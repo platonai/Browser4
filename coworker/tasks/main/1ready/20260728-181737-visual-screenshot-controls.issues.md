@@ -92,12 +92,14 @@ The full-page screenshot likely uses CDP to temporarily set the viewport height 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Real bug — full-page screenshot temporarily adjusts viewport via CDP and fails to restore original dimensions. Related to Issue 6 (both stem from viewport size opacity) but distinct: this is a correctness defect, not a documentation gap.
 
 ---
 
@@ -136,12 +138,14 @@ Likely the full-page screenshot path uses CDP's `Page.captureScreenshot` which r
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The CLI hardcodes `.png` extension but CDP returns JPEG for large full-page screenshots. The extension must match the actual format — either detect MIME type from the CDP response and set the extension accordingly, or force PNG output.
 
 ---
 
@@ -180,12 +184,14 @@ The help category filter list in the CLI's help text is hardcoded and was not up
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Two hardcoded category lists in the help output are stale — `capture`, `mouse`, and `core` work as filters but aren't advertised. Should be generated dynamically from registered categories to prevent drift.
 
 ---
 
@@ -222,12 +228,14 @@ The scroll command only supports relative pixel offsets. Positional targets (top
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Reasonable UX convenience — `scroll top` / `scroll bottom` aliases are low-effort to implement and eliminate the friction of tracking cumulative scroll distance. Not a bug, but a clear usability win.
 
 ---
 
@@ -265,12 +273,14 @@ The wait command uses a generic success message regardless of the wait mode, dis
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Generic "✓ Wait complete" discards context the command already has (mode, elapsed time, whether condition was pre-satisfied). Adding mode-specific messages and timing is a small change with outsized debuggability benefit.
 
 ---
 
@@ -309,12 +319,14 @@ The resize command likely sets the outer window size via CDP `Browser.setWindowB
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Related to Issue 1 but distinct — this is about clarifying what `resize` actually controls (outer window vs. inner viewport vs. CSS pixels) and reporting the resulting viewport dimensions in the output. Documentation and output-format fix, not a behavioral bug.
 
 ---
 
@@ -349,12 +361,14 @@ Design choice to store artifacts in `.browser4-cli/snapshot/`. This is fine for 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The absolute path is already shown, so this is polish rather than a gap. A one-time tip after the first screenshot ("saved to .browser4-cli/snapshot/") would help newcomers without cluttering output for repeat users.
 
 ---
 
@@ -392,12 +406,14 @@ Commands are organized by implementation mechanism (mouse events, CDP capture, c
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Commands are grouped by implementation mechanism rather than user intent. A full category restructure has backward-compatibility risk, but the suggested cross-reference approach ("See also --help viewport") is low-effort, non-breaking, and immediately actionable. Defer any deeper taxonomy redesign.
 
 ---
 

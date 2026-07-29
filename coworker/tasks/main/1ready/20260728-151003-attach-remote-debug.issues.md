@@ -68,12 +68,14 @@ The attach command appears to reuse the existing Browser4-managed browser backen
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Critical product defect — `attach --cdp` reuses the Browser4-managed Chrome session instead of connecting to the external CDP browser, making the feature non-functional. Fixing this should unblock Issues 2–4 which are downstream consequences of the broken attach workflow.
 
 ---
 
@@ -108,12 +110,14 @@ The backend enforces a single unnamed session slot. When it's occupied, any comm
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Legitimate UX friction. The unnamed-session collision blocks the simplest attach invocation. An interactive prompt or auto-generated session name (e.g., `chrome-cdp`) would resolve this without requiring users to understand sessions upfront.
 
 ---
 
@@ -151,11 +155,13 @@ The backend is assigning the same underlying browser session to multiple named s
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The observation that named sessions share a single underlying session ID is valid and indicates sessions are aliases, not isolated contexts. However, a full architectural change to per-session browser instances may be scoped separately. Short-term: document the sharing model explicitly and add `--new-session` flag. Related to Issue 1 — if attach actually connected to the CDP target, this alias model might be acceptable for CDP use cases.
 
 ---
 
@@ -190,12 +196,14 @@ The attach command auto-captures a snapshot of the 'current page' but doesn't li
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Sensible discoverability improvement. Auto-running the equivalent of `tab-list` after a successful attach gives immediate confidence the connection worked. This is a low-effort, high-value enhancement.
 
 ---
 
@@ -227,12 +235,14 @@ The warning logic doesn't account for the b4w.ps1 wrapper's manual argument pars
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Simple correctness fix — the short-flag warning contradicts the SKILL.md claim that `b4w.ps1` handles short flags safely. Either detect the wrapper context to suppress the warning, or reword the message to avoid implying the current invocation is unsafe.
 
 ---
 
@@ -265,12 +275,14 @@ The version comparison logic does strict string matching instead of semantic ver
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The version comparison should be semantic (ignoring `-SNAPSHOT` and other pre-release suffixes) rather than strict string equality. A `-SNAPSHOT` suffix from the same source tree is not a real mismatch.
 
 ---
 
@@ -304,12 +316,14 @@ The documentation doesn't explicitly address this. It's unclear whether tab-sele
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Documentation gap — users need to know whether `tab-select` blocks on page load. Clarifying this in the Tab Management section is low-effort. A `--wait load` flag would be a useful follow-up enhancement.
 
 ---
 
@@ -343,12 +357,14 @@ No --help attach category exists. Attach is mixed in with open, close, list, ses
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Minor discoverability improvement. Adding `--help attach` as a category filter (or grouping attach-related commands under a scannable subsection in `--help session`) is straightforward and helps new users find the CDP attach workflow.
 
 ---
 

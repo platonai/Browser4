@@ -195,6 +195,67 @@ function Resolve-IssuesFile {
     return $null
 }
 
+function Get-ReviewFileNavigationTarget {
+    <#
+    .SYNOPSIS
+        Returns the adjacent review file for a navigation direction.
+    .DESCRIPTION
+        Keeps file navigation independent from the current issue view so the
+        same behavior works in single-issue and all-issues displays.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Files,
+
+        [Parameter(Mandatory = $true)]
+        [string]$CurrentFilePath,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet(-1, 1)]
+        [int]$Direction
+    )
+
+    $currentPath = [System.IO.Path]::GetFullPath($CurrentFilePath)
+    for ($i = 0; $i -lt $Files.Count; $i++) {
+        $candidatePath = [System.IO.Path]::GetFullPath($Files[$i])
+        if (-not $candidatePath.Equals($currentPath, [StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+
+        $targetIndex = $i + $Direction
+        if ($targetIndex -ge 0 -and $targetIndex -lt $Files.Count) {
+            return $Files[$targetIndex]
+        }
+        return $null
+    }
+
+    return $null
+}
+
+function Get-ReviewNavigationAction {
+    <#
+    .SYNOPSIS
+        Maps a console key to a review navigation action.
+    .DESCRIPTION
+        ConsoleKeyInfo.Key is stable across terminal hosts, unlike KeyChar,
+        which can lose Shift state in some PowerShell terminals.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [ConsoleKeyInfo]$KeyInfo
+    )
+
+    $hasShift = ($KeyInfo.Modifiers -band [ConsoleModifiers]::Shift) -ne 0
+    switch ($KeyInfo.Key) {
+        ([ConsoleKey]::N) { return $(if ($hasShift) { 'next-file' } else { 'next-issue' }) }
+        ([ConsoleKey]::P) { return $(if ($hasShift) { 'prev-file' } else { 'prev-issue' }) }
+        ([ConsoleKey]::B) { return 'back-to-list' }
+        ([ConsoleKey]::L) { return 'back-to-list' }
+        ([ConsoleKey]::Escape) { return 'back-to-list' }
+        default { return $null }
+    }
+}
+
 # ── File parsing ───────────────────────────────────────────────────────────────
 
 function Read-IssuesFile {
@@ -855,7 +916,7 @@ function Show-IssueDisplay {
     Write-Host ' ║' -ForegroundColor DarkGray
 
     # Row 2
-    $r2 = '[e] notes  [m] mark-done  [d] discard  [q] quit  [?] help'
+    $r2 = '[e] notes  [m] mark-done  [d] discard  [b]/[l] list  [q] quit  [?] help'
     $r2Pad = $inner - $margin - $r2.Length
     if ($r2Pad -lt 1) { $r2Pad = 1 }
     Write-Host '║ ' -NoNewline -ForegroundColor DarkGray
@@ -865,6 +926,8 @@ function Show-IssueDisplay {
     Write-Host ' mark-done  ' -NoNewline -ForegroundColor White
     Write-Host '[d]' -NoNewline -ForegroundColor Cyan
     Write-Host ' discard  ' -NoNewline -ForegroundColor White
+    Write-Host '[b]/[l]' -NoNewline -ForegroundColor Cyan
+    Write-Host ' list  ' -NoNewline -ForegroundColor White
     Write-Host '[q]' -NoNewline -ForegroundColor Cyan
     Write-Host ' quit  ' -NoNewline -ForegroundColor White
     Write-Host '[?]' -NoNewline -ForegroundColor Cyan
@@ -953,7 +1016,7 @@ function Show-AllIssuesDisplay {
 
     Write-Host ''
     Write-Host ('═' * $inner) -ForegroundColor DarkGray
-    Write-Host "  Press a number (1-$total) to jump, [v] for single mode, [q] to quit" -ForegroundColor DarkGray
+    Write-Host "  Press a number (1-$total) to jump, [N]/[P] file, [v] single, [b] list, [q] quit" -ForegroundColor DarkGray
 }
 
 function Show-Help {
@@ -980,6 +1043,7 @@ function Show-Help {
     Write-Host '  [v]             Toggle view: single-issue / all-issues table'
     Write-Host '  [m]             Mark file as DONE → moves to 1ready/ for execution'
     Write-Host '  [d]             Discard file → moves to review/done/discard/'
+    Write-Host '  [b] / [l] / Esc Back to file list — re-pick a file'
     Write-Host '  [q]             Quit'
     Write-Host '  [?]             Show this help'
     Write-Host ''
@@ -1003,18 +1067,15 @@ function Start-ReviewSession {
         [Parameter(Mandatory = $true)]
         [PSObject]$ParsedFile,
 
-        [string[]]$AllFiles = @()
+        [string[]]$AllFiles = @(),
+
+        [ValidateSet('single', 'all')]
+        [string]$InitialMode = 'single'
     )
 
     $totalIssues = $ParsedFile.Issues.Count
-    if ($totalIssues -eq 0) {
-        Write-ConsoleLine -Message "This file has no parsed issues." -ForegroundColor Yellow
-        Write-ConsoleLine -Message "Use 'coworker review' to select a different file, or discard this one." -ForegroundColor DarkGray
-        return
-    }
-
     $currentIdx = 0
-    $mode = 'single'  # 'single' or 'all'
+    $mode = if ($totalIssues -eq 0) { 'all' } else { $InitialMode }
     $running = $true
 
     # Helper: persist current state to disk silently
@@ -1025,16 +1086,6 @@ function Start-ReviewSession {
         } catch {
             # Show error briefly but don't block
             return $false
-        }
-    }
-
-    # Find current file position in the file list for prev/next file nav
-    $currentFileIdx = -1
-    $normalizedPath = (Resolve-Path -LiteralPath $ParsedFile.FilePath).Path
-    for ($i = 0; $i -lt $AllFiles.Count; $i++) {
-        if ((Resolve-Path -LiteralPath $AllFiles[$i]).Path -eq $normalizedPath) {
-            $currentFileIdx = $i
-            break
         }
     }
 
@@ -1061,9 +1112,10 @@ function Start-ReviewSession {
         if (-not $key) { continue }
 
         $char = $key.KeyChar
+        $navigationAction = Get-ReviewNavigationAction -KeyInfo $key
 
         # ── Decision keys (1-6) ───────────────────────────────────────────
-        if ($char -ge '1' -and $char -le '6') {
+        if ($totalIssues -gt 0 -and $char -ge '1' -and $char -le '6') {
             $decIdx = [int][string]$char - 1
             $decision = $script:ReviewDecisions[$decIdx]
             $issue = $ParsedFile.Issues[$currentIdx]
@@ -1079,29 +1131,29 @@ function Start-ReviewSession {
         }
 
         # ── Navigation ────────────────────────────────────────────────────
-        if ($char -eq 'n') {
+        if ($navigationAction -eq 'next-issue') {
             if ($currentIdx -lt $totalIssues - 1) { $currentIdx++ }
             continue
         }
-        if ($char -eq 'p') {
+        if ($navigationAction -eq 'prev-issue') {
             if ($currentIdx -gt 0) { $currentIdx-- }
             continue
         }
 
-        # Next/previous file (uppercase N/P = Shift+n, Shift+p)
-        if ($char -eq 'N') {
+        # Next/previous file (Shift+N / Shift+P)
+        if ($navigationAction -eq 'next-file') {
             $null = Save-Now
-            if ($currentFileIdx -ge 0 -and $currentFileIdx -lt $AllFiles.Count - 1) {
-                return 'next-file'
+            if (Get-ReviewFileNavigationTarget -Files $AllFiles -CurrentFilePath $ParsedFile.FilePath -Direction 1) {
+                return "next-file-$mode"
             }
             Write-ConsoleLine -Message "Already at the last file." -ForegroundColor DarkGray
             Start-Sleep -Milliseconds 500
             continue
         }
-        if ($char -eq 'P') {
+        if ($navigationAction -eq 'prev-file') {
             $null = Save-Now
-            if ($currentFileIdx -gt 0) {
-                return 'prev-file'
+            if (Get-ReviewFileNavigationTarget -Files $AllFiles -CurrentFilePath $ParsedFile.FilePath -Direction -1) {
+                return "prev-file-$mode"
             }
             Write-ConsoleLine -Message "Already at the first file." -ForegroundColor DarkGray
             Start-Sleep -Milliseconds 500
@@ -1110,6 +1162,11 @@ function Start-ReviewSession {
 
         # ── Edit notes ────────────────────────────────────────────────────
         if ($char -eq 'e') {
+            if ($totalIssues -eq 0) {
+                Write-ConsoleLine -Message "This file has no parsed issues. Use [N]/[P] to navigate, [b] to return to the list, or [d] to discard." -ForegroundColor Yellow
+                Start-Sleep -Milliseconds 750
+                continue
+            }
             $issue = $ParsedFile.Issues[$currentIdx]
             Write-Host ''
             Write-Host 'Review notes (Enter to submit, empty to clear):' -ForegroundColor Cyan
@@ -1134,12 +1191,22 @@ function Start-ReviewSession {
 
         # ── AI Review ─────────────────────────────────────────────────────
         if ($char -eq 'a') {
+            if ($totalIssues -eq 0) {
+                Write-ConsoleLine -Message "This file has no parsed issues to review." -ForegroundColor Yellow
+                Start-Sleep -Milliseconds 750
+                continue
+            }
             $issue = $ParsedFile.Issues[$currentIdx]
             $aiResult = Invoke-AiReview -Issue $issue -ParsedFile $ParsedFile -Batch:$false
             if ($aiResult) { $null = Save-Now }
             continue
         }
         if ($char -eq 'A') {
+            if ($totalIssues -eq 0) {
+                Write-ConsoleLine -Message "This file has no parsed issues to review." -ForegroundColor Yellow
+                Start-Sleep -Milliseconds 750
+                continue
+            }
             $aiResult = Invoke-AiReview -ParsedFile $ParsedFile -Batch:$true
             if ($aiResult) { $null = Save-Now }
             continue
@@ -1147,12 +1214,19 @@ function Start-ReviewSession {
 
         # ── Toggle view mode ──────────────────────────────────────────────
         if ($char -eq 'v') {
-            $mode = if ($mode -eq 'single') { 'all' } else { 'single' }
+            if ($totalIssues -gt 0) {
+                $mode = if ($mode -eq 'single') { 'all' } else { 'single' }
+            }
             continue
         }
 
         # ── Mark done ─────────────────────────────────────────────────────
         if ($char -eq 'm') {
+            if ($totalIssues -eq 0) {
+                Write-ConsoleLine -Message "This file has no parsed issues. Use [d] to discard it instead." -ForegroundColor Yellow
+                Start-Sleep -Milliseconds 750
+                continue
+            }
             $null = Save-Now
 
             $unreviewed = @($ParsedFile.Issues | Where-Object { -not $_.Decision }).Count
@@ -1214,6 +1288,12 @@ function Start-ReviewSession {
                 }
             }
             continue
+        }
+
+        # ── Back to file list ────────────────────────────────────────────
+        if ($navigationAction -eq 'back-to-list') {
+            $null = Save-Now
+            return 'back-to-list'
         }
 
         # ── Help ──────────────────────────────────────────────────────────
@@ -1866,34 +1946,44 @@ function Invoke-Review {
 
     # ── Interactive loop (supports file-to-file navigation) ──────────────────
     $currentParsed = $parsed
+    $reviewMode = 'single'
     while ($true) {
-        $result = Start-ReviewSession -ParsedFile $currentParsed -AllFiles $allFiles
+        $result = Start-ReviewSession -ParsedFile $currentParsed -AllFiles $allFiles -InitialMode $reviewMode
 
         if ($result -eq 'quit' -or $result -eq 'done' -or $result -eq 'discard') {
             break
         }
 
-        # Find next/prev file
-        $normalizedPath = (Resolve-Path -LiteralPath $currentParsed.FilePath).Path
-        $currentIdx = -1
-        for ($i = 0; $i -lt $allFiles.Count; $i++) {
-            if ((Resolve-Path -LiteralPath $allFiles[$i]).Path -eq $normalizedPath) {
-                $currentIdx = $i
+        # Back to file list — re-prompt file picker
+        if ($result -eq 'back-to-list') {
+            $allFiles = Find-IssuesFiles -IncludeDone:$All
+            $filePath = Show-FilePicker -Files $allFiles
+            if (-not $filePath) { break }
+            try {
+                $currentParsed = Read-IssuesFile -FilePath $filePath
+            } catch {
+                Write-ConsoleLine -Message "Error reading file: $_" -ForegroundColor Red
                 break
             }
+            $reviewMode = 'single'
+            continue
         }
 
-        $nextIdx = -1
-        if ($result -eq 'next-file' -and $currentIdx -lt $allFiles.Count - 1) {
-            $nextIdx = $currentIdx + 1
-        } elseif ($result -eq 'prev-file' -and $currentIdx -gt 0) {
-            $nextIdx = $currentIdx - 1
+        $direction = if ($result -like 'next-file-*') { 1 } elseif ($result -like 'prev-file-*') { -1 } else { 0 }
+        if ($result -like '*-all') {
+            $reviewMode = 'all'
+        } else {
+            $reviewMode = 'single'
         }
-
-        if ($nextIdx -lt 0) { break }
+        $nextFilePath = if ($direction) {
+            Get-ReviewFileNavigationTarget -Files $allFiles -CurrentFilePath $currentParsed.FilePath -Direction $direction
+        } else {
+            $null
+        }
+        if (-not $nextFilePath) { break }
 
         try {
-            $currentParsed = Read-IssuesFile -FilePath $allFiles[$nextIdx]
+            $currentParsed = Read-IssuesFile -FilePath $nextFilePath
         } catch {
             Write-ConsoleLine -Message "Error reading next file: $_" -ForegroundColor Red
             break

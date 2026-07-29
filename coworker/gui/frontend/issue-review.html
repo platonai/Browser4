@@ -1047,14 +1047,15 @@ body {
         <p>Select a file to review its issues</p>
         <div class="shortcut-hints">
           <strong>Keyboard shortcuts:</strong><br>
-          <kbd>Shift+1</kbd>-<kbd>Shift+6</kbd> Select decision<br>
-          <kbd>Shift+A</kbd> AI review issue &nbsp;|&nbsp;
-          <kbd>Shift+Ctrl+A</kbd> AI review all<br>
-          <kbd>Shift+Ctrl+D</kbd> AI review directory<br>
+          <kbd>Shift+1</kbd>-<kbd>Shift+6</kbd> Select decision &nbsp;|&nbsp;
+          <kbd>Shift+A</kbd> AI review issue<br>
+          <kbd>Shift+Ctrl+A</kbd> AI review all &nbsp;|&nbsp;
+          <kbd>Shift+Ctrl+D</kbd> AI review directory &nbsp;|&nbsp;
           <kbd>Shift+Ctrl+M</kbd> Mark all done<br>
-          <kbd>Shift+D</kbd> Discard file<br>
-          <kbd>Alt+←</kbd>/<kbd>Alt+→</kbd> Prev/next issue<br>
-          <kbd>Shift+P</kbd>/<kbd>Shift+N</kbd> Prev/next file<br>
+          <kbd>N</kbd>/<kbd>P</kbd> Next/prev file &nbsp;|&nbsp;
+          <kbd>Alt+←</kbd>/<kbd>Alt+→</kbd> Prev/next issue &nbsp;|&nbsp;
+          <kbd>Shift+D</kbd> Discard file &nbsp;|&nbsp;
+          <kbd>B</kbd>/<kbd>Esc</kbd> Back to file list &nbsp;|&nbsp;
           <kbd>Ctrl+S</kbd> Save
         </div>
       </div>
@@ -1767,12 +1768,12 @@ function toggleTreeDir(el) {
 }
 
 // ── File selection & parsing ──
-async function selectFile(path) {
+async function selectFile(path, reviewMode) {
   state.selectedFilePath = path;
   state.dirty = false;
   state.parsed = null;
   state.selectedFileContent = null;
-  state.reviewMode = 'single';  // always start in single-issue mode
+  state.reviewMode = reviewMode || 'single';
   state.currentIssueIndex = 0;
   focusedIssueIndex = 0;
   updateSaveState();
@@ -1946,6 +1947,14 @@ function renderAllIssues() {
     }
   }
 
+  // Add navigation hints at the bottom
+  html += '<div style="padding: 0.75rem 0; font-size: 0.72rem; color: var(--text-muted); text-align: center; border-top: 1px solid var(--border-light); margin-top: 0.5rem;">';
+  html += '<kbd>N</kbd>/<kbd>P</kbd> file &nbsp;·&nbsp; ';
+  html += '<kbd>Shift+J</kbd>/<kbd>Shift+K</kbd> issue &nbsp;·&nbsp; ';
+  html += '<kbd>Shift+1</kbd>-<kbd>Shift+6</kbd> decision &nbsp;·&nbsp; ';
+  html += '<kbd>B</kbd>/<kbd>Esc</kbd> back to list';
+  html += '</div>';
+
   content.innerHTML = html;
 }
 
@@ -2012,6 +2021,14 @@ function renderSingleIssue() {
     html += '<div class="section-body">' + marked.parse(sec.body) + '</div>';
     html += '</div>';
   }
+
+  // Navigation hints
+  html += '<div style="padding: 0.5rem 0; font-size: 0.7rem; color: var(--text-muted); text-align: center; border-top: 1px solid var(--border-light);">';
+  html += '<kbd>N</kbd>/<kbd>P</kbd> file &nbsp;·&nbsp; ';
+  html += '<kbd>Alt+←</kbd>/<kbd>Alt+→</kbd> issue &nbsp;·&nbsp; ';
+  html += '<kbd>Shift+1</kbd>-<kbd>Shift+6</kbd> decision &nbsp;·&nbsp; ';
+  html += '<kbd>B</kbd>/<kbd>Esc</kbd> back to list';
+  html += '</div>';
 
   // Review decision is now in the floating panel — populated below
   html += '</div>'; // .single-issue-view
@@ -2873,6 +2890,25 @@ function toggleReviewMode() {
   }
 }
 
+function clearSelection() {
+  state.selectedFilePath = null;
+  state.parsed = null;
+  state.selectedFileContent = null;
+  state.dirty = false;
+  state.currentIssueIndex = 0;
+  cancelAutoSave();
+  updateSaveState();
+  hideFloatPanel();
+  document.getElementById('review-header').style.display = 'none';
+  document.getElementById('review-content').innerHTML =
+    '<div class="review-placeholder">' +
+    '<svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>' +
+    '<p>Select a file to review its issues</p>' +
+    '</div>';
+  renderFileList();
+  updateStats();
+}
+
 function updateSaveState() {
   var btnFloat = document.getElementById('float-btn-save');
   var chip = document.getElementById('save-chip');
@@ -3184,13 +3220,13 @@ document.addEventListener('keydown', function(e) {
     return;
   }
 
-  // Shift+N / Shift+P → prev/next file
-  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'N' || e.key === 'n')) {
+  // N/n / P/p → next/prev file (matches CLI [N]/[P] convention)
+  if (!e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'n' || e.key === 'N')) {
     e.preventDefault();
     navigateFile(1);
     return;
   }
-  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'P' || e.key === 'p')) {
+  if (!e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'p' || e.key === 'P')) {
     e.preventDefault();
     navigateFile(-1);
     return;
@@ -3205,6 +3241,18 @@ document.addEventListener('keydown', function(e) {
   if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'K' || e.key === 'k') && state.reviewMode !== 'single') {
     e.preventDefault();
     navigateIssue(-1);
+    return;
+  }
+
+  // B / Shift+B / Escape → back to file list (uppercase B only to avoid interfering with typing in notes)
+  if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key === 'B') {
+    e.preventDefault();
+    clearSelection();
+    return;
+  }
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    clearSelection();
     return;
   }
 });
@@ -3252,12 +3300,29 @@ async function navigateToFile(direction) {
   if (newIdx < 0 || newIdx >= state.filteredFiles.length) return;
   if (newIdx === currentIdx) return;
 
-  selectFile(state.filteredFiles[newIdx].path);
+  // Preserve current review mode when navigating between files
+  var prevMode = state.reviewMode;
+  selectFile(state.filteredFiles[newIdx].path, prevMode);
 }
 
-// Quick keyboard-only file nav (no auto-save)
-function navigateFile(direction) {
+// Keyboard-driven file navigation (auto-saves first)
+async function navigateFile(direction) {
   if (state.filteredFiles.length === 0) return;
+
+  // Auto-save current file before navigating away
+  if (state.dirty && state.selectedFilePath) {
+    cancelAutoSave();
+    try {
+      var newContent = reconstructFile();
+      await apiPost('/api/task?path=' + encodeURIComponent(state.selectedFilePath), { content: newContent });
+      state.selectedFileContent = newContent;
+      state.parsed._originalContent = newContent;
+      state.dirty = false;
+    } catch (e) {
+      // Continue navigation even if save fails
+    }
+  }
+
   var currentIdx = -1;
   for (var i = 0; i < state.filteredFiles.length; i++) {
     if (state.filteredFiles[i].path === state.selectedFilePath) { currentIdx = i; break; }
@@ -3265,7 +3330,10 @@ function navigateFile(direction) {
   var newIdx = currentIdx + direction;
   if (newIdx < 0 || newIdx >= state.filteredFiles.length) return;
   if (newIdx === currentIdx) return;
-  selectFile(state.filteredFiles[newIdx].path);
+
+  // Preserve current review mode when navigating between files
+  var prevMode = state.reviewMode;
+  selectFile(state.filteredFiles[newIdx].path, prevMode);
 }
 
 // ── Expand/Collapse ──

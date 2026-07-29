@@ -2919,7 +2919,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-query",
-            description: "Run X-SQL. DOM_LOAD_AND_SELECT(@url, ...) re-fetches the page fresh via the scrape API (independent of the stored snapshot). htmlsnapshot capture is only needed for inspect/get/summary, not for query with @url.",
+            description: "Run X-SQL. DOM_LOAD_AND_SELECT(@url, ...) re-fetches the page fresh via the scrape API (independent of the stored snapshot). htmlsnapshot capture is only needed for inspect/get/summary, not for query with @url. IMPORTANT: CSS selectors in X-SQL must use single quotes (SQL syntax); double quotes mean SQL identifiers.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,

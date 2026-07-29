@@ -83,12 +83,14 @@ The b4w.ps1 file has Windows-style CRLF line endings. The shebang line `#!/usr/b
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] CRLF in a shebang-bearing script is a real cross-platform bug that breaks Linux/macOS execution. Fix is trivial (convert to LF, add `*.ps1 text eol=lf` to `.gitattributes`) and the impact is clear — users get a cryptic `pwsh\r` error instead of help output.
 
 ---
 
@@ -128,12 +130,14 @@ The backend likely changed the processState value from "done" to "completed" at 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Straightforward documentation drift — the backend returns `"completed"` but SKILL.md still says `"done"`. Since `"completed"` is the better name, the docs are stale, not the code. Low-effort fix with clear user benefit (reduces confusion when comparing output to reference).
 
 ---
 
@@ -166,12 +170,14 @@ The backend `agent status` endpoint appears to return the full task result objec
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Returning ~4-5KB of redundant `pageSummary` on every status poll is a real bandwidth and UX problem. The ideal fix is backend-side — `agent status` should return only status metadata and omit `commandResult` entirely, since `agent result` exists for the full payload. The `--lightweight` flag suggestion is a reasonable fallback but shouldn't be the primary fix; the API contract itself should separate status from result.
 
 ---
 
@@ -204,12 +210,14 @@ The top-level `agent --help` output is a condensed summary. It doesn't surface s
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Valid discoverability gap — `agent --help` is the primary entry point users read, and `--clear` is the only way to clean up the task list. A one-line hint (`supports --clear, --limit, --offset`) or a footer directing users to subcommand `--help` costs almost nothing and significantly improves discoverability. The suggestion for a standalone `agent clear` subcommand is also worth considering separately.
 
 ---
 
@@ -242,12 +250,14 @@ The `agent list` table format uses a fixed column width for DESCRIPTION. For ver
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Truncation with no expansion path makes the list useless when tasks share long prefixes (e.g., URL-based descriptions). Adding `--verbose` or `agent info <id>` aligns with standard CLI patterns and is low-effort. The hash/ID suffix suggestion is a nice lightweight alternative for disambiguation without adding flags.
 
 ---
 
@@ -281,12 +291,14 @@ Agent tasks are persisted to disk and survive across CLI sessions. This is by de
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Persistence across sessions is correct behavior, but the UX for new users is genuinely confusing — seeing pre-existing tasks with no session context feels like a shared/dirty state. The suggested improvements (session grouping, a notice on first run, `--since`/`--session` filters) preserve the persistence design while making the experience legible. Auto-clearing or hiding old tasks would be wrong; the fix is transparency, not deletion.
 
 ---
 

@@ -74,12 +74,14 @@ b4w.ps1 uses Windows CRLF line endings. The first line `#!/usr/bin/env pwsh\r\n`
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] CRLF shebang is a real bug that makes b4w.ps1 fail on Linux — this is a correctness issue, not cosmetic. Fix line endings AND add a platform guard that directs Linux/macOS users to b4w.sh when pwsh isn't on PATH.
 
 ---
 
@@ -116,12 +118,14 @@ The attach.md docs state: 'When --endpoint is used alone (without --cdp), it swi
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The combined --endpoint + --cdp semantics are genuinely ambiguous from the user's perspective, and the output provides zero visibility into what path was taken. The suggested output clarification (e.g., "CDP discovery routed through endpoint…") is the right fix.
 
 ---
 
@@ -158,12 +162,14 @@ The same command name ('close') has different semantics depending on session typ
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Same command name producing different side effects depending on session type is a UX trap. The output should always state the consequence for that session type. The suggested "disconnect" alias and tip on first close are good low-cost additions.
 
 ---
 
@@ -201,11 +207,13 @@ The close command does not check whether state-save has been called recently or 
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The core concern (losing state silently) is valid, but a full dirty-state tracking system is heavy for the benefit. A lighter approach: emit a one-line tip after close ("Tip: use state-save before close to preserve cookies and localStorage") and add a --force flag as a no-op today that reserves the flag name for future confirmation behavior. Skip the confirmation prompt until there's evidence users are actually losing critical state.
 
 ---
 
@@ -243,12 +251,14 @@ The help output is generated as a flat list of all commands. There's no progress
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The first-run help experience is a real onboarding barrier — 100+ lines is a wall of text. The "Common workflows" section is the right idea but visually buried. Moving it to the top with visual prominence and adding a "Getting Started" quickstart section are low-effort, high-impact fixes.
 
 ---
 
@@ -285,12 +295,14 @@ b4w.sh delegates to b4w.ps1 via pwsh. The warning is emitted by b4w.ps1 before i
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The short-flag PowerShell warning is actively confusing when emitted in a bash context. The fix is straightforward: have b4w.sh set an env var (e.g., B4W_FROM_BASH=1) and have b4w.ps1 suppress the warning when that var is set.
 
 ---
 
@@ -327,12 +339,14 @@ Zero-based indexing is common in programming but non-obvious to CLI users who ex
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Zero-based indexing for a human-facing CLI flag is counterintuitive. Adding one sentence to snapshot --help explaining the convention is trivial and sufficient. Changing to 1-based would be a breaking change and is not worth the churn.
 
 ---
 
@@ -369,12 +383,14 @@ The attach command includes an implicit snapshot as part of its post-attach flow
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The auto-snapshot on attach is a good convenience feature but surprising when undocumented. Document it in attach.md and add a visual separator in the output (e.g., "── Page state (auto-captured) ──") so the connection status and snapshot result are clearly delineated.
 
 ---
 
@@ -410,12 +426,14 @@ The help text format `tab-select [index] [--guid <guid>]` uses standard CLI conv
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The help text `tab-select [index] [--guid <guid>]` is technically correct CLI convention but easily misread. Changing to `tab-select <index> | --guid <guid>` makes mutual exclusivity obvious. Low effort, clear improvement.
 
 ---
 
@@ -452,12 +470,14 @@ The help category filters (`--help nav`, `--help session`, etc.) need to be manu
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Category filters that silently omit commands undermine discoverability. Verify session-default appears under --help session and add a quick automated check that every command maps to at least one category filter. Low effort, prevents future regressions.
 
 ---
 
@@ -496,10 +516,12 @@ b4w.sh uses `cargo run` or invokes the binary, but cargo still checks timestamps
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DEFER] 0.4s per invocation is below the threshold of perceived friction for an interactive CLI. The b4w.ps1 fast path already handles the Windows case well; adding equivalent logic to b4w.sh would save ~4s over 10 commands, which is measurable but not user-complaint-worthy. Revisit if users report sluggishness in interactive use.
 
 ---
 

@@ -4730,7 +4730,36 @@ async fn handle_tool_command_with_options(
             cli_println!("null");
         } else if result.is_empty() {
             cli_println!("\"\"");
-        } else if eval_json {
+        }
+        // When eval returns empty or null, the page context may have changed
+        // (e.g. after htmlsnapshot capture or other commands that interact
+        // with the browser). Give the user a diagnostic hint.
+        let expression = tool_params
+            .get("expression")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if result.is_empty() || result == "null" {
+            if !json_active() {
+                cli_println!(
+                    "💡 Tip: Eval returned empty/null. The page context may be stale.\n\
+                       Try re-navigating with: goto <url>\n\
+                       Or check the current page: eval \"window.location.href\""
+                );
+                // If the expression looked like it should produce output (e.g.
+                // `document.title`), offer a specific suggestion.
+                if expression.contains("document.title")
+                    || expression.contains("document.body")
+                    || expression.contains("document.querySelector")
+                {
+                    cli_println!(
+                        "   `{}` returned empty — the page may have changed\n\
+                           since your last navigation. Run `goto` first to restore the page context.",
+                        expression
+                    );
+                }
+            }
+        }
+        if eval_json {
             // --json: ensure output is valid JSON. Try to parse the result
             // as JSON first (objects, arrays, numbers, booleans, null); if
             // that fails, wrap it as a JSON string.
@@ -5826,37 +5855,76 @@ async fn handle_html_snapshot_query(
         // Try to parse the server JSON and extract the resultSet
         match serde_json::from_str::<Value>(&result) {
             Ok(parsed) => {
-                let rows: Option<&Vec<Value>> = parsed
+                // Detect scrape-session failures (417 Expectation Failed, 500, etc.)
+                // and surface them as actionable error messages instead of
+                // silently showing an empty resultSet.
+                let status_code = parsed
+                    .get("statusCode")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(200);
+                let status = parsed
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let result_set_empty = parsed
                     .get("resultSet")
-                    .and_then(|rs| rs.as_array());
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.is_empty())
+                    .unwrap_or(true);
 
-                match rows {
-                    Some(rows) if format.as_str() != "json" => {
-                        // Format as table or CSV
-                        let summary = format!("\n{} row{} returned.\n", rows.len(), if rows.len() == 1 { "" } else { "s" });
-                        match format.as_str() {
-                            "csv" => format_csv(rows) + &summary,
-                            "table" => format_table(rows) + &summary,
-                            _ => unreachable!(),
-                        }
+                if status_code == 417 {
+                    cli_println!("### X-SQL Query Failed (417 Expectation Failed)");
+                    cli_println!("- The scrape session closed before the query could execute.");
+                    cli_println!("  This is a known backend race condition. Try these workarounds:");
+                    cli_println!("  1. Re-run the query — the session may recover on retry.");
+                    cli_println!("  2. Use `htmlsnapshot get` for simple extractions instead of X-SQL.");
+                    cli_println!("  3. Use `eval --file script.js` with DOM APIs for complex extraction.");
+                    cli_println!("  4. Ensure CSS selectors use single quotes in X-SQL (SQL string literal syntax).");
+                    if !json_active() {
+                        cli_println!("\n  Raw response:");
                     }
-                    _ => {
-                        // JSON format: pretty-print resultSet or full result
-                        let output_data = if let Some(result_set) = parsed.get("resultSet") {
-                            serde_json::to_string_pretty(result_set)
-                                .unwrap_or_else(|_| result.clone())
-                        } else if result_only {
-                            if !json_active() {
-                                eprintln!(
-                                    "⚠️  --result-only set but no 'resultSet' field found in response. \
-                                     Showing full result."
-                                );
+                    result.clone()
+                } else if status_code >= 500 && result_set_empty {
+                    cli_println!("### X-SQL Query Failed ({} {})", status_code, status);
+                    cli_println!("- The backend scrape engine encountered an error.");
+                    cli_println!("  Check the backend logs for details, or try `htmlsnapshot get` as an alternative.");
+                    if !json_active() {
+                        cli_println!("\n  Raw response:");
+                    }
+                    result.clone()
+                } else {
+                    let rows: Option<&Vec<Value>> = parsed
+                        .get("resultSet")
+                        .and_then(|rs| rs.as_array());
+
+                    match rows {
+                        Some(rows) if format.as_str() != "json" => {
+                            // Format as table or CSV
+                            let summary = format!("\n{} row{} returned.\n", rows.len(), if rows.len() == 1 { "" } else { "s" });
+                            match format.as_str() {
+                                "csv" => format_csv(rows) + &summary,
+                                "table" => format_table(rows) + &summary,
+                                _ => unreachable!(),
                             }
-                            result.clone()
-                        } else {
-                            result.clone()
-                        };
-                        output_data
+                        }
+                        _ => {
+                            // JSON format: pretty-print resultSet or full result
+                            let output_data = if let Some(result_set) = parsed.get("resultSet") {
+                                serde_json::to_string_pretty(result_set)
+                                    .unwrap_or_else(|_| result.clone())
+                            } else if result_only {
+                                if !json_active() {
+                                    eprintln!(
+                                        "⚠️  --result-only set but no 'resultSet' field found in response. \
+                                         Showing full result."
+                                    );
+                                }
+                                result.clone()
+                            } else {
+                                result.clone()
+                            };
+                            output_data
+                        }
                     }
                 }
             }
@@ -5889,6 +5957,11 @@ async fn handle_html_snapshot_query(
         cli_println!(
             "\n💡 Tip: Use --sql @file.sql to avoid shell quoting issues. \
              Write your X-SQL query to a file and reference it with @filename.sql."
+        );
+        cli_println!(
+            "   Also: CSS selectors in X-SQL must use single quotes (SQL string literal syntax). \
+             Double quotes are interpreted as SQL identifiers.\n\
+               Example: DOM_FIRST_TEXT(DOM, 'h1') — NOT DOM_FIRST_TEXT(DOM, \"h1\")"
         );
     }
 
@@ -6493,7 +6566,17 @@ async fn handle_html_snapshot_inspect(
         if let (Some(sel), Some(count)) = (speculative_selector, speculative_count) {
             render_speculative(sel, count);
         }
-        cli_println!("- No elements matched. Check the CSS selector and ensure a HTML snapshot has been captured (`browser4-cli htmlsnapshot`).");
+        // If the selector is :root (the default, meaning "everything") and there
+        // are 0 matches, the most likely cause is that no HTML snapshot has been
+        // captured yet. Make this very explicit.
+        if selector == ":root" {
+            cli_println!("");
+            cli_println!("  ⚠️  No HTML snapshot found. htmlsnapshot inspect requires a prior capture.");
+            cli_println!("  Run this first:  browser4-cli htmlsnapshot");
+            cli_println!("  Then re-run:     browser4-cli htmlsnapshot inspect");
+        } else {
+            cli_println!("- No elements matched. Check the CSS selector and ensure a HTML snapshot has been captured (`browser4-cli htmlsnapshot`).");
+        }
         // Add actionable troubleshooting hints
         if selector.starts_with('.') {
             let class_hint = selector.trim_start_matches('.');
@@ -6836,7 +6919,40 @@ fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
     };
 
     if pattern.is_empty() && extra_patterns.is_empty() {
-        return Err("Pattern is required. Provide a positional pattern, or use -e PATTERN (repeatable) for multiple patterns.".to_string());
+        // Check if the user provided --selector or --selector-all — they may
+        // want to view all content within a scoped element rather than grep.
+        let has_selector = tool_params
+            .get("selector")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        let has_selector_all = tool_params
+            .get("selector-all")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+
+        let mut msg = "Pattern is required. Provide a positional pattern, or use -e PATTERN (repeatable) for multiple patterns.".to_string();
+        if has_selector {
+            let sel = tool_params
+                .get("selector")
+                .and_then(|v| v.as_str())
+                .unwrap_or("<selector>");
+            msg.push_str(&format!(
+                "\nTo view all HTML within \"{}\" without filtering, use:\n  htmlsnapshot get all html \"{}\"",
+                sel, sel
+            ));
+        } else if has_selector_all {
+            let sel = tool_params
+                .get("selector-all")
+                .and_then(|v| v.as_str())
+                .unwrap_or("<selector>");
+            msg.push_str(&format!(
+                "\nTo view all HTML across all \"{}\" elements without filtering, use:\n  htmlsnapshot get all html \"{}\"",
+                sel, sel
+            ));
+        }
+        return Err(msg);
     }
 
     let parse_usize = |key: &str| -> Option<usize> {
@@ -8831,6 +8947,21 @@ async fn handle_swarm_query(
         if !task_ids.is_empty() {
             swarm_wait_for_jobs(client, base_url, &task_ids).await?;
         }
+    } else {
+        // Without --wait, jobs are submitted asynchronously. The user needs
+        // a way to track progress — otherwise submitted-but-not-monitored
+        // jobs look like they're hung.
+        cli_println!(
+            "\n💡 Tip: Add --wait to track progress and see results automatically.\n\
+               Without --wait, use these commands to monitor:\n  \
+               swarm status <task-id>  — check if a job is done\n  \
+               swarm result <task-id>  — get the result when complete\n  \
+               swarm list             — see all tracked tasks"
+        );
+        cli_println!(
+            "   If jobs appear stuck, run `swarm list` to check their status,\n\
+               or `swarm list --clear` to remove stale entries from prior sessions."
+        );
     }
 
     Ok(())

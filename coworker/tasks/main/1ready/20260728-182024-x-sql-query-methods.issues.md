@@ -181,12 +181,14 @@ The file-path resolution logic (likely in the CLI's argument parsing for `@file`
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Genuine bug — "Finding browser4 root" diagnostic prints to stdout, contaminating machine-readable output in `--result-only` mode. Fix is straightforward: route CLI-level diagnostics to stderr, and suppress all non-result stdout when `--result-only` is active.
 
 ---
 
@@ -220,12 +222,14 @@ The `./b4w.ps1` wrapper passes arguments through PowerShell which has its own qu
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Real usability hazard. The PowerShell wrapper + shell quoting interaction makes inline `--sql` fragile on Linux. The recommended fix is documentation-first: add Linux/bash-specific escaping examples, elevate `--sql @file` and `--sql-stdin` as the primary recommendation regardless of platform, and warn about single-quote-in-double-quote edge cases.
 
 ---
 
@@ -258,12 +262,14 @@ The `htmlsnapshot inspect` text-discovery logic detects text-bearing elements wi
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Valid UX gap. The inspect output surfaces `p.price_color` with sample values but doesn't generate analogous text-extraction selectors (e.g., `h3 a` with sample titles) despite having the data in the DOM tree. Low priority, but a clear quality-of-life improvement for users discovering selectors.
 
 ---
 
@@ -296,12 +302,14 @@ The `@url` placeholder is a server-side SQL template feature. The CLI help is ge
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Genuine discoverability gap. `@url` is the recommended placeholder for X-SQL queries but is invisible in CLI help output — users must stumble across the x-sql.md reference to learn about it. Adding a one-line note and a short example in `htmlsnapshot query --help` would close this gap.
 
 ---
 
@@ -334,12 +342,14 @@ The inspect output is auto-generated from CSS selector discovery. PowerCSS `:exp
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] PowerCSS `:expr()` selectors are domain-specific syntax with no inline explanation — a new user sees `h3:expr(a>0)` with no indication it means "h3 elements containing at least one `<a>` descendant." A one-line legend or footnote in the inspect output, plus a pointer to PowerCSS docs, is the right fix.
 
 ---
 
@@ -372,12 +382,14 @@ The truncation likely occurs in the DOM text extraction or the H2 database's tex
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Needs investigation before a fix can be targeted. The truncation could originate at any of three levels: CSS `text-overflow: ellipsis` on the rendered page, a character limit in `DOM_FIRST_TEXT` extraction, or H2/serialization column width defaults. Accept for triage; root cause will determine whether this is a docs issue (workaround: use `title` attribute) or a code fix (increase/remove limit).
 
 ---
 
@@ -410,12 +422,14 @@ The `--help extract` category exists and does mention htmlsnapshot. However, run
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Standard CLI UX expectation — subcommands should have their own `--help` output showing their specific flags. `htmlsnapshot query --help` currently shows only generic htmlsnapshot help, hiding query-specific flags (`--sql`, `--result-only`, etc.). This forces users to consult external reference files for basic flag discovery.
 
 ---
 

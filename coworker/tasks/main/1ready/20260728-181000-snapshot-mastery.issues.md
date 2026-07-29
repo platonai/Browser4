@@ -102,12 +102,14 @@ The --selector implementation appears to be including all root-to-leaf ancestor 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Core feature is non-functional — selector scoping either isn't filtering at all or is matching far too broadly (siblings/independent subtrees, not just ancestors). High severity with clear repro steps. Fixing this will likely also resolve Issue 2.
 
 ---
 
@@ -148,7 +150,9 @@ The --selector flag for snapshot grep appears to be non-functional or has the sa
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DUPLICATE] Same underlying selector scoping bug as Issue 1, manifesting in the grep subcommand path. The grep render layer may differ, but the root cause (selector matching logic failing to prune non-matching subtrees) is identical. Fix Issue 1 first, then verify grep --selector against the same test fixtures.
 
 ---
 
@@ -189,12 +193,14 @@ The wrapper script b4w.ps1 unconditionally emits the warning when short flags ar
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Genuine cross-platform UX noise — the warning is PowerShell-specific but fires unconditionally on bash/Linux. Straightforward fix: guard with `$PSVersionTable` or an equivalent env check. Consider also making it per-session rather than per-command to reduce annoyance even on PowerShell.
 
 ---
 
@@ -232,12 +238,14 @@ The auto-diff feature seems to compare element trees internally but presents the
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Auto-diff without visual change indicators (+/-/~ or color) is nearly useless — you can't tell what changed. This is the primary blocker for auto-diff being a usable feature. Should be addressed before or alongside Issue 5's structural summary request.
 
 ---
 
@@ -276,10 +284,12 @@ After a full page navigation, every backend node ID changes (new DOM), so the di
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DEFER] The root cause (new DOM after navigation = all nodes are new) is technically correct behavior, and the documentation already acknowledges this limitation. A structural summary would be nice but is a feature enhancement, not a bug. Revisit after Issue 4's diff markers are implemented — with proper +/- prefixes, a post-navigation diff would at least be honest (everything marked `+`), and a summary line could be added as a follow-up.
 
 ---
 
@@ -313,11 +323,13 @@ Historical: snapshot -i predates snapshot grep -i. The grep subcommand follows U
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Backward compatibility prevents changing the flags, but the discoverability cost is real. Improvements: (1) add cross-referencing notes in `--help` for both commands ("-i: interactive mode [note: -i means --ignore-case in snapshot grep]"), (2) promote --interactive and --ignore-case as the primary documented forms with short flags as convenience aliases. Low effort, meaningful UX gain.
 
 ---
 
@@ -354,12 +366,14 @@ The task setup instructions were written to ensure the local source tree is used
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Documentation inconsistency is a quick fix. Align SKILL.md and task setup instructions: recommend b4w.sh for bash/Linux, b4w.ps1 for PowerShell. If Issue 3 is fixed (suppress warnings on bash), add a clarifying note that either wrapper works on Linux. Simple editorial change, no code impact.
 
 ---
 
@@ -396,12 +410,14 @@ The viewport slicing filters the accessibility tree by Y-coordinate bounding box
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Valid viewport range returning empty output is a filtering bug — likely the Y-range bounding-box check is too strict (requiring full containment instead of overlap). The report's suggestion to use inclusive/overlap filtering is the right fix. Also add a clear diagnostic message when a viewport slice yields zero elements, so users aren't left staring at empty YAML headers.
 
 ---
 
