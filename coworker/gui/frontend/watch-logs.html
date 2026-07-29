@@ -159,64 +159,94 @@ body {
 .source-tabs {
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
-  padding: 4px 0.75rem;
+  padding: 5px 0.75rem;
   flex-shrink: 0;
-  display: flex; align-items: center; gap: 5px;
+  display: flex; align-items: stretch;
   box-shadow: var(--shadow-sm);
 }
 .source-dropdown { position: relative; flex: 1; }
+.source-dropdown + .source-dropdown { margin-left: -1px; }
+.source-dropdown:first-child .source-dropdown-btn { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.source-dropdown:last-child  .source-dropdown-btn { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.source-dropdown:first-child:last-child .source-dropdown-btn { border-radius: var(--radius-sm); }
 .source-dropdown-btn {
-  display: flex; align-items: center; justify-content: space-between;
-  width: 100%; gap: 5px;
-  padding: 5px 10px;
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; height: 100%; gap: 5px;
+  padding: 6px 10px;
   font-size: 0.72rem; font-weight: 500;
   cursor: pointer; user-select: none;
   border: 1px solid var(--border);
   background: var(--bg-raised); color: var(--text-secondary);
-  border-radius: var(--radius-sm);
   transition: all var(--transition);
+  position: relative; z-index: 1;
 }
-.source-dropdown-btn:hover { color: var(--text-primary); border-color: var(--text-muted); }
+.source-dropdown.open .source-dropdown-btn { z-index: 201; }
+.source-dropdown-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.source-dropdown.open .source-dropdown-btn {
+  border-color: var(--accent); color: var(--text-primary);
+  background: var(--bg-surface);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
 .source-dropdown-btn .arrow {
   font-size: 0.5rem; transition: transform var(--transition);
-  opacity: 0.5; margin-left: -1px;
+  opacity: 0.4; flex-shrink: 0;
 }
-.source-dropdown.open .source-dropdown-btn { border-color: var(--accent); color: var(--text-primary); }
-.source-dropdown.open .source-dropdown-btn .arrow { transform: rotate(180deg); opacity: 1; }
-.source-dropdown-btn .cur-key {
-  font-size: 0.58rem; font-weight: 700;
-  background: var(--accent-bg); color: var(--accent);
-  border-radius: 3px; padding: 0px 4px; min-width: 16px;
-  text-align: center; line-height: 1.6;
+.source-dropdown.open .source-dropdown-btn .arrow { transform: rotate(180deg); opacity: 0.8; }
+.source-dropdown-btn .group-name {
+  font-weight: 500; color: var(--text-muted); font-size: 0.65rem;
+  text-transform: uppercase; letter-spacing: 0.04em;
 }
+.source-dropdown-btn .sep {
+  color: var(--border); font-weight: 300;
+}
+.source-dropdown-btn .cur-source {
+  font-weight: 500; color: var(--text-secondary);
+}
+.source-dropdown-btn .cur-label {
+  font-weight: 600; color: var(--accent);
+}
+.source-dropdown.open .source-dropdown-btn .group-name { color: var(--accent); }
+.source-dropdown.open .source-dropdown-btn .cur-source { color: var(--text-primary); }
 .source-dropdown-menu {
-  display: none; position: absolute; top: 100%; left: 0;
-  margin-top: 2px; min-width: 170px;
+  display: none; position: absolute; top: 100%; left: 0; right: 0;
+  margin-top: -1px;
   background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-md);
-  z-index: 200; padding: 3px 0;
+  border: 1px solid var(--accent);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+  z-index: 200; padding: 4px 0;
+  overflow: hidden;
 }
 .source-dropdown.open .source-dropdown-menu { display: block; }
 .source-dropdown-item {
-  display: flex; align-items: center; gap: 6px;
-  padding: 5px 12px; cursor: pointer;
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; cursor: pointer;
   font-size: 0.73rem; color: var(--text-primary);
   transition: background 0.1s;
 }
 .source-dropdown-item:hover { background: var(--bg-hover); }
-.source-dropdown-item.active { background: var(--bg-selected); color: var(--accent); font-weight: 600; }
+.source-dropdown-item.active {
+  background: var(--bg-selected);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
 .source-dropdown-item .item-key {
   font-size: 0.6rem; font-weight: 700;
   background: var(--bg-inset); color: var(--text-muted);
   border-radius: 3px; padding: 0px 4px; min-width: 16px;
-  text-align: center; line-height: 1.6;
+  text-align: center; line-height: 1.6; flex-shrink: 0;
 }
 .source-dropdown-item.active .item-key { background: var(--accent-bg); color: var(--accent); }
 .source-dropdown-item .item-desc {
   font-size: 0.62rem; color: var(--text-muted); margin-left: auto;
+  white-space: nowrap;
 }
+.source-dropdown-item .item-check {
+  margin-left: auto; color: var(--accent); font-weight: 700;
+  font-size: 0.7rem; display: none;
+}
+.source-dropdown-item.active .item-check { display: inline; }
+.source-dropdown-item.active .item-desc { display: none; }
 /* ═══════════════════════════════════════════════════════════════════════
    Main Log Display
    ═══════════════════════════════════════════════════════════════════════ */
@@ -347,7 +377,9 @@ body {
    ═══════════════════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
   .source-tabs { padding: 3px 0.5rem; gap: 4px; }
-  .source-dropdown-btn { padding: 4px 8px; font-size: 0.68rem; }
+  .source-dropdown-btn { padding: 4px 8px; font-size: 0.66rem; }
+  .source-dropdown-btn .group-name { display: none; }
+  .source-dropdown-btn .sep { display: none; }
   .log-display { font-size: 0.7rem; }
 }
 </style>
@@ -516,13 +548,14 @@ function renderTabs() {
     var group = SOURCE_GROUPS[g];
     var members = LOG_SOURCES.filter(function(s) { return s.group === group.id; });
     var activeMember = members.find(function(s) { return s.label === activeLabel; });
-    var curLabel = activeMember ? activeMember.label : group.label;
-    var curKey = activeMember ? activeMember.key : '';
+    var btnLabel = activeMember ? escHtml(activeMember.label) : escHtml(group.label);
+    var btnClass = activeMember ? ' cur-label' : '';
 
     html += '<div class="source-dropdown" data-group="' + group.id + '">';
-    html += '<div class="source-dropdown-btn" onclick="toggleDropdown(\'' + group.id + '\', event)">';
-    html += escHtml(group.label);
-    if (curKey) html += '<span class="cur-key">' + escHtml(curKey) + '</span>';
+    html += '<div class="source-dropdown-btn" data-group="' + group.id + '">';
+    html += '<span class="group-name">' + escHtml(group.label) + '</span>';
+    html += '<span class="sep">·</span>';
+    html += '<span class="cur-source' + btnClass + '">' + btnLabel + '</span>';
     html += '<span class="arrow">▾</span>';
     html += '</div>';
     html += '<div class="source-dropdown-menu">';
@@ -530,20 +563,58 @@ function renderTabs() {
       var src = members[m];
       var activeClass = (src.label === activeLabel) ? ' active' : '';
       html += '<div class="source-dropdown-item' + activeClass + '" data-source="' + src.label +
-        '" onclick="selectSourceById(\'' + src.label + '\'); closeAllDropdowns();">' +
+        '" data-group="' + group.id + '">' +
         '<span class="item-key">' + escHtml(src.key) + '</span>' +
-        escHtml(src.label) +
-        '<span class="item-desc">' + escHtml(src.desc) + '</span></div>';
+        '<span>' + escHtml(src.label) + '</span>' +
+        '<span class="item-desc">' + escHtml(src.desc) + '</span>' +
+        '<span class="item-check">✓</span></div>';
     }
     html += '</div></div>';
   }
   container.innerHTML = html;
+
+  // Re-bind click handlers
+  bindDropdownEvents();
+}
+
+function bindDropdownEvents() {
+  // Button click toggles
+  var btns = document.querySelectorAll('.source-dropdown-btn');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].addEventListener('click', function(e) {
+      e.stopPropagation();
+      var groupId = this.getAttribute('data-group');
+      toggleDropdown(groupId);
+    });
+  }
+
+  // Item click selects source
+  var items = document.querySelectorAll('.source-dropdown-item');
+  for (var j = 0; j < items.length; j++) {
+    items[j].addEventListener('click', function(e) {
+      e.stopPropagation();
+      var label = this.getAttribute('data-source');
+      selectSourceById(label);
+      closeAllDropdowns();
+    });
+  }
+
+  // Hover over button when another dropdown is open → switch to this one
+  for (var k = 0; k < btns.length; k++) {
+    btns[k].addEventListener('mouseenter', function() {
+      if (openDropdown && openDropdown !== this.getAttribute('data-group')) {
+        closeAllDropdowns();
+        var gid = this.getAttribute('data-group');
+        var dd = document.querySelector('.source-dropdown[data-group="' + gid + '"]');
+        if (dd) { dd.classList.add('open'); openDropdown = gid; }
+      }
+    });
+  }
 }
 
 var openDropdown = null;
 
-function toggleDropdown(groupId, event) {
-  event.stopPropagation();
+function toggleDropdown(groupId) {
   var dropdown = document.querySelector('.source-dropdown[data-group="' + groupId + '"]');
   if (!dropdown) return;
   var wasOpen = dropdown.classList.contains('open');
