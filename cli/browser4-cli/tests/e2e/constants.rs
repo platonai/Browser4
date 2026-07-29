@@ -14,11 +14,19 @@ pub const OTHER_PATH: &str = "/other";
 
 pub const FORM_PATH: &str = "/form";
 
+pub const MOUSE_PATH: &str = "/mouse";
+
+pub const KEYBOARD_PATH: &str = "/keyboard";
+
 pub const INTERACTIVE_TITLE: &str = "Browser4 CLI Interactive Fixture";
 
 pub const OTHER_TITLE: &str = "Browser4 CLI Other Fixture";
 
 pub const FORM_TITLE: &str = "Browser4 CLI Form Fixture";
+
+pub const MOUSE_TITLE: &str = "Browser4 CLI Mouse Fixture";
+
+pub const KEYBOARD_TITLE: &str = "Browser4 CLI Keyboard Fixture";
 
 pub const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
 
@@ -35,6 +43,10 @@ pub const INTERACTIVE_FIXTURE_FILE: &str = "mcp-tool-controller-interactive-fixt
 pub const OTHER_FIXTURE_FILE: &str = "mcp-tool-controller-other-fixture.html";
 
 pub const FORM_FIXTURE_FILE: &str = "mcp-tool-controller-form-fixture.html";
+
+pub const MOUSE_FIXTURE_FILE: &str = "mcp-tool-controller-mouse-fixture.html";
+
+pub const KEYBOARD_FIXTURE_FILE: &str = "mcp-tool-controller-keyboard-fixture.html";
 
 pub const MAX_EMPTY_READ_ATTEMPTS: u32 = 200; // 2 s with 10 ms sleep per attempt
 

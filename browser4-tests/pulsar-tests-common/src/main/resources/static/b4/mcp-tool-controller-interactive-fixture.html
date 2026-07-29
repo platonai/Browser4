@@ -49,24 +49,41 @@
   <script>
     window.__browser4State = {
       clickCount: 0,
+      clickButton: '',
+      clickPosition: null,
       doubleClickCount: 0,
+      rightClickCount: 0,
+      middleClickCount: 0,
+      modifierClick: { count: 0, shiftKey: false, ctrlKey: false, altKey: false, metaKey: false },
       hovered: false,
+      hoverEnterCount: 0,
+      hoverLeaveCount: 0,
+      contextMenuFired: false,
       dragStarted: false,
       dragDropped: '',
       promptResult: '',
       confirmResult: '',
       keyEvents: [],
+      keyDownCount: 0,
+      keyUpCount: 0,
       mouseDownCount: 0,
+      mouseDownButton: '',
       mouseUpCount: 0,
+      mouseUpButton: '',
+      mouseEnteredArea: false,
+      mouseLeftArea: false,
       lastMouse: null,
       lastWheel: null,
+      wheelEvents: [],
+      scrollY: 0,
       typeValue: '',
       fillValue: '',
       checkbox: false,
       selectValue: '',
       uploadCount: 0,
       uploadName: '',
-      submitCount: 0
+      submitCount: 0,
+      focusEvents: []
     };
 
     function syncState() {
@@ -75,14 +92,42 @@
       state.fillValue = document.getElementById('fill-target').value;
       state.checkbox = document.getElementById('check-target').checked;
       state.selectValue = document.getElementById('select-target').value;
+      state.scrollY = Math.round(window.scrollY);
       const files = document.getElementById('file-input').files;
       state.uploadCount = files ? files.length : 0;
       state.uploadName = files && files[0] ? files[0].name : '';
       document.getElementById('state-log').textContent = JSON.stringify(state);
     }
 
-    document.getElementById('click-target').addEventListener('click', () => {
+    document.getElementById('click-target').addEventListener('click', (event) => {
       window.__browser4State.clickCount += 1;
+      window.__browser4State.clickButton = 'left';
+      window.__browser4State.clickPosition = [Math.round(event.clientX), Math.round(event.clientY)];
+      window.__browser4State.modifierClick.shiftKey = event.shiftKey;
+      window.__browser4State.modifierClick.ctrlKey = event.ctrlKey;
+      window.__browser4State.modifierClick.altKey = event.altKey;
+      window.__browser4State.modifierClick.metaKey = event.metaKey;
+      if (event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) {
+        window.__browser4State.modifierClick.count += 1;
+      }
+      syncState();
+    });
+
+    document.getElementById('click-target').addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      window.__browser4State.rightClickCount += 1;
+      syncState();
+    });
+
+    document.getElementById('click-target').addEventListener('mousedown', (event) => {
+      if (event.button === 2) window.__browser4State.rightClickCount += 1;
+      if (event.button === 1) window.__browser4State.middleClickCount += 1;
+      syncState();
+    });
+
+    document.getElementById('click-target').addEventListener('auxclick', (event) => {
+      event.preventDefault();
+      if (event.button === 1) window.__browser4State.middleClickCount += 1;
       syncState();
     });
 
@@ -93,6 +138,13 @@
 
     document.getElementById('hover-target').addEventListener('mouseenter', () => {
       window.__browser4State.hovered = true;
+      window.__browser4State.hoverEnterCount += 1;
+      syncState();
+    });
+
+    document.getElementById('hover-target').addEventListener('mouseleave', () => {
+      window.__browser4State.hovered = false;
+      window.__browser4State.hoverLeaveCount += 1;
       syncState();
     });
 
@@ -136,12 +188,33 @@
     });
 
     document.addEventListener('keydown', (event) => {
-      window.__browser4State.keyEvents.push('down:' + event.key);
+      window.__browser4State.keyEvents.push({
+        type: 'down',
+        key: event.key,
+        code: event.code,
+        shiftKey: event.shiftKey,
+        ctrlKey: event.ctrlKey,
+        altKey: event.altKey,
+        metaKey: event.metaKey,
+        repeat: event.repeat
+      });
+      window.__browser4State.keyDownCount += 1;
+      if (window.__browser4State.keyEvents.length > 200) window.__browser4State.keyEvents.shift();
       syncState();
     });
 
     document.addEventListener('keyup', (event) => {
-      window.__browser4State.keyEvents.push('up:' + event.key);
+      window.__browser4State.keyEvents.push({
+        type: 'up',
+        key: event.key,
+        code: event.code,
+        shiftKey: event.shiftKey,
+        ctrlKey: event.ctrlKey,
+        altKey: event.altKey,
+        metaKey: event.metaKey
+      });
+      window.__browser4State.keyUpCount += 1;
+      if (window.__browser4State.keyEvents.length > 200) window.__browser4State.keyEvents.shift();
       syncState();
     });
 
@@ -151,17 +224,43 @@
     document.getElementById('select-target').addEventListener('change', syncState);
     document.getElementById('file-input').addEventListener('change', syncState);
 
+    // ── Focus tracking ──────────────────────────────────────────
+    ['type-target', 'fill-target'].forEach(function(id) {
+      var el = document.getElementById(id);
+      el.addEventListener('focus', function() {
+        window.__browser4State.focusEvents.push({ target: id, event: 'focus' });
+        if (window.__browser4State.focusEvents.length > 50) window.__browser4State.focusEvents.shift();
+        syncState();
+      });
+      el.addEventListener('blur', function() {
+        window.__browser4State.focusEvents.push({ target: id, event: 'blur' });
+        if (window.__browser4State.focusEvents.length > 50) window.__browser4State.focusEvents.shift();
+        syncState();
+      });
+    });
+
     const mouseArea = document.getElementById('mouse-area');
     mouseArea.addEventListener('mousemove', (event) => {
       window.__browser4State.lastMouse = [Math.round(event.clientX), Math.round(event.clientY)];
       syncState();
     });
-    mouseArea.addEventListener('mousedown', () => {
+    mouseArea.addEventListener('mousedown', (event) => {
       window.__browser4State.mouseDownCount += 1;
+      window.__browser4State.mouseDownButton = ['left','middle','right'][event.button] || 'unknown';
       syncState();
     });
-    mouseArea.addEventListener('mouseup', () => {
+    mouseArea.addEventListener('mouseup', (event) => {
       window.__browser4State.mouseUpCount += 1;
+      window.__browser4State.mouseUpButton = ['left','middle','right'][event.button] || 'unknown';
+      syncState();
+    });
+    mouseArea.addEventListener('mouseenter', () => {
+      window.__browser4State.mouseEnteredArea = true;
+      window.__browser4State.mouseLeftArea = false;
+      syncState();
+    });
+    mouseArea.addEventListener('mouseleave', () => {
+      window.__browser4State.mouseLeftArea = true;
       syncState();
     });
     // Chromium CDP bug workaround (crbug.com/444929150): Input.dispatchMouseEvent
@@ -171,6 +270,13 @@
     // the race condition that causes CDP mouseWheel commands to hang/timeout.
     mouseArea.addEventListener('wheel', (event) => {
       window.__browser4State.lastWheel = [Math.round(event.deltaX), Math.round(event.deltaY)];
+      window.__browser4State.wheelEvents.push({
+        deltaX: Math.round(event.deltaX),
+        deltaY: Math.round(event.deltaY),
+        clientX: Math.round(event.clientX),
+        clientY: Math.round(event.clientY)
+      });
+      if (window.__browser4State.wheelEvents.length > 50) window.__browser4State.wheelEvents.shift();
       syncState();
     }, { passive: false });
 
