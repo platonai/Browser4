@@ -221,28 +221,29 @@ class PageHandler constructor(
         val s = buState.browserState.scrollState
         if (s.viewportsTotal <= 1) return ""
 
-        // When viewports are specified, use the first requested viewport index as
-        // the "current" viewport for navigation hints. Otherwise use the scroll position.
-        val currentViewport: Int = options.viewports?.let { spec ->
-            ViewportSpec.parse(spec)?.firstOrNull()
-        } ?: s.processingViewport
-
+        // Viewport indices are now scroll-relative: -v 0 = current visible area,
+        // -v 1 = next viewport below, -v -1 = previous viewport above.
+        // The footer always uses scroll-relative hints regardless of whether an
+        // explicit viewport spec was provided or we're showing the default view.
         val viewportLabel = if (options.viewports != null) {
             "You are viewing viewport(s) ${options.viewports}"
         } else {
-            "You are currently viewing viewport $currentViewport"
+            "You are currently viewing viewport ${s.processingViewport} (absolute)"
         }
+
+        val hasSpaceAbove = s.processingViewport > 0
+        val hasSpaceBelow = s.processingViewport < s.viewportsTotal - 1
 
         return buildString {
             appendLine("# ---")
             appendLine("# This page has ${s.viewportsTotal} viewports (page chunks split by viewport height). $viewportLabel.")
             appendLine("# To read the page viewport by viewport (like a human scrolling):")
-            if (currentViewport > 0) {
-                appendLine("#   snapshot -v 0          # current visible area")
+            appendLine("#   snapshot -v 0          # current visible area")
+            if (hasSpaceAbove) {
+                appendLine("#   snapshot -v -1         # scroll up one viewport")
             }
-            if (currentViewport < s.viewportsTotal - 1) {
-                val next = currentViewport + 1
-                appendLine("#   snapshot -v $next          # scroll down to viewport $next")
+            if (hasSpaceBelow) {
+                appendLine("#   snapshot -v 1          # scroll down one viewport")
             }
             appendLine("#   snapshot -v 0-${s.viewportsTotal - 1}    # capture all viewports at once")
             appendLine("#   snapshot -v all       # capture all viewports (same as above)")

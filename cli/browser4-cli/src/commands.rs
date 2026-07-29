@@ -1947,7 +1947,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(f) = get_opt_str(args, "filename") { p["filename"] = json!(f); }
                 if let Some(fp) = get_bool(args, "full-page") { p["fullPage"] = json!(fp); }
                 if let Some(v) = get_opt_str(args, "viewport") {
-                    if let Ok(n) = v.parse::<i32>() { p["viewport"] = json!(n.max(0)); }
+                    if let Ok(n) = v.parse::<i32>() { p["viewport"] = json!(n); }
                 }
                 p
             },
@@ -5422,7 +5422,7 @@ mod tests {
     }
 
     #[test]
-    fn test_screenshot_viewport_negative_clamped_to_zero() {
+    fn test_screenshot_viewport_negative_allowed() {
         let map = commands_map();
         let cmd = map.get("screenshot").unwrap();
         let mut args = HashMap::new();
@@ -5430,8 +5430,8 @@ mod tests {
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(
             params.get("viewport").and_then(|v| v.as_i64()),
-            Some(0),
-            "negative viewport should be clamped to 0"
+            Some(-1),
+            "negative viewport should be passed through for scroll-relative scrolling"
         );
     }
 
