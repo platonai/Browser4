@@ -156,3 +156,4 @@ bin/maintenance/state/*.lock
 .build-state
 /.build/
 /b4w
+/b4w-*.bat

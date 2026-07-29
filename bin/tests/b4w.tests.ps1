@@ -34,11 +34,12 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $TestUtilsModule = Join-Path $ScriptDir '..\..\browser4-tests\tests-production\test-utils.psm1'
 $B4wPs1Path = Join-Path $ScriptDir '..\..\b4w.ps1'
 $IsWinTest = ($IsWindows -or $env:OS -eq 'Windows_NT')
-# b4w install now creates the global launcher at ~/.local/bin/b4w (non-Windows)
-# or adds the repo to PATH (Windows).  The legacy repo-local launcher is no
-# longer created — it is only cleaned up by uninstall if it exists from past
-# installs.
-$GlobalB4wLauncher = if ($IsWinTest) { $null } else { Join-Path $HOME '.local/bin/b4w' }
+# b4w install creates the global launcher at ~/.local/bin/b4w (non-Windows) or
+# adds the repo to PATH (Windows).  The legacy repo-local launcher is no longer
+# created — it is only cleaned up by uninstall if it exists from past installs.
+# $GlobalB4wLauncher is always set to the canonical path so that Test-Path
+# receives a real path on all platforms (Test-Path $null is unreliable).
+$GlobalB4wLauncher = Join-Path $HOME '.local/bin/b4w'
 
 # -------------------------------------------------------------------
 # Load shared test utilities (soft dependency)
@@ -251,9 +252,8 @@ if ($IsWinTest) {
 }
 
 # Verify the global `b4w` bash launcher exists (non-Windows) or is absent (Windows).
-# The launcher is now created at ~/.local/bin/b4w (global install) rather than
-# in the repo root.
-$bashExpected = -not $IsWinTest
+# The launcher is created at ~/.local/bin/b4w by the non-Windows install path;
+# Windows install does not create it, so Test-Path should return $false there.
 if ($IsWinTest) {
     Assert-Returns -Label 'b4w install Win: no global bash launcher' -Actual (Test-Path $GlobalB4wLauncher) -Expected $false
 } else {
@@ -266,6 +266,51 @@ if ($GlobalB4wLauncher -and (Test-Path $GlobalB4wLauncher)) {
     Assert-ContainsString -Label 'b4w install: bash launcher has shebang' -Haystack $b4wContent -Needle '#!/bin/bash'
     Assert-ContainsString -Label 'b4w install: bash launcher delegates to b4w.sh' -Haystack $b4wContent -Needle 'b4w.sh'
 }
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: Subcommand launchers (created by b4w install)
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ Subcommand: b4w install launchers ━━━" -ForegroundColor Cyan
+
+# Verify install output mentions subcommand launchers
+Assert-ContainsString -Label 'b4w install: mentions subcommand launchers' -Haystack $output -Needle 'subcommand launchers'
+
+# Verify key launcher scripts were created (non-Windows: bash scripts; Windows: .bat files)
+$testSubcommands = @('b4w-coworker', 'b4w-coworker-fix', 'b4w-test', 'b4w-build')
+foreach ($sub in $testSubcommands) {
+    if ($IsWinTest) {
+        # Windows: .bat files in the repo root
+        $repoRoot = Split-Path -Parent $b4wAbs
+        $batPath = Join-Path $repoRoot "$sub.bat"
+        if (Test-Path $batPath) {
+            Assert-Returns -Label "b4w install: $sub.bat exists" -Actual $true -Expected $true
+            $content = Get-Content $batPath -Raw
+            Assert-ContainsString -Label "b4w install: $sub.bat delegates to b4w" -Haystack $content -Needle 'b4w.bat'
+        } else {
+            Write-Host "    ? SKIP: $sub.bat not found" -ForegroundColor Yellow
+        }
+    } else {
+        # Non-Windows: bash scripts in ~/.local/bin/
+        $launcherPath = Join-Path $HOME ".local/bin/$sub"
+        Assert-Returns -Label "b4w install: $sub launcher exists" -Actual (Test-Path $launcherPath) -Expected $true
+        if (Test-Path $launcherPath) {
+            $content = Get-Content $launcherPath -Raw
+            Assert-ContainsString -Label "b4w install: $sub has shebang" -Haystack $content -Needle '#!/bin/bash'
+            Assert-ContainsString -Label "b4w install: $sub delegates to b4w.sh" -Haystack $content -Needle 'b4w.sh'
+        }
+    }
+}
+
+# Verify the launchers are cleaned up by uninstall
+$uninstallOutput = pwsh -NoProfile -Command "& '$b4wAbs' b4w uninstall *>&1" *>&1 | Out-String
+if ($IsWinTest) {
+    Assert-ContainsString -Label 'b4w uninstall: cleans up .bat launchers' -Haystack $uninstallOutput -Needle 'subcommand .bat launcher'
+} else {
+    Assert-ContainsString -Label 'b4w uninstall: cleans up subcommand launchers' -Haystack $uninstallOutput -Needle 'subcommand launcher'
+}
+
+# Re-install after uninstall test (restore state for subsequent tests)
+$null = pwsh -NoProfile -Command "& '$b4wAbs' b4w install *>&1" *>&1 | Out-String
 
 # ═══════════════════════════════════════════════════════════════════
 # TESTS: Subcommand routing — b4w uninstall
@@ -447,6 +492,13 @@ Assert-ContainsString -Label 'Integrity: b4w uninstall removes from PATH' -Hayst
 Assert-ContainsString -Label 'Integrity: b4w uninstall deletes launcher' -Haystack $srcText -Needle 'Removed global launcher'
 Assert-ContainsString -Label 'Integrity: b4w bare prints help' -Haystack $srcText -Needle "b4w (bare / unknown subcommand)"
 Assert-ContainsString -Label 'Integrity: cli subcommand stripping' -Haystack $srcText -Needle "eq 'cli'"
+Assert-ContainsString -Label 'Integrity: has LauncherSubcommands array' -Haystack $srcText -Needle '$LauncherSubcommands'
+Assert-ContainsString -Label 'Integrity: has b4w-coworker launcher' -Haystack $srcText -Needle 'b4w-coworker'
+Assert-ContainsString -Label 'Integrity: has b4w-coworker-fix launcher' -Haystack $srcText -Needle 'b4w-coworker-fix'
+Assert-ContainsString -Label 'Integrity: has b4w-test launcher' -Haystack $srcText -Needle 'b4w-test'
+Assert-ContainsString -Label 'Integrity: has b4w-build launcher' -Haystack $srcText -Needle 'b4w-build'
+Assert-ContainsString -Label 'Integrity: install creates subcommand launchers' -Haystack $srcText -Needle 'subcommand launchers installed'
+Assert-ContainsString -Label 'Integrity: uninstall cleans subcommand launchers' -Haystack $srcText -Needle 'subcommand launcher'
 
 # ═══════════════════════════════════════════════════════════════════
 # TESTS: Source integrity — bootstrap (global invocation)
@@ -475,6 +527,8 @@ Assert-ContainsString -Label 'Help: mentions passthrough tip' -Haystack $helpOut
 Assert-ContainsString -Label 'Help: mentions coworker list example' -Haystack $helpOutput -Needle 'coworker list'
 Assert-ContainsString -Label 'Help: mentions test --e2e example' -Haystack $helpOutput -Needle '--e2e'
 Assert-ContainsString -Label 'Help: mentions build example' -Haystack $helpOutput -Needle 'build browser4-cli'
+Assert-ContainsString -Label 'Help: mentions subcommand launchers' -Haystack $helpOutput -Needle 'b4w-coworker-fix'
+Assert-ContainsString -Label 'Help: mentions b4w-coworker mapping' -Haystack $helpOutput -Needle 'b4w-coworker'
 
 # ═══════════════════════════════════════════════════════════════════
 # TESTS: Subcommand routing — edge cases

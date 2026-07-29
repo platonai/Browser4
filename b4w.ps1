@@ -191,6 +191,14 @@ Commands:
   b4w install      Install b4w as a global command (adds to PATH)
   b4w uninstall    Remove b4w from PATH and delete generated launcher
 
+After running `b4w install`, subcommand launchers are created so you can
+type subcommands directly:
+  b4w-coworker       → b4w coworker
+  b4w-coworker-fix   → b4w coworker fix
+  b4w-test           → b4w test
+  b4w-build          → b4w build
+  (and all coworker sub-subcommands: b4w-coworker-draft, -review, etc.)
+
 Examples:
   # cli (default — "cli" keyword is optional)
   b4w                                   show this help
@@ -207,6 +215,12 @@ Examples:
   b4w b4w install                       install b4w globally (one-time setup)
   b4w b4w uninstall                     remove b4w from PATH and launcher
 
+  # subcommand launchers (after b4w install)
+  b4w-coworker list                     b4w coworker list
+  b4w-coworker-fix                      pick and fix a task from 1ready/
+  b4w-test fast                         run fast tests
+  b4w-build                             build browser4-cli
+
 Wrapper:
   b4w.sh          Git Bash / Linux / macOS wrapper — preferred for bash
                   environments when PowerShell flag interception occurs.
@@ -217,18 +231,49 @@ b4w.ps1 thanks to manual argument parsing that avoids PowerShell's
 parameter binder.
 '@
 
+# ── Known subcommand launchers ──────────────────────────────────────────────
+# When b4w install runs, it creates global wrapper scripts so subcommands
+# can be invoked directly from the shell without typing "b4w" first:
+#   b4w-coworker              → b4w coworker
+#   b4w-coworker-fix          → b4w coworker fix
+#   b4w-test                  → b4w test
+#   b4w-build                 → b4w build
+#   etc.
+#
+# Each entry maps the launcher script name (without extension) to the
+# b4w argument string it delegates to.
+$LauncherSubcommands = @(
+    @{ Name = 'b4w-coworker';          Args = 'coworker' },
+    @{ Name = 'b4w-coworker-draft';    Args = 'coworker draft' },
+    @{ Name = 'b4w-coworker-refine';   Args = 'coworker refine' },
+    @{ Name = 'b4w-coworker-assign';   Args = 'coworker assign' },
+    @{ Name = 'b4w-coworker-list';     Args = 'coworker list' },
+    @{ Name = 'b4w-coworker-view';     Args = 'coworker view' },
+    @{ Name = 'b4w-coworker-cancel';   Args = 'coworker cancel' },
+    @{ Name = 'b4w-coworker-commit';   Args = 'coworker commit' },
+    @{ Name = 'b4w-coworker-push';     Args = 'coworker push' },
+    @{ Name = 'b4w-coworker-fix';      Args = 'coworker fix' },
+    @{ Name = 'b4w-coworker-review';   Args = 'coworker review' },
+    @{ Name = 'b4w-test';              Args = 'test' },
+    @{ Name = 'b4w-build';             Args = 'build' }
+)
+
 # ── Subcommand: b4w install ────────────────────────────────────────────────
 # Installs the b4w command globally so you can type `b4w <subcommand>` from
 # any directory without the .ps1 / .bat / .sh extension.
 #
-# On non-Windows platforms, installation places a bash launcher script at
+# On non-Windows platforms, installation places bash launcher scripts at
 #   $HOME/.local/bin/b4w
-# and ensures that directory is on the user PATH.  The launcher delegates
+#   $HOME/.local/bin/b4w-coworker
+#   $HOME/.local/bin/b4w-test
+#   ... (one per known subcommand)
+# and ensures that directory is on the user PATH.  Each launcher delegates
 # to the repo's b4w.sh via an absolute path, so the repo can be moved or
 # deleted independently — just re-run install from the new location.
 #
 # On Windows, installation adds the repo directory ($ScriptDir) to the user
-# PATH so b4w.ps1 / b4w.bat are discoverable from any shell.
+# PATH so b4w.ps1 / b4w.bat are discoverable from any shell, and creates
+# b4w-*.bat launchers in the repo root that delegate to b4w.bat.
 if ($CliArgs -and $CliArgs[0] -eq 'b4w' -and $CliArgs[1] -eq 'install') {
     Write-Host "Installing b4w command..." -ForegroundColor Cyan
 
@@ -299,12 +344,45 @@ if ($CliArgs -and $CliArgs[0] -eq 'b4w' -and $CliArgs[1] -eq 'install') {
         Write-Host "Restart your shell (or run 'hash -r' / reopen the terminal)"
         Write-Host "and then you can type just:  b4w <subcommand>" -ForegroundColor Yellow
         Write-Host ""
+        # ── Create subcommand launchers ────────────────────────────────────
+        # Creates b4w-coworker, b4w-test, b4w-coworker-fix, etc. in ~/.local/bin/
+        # so subcommands can be invoked directly without typing "b4w" first.
+        $launcherCount = 0
+        foreach ($entry in $LauncherSubcommands) {
+            $subLauncherPath = Join-Path $globalBin $entry.Name
+            $subExisted = Test-Path $subLauncherPath
+            $subContent = "#!/bin/bash`n" +
+                "# $($entry.Name) — global launcher for browser4-cli.`n" +
+                "# Installed by: $ScriptDir/b4w.ps1`n" +
+                "# Delegates to: $ScriptDir/b4w.sh $($entry.Args)`n" +
+                "exec `"$ScriptDir/b4w.sh`" $($entry.Args) `"`$@`"`n"
+            [System.IO.File]::WriteAllText($subLauncherPath, $subContent, [System.Text.Encoding]::ASCII)
+            chmod +x $subLauncherPath 2>$null
+            if ($subExisted) { Write-Host "  + Updated: $subLauncherPath" -ForegroundColor Green }
+            else             { Write-Host "  + Created: $subLauncherPath" -ForegroundColor Green }
+            $launcherCount++
+        }
+        Write-Host "  + $launcherCount subcommand launchers installed." -ForegroundColor Green
+
+        Write-Host ""
+        Write-Host "b4w installed successfully!" -ForegroundColor Green
+        Write-Host "  bash launchers: $globalBin/  ($launcherCount subcommands)"
+        Write-Host "  Repo     : $ScriptDir"
+        Write-Host ""
+        Write-Host "Restart your shell (or run 'hash -r' / reopen the terminal)"
+        Write-Host "and then you can type just:  b4w <subcommand>" -ForegroundColor Yellow
+        Write-Host ""
         Write-Host "Examples:" -ForegroundColor White
         Write-Host "  b4w --help"
-        Write-Host "  b4w coworker list"
-        Write-Host "  b4w test --e2e"
-        Write-Host "  b4w build"
+        Write-Host "  b4w-coworker list"
+        Write-Host "  b4w-test --e2e"
+        Write-Host "  b4w-build"
         Write-Host "  b4w -- snapshot -i"
+        Write-Host ""
+        Write-Host "Or use subcommand launchers directly:" -ForegroundColor DarkGray
+        Write-Host "  b4w-coworker-fix        # → b4w coworker fix" -ForegroundColor DarkGray
+        Write-Host "  b4w-coworker-review     # → b4w coworker review" -ForegroundColor DarkGray
+        Write-Host "  b4w-test fast           # → b4w test fast" -ForegroundColor DarkGray
 
         Set-Location $OriginalCwd
         exit 0
@@ -339,6 +417,27 @@ if ($CliArgs -and $CliArgs[0] -eq 'b4w' -and $CliArgs[1] -eq 'install') {
     }
     $env:Path = $procCleaned -join ';'
 
+    # ── Create subcommand .bat launchers in the repo root ─────────────────
+    # Creates b4w-coworker.bat, b4w-test.bat, b4w-coworker-fix.bat, etc.
+    # so subcommands can be invoked directly from any shell.
+    $launcherCount = 0
+    foreach ($entry in $LauncherSubcommands) {
+        $batPath = Join-Path $ScriptDir "$($entry.Name).bat"
+        $batExisted = Test-Path $batPath
+        $batContent = "@echo off`r`n" +
+            "REM $($entry.Name).bat — Delegates to b4w $($entry.Args)`r`n" +
+            "REM Generated by b4w install. Do not edit.`r`n" +
+            "setlocal`r`n" +
+            "set `"SCRIPT_DIR=%~dp0`"`r`n" +
+            "call `"%SCRIPT_DIR%b4w.bat`" $($entry.Args) %*`r`n" +
+            "exit /b %ERRORLEVEL%`r`n"
+        [System.IO.File]::WriteAllText($batPath, $batContent, [System.Text.Encoding]::ASCII)
+        if ($batExisted) { Write-Host "  + Updated: $batPath" -ForegroundColor Green }
+        else             { Write-Host "  + Created: $batPath" -ForegroundColor Green }
+        $launcherCount++
+    }
+    Write-Host "  + $launcherCount subcommand .bat launchers installed." -ForegroundColor Green
+
     Write-Host ""
     Write-Host "b4w installed successfully!" -ForegroundColor Green
     Write-Host ""
@@ -347,10 +446,15 @@ if ($CliArgs -and $CliArgs[0] -eq 'b4w' -and $CliArgs[1] -eq 'install') {
     Write-Host ""
     Write-Host "Examples:" -ForegroundColor White
     Write-Host "  b4w --help"
-    Write-Host "  b4w coworker list"
-    Write-Host "  b4w test --e2e"
-    Write-Host "  b4w build"
+    Write-Host "  b4w-coworker list"
+    Write-Host "  b4w-test --e2e"
+    Write-Host "  b4w-build"
     Write-Host "  b4w -- snapshot -i"
+    Write-Host ""
+    Write-Host "Or use subcommand launchers directly:" -ForegroundColor DarkGray
+    Write-Host "  b4w-coworker-fix        # → b4w coworker fix" -ForegroundColor DarkGray
+    Write-Host "  b4w-coworker-review     # → b4w coworker review" -ForegroundColor DarkGray
+    Write-Host "  b4w-test fast           # → b4w test fast" -ForegroundColor DarkGray
 
     Set-Location $OriginalCwd
     exit 0
@@ -377,7 +481,25 @@ if ($CliArgs -and $CliArgs[0] -eq 'b4w' -and $CliArgs[1] -eq 'uninstall') {
             Write-Host "  - Global launcher not found: $globalLauncher" -ForegroundColor DarkGray
         }
 
-        # 2. Also clean up the legacy repo-local bash launcher if it exists
+        # 2. Remove subcommand launchers (b4w-coworker, b4w-test, etc.)
+        #    Only remove files that look like generated launchers (contain
+        #    the "global launcher for browser4-cli" marker).
+        $subLaunchers = Get-ChildItem -Path $globalBin -Filter 'b4w-*' -File -ErrorAction SilentlyContinue
+        $removedCount = 0
+        foreach ($s in $subLaunchers) {
+            $content = Get-Content $s.FullName -Raw -ErrorAction SilentlyContinue
+            if ($content -match 'global launcher for browser4-cli') {
+                Remove-Item $s.FullName -Force
+                $removedCount++
+            }
+        }
+        if ($removedCount -gt 0) {
+            Write-Host "  + Removed $removedCount subcommand launcher(s) from $globalBin" -ForegroundColor Green
+        } else {
+            Write-Host "  - No subcommand launchers to remove" -ForegroundColor DarkGray
+        }
+
+        # 3. Also clean up the legacy repo-local bash launcher if it exists
         #    (from b4w installs prior to the global-install change).
         $legacyLauncher = Join-Path $ScriptDir 'b4w'
         if (Test-Path $legacyLauncher) {
@@ -390,7 +512,7 @@ if ($CliArgs -and $CliArgs[0] -eq 'b4w' -and $CliArgs[1] -eq 'uninstall') {
             }
         }
 
-        # 3. Clean any b4w-repo PATH entries from the user PATH (legacy).
+        # 4. Clean any b4w-repo PATH entries from the user PATH (legacy).
         $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
         $normalizedRepo = $ScriptDir.TrimEnd('\', '/')
         $entries = @($userPath -split ';' -ne '')
@@ -453,6 +575,22 @@ if ($CliArgs -and $CliArgs[0] -eq 'b4w' -and $CliArgs[1] -eq 'uninstall') {
         Write-Host "  + Removed from current session PATH" -ForegroundColor Green
     }
 
+    # ── Remove subcommand .bat launchers from the repo root ─────────────
+    $batLaunchers = Get-ChildItem -Path $ScriptDir -Filter 'b4w-*.bat' -File -ErrorAction SilentlyContinue
+    $batCount = 0
+    foreach ($b in $batLaunchers) {
+        $c = Get-Content $b.FullName -Raw -ErrorAction SilentlyContinue
+        if ($c -match 'Generated by b4w install') {
+            Remove-Item $b.FullName -Force
+            $batCount++
+        }
+    }
+    if ($batCount -gt 0) {
+        Write-Host "  + Removed $batCount subcommand .bat launcher(s) from $ScriptDir" -ForegroundColor Green
+    } else {
+        Write-Host "  - No subcommand .bat launchers to remove" -ForegroundColor DarkGray
+    }
+
     Write-Host ""
     Write-Host "b4w uninstalled successfully!" -ForegroundColor Green
     Write-Host ""
@@ -470,8 +608,15 @@ Usage: b4w b4w <subcommand>
 Manage the b4w launcher itself.
 
 Subcommands:
-  b4w install      Install b4w as a global command (adds to PATH, creates bash launcher)
-  b4w uninstall    Remove b4w from PATH and delete the generated launcher
+  b4w install      Install b4w as a global command (adds to PATH, creates subcommand launchers)
+  b4w uninstall    Remove b4w from PATH and delete all generated launchers
+
+After installation, subcommand launchers are created so you can type:
+  b4w-coworker       → b4w coworker
+  b4w-coworker-fix   → b4w coworker fix
+  b4w-test           → b4w test
+  b4w-build          → b4w build
+  (and all coworker sub-subcommands)
 
 Examples:
   ./b4w.ps1 b4w install       install b4w globally
