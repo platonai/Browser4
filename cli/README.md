@@ -116,6 +116,9 @@ browser4-cli close
 | `--proxy <url>` | HTTP proxy for runtime downloads only |
 | `--json` | Emit machine-parseable JSON to stdout |
 | `-q`, `--quiet` | Suppress normal output |
+| `-tip`, `--show-tip` | Show a relevant tip on stderr after each command |
+| `--pretty` | Pretty-print JSON output |
+| `--timeout <seconds>` | Override the default HTTP timeout for tool calls |
 
 Sessions persist independently per name. Omit `-s` to use the default session
 (`~/.browser4/cli-state.json`). With `-s <name>`, state is stored under
@@ -169,8 +172,8 @@ browser4-cli -s mysession goto https://example.com
 
 | Command | Description |
 |---|---|
-| `click <ref> [button]` | Click an element. `--modifiers` for modifier keys, `--follow` to detect and switch to new tabs opened by the click. |
-| `dblclick <ref> [button]` | Double-click an element. `--modifiers` for modifier keys, `--follow` to detect and switch to new tabs. |
+| `click <ref> [button]` | Click an element. `--modifiers` for modifier keys, `--follow` to detect and switch to new tabs opened by the click, `--auto-dismiss-dialogs` to auto-accept any dialog triggered by the click. |
+| `dblclick <ref> [button]` | Double-click an element. `--modifiers` for modifier keys, `--follow` to detect and switch to new tabs, `--auto-dismiss-dialogs` to auto-accept any dialog triggered by the double-click. |
 | `hover <ref>` | Hover over an element. |
 | `drag <startRef> <endRef>` | Drag and drop between two elements. |
 | `fill <ref> <text>` | Fill text into an editable element. `--submit` to press Enter after. `--verify` to confirm. |
@@ -181,6 +184,10 @@ browser4-cli -s mysession goto https://example.com
 
 All interaction commands accept element references from `snapshot` (e.g. `e15`)
 or CSS selectors (e.g. `#submit-btn`, `.menu-item`).
+
+Interaction commands take an automatic accessibility-tree snapshot after executing
+to verify results. Pass `--no-snapshot` to skip this automatic snapshot when you
+plan to capture a fresh snapshot manually.
 
 ```bash
 browser4-cli click e15
@@ -410,6 +417,27 @@ browser4-cli skills unpack /custom/path     # Unpack to a custom directory
 | `delete-data` | Delete session data (cookies, storage, cache). |
 | `console [min-level]` | List console messages. `--clear` to clear. |
 | `upload <ref> <file>` | Upload files to a file input. |
+
+### Plugins
+
+Installed server-side plugins expose their tools through the `plugin-<name>` pattern:
+
+| Command | Description |
+|---|---|
+| `plugin list` | List installed plugins and their status. |
+| `plugin info <name>` | Show detailed information about a plugin. |
+| `plugin install <name>` | Install a plugin from the registry. |
+| `plugin remove <name>` | Remove an installed plugin. |
+
+Plugin tools are invoked via `plugin-<name> <method>`. Use `plugin list` to see
+available plugin tool domains and their methods.
+
+```
+browser4-cli plugin list
+browser4-cli plugin info <name>
+browser4-cli plugin install <name>
+browser4-cli plugin-<name> <method> [args...]
+```
 
 ---
 
@@ -850,6 +878,20 @@ browser4-cli type "query" e15  # type into it
 
 You can also use CSS selectors (e.g. `#search`, `.btn-primary`,
 `input[name=email]`) anywhere a ref is accepted.
+
+## Development (running from source)
+
+When working from the repository (not using an installed `browser4-cli` binary),
+use the dev-mode wrappers in the repo root:
+
+| Platform | Command | Notes |
+|---|---|---|
+| **PowerShell** (Windows) | `./b4w.ps1 <command>` | Primary choice. Auto-builds from source when needed. Uses manual argument parsing — short flags (`-o`, `-i`, `-v`) are safe. |
+| **Git Bash / Linux / macOS** | `./b4w.sh <command>` | Bash wrapper that individually quotes arguments before passing to pwsh. |
+| **CMD** (Windows) | `./b4w.bat <command>` | Uses `--%` stop-parsing token to prevent PowerShell from consuming flags. |
+| **Cargo (any platform)** | `cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>` | Slower (compiles each run). Good for one-off debugging. |
+
+**Example:** The installed command `browser4-cli snapshot -v 0` becomes `./b4w.ps1 snapshot -v 0` (PowerShell) or `./b4w.sh snapshot -v 0` (Git Bash) when running from source.
 
 ## State persistence
 

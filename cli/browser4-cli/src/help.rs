@@ -400,7 +400,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "wait" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Five wait modes are supported, selected by which option or positional argument is provided:"
+            "  - Six wait modes are supported, selected by which option or positional argument is provided:"
                 .to_string(),
         );
         lines.push(
@@ -2592,7 +2592,7 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "wait").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli wait [target]"));
-        assert!(help.contains("Five wait modes"));
+        assert!(help.contains("Six wait modes"));
         assert!(help.contains("selector — wait for an element"));
         assert!(help.contains("time — wait a fixed number"));
         assert!(help.contains("text — wait until the given text"));

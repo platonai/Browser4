@@ -93,9 +93,12 @@ Refs are **ephemeral** — they become invalid after commands that change the DO
 
 **In practice, you can fill an entire form from a single snapshot.** Only re-snapshot if a ref unexpectedly fails — the CLI will surface a clear error so you know when it's needed.
 
+Interaction commands capture an automatic snapshot after execution. Pass `--no-snapshot` to skip it when you plan to capture a fresh snapshot manually (saves a round-trip).
+
 ### Output Modes
 
-- **Default** — human-readable output on stdout with tips on stderr.
+- **Default** — human-readable output on stdout.
+- **`--show-tip` / `-tip`** — show a relevant, rotating tip on stderr after each successful command. Tips are suppressed by default; use this flag to enable them.
 - **`--json`** — single-line JSON envelope on stdout only. All tips, hints, warnings, and human-readable text are suppressed (clean machine output).
 - **`--quiet` / `-q`** — suppress all normal output; only errors appear on stderr.
 
@@ -308,7 +311,7 @@ browser4-cli dialog-accept "Hello from Browser4"  # fill prompt and accept
 browser4-cli dialog-dismiss                       # cancel/dismiss any dialog
 ```
 
-**Note:** `dialog-accept` and `dialog-dismiss` must be run in a separate invocation — they cannot be part of the same command as the triggering `click`.
+**Note:** `dialog-accept` and `dialog-dismiss` must be run in a separate invocation — they cannot be part of the same command as the triggering `click`. Alternatively, use `click --auto-dismiss-dialogs <ref>` to auto-accept any dialog triggered by the click in a single invocation.
 
 ### Verifying Results (verify-after-interaction)
 
