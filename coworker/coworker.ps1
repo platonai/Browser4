@@ -40,7 +40,7 @@ Usage: coworker <command> [options]
 
 Commands:
   draft     Create or edit a task draft in 0draft/
-            coworker draft [-Title <str>] [-Content <str>] [-Edit] [-Name <str>]
+            coworker draft [-Title <str>|-t <str>] [-Content <str>|-ct <str>] [-Edit|-e] [-Name <str>|-n <str>] [-Interactive|-i] [-NoInteractive|-ni]
 
   refine    Improve a draft task using AI analysis
             coworker refine [-Path <path>] [-Audience <str>] [-InPlace]
@@ -340,6 +340,33 @@ function Read-TaskContent {
     }
 }
 
+function Test-CanPrompt {
+    try {
+        return [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
+    }
+    catch {
+        return $false
+    }
+}
+
+function Read-MultilineInput {
+    param(
+        [string]$PromptMessage = 'Enter text',
+        [string]$EndToken = '.'
+    )
+
+    Write-ConsoleLine -Message $PromptMessage -ForegroundColor Cyan
+    Write-ConsoleLine -Message "Finish input with a line containing only '$EndToken'." -ForegroundColor DarkGray
+
+    $lines = @()
+    while ($true) {
+        $line = Read-Host
+        if ($line -eq $EndToken) { break }
+        $lines += $line
+    }
+    return (($lines -join [Environment]::NewLine).Trim())
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Subcommand: draft — Create or edit a task draft in 0draft/
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -351,7 +378,9 @@ function Invoke-Draft {
         [string]$Prompt = '',
         [switch]$Edit,
         [string]$Name = '',
-        [switch]$RefreshEditor
+        [switch]$RefreshEditor,
+        [switch]$Interactive,
+        [switch]$NoInteractive
     )
 
     $dirs = Get-TaskDirectories
@@ -364,6 +393,34 @@ function Invoke-Draft {
 
     # Use $Prompt as alias for $Content
     if ($Prompt -and -not $Content) { $Content = $Prompt }
+
+    if ($Interactive -and $NoInteractive) {
+        Write-ConsoleLine -Message 'Error: -Interactive and -NoInteractive cannot be used together.' -ForegroundColor Red
+        exit 1
+    }
+
+    $hasExplicitArgs = @($Title, $Content, $Prompt, $Name) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    if (-not $Interactive -and -not $NoInteractive -and $hasExplicitArgs.Count -eq 0 -and -not $Edit) {
+        $Interactive = $true
+    }
+
+    if ($Interactive) {
+        if (-not (Test-CanPrompt)) {
+            Write-ConsoleLine -Message 'Error: Interactive draft mode requires a TTY (console input).' -ForegroundColor Red
+            Write-ConsoleLine -Message 'Use -NoInteractive with -Title/-Content for non-interactive environments.' -ForegroundColor Yellow
+            exit 1
+        }
+
+        if (-not $Title) {
+            $Title = (Read-Host 'Title (optional)').Trim()
+        }
+        if (-not $Name) {
+            $Name = (Read-Host 'Filename (optional, without .md)').Trim()
+        }
+        if (-not $Content) {
+            $Content = Read-MultilineInput -PromptMessage 'Prompt content' -EndToken '.'
+        }
+    }
 
     # Determine filename
     $fileName = ''
@@ -1318,15 +1375,22 @@ Usage: coworker draft [options]
 
 Create or edit a task draft in 0draft/.
 
+When no options are provided, draft mode starts interactively by default.
+
 Options:
-  -Title <str>       Task title (creates structured format)
-  -Content <str>     Task content / prompt body
-  -Prompt <str>      Alias for -Content
-  -Edit              Open the draft in an editor after creation
-  -Name <str>        Specify the filename (without .md extension)
-  -RefreshEditor     Re-detect available editor (ignore state cache)
+  -Title, -t <str>         Task title (creates structured format)
+  -Content, -ct <str>      Task content / prompt body
+  -Prompt, -pr <str>       Alias for -Content
+  -Edit, -e                Open the draft in an editor after creation
+  -Name, -n <str>          Specify the filename (without .md extension)
+  -Interactive, -i         Force interactive prompts in the terminal
+  -NoInteractive, -ni      Disable interactive prompts (for scripts/CI)
+  -RefreshEditor, -re      Re-detect available editor (ignore state cache)
 
 Examples:
+  coworker draft
+  coworker draft -Interactive
+  coworker draft -i -t "Fix login timeout"
   coworker draft -Title "Fix login timeout" -Content "The login..."
   coworker draft -Edit
   coworker draft -Name my-feature -Title "My Feature"
@@ -1584,10 +1648,20 @@ function Parse-SubcommandArgs {
         $arg = $ArgList[$i]
         switch -Wildcard ($arg) {
             '-Path'          { $parsed['Path'] = $ArgList[++$i]; break }
+            '-path'          { $parsed['Path'] = $ArgList[++$i]; break }
+            '-p'             { $parsed['Path'] = $ArgList[++$i]; break }
             '-Name'          { $parsed['Name'] = $ArgList[++$i]; break }
+            '-name'          { $parsed['Name'] = $ArgList[++$i]; break }
+            '-n'             { $parsed['Name'] = $ArgList[++$i]; break }
             '-Title'         { $parsed['Title'] = $ArgList[++$i]; break }
+            '-title'         { $parsed['Title'] = $ArgList[++$i]; break }
+            '-t'             { $parsed['Title'] = $ArgList[++$i]; break }
             '-Content'       { $parsed['Content'] = $ArgList[++$i]; break }
+            '-content'       { $parsed['Content'] = $ArgList[++$i]; break }
+            '-ct'            { $parsed['Content'] = $ArgList[++$i]; break }
             '-Prompt'        { $parsed['Prompt'] = $ArgList[++$i]; break }
+            '-prompt'        { $parsed['Prompt'] = $ArgList[++$i]; break }
+            '-pr'            { $parsed['Prompt'] = $ArgList[++$i]; break }
             '-State'         { $parsed['State'] = $ArgList[++$i]; break }
             '-Audience'      { $parsed['Audience'] = $ArgList[++$i]; break }
             '-DomainContext' { $parsed['DomainContext'] = $ArgList[++$i]; break }
@@ -1598,7 +1672,17 @@ function Parse-SubcommandArgs {
             '-Count'         { $parsed['Count'] = [int]$ArgList[++$i]; break }
             '-FileName'      { $parsed['FileName'] = $ArgList[++$i]; break }
             '-Edit'          { $parsed['Edit'] = $true; break }
+            '-edit'          { $parsed['Edit'] = $true; break }
+            '-e'             { $parsed['Edit'] = $true; break }
+            '-Interactive'   { $parsed['Interactive'] = $true; break }
+            '-interactive'   { $parsed['Interactive'] = $true; break }
+            '-i'             { $parsed['Interactive'] = $true; break }
+            '-NoInteractive' { $parsed['NoInteractive'] = $true; break }
+            '-nointeractive' { $parsed['NoInteractive'] = $true; break }
+            '-ni'            { $parsed['NoInteractive'] = $true; break }
             '-RefreshEditor' { $parsed['RefreshEditor'] = $true; break }
+            '-refresheditor' { $parsed['RefreshEditor'] = $true; break }
+            '-re'            { $parsed['RefreshEditor'] = $true; break }
             '-Rename'        { $parsed['Rename'] = $true; break }
             '-AutoApprove'   { $parsed['AutoApprove'] = $true; break }
             '-Force'         { $parsed['Force'] = $true; break }
@@ -1690,6 +1774,8 @@ try {
                 -Prompt (Get-Arg $subArgs 'Prompt') `
                 -Edit:(Get-SwitchArg $subArgs 'Edit') `
                 -Name (Get-Arg $subArgs 'Name') `
+                -Interactive:(Get-SwitchArg $subArgs 'Interactive') `
+                -NoInteractive:(Get-SwitchArg $subArgs 'NoInteractive') `
                 -RefreshEditor:(Get-SwitchArg $subArgs 'RefreshEditor')
         }
         'refine' {
