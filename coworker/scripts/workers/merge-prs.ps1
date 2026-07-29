@@ -1,16 +1,19 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Merge all open PRs targeting the current branch, resolve conflicts via agent,
-    run minimal tests, and queue a coworker task on failure.
+    Merge open PRs targeting the current branch created by the current user,
+    resolve conflicts via agent, run minimal tests, and queue a coworker task
+    on failure.
 
 .DESCRIPTION
     1. Lists open PRs targeting the current branch via gh CLI.
-    2. For each PR: attempts direct merge; on conflict, checks out the PR
+    2. Filters to PRs authored by the current GitHub user (use -AllAuthors to
+       merge everyone's PRs).
+    3. For each PR: attempts direct merge; on conflict, checks out the PR
        branch, merges base, invokes the agent to resolve conflicts, pushes,
        then merges.
-    3. Runs minimal tests (./bin/test.ps1 fast).
-    4. If tests fail, writes a coworker task file into 1ready and triggers
+    4. Runs minimal tests (./bin/test.ps1 fast).
+    5. If tests fail, writes a coworker task file into 1ready and triggers
        process-coworker-queue.
 
 .PARAMETER TestType
@@ -25,6 +28,10 @@
 
 .PARAMETER SkipTests
     Skip the post-merge test run.
+
+.PARAMETER AllAuthors
+    Merge all open PRs regardless of author. Default: only merge PRs created
+    by the currently authenticated GitHub user.
 #>
 
 param(
@@ -32,7 +39,8 @@ param(
     [string]$BaseBranch = '',
     [ValidateSet('--merge', '--squash', '--rebase')]
     [string]$MergeMethod = '--merge',
-    [switch]$SkipTests
+    [switch]$SkipTests,
+    [switch]$AllAuthors
 )
 
 Set-StrictMode -Version Latest
@@ -94,8 +102,21 @@ try {
     & git checkout $BaseBranch 2>&1 | Out-Null
     & git pull origin $BaseBranch 2>&1 | Out-Null
 
+    # ── Resolve current GitHub user ────────────────────────────────────────
+    $currentUser = ''
+    if (-not $AllAuthors) {
+        $currentUser = & gh api user --jq '.login' 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "WARN: Could not determine current GitHub user. Falling back to all authors." -ForegroundColor Yellow
+            $currentUser = ''
+        }
+        else {
+            Write-Host "Filtering to PRs authored by: $currentUser" -ForegroundColor DarkGray
+        }
+    }
+
     # ── Discover open PRs ──────────────────────────────────────────────────
-    $prsJson = & gh pr list --base $BaseBranch --state open --json number,title,headRefName,mergeable 2>&1
+    $prsJson = & gh pr list --base $BaseBranch --state open --json number,title,headRefName,mergeable,author 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: gh pr list failed: $prsJson"
         Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
@@ -103,18 +124,41 @@ try {
         exit 1
     }
 
-    $prs = $prsJson | ConvertFrom-Json
-    if ($prs.Count -eq 0) {
+    $allPrs = @($prsJson | ConvertFrom-Json)
+    if ($allPrs.Count -eq 0) {
         Write-Host "No open PRs targeting '$BaseBranch'." -ForegroundColor Green
         Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
         Pop-Location
         exit 0
     }
 
-    Write-Host "Found $($prs.Count) open PR(s) targeting '$BaseBranch':" -ForegroundColor Cyan
+    # ── Filter by author ───────────────────────────────────────────────────
+    $foreignPrs = @()
+    if ($currentUser) {
+        $prs = @($allPrs | Where-Object { $_.author.login -eq $currentUser })
+        $foreignPrs = @($allPrs | Where-Object { $_.author.login -ne $currentUser })
+    }
+    else {
+        $prs = $allPrs
+    }
+
+    if ($prs.Count -eq 0) {
+        Write-Host "No PRs by $currentUser targeting '$BaseBranch'." -ForegroundColor Green
+        if ($foreignPrs.Count -gt 0) {
+            Write-Host "  ($($foreignPrs.Count) PR(s) by other authors skipped. Use -AllAuthors to merge them.)" -ForegroundColor DarkGray
+        }
+        Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
+        Pop-Location
+        exit 0
+    }
+
+    Write-Host "Found $($prs.Count) PR(s) by $currentUser targeting '$BaseBranch':" -ForegroundColor Cyan
     foreach ($pr in $prs) {
         $mergeableIcon = if ($pr.mergeable -eq 'MERGEABLE') { '+' } else { '!' }
         Write-Host "  [$mergeableIcon] #$($pr.number) $($pr.title)  <-- $($pr.headRefName)" -ForegroundColor White
+    }
+    if ($foreignPrs.Count -gt 0) {
+        Write-Host "  ($($foreignPrs.Count) PR(s) by other authors skipped. Use -AllAuthors to merge them.)" -ForegroundColor DarkGray
     }
 
     # ── Merge each PR ──────────────────────────────────────────────────────
