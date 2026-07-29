@@ -316,6 +316,8 @@ Write-Host "--- New-Symlinks ---" -ForegroundColor Cyan
 
     . $sb
 
+    # NOTE: $env:PATH (all-caps) is the real env var on Linux; $env:Path
+    # (mixed-case) is a different, unrelated variable.
     $testPlatformKey = if ($script:OSWin) { "win32-x64" } else { "linux-x64" }
     $testExt = if ($testPlatformKey.StartsWith("win32")) { ".exe" } else { "" }
     $testBinaryName = "browser4-cli-$testPlatformKey$testExt"
@@ -337,10 +339,27 @@ Write-Host "--- New-Symlinks ---" -ForegroundColor Cyan
             if (Test-Path $testCmdPath) { Remove-Item $testCmdPath -Force -ErrorAction SilentlyContinue }
         }
 
+        # Helper: temporarily override $env:PATH so the New-Symlinks PATH
+        # scan only sees directories the test scenario controls.  On Linux
+        # the kernel's b4 patch tool lives in /usr/bin (and /bin on some
+        # distros); without this override Get-Command/Get-Command b4 would
+        # always find the system b4 and skip creating our link.
+        function Invoke-WithPath([string]$Path, [ScriptBlock]$Action) {
+            $prevPath = $env:PATH
+            try {
+                $env:PATH = $Path
+                return & $Action
+            } finally {
+                $env:PATH = $prevPath
+            }
+        }
+
         # ── Scenario 1: b4 does not exist → should create ──
         Clear-B4Links
 
-        New-Symlinks -BinaryName $testBinaryName -InstallDir $tempDir -PlatformKey $testPlatformKey
+        Invoke-WithPath -Path $tempDir -Action {
+            New-Symlinks -BinaryName $testBinaryName -InstallDir $tempDir -PlatformKey $testPlatformKey
+        }
 
         Test "New-Symlinks creates b4 when it does not exist" {
             if (-not ((Test-Path $testShortPath) -or (Test-Path $testCmdPath))) {
@@ -351,8 +370,9 @@ Write-Host "--- New-Symlinks ---" -ForegroundColor Cyan
         # ── Scenario 2: b4 exists in install dir → should update ──
         Clear-B4Links
 
-        # Create initial link
-        New-Symlinks -BinaryName $testBinaryName -InstallDir $tempDir -PlatformKey $testPlatformKey
+        Invoke-WithPath -Path $tempDir -Action {
+            New-Symlinks -BinaryName $testBinaryName -InstallDir $tempDir -PlatformKey $testPlatformKey
+        }
 
         $existingPath = if (Test-Path $testShortPath) { $testShortPath }
                         elseif (Test-Path $testCmdPath) { $testCmdPath }
@@ -362,7 +382,9 @@ Write-Host "--- New-Symlinks ---" -ForegroundColor Cyan
             $beforeTime = (Get-Item $existingPath).LastWriteTime
             Start-Sleep -Milliseconds 200
 
-            New-Symlinks -BinaryName $testBinaryName -InstallDir $tempDir -PlatformKey $testPlatformKey
+            Invoke-WithPath -Path $tempDir -Action {
+                New-Symlinks -BinaryName $testBinaryName -InstallDir $tempDir -PlatformKey $testPlatformKey
+            }
 
             $afterPath = if (Test-Path $testShortPath) { $testShortPath }
                          elseif (Test-Path $testCmdPath) { $testCmdPath }
@@ -397,18 +419,14 @@ Write-Host "--- New-Symlinks ---" -ForegroundColor Cyan
                 & { chmod +x $foreignB4 2>$null } | Out-Null
             }
 
-            $oldPath = $env:Path
-            $env:Path = "$foreignDir$([System.IO.Path]::PathSeparator)$oldPath"
-            try {
+            Invoke-WithPath -Path "$foreignDir$([System.IO.Path]::PathSeparator)$tempDir" -Action {
                 New-Symlinks -BinaryName $testBinaryName -InstallDir $tempDir -PlatformKey $testPlatformKey
+            }
 
-                Test "New-Symlinks skips b4 when foreign b4 is on PATH" {
-                    if ((Test-Path $testShortPath) -or (Test-Path $testCmdPath)) {
-                        throw "b4 link was created even though a non-browser4-cli b4 is on PATH"
-                    }
+            Test "New-Symlinks skips b4 when foreign b4 is on PATH" {
+                if ((Test-Path $testShortPath) -or (Test-Path $testCmdPath)) {
+                    throw "b4 link was created even though a non-browser4-cli b4 is on PATH"
                 }
-            } finally {
-                $env:Path = $oldPath
             }
         } finally {
             Remove-Item $foreignDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -429,18 +447,14 @@ Write-Host "--- New-Symlinks ---" -ForegroundColor Cyan
                 & { chmod +x $oursB4 2>$null } | Out-Null
             }
 
-            $oldPath = $env:Path
-            $env:Path = "$oursDir$([System.IO.Path]::PathSeparator)$oldPath"
-            try {
+            Invoke-WithPath -Path "$oursDir$([System.IO.Path]::PathSeparator)$tempDir" -Action {
                 New-Symlinks -BinaryName $testBinaryName -InstallDir $tempDir -PlatformKey $testPlatformKey
+            }
 
-                Test "New-Symlinks creates b4 when b4 on PATH is browser4-cli" {
-                    if (-not ((Test-Path $testShortPath) -or (Test-Path $testCmdPath))) {
-                        throw "b4 link was not created even though PATH b4 is browser4-cli"
-                    }
+            Test "New-Symlinks creates b4 when b4 on PATH is browser4-cli" {
+                if (-not ((Test-Path $testShortPath) -or (Test-Path $testCmdPath))) {
+                    throw "b4 link was not created even though PATH b4 is browser4-cli"
                 }
-            } finally {
-                $env:Path = $oldPath
             }
         } finally {
             Remove-Item $oursDir -Recurse -Force -ErrorAction SilentlyContinue
