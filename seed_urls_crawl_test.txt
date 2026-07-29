@@ -1,2 +1,0 @@
-http://localhost:18080/generated/crawl/product/1.html
-http://localhost:18080/generated/crawl/product/3.html
