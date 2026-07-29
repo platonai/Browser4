@@ -21,7 +21,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4</artifactId>
-    <version>4.12.2-SNAPSHOT</version>
+    <version>4.13.0</version>
     <packaging>pom</packaging>
 
     <name>Browser4</name>
@@ -47,7 +47,7 @@
         <connection>scm:git:https://github.com/platonai/browser4.git</connection>
         <developerConnection>scm:git:https://github.com/platonai/browser4.git</developerConnection>
         <url>https://github.com/platonai/browser4</url>
-        <tag>HEAD</tag>
+        <tag>v4.13.0</tag>
     </scm>
 
     <issueManagement>

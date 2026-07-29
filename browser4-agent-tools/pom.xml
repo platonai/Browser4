@@ -15,7 +15,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4</artifactId>
-        <version>4.12.2-SNAPSHOT</version>
+        <version>4.13.0</version>
     </parent>
 
     <artifactId>browser4-agent-tools</artifactId>
