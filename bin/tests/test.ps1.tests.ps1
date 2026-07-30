@@ -672,8 +672,11 @@ Assert-ContainsString -Label 'RWS files: shows Total count' -Haystack $output -N
 Write-Host "━━━ RWS dir: --absolute ━━━" -ForegroundColor Cyan
 
 $output = pwsh -NoProfile -Command "& '$testPs1Abs' rws dir --absolute *>&1" *>&1 | Out-String
-$hasFullPath = $output -match 'D:'
-Assert-Returns -Label 'RWS absolute: contains absolute drive paths' -Actual $hasFullPath -Expected $true
+$hasAbsolutePath = ($output -split "`r?`n" | Where-Object {
+    $line = $_.Trim()
+    $line -match '^[A-Za-z]:[\\/]' -or $line -match '^/'
+}).Count -gt 0
+Assert-Returns -Label 'RWS absolute: contains absolute paths' -Actual $hasAbsolutePath -Expected $true
 Assert-ContainsString -Label 'RWS absolute: shows Total count' -Haystack $output -Needle 'Total:'
 
 Write-Host "━━━ RWS dir: --metadata ━━━" -ForegroundColor Cyan
