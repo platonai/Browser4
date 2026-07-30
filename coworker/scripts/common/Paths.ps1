@@ -122,3 +122,39 @@ function Resolve-TasksPath {
 
     return Resolve-CoworkerConfiguredPath -Path $RelativePath -BaseDirectory (Get-TasksRoot)
 }
+
+<#
+.SYNOPSIS
+    Resolve a unique file path in a directory by appending a numeric suffix
+    when a file with the same base name already exists.
+
+.DESCRIPTION
+    Canonical version — previously duplicated in workflow.ps1 and
+    refine-drafts.ps1.  Returns a hashtable with Path and FileName.
+#>
+function Resolve-UniquePath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Directory,
+        [Parameter(Mandatory = $true)]
+        [string]$BaseName,
+        [Parameter(Mandatory = $true)]
+        [string]$Extension
+    )
+
+    $candidateName = "$BaseName$Extension"
+    $candidatePath = Join-Path $Directory $candidateName
+    if (-not (Test-Path $candidatePath)) {
+        return @{ Path = $candidatePath; FileName = $candidateName }
+    }
+
+    $counter = 2
+    while ($true) {
+        $nextName = "$BaseName.$counter$Extension"
+        $nextPath = Join-Path $Directory $nextName
+        if (-not (Test-Path $nextPath)) {
+            return @{ Path = $nextPath; FileName = $nextName }
+        }
+        $counter++
+    }
+}

@@ -60,7 +60,7 @@ if (-not [string]::IsNullOrWhiteSpace($TaskFile)) {
 
 $repoRoot = Get-WorkspaceRoot
 
-$tasksRoot = Join-Path $repoRoot "coworker\tasks"
+$tasksRoot = Get-TasksRoot
 $scriptsDir = $PSScriptRoot
 $agentHelper = Join-Path $scriptsDir "workers\agent.ps1"
 . $agentHelper
@@ -76,27 +76,27 @@ $agentWorkingDirectory = $repoRoot
 $logsDir = Get-LogDirectory
 $memoryDir = $logsDir
 
+# Pipeline directories — resolved via the centralized StateMachine definitions.
+# Property names (Prepare, Created, Working, etc.) preserved for backward
+# compatibility with the rest of this script.
 $taskRoots = @(
     @{
-        Prepare = (Join-Path $tasksRoot "main\0draft")
-        Created = (Join-Path $tasksRoot "main\1ready")
-        Working = (Join-Path $tasksRoot "main\2working")
-        Finished = (Join-Path $tasksRoot "main\3done")
-        Review = (Join-Path $tasksRoot "main\4review")
-        Approved = (Join-Path $tasksRoot "main\5approved")
-        Pushed = (Join-Path $tasksRoot "main\6git-pushed")
-        Logs = $logsDir
-        Label = "tasks"
+        Prepare  = Get-CoworkerStageDirectory -PipelineName 'main' -StageId '0draft'
+        Created  = Get-CoworkerStageDirectory -PipelineName 'main' -StageId '1ready'
+        Working  = Get-CoworkerStageDirectory -PipelineName 'main' -StageId '2working'
+        Finished = Get-CoworkerStageDirectory -PipelineName 'main' -StageId '3done'
+        Review   = Get-CoworkerStageDirectory -PipelineName 'main' -StageId '4review'
+        Approved = Get-CoworkerStageDirectory -PipelineName 'main' -StageId '5approved'
+        Pushed   = Get-CoworkerStageDirectory -PipelineName 'main' -StageId '6git-pushed'
+        Logs     = $logsDir
+        Label    = 'tasks'
     }
 )
 
 # Ensure all required directories exist
-# Create them if they don't already exist
-foreach ($root in $taskRoots) {
-    foreach ($dir in @($root.Prepare, $root.Created, $root.Working, $root.Finished, $root.Review, $root.Approved, $root.Pushed, $root.Logs)) {
-        if (!(Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
-    }
-}
+Ensure-CoworkerPipelineDirectories -Pipeline 'main'
+# Also ensure the logs directory
+if (-not (Test-Path $logsDir)) { New-Item -ItemType Directory -Path $logsDir -Force | Out-Null }
 
 # Handle specified TaskFile
 if (-not [string]::IsNullOrWhiteSpace($TaskFile)) {
@@ -347,6 +347,7 @@ foreach ($taskRoot in $taskRoots) {
 
         Move-Item -Path $file.FullName -Destination $workingPath -Force
         Write-LogMessage "Moved to working: $workingPath" INFO
+        Register-CoworkerTaskMove -FilePath $workingPath -Pipeline 'main' -FromState '1ready' -ToState '2working' -Reason 'execution-started'
 
         # 3. Parse content for execution (logging purposes)
         $title = $descriptiveName
@@ -618,6 +619,8 @@ Agent Log: $agentLogPath
         if (Test-Path $workingPath) {
             Move-Item -Path $workingPath -Destination $targetInfo.Path -Force
             Write-LogMessage "$targetMessage : $($targetInfo.Path)" INFO
+            $targetStageId = if ($targetDir -eq $approvedDir) { '5approved' } else { '3done' }
+            Register-CoworkerTaskMove -FilePath $targetInfo.Path -Pipeline 'main' -FromState '2working' -ToState $targetStageId -Reason 'execution-completed'
         } else {
             Write-LogMessage "Task file not found at working path (may have been moved/deleted by agent): $workingPath" WARN
         }

@@ -128,64 +128,10 @@ if (Test-Path $stateHelper) { . $stateHelper }
 # Shared helper functions
 # ═══════════════════════════════════════════════════════════════════════════════
 
-function Get-TaskDirectories {
-    $tasksRoot = Get-TasksRoot
-    $main = Join-Path $tasksRoot 'main'
-    return [pscustomobject]@{
-        Draft    = Join-Path $main '0draft'
-        Ready    = Join-Path $main '1ready'
-        Working  = Join-Path $main '2working'
-        Done     = Join-Path $main '3done'
-        Review   = Join-Path $main '4review'
-        Approved = Join-Path $main '5approved'
-        Pushed   = Join-Path $main '6git-pushed'
-    }
-}
-
-function Get-StateLabel {
-    param([string]$DirPath)
-    $name = Split-Path -Leaf $DirPath
-    switch -Wildcard ($name) {
-        '0draft'      { return 'Draft' }
-        '1ready'      { return 'Ready' }
-        '2working'    { return 'Working' }
-        '3done'       { return 'Done' }
-        '4review'     { return 'Review' }
-        '5approved'   { return 'Approved' }
-        '6git-pushed' { return 'Pushed' }
-        default       { return $name }
-    }
-}
-
-function Get-StateColor {
-    param([string]$DirPath)
-    $name = Split-Path -Leaf $DirPath
-    switch -Wildcard ($name) {
-        '0draft'      { return 'Gray' }
-        '1ready'      { return 'Green' }
-        '2working'    { return 'Yellow' }
-        '3done'       { return 'Cyan' }
-        '4review'     { return 'Magenta' }
-        '5approved'   { return 'Blue' }
-        '6git-pushed' { return 'DarkGray' }
-        default       { return 'White' }
-    }
-}
-
-function Get-StateFromLabel {
-    param([string]$Label)
-    switch ($Label) {
-        'draft'    { return '0draft' }
-        'ready'    { return '1ready' }
-        'working'  { return '2working' }
-        'done'     { return '3done' }
-        'review'   { return '4review' }
-        'approved' { return '5approved' }
-        'pushed'   { return '6git-pushed' }
-        'all'      { return 'all' }
-        default    { return $null }
-    }
-}
+# Get-TaskDirectories, Get-StateLabel, Get-StateColor, and Get-StateFromLabel
+# are now provided by StateMachine.ps1 (dot-sourced via config.ps1).
+# They are backward-compatible shims that delegate to the centralized
+# pipeline definitions.
 
 <#
 .SYNOPSIS
@@ -256,10 +202,35 @@ function Find-TaskFile {
         return @((Resolve-Path $Name).Path)
     }
 
-    $matches = @()
+    # Fast path: try the task registry first (best-effort)
     $searchName = [System.IO.Path]::GetFileNameWithoutExtension($Name)
     $searchExt = [System.IO.Path]::GetExtension($Name)
     if (-not $searchExt) { $searchExt = '.md' }
+
+    try {
+        $registryInfo = Get-CoworkerTaskInfo -TaskId $searchName
+        if ($registryInfo -and $registryInfo.ContainsKey('currentState') -and $registryInfo.ContainsKey('pipeline')) {
+            $regStageDir = Get-CoworkerStageDirectory -PipelineName $registryInfo['pipeline'] -StageId $registryInfo['currentState'] -ErrorAction SilentlyContinue
+            if ($regStageDir -and (Test-Path $regStageDir)) {
+                $directPath = Join-Path $regStageDir "$searchName$searchExt"
+                if (Test-Path -LiteralPath $directPath) {
+                    return @((Resolve-Path $directPath).Path)
+                }
+                # Also try recursive search under the stage dir
+                if (Test-Path $regStageDir) {
+                    $found = Get-ChildItem -Path $regStageDir -Recurse -File -ErrorAction SilentlyContinue |
+                        Where-Object { -not (Test-CoworkerIgnoredFile -Item $_) } |
+                        Where-Object { $_.Name -eq "$searchName$searchExt" -or $_.BaseName -eq $searchName }
+                    if ($found) {
+                        return @($found[0].FullName)
+                    }
+                }
+            }
+        }
+    }
+    catch {
+        # Registry lookup failed — fall through to filesystem scan
+    }
 
     foreach ($dir in $searchDirs) {
         if (-not (Test-Path $dir)) { continue }
@@ -913,6 +884,9 @@ function Invoke-Assign {
     Move-Item -Path $inputPath -Destination $destPath -Force
     Write-ConsoleLine -Message "Added to 1ready: $destPath" -ForegroundColor Green
 
+    # Record the state transition in the task registry (best-effort)
+    Register-CoworkerTaskMove -FilePath $destPath -Pipeline 'main' -ToState '1ready' -Reason 'assigned'
+
     # Restore draft placeholders if we moved from 0draft
     if ($normalizedInput.StartsWith((Resolve-Path $dirs.Draft -ErrorAction SilentlyContinue).Path)) {
         Ensure-DraftPlaceholders -DraftDirectory $dirs.Draft
@@ -1208,6 +1182,8 @@ function Invoke-Cancel {
         }
         Remove-Item -Path $filePath -Force
         Write-ConsoleLine -Message "Deleted: $filePath" -ForegroundColor Red
+        # Remove from task registry (best-effort)
+        Remove-CoworkerTask -TaskId $filePath
     }
     else {
         # Move back to 0draft
@@ -1222,6 +1198,8 @@ function Invoke-Cancel {
         $destInfo = Resolve-UniquePath -Directory $draftDir -BaseName $destBaseName -Extension $fileItem.Extension
         Move-Item -Path $filePath -Destination $destInfo.Path -Force
         Write-ConsoleLine -Message "Moved back to draft: $($destInfo.Path)" -ForegroundColor Yellow
+        # Record the state transition (best-effort)
+        Register-CoworkerTaskMove -FilePath $destInfo.Path -Pipeline 'main' -ToState '0draft' -Reason 'cancelled'
 
         # Restore placeholders
         Ensure-DraftPlaceholders -DraftDirectory $draftDir
