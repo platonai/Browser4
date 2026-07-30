@@ -1464,6 +1464,41 @@ if (-not $Stress) {
     }
 }
 
+# ═══════════════════════════════════════════════════════════════
+# FINAL STEP — Upgrade browser4-cli to latest version
+#
+# After all test cycles and stress tests have completed, perform a
+# final install/upgrade so the user is left with the latest version
+# of browser4-cli — regardless of what earlier steps may have
+# installed or uninstalled.
+# ═══════════════════════════════════════════════════════════════
+Write-StepHeader 'FINAL STEP — Upgrade browser4-cli to latest version'
+
+Write-Info 'Ensuring browser4-cli is at the latest version after all tests …'
+
+if ($Version) {
+    Write-Info "Installing specific version: $Version"
+}
+
+$finalUpgradeOk = Invoke-InstallFromRemoteScript
+if ($finalUpgradeOk) {
+    Update-SessionPath
+    $finalCliPath = Resolve-CliPath
+    if ($finalCliPath) {
+        $finalVersionResult = Invoke-CliCommand -Arguments @('--version')
+        $finalVersion = if ($finalVersionResult.ExitCode -eq 0) { $finalVersionResult.Output.Trim() } else { 'unknown' }
+        Write-Info "browser4-cli is now at: $finalVersion"
+        Write-StepResult -Step 'Final upgrade' -Passed $true `
+            -Detail "Installed: $finalVersion"
+    } else {
+        Write-StepResult -Step 'Final upgrade' -Passed $false `
+            -Detail 'Install script completed but browser4-cli not found on PATH'
+    }
+} else {
+    Write-StepResult -Step 'Final upgrade' -Passed $false `
+        -Detail 'Install script failed — browser4-cli may not be at latest version'
+}
+
 } finally {
     # ═══════════════════════════════════════════════════════════════
     # Cleanup (guaranteed to run even on error)
@@ -1552,6 +1587,7 @@ Write-Host "  Passed      : $PassedSteps" -ForegroundColor $(if ($PassedSteps -g
 Write-Host "  Failed      : $FailedSteps" -ForegroundColor $(if ($FailedSteps -eq 0) { 'Green' } else { 'Red' })
 Write-Host "  Cycle 1     : $(if ($cycle1Ok) { '✅ Clean-room install' } else { '❌ Clean-room install' })"
 Write-Host "  Cycle 2     : $(if ($cycle2Ok) { '✅ Re-install + timing' } else { '❌ Re-install + timing' })"
+Write-Host "  Final       : $(if ($finalUpgradeOk) { '✅ Upgrade to latest' } else { '❌ Upgrade to latest' })"
 
 if ($FailedSteps -gt 0) {
     Write-Host ''
