@@ -30,42 +30,77 @@ $script:LastCtrlCTime = [datetime]::MinValue
 
 <#
 .SYNOPSIS
-    Read-Host wrapper that lets Ctrl+C cancel back to the caller.
+    Read a full line of input with Ctrl+C / Escape cancellation.
 
 .DESCRIPTION
-    Temporarily disables TreatControlCAsInput so that Ctrl+C triggers
-    PowerShell's native break exception, then catches it and returns
-    $null to signal cancellation. Always restores the console setting.
+    Uses [Console]::ReadKey() so that Ctrl+C (char 3) and Escape (char 27)
+    are reliably detected as keypresses — no exception handling needed.
+    Both return $null to signal cancellation. Enter returns the line.
 
-    Callers should check for $null to detect cancellation:
-        $result = Read-HostCancelable -Prompt '> '
-        if ($null -eq $result) { return }  # user pressed Ctrl+C
+    Falls back to Read-Host when console input is redirected (pipe/CI).
+
+    Callers check for $null to detect cancellation:
+        $result = Read-LineCancelable
+        if ($null -eq $result) { return }  # user pressed Ctrl+C or Escape
 #>
-function Read-HostCancelable {
-    param([string]$Prompt = '')
-
-    # Let Ctrl+C behave natively (throw) so we can catch it as cancellation.
-    [Console]::TreatControlCAsInput = $false
-
+function Read-LineCancelable {
+    # Fallback to Read-Host when input is redirected (pipe, CI, etc.)
     try {
-        if ($Prompt) {
-            return Read-Host -Prompt $Prompt
-        }
-        else {
+        if ([Console]::IsInputRedirected) {
             return Read-Host
         }
     }
-    catch [System.Management.Automation.PipelineStoppedException] {
-        # Ctrl+C pressed — signal cancellation
-        return $null
-    }
     catch {
-        # Unexpected error — re-throw
-        throw
+        return Read-Host
     }
-    finally {
-        # Re-enable Ctrl+C interception for the main panel loop
-        [Console]::TreatControlCAsInput = $true
+
+    $buffer = ''
+
+    while ($true) {
+        try {
+            $key = [Console]::ReadKey($true)
+        }
+        catch {
+            # ReadKey can fail if console is detached mid-read
+            return $null
+        }
+
+        $char = [int]$key.KeyChar
+
+        # Enter (13) — commit the buffer
+        if ($char -eq 13) {
+            Write-Host ''
+            return $buffer
+        }
+
+        # Escape (27) — cancel
+        if ($char -eq 27) {
+            Write-Host ''
+            return $null
+        }
+
+        # Backspace (8) — erase last character
+        if ($char -eq 8) {
+            if ($buffer.Length -gt 0) {
+                $buffer = $buffer.Substring(0, $buffer.Length - 1)
+                Write-Host "`b `b" -NoNewline
+            }
+            continue
+        }
+
+        # Ctrl+C (3) — cancel (single press, no double-tap needed in sub-modes)
+        if ($char -eq 3) {
+            Write-Host '^C'
+            return $null
+        }
+
+        # Printable characters (space and above)
+        if ($char -ge 32) {
+            $charStr = [char]$char
+            $buffer += $charStr
+            Write-Host $charStr -NoNewline
+        }
+        # All other control characters are silently ignored
     }
 }
 
@@ -294,7 +329,7 @@ function Show-PanelHelp {
     Write-ConsoleLine -Message "  ────────────────────────────────────────────────────" -ForegroundColor DarkGray
     Write-ConsoleLine -Message '  Press Enter to return.' -ForegroundColor DarkGray
     Write-ConsoleLine -Message ''
-    $null = Read-HostCancelable
+    $null = Read-LineCancelable
 }
 
 <#
@@ -340,7 +375,7 @@ function Show-DraftView {
     Write-ConsoleLine -Message '  ────────────────────────────────────────────────────' -ForegroundColor DarkGray
     Write-ConsoleLine -Message '  Press Enter to return to the draft list.' -ForegroundColor DarkGray
     Write-ConsoleLine -Message ''
-    $null = Read-HostCancelable
+    $null = Read-LineCancelable
 }
 
 <#
@@ -366,7 +401,7 @@ function Invoke-FixDraft {
     Write-ConsoleLine -Message "  Fix draft $Index : $($draft.Title)" -ForegroundColor Cyan
     Write-ConsoleLine -Message "  This will assign the draft to 1ready/ and execute it." -ForegroundColor DarkGray
     Write-Host -NoNewline -ForegroundColor Yellow '  Proceed? [y/N] '
-    $confirm = Read-HostCancelable
+    $confirm = Read-LineCancelable
     if ($null -eq $confirm) {
         Write-ConsoleLine -Message "  Cancelled." -ForegroundColor DarkGray
         Start-Sleep -Milliseconds 1000
@@ -425,7 +460,7 @@ function Invoke-FixDraft {
 
     Write-ConsoleLine -Message ''
     Write-ConsoleLine -Message '  Press Enter to continue.' -ForegroundColor DarkGray
-    $null = Read-HostCancelable
+    $null = Read-LineCancelable
 }
 
 <#
@@ -441,7 +476,7 @@ function Invoke-NewDraftInteractive {
 
     # Title
     Write-Host -NoNewline -ForegroundColor White '  Title (optional): '
-    $titleRaw = Read-HostCancelable
+    $titleRaw = Read-LineCancelable
     if ($null -eq $titleRaw) {
         Write-ConsoleLine -Message ''
         Write-ConsoleLine -Message "  Draft cancelled." -ForegroundColor DarkGray
@@ -459,7 +494,7 @@ function Invoke-NewDraftInteractive {
     $lines = @()
     $cancelled = $false
     while ($true) {
-        $line = Read-HostCancelable
+        $line = Read-LineCancelable
         if ($null -eq $line) {
             $cancelled = $true
             break
@@ -520,7 +555,7 @@ Prompt: $body
     # Ask if user wants to fix it now
     Write-ConsoleLine -Message ''
     Write-Host -NoNewline -ForegroundColor Cyan '  Fix this issue now? (assign to 1ready + run cowarker fix) [y/N] '
-    $fixNow = Read-HostCancelable
+    $fixNow = Read-LineCancelable
     if ($null -eq $fixNow) {
         Write-ConsoleLine -Message "  Skipping fix. Draft saved in 0draft/." -ForegroundColor DarkGray
     }
@@ -572,7 +607,7 @@ Prompt: $body
     Write-ConsoleLine -Message ''
     Write-ConsoleLine -Message '  Press Enter to return to the draft list.' -ForegroundColor DarkGray
     Write-Host -NoNewline
-    $null = Read-HostCancelable
+    $null = Read-LineCancelable
 }
 
 # ── Main loop ──────────────────────────────────────────────────────────────
