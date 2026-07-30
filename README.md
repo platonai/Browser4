@@ -99,6 +99,9 @@ These flags can appear before any command:
 --server <url>                 Override Browser4 server URL
 --json                         Emit machine-parseable JSON to stdout
 -q, --quiet                    Suppress normal output, show only errors
+--show-tip, -tip               Show a relevant tip on stderr after each command
+--pretty                       Pretty-print JSON output
+--timeout <seconds>            Override the default HTTP timeout for tool calls
 --proxy <url>                  Manual HTTP proxy for downloads
 --help, -h                     Print help
 --version, -v                  Print version
@@ -467,6 +470,11 @@ browser4-cli close
    ```
    > On Windows, prefix the command with `chcp 65001 >nul &&` for proper UTF-8 output.
    > See [Build from Source](docs/build-from-source.md) for full platform-specific instructions.
+
+   **Dev-mode wrappers (no install needed):** The repo root provides shell wrappers
+   that auto-build from source. Use `./b4w.ps1 <command>` (PowerShell),
+   `./b4w.sh <command>` (Git Bash / Linux / macOS), or `./b4w.bat <command>`
+   (CMD) — all accept the same arguments as the installed `browser4-cli` binary.
 
 ---
 
