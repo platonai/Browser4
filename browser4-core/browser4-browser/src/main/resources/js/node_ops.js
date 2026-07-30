@@ -137,7 +137,7 @@ NodeOps.nScreen = function(node) {
     const rect = NodeOps.getRect(node);
     if (!rect) return 0;
     const config = __pulsar_utils__.getConfig();
-    const viewPortHeight = config.viewPortHeight;
+    const viewPortHeight = window.innerHeight || config.viewPortHeight;
     let ns = rect.y / viewPortHeight;
     return Math.floor(ns);
 };

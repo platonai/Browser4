@@ -431,7 +431,7 @@ __pulsar_utils__.scrollToViewport = function (n = 0) {
     if (!document?.documentElement || !document?.body) return;
 
     const config = this.getConfig?.() || {};
-    const viewportHeight = config.viewPortHeight || window.innerHeight;
+    const viewportHeight = window.innerHeight || config.viewPortHeight;
 
     const totalHeight = Math.min(
         Math.max(
