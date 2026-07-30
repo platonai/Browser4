@@ -2476,6 +2476,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "max-open-tabs", description: "Maximum open tabs per browser context (default: 8)", is_bool: false, short: None },
                 OptionDef { name: "max-browser-contexts", description: "Number of isolated browser environments (default: 2)", is_bool: false, short: None },
                 OptionDef { name: "display-mode", description: "Display mode: GUI, HEADLESS, SUPERVISED", is_bool: false, short: None },
+                OptionDef { name: "clear-stale", description: "Clear stale swarm tasks from prior sessions before creating the new session", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "open_session".to_string(),
@@ -2489,6 +2490,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(v) = get_opt_str(args, "max-open-tabs") { p["maxOpenTabs"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "max-browser-contexts") { p["maxBrowserContexts"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "display-mode") { p["displayMode"] = json!(v); }
+                if let Some(b) = get_bool(args, "clear-stale") { p["clearStale"] = json!(b); }
                 p
             },
         },

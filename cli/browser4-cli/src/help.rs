@@ -143,6 +143,8 @@ pub fn generate_help() -> String {
     lines.push("    eval --file script.js                     # read JS from file (no quoting issues)".to_string());
     lines.push("  Bulk crawl:".to_string());
     lines.push("    crawl <url> --out-link-selector \"...\" --depth 1 --sql @query.sql".to_string());
+    lines.push("  Parallel extraction:".to_string());
+    lines.push("    swarm create  →  swarm query --sql @q.sql --seed-file urls.txt  →  swarm result <id>".to_string());
 
     // Category listing — each category with its commands
     let mut first_category = true;
@@ -1036,11 +1038,19 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - `--profile-mode` defaults to `SEQUENTIAL` and only supports `SEQUENTIAL` or `TEMPORARY`."
                 .to_string(),
         );
+        lines.push(
+            "  - Use `--clear-stale` to automatically clear stale tasks from prior sessions before creating the new session."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli swarm create".to_string());
         lines.push(
             "  browser4-cli swarm create --profile-mode TEMPORARY --max-open-tabs 12 --max-browser-contexts 3 --display-mode HEADLESS"
+                .to_string(),
+        );
+        lines.push(
+            "  browser4-cli swarm create --clear-stale"
                 .to_string(),
         );
     }

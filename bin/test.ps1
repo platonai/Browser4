@@ -1042,20 +1042,8 @@ function Show-InteractiveScenarioPicker {
     function Build-ScenarioTemplateContent {
         param(
             [string]$ScenarioTitle,
-            [string]$StartUrl,
-            [string]$ScenarioContent = ''
+            [string]$StartUrl
         )
-
-        if ($ScenarioContent) {
-            $template = @'
-# {0}
-
-{1}
-
-> Starting URL: `{2}`
-'@
-            return [string]::Format($template, $ScenarioTitle, $ScenarioContent.Trim(), $StartUrl)
-        }
 
         $template = @'
 # {0}
@@ -1067,108 +1055,6 @@ function Show-InteractiveScenarioPicker {
 5. Write the final findings to a markdown file in the `./target/` directory.
 '@
         return [string]::Format($template, $ScenarioTitle, $StartUrl)
-    }
-
-    function Invoke-ExternalEditorForScenario {
-        param(
-            [string]$InitialContent,
-            [string]$Title = 'Edit scenario content'
-        )
-
-        $tempFile = [System.IO.Path]::GetTempFileName() + '.md'
-        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-        if ($InitialContent) {
-            [System.IO.File]::WriteAllText($tempFile, $InitialContent, $utf8NoBom)
-        } else {
-            [System.IO.File]::WriteAllText($tempFile, '', $utf8NoBom)
-        }
-
-        try {
-            $editor = ''
-            if ($env:VISUAL) {
-                $editor = $env:VISUAL
-            } elseif ($env:EDITOR) {
-                $editor = $env:EDITOR
-            } elseif ($IsWindows -or $env:OS -eq 'Windows_NT') {
-                $editor = 'notepad.exe'
-            } elseif ($IsLinux) {
-                $editor = if (Get-Command nano -ErrorAction SilentlyContinue) { 'nano' } else { 'vi' }
-            } elseif ($IsMacOS) {
-                $editor = if (Get-Command nano -ErrorAction SilentlyContinue) { 'nano' } else { 'vi' }
-            }
-
-            [Console]::Clear()
-            Write-Host $Title -ForegroundColor Cyan
-            Write-Host ('─' * 60) -ForegroundColor DarkGray
-            Write-Host "Opening: $editor" -ForegroundColor Yellow
-            Write-Host ''
-            Write-Host 'Edit the content, save, and close the editor to continue.' -ForegroundColor DarkGray
-            Write-Host 'The file will be read back when the editor closes.' -ForegroundColor DarkGray
-            Start-Sleep -Seconds 1
-
-            Start-Process -FilePath $editor -ArgumentList $tempFile -Wait
-
-            if (Test-Path -LiteralPath $tempFile) {
-                $content = Get-Content -LiteralPath $tempFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
-                if ($content) { return $content.Trim() }
-            }
-            return ''
-        }
-        finally {
-            Remove-Item $tempFile -ErrorAction SilentlyContinue
-        }
-    }
-
-    function Invoke-AIRefineScenario {
-        param(
-            [string]$ScenarioTitle,
-            [string]$StartUrl,
-            [string]$ScenarioContent
-        )
-
-        $claudeCmd = Get-Command claude -ErrorAction SilentlyContinue
-        if (-not $claudeCmd) { return $null }
-
-        $prompt = @"
-You are a test-scenario writer for Browser4, a browser-automation CLI tool. Refine the following draft scenario into a polished, structured, and actionable markdown scenario file.
-
-Rules:
-- Keep the original `# Title` line exactly as provided.
-- Keep the `> Starting URL:` line at the end.
-- Add a short **Goal** section (2-3 lines) describing what the scenario should accomplish.
-- Break the workflow into **numbered steps**. Each step should describe ONE concrete action the agent should take.
-- Use backtick-quoted selectors and URLs in the steps.
-- Add a **Verification** section at the end with 2-4 specific checks the agent should perform.
-- Use clear, imperative language throughout.
-- Output ONLY the final markdown — no preamble, no commentary, no code fences.
-
-Title: $ScenarioTitle
-Starting URL: $StartUrl
-
-Current content:
-$ScenarioContent
-"@
-
-        [Console]::Clear()
-        Write-Host 'AI Refine' -ForegroundColor Cyan
-        Write-Host ('─' * 60) -ForegroundColor DarkGray
-        Write-Host 'Calling Claude to refine the scenario...' -ForegroundColor Yellow
-        Write-Host 'This may take 30-60 seconds.' -ForegroundColor DarkGray
-        Write-Host ''
-
-        try {
-            $prevEncoding = [Console]::OutputEncoding
-            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-            $result = & claude -p $prompt 2>$null
-            [Console]::OutputEncoding = $prevEncoding
-            if ($LASTEXITCODE -eq 0 -and $result) {
-                return ($result -join "`n").Trim()
-            }
-            return $null
-        }
-        catch {
-            return $null
-        }
     }
 
     function New-ScenarioFromTemplate {
@@ -1276,100 +1162,16 @@ $ScenarioContent
                     continue
                 }
 
-                # Jump straight to the review panel after collecting all inputs
-                break
-            }
+                $templateContent = Build-ScenarioTemplateContent -ScenarioTitle $scenarioTitle -StartUrl $startUrl
+                $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+                [System.IO.File]::WriteAllText($newFilePath, $templateContent, $utf8NoBom)
 
-            # ═══════════════════════════════════════════════════════════════
-            #  Review & Refine panel — edit content, AI refine, then save
-            # ═══════════════════════════════════════════════════════════════
-            $templateContent = Build-ScenarioTemplateContent -ScenarioTitle $scenarioTitle -StartUrl $startUrl
-            $scenarioContent = ''
-
-            while ($true) {
-                [Console]::Clear()
-                Write-Host 'Review & Refine Scenario' -ForegroundColor Cyan
-                Write-Host ('─' * 60) -ForegroundColor DarkGray
-                Write-Host "File: $slug.md" -ForegroundColor DarkGray
-                Write-Host "Dir:  $targetDirRel" -ForegroundColor DarkGray
+                $newFileRel = [System.IO.Path]::GetRelativePath($TasksRoot, $newFilePath)
                 Write-Host ''
-
-                $previewLines = $templateContent -split "`n"
-                $maxPreview = [Math]::Min(15, $previewLines.Count)
-                Write-Host 'Preview:' -ForegroundColor DarkGray
-                Write-Host ('─' * 40) -ForegroundColor DarkGray
-                for ($p = 0; $p -lt $maxPreview; $p++) {
-                    Write-Host "  $($previewLines[$p])" -ForegroundColor DarkGray
-                }
-                if ($previewLines.Count -gt $maxPreview) {
-                    Write-Host "  ... ($($previewLines.Count) lines total)" -ForegroundColor DarkGray
-                }
-                Write-Host ('─' * 40) -ForegroundColor DarkGray
-                Write-Host ''
-
-                $hasContent = $scenarioContent -ne ''
-                $hasAI = [bool](Get-Command claude -ErrorAction SilentlyContinue)
-
-                $optionDesc = @()
-                $optionDesc += 'Enter = save'
-                $optionDesc += 'e = edit in external editor'
-                if ($hasAI) { $optionDesc += 'a = AI refine' }
-                $optionDesc += 'Esc = cancel'
-                Write-Host ($optionDesc -join '   ') -ForegroundColor DarkGray
-                if ($hasContent) {
-                    Write-Host '  (content was edited — AI refine will use your content)' -ForegroundColor DarkGray
-                }
-
-                $reviewKey = [Console]::ReadKey($true)
-                switch ($reviewKey.Key) {
-                    'Enter' {
-                        $saveContent = if ($scenarioContent) {
-                            Build-ScenarioTemplateContent -ScenarioTitle $scenarioTitle -StartUrl $startUrl -ScenarioContent $scenarioContent
-                        } else {
-                            $templateContent
-                        }
-                        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-                        [System.IO.File]::WriteAllText($newFilePath, $saveContent, $utf8NoBom)
-
-                        $newFileRel = [System.IO.Path]::GetRelativePath($TasksRoot, $newFilePath)
-                        Write-Host ''
-                        Write-Host "Created: $newFileRel" -ForegroundColor Green
-                        Write-Host 'Press any key to return to the picker...' -ForegroundColor DarkGray
-                        [Console]::ReadKey($true) | Out-Null
-                        return $newFilePath
-                    }
-                    'E' {
-                        $editorContent = Invoke-ExternalEditorForScenario -InitialContent $templateContent -Title "Edit: $slug.md"
-                        if ($editorContent) {
-                            $templateContent = $editorContent
-                            $scenarioContent = $editorContent
-                        }
-                    }
-                    'A' {
-                        if (-not $hasAI) { continue }
-                        $refineSource = if ($scenarioContent) { $scenarioContent } else { $templateContent }
-                        $refined = Invoke-AIRefineScenario -ScenarioTitle $scenarioTitle -StartUrl $startUrl -ScenarioContent $refineSource
-                        if ($refined) {
-                            $templateContent = $refined
-                            $scenarioContent = $refined
-                            Write-Host ''
-                            Write-Host 'AI refine complete. Review the updated preview above.' -ForegroundColor Green
-                            Write-Host 'Press any key to continue...' -ForegroundColor DarkGray
-                            [Console]::ReadKey($true) | Out-Null
-                        } else {
-                            Write-Host ''
-                            Write-Host 'AI refine failed or was unavailable. Your content was not changed.' -ForegroundColor Yellow
-                            Write-Host 'Press any key to continue...' -ForegroundColor DarkGray
-                            [Console]::ReadKey($true) | Out-Null
-                        }
-                    }
-                    'Escape' {
-                        Write-Host ''
-                        Write-Host 'Scenario creation cancelled.' -ForegroundColor Yellow
-                        Start-Sleep -Milliseconds 700
-                        return $null
-                    }
-                }
+                Write-Host "Created: $newFileRel" -ForegroundColor Green
+                Write-Host 'Press any key to return to the picker...' -ForegroundColor DarkGray
+                [Console]::ReadKey($true) | Out-Null
+                return $newFilePath
             }
         }
         finally {
@@ -1460,7 +1262,7 @@ $ScenarioContent
         }
 
         # Controls
-        Write-Host '  ↑↓ nav   ←→ fold   Space/Enter run   n new   v view   t view   / filter   r refresh   q quit' -ForegroundColor DarkGray
+        Write-Host '  ↑↓ nav   ←→ fold   Space/Enter run   n new   t view   / filter   r refresh   q quit' -ForegroundColor DarkGray
         Write-Host ('─' * 60) -ForegroundColor DarkGray
 
         # Compute render area
@@ -1676,65 +1478,6 @@ $ScenarioContent
                 $tree.Expanded = $true
                 $cursor = 0; $topOffset = 0
                 Write-Host "Refreshed." -ForegroundColor DarkGray
-                break
-            }
-            'V' {
-                if ($visible.Count -gt 0) {
-                    $viewNode = $visible[$cursor]
-                    if ($viewNode.Type -eq 'file') {
-                        $viewRelPath = [System.IO.Path]::GetRelativePath($TasksRoot, $viewNode.FullPath)
-                        $viewContent = Get-Content -LiteralPath $viewNode.FullPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
-                        if (-not $viewContent) { $viewContent = '(empty file)' }
-
-                        [Console]::Clear()
-                        Write-Host 'Scenario Viewer' -ForegroundColor Cyan
-                        Write-Host ('─' * 60) -ForegroundColor DarkGray
-                        Write-Host "File: $viewRelPath" -ForegroundColor DarkGray
-                        Write-Host ('─' * 60) -ForegroundColor DarkGray
-
-                        $viewLines = $viewContent -split "`n"
-                        $viewHeight = [Math]::Max(5, [Console]::WindowHeight - 6)
-                        $viewOffset = 0
-                        $viewDone = $false
-
-                        while (-not $viewDone) {
-                            [Console]::SetCursorPosition(0, 5)
-                            $renderEnd = [Math]::Min($viewOffset + $viewHeight, $viewLines.Count)
-                            for ($vl = $viewOffset; $vl -lt $renderEnd; $vl++) {
-                                $lineNum = "$($vl + 1)".PadLeft(4)
-                                $cleanLine = if ($viewLines[$vl].Length -gt ([Console]::WindowWidth - 7)) {
-                                    $viewLines[$vl].Substring(0, [Console]::WindowWidth - 7)
-                                } else { $viewLines[$vl] }
-                                Write-Host "$lineNum  $cleanLine"
-                            }
-
-                            # Clear remaining lines
-                            for ($cl = $renderEnd; $cl -lt $viewOffset + $viewHeight; $cl++) {
-                                Write-Host (''.PadRight([Console]::WindowWidth - 1))
-                            }
-
-                            # Footer
-                            $footerTop = 5 + $viewHeight
-                            [Console]::SetCursorPosition(0, $footerTop)
-                            Write-Host ('─' * 60) -ForegroundColor DarkGray
-                            $pct = if ($viewLines.Count -gt 0) { [math]::Round(($viewOffset + $viewHeight) * 100 / $viewLines.Count) } else { 100 }
-                            if ($pct -gt 100) { $pct = 100 }
-                            Write-Host "  Lines $($viewOffset + 1)-$renderEnd of $($viewLines.Count) ($pct%)" -NoNewline -ForegroundColor DarkGray
-                            Write-Host '  ↑↓ PgUp PgDn Home End scroll   any other key return' -ForegroundColor DarkGray
-
-                            $viewKey = [Console]::ReadKey($true)
-                            switch ($viewKey.Key) {
-                                'UpArrow'    { $viewOffset = [Math]::Max(0, $viewOffset - 1) }
-                                'DownArrow'  { $viewOffset = [Math]::Min([Math]::Max(0, $viewLines.Count - $viewHeight), $viewOffset + 1) }
-                                'PageUp'     { $viewOffset = [Math]::Max(0, $viewOffset - $viewHeight) }
-                                'PageDown'   { $viewOffset = [Math]::Min([Math]::Max(0, $viewLines.Count - $viewHeight), $viewOffset + $viewHeight) }
-                                'Home'       { $viewOffset = 0 }
-                                'End'        { $viewOffset = [Math]::Max(0, $viewLines.Count - $viewHeight) }
-                                default      { $viewDone = $true }
-                            }
-                        }
-                    }
-                }
                 break
             }
             'N' {
@@ -3004,9 +2747,6 @@ if ($ScriptArgs.Count -eq 0) {
 # like 'browser4-core') are forwarded as additional args.
 $parsingTestTypes = $true
 foreach ($arg in $ScriptArgs) {
-    # Skip null/empty arguments (can arrive from caller splatting $CliArgs[1..$CliArgs.Length])
-    if (-not $arg) { continue }
-
     # Handle --help / -h / -help (only before any test type has been collected,
     # matching the original behaviour where -h given as the first argument
     # shows usage instead of being treated as a test type).

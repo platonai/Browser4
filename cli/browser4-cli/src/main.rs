@@ -8751,9 +8751,13 @@ async fn handle_swarm_create(
     state.last_accessed_at = Some(Utc::now().to_rfc3339());
     write_state(&state, None, session_name).map_err(|e| e.to_string())?;
 
-    // Check for stale swarm tasks from prior sessions and warn the user.
+    // Check for stale swarm tasks from prior sessions.
     // Old completed tasks in the task store can block the worker pool
     // from picking up new tasks, causing jobs to stay "Created" indefinitely.
+    let clear_stale = tool_params
+        .get("clearStale")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let existing = read_async_tasks(None);
     let swarm_tasks: Vec<_> = existing
         .tasks
@@ -8761,20 +8765,81 @@ async fn handle_swarm_create(
         .filter(|t| t.command == "swarm-submit" || t.command == "swarm-query")
         .collect();
     if !swarm_tasks.is_empty() {
-        cli_println!(
-            "Note: {} swarm task(s) from prior sessions are still tracked.",
-            swarm_tasks.len()
-        );
-        cli_println!(
-            "  If new jobs get stuck in \"Created\" status, run `swarm list --clear` to remove stale entries,"
-        );
-        cli_println!(
-            "  then recreate the swarm session before resubmitting."
-        );
-        json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+        if clear_stale {
+            // User opted in: clear stale tasks automatically.
+            let mut list = existing;
+            let before = list.tasks.len();
+            list.tasks
+                .retain(|t| t.command != "swarm-submit" && t.command != "swarm-query");
+            let removed = before - list.tasks.len();
+            write_async_tasks(&list, None).map_err(|e| e.to_string())?;
+            cli_println!("Cleared {} stale swarm task(s) from prior sessions.", removed);
+            json_field("cleared_stale_tasks", json!(removed));
+        } else {
+            cli_println!(
+                "Note: {} swarm task(s) from prior sessions are still tracked.",
+                swarm_tasks.len()
+            );
+            cli_println!(
+                "  If new jobs get stuck in \"Created\" status, run `swarm list --clear` to remove stale entries,"
+            );
+            cli_println!(
+                "  then recreate the swarm session before resubmitting."
+            );
+            cli_println!(
+                "  Or use `swarm create --clear-stale` to clear and recreate in one step."
+            );
+            json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+        }
     }
 
     cli_println!("Swarm session created: {}", session_id);
+    Ok(())
+}
+
+async fn handle_swarm_close(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let state = read_state(None, session_name);
+    let Some(session_id) = get_session_id_for_close(&state).map(str::to_string) else {
+        clear_state(None, session_name);
+        eprintln!("{}", no_active_session_message());
+        json_field("session_id", json!(null));
+        json_field("closed", json!(false));
+        return Ok(());
+    };
+    json_field("session_id", json!(&session_id));
+
+    // Count tracked swarm tasks before closing (for the summary).
+    let existing = read_async_tasks(None);
+    let swarm_task_count = existing
+        .tasks
+        .iter()
+        .filter(|t| t.command == "swarm-submit" || t.command == "swarm-query")
+        .count();
+
+    // Close the swarm session — ignore errors if already closed.
+    let _ = call_tool(
+        client,
+        base_url,
+        "close_session",
+        json!({ "sessionId": session_id }),
+    )
+    .await;
+    clear_state(None, session_name);
+
+    json_field("closed", json!(true));
+    if swarm_task_count > 0 {
+        cli_println!(
+            "Swarm session closed. Browser terminated. {} tracked task(s) retained for history. Use `swarm list --clear` to remove.",
+            swarm_task_count
+        );
+        json_field("tracked_tasks_retained", json!(swarm_task_count));
+    } else {
+        cli_println!("Swarm session closed. Browser terminated.");
+    }
     Ok(())
 }
 
@@ -16427,7 +16492,7 @@ async fn run(
             handle_swarm_list(&client, &base_url, &tool_params).await?;
         }
         "swarm-close" => {
-            handle_close(&client, &base_url, global.session_name.as_deref()).await?;
+            handle_swarm_close(&client, &base_url, global.session_name.as_deref()).await?;
         }
         "crawl" => {
             handle_crawl(
