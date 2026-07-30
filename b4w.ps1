@@ -131,7 +131,7 @@ if ($RemainingArgs -and ($RemainingArgs[0] -eq '--' -or $RemainingArgs[0] -eq '-
 # Delegates to coworker/coworker.ps1, forwarding all remaining arguments.
 if ($CliArgs -and $CliArgs[0] -eq 'coworker') {
     $CoworkerScript = Join-Path $ScriptDir 'coworker\coworker.ps1'
-    $CoworkerArgs = if ($CliArgs.Count -gt 1) { $CliArgs[1..($CliArgs.Count - 1)] } else { @() }
+    $CoworkerArgs = if ($CliArgs.Count -gt 1) { @($CliArgs[1..($CliArgs.Count - 1)]) } else { @() }
     if ($CoworkerArgs) {
         $CoworkerCommand = $CoworkerArgs[0]
         $CoworkerRemaining = @()
