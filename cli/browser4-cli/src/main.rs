@@ -472,7 +472,11 @@ fn no_active_session_message() -> String {
         "Session required",
         None,
         "No active session is currently stored for this CLI context.",
-        &["run `browser4-cli open <url>` first."],
+        &[
+            "run `browser4-cli open <url>` to start a new session.",
+            "after tab operations, use `goto <url>` to restore the active page.",
+            "check available sessions with `session list`.",
+        ],
     )
 }
 
@@ -2459,8 +2463,11 @@ async fn handle_tab_select(
         }
     });
 
-    // Perform the tab switch.
-    let _result = with_session(client, base_url, session_name, false, |session_id| {
+    // Perform the tab switch with session recovery enabled.  Tab switches
+    // can invalidate the session on some backends (extension sessions,
+    // attached+cdp sessions) — recover_stale=true ensures the CLI state
+    // stays valid even when the switch causes a session refresh.
+    let _result = with_session(client, base_url, session_name, true, |session_id| {
         let client = client.clone();
         let base_url = base_url.to_string();
         let mut params = tool_params.clone();
@@ -2470,6 +2477,14 @@ async fn handle_tab_select(
         }
     })
     .await?;
+
+    // Persist session state after the tab switch so the CLI always has a
+    // valid session_id on disk for the next interaction command.
+    if let Ok(state) = require_session(session_name) {
+        let mut updated = state.clone();
+        updated.last_accessed_at = Some(Utc::now().to_rfc3339());
+        let _ = write_state(&updated, None, session_name);
+    }
 
     // Resolve what was selected for a friendly message.
     let index_opt = tool_params
@@ -5550,6 +5565,10 @@ async fn handle_html_snapshot_capture(
         }
     }
 
+    // Remind users that the live page context is preserved — htmlsnapshot
+    // takes a static copy; eval, snapshot, and other commands still work
+    // against the live DOM.
+    cli_println!("  ℹ️  The live page is still accessible — use `eval`, `snapshot`, or `click` to continue interacting.");
     // Next-step hints
     cli_println!("  💡 Try these next:");
     cli_println!("    Use `get all text` to extract visible text, or `get all attr <name>` for attribute values.");
@@ -17722,7 +17741,9 @@ mod tests {
 
         assert!(message.contains("🔐 Session required"));
         assert!(message.contains("💡 What to try"));
-        assert!(message.contains("run `browser4-cli open <url>` first."));
+        assert!(message.contains("run `browser4-cli open <url>` to start a new session"));
+        assert!(message.contains("after tab operations, use `goto <url>`"));
+        assert!(message.contains("session list"));
         assert!(message.contains("🧾 Details"));
         assert!(message.contains("No active session is currently stored"));
     }
