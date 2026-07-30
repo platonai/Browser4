@@ -84,7 +84,11 @@ class KnowledgeStore(
         val timestamp = DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss-SSS")
             .withZone(ZoneId.systemDefault()).format(trace.timestamp)
         val intentSlug = trace.intent.take(40).replace(Regex("[^a-zA-Z0-9_]"), "_")
-        val filename = "$timestamp-$intentSlug.yaml"
+
+        // Avoid filename collisions when multiple traces land in the same millisecond.
+        // Appends a short suffix from the traceId UUID which is always unique.
+        val shortId = trace.traceId.take(8)
+        val filename = "$timestamp-$intentSlug-$shortId.yaml"
         val file = domainDir.resolve(filename)
 
         writeAtomicYaml(file, mapFromTrace(trace))
