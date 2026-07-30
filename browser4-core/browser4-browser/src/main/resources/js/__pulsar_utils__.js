@@ -235,12 +235,16 @@ __pulsar_utils__.__updateStat = function(init = false) {
     }
 
     const config = this.getConfig();
-    const viewPortWidth = config.viewPortWidth;
+
+    // Use the actual viewport width as the source of truth so the cap stays correct
+    // after resize(). Fall back to the injected config value on pages where
+    // window.innerWidth is not available (e.g. about:blank during early init).
+    const actualViewPortWidth = window.innerWidth || config.viewPortWidth;
 
     // Width/height need to reflect the full page, but also must be robust:
     // some pages can report pathological sizes (infinite/huge due to bad CSS/JS).
     // We cap sizes to keep stats stable and avoid downstream overflows.
-    const maxWidth = Math.max(1, 1.2 * viewPortWidth);
+    const maxWidth = Math.max(1, 1.2 * actualViewPortWidth);
     const maxHeight = 150000; // 150k px is far beyond typical pages but prevents runaway values
 
     let width = 0;
@@ -427,7 +431,7 @@ __pulsar_utils__.scrollToViewport = function (n = 0) {
     if (!document?.documentElement || !document?.body) return;
 
     const config = this.getConfig?.() || {};
-    const viewportHeight = config.viewPortHeight || window.innerHeight;
+    const viewportHeight = window.innerHeight || config.viewPortHeight;
 
     const totalHeight = Math.min(
         Math.max(
@@ -1457,8 +1461,8 @@ __pulsar_utils__.computeMetadata = function() {
 
     let metadata = {};
 
-    metadata["viewPortWidth"] = config.viewPortWidth
-    metadata["viewPortHeight"] = config.viewPortHeight
+    metadata["viewPortWidth"] = clientWidth
+    metadata["viewPortHeight"] = clientHeight
     metadata["scrollTop"] = scrollTop.toFixed(2)
     metadata["scrollLeft"] = scrollLeft.toFixed(2)
     metadata["clientWidth"] = clientWidth.toFixed(2)
@@ -1485,7 +1489,7 @@ __pulsar_utils__.generateMetadata = function() {
     }
 
     let domain = document.domain
-    let viewPort = config.viewPortWidth + "x" + config.viewPortHeight
+    let viewPort = window.innerWidth + "x" + window.innerHeight
     let dateTime = new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString()
     let timestamp = new Date().getTime().toString()
 

@@ -126,9 +126,9 @@ __pulsar_NodeFeatureCalculator.prototype.calcSelfIndicator = function(node, dept
     // all descendant nodes should be smaller than this one
     if (nodeExt.hasOverflowHidden()) {
         // TODO: also update max height
-        nodeExt.updateMaxWidth(nodeExt.rect.width);
+        nodeExt.updateMaxWidth(nodeExt.rect ? nodeExt.rect.width : 0);
     } else {
-        nodeExt.updateMaxWidth(this.config.viewPortWidth);
+        nodeExt.updateMaxWidth(window.innerWidth || this.config.viewPortWidth);
     }
 
     nodeExt.adjustDOMRect();
@@ -178,7 +178,7 @@ __pulsar_NodeFeatureCalculator.prototype.tail = function(node, depth) {
     }
 
     if (this.debug > 0) {
-        this.addDebugInfo()
+        this.addDebugInfo(node)
     }
 
     delete node.__pulsar_nodeExt
@@ -219,7 +219,7 @@ __pulsar_NodeFeatureCalculator.prototype.addDebugInfo = function(node) {
     if (NodeOps.isText(node)) {
         // 'tl' is short for 'text length', it's used to diagnosis
         if (node.textContent) {
-            __pulsar_utils__.addTuple(node, config.ATTR_DEBUG, "tl" + i, node.textContent.length);
+            __pulsar_utils__.addTuple(node, config.ATTR_DEBUG, "tl" + nodeExt.sequence, node.textContent.length);
         }
     } else {
         let descend = __pulsar_utils__.getIntAttribute(node, "_d", 0);
