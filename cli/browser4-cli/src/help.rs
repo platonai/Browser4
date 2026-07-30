@@ -536,6 +536,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
+            "  - console.log() output is NOT captured — only the expression's return value is shown."
+                .to_string(),
+        );
+        lines.push(
+            "    Use `return` instead of `console.log` for values you want to see."
+                .to_string(),
+        );
+        lines.push(
             "  - Objects and arrays are serialized as valid JSON. Use --json to JSON-wrap"
                 .to_string(),
         );
@@ -556,8 +564,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  EOF".to_string());
         lines.push("  echo 'document.title' | browser4-cli eval --stdin".to_string());
         lines.push("  echo 'document.title' | browser4-cli eval --js   # --js is a shorthand for --stdin".to_string());
-        lines.push("  # Base64 (inline, avoids quoting):".to_string());
+        lines.push("  # Base64 (inline, avoids quoting). Encode with: echo -n 'expr' | base64".to_string());
         lines.push("  browser4-cli eval --base64 ZG9jdW1lbnQudGl0bGU=".to_string());
+        lines.push("  # On Windows (PowerShell): [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('expr'))".to_string());
         lines.push("  # Inline (simple expressions only — avoid on Windows with complex JS):".to_string());
         lines.push("  browser4-cli eval \"document.title\"".to_string());
         lines.push("  browser4-cli eval --json \"document.title\"".to_string());

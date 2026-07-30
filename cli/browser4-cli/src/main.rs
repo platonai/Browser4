@@ -5785,6 +5785,60 @@ fn resolve_sql_file(file_path: &str) -> Result<String, String> {
     ))
 }
 
+/// Resolve a file path for `eval --file` and similar CLI-side file arguments.
+///
+/// Resolution strategy (same as `resolve_sql_file`):
+/// 1. Absolute paths — used as-is (must exist).
+/// 2. Relative paths — tries Browser4 repo root first, then CWD.
+///    This allows users to reference files at the repo root from any
+///    subdirectory (e.g. `cli/browser4-cli/` where `cargo run` sets CWD).
+///
+/// Returns the resolved `PathBuf` on success; errors with a message listing all
+/// locations tried when the file cannot be found.
+fn resolve_file_path_with_root_fallback(file_path: &str) -> Result<std::path::PathBuf, String> {
+    let path = std::path::Path::new(file_path);
+
+    // Absolute path — just check it exists
+    if path.is_absolute() {
+        if path.exists() {
+            return Ok(path.to_path_buf());
+        }
+        return Err(format!("Eval file '{}' not found", file_path));
+    }
+
+    let cwd = std::env::current_dir()
+        .map_err(|e| format!("Cannot determine current directory: {e}"))?;
+    let cwd_path = cwd.join(file_path);
+
+    // Try Browser4 repo root first (consistent resolution from any subdirectory)
+    if let Some(root) = daemon::find_browser4_root() {
+        let root_path = root.join(file_path);
+        if root_path != cwd_path && root_path.exists() {
+            return Ok(root_path);
+        }
+    }
+
+    // Fall back to CWD
+    if cwd_path.exists() {
+        return Ok(cwd_path);
+    }
+
+    // Build a clear error message showing where we looked
+    let mut tried = vec![cwd_path.display().to_string()];
+    if let Some(root) = daemon::find_browser4_root() {
+        let root_path = root.join(file_path);
+        let root_display = root_path.display().to_string();
+        if root_display != tried[0] {
+            tried.push(root_display);
+        }
+    }
+    Err(format!(
+        "Eval file '{}' not found\n  Tried: {}",
+        file_path,
+        tried.join("\n  Tried: "),
+    ))
+}
+
 /// Base64-decode the SQL string if `--sql-base64` was passed.
 /// Supports two modes:
 ///   1. `--sql-base64 <base64-query>` — the value is read directly from the option.
@@ -14924,7 +14978,21 @@ fn compile_batch_request(
                         .map(str::trim)
                         .filter(|v| !v.is_empty())
                     {
-                        match std::fs::read_to_string(file_path) {
+                        let resolved = match resolve_file_path_with_root_fallback(file_path) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                if push_batch_local_failure(
+                                    &mut entries,
+                                    spec,
+                                    e,
+                                    bail,
+                                ) {
+                                    break;
+                                }
+                                continue;
+                            }
+                        };
+                        match std::fs::read_to_string(&resolved) {
                             Ok(content) => {
                                 let expression = content.trim().to_string();
                                 if expression.is_empty() {
@@ -14949,7 +15017,7 @@ fn compile_batch_request(
                                 if push_batch_local_failure(
                                     &mut entries,
                                     spec,
-                                    format!("Failed to read eval file '{}': {}", file_path, e),
+                                    format!("Failed to read eval file '{}' (resolved to '{}'): {}", file_path, resolved.display(), e),
                                     bail,
                                 ) {
                                     break;
@@ -16239,8 +16307,9 @@ async fn run(
                 {
                     // --stdin and --base64 take precedence; skip --file if they were already used.
                     if !use_stdin && !use_base64 {
-                        let expression = std::fs::read_to_string(file_path)
-                            .map_err(|e| format!("Failed to read eval file '{}': {}", file_path, e))?;
+                        let resolved = resolve_file_path_with_root_fallback(file_path)?;
+                        let expression = std::fs::read_to_string(&resolved)
+                            .map_err(|e| format!("Failed to read eval file '{}' (resolved to '{}'): {}", file_path, resolved.display(), e))?;
                         let expression = expression.trim().to_string();
                         if expression.is_empty() {
                             return Err(CliError(

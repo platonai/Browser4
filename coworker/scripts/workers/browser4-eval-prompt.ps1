@@ -99,6 +99,16 @@ function New-Browser4EvalPrompt {
         $skillPath     = '`skills/browser4-cli/SKILL.md`'
     }
 
+    # Resolve the repository root path (with forward slashes for cross-shell compatibility)
+    $RepoRootPath = ''
+    try {
+        $wsRoot = Get-WorkspaceRoot
+        $RepoRootPath = ($wsRoot -replace '\\', '/')
+    } catch {
+        # If Get-WorkspaceRoot fails (e.g. no .git directory found), leave empty
+        $RepoRootPath = '<repository-root>'
+    }
+
     return @"
 You are evaluating the usability, discoverability, and reliability of browser4-cli while completing a real-world task.
 
@@ -106,11 +116,12 @@ You are evaluating the usability, discoverability, and reliability of browser4-c
 
 Before performing any browser interaction:
 
-1. Note the repository root directory (where `.git` resides). All `cd cli/browser4-cli && cargo run --` commands rely on being in the repository root — the shell's working directory persists between invocations. If any operation changes the working directory (e.g., JAR extraction, file browsing, `cd` into subdirectories), always `cd` back to the repository root before running the next `cd cli/browser4-cli && cargo run --` command. If `cd cli/browser4-cli` fails with "No such file or directory," you are likely not in the repository root — navigate back to it first.
-2. Run $helpCmd.
-3. Read $skillPath completely.
-4. Learn the available commands, workflows, and conventions directly from the documentation.
-5. Do not assume any prior knowledge of browser4-cli.
+0. Verify your working directory is the repository root: `$($RepoRootPath)`. If `pwd` is anything other than this directory, navigate there immediately with `cd "$RepoRootPath"`. All browser4-cli commands use `$($cliInvocation)` which works from the repo root — stay in this directory for all commands.
+    **IMPORTANT — Temporary files:** Create ALL temporary, intermediate, and scratch files (scripts, data dumps, HTML snapshots, JSON exports, markdown drafts, log files, etc.) inside `./.test-sessions/` (not the repo root). Before creating any file, ensure the directory exists with `mkdir -p .test-sessions`. Do NOT pollute the repository root with temporary files — every generated file that is not a permanent project asset belongs under `.test-sessions/`.
+1. Run $helpCmd.
+2. Read $skillPath completely.
+3. Learn the available commands, workflows, and conventions directly from the documentation.
+4. Do not assume any prior knowledge of browser4-cli.
 
 ## Command Invocation
 

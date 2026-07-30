@@ -95,13 +95,14 @@ The `eval` command uses CDP's `Runtime.evaluate` which returns only the expressi
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Silently discarding `console.log` output is a genuine reliability gap — users who write logging-heavy scripts (as the task instructions suggest: "computes and logs") will be confused when their logs vanish. At minimum, document the limitation in `eval --help`; ideally, subscribe to `Runtime.consoleAPICalled` during `eval --file` and forward messages to stderr.
 
 ---
 
@@ -145,9 +146,10 @@ Shell precedence: `|` binds tighter than `&&`. The user must either `cd` into th
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: REJECT] This is standard POSIX shell precedence (`|` binds tighter than `&&`), not a Browser4 issue. Every CLI tool invoked via `cargo run` exhibits the same behavior. The fix is shell education (use subshell grouping), not a code or documentation change. Adding shell syntax tutorials to a CLI tool's help text is scope creep.
 
 ---
 
@@ -184,13 +186,14 @@ The prompt is generated from a PowerShell template (`browser4-eval-prompt.ps1`) 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Template variables left as literal `$variable` strings force every evaluator to reverse-engineer their values from `common.ps1`. This has been reported in at least 3 prior evaluations without resolution — it's a recurring productivity drag. The fix is straightforward: resolve `$cliInvocation`, `$helpCmd`, `$skillPath`, and `$RepoRootPath` to their actual values in `browser4-eval-prompt.ps1` before emitting the prompt.
 
 ---
 
@@ -231,12 +234,13 @@ The path resolves from `cli/browser4-cli/`. Users must use absolute paths (e.g.,
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Document in `eval --help` that `--file` paths resolve relative to the current working directory (which `cargo run` sets to `cli/browser4-cli/`). The suggested improvement to resolve paths against the original CWD before `cargo run` changes it is the better fix — it eliminates the surprise entirely rather than just documenting it. A `--file` path resolution note in the examples section is the minimum viable improvement.
 
 ---
 
@@ -277,12 +281,13 @@ The user must run the command twice — once to learn about `--stdout` from the 
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] When `-i`/`--interactive` is explicitly passed, the user is signaling "I want to explore interactively" — truncating to 10 lines undermines that intent. Rather than defaulting to `--stdout` (which changes output semantics), increase the interactive-mode preview line count to at least 30 lines so most interactive elements on a typical page are visible without a second invocation.
 
 ---
 
@@ -323,12 +328,13 @@ Documentation gap — `eval --help` shows the base64 example but doesn't explain
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Add an encoding tip to `eval --help` (e.g., "Generate base64: `echo -n 'document.title' | base64`") and document the workflow in SKILL.md's eval section. A `--base64 -` convenience mode that reads from stdin and auto-encodes is reasonable but a dedicated encoder subcommand is over-engineering for a workaround flag.
 
 ---
 
