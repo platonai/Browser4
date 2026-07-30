@@ -268,40 +268,58 @@ if ($GlobalB4wLauncher -and (Test-Path $GlobalB4wLauncher)) {
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# TESTS: Subcommand launchers (created by b4w install)
+# TESTS: Subcommand launchers (NOT created by default)
 # ═══════════════════════════════════════════════════════════════════
-Write-Host "━━━ Subcommand: b4w install launchers ━━━" -ForegroundColor Cyan
+Write-Host "━━━ Subcommand: b4w install launchers (default: none) ━━━" -ForegroundColor Cyan
 
-# Verify install output mentions subcommand launchers
-Assert-ContainsString -Label 'b4w install: mentions subcommand launchers' -Haystack $output -Needle 'subcommand launchers'
+# By default, install output should NOT mention subcommand launchers being created
+Assert-NotContainsString -Label 'b4w install default: does NOT create subcommand launchers' -Haystack $output -Needle 'subcommand launchers installed'
+Assert-ContainsString -Label 'b4w install default: shows -WithLaunchers tip' -Haystack $output -Needle '-WithLaunchers'
 
-# Verify key launcher scripts were created (non-Windows: bash scripts; Windows: .bat files)
+# Verify key launcher scripts/bats are NOT created by default
 $testSubcommands = @('b4w-coworker', 'b4w-coworker-fix', 'b4w-test', 'b4w-build')
 foreach ($sub in $testSubcommands) {
     if ($IsWinTest) {
-        # Windows: .bat files in the repo root
+        # Windows: .bat files in the repo root should NOT exist
         $repoRoot = Split-Path -Parent $b4wAbs
         $batPath = Join-Path $repoRoot "$sub.bat"
-        if (Test-Path $batPath) {
-            Assert-Returns -Label "b4w install: $sub.bat exists" -Actual $true -Expected $true
-            $content = Get-Content $batPath -Raw
-            Assert-ContainsString -Label "b4w install: $sub.bat delegates to b4w" -Haystack $content -Needle 'b4w.bat'
-        } else {
-            Write-Host "    ? SKIP: $sub.bat not found" -ForegroundColor Yellow
-        }
+        Assert-Returns -Label "b4w install default: $sub.bat does NOT exist" -Actual (Test-Path $batPath) -Expected $false
     } else {
-        # Non-Windows: bash scripts in ~/.local/bin/
+        # Non-Windows: bash scripts in ~/.local/bin/ should NOT exist
         $launcherPath = Join-Path $HOME ".local/bin/$sub"
-        Assert-Returns -Label "b4w install: $sub launcher exists" -Actual (Test-Path $launcherPath) -Expected $true
+        Assert-Returns -Label "b4w install default: $sub launcher does NOT exist" -Actual (Test-Path $launcherPath) -Expected $false
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: Subcommand launchers (created by b4w install -WithLaunchers)
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ Subcommand: b4w install -WithLaunchers ━━━" -ForegroundColor Cyan
+
+$outputWL = pwsh -NoProfile -Command "& '$b4wAbs' b4w install -WithLaunchers *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'b4w install -WL: reports success' -Haystack $outputWL -Needle 'b4w installed successfully'
+Assert-ContainsString -Label 'b4w install -WL: creates subcommand launchers' -Haystack $outputWL -Needle 'subcommand launchers installed'
+
+# Verify key launcher scripts/bats WERE created with -WithLaunchers
+foreach ($sub in $testSubcommands) {
+    if ($IsWinTest) {
+        $repoRoot = Split-Path -Parent $b4wAbs
+        $batPath = Join-Path $repoRoot "$sub.bat"
+        Assert-Returns -Label "b4w install -WL: $sub.bat exists" -Actual (Test-Path $batPath) -Expected $true
+        $content = Get-Content $batPath -Raw
+        Assert-ContainsString -Label "b4w install -WL: $sub.bat delegates to b4w" -Haystack $content -Needle 'b4w.bat'
+    } else {
+        $launcherPath = Join-Path $HOME ".local/bin/$sub"
+        Assert-Returns -Label "b4w install -WL: $sub launcher exists" -Actual (Test-Path $launcherPath) -Expected $true
         if (Test-Path $launcherPath) {
             $content = Get-Content $launcherPath -Raw
-            Assert-ContainsString -Label "b4w install: $sub has shebang" -Haystack $content -Needle '#!/bin/bash'
-            Assert-ContainsString -Label "b4w install: $sub delegates to b4w.sh" -Haystack $content -Needle 'b4w.sh'
+            Assert-ContainsString -Label "b4w install -WL: $sub has shebang" -Haystack $content -Needle '#!/bin/bash'
+            Assert-ContainsString -Label "b4w install -WL: $sub delegates to b4w.sh" -Haystack $content -Needle 'b4w.sh'
         }
     }
 }
 
-# Verify the launchers are cleaned up by uninstall
+# Verify the launchers are cleaned up by uninstall (after -WithLaunchers)
 $uninstallOutput = pwsh -NoProfile -Command "& '$b4wAbs' b4w uninstall *>&1" *>&1 | Out-String
 if ($IsWinTest) {
     Assert-ContainsString -Label 'b4w uninstall: cleans up .bat launchers' -Haystack $uninstallOutput -Needle 'subcommand .bat launcher'
@@ -499,6 +517,8 @@ Assert-ContainsString -Label 'Integrity: has b4w-test launcher' -Haystack $srcTe
 Assert-ContainsString -Label 'Integrity: has b4w-build launcher' -Haystack $srcText -Needle 'b4w-build'
 Assert-ContainsString -Label 'Integrity: install creates subcommand launchers' -Haystack $srcText -Needle 'subcommand launchers installed'
 Assert-ContainsString -Label 'Integrity: uninstall cleans subcommand launchers' -Haystack $srcText -Needle 'subcommand launcher'
+Assert-ContainsString -Label 'Integrity: WithLaunchers flag parsing' -Haystack $srcText -Needle '$WithLaunchers'
+Assert-ContainsString -Label 'Integrity: -WithLaunchers documented in install help' -Haystack $srcText -Needle '-WithLaunchers'
 
 # ═══════════════════════════════════════════════════════════════════
 # TESTS: Source integrity — bootstrap (global invocation)
