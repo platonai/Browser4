@@ -1460,7 +1460,7 @@ $ScenarioContent
         }
 
         # Controls
-        Write-Host '  ↑↓ nav   ←→ fold   Space/Enter run   n new   t view   / filter   r refresh   q quit' -ForegroundColor DarkGray
+        Write-Host '  ↑↓ nav   ←→ fold   Space/Enter run   n new   v view   t view   / filter   r refresh   q quit' -ForegroundColor DarkGray
         Write-Host ('─' * 60) -ForegroundColor DarkGray
 
         # Compute render area
@@ -1676,6 +1676,65 @@ $ScenarioContent
                 $tree.Expanded = $true
                 $cursor = 0; $topOffset = 0
                 Write-Host "Refreshed." -ForegroundColor DarkGray
+                break
+            }
+            'V' {
+                if ($visible.Count -gt 0) {
+                    $viewNode = $visible[$cursor]
+                    if ($viewNode.Type -eq 'file') {
+                        $viewRelPath = [System.IO.Path]::GetRelativePath($TasksRoot, $viewNode.FullPath)
+                        $viewContent = Get-Content -LiteralPath $viewNode.FullPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                        if (-not $viewContent) { $viewContent = '(empty file)' }
+
+                        [Console]::Clear()
+                        Write-Host 'Scenario Viewer' -ForegroundColor Cyan
+                        Write-Host ('─' * 60) -ForegroundColor DarkGray
+                        Write-Host "File: $viewRelPath" -ForegroundColor DarkGray
+                        Write-Host ('─' * 60) -ForegroundColor DarkGray
+
+                        $viewLines = $viewContent -split "`n"
+                        $viewHeight = [Math]::Max(5, [Console]::WindowHeight - 6)
+                        $viewOffset = 0
+                        $viewDone = $false
+
+                        while (-not $viewDone) {
+                            [Console]::SetCursorPosition(0, 5)
+                            $renderEnd = [Math]::Min($viewOffset + $viewHeight, $viewLines.Count)
+                            for ($vl = $viewOffset; $vl -lt $renderEnd; $vl++) {
+                                $lineNum = "$($vl + 1)".PadLeft(4)
+                                $cleanLine = if ($viewLines[$vl].Length -gt ([Console]::WindowWidth - 7)) {
+                                    $viewLines[$vl].Substring(0, [Console]::WindowWidth - 7)
+                                } else { $viewLines[$vl] }
+                                Write-Host "$lineNum  $cleanLine"
+                            }
+
+                            # Clear remaining lines
+                            for ($cl = $renderEnd; $cl -lt $viewOffset + $viewHeight; $cl++) {
+                                Write-Host (''.PadRight([Console]::WindowWidth - 1))
+                            }
+
+                            # Footer
+                            $footerTop = 5 + $viewHeight
+                            [Console]::SetCursorPosition(0, $footerTop)
+                            Write-Host ('─' * 60) -ForegroundColor DarkGray
+                            $pct = if ($viewLines.Count -gt 0) { [math]::Round(($viewOffset + $viewHeight) * 100 / $viewLines.Count) } else { 100 }
+                            if ($pct -gt 100) { $pct = 100 }
+                            Write-Host "  Lines $($viewOffset + 1)-$renderEnd of $($viewLines.Count) ($pct%)" -NoNewline -ForegroundColor DarkGray
+                            Write-Host '  ↑↓ PgUp PgDn Home End scroll   any other key return' -ForegroundColor DarkGray
+
+                            $viewKey = [Console]::ReadKey($true)
+                            switch ($viewKey.Key) {
+                                'UpArrow'    { $viewOffset = [Math]::Max(0, $viewOffset - 1) }
+                                'DownArrow'  { $viewOffset = [Math]::Min([Math]::Max(0, $viewLines.Count - $viewHeight), $viewOffset + 1) }
+                                'PageUp'     { $viewOffset = [Math]::Max(0, $viewOffset - $viewHeight) }
+                                'PageDown'   { $viewOffset = [Math]::Min([Math]::Max(0, $viewLines.Count - $viewHeight), $viewOffset + $viewHeight) }
+                                'Home'       { $viewOffset = 0 }
+                                'End'        { $viewOffset = [Math]::Max(0, $viewLines.Count - $viewHeight) }
+                                default      { $viewDone = $true }
+                            }
+                        }
+                    }
+                }
                 break
             }
             'N' {
