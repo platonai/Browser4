@@ -123,20 +123,94 @@ function Write-DraftPanel {
     Write-ConsoleLine -Message '  n  New draft    v<N> View    f<N> Fix (assign+run)' -ForegroundColor DarkGray
     Write-ConsoleLine -Message '  r  Refresh      q  Quit     ?  Help' -ForegroundColor DarkGray
     Write-ConsoleLine -Message ''
-    Write-Host -NoNewline -ForegroundColor Cyan '  > '
 }
 
 # ── Action handlers ─────────────────────────────────────────────────────────
 
 <#
 .SYNOPSIS
-    Read a single key from the user. Returns the key character and any
-    trailing text (e.g. "v3" → 'v', '3').
+    Read user input with instant single-key response for common commands.
+
+.DESCRIPTION
+    Uses [Console]::ReadKey() to provide instant response for single-key
+    commands (q, n, r, ?, Escape) without requiring Enter. For commands
+    that need arguments (v <N>, f <N>), the user types the full command
+    and presses Enter as usual.
+
+    Supports Backspace for line editing during typed input.
+    Falls back to Read-Host when console input is redirected (piped/CI).
+
+    Key mappings:
+      q / Escape  → quit
+      n           → new draft
+      r           → refresh
+      ?           → help
+      Ctrl+C      → ignored (no-op, returns empty string)
+      v <N>       → view draft N (requires Enter)
+      f <N>       → fix draft N (requires Enter)
 #>
 function Read-PanelInput {
+    # Fallback to Read-Host when input is redirected (pipe, CI, etc.)
+    try {
+        if ([Console]::IsInputRedirected) {
+            $raw = Read-Host
+            return $raw.Trim()
+        }
+    }
+    catch {
+        $raw = Read-Host
+        return $raw.Trim()
+    }
+
     Write-Host -NoNewline -ForegroundColor Cyan '  > '
-    $raw = Read-Host
-    return $raw.Trim()
+    $buffer = ''
+
+    while ($true) {
+        try {
+            $key = [Console]::ReadKey($true)
+        }
+        catch {
+            # ReadKey can fail if console is detached mid-read
+            return ''
+        }
+
+        $char = [int]$key.KeyChar
+
+        # Enter (13) — commit the buffer
+        if ($char -eq 13) {
+            Write-Host ''
+            return $buffer.Trim()
+        }
+
+        # Escape (27) — quit
+        if ($char -eq 27) {
+            Write-Host 'q'
+            return 'q'
+        }
+
+        # Backspace (8) — erase last character
+        if ($char -eq 8) {
+            if ($buffer.Length -gt 0) {
+                $buffer = $buffer.Substring(0, $buffer.Length - 1)
+                Write-Host "`b `b" -NoNewline
+            }
+            continue
+        }
+
+        # Ctrl+C (3) — ignore, treat as no-op
+        if ($char -eq 3) {
+            # Echo nothing; the user pressed Ctrl+C — just ignore it
+            continue
+        }
+
+        # Printable characters (space and above)
+        if ($char -ge 32) {
+            $charStr = [char]$char
+            $buffer += $charStr
+            Write-Host $charStr -NoNewline
+        }
+        # All other control characters are silently ignored
+    }
 }
 
 <#
@@ -266,9 +340,15 @@ function Invoke-FixDraft {
     # Run coworker fix via b4w.ps1
     $b4wScript = Join-Path (Get-WorkspaceRoot) 'b4w.ps1'
     if (Test-Path $b4wScript) {
-        # Run fix on the newly assigned file
-        $fixArgs = @('-File', $b4wScript, 'coworker', 'fix', '-Path', $destInfo.Path)
-        $process = Start-Process -FilePath 'pwsh.exe' `
+        $powerShell = if ($IsWindows) {
+            if (Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue) { 'pwsh.exe' }
+            else { 'powershell.exe' }
+        }
+        else {
+            'pwsh'
+        }
+
+        $process = Start-Process -FilePath $powerShell `
             -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $b4wScript, 'coworker', 'fix', '-Path', $destInfo.Path) `
             -PassThru -NoNewWindow -Wait
 
@@ -381,7 +461,15 @@ Prompt: $body
 
         $b4wScript = Join-Path (Get-WorkspaceRoot) 'b4w.ps1'
         if (Test-Path $b4wScript) {
-            $process = Start-Process -FilePath 'pwsh.exe' `
+            $powerShell = if ($IsWindows) {
+                if (Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue) { 'pwsh.exe' }
+                else { 'powershell.exe' }
+            }
+            else {
+                'pwsh'
+            }
+
+            $process = Start-Process -FilePath $powerShell `
                 -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $b4wScript, 'coworker', 'fix', '-Path', $destInfo.Path) `
                 -PassThru -NoNewWindow -Wait
 
@@ -413,6 +501,11 @@ Prompt: $body
 .SYNOPSIS
     Entry point for the interactive draft panel.
     Called when `coworker draft -i` or `coworker draft --interactive` is invoked.
+
+.DESCRIPTION
+    Runs a full-screen interactive panel that never exits unless the user
+    explicitly presses 'q' or Escape. Ctrl+C is intercepted and ignored.
+    All errors are trapped so the panel stays alive.
 #>
 function Invoke-DraftPanel {
     # Verify we have a TTY
@@ -422,69 +515,109 @@ function Invoke-DraftPanel {
         exit 1
     }
 
+    # Intercept Ctrl+C so it cannot kill the panel.
+    # The Read-PanelInput function ignores Ctrl+C keypresses; this
+    # setting prevents the OS from turning Ctrl+C into a process signal.
+    $previousTreatControlC = [Console]::TreatControlCAsInput
+    [Console]::TreatControlCAsInput = $true
+
     $statusMessage = ''
     $statusColor = 'DarkGray'
+    $exitRequested = $false
 
-    while ($true) {
-        $drafts = @(Get-DraftEntries)
-        Write-DraftPanel -Drafts $drafts -StatusMessage $statusMessage -StatusColor $statusColor
-        $statusMessage = ''
-        $statusColor = 'DarkGray'
+    try {
+        while (-not $exitRequested) {
+            # ── Render ──────────────────────────────────────────────────
+            try {
+                $drafts = @(Get-DraftEntries)
+            }
+            catch {
+                # If draft scanning fails (e.g. permission error), show an
+                # empty list and let the user continue.
+                $drafts = @()
+                $statusMessage = "Warning: Could not scan drafts: $_"
+                $statusColor = 'Yellow'
+            }
 
-        $input = Read-PanelInput
+            Write-DraftPanel -Drafts $drafts -StatusMessage $statusMessage -StatusColor $statusColor
+            $statusMessage = ''
+            $statusColor = 'DarkGray'
 
-        if (-not $input) {
-            continue
-        }
+            # ── Input ───────────────────────────────────────────────────
+            try {
+                $input = Read-PanelInput
+            }
+            catch {
+                # Read-PanelInput should never throw, but guard anyway
+                $statusMessage = "Input error — press ? for help, q to quit."
+                $statusColor = 'Red'
+                continue
+            }
 
-        # Match patterns
-        switch -Regex ($input) {
-            '^[qQ]$' {
-                # Quit
-                Clear-Host
-                Write-ConsoleLine -Message "  Coworker Draft Panel closed." -ForegroundColor DarkGray
-                break
-            }
-            '^\?$' {
-                Show-PanelHelp
+            if (-not $input) {
                 continue
             }
-            '^[rR]$' {
-                # Refresh — naturally happens each loop iteration
-                continue
+
+            # ── Dispatch ────────────────────────────────────────────────
+            try {
+                switch -Regex ($input) {
+                    '^[qQ]$' {
+                        $exitRequested = $true
+                        continue
+                    }
+                    '^\?$' {
+                        Show-PanelHelp
+                        continue
+                    }
+                    '^[rR]$' {
+                        # Refresh — naturally happens each loop iteration
+                        continue
+                    }
+                    '^[nN]$' {
+                        Invoke-NewDraftInteractive
+                        continue
+                    }
+                    '^[vV]\s+(\d+)$' {
+                        $idx = [int]$Matches[1]
+                        Show-DraftView -Drafts $drafts -Index $idx
+                        continue
+                    }
+                    '^[vV]$' {
+                        $statusMessage = "Usage: v <number>  (e.g. v 1)"
+                        $statusColor = 'Yellow'
+                        continue
+                    }
+                    '^[fF]\s+(\d+)$' {
+                        $idx = [int]$Matches[1]
+                        Invoke-FixDraft -Drafts $drafts -Index $idx
+                        continue
+                    }
+                    '^[fF]$' {
+                        $statusMessage = "Usage: f <number>  (e.g. f 1)"
+                        $statusColor = 'Yellow'
+                        continue
+                    }
+                    default {
+                        $statusMessage = "Unknown command: '$input'. Type ? for help."
+                        $statusColor = 'Red'
+                        continue
+                    }
+                }
             }
-            '^[nN]$' {
-                Invoke-NewDraftInteractive
-                continue
-            }
-            '^[vV]\s+(\d+)$' {
-                $idx = [int]$Matches[1]
-                Show-DraftView -Drafts $drafts -Index $idx
-                continue
-            }
-            '^[vV]$' {
-                # Bare 'v' — ask for which one
-                Write-ConsoleLine -Message "  Usage: v <number>  (e.g. v 1)" -ForegroundColor Yellow
-                Start-Sleep -Milliseconds 1500
-                continue
-            }
-            '^[fF]\s+(\d+)$' {
-                $idx = [int]$Matches[1]
-                Invoke-FixDraft -Drafts $drafts -Index $idx
-                continue
-            }
-            '^[fF]$' {
-                # Bare 'f' — ask for which one
-                Write-ConsoleLine -Message "  Usage: f <number>  (e.g. f 1)" -ForegroundColor Yellow
-                Start-Sleep -Milliseconds 1500
-                continue
-            }
-            default {
-                $statusMessage = "Unknown command: '$input'. Type ? for help."
+            catch {
+                # An action handler threw — show the error and keep running
+                $statusMessage = "Error: $_"
                 $statusColor = 'Red'
                 continue
             }
         }
-        break
     }
+    finally {
+        # Always restore the console setting, even if something goes
+        # catastrophically wrong and we unwind out of the panel.
+        [Console]::TreatControlCAsInput = $previousTreatControlC
+    }
+
+    Clear-Host
+    Write-ConsoleLine -Message "  Coworker Draft Panel closed." -ForegroundColor DarkGray
 }
