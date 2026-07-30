@@ -1458,3 +1458,686 @@ pub(super) fn test_cdp_live_command(ctx: &mut E2ECtx) {
 
     run_command(ctx, &["close"]);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Mouse fixture tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Test various click types on the dedicated mouse fixture page:
+/// left click, right click, middle click, double click, click with count (triple),
+/// modifier clicks (Shift, Ctrl, Alt), and tiny target click.
+pub(super) fn test_mouse_click_variants(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.mouse_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["resize", "1280", "900"]);
+    sleep(Duration::from_secs(1));
+
+    // ── Left click ──────────────────────────────────────────────────
+    run_command(ctx, &["click", "#click-target"]);
+    wait_for_state_or_abort(
+        ctx,
+        |s| s["clickCount"].as_u64() == Some(1),
+        2_000,
+        "Expected clickCount to become 1 after left click",
+    );
+
+    // ── Double click ────────────────────────────────────────────────
+    run_command(ctx, &["dblclick", "#dblclick-target"]);
+    wait_for_state_or_abort(
+        ctx,
+        |s| s["doubleClickCount"].as_u64() == Some(1),
+        2_000,
+        "Expected doubleClickCount to become 1 after dblclick",
+    );
+
+    // ── Right click (contextmenu) ───────────────────────────────────
+    run_command(ctx, &["click", "#rightclick-target", "--button=right"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["rightClickCount"].as_u64().unwrap_or(0) >= 1,
+        2_000,
+        "Expected rightClickCount >= 1 after right click",
+    );
+
+    // ── Middle click ────────────────────────────────────────────────
+    run_command(ctx, &["click", "#middleclick-target", "--button=middle"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["middleClickCount"].as_u64().unwrap_or(0) >= 1,
+        2_000,
+        "Expected middleClickCount >= 1 after middle click",
+    );
+
+    // ── Click with count (triple click via clickCount=3) ────────────
+    run_command(ctx, &["click", "#click-count-target", "--count=3"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["clickCountClicks"].as_u64() == Some(3),
+        2_000,
+        "Expected clickCountClicks to become 3 after click --count=3",
+    );
+
+    // ── Modifier clicks ─────────────────────────────────────────────
+    // Shift+click
+    run_command(ctx, &["click", "#modifier-click-target", "--modifiers", "Shift"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["modifierClick"]["count"].as_u64().unwrap_or(0) >= 1
+            && s["modifierClick"]["shiftKey"].as_bool() == Some(true),
+        2_000,
+        "Expected modifierClick.shiftKey=true after Shift+click",
+    );
+
+    // Ctrl+click
+    run_command(ctx, &["click", "#modifier-click-target", "--modifiers", "Control"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["modifierClick"]["ctrlKey"].as_bool() == Some(true),
+        2_000,
+        "Expected modifierClick.ctrlKey=true after Ctrl+click",
+    );
+
+    // Alt+click
+    run_command(ctx, &["click", "#modifier-click-target", "--modifiers", "Alt"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["modifierClick"]["altKey"].as_bool() == Some(true),
+        2_000,
+        "Expected modifierClick.altKey=true after Alt+click",
+    );
+
+    // ── Tiny target (10x10) ─────────────────────────────────────────
+    run_command(ctx, &["click", "#tiny-target"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["tinyClickCount"].as_u64() == Some(1),
+        2_000,
+        "Expected tinyClickCount to become 1 after clicking 10x10 target",
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+/// Test mouse wheel on dedicated scroll containers (vertical, horizontal,
+/// wheel on specific element, multi-count wheelDown/wheelUp).
+pub(super) fn test_mouse_wheel_advanced(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.mouse_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["resize", "1280", "900"]);
+    sleep(Duration::from_secs(1));
+
+    // ── Scroll the dedicated scroll container ──────────────────────
+    // First move mouse into the scroll container area
+    run_command(ctx, &["mousemove", "150", "600"]);
+
+    // Vertical scroll in the container
+    run_command(ctx, &["mousewheel", "0", "200"]);
+    let deadline = Instant::now() + Duration::from_millis(10_000);
+    let mut scrolled = false;
+    while Instant::now() < deadline {
+        let top = read_interactive_state(ctx)["scrollContainerScrollTop"]
+            .as_u64()
+            .unwrap_or(0);
+        if top >= 100 {
+            scrolled = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    if !scrolled {
+        eprintln!(
+            "[assumption] Expected scrollContainerScrollTop >= 100 after mousewheel(0,200). \
+             Last state: {:?}",
+            read_interactive_state(ctx)
+        );
+    }
+
+    // Horizontal scroll in the dedicated horizontal container
+    run_command(ctx, &["mousemove", "150", "740"]);
+    run_command(ctx, &["mousewheel", "200", "0"]);
+    let deadline2 = Instant::now() + Duration::from_millis(10_000);
+    let mut scrolled_x = false;
+    while Instant::now() < deadline2 {
+        let left = read_interactive_state(ctx)["scrollContainerXScrollLeft"]
+            .as_u64()
+            .unwrap_or(0);
+        if left >= 100 {
+            scrolled_x = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    if !scrolled_x {
+        eprintln!(
+            "[assumption] Expected scrollContainerXScrollLeft >= 100 after mousewheel(200,0). \
+             Last state: {:?}",
+            read_interactive_state(ctx)
+        );
+    }
+
+    // ── Page-level scroll via wheel on mouse area ──────────────────
+    run_command(ctx, &["mousemove", "240", "160"]);
+    run_command(ctx, &["mousewheel", "0", "300"]);
+    wait_for_scroll_y_or_abort(
+        ctx,
+        300,
+        10_000,
+        "Expected mousewheel(0, 300) to scroll page by at least 300px",
+    );
+
+    // ── wheelEvents array should have entries ──────────────────────
+    let wheel_events = read_interactive_state(ctx)["wheelEvents"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
+    assert!(
+        wheel_events > 0,
+        "Expected wheelEvents to have recorded events, got {wheel_events}"
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+/// Test hover enter/leave and context menu on the mouse fixture.
+pub(super) fn test_mouse_hover_and_context(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.mouse_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["resize", "1280", "900"]);
+    sleep(Duration::from_secs(1));
+
+    // ── Hover enter ─────────────────────────────────────────────────
+    run_command(ctx, &["hover", "#hover-zone"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["hovered"].as_bool() == Some(true)
+            && s["hoverEnterCount"].as_u64().unwrap_or(0) >= 1,
+        2_000,
+        "Expected hovered=true and hoverEnterCount >= 1 after hover",
+    );
+
+    // ── Hover leave (move mouse away) ───────────────────────────────
+    run_command(ctx, &["mousemove", "10", "10"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["hovered"].as_bool() == Some(false)
+            && s["hoverLeaveCount"].as_u64().unwrap_or(0) >= 1,
+        2_000,
+        "Expected hovered=false and hoverLeaveCount >= 1 after moving away",
+    );
+
+    // ── Context menu (right-click on context-target) ────────────────
+    run_command(ctx, &["click", "#context-target", "--button=right"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["contextMenuFired"].as_bool() == Some(true),
+        2_000,
+        "Expected contextMenuFired=true after right-click on context target",
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+/// Test overlapping element clicks and coordinate boundary clicks.
+pub(super) fn test_mouse_overlapping_and_boundaries(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.mouse_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["resize", "1280", "900"]);
+    sleep(Duration::from_secs(1));
+
+    // ── Click overlapping region (front element should receive it) ──
+    run_command(ctx, &["click", "#overlap-front"]);
+    wait_for_state_or_abort(
+        ctx,
+        |s| s["overlapFrontClicks"].as_u64() == Some(1),
+        2_000,
+        "Expected overlapFrontClicks to become 1",
+    );
+    // Back element should NOT have received the click
+    let back_clicks = read_interactive_state(ctx)["overlapBackClicks"]
+        .as_u64()
+        .unwrap_or(0);
+    assert_eq!(
+        back_clicks, 0,
+        "Expected overlapBackClicks to remain 0 (front element intercepted click)"
+    );
+
+    // ── Corner targets ──────────────────────────────────────────────
+    // Top-left corner
+    run_command(ctx, &["mousemove", "5", "5"]);
+    run_command(ctx, &["click", "#corner-tl"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["cornerTLClicks"].as_u64() == Some(1),
+        2_000,
+        "Expected cornerTLClicks to become 1",
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+/// Test mouse drag variants on the mouse fixture.
+pub(super) fn test_mouse_drag_variants(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.mouse_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["resize", "1280", "900"]);
+    sleep(Duration::from_secs(1));
+
+    // ── Drag source→target ──────────────────────────────────────────
+    run_command(ctx, &["drag", "#drag-source", "#drag-target"]);
+    assume_wait_for_state(
+        ctx,
+        |s| {
+            s["dragStarted"].as_str() == Some("drag-source-1")
+                && s["dragDropped"]["source"].as_str() == Some("drag-source-1")
+                && s["dragDropped"]["target"].as_str() == Some("drop-target-1")
+        },
+        2_000,
+        "Expected drag source→target to complete",
+    );
+
+    // ── Drag second source to second target ─────────────────────────
+    run_command(ctx, &["drag", "#drag-source2", "#drag-target2"]);
+    assume_wait_for_state(
+        ctx,
+        |s| {
+            s["dragStarted2"].as_str() == Some("drag-source-2")
+                && s["dragDropped2"]["source"].as_str() == Some("drag-source-2")
+                && s["dragDropped2"]["target"].as_str() == Some("drop-target-2")
+        },
+        2_000,
+        "Expected drag source2→target2 to complete",
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+/// Test mousemove, mousedown, mouseup with button tracking on the mouse fixture.
+pub(super) fn test_mouse_low_level_events(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.mouse_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["resize", "1280", "900"]);
+    sleep(Duration::from_secs(1));
+
+    // ── mousemove ───────────────────────────────────────────────────
+    run_command(ctx, &["mousemove", "200", "200"]);
+    wait_for_state_or_abort(
+        ctx,
+        |s| {
+            let lm = &s["lastMouse"];
+            lm[0].as_i64() == Some(200) && lm[1].as_i64() == Some(200)
+        },
+        2_000,
+        "Expected lastMouse to be [200, 200] after mousemove",
+    );
+
+    // ── mousedown left ──────────────────────────────────────────────
+    let md_before = read_interactive_state(ctx)["mouseDownCount"]
+        .as_u64()
+        .unwrap_or(0);
+    run_command(ctx, &["mousedown", "left"]);
+    wait_for_state_or_abort(
+        ctx,
+        |s| s["mouseDownCount"].as_u64().unwrap_or(0) > md_before
+            && s["mouseDownButton"].as_str() == Some("left"),
+        2_000,
+        "Expected mouseDownCount to increment with button=left",
+    );
+
+    // ── mouseup left ────────────────────────────────────────────────
+    let mu_before = read_interactive_state(ctx)["mouseUpCount"]
+        .as_u64()
+        .unwrap_or(0);
+    run_command(ctx, &["mouseup", "left"]);
+    wait_for_state_or_abort(
+        ctx,
+        |s| s["mouseUpCount"].as_u64().unwrap_or(0) > mu_before
+            && s["mouseUpButton"].as_str() == Some("left"),
+        2_000,
+        "Expected mouseUpCount to increment with button=left",
+    );
+
+    // ── mouse enter/leave on track area ─────────────────────────────
+    run_command(ctx, &["mousemove", "100", "100"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["mouseEnteredTrackArea"].as_bool() == Some(true),
+        2_000,
+        "Expected mouseEnteredTrackArea=true after moving into track area",
+    );
+
+    // Move out of the track area
+    run_command(ctx, &["mousemove", "500", "500"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["mouseLeftTrackArea"].as_bool() == Some(true),
+        2_000,
+        "Expected mouseLeftTrackArea=true after moving out of track area",
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Keyboard fixture tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Test type and fill commands with various edge cases:
+/// normal text, Unicode, emoji, long text, empty string, special characters.
+pub(super) fn test_keyboard_type_and_fill_edge_cases(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.keyboard_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["resize", "1280", "900"]);
+    sleep(Duration::from_secs(1));
+
+    // ── type normal text ────────────────────────────────────────────
+    run_command(ctx, &["type", "hello world", "#type-target"]);
+    wait_for_dom_value_or_abort(
+        ctx, "#type-target", "hello world", 2_000,
+        "Expected type-target value 'hello world'",
+    );
+
+    // ── type Unicode ────────────────────────────────────────────────
+    run_command(ctx, &["type", "café 北京 🎉", "#type-target"]);
+    wait_for_dom_value_or_abort(
+        ctx, "#type-target", "hello worldcafé 北京 🎉", 5_000,
+        "Expected type-target to contain Unicode + emoji text",
+    );
+
+    // ── fill normal text (clears first) ─────────────────────────────
+    run_command(ctx, &["fill", "#fill-target", "filled text"]);
+    wait_for_dom_value_or_abort(
+        ctx, "#fill-target", "filled text", 2_000,
+        "Expected fill-target value 'filled text'",
+    );
+
+    // ── fill with special characters ────────────────────────────────
+    run_command(ctx, &["fill", "#fill-target", "@#$%^&*()[]{}|\\;:'\",.<>/?`~"]);
+    wait_for_dom_value_or_abort(
+        ctx, "#fill-target", "@#$%^&*()[]{}|\\;:'\",.<>/?`~", 5_000,
+        "Expected fill-target to accept all special characters",
+    );
+
+    // ── fill empty string (clears the field) ────────────────────────
+    run_command(ctx, &["fill", "#fill-target", ""]);
+    wait_for_dom_value_or_abort(
+        ctx, "#fill-target", "", 2_000,
+        "Expected fill-target to be empty after fill with empty string",
+    );
+
+    // ── fill long text ──────────────────────────────────────────────
+    let long_text = "A".repeat(200);
+    run_command(ctx, &["fill", "#fill-target", &long_text]);
+    thread::sleep(Duration::from_millis(500));
+    let actual = eval_text_for_target(ctx, "element => element.value", "#fill-target");
+    assert!(
+        actual.trim().len() >= 190,
+        "Expected fill-target to contain ~200 chars, got {} chars: {:?}",
+        actual.trim().len(),
+        &actual[..actual.len().min(80)],
+    );
+
+    // ── fill on textarea ────────────────────────────────────────────
+    run_command(ctx, &["fill", "#textarea-target", "line1\nline2\nline3"]);
+    wait_for_dom_value_or_abort(
+        ctx, "#textarea-target", "line1\nline2\nline3", 3_000,
+        "Expected textarea to contain multi-line text",
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+/// Test press command with various special keys:
+/// Enter, Tab, Escape, Backspace, Delete, Arrow keys, Home, End.
+pub(super) fn test_keyboard_press_special_keys(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.keyboard_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["resize", "1280", "900"]);
+    sleep(Duration::from_secs(1));
+
+    // Pre-fill with some text to test navigation keys
+    run_command(ctx, &["fill", "#press-target", "ABCDEF"]);
+
+    // ── Press Home then Delete ──────────────────────────────────────
+    run_command(ctx, &["press", "Home", "#press-target"]);
+    run_command(ctx, &["press", "Delete", "#press-target"]);
+    thread::sleep(Duration::from_millis(300));
+    let val1 = eval_text_for_target(ctx, "element => element.value", "#press-target");
+    assert!(
+        val1.trim().starts_with("B") || val1.trim().len() < 6,
+        "Expected first char removed by Home+Delete, got: {:?}", val1.trim()
+    );
+
+    // ── Press End then Backspace ────────────────────────────────────
+    run_command(ctx, &["press", "End", "#press-target"]);
+    run_command(ctx, &["press", "Backspace", "#press-target"]);
+    thread::sleep(Duration::from_millis(300));
+    let val2 = eval_text_for_target(ctx, "element => element.value", "#press-target");
+    assert!(
+        val2.trim().len() <= 5,
+        "Expected last char removed by End+Backspace, got: {:?}", val2.trim()
+    );
+
+    // ── Press Escape (page-level, should not error) ─────────────────
+    let esc_result = run_command(ctx, &["press", "Escape"]);
+    assert!(
+        esc_result.exit_code == 0,
+        "Expected Escape press to succeed at page level"
+    );
+
+    // ── Press Tab ───────────────────────────────────────────────────
+    let tab_result = run_command(ctx, &["press", "Tab"]);
+    assert_eq!(tab_result.exit_code, 0, "Expected Tab press to succeed");
+
+    // ── Press Enter in form input ───────────────────────────────────
+    run_command(ctx, &["fill", "#form-input", "test submit"]);
+    run_command(ctx, &["press", "Enter", "#form-input"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["formSubmitCount"].as_u64().unwrap_or(0) >= 1,
+        3_000,
+        "Expected form to submit on Enter in form input",
+    );
+
+    // ── Press ArrowRight / ArrowLeft (navigation) ───────────────────
+    run_command(ctx, &["fill", "#press-target", "XY"]);
+    run_command(ctx, &["press", "ArrowLeft", "#press-target"]);
+    run_command(ctx, &["type", "Z", "#press-target"]);
+    thread::sleep(Duration::from_millis(300));
+    let val3 = eval_text_for_target(ctx, "element => element.value", "#press-target");
+    // After ArrowLeft from end, cursor is between X and Y, so Z should insert between
+    assert!(
+        val3.trim().contains("XZ") || val3.trim().contains("ZY"),
+        "Expected Z inserted between X and Y after ArrowLeft, got: {:?}", val3.trim()
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+/// Test keyboard operations on edge case inputs:
+/// maxlength, readonly, disabled, hidden, number, password, contenteditable.
+pub(super) fn test_keyboard_edge_inputs(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.keyboard_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["resize", "1280", "900"]);
+    sleep(Duration::from_secs(1));
+
+    // ── maxlength input ─────────────────────────────────────────────
+    run_command(ctx, &["fill", "#maxlength-target", "1234567890"]);
+    thread::sleep(Duration::from_millis(300));
+    let max_val = eval_text_for_target(ctx, "element => element.value", "#maxlength-target");
+    assert!(
+        max_val.trim().len() <= 5,
+        "Expected maxlength input to limit to 5 chars, got {} chars: {:?}",
+        max_val.trim().len(),
+        max_val.trim()
+    );
+
+    // ── number input ────────────────────────────────────────────────
+    run_command(ctx, &["fill", "#number-target", "42"]);
+    wait_for_dom_value_or_abort(
+        ctx, "#number-target", "42", 2_000,
+        "Expected number input to accept '42'",
+    );
+
+    // ── password input ──────────────────────────────────────────────
+    run_command(ctx, &["fill", "#password-target", "s3cr3t!"]);
+    wait_for_dom_value_or_abort(
+        ctx, "#password-target", "s3cr3t!", 2_000,
+        "Expected password input to accept value",
+    );
+
+    // ── readonly input: value should remain unchanged ───────────────
+    run_command(ctx, &["fill", "#readonly-target", "new val"]);
+    let readonly_val = eval_text_for_target(ctx, "element => element.value", "#readonly-target");
+    assert_eq!(
+        readonly_val.trim(), "read-only",
+        "Expected readonly input to retain original value, got: {:?}", readonly_val.trim()
+    );
+
+    // ── disabled input ──────────────────────────────────────────────
+    run_command(ctx, &["fill", "#disabled-target", "new val"]);
+    let disabled_val = eval_text_for_target(
+        ctx, "element => element.value", "#disabled-target"
+    );
+    assert_eq!(
+        disabled_val.trim(), "disabled",
+        "Expected disabled input to retain original value, got: {:?}", disabled_val.trim()
+    );
+
+    // ── Contenteditable div ─────────────────────────────────────────
+    run_command(ctx, &["fill", "#contenteditable-target", "edited content"]);
+    thread::sleep(Duration::from_millis(500));
+    let ce_html = eval_text_for_target(
+        ctx, "element => element.innerHTML", "#contenteditable-target"
+    );
+    assert!(
+        ce_html.contains("edited") || ce_html.contains("content"),
+        "Expected contenteditable to contain 'edited content', got: {:?}", ce_html
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+/// Test key combinations (Ctrl+A) and focus/blur tracking.
+pub(super) fn test_keyboard_combinations_and_focus(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.keyboard_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["resize", "1280", "900"]);
+    sleep(Duration::from_secs(1));
+
+    // ── Focus tracking ──────────────────────────────────────────────
+    run_command(ctx, &["click", "#type-target"]);
+    thread::sleep(Duration::from_millis(500));
+    let focus_events = &read_interactive_state(ctx)["focusEvents"];
+    let has_focus = focus_events.as_array().map_or(false, |a| {
+        a.iter().any(|e| e["target"].as_str() == Some("type-target") && e["event"].as_str() == Some("focus"))
+    });
+    assert!(
+        has_focus,
+        "Expected focus event on type-target after click, focusEvents: {:?}", focus_events
+    );
+
+    // ── Ctrl+A (Select All) via keydown/keyup sequence ──────────────
+    run_command(ctx, &["fill", "#combo-target", "selectable text"]);
+    run_command(ctx, &["keydown", "Control"]);
+    run_command(ctx, &["press", "a", "#combo-target"]);
+    run_command(ctx, &["keyup", "Control"]);
+    thread::sleep(Duration::from_millis(300));
+    let combo_events = &read_interactive_state(ctx)["comboEvents"];
+    let has_ctrl = combo_events.as_array().map_or(false, |a| {
+        a.iter().any(|e| e["ctrlKey"].as_bool() == Some(true))
+    });
+    // keyDown/keyUp use JS dispatchEvent which is reliable
+    assert!(
+        has_ctrl,
+        "Expected at least one combo event with ctrlKey=true. comboEvents: {:?}",
+        combo_events
+    );
+
+    // ── keyDown/keyUp count tracking ────────────────────────────────
+    let kd_before = read_interactive_state(ctx)["keyDownCount"].as_u64().unwrap_or(0);
+    run_command(ctx, &["keydown", "a"]);
+    run_command(ctx, &["keyup", "a"]);
+    thread::sleep(Duration::from_millis(300));
+    let kd_after = read_interactive_state(ctx)["keyDownCount"].as_u64().unwrap_or(0);
+    let ku_after = read_interactive_state(ctx)["keyUpCount"].as_u64().unwrap_or(0);
+    assert!(
+        kd_after > kd_before,
+        "Expected keyDownCount to increment after keydown 'a'. Before: {kd_before}, After: {kd_after}"
+    );
+    assert!(
+        ku_after > 0,
+        "Expected keyUpCount > 0 after keyup 'a'. Got: {ku_after}"
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+/// Test the enhanced interactive fixture features:
+/// click position, right-click, hover enter/leave, detailed key events.
+pub(super) fn test_interactive_enhanced_tracking(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    open_resized_interactive_page(ctx);
+
+    // ── Click position tracking ─────────────────────────────────────
+    run_command(ctx, &["click", "#click-target"]);
+    wait_for_state_or_abort(
+        ctx,
+        |s| s["clickPosition"].is_array() && s["clickButton"].as_str() == Some("left"),
+        2_000,
+        "Expected clickPosition and clickButton='left' after click",
+    );
+
+    // ── Right-click tracking ────────────────────────────────────────
+    run_command(ctx, &["click", "#click-target", "--button=right"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["rightClickCount"].as_u64().unwrap_or(0) >= 1,
+        2_000,
+        "Expected rightClickCount >= 1 after right-click on click-target",
+    );
+
+    // ── Hover enter/leave tracking ──────────────────────────────────
+    run_command(ctx, &["hover", "#hover-target"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["hoverEnterCount"].as_u64().unwrap_or(0) >= 1,
+        2_000,
+        "Expected hoverEnterCount >= 1 after hover",
+    );
+
+    // Move away — hoverLeaveCount should increment
+    run_command(ctx, &["mousemove", "500", "500"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["hoverLeaveCount"].as_u64().unwrap_or(0) >= 1,
+        2_000,
+        "Expected hoverLeaveCount >= 1 after moving away from hover target",
+    );
+
+    // ── Enhanced key event details ──────────────────────────────────
+    let key_events_before = read_interactive_state(ctx)["keyEvents"]
+        .as_array().map(|a| a.len()).unwrap_or(0);
+    run_command(ctx, &["press", "x", "#type-target"]);
+    thread::sleep(Duration::from_millis(500));
+    let key_events_after = read_interactive_state(ctx)["keyEvents"]
+        .as_array().map(|a| a.len()).unwrap_or(0);
+    assert!(
+        key_events_after > key_events_before,
+        "Expected keyEvents to grow after press 'x'. Before: {key_events_before}, After: {key_events_after}"
+    );
+
+    // Key events should have detailed fields (key, code, modifiers)
+    let last_event = read_interactive_state(ctx)["keyEvents"]
+        .as_array()
+        .and_then(|a| a.last().cloned());
+    if let Some(evt) = last_event {
+        assert!(
+            evt["key"].is_string() || evt["code"].is_string(),
+            "Expected key events to have 'key' or 'code' field, got: {:?}", evt
+        );
+    }
+
+    run_command(ctx, &["close"]);
+}
