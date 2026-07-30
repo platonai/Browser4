@@ -2535,6 +2535,9 @@ if ($ScriptArgs.Count -eq 0) {
 # like 'browser4-core') are forwarded as additional args.
 $parsingTestTypes = $true
 foreach ($arg in $ScriptArgs) {
+    # Skip null/empty arguments (can arrive from caller splatting $CliArgs[1..$CliArgs.Length])
+    if (-not $arg) { continue }
+
     # Handle --help / -h / -help (only before any test type has been collected,
     # matching the original behaviour where -h given as the first argument
     # shows usage instead of being treated as a test type).
