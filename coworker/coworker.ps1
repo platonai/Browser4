@@ -42,6 +42,13 @@ Commands:
   draft     Create or edit a task draft in 0draft/
             coworker draft [-Title <str>|-t <str>] [-Content <str>|-ct <str>] [-Edit|-e] [-Name <str>|-n <str>] [-Interactive|-i] [-NoInteractive|-ni]
 
+            Use -i / -Interactive to launch the full-screen Draft Panel:
+              — Browse existing drafts with titles and dates
+              — Create new drafts interactively
+              — View draft content inline
+              — Fix a draft (assign to 1ready + run `coworker fix`)
+              — Keyboard shortcuts: n (new), v<N> (view), f<N> (fix), r (refresh), q (quit), ? (help)
+
   refine    Improve a draft task using AI analysis
             coworker refine [-Path <path>] [-Audience <str>] [-InPlace]
 
@@ -110,6 +117,9 @@ if (Test-Path $agentHelper) { . $agentHelper }
 
 $reviewHelper = Join-Path $PSScriptRoot 'scripts\review.ps1'
 if (Test-Path $reviewHelper) { . $reviewHelper }
+
+$draftPanelHelper = Join-Path $PSScriptRoot 'scripts\workers\draft-panel.ps1'
+if (Test-Path $draftPanelHelper) { . $draftPanelHelper }
 
 $stateHelper = Join-Path $PSScriptRoot 'scripts\common\State.ps1'
 if (Test-Path $stateHelper) { . $stateHelper }
@@ -403,6 +413,14 @@ function Invoke-Draft {
     }
 
     if ($Interactive) {
+        # Launch the interactive draft panel — a full-screen UI that lists
+        # existing drafts, lets you browse them, create new ones, and
+        # optionally call `coworker fix` on a draft.
+        if (Get-Command -Name 'Invoke-DraftPanel' -ErrorAction SilentlyContinue) {
+            Invoke-DraftPanel
+            return
+        }
+        # Fallback: basic interactive prompt (if panel script not available)
         if (-not (Test-CanPrompt)) {
             Write-ConsoleLine -Message 'Error: Interactive draft mode requires a TTY (console input).' -ForegroundColor Red
             Write-ConsoleLine -Message 'Use -NoInteractive with -Title/-Content for non-interactive environments.' -ForegroundColor Yellow
@@ -1380,24 +1398,34 @@ Usage: coworker draft [options]
 
 Create or edit a task draft in 0draft/.
 
-When no options are provided, draft mode starts interactively by default.
+When no options are provided, the interactive Draft Panel opens by default.
+The panel lists existing drafts, lets you create new ones, view content, and
+optionally fix drafts (assign to 1ready + run coworker fix).
+
+Keyboard shortcuts in the panel:
+  n         New draft (prompts for title and content)
+  v <N>     View draft N (print full content)
+  f <N>     Fix draft N (assign to 1ready and execute via coworker fix)
+  r         Refresh the draft list
+  q / Esc   Quit the panel
+  ?         Show help
 
 Options:
-  -Title, -t <str>         Task title (creates structured format)
+  -Title, -t <str>         Task title (structured format; bypasses interactive panel)
   -Content, -ct <str>      Task content / prompt body
   -Prompt, -pr <str>       Alias for -Content
   -Edit, -e                Open the draft in an editor after creation
   -Name, -n <str>          Specify the filename (without .md extension)
-  -Interactive, -i         Force interactive prompts in the terminal
-  -NoInteractive, -ni      Disable interactive prompts (for scripts/CI)
+  -Interactive, -i         Launch the interactive Draft Panel (default when no args)
+  -NoInteractive, -ni      Skip the panel; use Title/Content flags only (for scripts/CI)
   -RefreshEditor, -re      Re-detect available editor (ignore state cache)
 
 Examples:
-  coworker draft
-  coworker draft -Interactive
-  coworker draft -i -t "Fix login timeout"
+  coworker draft                              Open the interactive draft panel
+  coworker draft -i                           Same as above
+  coworker draft -Title "Fix login timeout"
   coworker draft -Title "Fix login timeout" -Content "The login..."
-  coworker draft -Edit
+  coworker draft -Edit                        Open editor for new draft
   coworker draft -Name my-feature -Title "My Feature"
 '@
         }
