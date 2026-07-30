@@ -30,12 +30,43 @@ $script:LastCtrlCTime = [datetime]::MinValue
 
 <#
 .SYNOPSIS
-    Check whether a string (from Read-Host) contains a Ctrl+C cancellation.
-    With TreatControlCAsInput enabled, Ctrl+C appears as char 3 in the input.
+    Read-Host wrapper that lets Ctrl+C cancel back to the caller.
+
+.DESCRIPTION
+    Temporarily disables TreatControlCAsInput so that Ctrl+C triggers
+    PowerShell's native break exception, then catches it and returns
+    $null to signal cancellation. Always restores the console setting.
+
+    Callers should check for $null to detect cancellation:
+        $result = Read-HostCancelable -Prompt '> '
+        if ($null -eq $result) { return }  # user pressed Ctrl+C
 #>
-function Test-CtrlCPressed {
-    param([string]$InputString)
-    return $InputString.Contains([char]3)
+function Read-HostCancelable {
+    param([string]$Prompt = '')
+
+    # Let Ctrl+C behave natively (throw) so we can catch it as cancellation.
+    [Console]::TreatControlCAsInput = $false
+
+    try {
+        if ($Prompt) {
+            return Read-Host -Prompt $Prompt
+        }
+        else {
+            return Read-Host
+        }
+    }
+    catch [System.Management.Automation.PipelineStoppedException] {
+        # Ctrl+C pressed — signal cancellation
+        return $null
+    }
+    catch {
+        # Unexpected error — re-throw
+        throw
+    }
+    finally {
+        # Re-enable Ctrl+C interception for the main panel loop
+        [Console]::TreatControlCAsInput = $true
+    }
 }
 
 # ── Panel rendering ──────────────────────────────────────────────────────────
@@ -263,7 +294,7 @@ function Show-PanelHelp {
     Write-ConsoleLine -Message "  ────────────────────────────────────────────────────" -ForegroundColor DarkGray
     Write-ConsoleLine -Message '  Press Enter to return.' -ForegroundColor DarkGray
     Write-ConsoleLine -Message ''
-    $null = Read-Host
+    $null = Read-HostCancelable
 }
 
 <#
@@ -309,7 +340,7 @@ function Show-DraftView {
     Write-ConsoleLine -Message '  ────────────────────────────────────────────────────' -ForegroundColor DarkGray
     Write-ConsoleLine -Message '  Press Enter to return to the draft list.' -ForegroundColor DarkGray
     Write-ConsoleLine -Message ''
-    Read-Host | Out-Null
+    $null = Read-HostCancelable
 }
 
 <#
@@ -335,8 +366,8 @@ function Invoke-FixDraft {
     Write-ConsoleLine -Message "  Fix draft $Index : $($draft.Title)" -ForegroundColor Cyan
     Write-ConsoleLine -Message "  This will assign the draft to 1ready/ and execute it." -ForegroundColor DarkGray
     Write-Host -NoNewline -ForegroundColor Yellow '  Proceed? [y/N] '
-    $confirm = Read-Host
-    if (Test-CtrlCPressed -InputString $confirm) {
+    $confirm = Read-HostCancelable
+    if ($null -eq $confirm) {
         Write-ConsoleLine -Message "  Cancelled." -ForegroundColor DarkGray
         Start-Sleep -Milliseconds 1000
         return
@@ -394,7 +425,7 @@ function Invoke-FixDraft {
 
     Write-ConsoleLine -Message ''
     Write-ConsoleLine -Message '  Press Enter to continue.' -ForegroundColor DarkGray
-    Read-Host | Out-Null
+    $null = Read-HostCancelable
 }
 
 <#
@@ -410,8 +441,8 @@ function Invoke-NewDraftInteractive {
 
     # Title
     Write-Host -NoNewline -ForegroundColor White '  Title (optional): '
-    $titleRaw = Read-Host
-    if (Test-CtrlCPressed -InputString $titleRaw) {
+    $titleRaw = Read-HostCancelable
+    if ($null -eq $titleRaw) {
         Write-ConsoleLine -Message ''
         Write-ConsoleLine -Message "  Draft cancelled." -ForegroundColor DarkGray
         Start-Sleep -Milliseconds 1000
@@ -428,8 +459,8 @@ function Invoke-NewDraftInteractive {
     $lines = @()
     $cancelled = $false
     while ($true) {
-        $line = Read-Host
-        if (Test-CtrlCPressed -InputString $line) {
+        $line = Read-HostCancelable
+        if ($null -eq $line) {
             $cancelled = $true
             break
         }
@@ -489,8 +520,8 @@ Prompt: $body
     # Ask if user wants to fix it now
     Write-ConsoleLine -Message ''
     Write-Host -NoNewline -ForegroundColor Cyan '  Fix this issue now? (assign to 1ready + run cowarker fix) [y/N] '
-    $fixNow = Read-Host
-    if (Test-CtrlCPressed -InputString $fixNow) {
+    $fixNow = Read-HostCancelable
+    if ($null -eq $fixNow) {
         Write-ConsoleLine -Message "  Skipping fix. Draft saved in 0draft/." -ForegroundColor DarkGray
     }
     elseif ($fixNow -match '^[yY]') {
@@ -541,7 +572,7 @@ Prompt: $body
     Write-ConsoleLine -Message ''
     Write-ConsoleLine -Message '  Press Enter to return to the draft list.' -ForegroundColor DarkGray
     Write-Host -NoNewline
-    Read-Host | Out-Null
+    $null = Read-HostCancelable
 }
 
 # ── Main loop ──────────────────────────────────────────────────────────────
