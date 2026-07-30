@@ -260,6 +260,7 @@ function Print-Usage {
     Write-Host "  test.ps1 rws dir -t mock-site              # Short form of --tree"
     Write-Host "  test.ps1 rws dir -f -m                     # Short forms for --files --metadata"
     Write-Host "  test.ps1 rws dir --interactive             # Interactive directory picker"
+    Write-Host "  test.ps1 rws sc --interactive              # Interactive scenario picker"
     Write-Host "  test.ps1 main                       # Run all Browser4 main tests"
     Write-Host "  test.ps1 session list               # List all past test sessions"
     Write-Host "  test.ps1 session view 20260724T1917 # View a specific session (prefix match)"
@@ -805,6 +806,528 @@ function Show-InteractiveDirPicker {
     }
 }
 
+function Show-InteractiveScenarioPicker {
+    <#
+    .SYNOPSIS
+        Interactive scenario picker — browse, filter, and run .md task files
+        one-at-a-time in the background.
+
+    .DESCRIPTION
+        Reads all .md scenario files under $TasksRoot and presents an interactive
+        UI with tree-view navigation, text filtering, and background execution.
+        Only one scenario runs at a time; the UI loops back to the picker after
+        each run completes, quitting only when the user presses 'q'.
+
+        Controls:
+          ↑/↓       Navigate items
+          ←/→       Collapse / expand folder (tree view)
+          Space/Enter  Run the selected scenario in the background
+          t           Toggle tree-view / flat-list
+          /           Enter filter mode (type to filter, Esc to clear)
+          r           Refresh file list from disk
+          q           Quit (prompts to wait/kill if a scenario is running)
+
+        At-most-one enforcement — if a scenario is already running, pressing
+        Space/Enter shows a prompt: wait for completion, kill & run new, or cancel.
+
+    .PARAMETER TasksRoot
+        Root directory containing .md task files (recursively discovered).
+
+    .PARAMETER Production
+        Pass --production to run-task.ps1 (use installed browser4-cli).
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$TasksRoot,
+        [switch]$Production
+    )
+
+    if (-not (Test-Path -LiteralPath $TasksRoot -PathType Container)) {
+        Write-Error "Tasks root not found: $TasksRoot"
+        return
+    }
+
+    # ── Build a recursive file tree ─────────────────────────────────────────
+    function Build-FileTree {
+        param([string]$Path, [int]$Depth)
+        $node = [PSCustomObject]@{
+            Name     = Split-Path $Path -Leaf
+            FullPath = $Path
+            Type     = 'dir'
+            Children = [System.Collections.Generic.List[object]]::new()
+            Expanded = ($Depth -lt 2)
+            Depth    = $Depth
+        }
+        # Directories first, then files — both sorted by name
+        $subdirs = @(Get-ChildItem -LiteralPath $Path -Directory -ErrorAction SilentlyContinue | Sort-Object Name)
+        foreach ($d in $subdirs) {
+            $child = Build-FileTree -Path $d.FullName -Depth ($Depth + 1)
+            $node.Children.Add($child)
+        }
+        $subfiles = @(Get-ChildItem -LiteralPath $Path -File -Filter '*.md' -ErrorAction SilentlyContinue | Sort-Object Name)
+        foreach ($f in $subfiles) {
+            $node.Children.Add([PSCustomObject]@{
+                Name     = $f.Name
+                FullPath = $f.FullName
+                Type     = 'file'
+                Depth    = $Depth + 1
+            })
+        }
+        return $node
+    }
+
+    # ── Flatten tree to a visible-item list respecting expand/collapse ──────
+    function Get-VisibleNodes {
+        param([PSCustomObject]$Node)
+        $result = [System.Collections.Generic.List[object]]::new()
+        $result.Add($Node)
+        if ($Node.Type -eq 'dir' -and $Node.Expanded) {
+            foreach ($child in $Node.Children) {
+                $descendants = Get-VisibleNodes -Node $child
+                $result.AddRange($descendants)
+            }
+        }
+        return $result
+    }
+
+    # ── One-shot initialisation ─────────────────────────────────────────────
+    $tree = Build-FileTree -Path $TasksRoot -Depth 0
+    $tree.Expanded = $true  # root always expanded
+
+    $showTree   = $true
+    $filter     = ''
+    $filterMode = $false
+    $cursor     = 0
+    $topOffset  = 0
+
+    $runningProc = $null
+    $runningName = ''
+
+    $rwsScriptsDir = Join-Path $repoRoot 'browser4-tests' 'real-world-scenarios' 'scripts'
+    $taskRunner = Join-Path $rwsScriptsDir 'run-task.ps1'
+
+    if (-not (Test-Path -LiteralPath $taskRunner)) {
+        Write-Error "Task runner not found at $taskRunner"
+        return
+    }
+
+    # ── Launch a scenario in the background ─────────────────────────────────
+    function Start-ScenarioRun {
+        param([PSCustomObject]$Node)
+        $relPath = [System.IO.Path]::GetRelativePath($TasksRoot, $Node.FullPath)
+        $heading = Get-Content -LiteralPath $Node.FullPath -First 1 -ErrorAction SilentlyContinue
+        $scenarioName = if ($heading -match '^#\s+(.+)') { $Matches[1] } else { $relPath }
+        $script:runningName = $scenarioName
+
+        $pwshArgs = @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass',
+            '-File', $taskRunner,
+            '-TaskFile', $Node.FullPath
+        )
+        if ($Production) { $pwshArgs += '-Production' }
+
+        [Console]::Clear()
+        Write-Host 'Launching scenario...' -ForegroundColor Cyan
+        Write-Host "  Name: $scenarioName" -ForegroundColor DarkGray
+        Write-Host "  File: $relPath" -ForegroundColor DarkGray
+        Write-Host ''
+
+        $script:runningProc = Start-Process -FilePath 'pwsh' -ArgumentList $pwshArgs `
+            -NoNewWindow -PassThru
+
+        Write-Host "Running in background (PID $($script:runningProc.Id))..." -ForegroundColor Yellow
+        Write-Host ''
+        Write-Host 'Press any key to return to the scenario list' -ForegroundColor DarkGray
+        [Console]::ReadKey($true) | Out-Null
+    }
+
+    # ── Prompt when user tries to run while another scenario is active ──────
+    function Prompt-RunningConflict {
+        [Console]::Clear()
+        Write-Host "Scenario '$script:runningName' is still running (PID $($script:runningProc.Id))." -ForegroundColor Yellow
+        Write-Host ''
+        Write-Host '  w  =  wait for it to finish, then run the new one' -ForegroundColor DarkGray
+        Write-Host '  k  =  kill it and run the new one' -ForegroundColor DarkGray
+        Write-Host '  Esc / any other key  =  cancel, go back to list' -ForegroundColor DarkGray
+        Write-Host ''
+        $choice = [Console]::ReadKey($true)
+        if ($choice.KeyChar -eq 'w' -or $choice.KeyChar -eq 'W') {
+            Write-Host "Waiting for '$script:runningName' to complete..." -ForegroundColor Yellow
+            $script:runningProc.WaitForExit()
+            $script:runningProc.Dispose()
+            $script:runningProc = $null
+            $script:runningName = ''
+            return $true   # proceed
+        }
+        elseif ($choice.KeyChar -eq 'k' -or $choice.KeyChar -eq 'K') {
+            try { $script:runningProc.Kill() } catch { }
+            $script:runningProc.Dispose()
+            $script:runningProc = $null
+            $script:runningName = ''
+            Write-Host 'Killed.  Starting new scenario...' -ForegroundColor Yellow
+            Start-Sleep -Seconds 1
+            return $true   # proceed
+        }
+        return $false  # cancel
+    }
+
+    # ── Prompt when user tries to quit while a scenario is active ───────────
+    function Prompt-QuitConflict {
+        [Console]::Clear()
+        Write-Host "Scenario '$script:runningName' is still running (PID $($script:runningProc.Id))." -ForegroundColor Yellow
+        Write-Host ''
+        Write-Host '  w  =  wait for it to finish, then quit' -ForegroundColor DarkGray
+        Write-Host '  k  =  kill it and quit' -ForegroundColor DarkGray
+        Write-Host '  Esc / any other key  =  cancel, go back to list' -ForegroundColor DarkGray
+        Write-Host ''
+        $choice = [Console]::ReadKey($true)
+        if ($choice.KeyChar -eq 'w' -or $choice.KeyChar -eq 'W') {
+            Write-Host "Waiting for '$script:runningName' to complete..." -ForegroundColor Yellow
+            $script:runningProc.WaitForExit()
+            $script:runningProc.Dispose()
+            $script:runningProc = $null
+            return $true  # proceed to quit
+        }
+        elseif ($choice.KeyChar -eq 'k' -or $choice.KeyChar -eq 'K') {
+            try { $script:runningProc.Kill() } catch { }
+            $script:runningProc.Dispose()
+            $script:runningProc = $null
+            return $true  # proceed to quit
+        }
+        return $false  # cancel quit
+    }
+
+    # ═══════════════════════════════════════════════════════════════════════
+    #  Main interactive loop — only 'q' exits
+    # ═══════════════════════════════════════════════════════════════════════
+    $quitRequested = $false
+
+    while (-not $quitRequested) {
+
+        # ── Check background process ────────────────────────────────────────
+        if ($runningProc) {
+            try { $runningProc.Refresh() } catch { }
+            if ($runningProc.HasExited) {
+                $exitCode = $runningProc.ExitCode
+                try { $runningProc.Dispose() } catch { }
+                $runningProc = $null
+                $statusMark  = if ($exitCode -eq 0) { '[PASS]' } else { "[FAIL:$exitCode]" }
+                $statusColor = if ($exitCode -eq 0) { 'Green' } else { 'Red' }
+
+                [Console]::Clear()
+                Write-Host '══════════════════════════════════' -ForegroundColor Cyan
+                Write-Host '  Scenario Complete' -ForegroundColor Cyan
+                Write-Host '══════════════════════════════════' -ForegroundColor Cyan
+                Write-Host ''
+                Write-Host "  $runningName   $statusMark" -ForegroundColor $statusColor
+                if ($exitCode -eq 124) {
+                    Write-Host '  (timed out)' -ForegroundColor Yellow
+                }
+                Write-Host ''
+                Write-Host 'Press any key to return to the scenario list' -ForegroundColor DarkGray
+                [Console]::ReadKey($true) | Out-Null
+                $runningName = ''
+                continue
+            }
+        }
+
+        # ── Compute visible nodes ───────────────────────────────────────────
+        $allVisible = Get-VisibleNodes -Node $tree
+
+        if ($filter) {
+            $visible = foreach ($node in $allVisible) {
+                if ($node.Type -eq 'file') {
+                    $relPath = [System.IO.Path]::GetRelativePath($TasksRoot, $node.FullPath)
+                    if ($node.Name -like "*$filter*" -or $relPath -like "*$filter*") {
+                        $node
+                    }
+                }
+            }
+            $visible = @($visible)
+        }
+        else {
+            $visible = $allVisible
+        }
+
+        # Hide directory-only nodes from flat-list view (confusing cursor nav)
+        if (-not $showTree) {
+            $visible = @($visible | Where-Object { $_.Type -eq 'file' })
+        }
+
+        # ── Clamp cursor ────────────────────────────────────────────────────
+        if ($visible.Count -eq 0) {
+            $cursor = 0
+        }
+        else {
+            $cursor = [Math]::Max(0, [Math]::Min($cursor, $visible.Count - 1))
+        }
+
+        # ── Render ──────────────────────────────────────────────────────────
+        [Console]::Clear()
+
+        # Header
+        if ($runningProc) {
+            Write-Host "  ⏳ RUNNING: $runningName  (PID $($runningProc.Id))" -ForegroundColor Yellow
+        }
+        else {
+            Write-Host 'Interactive Scenario Picker' -ForegroundColor Cyan
+        }
+        Write-Host ('─' * 60) -ForegroundColor DarkGray
+
+        if ($filter) {
+            $filterPrompt = if ($filterMode) { "_$filter`_" } else { "$filter" }
+            Write-Host "  Filter: $filterPrompt  ($($visible.Count) match$(if ($visible.Count -ne 1) { 'es' }))" -ForegroundColor Magenta
+        }
+
+        # Controls
+        Write-Host '  ↑↓ nav   ←→ fold   Space/Enter run   t view   / filter   r refresh   q quit' -ForegroundColor DarkGray
+        Write-Host ('─' * 60) -ForegroundColor DarkGray
+
+        # Compute render area
+        $headerLines = 4 + $(if ($runningProc) { 1 } else { 0 }) + $(if ($filter) { 1 } else { 0 })
+        $footerLines = 3
+        $renderSlots = [Math]::Max(5, [Console]::WindowHeight - $headerLines - $footerLines)
+
+        if ($visible.Count -gt 0 -and $cursor -lt $topOffset) {
+            $topOffset = $cursor
+        }
+        if ($visible.Count -gt 0 -and $cursor -ge $topOffset + $renderSlots) {
+            $topOffset = $cursor - $renderSlots + 1
+        }
+        $topOffset = [Math]::Max(0, [Math]::Min($topOffset, [Math]::Max(0, $visible.Count - $renderSlots)))
+
+        $renderEnd = [Math]::Min($topOffset + $renderSlots, $visible.Count)
+
+        # Scroll indicator
+        if ($topOffset -gt 0) {
+            Write-Host "  ^^ $topOffset more above ^^" -ForegroundColor DarkGray
+        }
+
+        # Render items
+        for ($i = $topOffset; $i -lt $renderEnd; $i++) {
+            $node = $visible[$i]
+            $isCursor = ($i -eq $cursor)
+
+            if ($showTree) {
+                $indent = '  ' * [Math]::Max(0, $node.Depth - 1)
+                if ($node.Type -eq 'dir') {
+                    $expand  = if ($node.Expanded) { '▼' } else { '▶' }
+                    $name    = "$($node.Name)/"
+                }
+                else {
+                    $expand  = ' '
+                    $name    = $node.Name
+                }
+                $line = "$indent$expand $name"
+            }
+            else {
+                $relPath = [System.IO.Path]::GetRelativePath($TasksRoot, $node.FullPath)
+                $line = "  $relPath"
+            }
+
+            $cursorMark = if ($isCursor) { '▶' } else { ' ' }
+            if ($isCursor) {
+                Write-Host "$cursorMark " -NoNewline -ForegroundColor Green
+                Write-Host $line -ForegroundColor Green
+            }
+            else {
+                Write-Host "$cursorMark $line"
+            }
+        }
+
+        # Scroll indicator
+        if ($renderEnd -lt $visible.Count) {
+            $more = $visible.Count - $renderEnd
+            Write-Host "  vv $more more below vv" -ForegroundColor DarkGray
+        }
+
+        # Footer
+        Write-Host ('─' * 60) -ForegroundColor DarkGray
+
+        $summaryParts = [System.Collections.Generic.List[string]]::new()
+        $summaryParts.Add("$($visible.Count) visible")
+        $summaryParts.Add("$(if ($showTree) { 'tree' } else { 'list' }) view")
+        if ($filter) { $summaryParts.Add("filter: $filter") }
+        Write-Host "  $($summaryParts -join '  |  ')" -ForegroundColor DarkGray
+
+        if ($visible.Count -gt 0) {
+            $current = $visible[$cursor]
+            if ($current.Type -eq 'file') {
+                $relPath = [System.IO.Path]::GetRelativePath($TasksRoot, $current.FullPath)
+                Write-Host "  selected: $relPath" -ForegroundColor DarkGray
+            }
+        }
+
+        # ── Read input ──────────────────────────────────────────────────────
+        # In filter-input mode, KeyChar handling is the primary path.
+        if ($filterMode) {
+            $key = [Console]::ReadKey($true)
+            if ($key.Key -eq 'Escape') {
+                $filter = ''
+                $filterMode = $false
+                $cursor = 0; $topOffset = 0
+                continue
+            }
+            if ($key.Key -eq 'Enter') {
+                $filterMode = $false
+                continue
+            }
+            if ($key.Key -eq 'Backspace') {
+                if ($filter.Length -gt 0) {
+                    $filter = $filter.Substring(0, $filter.Length - 1)
+                }
+                $cursor = 0; $topOffset = 0
+                continue
+            }
+            if ($key.KeyChar -match '^[\x20-\x7E]$' -and $key.KeyChar -ne '/') {
+                $filter += $key.KeyChar
+                $cursor = 0; $topOffset = 0
+                continue
+            }
+            # Any other key in filter mode is ignored
+            continue
+        }
+
+        $key = [Console]::ReadKey($true)
+
+        # '/' enters filter mode (check both KeyChar and Oem2 for layout portability)
+        if ($key.KeyChar -eq '/' -and $key.Modifiers -eq 0) {
+            $filterMode = $true
+            $cursor = 0; $topOffset = 0
+            continue
+        }
+
+        switch ($key.Key) {
+            'UpArrow' {
+                $cursor = [Math]::Max(0, $cursor - 1)
+                break
+            }
+            'DownArrow' {
+                $cursor = [Math]::Min($visible.Count - 1, $cursor + 1)
+                break
+            }
+            'PageUp' {
+                $cursor = [Math]::Max(0, $cursor - $renderSlots)
+                break
+            }
+            'PageDown' {
+                $cursor = [Math]::Min($visible.Count - 1, $cursor + $renderSlots)
+                break
+            }
+            'Home' {
+                $cursor = 0
+                break
+            }
+            'End' {
+                $cursor = [Math]::Max(0, $visible.Count - 1)
+                break
+            }
+            'LeftArrow' {
+                if ($showTree -and $visible.Count -gt 0) {
+                    $node = $visible[$cursor]
+                    if ($node.Type -eq 'dir' -and $node.Expanded) {
+                        $node.Expanded = $false
+                    }
+                }
+                break
+            }
+            'RightArrow' {
+                if ($showTree -and $visible.Count -gt 0) {
+                    $node = $visible[$cursor]
+                    if ($node.Type -eq 'dir') {
+                        if (-not $node.Expanded) {
+                            $node.Expanded = $true
+                        }
+                    }
+                }
+                break
+            }
+            'Spacebar' {
+                if ($visible.Count -gt 0) {
+                    $node = $visible[$cursor]
+                    if ($node.Type -eq 'file') {
+                        $canRun = $true
+                        if ($runningProc) {
+                            try { $runningProc.Refresh() } catch { }
+                            if (-not $runningProc.HasExited) {
+                                $canRun = Prompt-RunningConflict
+                            }
+                            else {
+                                try { $runningProc.Dispose() } catch { }
+                                $runningProc = $null
+                            }
+                        }
+                        if ($canRun) {
+                            Start-ScenarioRun -Node $node
+                        }
+                    }
+                }
+                break
+            }
+            'Enter' {
+                if ($visible.Count -gt 0) {
+                    $node = $visible[$cursor]
+                    if ($node.Type -eq 'file') {
+                        $canRun = $true
+                        if ($runningProc) {
+                            try { $runningProc.Refresh() } catch { }
+                            if (-not $runningProc.HasExited) {
+                                $canRun = Prompt-RunningConflict
+                            }
+                            else {
+                                try { $runningProc.Dispose() } catch { }
+                                $runningProc = $null
+                            }
+                        }
+                        if ($canRun) {
+                            Start-ScenarioRun -Node $node
+                        }
+                    }
+                }
+                break
+            }
+            'T' {
+                $showTree = -not $showTree
+                $cursor = 0; $topOffset = 0
+                break
+            }
+            'R' {
+                $tree = Build-FileTree -Path $TasksRoot -Depth 0
+                $tree.Expanded = $true
+                $cursor = 0; $topOffset = 0
+                Write-Host "Refreshed." -ForegroundColor DarkGray
+                break
+            }
+            'Q' {
+                if ($runningProc) {
+                    try { $runningProc.Refresh() } catch { }
+                    if (-not $runningProc.HasExited) {
+                        $proceed = Prompt-QuitConflict
+                        if (-not $proceed) { break }
+                    }
+                    else {
+                        try { $runningProc.Dispose() } catch { }
+                        $runningProc = $null
+                    }
+                }
+                $quitRequested = $true
+                break
+            }
+            'Escape' {
+                if ($filter) {
+                    $filter = ''
+                    $cursor = 0; $topOffset = 0
+                }
+                break
+            }
+        }
+    }
+
+    # ── Clean exit ──────────────────────────────────────────────────────────
+    [Console]::Clear()
+    Write-Host 'Exited interactive scenario picker.' -ForegroundColor DarkGray
+}
+
 function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
     $rwsScriptsDir = Join-Path $repoRoot 'browser4-tests' 'real-world-scenarios' 'scripts'
     $scenarioRunner = Join-Path $rwsScriptsDir 'run-tests.ps1'
@@ -837,10 +1360,30 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
                 $i++
             }
             if ($scenarioNames.Count -eq 0) {
-                # --list is the only flag that makes sense without names
-                if ($i -lt $additionalArgs.Count -and $additionalArgs[$i] -in '--list', '-List') {
-                    $passThroughArgs += '-List'
-                    $i++
+                # --list and --interactive are valid without names
+                $scIsInteractive = $false
+                while ($i -lt $additionalArgs.Count) {
+                    $flag = $additionalArgs[$i]
+                    if ($flag -in '--list', '-List') {
+                        $passThroughArgs += '-List'
+                        $i++
+                    }
+                    elseif ($flag -in '--interactive', '-Interactive', '-i') {
+                        $scIsInteractive = $true
+                        $i++
+                    }
+                    elseif ($flag -in '--production', '-Production') {
+                        $setProduction = $true
+                        $i++
+                    }
+                    else {
+                        break
+                    }
+                }
+                if ($scIsInteractive) {
+                    $modeLabel = 'real-world scenarios (interactive)'
+                }
+                elseif ($passThroughArgs -contains '-List') {
                     $modeLabel = 'real-world scenarios (list)'
                 }
                 else {
@@ -851,6 +1394,9 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
                     Write-Host ''
                     Write-Host 'Discover available scenarios:'
                     Write-Host '  test.ps1 rws sc --list'
+                    Write-Host ''
+                    Write-Host 'Interactive mode:'
+                    Write-Host '  test.ps1 rws sc --interactive'
                     Write-Host ''
                     Write-Host 'Examples:'
                     Write-Host '  test.ps1 rws sc amazon'
@@ -964,6 +1510,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host ''
         Write-Host 'Modes (required, pick one):'
         Write-Host '  sc, scenarios <names...>  Run named agent-scenario tasks via run-tests.ps1'
+        Write-Host '  sc, scenarios --interactive  Interactive file picker (tree, filter, bg run)'
         Write-Host '  dir, directory <path>     Run all .md task files in a directory'
         Write-Host '  dir, directory --list     List available scenario directories'
         Write-Host '  dir --tree, -t [path]  Show directory tree view (display only)'
@@ -998,6 +1545,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host '  test.ps1 rws dir -t mock-site               # Short form of --tree'
         Write-Host '  test.ps1 rws dir -f -m                      # Short forms for --files --metadata'
         Write-Host '  test.ps1 rws dir --interactive              # Interactive directory picker'
+        Write-Host '  test.ps1 rws sc --interactive              # Interactive scenario picker'
         exit 0
     }
 
@@ -1059,6 +1607,34 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
             -Icon $(if ($overallExit -eq 0) { '[PASS]' } else { '[FAIL]' })
 
         exit $overallExit
+    }
+
+    # -- Interactive-mode for sc (-i / --interactive) -------------------------
+    if ($mode -eq 'scenarios' -and $scIsInteractive) {
+        $tasksRoot = Join-Path $repoRoot 'browser4-tests' 'real-world-scenarios' 'tasks'
+
+        # Honor -Show / -DryRun
+        if ($script:Show) {
+            Write-CommandBanner -Label '[SHOW] Would launch interactive scenario picker' `
+                -Subtitle "  rws sc --interactive  (tasks root: $tasksRoot)"
+            exit 0
+        }
+        if ($script:DryRun) {
+            Write-CommandBanner -Label '[DRY RUN] Would launch interactive scenario picker' `
+                -Subtitle "  rws sc --interactive  (tasks root: $tasksRoot)"
+            exit 0
+        }
+
+        Write-CommandBanner -Label 'Launching interactive scenario picker...'
+
+        if ($setProduction) {
+            Show-InteractiveScenarioPicker -TasksRoot $tasksRoot -Production
+        }
+        else {
+            Show-InteractiveScenarioPicker -TasksRoot $tasksRoot
+        }
+
+        exit 0
     }
 
     # -- Display-mode resolution for dir (--tree, --files, --absolute, --metadata)
