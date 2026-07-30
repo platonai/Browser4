@@ -1913,6 +1913,19 @@ open class PulsarWebDriver constructor(
     private suspend fun navigateInvaded(entry: NavigateEntry) {
         val url = entry.userTypedUrl
 
+        // Ensure the actual viewport matches the dimensions that will be injected
+        // into the JS config via addScriptToEvaluateOnNewDocument. Without this,
+        // a pooled tab may have a different viewport from a previous task,
+        // causing the JS config values (viewPortWidth/viewPortHeight) to be
+        // out of sync with window.innerWidth/innerHeight.
+        val viewport = settings.viewportSize
+        browserProtocol.setDeviceMetricsOverride(
+            mobile = false,
+            width = viewport.width,
+            height = viewport.height,
+            deviceScaleFactor = 0.0,
+        )
+
         addScriptToEvaluateOnNewDocument()
 
         if (blockedURLs.isNotEmpty()) {

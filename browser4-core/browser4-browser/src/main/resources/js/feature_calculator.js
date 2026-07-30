@@ -128,7 +128,7 @@ __pulsar_NodeFeatureCalculator.prototype.calcSelfIndicator = function(node, dept
         // TODO: also update max height
         nodeExt.updateMaxWidth(nodeExt.rect.width);
     } else {
-        nodeExt.updateMaxWidth(this.config.viewPortWidth);
+        nodeExt.updateMaxWidth(window.innerWidth || this.config.viewPortWidth);
     }
 
     nodeExt.adjustDOMRect();

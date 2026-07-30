@@ -28,6 +28,7 @@ class ScreenshotHandler(
         }
 
         val metrics = activeCdp()?.getLayoutMetrics() ?: return null
+        val originalViewport = metrics.cssVisualViewport
         val rect = metrics.contentSize
         val width = rect.width.toInt()
         val height = rect.height.toInt()
@@ -49,7 +50,17 @@ class ScreenshotHandler(
             captureBeyondViewport = true,
         )
 
-        bp.clearDeviceMetricsOverride()
+        // Restore the original viewport so subsequent pageSource() calls and
+        // interactions see the intended dimensions rather than the expanded
+        // full-page content size.
+        bp.setDeviceMetricsOverride(
+            mobile = false,
+            width = originalViewport.clientWidth.toInt(),
+            height = originalViewport.clientHeight.toInt(),
+            deviceScaleFactor = originalViewport.scale,
+            screenWidth = originalViewport.clientWidth.toInt(),
+            screenHeight = originalViewport.clientHeight.toInt(),
+        )
 
         return result
     }
