@@ -24,6 +24,20 @@ $script:PanelHeader = '──── Coworker Draft Panel ────'
 $script:MaxTitleLength = 55
 $script:MaxNameLength = 40
 
+# Ctrl+C double-tap tracking — two presses within this window exits the panel.
+$script:CtrlCDoubleTapWindow = [TimeSpan]::FromMilliseconds(800)
+$script:LastCtrlCTime = [datetime]::MinValue
+
+<#
+.SYNOPSIS
+    Check whether a string (from Read-Host) contains a Ctrl+C cancellation.
+    With TreatControlCAsInput enabled, Ctrl+C appears as char 3 in the input.
+#>
+function Test-CtrlCPressed {
+    param([string]$InputString)
+    return $InputString.Contains([char]3)
+}
+
 # ── Panel rendering ──────────────────────────────────────────────────────────
 
 <#
@@ -120,7 +134,7 @@ function Write-DraftPanel {
     Write-ConsoleLine -Message '  ' -NoNewline
     Write-Host -NoNewline -ForegroundColor DarkGray ('─' * 55)
     Write-ConsoleLine -Message ''
-    Write-ConsoleLine -Message '  n  New draft    v<N> View    f<N> Fix (assign+run)' -ForegroundColor DarkGray
+    Write-ConsoleLine -Message '  n  New draft    v <N> View   f <N> Fix (assign+run)' -ForegroundColor DarkGray
     Write-ConsoleLine -Message '  r  Refresh      q  Quit     ?  Help' -ForegroundColor DarkGray
     Write-ConsoleLine -Message ''
 }
@@ -197,9 +211,17 @@ function Read-PanelInput {
             continue
         }
 
-        # Ctrl+C (3) — ignore, treat as no-op
+        # Ctrl+C (3) — first press is ignored; second press within
+        # the double-tap window exits the panel.
         if ($char -eq 3) {
-            # Echo nothing; the user pressed Ctrl+C — just ignore it
+            $now = [datetime]::Now
+            if ($now - $script:LastCtrlCTime -lt $script:CtrlCDoubleTapWindow) {
+                # Double-tap — quit
+                Write-Host '^C'
+                return 'q'
+            }
+            $script:LastCtrlCTime = $now
+            Write-Host '^C' -NoNewline
             continue
         }
 
@@ -223,8 +245,9 @@ function Show-PanelHelp {
     Write-ConsoleLine -Message "  ──── Draft Panel Help ────" -ForegroundColor Cyan
     Write-ConsoleLine -Message ''
     Write-ConsoleLine -Message "  n              Create a new draft interactively." -ForegroundColor White
-    Write-ConsoleLine -Message "                   Prompts for title and content. After saving," -ForegroundColor DarkGray
-    Write-ConsoleLine -Message "                   offers to assign to 1ready and fix immediately." -ForegroundColor DarkGray
+    Write-ConsoleLine -Message "                   Prompts for title and content. Ctrl+C at any" -ForegroundColor DarkGray
+    Write-ConsoleLine -Message "                   prompt cancels and returns to the draft list." -ForegroundColor DarkGray
+    Write-ConsoleLine -Message "                   After saving, offers to assign and fix." -ForegroundColor DarkGray
     Write-ConsoleLine -Message ''
     Write-ConsoleLine -Message "  v <N>          View draft N. Prints full content of the draft." -ForegroundColor White
     Write-ConsoleLine -Message "                   Example: v 1" -ForegroundColor DarkGray
@@ -240,7 +263,7 @@ function Show-PanelHelp {
     Write-ConsoleLine -Message "  ────────────────────────────────────────────────────" -ForegroundColor DarkGray
     Write-ConsoleLine -Message '  Press Enter to return.' -ForegroundColor DarkGray
     Write-ConsoleLine -Message ''
-    Read-Host | Out-Null
+    $null = Read-Host
 }
 
 <#
@@ -313,6 +336,11 @@ function Invoke-FixDraft {
     Write-ConsoleLine -Message "  This will assign the draft to 1ready/ and execute it." -ForegroundColor DarkGray
     Write-Host -NoNewline -ForegroundColor Yellow '  Proceed? [y/N] '
     $confirm = Read-Host
+    if (Test-CtrlCPressed -InputString $confirm) {
+        Write-ConsoleLine -Message "  Cancelled." -ForegroundColor DarkGray
+        Start-Sleep -Milliseconds 1000
+        return
+    }
     if ($confirm -notmatch '^[yY]') {
         Write-ConsoleLine -Message "  Cancelled." -ForegroundColor DarkGray
         Start-Sleep -Milliseconds 1000
@@ -377,11 +405,19 @@ function Invoke-NewDraftInteractive {
     Clear-Host
     Write-ConsoleLine -Message ''
     Write-ConsoleLine -Message "  ──── New Draft ────" -ForegroundColor Cyan
+    Write-ConsoleLine -Message "  Ctrl+C to cancel and return to the draft list." -ForegroundColor DarkGray
     Write-ConsoleLine -Message ''
 
     # Title
     Write-Host -NoNewline -ForegroundColor White '  Title (optional): '
-    $title = (Read-Host).Trim()
+    $titleRaw = Read-Host
+    if (Test-CtrlCPressed -InputString $titleRaw) {
+        Write-ConsoleLine -Message ''
+        Write-ConsoleLine -Message "  Draft cancelled." -ForegroundColor DarkGray
+        Start-Sleep -Milliseconds 1000
+        return
+    }
+    $title = $titleRaw.Trim()
 
     # Content (multiline)
     Write-ConsoleLine -Message ''
@@ -390,10 +426,20 @@ function Invoke-NewDraftInteractive {
     Write-ConsoleLine -Message ''
 
     $lines = @()
+    $cancelled = $false
     while ($true) {
         $line = Read-Host
+        if (Test-CtrlCPressed -InputString $line) {
+            $cancelled = $true
+            break
+        }
         if ($line -eq '.') { break }
         $lines += $line
+    }
+    if ($cancelled) {
+        Write-ConsoleLine -Message "  Draft cancelled." -ForegroundColor DarkGray
+        Start-Sleep -Milliseconds 1000
+        return
     }
     $content = ($lines -join [Environment]::NewLine).Trim()
 
@@ -444,7 +490,10 @@ Prompt: $body
     Write-ConsoleLine -Message ''
     Write-Host -NoNewline -ForegroundColor Cyan '  Fix this issue now? (assign to 1ready + run cowarker fix) [y/N] '
     $fixNow = Read-Host
-    if ($fixNow -match '^[yY]') {
+    if (Test-CtrlCPressed -InputString $fixNow) {
+        Write-ConsoleLine -Message "  Skipping fix. Draft saved in 0draft/." -ForegroundColor DarkGray
+    }
+    elseif ($fixNow -match '^[yY]') {
         Write-ConsoleLine -Message "  Assigning to 1ready/..." -ForegroundColor Cyan
 
         $readyDir = $dirs.Ready
@@ -577,23 +626,23 @@ function Invoke-DraftPanel {
                         Invoke-NewDraftInteractive
                         continue
                     }
-                    '^[vV]\s+(\d+)$' {
+                    '^[vV]\s*(\d+)$' {
                         $idx = [int]$Matches[1]
                         Show-DraftView -Drafts $drafts -Index $idx
                         continue
                     }
                     '^[vV]$' {
-                        $statusMessage = "Usage: v <number>  (e.g. v 1)"
+                        $statusMessage = "Usage: v <number>  (e.g. v 1 or v1)"
                         $statusColor = 'Yellow'
                         continue
                     }
-                    '^[fF]\s+(\d+)$' {
+                    '^[fF]\s*(\d+)$' {
                         $idx = [int]$Matches[1]
                         Invoke-FixDraft -Drafts $drafts -Index $idx
                         continue
                     }
                     '^[fF]$' {
-                        $statusMessage = "Usage: f <number>  (e.g. f 1)"
+                        $statusMessage = "Usage: f <number>  (e.g. f 1 or f1)"
                         $statusColor = 'Yellow'
                         continue
                     }
