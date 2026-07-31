@@ -381,6 +381,7 @@ function Enter-EditMode {
             '^:(\d+)$' {
                 $lineNum = [int]$Matches[1]
                 Edit-SingleLine -LineNumber $lineNum
+                Show-EditBuffer
                 continue
             }
 
@@ -389,6 +390,7 @@ function Enter-EditMode {
                 $lineNum = [int]$Matches[1]
                 $newText = $Matches[2]
                 Replace-Line -LineNumber $lineNum -NewText $newText
+                Show-EditBuffer
                 continue
             }
 
@@ -396,6 +398,7 @@ function Enter-EditMode {
             '^:d(\d+)$' {
                 $lineNum = [int]$Matches[1]
                 Delete-Line -LineNumber $lineNum
+                Show-EditBuffer
                 continue
             }
 
@@ -404,6 +407,7 @@ function Enter-EditMode {
                 $lineNum = [int]$Matches[1]
                 $newText = $Matches[2]
                 Insert-Line -AfterLine $lineNum -Text $newText
+                Show-EditBuffer
                 continue
             }
 
