@@ -320,35 +320,35 @@ function Enter-EditMode {
 
     Show-EditBuffer
 
-    while ($script:Running) {
-        $input = Read-HostPrompt 'edit'
+    $editing = $true
+    while ($script:Running -and $editing) {
+        $cmd = Read-HostPrompt 'edit'
 
-        if ($null -eq $input) {
+        if ($null -eq $cmd) {
             # Ctrl+C or EOF
             Write-Line ''
             Write-Line 'Edit mode cancelled. Buffer discarded.' 'Yellow'
-            $script:EditBuffer = $null
-            $script:EditOriginal = $null
-            $script:EditPath = $null
-            return
+            break
         }
 
-        $input = $input.Trim()
+        $cmd = $cmd.Trim()
 
-        if ([string]::IsNullOrWhiteSpace($input)) { continue }
+        if ([string]::IsNullOrWhiteSpace($cmd)) { continue }
 
-        switch -Regex ($input) {
+        switch -Regex ($cmd) {
             # ── Quit edit mode ──
             '^:q(uit)?$' {
                 if (Has-UnsavedChanges) {
                     Write-Line 'You have unsaved changes. Use :q! to discard, or :w to save first.' 'Yellow'
-                    continue
+                    break
                 }
                 Write-Line 'Edit mode ended (no changes).' 'DarkGray'
+                $editing = $false
                 break
             }
             '^:q!$' {
                 Write-Line 'Edit mode ended. Changes discarded.' 'Yellow'
+                $editing = $false
                 break
             }
 
@@ -356,25 +356,25 @@ function Enter-EditMode {
             '^:w(rite)?$' {
                 Save-EditBuffer
                 Write-Line 'File saved.' 'Green'
-                # Stay in edit mode after save
-                continue
+                break
             }
             '^:wq$' {
                 Save-EditBuffer
                 Write-Line 'File saved.' 'Green'
+                $editing = $false
                 break
             }
 
             # ── Show buffer ──
             '^:s(how)?$' {
                 Show-EditBuffer
-                continue
+                break
             }
 
             # ── Diff ──
             '^:diff$' {
                 Show-EditDiff
-                continue
+                break
             }
 
             # ── Edit line: :N ──
@@ -382,7 +382,7 @@ function Enter-EditMode {
                 $lineNum = [int]$Matches[1]
                 Edit-SingleLine -LineNumber $lineNum
                 Show-EditBuffer
-                continue
+                break
             }
 
             # ── Edit line inline: :N,<text> ──
@@ -391,7 +391,7 @@ function Enter-EditMode {
                 $newText = $Matches[2]
                 Replace-Line -LineNumber $lineNum -NewText $newText
                 Show-EditBuffer
-                continue
+                break
             }
 
             # ── Delete line: :dN ──
@@ -399,7 +399,7 @@ function Enter-EditMode {
                 $lineNum = [int]$Matches[1]
                 Delete-Line -LineNumber $lineNum
                 Show-EditBuffer
-                continue
+                break
             }
 
             # ── Insert line: :iN,<text> ──
@@ -408,25 +408,22 @@ function Enter-EditMode {
                 $newText = $Matches[2]
                 Insert-Line -AfterLine $lineNum -Text $newText
                 Show-EditBuffer
-                continue
+                break
             }
 
             # ── AI improve ──
             '^:a\s+(.+)$' {
                 $prompt = $Matches[1]
                 Invoke-AiImprove -Prompt $prompt
-                continue
+                break
             }
 
             default {
-                Write-Line "Unknown edit command: $input" 'Red'
+                Write-Line "Unknown edit command: $cmd" 'Red'
                 Write-Line '  :N | :N,text | :dN | :iN,text | :s | :w | :q | :diff | :a <prompt>' 'DarkGray'
-                continue
+                break
             }
         }
-
-        # If we get here from a break, exit the edit loop
-        break
     }
 
     $script:EditBuffer   = $null
@@ -702,8 +699,8 @@ function Read-HostPrompt {
     param([string]$Mode = 'cmd')
 
     Write-Host "$Mode> " -ForegroundColor Cyan -NoNewline
-    $input = Read-Host
-    return $input
+    $line = Read-Host
+    return $line
 }
 
 # ── Command dispatch (list mode) ─────────────────────────────────────────────
@@ -920,16 +917,16 @@ Show-FileList
 
 while ($script:Running) {
     try {
-        $input = Read-HostPrompt 'cmd'
+        $raw = Read-HostPrompt 'cmd'
 
-        if ($null -eq $input) {
+        if ($null -eq $raw) {
             # Ctrl+C or EOF
             Write-Line ''
             Write-Line 'Goodbye.' 'Cyan'
             break
         }
 
-        Invoke-ListCommand -RawInput $input
+        Invoke-ListCommand -RawInput $raw
     }
     catch {
         Write-Line "Error: $_" 'Red'
