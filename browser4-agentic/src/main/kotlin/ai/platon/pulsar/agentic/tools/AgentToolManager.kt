@@ -4,6 +4,8 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.common.AgentFileSystem
 import ai.platon.pulsar.agentic.common.AgentShell
+import ai.platon.pulsar.agentic.common.CodingAgentFileSystem
+import ai.platon.pulsar.agentic.common.CodingAgentShell
 import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.skills.SkillContext
 import ai.platon.pulsar.agentic.skills.SkillRegistry
@@ -32,6 +34,18 @@ class AgentToolManager constructor(
     val driver: WebDriver get() = session.getOrCreateBoundDriver()
     val fs: AgentFileSystem = AgentFileSystem(baseDir)
     val shell: AgentShell = AgentShell(baseDir)
+
+    /** Enhanced coding shell for dev tools (git, cargo, mvn, npm, etc.) */
+    val codingShell: CodingAgentShell = CodingAgentShell(baseDir)
+    /** Enhanced coding file system for full filesystem access */
+    val codingFs: CodingAgentFileSystem = CodingAgentFileSystem(baseDir)
+    /** Composite target for the coding domain */
+    val codingTarget: CodingToolExecutor.Target by lazy {
+        CodingToolExecutor.Target(codingShell, codingFs)
+    }
+    /** CLI tool executor for browser4-cli integration */
+    val cliExecutor: CliToolExecutor = CliToolExecutor()
+
     val system: SystemToolExecutor = SystemToolExecutor(this)
 
     val skillContext: SkillContext by lazy {
@@ -66,6 +80,14 @@ class AgentToolManager constructor(
 
         "captcha" to "captcha",
         "Captcha" to "captcha",
+
+        "coding" to "coding",
+        "Coding" to "coding",
+        "dev" to "coding",
+
+        "cli" to "cli",
+        "Cli" to "cli",
+        "browser4-cli" to "cli",
     )
 
     private val _concreteExecutors: MutableMap<String, ToolExecutor> by lazy {
@@ -75,6 +97,8 @@ class AgentToolManager constructor(
             FileSystemToolExecutor(),
             ShellToolExecutor(),
             AgentToolExecutor(),
+            CodingToolExecutor(),
+            cliExecutor,
             system,
             skills
         ).associateBy { it.domain }.toMutableMap()
@@ -207,6 +231,8 @@ class AgentToolManager constructor(
             "fs" -> executor.callFunctionOn(normalized, fs)
             "shell" -> executor.callFunctionOn(normalized, shell)
             "agent" -> executor.callFunctionOn(normalized, agent)
+            "coding" -> executor.callFunctionOn(normalized, codingTarget)
+            "cli" -> executor.callFunctionOn(normalized, codingShell)
             "command" -> {
                 // TODO: the commandTarget is ai.platon.pulsar.agentic.tools.advanced.CommandRunner, consider make it built-in
                 //      and is registered in browser4-rest module
