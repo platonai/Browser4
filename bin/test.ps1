@@ -847,6 +847,9 @@ function Show-InteractiveScenarioPicker {
           ←/→       Collapse / expand folder (tree view)
           Space/Enter  Run the selected scenario in the background
           v           View the scenario file content (scrollable, Enter to run)
+          e           Edit the scenario in an external editor (blocks until closed)
+          a           AI-refine the scenario with an optional guidance prompt
+          1-9         Quick-goto file by index (Enter=jump, v=jump+view)
           n           Create a new scenario from template (in selected folder)
           t           Toggle tree-view / flat-list
           /           Enter filter mode (type to filter, Esc to clear)
@@ -937,10 +940,17 @@ function Show-InteractiveScenarioPicker {
 
     $rwsScriptsDir = Join-Path $repoRoot 'browser4-tests' 'real-world-scenarios' 'scripts'
     $taskRunner = Join-Path $rwsScriptsDir 'run-task.ps1'
+    $commonPs1    = Join-Path $rwsScriptsDir 'common.ps1'
 
     if (-not (Test-Path -LiteralPath $taskRunner)) {
         Write-Error "Task runner not found at $taskRunner"
         return
+    }
+    # Dot-source common.ps1 for Edit-FileInEditor and agent helpers.
+    # Safe: the module is idempotent and sets ErrorActionPreference=Stop
+    # which is fine for the interactive picker.
+    if (Test-Path -LiteralPath $commonPs1) {
+        . $commonPs1
     }
 
     # ── Launch a scenario in the background ─────────────────────────────────
@@ -1309,6 +1319,212 @@ function Show-InteractiveScenarioPicker {
         }
     }
 
+    # ── Edit scenario file in external editor ──────────────────────────────
+    function Edit-ScenarioFile {
+        param([PSCustomObject]$Node)
+
+        if ($null -eq $Node -or $Node.Type -ne 'file') { return }
+
+        $relPath = [System.IO.Path]::GetRelativePath($TasksRoot, $Node.FullPath)
+
+        [Console]::Clear()
+        Write-Host 'Opening editor...' -ForegroundColor Cyan
+        Write-Host "  File: $relPath" -ForegroundColor DarkGray
+        Write-Host ''
+        Write-Host 'The editor will open in a new window.' -ForegroundColor DarkGray
+        Write-Host 'Save and close the editor to continue.' -ForegroundColor DarkGray
+        Start-Sleep -Milliseconds 800
+
+        $ok = Edit-FileInEditor -Path $Node.FullPath
+
+        [Console]::Clear()
+        if ($ok -or $true) {
+            # Refresh file tree to pick up any changes
+            $script:tree = Build-FileTree -Path $TasksRoot -Depth 0
+            $script:tree.Expanded = $true
+            Write-Host 'Editor closed.' -ForegroundColor Green
+        } else {
+            Write-Host 'Editor closed with errors.' -ForegroundColor Yellow
+        }
+        Write-Host "  File: $relPath" -ForegroundColor DarkGray
+        Write-Host ''
+        Write-Host 'Press any key to return to the scenario list' -ForegroundColor DarkGray
+        [Console]::ReadKey($true) | Out-Null
+    }
+
+    # ── AI refine scenario content ─────────────────────────────────────────
+    function Refine-ScenarioWithAI {
+        param([PSCustomObject]$Node)
+
+        if ($null -eq $Node -or $Node.Type -ne 'file') { return }
+
+        $relPath = [System.IO.Path]::GetRelativePath($TasksRoot, $Node.FullPath)
+
+        # Read current content
+        try {
+            $currentContent = Get-Content -LiteralPath $Node.FullPath -Raw -Encoding UTF8 -ErrorAction Stop
+        } catch {
+            Write-Host "Could not read scenario file: $_" -ForegroundColor Red
+            Start-Sleep -Seconds 1
+            return
+        }
+
+        # Prompt for optional refinement guidance
+        [Console]::Clear()
+        Write-Host 'AI Scenario Refine' -ForegroundColor Cyan
+        Write-Host ('─' * 60) -ForegroundColor DarkGray
+        Write-Host "  File: $relPath" -ForegroundColor DarkGray
+        Write-Host ''
+        Write-Host 'Refinement hint (optional, Enter to skip):' -ForegroundColor DarkGray
+        Write-Host '  e.g. "add error handling", "make steps more specific",' -ForegroundColor DarkGray
+        Write-Host '  "include verification steps", "shorten and simplify"' -ForegroundColor DarkGray
+        Write-Host ''
+
+        Write-Host -NoNewline '> '
+        $buffer = [System.Text.StringBuilder]::new()
+        while ($true) {
+            $key = [Console]::ReadKey($true)
+            if ($key.Key -eq 'Enter') { Write-Host ''; break }
+            if ($key.Key -eq 'Escape') {
+                Write-Host ''
+                Write-Host 'Refine cancelled.' -ForegroundColor DarkGray
+                Start-Sleep -Milliseconds 600
+                return
+            }
+            if ($key.Key -eq 'Backspace') {
+                if ($buffer.Length -gt 0) {
+                    [void]$buffer.Remove($buffer.Length - 1, 1)
+                    $left = [Console]::CursorLeft
+                    $top  = [Console]::CursorTop
+                    if ($left -gt 2) {
+                        [Console]::SetCursorPosition($left - 1, $top)
+                        [Console]::Write(' ')
+                        [Console]::SetCursorPosition($left - 1, $top)
+                    }
+                }
+                continue
+            }
+            $code = [int][char]$key.KeyChar
+            if ($code -ge 32) {
+                [void]$buffer.Append($key.KeyChar)
+                [Console]::Write($key.KeyChar)
+            }
+        }
+        $userHint = $buffer.ToString().Trim()
+
+        # Build the refine prompt
+        $hintLine = if ($userHint) { "`nUser's refinement guidance: $userHint" } else { '' }
+        $prompt = @"
+You are refining a browser automation scenario written in Markdown format.
+The scenario describes step-by-step instructions for a web agent to follow.
+
+Refinement guidelines:
+- Keep the same general structure: a single `# Heading` followed by numbered steps
+- Make each step more specific, actionable, and unambiguous
+- Add verification/assertion steps at the end if missing
+- Preserve the original intent and all URL targets
+- Fix grammar, clarity, and formatting issues
+- Do NOT add fluff, introductions, or explanations — keep it concise
+
+$hintLine
+
+Original scenario content:
+---
+$currentContent
+---
+
+Return ONLY the refined Markdown. Do not include any preamble, commentary, or code fences around your output.
+"@
+
+        # Detect agent
+        $agent = Get-ScenarioAgent
+
+        [Console]::Clear()
+        Write-Host "Refining with $agent ..." -ForegroundColor Cyan
+        Write-Host "  File: $relPath" -ForegroundColor DarkGray
+        if ($userHint) { Write-Host "  Hint: $userHint" -ForegroundColor DarkGray }
+        Write-Host ''
+
+        # Build a temp file for the prompt to avoid command-line length limits
+        $tempDir = Join-Path $script:repoRoot 'target'
+        if (-not (Test-Path -LiteralPath $tempDir)) {
+            New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+        }
+        $promptFile = Join-Path $tempDir '.refine-prompt.md'
+        $outputFile = Join-Path $tempDir '.refine-output.md'
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText($promptFile, $prompt, $utf8NoBom)
+
+        try {
+            # Build agent CLI arguments
+            $agentArgs = @()
+            switch ($agent) {
+                'claude' {
+                    $agentArgs += '--dangerously-skip-permissions'
+                    $agentArgs += @('-p', $prompt)
+                }
+                'kimi'   { $agentArgs += @('-p', $prompt) }
+                'opencode' { $agentArgs += @('run', $prompt) }
+                default  { $agentArgs += @('-p', $prompt) }
+            }
+
+            # Run the agent and capture output
+            $output = & $agent @agentArgs 2>&1 | Out-String
+            $exitCode = $LASTEXITCODE
+
+            if ($exitCode -ne 0) {
+                Write-Host ''
+                Write-Host "WARNING: $agent exited with code $exitCode" -ForegroundColor Yellow
+                Write-Host 'The original file was NOT modified.' -ForegroundColor Yellow
+                Write-Host ''
+                Write-Host 'Press any key to return...' -ForegroundColor DarkGray
+                [Console]::ReadKey($true) | Out-Null
+                return
+            }
+
+            # Try to extract the refined markdown from the output.
+            # Claude often wraps in ```markdown fences; strip those.
+            $refined = $output
+            if ($refined -match '(?s)```(?:markdown|md)?\s*\n(.+?)\n```') {
+                $refined = $Matches[1]
+            }
+            $refined = $refined.Trim()
+
+            if ([string]::IsNullOrWhiteSpace($refined)) {
+                Write-Host ''
+                Write-Host 'WARNING: Agent returned empty output.' -ForegroundColor Yellow
+                Write-Host 'The original file was NOT modified.' -ForegroundColor Yellow
+                Write-Host ''
+                Write-Host 'Press any key to return...' -ForegroundColor DarkGray
+                [Console]::ReadKey($true) | Out-Null
+                return
+            }
+
+            # Ensure the output starts with a heading
+            if ($refined -notmatch '^#\s') {
+                $refined = "# $refined"
+            }
+
+            # Write the refined content back
+            [System.IO.File]::WriteAllText($Node.FullPath, "$refined`n", $utf8NoBom)
+
+            # Refresh the file tree
+            $script:tree = Build-FileTree -Path $TasksRoot -Depth 0
+            $script:tree.Expanded = $true
+
+            Write-Host ''
+            Write-Host 'Scenario refined successfully.' -ForegroundColor Green
+            Write-Host "  File: $relPath" -ForegroundColor DarkGray
+        } catch {
+            Write-Host ''
+            Write-Host "ERROR: Refine failed: $_" -ForegroundColor Red
+            Write-Host 'The original file was NOT modified.' -ForegroundColor Red
+        }
+        Write-Host ''
+        Write-Host 'Press any key to return to the scenario list' -ForegroundColor DarkGray
+        [Console]::ReadKey($true) | Out-Null
+    }
+
     # ═══════════════════════════════════════════════════════════════════════
     #  Main interactive loop — only 'q' exits
     # ═══════════════════════════════════════════════════════════════════════
@@ -1408,7 +1624,7 @@ function Show-InteractiveScenarioPicker {
         }
 
         # Controls
-        Write-Host '  ↑↓ nav   ←→ fold   Space/Enter run   v view   1-9 goto   n new   t tree   / filter   r refresh   q quit' -ForegroundColor DarkGray
+        Write-Host '  ↑↓ nav   ←→ fold   Space/Enter run   v view   e edit   a refine   1-9 goto   n new   t tree   / filter   r refresh   q quit' -ForegroundColor DarkGray
         Write-Host ('─' * 60) -ForegroundColor DarkGray
 
         # Compute render area
@@ -1721,6 +1937,24 @@ function Show-InteractiveScenarioPicker {
                     $node = $visible[$cursor]
                     if ($node.Type -eq 'file') {
                         Show-ScenarioContent -Node $node
+                    }
+                }
+                break
+            }
+            'E' {
+                if ($visible.Count -gt 0) {
+                    $node = $visible[$cursor]
+                    if ($node.Type -eq 'file') {
+                        Edit-ScenarioFile -Node $node
+                    }
+                }
+                break
+            }
+            'A' {
+                if ($visible.Count -gt 0) {
+                    $node = $visible[$cursor]
+                    if ($node.Type -eq 'file') {
+                        Refine-ScenarioWithAI -Node $node
                     }
                 }
                 break
