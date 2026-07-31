@@ -936,8 +936,8 @@ function Show-InteractiveScenarioPicker {
     $cursor     = 0
     $topOffset  = 0
 
-    $runningProc = $null
-    $runningName = ''
+    $script:runningProc = $null
+    $script:runningName = ''
 
     $rwsScriptsDir = Join-Path $repoRoot 'browser4-tests' 'real-world-scenarios' 'scripts'
     $taskRunner = Join-Path $rwsScriptsDir 'run-task.ps1'
@@ -1548,12 +1548,12 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
     while (-not $quitRequested) {
 
         # ── Check background process ────────────────────────────────────────
-        if ($runningProc) {
-            try { $runningProc.Refresh() } catch { }
-            if ($runningProc.HasExited) {
-                $exitCode = $runningProc.ExitCode
-                try { $runningProc.Dispose() } catch { }
-                $runningProc = $null
+        if ($script:runningProc) {
+            try { $script:runningProc.Refresh() } catch { }
+            if ($script:runningProc.HasExited) {
+                $exitCode = $script:runningProc.ExitCode
+                try { $script:runningProc.Dispose() } catch { }
+                $script:runningProc = $null
                 $statusMark  = if ($exitCode -eq 0) { '[PASS]' } else { "[FAIL:$exitCode]" }
                 $statusColor = if ($exitCode -eq 0) { 'Green' } else { 'Red' }
 
@@ -1562,14 +1562,14 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
                 Write-Host '  Scenario Complete' -ForegroundColor Cyan
                 Write-Host '══════════════════════════════════' -ForegroundColor Cyan
                 Write-Host ''
-                Write-Host "  $runningName   $statusMark" -ForegroundColor $statusColor
+                Write-Host "  $script:runningName   $statusMark" -ForegroundColor $statusColor
                 if ($exitCode -eq 124) {
                     Write-Host '  (timed out)' -ForegroundColor Yellow
                 }
                 Write-Host ''
                 Write-Host 'Press any key to return to the scenario list' -ForegroundColor DarkGray
                 [Console]::ReadKey($true) | Out-Null
-                $runningName = ''
+                $script:runningName = ''
                 continue
             }
         }
@@ -1621,8 +1621,8 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
         [Console]::Clear()
 
         # Header
-        if ($runningProc) {
-            Write-Host "  ⏳ RUNNING: $runningName  (PID $($runningProc.Id))" -ForegroundColor Yellow
+        if ($script:runningProc) {
+            Write-Host "  ⏳ RUNNING: $script:runningName  (PID $($script:runningProc.Id))" -ForegroundColor Yellow
         }
         else {
             Write-Host 'Interactive Scenario Picker' -ForegroundColor Cyan
@@ -1643,7 +1643,7 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
         Write-Host ('─' * 60) -ForegroundColor DarkGray
 
         # Compute render area
-        $headerLines = 4 + $(if ($runningProc) { 1 } else { 0 }) + $(if ($filter) { 1 } else { 0 }) + $(if ($gotoIndex) { 1 } else { 0 })
+        $headerLines = 4 + $(if ($script:runningProc) { 1 } else { 0 }) + $(if ($filter) { 1 } else { 0 }) + $(if ($gotoIndex) { 1 } else { 0 })
         $footerLines = 3
         $renderSlots = [Math]::Max(5, [Console]::WindowHeight - $headerLines - $footerLines)
 
@@ -1870,14 +1870,14 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
                     $node = $visible[$cursor]
                     if ($node.Type -eq 'file') {
                         $canRun = $true
-                        if ($runningProc) {
-                            try { $runningProc.Refresh() } catch { }
-                            if (-not $runningProc.HasExited) {
+                        if ($script:runningProc) {
+                            try { $script:runningProc.Refresh() } catch { }
+                            if (-not $script:runningProc.HasExited) {
                                 $canRun = Prompt-RunningConflict
                             }
                             else {
-                                try { $runningProc.Dispose() } catch { }
-                                $runningProc = $null
+                                try { $script:runningProc.Dispose() } catch { }
+                                $script:runningProc = $null
                             }
                         }
                         if ($canRun) {
@@ -1969,15 +1969,15 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
                 break
             }
             'Q' {
-                if ($runningProc) {
-                    try { $runningProc.Refresh() } catch { }
-                    if (-not $runningProc.HasExited) {
+                if ($script:runningProc) {
+                    try { $script:runningProc.Refresh() } catch { }
+                    if (-not $script:runningProc.HasExited) {
                         $proceed = Prompt-QuitConflict
                         if (-not $proceed) { break }
                     }
                     else {
-                        try { $runningProc.Dispose() } catch { }
-                        $runningProc = $null
+                        try { $script:runningProc.Dispose() } catch { }
+                        $script:runningProc = $null
                     }
                 }
                 $quitRequested = $true
