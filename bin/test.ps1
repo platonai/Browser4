@@ -846,6 +846,7 @@ function Show-InteractiveScenarioPicker {
           ↑/↓       Navigate items
           ←/→       Collapse / expand folder (tree view)
           Space/Enter  Run the selected scenario in the background
+          v           View the scenario file content (scrollable, Enter to run)
           n           Create a new scenario from template (in selected folder)
           t           Toggle tree-view / flat-list
           /           Enter filter mode (type to filter, Esc to clear)
@@ -1179,6 +1180,134 @@ function Show-InteractiveScenarioPicker {
         }
     }
 
+    # ── View scenario content ──────────────────────────────────────────────
+    function Show-ScenarioContent {
+        param([PSCustomObject]$Node)
+
+        if ($null -eq $Node -or $Node.Type -ne 'file') { return }
+
+        $relPath = [System.IO.Path]::GetRelativePath($TasksRoot, $Node.FullPath)
+
+        try {
+            $raw = Get-Content -LiteralPath $Node.FullPath -Raw -Encoding UTF8 -ErrorAction Stop
+        } catch {
+            [Console]::Clear()
+            Write-Host "Could not read scenario file:" -ForegroundColor Red
+            Write-Host "  $relPath" -ForegroundColor DarkGray
+            Write-Host ''
+            Write-Host "Error: $_" -ForegroundColor Red
+            Write-Host ''
+            Write-Host 'Press any key to return...' -ForegroundColor DarkGray
+            [Console]::ReadKey($true) | Out-Null
+            return
+        }
+
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            [Console]::Clear()
+            Write-Host "Scenario file is empty:" -ForegroundColor Yellow
+            Write-Host "  $relPath" -ForegroundColor DarkGray
+            Write-Host ''
+            Write-Host 'Press any key to return...' -ForegroundColor DarkGray
+            [Console]::ReadKey($true) | Out-Null
+            return
+        }
+
+        # Split into lines for scrollable display
+        $contentLines = $raw -split '\r?\n'
+        $scrollOffset = 0
+        $viewDone = $false
+
+        while (-not $viewDone) {
+            [Console]::Clear()
+
+            # Header
+            Write-Host 'Scenario Content Viewer' -ForegroundColor Cyan
+            Write-Host ('─' * [Math]::Min(76, [Console]::WindowWidth - 1)) -ForegroundColor DarkGray
+            Write-Host "  File: $relPath" -ForegroundColor DarkGray
+            Write-Host ('─' * [Math]::Min(76, [Console]::WindowWidth - 1)) -ForegroundColor DarkGray
+
+            # Compute usable area
+            $headerUsed = 4
+            $footerUsed = 2
+            $viewHeight = [Math]::Max(5, [Console]::WindowHeight - $headerUsed - $footerUsed)
+            $maxScroll = [Math]::Max(0, $contentLines.Count - $viewHeight)
+            $scrollOffset = [Math]::Max(0, [Math]::Min($scrollOffset, $maxScroll))
+
+            # Scroll indicator
+            if ($scrollOffset -gt 0) {
+                Write-Host "  ^^ $scrollOffset more lines above ^^" -ForegroundColor DarkGray
+            }
+
+            # Render content lines
+            $renderEnd = [Math]::Min($scrollOffset + $viewHeight, $contentLines.Count)
+            for ($li = $scrollOffset; $li -lt $renderEnd; $li++) {
+                $line = $contentLines[$li]
+                # Truncate to console width to avoid wrapping artifacts
+                $maxWidth = [Console]::WindowWidth - 2
+                if ($line.Length -gt $maxWidth) {
+                    $line = $line.Substring(0, $maxWidth)
+                }
+                # Dim headings for visual structure
+                if ($line -match '^#+\s') {
+                    Write-Host " $line" -ForegroundColor Yellow
+                } elseif ($line -match '^```') {
+                    Write-Host " $line" -ForegroundColor DarkGray
+                } elseif ($line -match '^\s*[-*]\s') {
+                    Write-Host " $line" -ForegroundColor DarkCyan
+                } elseif ($line -match '^\d+\.\s') {
+                    Write-Host " $line" -ForegroundColor DarkCyan
+                } else {
+                    Write-Host " $line" -ForegroundColor Gray
+                }
+            }
+
+            # Scroll indicator
+            if ($renderEnd -lt $contentLines.Count) {
+                $more = $contentLines.Count - $renderEnd
+                Write-Host "  vv $more more lines below vv" -ForegroundColor DarkGray
+            }
+
+            # Footer
+            Write-Host ('─' * [Math]::Min(76, [Console]::WindowWidth - 1)) -ForegroundColor DarkGray
+            Write-Host '  ↑↓/PgUp/PgDn/Home/End scroll   Esc/q back   Enter run this scenario' -ForegroundColor DarkGray
+
+            $key = [Console]::ReadKey($true)
+            switch ($key.Key) {
+                'UpArrow'    { $scrollOffset = [Math]::Max(0, $scrollOffset - 1); break }
+                'DownArrow'  { $scrollOffset = [Math]::Min($maxScroll, $scrollOffset + 1); break }
+                'PageUp'     { $scrollOffset = [Math]::Max(0, $scrollOffset - $viewHeight); break }
+                'PageDown'   { $scrollOffset = [Math]::Min($maxScroll, $scrollOffset + $viewHeight); break }
+                'Home'       { $scrollOffset = 0; break }
+                'End'        { $scrollOffset = $maxScroll; break }
+                'Enter'      {
+                    # Run the scenario from the viewer
+                    $canRun = $true
+                    if ($script:runningProc) {
+                        try { $script:runningProc.Refresh() } catch { }
+                        if (-not $script:runningProc.HasExited) {
+                            $canRun = Prompt-RunningConflict
+                        } else {
+                            try { $script:runningProc.Dispose() } catch { }
+                            $script:runningProc = $null
+                        }
+                    }
+                    if ($canRun) {
+                        Start-ScenarioRun -Node $Node
+                        $viewDone = $true  # exit viewer, back to the main loop
+                    }
+                    break
+                }
+                'Escape'     { $viewDone = $true; break }
+                default {
+                    if ($key.KeyChar -eq 'q' -or $key.KeyChar -eq 'Q') {
+                        $viewDone = $true
+                    }
+                    break
+                }
+            }
+        }
+    }
+
     # ═══════════════════════════════════════════════════════════════════════
     #  Main interactive loop — only 'q' exits
     # ═══════════════════════════════════════════════════════════════════════
@@ -1262,7 +1391,7 @@ function Show-InteractiveScenarioPicker {
         }
 
         # Controls
-        Write-Host '  ↑↓ nav   ←→ fold   Space/Enter run   n new   t view   / filter   r refresh   q quit' -ForegroundColor DarkGray
+        Write-Host '  ↑↓ nav   ←→ fold   Space/Enter run   v view   n new   t tree   / filter   r refresh   q quit' -ForegroundColor DarkGray
         Write-Host ('─' * 60) -ForegroundColor DarkGray
 
         # Compute render area
@@ -1510,6 +1639,15 @@ function Show-InteractiveScenarioPicker {
                 }
                 break
             }
+            'V' {
+                if ($visible.Count -gt 0) {
+                    $node = $visible[$cursor]
+                    if ($node.Type -eq 'file') {
+                        Show-ScenarioContent -Node $node
+                    }
+                }
+                break
+            }
             'Q' {
                 if ($runningProc) {
                     try { $runningProc.Refresh() } catch { }
@@ -1722,7 +1860,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host ''
         Write-Host 'Modes (required, pick one):'
         Write-Host '  sc, scenarios <names...>  Run named agent-scenario tasks via run-tests.ps1'
-        Write-Host '  sc, scenarios --interactive  Interactive file picker (tree, filter, bg run)'
+        Write-Host '  sc, scenarios --interactive  Interactive file picker (tree, filter, view, bg run)'
         Write-Host '  dir, directory <path>     Run all .md task files in a directory'
         Write-Host '  dir, directory --list     List available scenario directories'
         Write-Host '  dir --tree, -t [path]  Show directory tree view (display only)'
