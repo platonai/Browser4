@@ -203,6 +203,12 @@ function Print-Usage {
     Write-Host "  ps          Run all PowerShell *.tests.ps1 files in the project"
     Write-Host "  rws         Run real-world scenario tests (requires a mode)"
     Write-Host "              sc, scenarios <names...>  run named tasks via run-tests.ps1"
+    Write-Host "              sc add <name> <url>       create a scenario from template"
+    Write-Host "                --refine, -r              AI-refine after creation"
+    Write-Host "                --guidance, -g <hint>     refinement hint"
+    Write-Host "                --title <title>           custom heading"
+    Write-Host "                --dir, -d <path>          target directory"
+    Write-Host "                --category, -c <cat>      generic, browser4, mock-site"
     Write-Host "              dir, directory <path>     run all .md tasks in a directory"
     Write-Host "              dir --tree, -t  [path]  tree view of task directories (display only)"
     Write-Host "              dir --files, -f [path]  list .md task files (display only)"
@@ -261,6 +267,8 @@ function Print-Usage {
     Write-Host "  test.ps1 rws dir -f -m                     # Short forms for --files --metadata"
     Write-Host "  test.ps1 rws dir --interactive             # Interactive directory picker"
     Write-Host "  test.ps1 rws sc --interactive              # Interactive scenario picker"
+    Write-Host "  test.ps1 rws sc add my-test https://example.com  # Create a new scenario"
+    Write-Host "  test.ps1 rws sc add my-test https://example.com --refine  # Create + AI refine"
     Write-Host "  test.ps1 main                       # Run all Browser4 main tests"
     Write-Host "  test.ps1 session list               # List all past test sessions"
     Write-Host "  test.ps1 session view 20260724T1917 # View a specific session (prefix match)"
@@ -2023,6 +2031,92 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         if ($arg -in 'scenarios', 'sc', '--scenarios', '-sc') {
             $mode = 'scenarios'
             $i++
+            # ── sc add <name> <url> [--refine] [--guidance <hint>] … ──────────
+            if ($i -lt $additionalArgs.Count -and $additionalArgs[$i] -eq 'add') {
+                $mode = 'scenarios-add'
+                $i++
+                # Collect required positional args: <name> <url>
+                $addScenarioName = $null
+                $addScenarioUrl  = $null
+                if ($i -lt $additionalArgs.Count -and -not $additionalArgs[$i].StartsWith('-')) {
+                    $addScenarioName = $additionalArgs[$i]
+                    $i++
+                }
+                if ($i -lt $additionalArgs.Count -and -not $additionalArgs[$i].StartsWith('-')) {
+                    $addScenarioUrl = $additionalArgs[$i]
+                    $i++
+                }
+                $addRefine   = $false
+                $addGuidance = $null
+                $addTitle    = $null
+                $addDir      = $null
+                $addCategory = $null
+                while ($i -lt $additionalArgs.Count) {
+                    $flag = $additionalArgs[$i]
+                    if ($flag -in '--refine', '-Refine', '-r') {
+                        $addRefine = $true
+                        $i++
+                    }
+                    elseif ($flag -in '--guidance', '-Guidance', '-g') {
+                        if (($i + 1) -lt $additionalArgs.Count) {
+                            $addGuidance = $additionalArgs[$i + 1]
+                            $i += 2
+                        } else {
+                            Write-Error '--guidance requires a value'
+                            exit 1
+                        }
+                    }
+                    elseif ($flag -in '--title', '-Title') {
+                        if (($i + 1) -lt $additionalArgs.Count) {
+                            $addTitle = $additionalArgs[$i + 1]
+                            $i += 2
+                        } else {
+                            Write-Error '--title requires a value'
+                            exit 1
+                        }
+                    }
+                    elseif ($flag -in '--dir', '-Dir', '-d') {
+                        if (($i + 1) -lt $additionalArgs.Count) {
+                            $addDir = $additionalArgs[$i + 1]
+                            $i += 2
+                        } else {
+                            Write-Error '--dir requires a value'
+                            exit 1
+                        }
+                    }
+                    elseif ($flag -in '--category', '-Category', '-c') {
+                        if (($i + 1) -lt $additionalArgs.Count) {
+                            $addCategory = $additionalArgs[$i + 1]
+                            $i += 2
+                        } else {
+                            Write-Error '--category requires a value'
+                            exit 1
+                        }
+                    }
+                    else {
+                        break
+                    }
+                }
+                if (-not $addScenarioName) {
+                    Write-Host ''
+                    Write-Host "sc add requires a scenario name." -ForegroundColor Yellow
+                    Write-Host ''
+                    Write-Host "Usage:  test.ps1 rws sc add <name> <url> [--refine] [--guidance <hint>] [--title <title>] [--dir <path>] [--category <generic|browser4|mock-site>]"
+                    Write-Host ''
+                    Write-Host "Examples:"
+                    Write-Host "  test.ps1 rws sc add my-scenario https://example.com"
+                    Write-Host "  test.ps1 rws sc add my-scenario https://example.com --refine"
+                    Write-Host "  test.ps1 rws sc add my-scenario https://example.com --refine --guidance 'add error handling steps'"
+                    Write-Host "  test.ps1 rws sc add my-scenario https://example.com --category generic"
+                    Write-Host ''
+                    exit 1
+                }
+                if (-not $addScenarioUrl) {
+                    $addScenarioUrl = 'https://example.com/'
+                }
+                $modeLabel = "add scenario: $addScenarioName"
+            }
+            else {
             # Collect required scenario names (bare words until a --flag or end)
             $scenarioNames = @()
             while ($i -lt $additionalArgs.Count -and -not $additionalArgs[$i].StartsWith('-')) {
@@ -2061,9 +2155,14 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
                     Write-Host 'sc requires at least one scenario name.' -ForegroundColor Yellow
                     Write-Host ''
                     Write-Host 'Usage:  test.ps1 rws sc <names...> [options]'
+                    Write-Host '        test.ps1 rws sc add <name> <url> [--refine] [...]'
                     Write-Host ''
                     Write-Host 'Discover available scenarios:'
                     Write-Host '  test.ps1 rws sc --list'
+                    Write-Host ''
+                    Write-Host 'Create a new scenario:'
+                    Write-Host '  test.ps1 rws sc add my-test https://example.com'
+                    Write-Host '  test.ps1 rws sc add my-test https://example.com --refine'
                     Write-Host ''
                     Write-Host 'Interactive mode:'
                     Write-Host '  test.ps1 rws sc --interactive'
@@ -2077,6 +2176,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
             }
             $modeLabel = "real-world scenarios: $($scenarioNames -join ', ')"
             $passThroughArgs += $scenarioNames
+            }
         }
         elseif ($arg -in 'dir', 'directory', '--dir', '--directory') {
             $mode = 'dir'
@@ -2181,6 +2281,12 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host 'Modes (required, pick one):'
         Write-Host '  sc, scenarios <names...>  Run named agent-scenario tasks via run-tests.ps1'
         Write-Host '  sc, scenarios --interactive  Interactive file picker (tree, filter, view, bg run)'
+        Write-Host '  sc add <name> <url>       Create a new scenario from template'
+        Write-Host '    --refine, -r              AI-refine the scenario after creation'
+        Write-Host '    --guidance, -g <hint>     Refinement hint for the AI'
+        Write-Host '    --title <title>           Custom heading (default: scenario name)'
+        Write-Host '    --dir, -d <path>          Target directory for the new file'
+        Write-Host '    --category, -c <cat>      Category: generic, browser4, mock-site'
         Write-Host '  dir, directory <path>     Run all .md task files in a directory'
         Write-Host '  dir, directory --list     List available scenario directories'
         Write-Host '  dir --tree, -t [path]  Show directory tree view (display only)'
@@ -2216,6 +2322,9 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host '  test.ps1 rws dir -f -m                      # Short forms for --files --metadata'
         Write-Host '  test.ps1 rws dir --interactive              # Interactive directory picker'
         Write-Host '  test.ps1 rws sc --interactive              # Interactive scenario picker'
+        Write-Host '  test.ps1 rws sc add my-test https://example.com  # Create a new scenario'
+        Write-Host '  test.ps1 rws sc add my-test https://example.com --refine  # Create + AI refine'
+        Write-Host '  test.ps1 rws sc add my-test https://example.com -r -g "add checks" --category generic'
         exit 0
     }
 
@@ -2304,6 +2413,191 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
             Show-InteractiveScenarioPicker -TasksRoot $tasksRoot
         }
 
+        exit 0
+    }
+
+    # -- sc add execution ----------------------------------------------------
+    if ($mode -eq 'scenarios-add') {
+        $tasksRoot = Join-Path $repoRoot 'browser4-tests' 'real-world-scenarios' 'tasks'
+
+        # Honor -Show / -DryRun
+        if ($script:Show) {
+            Write-CommandBanner -Label '[SHOW] Would create scenario:' `
+                -Subtitle "  name=$addScenarioName  url=$addScenarioUrl  refine=$addRefine  dir=$addDir  category=$addCategory"
+            exit 0
+        }
+        if ($script:DryRun) {
+            Write-CommandBanner -Label '[DRY RUN] Would create scenario:' `
+                -Subtitle "  name=$addScenarioName  url=$addScenarioUrl  refine=$addRefine  dir=$addDir  category=$addCategory"
+            exit 0
+        }
+
+        # ── Resolve target directory ───────────────────────────────────────
+        $targetDir = $tasksRoot
+        if ($addDir) {
+            $resolvedDir = $addDir
+            if (-not [System.IO.Path]::IsPathRooted($resolvedDir)) {
+                # Try relative to tasks root first, then relative to repo root
+                $fromTasks = Join-Path $tasksRoot $resolvedDir
+                if (Test-Path -LiteralPath $fromTasks -PathType Container) {
+                    $resolvedDir = $fromTasks
+                } else {
+                    $resolvedDir = Join-Path $repoRoot $resolvedDir
+                }
+            }
+            $resolvedDir = [System.IO.Path]::GetFullPath($resolvedDir)
+            if (-not (Test-Path -LiteralPath $resolvedDir -PathType Container)) {
+                Write-Error "Target directory not found: $resolvedDir"
+                exit 1
+            }
+            $targetDir = $resolvedDir
+        }
+        elseif ($addCategory) {
+            $catLower = $addCategory.ToLowerInvariant()
+            $catMap = @{
+                'generic'   = Join-Path $tasksRoot 'real-world' 'generic'
+                'browser4'  = Join-Path $tasksRoot 'real-world' 'browser4'
+                'mock-site' = Join-Path $tasksRoot 'mock-site'
+                'mock'      = Join-Path $tasksRoot 'mock-site'
+            }
+            if ($catMap.ContainsKey($catLower)) {
+                $targetDir = $catMap[$catLower]
+            } else {
+                Write-Error "Unknown category '$addCategory'. Valid categories: generic, browser4, mock-site"
+                exit 1
+            }
+        }
+
+        # ── Slugify the name ───────────────────────────────────────────────
+        $slug = $addScenarioName.Trim().ToLowerInvariant()
+        $slug = $slug -replace '[^a-z0-9]+', '-'
+        $slug = $slug -replace '^-+', ''
+        $slug = $slug -replace '-+$', ''
+        if ([string]::IsNullOrWhiteSpace($slug)) {
+            Write-Error "Invalid scenario name after normalization. Use letters or numbers."
+            exit 1
+        }
+
+        # ── Resolve title ──────────────────────────────────────────────────
+        $scenarioTitle = if ($addTitle) { $addTitle.Trim() } else { $addScenarioName.Trim() }
+
+        # ── Check for existing file ────────────────────────────────────────
+        $newFilePath = Join-Path $targetDir "$slug.md"
+        if (Test-Path -LiteralPath $newFilePath) {
+            $existingRel = [System.IO.Path]::GetRelativePath($tasksRoot, $newFilePath)
+            Write-Error "Scenario already exists: $existingRel"
+            exit 1
+        }
+
+        # ── Build template content ─────────────────────────────────────────
+        $template = @'
+# {0}
+
+1. Go to `{1}`.
+2. Discover the key interactive elements needed for this scenario.
+3. Complete the intended workflow step-by-step.
+4. Verify the expected result on the page.
+5. Write the final findings to a markdown file in the `./target/` directory.
+'@
+        $templateContent = [string]::Format($template, $scenarioTitle, $addScenarioUrl)
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText($newFilePath, $templateContent, $utf8NoBom)
+
+        $newFileRel = [System.IO.Path]::GetRelativePath($tasksRoot, $newFilePath)
+        Write-Host "Created: $newFileRel" -ForegroundColor Green
+
+        # ── AI refine (if requested) ───────────────────────────────────────
+        if ($addRefine) {
+            $rwsScriptsDir = Join-Path $repoRoot 'browser4-tests' 'real-world-scenarios' 'scripts'
+            $commonPs1 = Join-Path $rwsScriptsDir 'common.ps1'
+            if (Test-Path $commonPs1) { . $commonPs1 }
+
+            # Read back the file we just wrote
+            $currentContent = Get-Content -LiteralPath $newFilePath -Raw -Encoding UTF8 -ErrorAction Stop
+
+            $hintLine = if ($addGuidance) { "`nUser's refinement guidance: $addGuidance" } else { '' }
+            $refinePrompt = @"
+You are refining a browser automation scenario written in Markdown format.
+The scenario describes step-by-step instructions for a web agent to follow.
+
+Refinement guidelines:
+- Keep the same general structure: a single `# Heading` followed by numbered steps
+- Make each step more specific, actionable, and unambiguous
+- Add verification/assertion steps at the end if missing
+- Preserve the original intent and all URL targets
+- Fix grammar, clarity, and formatting issues
+- Do NOT add fluff, introductions, or explanations — keep it concise
+
+$hintLine
+
+Original scenario content:
+---
+$currentContent
+---
+
+Return ONLY the refined Markdown. Do not include any preamble, commentary, or code fences around your output.
+"@
+
+            # Detect agent
+            $agent = if (Get-Command 'claude' -ErrorAction SilentlyContinue) { 'claude' }
+                     elseif (Get-Command 'kimi' -ErrorAction SilentlyContinue) { 'kimi' }
+                     elseif (Get-Command 'opencode' -ErrorAction SilentlyContinue) { 'opencode' }
+                     else { 'claude' }
+
+            Write-Host "Refining with $agent ..." -ForegroundColor Cyan
+            if ($addGuidance) { Write-Host "  Guidance: $addGuidance" -ForegroundColor DarkGray }
+
+            try {
+                # Build agent args
+                $agentArgs = @()
+                switch ($agent) {
+                    'claude'   { $agentArgs += '--dangerously-skip-permissions'; $agentArgs += '--silent'; $agentArgs += @('-p', $refinePrompt) }
+                    'kimi'     { $agentArgs += @('-p', $refinePrompt) }
+                    'opencode' { $agentArgs += @('run', $refinePrompt) }
+                    default    { $agentArgs += @('-p', $refinePrompt) }
+                }
+
+                $psi = [System.Diagnostics.ProcessStartInfo]::new()
+                $psi.FileName = $agent
+                $psi.Arguments = [string]::Join(' ', $agentArgs)
+                $psi.UseShellExecute = $false
+                $psi.RedirectStandardOutput = $true
+                $psi.RedirectStandardError = $true
+                $psi.CreateNoWindow = $true
+
+                $proc = [System.Diagnostics.Process]::Start($psi)
+                $output = $proc.StandardOutput.ReadToEnd()
+                $null = $proc.StandardError.ReadToEnd()
+                $proc.WaitForExit()
+                $exitCode = $proc.ExitCode
+                $proc.Dispose()
+
+                if ($exitCode -ne 0) {
+                    Write-Host "WARNING: $agent exited with code $exitCode — keeping original template." -ForegroundColor Yellow
+                } else {
+                    $refined = $output
+                    if ($refined -match '(?s)```(?:markdown|md)?\s*\n(.+?)\n```') {
+                        $refined = $Matches[1]
+                    }
+                    $refined = $refined.Trim()
+
+                    if ([string]::IsNullOrWhiteSpace($refined)) {
+                        Write-Host 'WARNING: Agent returned empty output — keeping original template.' -ForegroundColor Yellow
+                    } else {
+                        if ($refined -notmatch '^#\s') {
+                            $refined = "# $refined"
+                        }
+                        [System.IO.File]::WriteAllText($newFilePath, "$refined`n", $utf8NoBom)
+                        Write-Host 'Scenario refined successfully.' -ForegroundColor Green
+                    }
+                }
+            } catch {
+                Write-Host "WARNING: Refine failed: $_ — keeping original template." -ForegroundColor Yellow
+            }
+        }
+
+        Write-Host ''
+        Write-Host "Scenario ready: $newFileRel" -ForegroundColor Cyan
         exit 0
     }
 
@@ -2431,7 +2725,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         $runnerKind = 'Task runner'
     }
     else {
-        Write-Error "Unknown RWS mode '$mode'. Valid modes: sc (scenarios), dir (directory), task"
+        Write-Error "Unknown RWS mode '$mode'. Valid modes: sc (scenarios), sc add, dir (directory), task"
         exit 1
     }
 
