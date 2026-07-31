@@ -2698,7 +2698,9 @@ function Edit-FileInEditor {
     $editorArgs.Add($Path)
 
     try {
-        $proc = Start-Process -FilePath $editorCmd -ArgumentList $editorArgs -PassThru -Wait
+        # -NoNewWindow prevents a console flash for CLI editors (code, vim, etc.)
+        # and is harmless for GUI apps (notepad) which create their own window.
+        $proc = Start-Process -FilePath $editorCmd -ArgumentList $editorArgs -PassThru -Wait -NoNewWindow
         return ($proc.ExitCode -eq 0)
     } catch {
         Write-Error "Edit-FileInEditor: failed to launch '$editorCmd': $_"

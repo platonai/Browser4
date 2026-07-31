@@ -1338,10 +1338,11 @@ function Show-InteractiveScenarioPicker {
         $ok = Edit-FileInEditor -Path $Node.FullPath
 
         [Console]::Clear()
-        if ($ok -or $true) {
+        if ($ok) {
             # Refresh file tree to pick up any changes
-            $script:tree = Build-FileTree -Path $TasksRoot -Depth 0
-            $script:tree.Expanded = $true
+            $newTree = Build-FileTree -Path $TasksRoot -Depth 0
+            $newTree.Expanded = $true
+            Set-Variable -Scope 1 -Name tree -Value $newTree
             Write-Host 'Editor closed.' -ForegroundColor Green
         } else {
             Write-Host 'Editor closed with errors.' -ForegroundColor Yellow
@@ -1446,21 +1447,19 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
         Write-Host ''
 
         # Build a temp file for the prompt to avoid command-line length limits
-        $tempDir = Join-Path $script:repoRoot 'target'
+        $tempDir = Join-Path $repoRoot 'target'
         if (-not (Test-Path -LiteralPath $tempDir)) {
             New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
         }
-        $promptFile = Join-Path $tempDir '.refine-prompt.md'
-        $outputFile = Join-Path $tempDir '.refine-output.md'
         $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-        [System.IO.File]::WriteAllText($promptFile, $prompt, $utf8NoBom)
 
         try {
-            # Build agent CLI arguments
+            # Build agent CLI arguments — suppress all terminal output during refine
             $agentArgs = @()
             switch ($agent) {
                 'claude' {
                     $agentArgs += '--dangerously-skip-permissions'
+                    $agentArgs += '--silent'
                     $agentArgs += @('-p', $prompt)
                 }
                 'kimi'   { $agentArgs += @('-p', $prompt) }
@@ -1468,7 +1467,7 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
                 default  { $agentArgs += @('-p', $prompt) }
             }
 
-            # Run the agent and capture output
+            # Run the agent — 2>&1 captures stderr, Out-String suppresses all real-time console output
             $output = & $agent @agentArgs 2>&1 | Out-String
             $exitCode = $LASTEXITCODE
 
@@ -1508,9 +1507,10 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
             # Write the refined content back
             [System.IO.File]::WriteAllText($Node.FullPath, "$refined`n", $utf8NoBom)
 
-            # Refresh the file tree
-            $script:tree = Build-FileTree -Path $TasksRoot -Depth 0
-            $script:tree.Expanded = $true
+            # Refresh the file tree in the parent scope
+            $newTree = Build-FileTree -Path $TasksRoot -Depth 0
+            $newTree.Expanded = $true
+            Set-Variable -Scope 1 -Name tree -Value $newTree
 
             Write-Host ''
             Write-Host 'Scenario refined successfully.' -ForegroundColor Green
@@ -1620,7 +1620,7 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
         }
 
         if ($gotoIndex) {
-            Write-Host "  Goto file #: $gotoIndex`_   Enter=jump  v=view  Esc=cancel" -ForegroundColor Cyan
+            Write-Host "  Goto file #: $gotoIndex`_   Enter=jump+view  v=view  Esc=cancel" -ForegroundColor Cyan
         }
 
         # Controls
@@ -1749,11 +1749,15 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
             switch ($key.Key) {
                 'Enter' {
                     $idx = [int]$gotoIndex
+                    $gotoIndex = ''
                     if ($fileIndexToCursor.ContainsKey($idx)) {
                         $cursor = $fileIndexToCursor[$idx]
                         $topOffset = $cursor
+                        # Open the viewer so Enter never accidentally runs the scenario
+                        if ($visible[$cursor].Type -eq 'file') {
+                            Show-ScenarioContent -Node $visible[$cursor]
+                        }
                     }
-                    $gotoIndex = ''
                     continue
                 }
                 'Escape' {
@@ -1769,9 +1773,10 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
                     continue
                 }
                 default {
-                    # 'v' jumps + views; any other key cancels goto
+                    # 'v' also jumps + views; any other key cancels goto
                     if ($key.KeyChar -ieq 'v') {
                         $idx = [int]$gotoIndex
+                        $gotoIndex = ''
                         if ($fileIndexToCursor.ContainsKey($idx)) {
                             $cursor = $fileIndexToCursor[$idx]
                             $topOffset = $cursor
@@ -1779,7 +1784,6 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
                                 Show-ScenarioContent -Node $visible[$cursor]
                             }
                         }
-                        $gotoIndex = ''
                         continue
                     }
                     $gotoIndex = ''
