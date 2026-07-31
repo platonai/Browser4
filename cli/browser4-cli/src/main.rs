@@ -20,6 +20,7 @@
 
 mod args;
 mod commands;
+mod config;
 mod daemon;
 mod help;
 mod http;
@@ -45,6 +46,10 @@ use args::{
     parse_command_string, parse_global_flags, parse_raw_args, GlobalFlags,
 };
 use commands::{commands_map, is_element_reference};
+use config::{
+    config_delete_value, config_set_value, config_value, read_config, write_config,
+    VALID_CONFIG_KEYS,
+};
 use daemon::{
     ensure_chrome_available, ensure_server_running, init_root_search_start_dir_from_startup,
     install_browser4_runtime, is_local_port_open, read_current_tag, resolve_base_url,
@@ -2800,6 +2805,110 @@ async fn handle_session_default(tool_params: &Value) -> Result<(), String> {
     cli_println!("Subsequent commands will target this session without needing -s.");
     json_field("session_name", json!(name));
     json_field("session_id", json!(named_id));
+    Ok(())
+}
+
+/// Extract a value from a JSON map as a trimmed string, handling string,
+/// number, and boolean types (coerces numbers and booleans to their string
+/// representation).
+fn get_value_as_string(map: &Value, key: &str) -> Option<String> {
+    map.get(key).and_then(|v| match v {
+        Value::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+        }
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    })
+}
+
+async fn handle_config_list() -> Result<(), String> {
+    let config = read_config();
+    cli_println!("{:<10} {}", "KEY", "VALUE");
+    cli_println!("----------  -----");
+    let keys = VALID_CONFIG_KEYS;
+    let mut any_set = false;
+    for key in keys {
+        if let Some(val) = config_value(&config, key) {
+            cli_println!("{:<10}  {}", key, val);
+            json_field(key, json!(val));
+            any_set = true;
+        } else {
+            cli_println!("{:<10}  (default)", key);
+        }
+    }
+    if !any_set {
+        cli_println!("No configuration values are set. Use 'browser4-cli config set <key> <value>' to set a value.");
+    }
+    Ok(())
+}
+
+async fn handle_config_get(tool_params: &Value) -> Result<(), String> {
+    let key = tool_params
+        .get("key")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "A config key is required: config get <key>".to_string())?;
+
+    if !VALID_CONFIG_KEYS.contains(&key) {
+        let valid = VALID_CONFIG_KEYS
+            .iter()
+            .map(|k| format!("'{}'", k))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "Unknown config key '{}'. Valid keys are: {}",
+            key, valid
+        ));
+    }
+
+    let config = read_config();
+    match config_value(&config, key) {
+        Some(val) => {
+            cli_println!("{}", val);
+            json_field(key, json!(val));
+        }
+        None => {
+            cli_println!("(not set)");
+        }
+    }
+    Ok(())
+}
+
+async fn handle_config_set(tool_params: &Value) -> Result<(), String> {
+    let key = get_value_as_string(tool_params, "key")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "A config key is required: config set <key> <value>".to_string())?;
+
+    let value = get_value_as_string(tool_params, "value")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "A value is required: config set <key> <value>".to_string())?;
+
+    let mut config = read_config();
+    config_set_value(&mut config, &key, &value)?;
+    write_config(&config).map_err(|e| format!("Failed to write config: {}", e))?;
+
+    cli_println!("Set '{}' = '{}'", key, value);
+    json_field(&key, json!(value));
+    Ok(())
+}
+
+async fn handle_config_delete(tool_params: &Value) -> Result<(), String> {
+    let key = tool_params
+        .get("key")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "A config key is required: config delete <key>".to_string())?;
+
+    let mut config = read_config();
+    config_delete_value(&mut config, key)?;
+    write_config(&config).map_err(|e| format!("Failed to write config: {}", e))?;
+
+    cli_println!("Removed '{}' (reset to default)", key);
+    json_field(key, json!(null));
     Ok(())
 }
 
@@ -14397,6 +14506,11 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "close-all"
         && command != "kill-all"
         && command != "session-default"
+        && command != "config"
+        && command != "config-list"
+        && command != "config-get"
+        && command != "config-set"
+        && command != "config-delete"
         && command != "list"
         && command != "install"
         && command != "uninstall"
@@ -14587,6 +14701,7 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         "snapshot" => format!("snapshot-{}", sub),
         "skills" => format!("skills-{}", sub),
         "plugin" => format!("plugin-{}", sub),
+        "config" => format!("config-{}", sub),
         _ => return None,
     };
     let mut rewritten = vec![rewritten_command];
@@ -15959,6 +16074,18 @@ async fn run(
         }
         "session-default" => {
             handle_session_default(&tool_params).await?;
+        }
+        "config" | "config-list" => {
+            handle_config_list().await?;
+        }
+        "config-get" => {
+            handle_config_get(&tool_params).await?;
+        }
+        "config-set" => {
+            handle_config_set(&tool_params).await?;
+        }
+        "config-delete" => {
+            handle_config_delete(&tool_params).await?;
         }
         "list" => {
             let verbose = tool_params

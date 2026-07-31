@@ -3413,6 +3413,100 @@ pub fn all_commands() -> Vec<CommandDef> {
                 params
             },
         },
+        // ---- Config ----
+        CommandDef {
+            name: "config",
+            description: "List all CLI configuration values",
+            category: Category::Config,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "config-list",
+            description: "List all CLI configuration values",
+            category: Category::Config,
+            hidden: true,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "config-get",
+            description: "Get a CLI configuration value",
+            category: Category::Config,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef {
+                    name: "key",
+                    optional: false,
+                    description: "The config key to get (server, timeout, proxy, session)",
+                },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
+                json!({ "key": key })
+            },
+        },
+        CommandDef {
+            name: "config-set",
+            description: "Set a CLI configuration value",
+            category: Category::Config,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef {
+                    name: "key",
+                    optional: false,
+                    description: "The config key to set (server, timeout, proxy, session)",
+                },
+                ArgDef {
+                    name: "value",
+                    optional: false,
+                    description: "The value to set",
+                },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
+                let value = get_string_value(args, "value").unwrap_or_default();
+                json!({ "key": key, "value": value })
+            },
+        },
+        CommandDef {
+            name: "config-delete",
+            description: "Remove a CLI configuration value, resetting it to default",
+            category: Category::Config,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef {
+                    name: "key",
+                    optional: false,
+                    description: "The config key to delete (server, timeout, proxy, session)",
+                },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
+                json!({ "key": key })
+            },
+        },
     ]
 }
 
@@ -3500,6 +3594,11 @@ mod tests {
             "plugin-install",
             "plugin-remove",
             "act",
+            "config",
+            "config-list",
+            "config-get",
+            "config-set",
+            "config-delete",
             "experience-save",
             "experience-query",
             "experience-list",
