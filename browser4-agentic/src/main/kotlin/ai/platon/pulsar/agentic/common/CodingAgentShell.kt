@@ -135,6 +135,22 @@ class CodingAgentShell(
     private val canonicalBaseDir: Path = baseDir.toRealPath()
 
     // ------------------------------------------------------------------
+    // Per-instance allow / deny overrides
+    // ------------------------------------------------------------------
+
+    /** Explicitly allowed base command names (e.g. "ffmpeg"). Overrides category membership. */
+    private val explicitAllow: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /** Explicitly denied base command names (e.g. "git"). Takes priority over everything except blocked patterns. */
+    private val explicitDeny: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /** Regex patterns that allow matching commands. The full command string is tested. */
+    private val allowPatterns: MutableList<Regex> = mutableListOf()
+
+    /** Regex patterns that deny matching commands. Takes priority over allow patterns. */
+    private val denyPatterns: MutableList<Regex> = mutableListOf()
+
+    // ------------------------------------------------------------------
     // Public API
     // ------------------------------------------------------------------
 
@@ -265,6 +281,144 @@ class CodingAgentShell(
     fun getEnv(): Map<String, String> = sessionEnv.toMap()
 
     // ------------------------------------------------------------------
+    // Allow / deny API
+    // ------------------------------------------------------------------
+
+    /**
+     * Allow a specific command by its base name (e.g. "ffmpeg", "pandoc").
+     * This adds the command to a per-instance allow-list that overrides
+     * the category check — even if the command is not in any predefined set,
+     * it will be permitted.
+     *
+     * Example:
+     * ```kotlin
+     * shell.allowCommand("ffmpeg")    // allow ffmpeg even though it's not in DEV_COMMANDS
+     * shell.allowCommand("pandoc")    // allow pandoc
+     * ```
+     */
+    fun allowCommand(name: String) {
+        explicitAllow.add(name.lowercase())
+        explicitDeny.remove(name.lowercase())
+    }
+
+    /**
+     * Deny a specific command by its base name (e.g. "git", "curl").
+     * This adds the command to a per-instance deny-list. The deny list
+     * takes priority over everything — even SAFE_COMMANDS and explicit
+     * allows — so you can lock down a command entirely.
+     *
+     * Example:
+     * ```kotlin
+     * shell.denyCommand("git")        // block git entirely
+     * shell.denyCommand("curl")       // block curl even if allowNetwork=true
+     * ```
+     */
+    fun denyCommand(name: String) {
+        explicitDeny.add(name.lowercase())
+        explicitAllow.remove(name.lowercase())
+    }
+
+    /**
+     * Remove a command from both the allow and deny lists, reverting
+     * to the default category-based policy.
+     */
+    fun resetCommand(name: String) {
+        explicitAllow.remove(name.lowercase())
+        explicitDeny.remove(name.lowercase())
+    }
+
+    /**
+     * Allow commands matching a regex pattern. The full command string
+     * (e.g. "pip install requests") is tested against the pattern.
+     *
+     * Example:
+     * ```kotlin
+     * shell.allowPattern(Regex("pip\\s+install.*"))   // allow pip install
+     * shell.allowPattern(Regex("npm\\s+run\\s+.*"))   // allow npm run <script>
+     * ```
+     */
+    fun allowPattern(pattern: Regex) {
+        allowPatterns.add(pattern)
+    }
+
+    /**
+     * Deny commands matching a regex pattern. Deny patterns take priority
+     * over allow patterns — if a command matches both, it is denied.
+     *
+     * Example:
+     * ```kotlin
+     * shell.denyPattern(Regex("git\\s+push.*--force"))  // block force push
+     * shell.denyPattern(Regex("rm\\s+-rf\\s+/"))         // block recursive root delete
+     * ```
+     */
+    fun denyPattern(pattern: Regex) {
+        denyPatterns.add(pattern)
+    }
+
+    /**
+     * Show the current effective policy for a command — why it's allowed or denied.
+     * Returns a human-readable explanation.
+     */
+    fun explain(command: String): String {
+        val base = extractBaseCommand(command).lowercase()
+
+        // Check blocked patterns
+        for (pattern in BLOCKED_PATTERNS) {
+            if (pattern.containsMatchIn(command)) {
+                return "'$command' is BLOCKED — matches hardcoded blocked pattern: ${pattern.pattern}"
+            }
+        }
+
+        // Deny patterns
+        for (pattern in denyPatterns) {
+            if (pattern.containsMatchIn(command)) {
+                return "'$command' is DENIED — matches deny pattern: ${pattern.pattern}"
+            }
+        }
+
+        // Explicit deny
+        if (base in explicitDeny) {
+            return "'$command' is DENIED — '$base' is in the explicit deny list"
+        }
+
+        // Explicit allow
+        if (base in explicitAllow) {
+            return "'$command' is ALLOWED — '$base' is in the explicit allow list"
+        }
+
+        // Allow patterns
+        for (pattern in allowPatterns) {
+            if (pattern.containsMatchIn(command)) {
+                return "'$command' is ALLOWED — matches allow pattern: ${pattern.pattern}"
+            }
+        }
+
+        // Category checks
+        if (base in SAFE_COMMANDS) return "'$command' is ALLOWED — '$base' is a safe command"
+        if (allowDevTools && base in DEV_COMMANDS) return "'$command' is ALLOWED — '$base' is a dev tool (allowDevTools=true)"
+        if (allowNetwork && base in NETWORK_COMMANDS) return "'$command' is ALLOWED — '$base' is a network command (allowNetwork=true)"
+        if (allowDestructive && base in DESTRUCTIVE_COMMANDS) return "'$command' is ALLOWED — '$base' is a destructive command (allowDestructive=true)"
+
+        if (command.startsWith("/") || command.startsWith("./") || command.startsWith(".\\")) {
+            return if (allowDevTools) "'$command' is ALLOWED — full-path command (allowDevTools=true)"
+            else "'$command' is DENIED — full-path commands require allowDevTools=true"
+        }
+
+        if (allowDevTools && isCommandOnPath(base)) {
+            return "'$command' is ALLOWED — '$base' found on PATH (allowDevTools=true)"
+        }
+
+        return "'$command' is DENIED — '$base' not in any allowed category"
+    }
+
+    /**
+     * Check whether a command would be allowed without actually executing it.
+     */
+    fun isAllowed(command: String): Boolean {
+        return validateCommand(command) == null
+    }
+
+    // ------------------------------------------------------------------
     // Working directory resolution
     // ------------------------------------------------------------------
 
@@ -297,25 +451,45 @@ class CodingAgentShell(
         val baseCommand = extractBaseCommand(command).lowercase()
         if (baseCommand.isEmpty()) return "empty or invalid command"
 
-        // Always check blocked patterns first
+        // 1. Hardcoded blocked patterns — always checked first, cannot be overridden
         for (pattern in BLOCKED_PATTERNS) {
             if (pattern.containsMatchIn(command)) {
                 return "matches blocked pattern: ${pattern.pattern}"
             }
         }
 
-        // Check if command is in any allowed category
+        // 2. Explicit deny — absolute veto (except blocked patterns above)
+        if (baseCommand in explicitDeny) {
+            return "'$baseCommand' is explicitly denied"
+        }
+
+        // 3. Deny patterns — regex-based veto
+        for (pattern in denyPatterns) {
+            if (pattern.containsMatchIn(command)) {
+                return "matches deny pattern: ${pattern.pattern}"
+            }
+        }
+
+        // 4. Explicit allow — bypasses category checks entirely
+        if (baseCommand in explicitAllow) return null
+
+        // 5. Allow patterns — bypasses category checks
+        for (pattern in allowPatterns) {
+            if (pattern.containsMatchIn(command)) return null
+        }
+
+        // 6. Category-based checks
         if (baseCommand in SAFE_COMMANDS) return null
         if (allowDevTools && (baseCommand in DEV_COMMANDS)) return null
         if (allowNetwork && (baseCommand in NETWORK_COMMANDS)) return null
         if (allowDestructive && (baseCommand in DESTRUCTIVE_COMMANDS)) return null
 
-        // Accept commands with full paths (e.g., /usr/bin/git, ./script.sh)
+        // 7. Full-path commands (e.g. /usr/bin/git, ./script.sh, .\tool.exe)
         if (command.startsWith("/") || command.startsWith("./") || command.startsWith(".\\")) {
             if (allowDevTools) return null
         }
 
-        // Check if command exists on PATH and allow if dev tools are enabled
+        // 8. PATH fallback — command not in any set but found on PATH
         if (allowDevTools && isCommandOnPath(baseCommand)) {
             return null
         }
