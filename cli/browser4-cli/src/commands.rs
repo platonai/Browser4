@@ -2424,7 +2424,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "chat",
             description: "Chat with AI without any auto-appended context",
             category: Category::Agent,
-            hidden: false,
+            hidden: true,
             batch_supported: false,
             args: &[ArgDef { name: "prompt", description: "Message to send to the AI", optional: false }],
             options: &[
@@ -2448,7 +2448,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "chat-result",
             description: "Get the result of an async chat task",
             category: Category::Agent,
-            hidden: false,
+            hidden: true,
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by chat --async", optional: false }],
             options: &[],
