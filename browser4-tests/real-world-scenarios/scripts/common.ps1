@@ -2698,12 +2698,8 @@ function Edit-FileInEditor {
     $editorArgs.Add($Path)
 
     try {
-        # CLI editors (code, vim, nano) — invoke directly to avoid a console window.
-        # GUI editors (notepad) — Start-Process -Wait blocks until the window closes.
-        if ($editorCmd -match '\\code(\.cmd)?$|^code$|\\vim|\\nano|\\emacs') {
-            & $editorCmd @editorArgs
-            return ($LASTEXITCODE -eq 0)
-        }
+        # Start-Process -Wait blocks reliably for both CLI tools (code --wait)
+        # and GUI apps (notepad.exe).  No special-casing needed.
         $proc = Start-Process -FilePath $editorCmd -ArgumentList $editorArgs -PassThru -Wait
         return ($proc.ExitCode -eq 0)
     } catch {
