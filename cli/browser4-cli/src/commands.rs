@@ -2421,6 +2421,46 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "chat",
+            description: "Chat with AI without any auto-appended context",
+            category: Category::Agent,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef { name: "prompt", description: "Message to send to the AI", optional: false }],
+            options: &[
+                OptionDef {
+                    name: "async",
+                    description: "Submit asynchronously and return a task ID for later polling",
+                    is_bool: true,
+                    short: None,
+                },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(prompt) = get_opt_str(args, "prompt") { p["prompt"] = json!(prompt); }
+                if let Some(true) = get_bool(args, "async") { p["async"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "chat-result",
+            description: "Get the result of an async chat task",
+            category: Category::Agent,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef { name: "id", description: "Task ID returned by chat --async", optional: false }],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(id) = get_opt_str(args, "id") { p["id"] = json!(id); }
+                p
+            },
+        },
+        CommandDef {
             name: "agent-run",
             description: "Run an autonomous agent task (async, returns task ID)",
             category: Category::Agent,
@@ -3451,6 +3491,8 @@ mod tests {
             "uninstall",
             "doctor",
             "batch",
+            "chat",
+            "chat-result",
             "loop",
             "goto",
             "click",
