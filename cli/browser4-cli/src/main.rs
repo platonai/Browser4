@@ -342,6 +342,8 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "goto",
         "act",
         "batch",
+        "chat",
+        "chat-result",
         "close",
         "disconnect",
         "close-all",
@@ -8475,6 +8477,60 @@ async fn handle_agent_run(
     Ok(())
 }
 
+async fn handle_chat(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let prompt = tool_params
+        .get("prompt")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    if prompt.is_empty() {
+        return Err("A prompt is required. Usage: browser4-cli chat \"<message>\"".to_string());
+    }
+
+    let is_async = tool_params
+        .get("async")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if is_async {
+        let task_id = http::chat_with_ai_async(client, base_url, prompt).await?;
+        cli_println!("Chat task submitted: {}", task_id);
+        cli_println!(
+            "Use 'browser4-cli chat-result {}' to get the response.",
+            task_id
+        );
+    } else {
+        let response = http::chat_with_ai(client, base_url, prompt).await?;
+        cli_println!("{}", response);
+    }
+
+    Ok(())
+}
+
+async fn handle_chat_result(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let task_id = tool_params
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    if task_id.is_empty() {
+        return Err("A task ID is required. Usage: browser4-cli chat-result <id>".to_string());
+    }
+
+    let response = http::get_chat_result(client, base_url, task_id).await?;
+    cli_println!("{}", response);
+
+    Ok(())
+}
+
 async fn handle_act(
     client: &Client,
     base_url: &str,
@@ -16536,6 +16592,12 @@ async fn run(
             .await?;
         }
         // Agent commands
+        "chat" => {
+            handle_chat(&client, &base_url, &tool_params).await?;
+        }
+        "chat-result" => {
+            handle_chat_result(&client, &base_url, &tool_params).await?;
+        }
         "agent-run" => {
             handle_agent_run(
                 &client,
