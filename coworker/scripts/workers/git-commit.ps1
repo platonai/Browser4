@@ -119,8 +119,11 @@ Rules:
 - Ignore coworker task files (.md under coworker/tasks/) when determining type
   and scope — they are task-tracker artifacts, not source code. Base the message
   on the actual source-code and documentation changes
-- Do NOT wrap the message in code fences or quotes
-- Output ONLY the commit message, no conversational framing
+- CRITICAL: The VERY FIRST character of your output must be the commit type
+  (feat, fix, docs, etc.). Do NOT output ANY text before the commit message.
+  NO conversational framing (no "Here's", "Here is", "Below is", "The following").
+  NO code fences or quote marks. NO greetings or explanations. Just the raw
+  commit message text, starting immediately with the type.
 
 Examples of GOOD messages:
   feat(cli): add tab-new, tab-close, and tab-select commands
@@ -169,8 +172,31 @@ $diffBody
                 }
                 else {
                     $Message = Get-Content -Path $msgStdOut -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
-                    # Strip any conversational framing or code fences
-                    $Message = $Message -replace '^```[a-z]*\s*\n', '' -replace '\n```\s*$', ''
+
+                    # ── Post-process: strip conversational framing ──────────
+                    # The prompt instructs the AI to output only the commit
+                    # message, but some models still wrap it in framing like
+                    # "Here's the conventional commit message...".  Defensively
+                    # strip common intro phrases and find where the actual
+                    # conventional-commit first line begins.
+                    $Message = $Message.Trim()
+
+                    # 1. Remove common intro phrases
+                    $Message = $Message -replace '(?s)^.*?Here''?s\s+(the\s+)?(conventional\s+)?commit\s+message[^\n]*\s*\n\s*', ''
+
+                    # 2. If there's still framing before the commit message,
+                    #    find where the conventional commit type prefix starts
+                    $ccTypes = 'feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert'
+                    if ($Message -match "(?m)^\s*($ccTypes)[(!:)]") {
+                        $firstMatch = $Matches[0]
+                        $idx = $Message.IndexOf($firstMatch)
+                        if ($idx -gt 0) {
+                            $Message = $Message.Substring($idx)
+                        }
+                    }
+
+                    # 3. Strip any remaining code fences
+                    $Message = $Message -replace '^```[a-z]*\s*\r?\n', '' -replace '\r?\n```\s*$', ''
                     $Message = $Message.Trim()
                 }
             }

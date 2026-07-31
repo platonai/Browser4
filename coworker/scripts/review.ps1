@@ -916,22 +916,22 @@ function Show-IssueDisplay {
     Write-Host ' ║' -ForegroundColor DarkGray
 
     # Row 2
-    $r2 = '[e] notes  [m] mark-done  [d] discard  [b]/[l] list  [q] quit  [?] help'
+    $r2 = '[e] notes  [m] done→list  [d] discard→list  [b]/[l] list  [q] quit  [?] help'
     $r2Pad = $inner - $margin - $r2.Length
     if ($r2Pad -lt 1) { $r2Pad = 1 }
     Write-Host '║ ' -NoNewline -ForegroundColor DarkGray
     Write-Host '[e]' -NoNewline -ForegroundColor Cyan
     Write-Host ' notes  ' -NoNewline -ForegroundColor White
     Write-Host '[m]' -NoNewline -ForegroundColor Cyan
-    Write-Host ' mark-done  ' -NoNewline -ForegroundColor White
+    Write-Host ' done→list  ' -NoNewline -ForegroundColor White
     Write-Host '[d]' -NoNewline -ForegroundColor Cyan
-    Write-Host ' discard  ' -NoNewline -ForegroundColor White
+    Write-Host ' discard→list  ' -NoNewline -ForegroundColor White
     Write-Host '[b]/[l]' -NoNewline -ForegroundColor Cyan
     Write-Host ' list  ' -NoNewline -ForegroundColor White
     Write-Host '[q]' -NoNewline -ForegroundColor Cyan
     Write-Host ' quit  ' -NoNewline -ForegroundColor White
     Write-Host '[?]' -NoNewline -ForegroundColor Cyan
-    Write-Host ' help' -NoNewline -ForegroundColor White
+    Write-Host ' help  ' -NoNewline -ForegroundColor White
     Write-Host (' ' * $r2Pad) -NoNewline
     Write-Host ' ║' -ForegroundColor DarkGray
 
@@ -1041,13 +1041,14 @@ function Show-Help {
     Write-Host '  [a]             AI review — get AI suggestion for current issue'
     Write-Host '  [A]             AI review ALL issues in this file'
     Write-Host '  [v]             Toggle view: single-issue / all-issues table'
-    Write-Host '  [m]             Mark file as DONE → moves to 1ready/ for execution'
-    Write-Host '  [d]             Discard file → moves to review/done/discard/'
+    Write-Host '  [m]             Mark file as DONE → moves to 1ready/, back to file list'
+    Write-Host '  [d]             Discard file → moves to review/done/discard/, back to file list'
     Write-Host '  [b] / [l] / Esc Back to file list — re-pick a file'
-    Write-Host '  [q]             Quit'
+    Write-Host '  [q]             Quit — the ONLY way to exit the review session'
     Write-Host '  [?]             Show this help'
     Write-Host ''
     Write-Host '  State is saved automatically after every change.' -ForegroundColor DarkGray
+    Write-Host '  [m] and [d] return to the file list — press [q] to end the session.' -ForegroundColor DarkGray
     Write-Host ''
     Write-Host '  Press any key to return...' -ForegroundColor DarkGray
     [Console]::ReadKey($true) | Out-Null
@@ -1950,12 +1951,12 @@ function Invoke-Review {
     while ($true) {
         $result = Start-ReviewSession -ParsedFile $currentParsed -AllFiles $allFiles -InitialMode $reviewMode
 
-        if ($result -eq 'quit' -or $result -eq 'done' -or $result -eq 'discard') {
+        if ($result -eq 'quit') {
             break
         }
 
-        # Back to file list — re-prompt file picker
-        if ($result -eq 'back-to-list') {
+        # Done / discard / back-to-list — all return to the file picker
+        if ($result -eq 'done' -or $result -eq 'discard' -or $result -eq 'back-to-list') {
             $allFiles = Find-IssuesFiles -IncludeDone:$All
             $filePath = Show-FilePicker -Files $allFiles
             if (-not $filePath) { break }
@@ -1980,7 +1981,20 @@ function Invoke-Review {
         } else {
             $null
         }
-        if (-not $nextFilePath) { break }
+        if (-not $nextFilePath) {
+            # Hit end of file list — go back to file picker
+            $allFiles = Find-IssuesFiles -IncludeDone:$All
+            $filePath = Show-FilePicker -Files $allFiles
+            if (-not $filePath) { break }
+            try {
+                $currentParsed = Read-IssuesFile -FilePath $filePath
+            } catch {
+                Write-ConsoleLine -Message "Error reading file: $_" -ForegroundColor Red
+                break
+            }
+            $reviewMode = 'single'
+            continue
+        }
 
         try {
             $currentParsed = Read-IssuesFile -FilePath $nextFilePath

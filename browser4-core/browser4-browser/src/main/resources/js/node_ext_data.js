@@ -30,7 +30,7 @@ let __pulsar_NodeExt = function (node, config) {
      * all it's descendants should hide the parts overflowed.
      * Number
      * */
-    this.maxWidth = config.viewPortWidth;
+    this.maxWidth = window.innerWidth || config.viewPortWidth;
     /**
      * The rectangle of this node
      * DOMRect
@@ -131,7 +131,7 @@ __pulsar_NodeExt.prototype.isOverflowHidden = function() {
         return false
     }
 
-    let maxWidth = this.config.viewPortWidth;
+    let maxWidth = window.innerWidth || this.config.viewPortWidth;
 
     // If an ancestor constrains maxWidth (overflow hidden), and this node is completely outside
     // the ancestor's box, then consider it overflow-hidden.

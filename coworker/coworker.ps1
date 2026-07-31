@@ -40,7 +40,14 @@ Usage: coworker <command> [options]
 
 Commands:
   draft     Create or edit a task draft in 0draft/
-            coworker draft [-Title <str>] [-Content <str>] [-Edit] [-Name <str>]
+            coworker draft [-Title <str>|-t <str>] [-Content <str>|-ct <str>] [-Edit|-e] [-Name <str>|-n <str>] [-Interactive|-i] [-NoInteractive|-ni]
+
+            Use -i / -Interactive to launch the full-screen Draft Panel:
+              — Browse existing drafts with titles and dates
+              — Create new drafts interactively
+              — View draft content inline
+              — Fix a draft (assign to 1ready + run `coworker fix`)
+              — Keyboard shortcuts: n (new), v<N> (view), f<N> (fix), r (refresh), q (quit), ? (help)
 
   refine    Improve a draft task using AI analysis
             coworker refine [-Path <path>] [-Audience <str>] [-InPlace]
@@ -111,6 +118,9 @@ if (Test-Path $agentHelper) { . $agentHelper }
 $reviewHelper = Join-Path $PSScriptRoot 'scripts\review.ps1'
 if (Test-Path $reviewHelper) { . $reviewHelper }
 
+$draftPanelHelper = Join-Path $PSScriptRoot 'scripts\workers\draft-panel.ps1'
+if (Test-Path $draftPanelHelper) { . $draftPanelHelper }
+
 $stateHelper = Join-Path $PSScriptRoot 'scripts\common\State.ps1'
 if (Test-Path $stateHelper) { . $stateHelper }
 
@@ -118,64 +128,10 @@ if (Test-Path $stateHelper) { . $stateHelper }
 # Shared helper functions
 # ═══════════════════════════════════════════════════════════════════════════════
 
-function Get-TaskDirectories {
-    $tasksRoot = Get-TasksRoot
-    $main = Join-Path $tasksRoot 'main'
-    return [pscustomobject]@{
-        Draft    = Join-Path $main '0draft'
-        Ready    = Join-Path $main '1ready'
-        Working  = Join-Path $main '2working'
-        Done     = Join-Path $main '3done'
-        Review   = Join-Path $main '4review'
-        Approved = Join-Path $main '5approved'
-        Pushed   = Join-Path $main '6git-pushed'
-    }
-}
-
-function Get-StateLabel {
-    param([string]$DirPath)
-    $name = Split-Path -Leaf $DirPath
-    switch -Wildcard ($name) {
-        '0draft'      { return 'Draft' }
-        '1ready'      { return 'Ready' }
-        '2working'    { return 'Working' }
-        '3done'       { return 'Done' }
-        '4review'     { return 'Review' }
-        '5approved'   { return 'Approved' }
-        '6git-pushed' { return 'Pushed' }
-        default       { return $name }
-    }
-}
-
-function Get-StateColor {
-    param([string]$DirPath)
-    $name = Split-Path -Leaf $DirPath
-    switch -Wildcard ($name) {
-        '0draft'      { return 'Gray' }
-        '1ready'      { return 'Green' }
-        '2working'    { return 'Yellow' }
-        '3done'       { return 'Cyan' }
-        '4review'     { return 'Magenta' }
-        '5approved'   { return 'Blue' }
-        '6git-pushed' { return 'DarkGray' }
-        default       { return 'White' }
-    }
-}
-
-function Get-StateFromLabel {
-    param([string]$Label)
-    switch ($Label) {
-        'draft'    { return '0draft' }
-        'ready'    { return '1ready' }
-        'working'  { return '2working' }
-        'done'     { return '3done' }
-        'review'   { return '4review' }
-        'approved' { return '5approved' }
-        'pushed'   { return '6git-pushed' }
-        'all'      { return 'all' }
-        default    { return $null }
-    }
-}
+# Get-TaskDirectories, Get-StateLabel, Get-StateColor, and Get-StateFromLabel
+# are now provided by StateMachine.ps1 (dot-sourced via config.ps1).
+# They are backward-compatible shims that delegate to the centralized
+# pipeline definitions.
 
 <#
 .SYNOPSIS
@@ -246,10 +202,35 @@ function Find-TaskFile {
         return @((Resolve-Path $Name).Path)
     }
 
-    $matches = @()
+    # Fast path: try the task registry first (best-effort)
     $searchName = [System.IO.Path]::GetFileNameWithoutExtension($Name)
     $searchExt = [System.IO.Path]::GetExtension($Name)
     if (-not $searchExt) { $searchExt = '.md' }
+
+    try {
+        $registryInfo = Get-CoworkerTaskInfo -TaskId $searchName
+        if ($registryInfo -and $registryInfo.ContainsKey('currentState') -and $registryInfo.ContainsKey('pipeline')) {
+            $regStageDir = Get-CoworkerStageDirectory -PipelineName $registryInfo['pipeline'] -StageId $registryInfo['currentState'] -ErrorAction SilentlyContinue
+            if ($regStageDir -and (Test-Path $regStageDir)) {
+                $directPath = Join-Path $regStageDir "$searchName$searchExt"
+                if (Test-Path -LiteralPath $directPath) {
+                    return @((Resolve-Path $directPath).Path)
+                }
+                # Also try recursive search under the stage dir
+                if (Test-Path $regStageDir) {
+                    $found = Get-ChildItem -Path $regStageDir -Recurse -File -ErrorAction SilentlyContinue |
+                        Where-Object { -not (Test-CoworkerIgnoredFile -Item $_) } |
+                        Where-Object { $_.Name -eq "$searchName$searchExt" -or $_.BaseName -eq $searchName }
+                    if ($found) {
+                        return @($found[0].FullName)
+                    }
+                }
+            }
+        }
+    }
+    catch {
+        # Registry lookup failed — fall through to filesystem scan
+    }
 
     foreach ($dir in $searchDirs) {
         if (-not (Test-Path $dir)) { continue }
@@ -340,6 +321,33 @@ function Read-TaskContent {
     }
 }
 
+function Test-CanPrompt {
+    try {
+        return [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
+    }
+    catch {
+        return $false
+    }
+}
+
+function Read-MultilineInput {
+    param(
+        [string]$PromptMessage = 'Enter text',
+        [string]$EndToken = '.'
+    )
+
+    Write-ConsoleLine -Message $PromptMessage -ForegroundColor Cyan
+    Write-ConsoleLine -Message "Finish input with a line containing only '$EndToken'." -ForegroundColor DarkGray
+
+    $lines = @()
+    while ($true) {
+        $line = Read-Host
+        if ($line -eq $EndToken) { break }
+        $lines += $line
+    }
+    return (($lines -join [Environment]::NewLine).Trim())
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Subcommand: draft — Create or edit a task draft in 0draft/
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -351,7 +359,9 @@ function Invoke-Draft {
         [string]$Prompt = '',
         [switch]$Edit,
         [string]$Name = '',
-        [switch]$RefreshEditor
+        [switch]$RefreshEditor,
+        [switch]$Interactive,
+        [switch]$NoInteractive
     )
 
     $dirs = Get-TaskDirectories
@@ -360,10 +370,51 @@ function Invoke-Draft {
         New-Item -ItemType Directory -Path $draftDir -Force | Out-Null
     }
 
-    Ensure-DraftPlaceholders -DraftDirectory $draftDir
-
     # Use $Prompt as alias for $Content
     if ($Prompt -and -not $Content) { $Content = $Prompt }
+
+    if ($Interactive -and $NoInteractive) {
+        Write-ConsoleLine -Message 'Error: -Interactive and -NoInteractive cannot be used together.' -ForegroundColor Red
+        exit 1
+    }
+
+    $hasExplicitArgs = @(@($Title, $Content, $Prompt, $Name) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if (-not $Interactive -and -not $NoInteractive -and $hasExplicitArgs.Count -eq 0 -and -not $Edit) {
+        $Interactive = $true
+    }
+
+    if ($Interactive) {
+        # Launch the interactive draft panel — a full-screen UI that lists
+        # existing drafts, lets you browse them, create new ones, and
+        # optionally call `coworker fix` on a draft.
+        if (Get-Command -Name 'Invoke-DraftPanel' -ErrorAction SilentlyContinue) {
+            Invoke-DraftPanel
+            return
+        }
+        # Fallback: basic interactive prompt (if panel script not available)
+        if (-not (Test-CanPrompt)) {
+            Write-ConsoleLine -Message 'Error: Interactive draft mode requires a TTY (console input).' -ForegroundColor Red
+            Write-ConsoleLine -Message 'Use -NoInteractive with -Title/-Content for non-interactive environments.' -ForegroundColor Yellow
+            exit 1
+        }
+
+        if (-not $Title) {
+            $Title = (Read-Host 'Title (optional)').Trim()
+        }
+        if (-not $Name) {
+            $Name = (Read-Host 'Filename (optional, without .md)').Trim()
+        }
+        if (-not $Content) {
+            $Content = Read-MultilineInput -PromptMessage 'Prompt content' -EndToken '.'
+        }
+    }
+
+    $hasTitleInput = -not [string]::IsNullOrWhiteSpace($Title)
+    $hasContentInput = -not [string]::IsNullOrWhiteSpace($Content)
+    if (-not $hasTitleInput -and -not $hasContentInput -and -not $Edit) {
+        Write-ConsoleLine -Message 'Draft not saved: title and content are both empty.' -ForegroundColor Yellow
+        return
+    }
 
     # Determine filename
     $fileName = ''
@@ -833,6 +884,9 @@ function Invoke-Assign {
     Move-Item -Path $inputPath -Destination $destPath -Force
     Write-ConsoleLine -Message "Added to 1ready: $destPath" -ForegroundColor Green
 
+    # Record the state transition in the task registry (best-effort)
+    Register-CoworkerTaskMove -FilePath $destPath -Pipeline 'main' -ToState '1ready' -Reason 'assigned'
+
     # Restore draft placeholders if we moved from 0draft
     if ($normalizedInput.StartsWith((Resolve-Path $dirs.Draft -ErrorAction SilentlyContinue).Path)) {
         Ensure-DraftPlaceholders -DraftDirectory $dirs.Draft
@@ -1128,6 +1182,8 @@ function Invoke-Cancel {
         }
         Remove-Item -Path $filePath -Force
         Write-ConsoleLine -Message "Deleted: $filePath" -ForegroundColor Red
+        # Remove from task registry (best-effort)
+        Remove-CoworkerTask -TaskId $filePath
     }
     else {
         # Move back to 0draft
@@ -1142,6 +1198,8 @@ function Invoke-Cancel {
         $destInfo = Resolve-UniquePath -Directory $draftDir -BaseName $destBaseName -Extension $fileItem.Extension
         Move-Item -Path $filePath -Destination $destInfo.Path -Force
         Write-ConsoleLine -Message "Moved back to draft: $($destInfo.Path)" -ForegroundColor Yellow
+        # Record the state transition (best-effort)
+        Register-CoworkerTaskMove -FilePath $destInfo.Path -Pipeline 'main' -ToState '0draft' -Reason 'cancelled'
 
         # Restore placeholders
         Ensure-DraftPlaceholders -DraftDirectory $draftDir
@@ -1318,17 +1376,34 @@ Usage: coworker draft [options]
 
 Create or edit a task draft in 0draft/.
 
+When no options are provided, the interactive Draft Panel opens by default.
+The panel lists existing drafts, lets you create new ones, view content, and
+optionally fix drafts (assign to 1ready + run coworker fix).
+
+Keyboard shortcuts in the panel:
+  n         New draft (prompts for title and content)
+  v <N>     View draft N (print full content)
+  f <N>     Fix draft N (assign to 1ready and execute via coworker fix)
+  r         Refresh the draft list
+  q / Esc   Quit the panel
+  ?         Show help
+
 Options:
-  -Title <str>       Task title (creates structured format)
-  -Content <str>     Task content / prompt body
-  -Prompt <str>      Alias for -Content
-  -Edit              Open the draft in an editor after creation
-  -Name <str>        Specify the filename (without .md extension)
-  -RefreshEditor     Re-detect available editor (ignore state cache)
+  -Title, -t <str>         Task title (structured format; bypasses interactive panel)
+  -Content, -ct <str>      Task content / prompt body
+  -Prompt, -pr <str>       Alias for -Content
+  -Edit, -e                Open the draft in an editor after creation
+  -Name, -n <str>          Specify the filename (without .md extension)
+  -Interactive, -i         Launch the interactive Draft Panel (default when no args)
+  -NoInteractive, -ni      Skip the panel; use Title/Content flags only (for scripts/CI)
+  -RefreshEditor, -re      Re-detect available editor (ignore state cache)
 
 Examples:
+  coworker draft                              Open the interactive draft panel
+  coworker draft -i                           Same as above
+  coworker draft -Title "Fix login timeout"
   coworker draft -Title "Fix login timeout" -Content "The login..."
-  coworker draft -Edit
+  coworker draft -Edit                        Open editor for new draft
   coworker draft -Name my-feature -Title "My Feature"
 '@
         }
@@ -1584,10 +1659,20 @@ function Parse-SubcommandArgs {
         $arg = $ArgList[$i]
         switch -Wildcard ($arg) {
             '-Path'          { $parsed['Path'] = $ArgList[++$i]; break }
+            '-path'          { $parsed['Path'] = $ArgList[++$i]; break }
+            '-p'             { $parsed['Path'] = $ArgList[++$i]; break }
             '-Name'          { $parsed['Name'] = $ArgList[++$i]; break }
+            '-name'          { $parsed['Name'] = $ArgList[++$i]; break }
+            '-n'             { $parsed['Name'] = $ArgList[++$i]; break }
             '-Title'         { $parsed['Title'] = $ArgList[++$i]; break }
+            '-title'         { $parsed['Title'] = $ArgList[++$i]; break }
+            '-t'             { $parsed['Title'] = $ArgList[++$i]; break }
             '-Content'       { $parsed['Content'] = $ArgList[++$i]; break }
+            '-content'       { $parsed['Content'] = $ArgList[++$i]; break }
+            '-ct'            { $parsed['Content'] = $ArgList[++$i]; break }
             '-Prompt'        { $parsed['Prompt'] = $ArgList[++$i]; break }
+            '-prompt'        { $parsed['Prompt'] = $ArgList[++$i]; break }
+            '-pr'            { $parsed['Prompt'] = $ArgList[++$i]; break }
             '-State'         { $parsed['State'] = $ArgList[++$i]; break }
             '-Audience'      { $parsed['Audience'] = $ArgList[++$i]; break }
             '-DomainContext' { $parsed['DomainContext'] = $ArgList[++$i]; break }
@@ -1598,7 +1683,17 @@ function Parse-SubcommandArgs {
             '-Count'         { $parsed['Count'] = [int]$ArgList[++$i]; break }
             '-FileName'      { $parsed['FileName'] = $ArgList[++$i]; break }
             '-Edit'          { $parsed['Edit'] = $true; break }
+            '-edit'          { $parsed['Edit'] = $true; break }
+            '-e'             { $parsed['Edit'] = $true; break }
+            '-Interactive'   { $parsed['Interactive'] = $true; break }
+            '-interactive'   { $parsed['Interactive'] = $true; break }
+            '-i'             { $parsed['Interactive'] = $true; break }
+            '-NoInteractive' { $parsed['NoInteractive'] = $true; break }
+            '-nointeractive' { $parsed['NoInteractive'] = $true; break }
+            '-ni'            { $parsed['NoInteractive'] = $true; break }
             '-RefreshEditor' { $parsed['RefreshEditor'] = $true; break }
+            '-refresheditor' { $parsed['RefreshEditor'] = $true; break }
+            '-re'            { $parsed['RefreshEditor'] = $true; break }
             '-Rename'        { $parsed['Rename'] = $true; break }
             '-AutoApprove'   { $parsed['AutoApprove'] = $true; break }
             '-Force'         { $parsed['Force'] = $true; break }
@@ -1690,6 +1785,8 @@ try {
                 -Prompt (Get-Arg $subArgs 'Prompt') `
                 -Edit:(Get-SwitchArg $subArgs 'Edit') `
                 -Name (Get-Arg $subArgs 'Name') `
+                -Interactive:(Get-SwitchArg $subArgs 'Interactive') `
+                -NoInteractive:(Get-SwitchArg $subArgs 'NoInteractive') `
                 -RefreshEditor:(Get-SwitchArg $subArgs 'RefreshEditor')
         }
         'refine' {

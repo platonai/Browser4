@@ -203,6 +203,8 @@ struct FixturePages {
     interactive_html: String,
     other_html: String,
     form_html: String,
+    mouse_html: String,
+    keyboard_html: String,
 }
 
 impl FixtureServer {
@@ -222,6 +224,8 @@ impl FixtureServer {
             interactive_html: load_html_fixture(INTERACTIVE_FIXTURE_FILE),
             other_html: load_html_fixture(OTHER_FIXTURE_FILE),
             form_html: load_html_fixture(FORM_FIXTURE_FILE),
+            mouse_html: load_html_fixture(MOUSE_FIXTURE_FILE),
+            keyboard_html: load_html_fixture(KEYBOARD_FIXTURE_FILE),
         });
 
         thread::spawn(move || {
@@ -297,6 +301,18 @@ fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePage
             "200 OK",
             "text/html; charset=utf-8",
             pages.form_html.clone(),
+        )
+    } else if path == MOUSE_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.mouse_html.clone(),
+        )
+    } else if path == KEYBOARD_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.keyboard_html.clone(),
         )
     } else {
         (
@@ -1852,6 +1868,14 @@ impl E2ECtx {
 
     fn form_url(&self) -> String {
         format!("{}{}", self.fixture_base_url, FORM_PATH)
+    }
+
+    fn mouse_url(&self) -> String {
+        format!("{}{}", self.fixture_base_url, MOUSE_PATH)
+    }
+
+    fn keyboard_url(&self) -> String {
+        format!("{}{}", self.fixture_base_url, KEYBOARD_PATH)
     }
 
     fn clear_step_timings(&mut self) {

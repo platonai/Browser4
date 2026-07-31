@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Browser4 CLI Keyboard Fixture</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; padding: 24px; }
+    section { margin: 16px 0; padding: 12px; border: 1px solid #ddd; border-radius: 4px; }
+    section h2 { margin: 0 0 8px; font-size: 14px; color: #555; }
+
+    .row { display: flex; gap: 12px; align-items: center; margin: 4px 0; flex-wrap: wrap; }
+    label { font-weight: bold; min-width: 120px; }
+    input, textarea, select { padding: 4px 8px; }
+    [contenteditable] {
+      border: 1px dashed #888; padding: 8px; min-height: 24px;
+      background: #fafafa; margin: 4px 0;
+    }
+
+    #state-log {
+      margin-top: 16px; padding: 8px; background: #f8f8f8;
+      border: 1px solid #ccc; white-space: pre-wrap; font-family: monospace; font-size: 12px;
+      max-height: 400px; overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <!-- Type / Fill Inputs -->
+    <section id="type-section">
+      <h2>Type &amp; Fill Inputs</h2>
+      <div class="row"><label>type-target:</label><input id="type-target" type="text" /></div>
+      <div class="row"><label>fill-target:</label><input id="fill-target" type="text" /></div>
+      <div class="row"><label>textarea-target:</label><textarea id="textarea-target" rows="2" cols="30"></textarea></div>
+      <div class="row"><label>contenteditable:</label><div id="contenteditable-target" contenteditable="true">editable</div></div>
+    </section>
+
+    <!-- Press Input -->
+    <section id="press-section">
+      <h2>Press Target</h2>
+      <div class="row"><label>press-target:</label><input id="press-target" type="text" /></div>
+      <div class="row"><label>press-no-target (page-level):</label><span>listens on document</span></div>
+    </section>
+
+    <!-- Edge Case Inputs -->
+    <section id="edge-section">
+      <h2>Edge Case Inputs</h2>
+      <div class="row"><label>maxlength (5):</label><input id="maxlength-target" type="text" maxlength="5" /></div>
+      <div class="row"><label>readonly:</label><input id="readonly-target" type="text" readonly value="read-only" /></div>
+      <div class="row"><label>disabled:</label><input id="disabled-target" type="text" disabled value="disabled" /></div>
+      <div class="row"><label>hidden:</label><input id="hidden-target" type="hidden" value="hidden-val" /></div>
+      <div class="row"><label>number:</label><input id="number-target" type="number" /></div>
+      <div class="row"><label>password:</label><input id="password-target" type="password" /></div>
+      <div class="row"><label>search with Enter:</label><input id="search-target" type="search" /></div>
+    </section>
+
+    <!-- Key Combination Area -->
+    <section id="combo-section">
+      <h2>Key Combinations</h2>
+      <div class="row"><label>combo-target:</label><input id="combo-target" type="text" value="selectable text" /></div>
+      <p>This tracks Ctrl+A, Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+Z, Ctrl+Y, Shift+Insert etc.</p>
+    </section>
+
+    <!-- Form with Enter Submission -->
+    <section id="form-section">
+      <h2>Form (Enter to Submit)</h2>
+      <form id="test-form">
+        <div class="row"><label>form-input:</label><input id="form-input" type="text" /></div>
+        <button id="form-submit-btn" type="submit">Submit</button>
+      </form>
+      <pre id="form-result"></pre>
+    </section>
+
+    <!-- State Log -->
+    <pre id="state-log"></pre>
+  </main>
+
+  <script>
+    window.__browser4State = {
+      // Type/Fill values
+      typeValue: '',
+      fillValue: '',
+      textareaValue: '',
+      contenteditableHtml: '',
+
+      // Press
+      pressValue: '',
+
+      // Edge case values
+      maxlengthValue: '',
+      readonlyValue: 'read-only',
+      disabledValue: 'disabled',
+      hiddenValue: 'hidden-val',
+      numberValue: '',
+      passwordValue: '',
+      searchValue: '',
+
+      // Key event tracking (per input target)
+      keyEvents: [],
+      keyEventsType: [],
+      keyEventsFill: [],
+      keyEventsPress: [],
+      keyEventsCombo: [],
+      keyEventsDocument: [],
+
+      // Focus events
+      focusEvents: [],
+
+      // Composition events
+      compositionEvents: [],
+
+      // Combo tracking
+      comboEvents: [],
+      lastComboText: '',
+
+      // Form
+      formSubmitCount: 0,
+      formSubmitValue: '',
+      searchSubmitCount: 0,
+
+      // Key down/up counts (for individual keyDown/keyUp testing)
+      keyDownCount: 0,
+      keyUpCount: 0,
+      lastKeyDown: null,
+      lastKeyUp: null,
+    };
+
+    var S = window.__browser4State;
+
+    function syncState() {
+      S.typeValue = document.getElementById('type-target').value;
+      S.fillValue = document.getElementById('fill-target').value;
+      S.textareaValue = document.getElementById('textarea-target').value;
+      S.contenteditableHtml = document.getElementById('contenteditable-target').innerHTML;
+      S.pressValue = document.getElementById('press-target').value;
+      S.maxlengthValue = document.getElementById('maxlength-target').value;
+      S.readonlyValue = document.getElementById('readonly-target').value;
+      S.disabledValue = document.getElementById('disabled-target').value;
+      S.hiddenValue = document.getElementById('hidden-target').value;
+      S.numberValue = document.getElementById('number-target').value;
+      S.passwordValue = document.getElementById('password-target').value;
+      S.searchValue = document.getElementById('search-target').value;
+      document.getElementById('state-log').textContent = JSON.stringify(S);
+    }
+
+    function recordKeyEvent(arr, prefix, e) {
+      arr.push({
+        type: prefix + ':' + e.type,
+        key: e.key,
+        code: e.code,
+        shiftKey: e.shiftKey,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        metaKey: e.metaKey,
+        repeat: e.repeat || false,
+      });
+      if (arr.length > 100) arr.shift();
+      syncState();
+    }
+
+    // ── Type target ───────────────────────────────────────────────
+
+    var typeEl = document.getElementById('type-target');
+    typeEl.addEventListener('input', syncState);
+    typeEl.addEventListener('keydown', function(e) { recordKeyEvent(S.keyEventsType, 'type', e); });
+    typeEl.addEventListener('keyup', function(e) { recordKeyEvent(S.keyEventsType, 'type', e); });
+    typeEl.addEventListener('focus', function() {
+      S.focusEvents.push({ target: 'type-target', event: 'focus' });
+      if (S.focusEvents.length > 50) S.focusEvents.shift();
+      syncState();
+    });
+    typeEl.addEventListener('blur', function() {
+      S.focusEvents.push({ target: 'type-target', event: 'blur' });
+      if (S.focusEvents.length > 50) S.focusEvents.shift();
+      syncState();
+    });
+    typeEl.addEventListener('compositionstart', function(e) {
+      S.compositionEvents.push({ target: 'type-target', event: 'compositionstart', data: e.data });
+      syncState();
+    });
+    typeEl.addEventListener('compositionend', function(e) {
+      S.compositionEvents.push({ target: 'type-target', event: 'compositionend', data: e.data });
+      syncState();
+    });
+
+    // ── Fill target ───────────────────────────────────────────────
+
+    var fillEl = document.getElementById('fill-target');
+    fillEl.addEventListener('input', syncState);
+    fillEl.addEventListener('keydown', function(e) { recordKeyEvent(S.keyEventsFill, 'fill', e); });
+    fillEl.addEventListener('keyup', function(e) { recordKeyEvent(S.keyEventsFill, 'fill', e); });
+
+    // ── Textarea target ───────────────────────────────────────────
+
+    var taEl = document.getElementById('textarea-target');
+    taEl.addEventListener('input', syncState);
+
+    // ── Contenteditable target ────────────────────────────────────
+
+    var ceEl = document.getElementById('contenteditable-target');
+    ceEl.addEventListener('input', syncState);
+
+    // ── Press target ──────────────────────────────────────────────
+
+    var pressEl = document.getElementById('press-target');
+    pressEl.addEventListener('input', syncState);
+    pressEl.addEventListener('keydown', function(e) { recordKeyEvent(S.keyEventsPress, 'press', e); });
+    pressEl.addEventListener('keyup', function(e) { recordKeyEvent(S.keyEventsPress, 'press', e); });
+
+    // ── Edge case inputs ──────────────────────────────────────────
+
+    document.getElementById('maxlength-target').addEventListener('input', syncState);
+    document.getElementById('number-target').addEventListener('input', syncState);
+    document.getElementById('password-target').addEventListener('input', syncState);
+    document.getElementById('search-target').addEventListener('input', syncState);
+
+    // ── Search Enter ──────────────────────────────────────────────
+
+    document.getElementById('search-target').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        S.searchSubmitCount += 1;
+        syncState();
+      }
+    });
+
+    // ── Combo target ──────────────────────────────────────────────
+
+    var comboEl = document.getElementById('combo-target');
+    comboEl.addEventListener('keydown', function(e) {
+      recordKeyEvent(S.keyEventsCombo, 'combo', e);
+      if (e.ctrlKey || e.metaKey || e.altKey) {
+        S.comboEvents.push({
+          key: e.key,
+          code: e.code,
+          ctrlKey: e.ctrlKey,
+          metaKey: e.metaKey,
+          altKey: e.altKey,
+          shiftKey: e.shiftKey,
+        });
+        if (S.comboEvents.length > 50) S.comboEvents.shift();
+      }
+      S.lastComboText = comboEl.value;
+      syncState();
+    });
+
+    // ── Document-level key events ─────────────────────────────────
+
+    document.addEventListener('keydown', function(e) {
+      recordKeyEvent(S.keyEventsDocument, 'doc', e);
+      // Track specific keyDown counts
+      S.keyDownCount += 1;
+      S.lastKeyDown = { key: e.key, code: e.code };
+    });
+    document.addEventListener('keyup', function(e) {
+      recordKeyEvent(S.keyEventsDocument, 'doc', e);
+      S.keyUpCount += 1;
+      S.lastKeyUp = { key: e.key, code: e.code };
+    });
+
+    // ── Form submission ───────────────────────────────────────────
+
+    document.getElementById('test-form').addEventListener('submit', function(e) {
+      e.preventDefault();
+      S.formSubmitCount += 1;
+      S.formSubmitValue = document.getElementById('form-input').value;
+      document.getElementById('form-result').textContent =
+        'Submitted: ' + S.formSubmitValue + ' (count: ' + S.formSubmitCount + ')';
+      syncState();
+    });
+
+    // ── Initial sync ──────────────────────────────────────────────
+
+    syncState();
+  </script>
+</body>
+</html>

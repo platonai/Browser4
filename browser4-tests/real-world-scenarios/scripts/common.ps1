@@ -2632,3 +2632,82 @@ function Invoke-Agent {
         Write-IssuesToDraft -ScenarioName $ScenarioName -Content $capturedOutput
     }
 }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Edit-FileInEditor — reusable minimal file editor launcher
+# ═══════════════════════════════════════════════════════════════════════════════
+
+function Edit-FileInEditor {
+    <#
+    .SYNOPSIS
+        Opens a file in the user's preferred text editor and blocks until it closes.
+
+    .DESCRIPTION
+        Detects an available editor with the following priority:
+          1. $env:EDITOR (may include extra arguments, e.g. "vim -R")
+          2. code --wait (VS Code)
+          3. notepad.exe (Windows fallback)
+
+        The call blocks until the editor process exits, so the caller can safely
+        assume the file has been saved (or discarded) on return.
+
+    .PARAMETER Path
+        Absolute path to the file to open for editing.
+
+    .OUTPUTS
+        Boolean — $true if the editor launched and exited cleanly, $false on error.
+
+    .EXAMPLE
+        Edit-FileInEditor -Path tasks/real-world/generic/amazon.md
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        Write-Error "Edit-FileInEditor: file not found: $Path"
+        return $false
+    }
+
+    $editorCmd = $null
+    $editorArgs = [System.Collections.Generic.List[string]]::new()
+
+    if ($env:EDITOR) {
+        $parts = $env:EDITOR -split '\s+'
+        if ($parts.Count -gt 0) {
+            $editorCmd = $parts[0]
+            if ($parts.Count -gt 1) {
+                $editorArgs.AddRange($parts[1..($parts.Count - 1)])
+            }
+        }
+    }
+    elseif (Get-Command code -ErrorAction SilentlyContinue) {
+        $editorCmd = 'code'
+        $editorArgs.Add('--wait')
+    }
+    else {
+        $editorCmd = 'notepad.exe'
+    }
+
+    if (-not $editorCmd) {
+        Write-Error 'Edit-FileInEditor: no editor found. Set $env:EDITOR or install VS Code.'
+        return $false
+    }
+
+    $editorArgs.Add($Path)
+
+    try {
+        # CLI editors (code, vim, nano) — invoke directly to avoid a console window.
+        # GUI editors (notepad) — Start-Process -Wait blocks until the window closes.
+        if ($editorCmd -match '\\code(\.cmd)?$|^code$|\\vim|\\nano|\\emacs') {
+            & $editorCmd @editorArgs
+            return ($LASTEXITCODE -eq 0)
+        }
+        $proc = Start-Process -FilePath $editorCmd -ArgumentList $editorArgs -PassThru -Wait
+        return ($proc.ExitCode -eq 0)
+    } catch {
+        Write-Error "Edit-FileInEditor: failed to launch '$editorCmd': $_"
+        return $false
+    }
+}

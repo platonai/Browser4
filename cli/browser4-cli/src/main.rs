@@ -53,7 +53,8 @@ use daemon::{
 };
 use help::{
     commands_in_category, generate_command_help, generate_help, generate_help_entry,
-    public_command_name, resolve_category_alias, CATEGORY_TITLES,
+    generate_help_json, generate_quick_reference, public_command_name,
+    resolve_category_alias, CATEGORY_TITLES,
 };
 use http::{
     call_tool, call_tool_with_result, call_tool_with_timeout_override, cancel_crawl,
@@ -472,7 +473,11 @@ fn no_active_session_message() -> String {
         "Session required",
         None,
         "No active session is currently stored for this CLI context.",
-        &["run `browser4-cli open <url>` first."],
+        &[
+            "run `browser4-cli open <url>` to start a new session.",
+            "after tab operations, use `goto <url>` to restore the active page.",
+            "check available sessions with `session list`.",
+        ],
     )
 }
 
@@ -2467,8 +2472,11 @@ async fn handle_tab_select(
         }
     });
 
-    // Perform the tab switch.
-    let _result = with_session(client, base_url, session_name, false, |session_id| {
+    // Perform the tab switch with session recovery enabled.  Tab switches
+    // can invalidate the session on some backends (extension sessions,
+    // attached+cdp sessions) — recover_stale=true ensures the CLI state
+    // stays valid even when the switch causes a session refresh.
+    let _result = with_session(client, base_url, session_name, true, |session_id| {
         let client = client.clone();
         let base_url = base_url.to_string();
         let mut params = tool_params.clone();
@@ -2478,6 +2486,14 @@ async fn handle_tab_select(
         }
     })
     .await?;
+
+    // Persist session state after the tab switch so the CLI always has a
+    // valid session_id on disk for the next interaction command.
+    if let Ok(state) = require_session(session_name) {
+        let mut updated = state.clone();
+        updated.last_accessed_at = Some(Utc::now().to_rfc3339());
+        let _ = write_state(&updated, None, session_name);
+    }
 
     // Resolve what was selected for a friendly message.
     let index_opt = tool_params
@@ -5559,6 +5575,10 @@ async fn handle_html_snapshot_capture(
         }
     }
 
+    // Remind users that the live page context is preserved — htmlsnapshot
+    // takes a static copy; eval, snapshot, and other commands still work
+    // against the live DOM.
+    cli_println!("  ℹ️  The live page is still accessible — use `eval`, `snapshot`, or `click` to continue interacting.");
     // Next-step hints
     cli_println!("  💡 Try these next:");
     cli_println!("    Use `get all text` to extract visible text, or `get all attr <name>` for attribute values.");
@@ -5789,6 +5809,60 @@ fn resolve_sql_file(file_path: &str) -> Result<String, String> {
     }
     Err(format!(
         "Failed to read file '{}'\n  Tried: {}",
+        file_path,
+        tried.join("\n  Tried: "),
+    ))
+}
+
+/// Resolve a file path for `eval --file` and similar CLI-side file arguments.
+///
+/// Resolution strategy (same as `resolve_sql_file`):
+/// 1. Absolute paths — used as-is (must exist).
+/// 2. Relative paths — tries Browser4 repo root first, then CWD.
+///    This allows users to reference files at the repo root from any
+///    subdirectory (e.g. `cli/browser4-cli/` where `cargo run` sets CWD).
+///
+/// Returns the resolved `PathBuf` on success; errors with a message listing all
+/// locations tried when the file cannot be found.
+fn resolve_file_path_with_root_fallback(file_path: &str) -> Result<std::path::PathBuf, String> {
+    let path = std::path::Path::new(file_path);
+
+    // Absolute path — just check it exists
+    if path.is_absolute() {
+        if path.exists() {
+            return Ok(path.to_path_buf());
+        }
+        return Err(format!("Eval file '{}' not found", file_path));
+    }
+
+    let cwd = std::env::current_dir()
+        .map_err(|e| format!("Cannot determine current directory: {e}"))?;
+    let cwd_path = cwd.join(file_path);
+
+    // Try Browser4 repo root first (consistent resolution from any subdirectory)
+    if let Some(root) = daemon::find_browser4_root() {
+        let root_path = root.join(file_path);
+        if root_path != cwd_path && root_path.exists() {
+            return Ok(root_path);
+        }
+    }
+
+    // Fall back to CWD
+    if cwd_path.exists() {
+        return Ok(cwd_path);
+    }
+
+    // Build a clear error message showing where we looked
+    let mut tried = vec![cwd_path.display().to_string()];
+    if let Some(root) = daemon::find_browser4_root() {
+        let root_path = root.join(file_path);
+        let root_display = root_path.display().to_string();
+        if root_display != tried[0] {
+            tried.push(root_display);
+        }
+    }
+    Err(format!(
+        "Eval file '{}' not found\n  Tried: {}",
         file_path,
         tried.join("\n  Tried: "),
     ))
@@ -8761,9 +8835,13 @@ async fn handle_swarm_create(
     state.last_accessed_at = Some(Utc::now().to_rfc3339());
     write_state(&state, None, session_name).map_err(|e| e.to_string())?;
 
-    // Check for stale swarm tasks from prior sessions and warn the user.
+    // Check for stale swarm tasks from prior sessions.
     // Old completed tasks in the task store can block the worker pool
     // from picking up new tasks, causing jobs to stay "Created" indefinitely.
+    let clear_stale = tool_params
+        .get("clearStale")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let existing = read_async_tasks(None);
     let swarm_tasks: Vec<_> = existing
         .tasks
@@ -8771,20 +8849,81 @@ async fn handle_swarm_create(
         .filter(|t| t.command == "swarm-submit" || t.command == "swarm-query")
         .collect();
     if !swarm_tasks.is_empty() {
-        cli_println!(
-            "Note: {} swarm task(s) from prior sessions are still tracked.",
-            swarm_tasks.len()
-        );
-        cli_println!(
-            "  If new jobs get stuck in \"Created\" status, run `swarm list --clear` to remove stale entries,"
-        );
-        cli_println!(
-            "  then recreate the swarm session before resubmitting."
-        );
-        json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+        if clear_stale {
+            // User opted in: clear stale tasks automatically.
+            let mut list = existing;
+            let before = list.tasks.len();
+            list.tasks
+                .retain(|t| t.command != "swarm-submit" && t.command != "swarm-query");
+            let removed = before - list.tasks.len();
+            write_async_tasks(&list, None).map_err(|e| e.to_string())?;
+            cli_println!("Cleared {} stale swarm task(s) from prior sessions.", removed);
+            json_field("cleared_stale_tasks", json!(removed));
+        } else {
+            cli_println!(
+                "Note: {} swarm task(s) from prior sessions are still tracked.",
+                swarm_tasks.len()
+            );
+            cli_println!(
+                "  If new jobs get stuck in \"Created\" status, run `swarm list --clear` to remove stale entries,"
+            );
+            cli_println!(
+                "  then recreate the swarm session before resubmitting."
+            );
+            cli_println!(
+                "  Or use `swarm create --clear-stale` to clear and recreate in one step."
+            );
+            json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+        }
     }
 
     cli_println!("Swarm session created: {}", session_id);
+    Ok(())
+}
+
+async fn handle_swarm_close(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let state = read_state(None, session_name);
+    let Some(session_id) = get_session_id_for_close(&state).map(str::to_string) else {
+        clear_state(None, session_name);
+        eprintln!("{}", no_active_session_message());
+        json_field("session_id", json!(null));
+        json_field("closed", json!(false));
+        return Ok(());
+    };
+    json_field("session_id", json!(&session_id));
+
+    // Count tracked swarm tasks before closing (for the summary).
+    let existing = read_async_tasks(None);
+    let swarm_task_count = existing
+        .tasks
+        .iter()
+        .filter(|t| t.command == "swarm-submit" || t.command == "swarm-query")
+        .count();
+
+    // Close the swarm session — ignore errors if already closed.
+    let _ = call_tool(
+        client,
+        base_url,
+        "close_session",
+        json!({ "sessionId": session_id }),
+    )
+    .await;
+    clear_state(None, session_name);
+
+    json_field("closed", json!(true));
+    if swarm_task_count > 0 {
+        cli_println!(
+            "Swarm session closed. Browser terminated. {} tracked task(s) retained for history. Use `swarm list --clear` to remove.",
+            swarm_task_count
+        );
+        json_field("tracked_tasks_retained", json!(swarm_task_count));
+    } else {
+        cli_println!("Swarm session closed. Browser terminated.");
+    }
     Ok(())
 }
 
@@ -14533,6 +14672,7 @@ fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::Gl
             proxy_url: global.proxy_url.clone(),
             show_tip: global.show_tip,
             pretty: global.pretty,
+            help_json: global.help_json,
             timeout_secs: global.timeout_secs,
             args: rewritten,
         };
@@ -14868,7 +15008,21 @@ fn compile_batch_request(
                         .map(str::trim)
                         .filter(|v| !v.is_empty())
                     {
-                        match std::fs::read_to_string(file_path) {
+                        let resolved = match resolve_file_path_with_root_fallback(file_path) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                if push_batch_local_failure(
+                                    &mut entries,
+                                    spec,
+                                    e,
+                                    bail,
+                                ) {
+                                    break;
+                                }
+                                continue;
+                            }
+                        };
+                        match std::fs::read_to_string(&resolved) {
                             Ok(content) => {
                                 let expression = content.trim().to_string();
                                 if expression.is_empty() {
@@ -14893,7 +15047,7 @@ fn compile_batch_request(
                                 if push_batch_local_failure(
                                     &mut entries,
                                     spec,
-                                    format!("Failed to read eval file '{}': {}", file_path, e),
+                                    format!("Failed to read eval file '{}' (resolved to '{}'): {}", file_path, resolved.display(), e),
                                     bail,
                                 ) {
                                     break;
@@ -15522,37 +15676,40 @@ async fn run(
     // Initialise pretty-print mode when --pretty is active.
     pretty_init(global.pretty);
 
-    // Handle help or no command — these always print human-readable text.
-    if command.is_empty() || command == "help" || command == "--help" || command == "-h" {
-        // Resolve spaced prefixed help targets such as
-        // `help swarm create` / `help agent run`.
+    // ── Help dispatch ────────────────────────────────────────────────
+    //
+    // Progressive disclosure:
+    //   no args        → quick reference (~35 lines, most-used commands)
+    //   --help         → full command reference by category
+    //   --help <topic> → category or per-command details
+    //   --help-json    → machine-readable JSON (for AI agents / scripts)
+
+    // --help-json as a standalone flag (before any command)
+    if global.help_json {
+        let help_args: Vec<String> = global.args.iter().cloned().collect();
+        let sub = resolve_help_target(&help_args);
+        println!("{}", generate_help_json(sub.as_deref()));
+        return Ok(());
+    }
+
+    // --help-json as the command itself
+    if command == "--help-json" {
         let help_args: Vec<String> = global.args.iter().skip(1).cloned().collect();
-        let sub = if let Some(rewritten) = rewrite_prefixed_command(&help_args) {
-            Some(rewritten[0].clone())
-        } else {
-            if let Some(target) = global.args.get(1) {
-                // Accept the target as-is when it is already a known command
-                // (e.g. "agent-run" is valid even though the preferred form is
-                // "agent run").  The spaced-form preference is enforced during
-                // command dispatch, not during help lookups.
-                let cmd_map = commands_map();
-                if cmd_map.contains_key(target.as_str()) {
-                    Some(target.clone())
-                } else if let Some(preferred) = preferred_spaced_command_form(target) {
-                    return Err(CliError(
-                        ExitCode::Usage,
-                        format!(
-                            "Unsupported command form: {}. Use 'browser4-cli help {}' instead.",
-                            target, preferred
-                        ),
-                    ));
-                } else {
-                    Some(target.clone())
-                }
-            } else {
-                None
-            }
-        };
+        let sub = resolve_help_target(&help_args);
+        println!("{}", generate_help_json(sub.as_deref()));
+        return Ok(());
+    }
+
+    // No command at all → compact quick reference
+    if command.is_empty() {
+        cli_println!("{}", generate_quick_reference());
+        return Ok(());
+    }
+
+    // Explicit help request: `help`, `--help`, `-h`
+    if command == "help" || command == "--help" || command == "-h" {
+        let help_args: Vec<String> = global.args.iter().skip(1).cloned().collect();
+        let sub = resolve_help_target(&help_args);
         print_help(sub.as_deref());
         return Ok(());
     }
@@ -15571,6 +15728,13 @@ async fn run(
     // print the help for that command instead of complaining about the form.
     if global.args.iter().any(|a| a == "--help" || a == "-h") {
         print_help(Some(command));
+        return Ok(());
+    }
+
+    // When the user passes --help-json after a command (e.g. `htmlsnapshot --help-json`),
+    // print JSON help for that command.
+    if global.args.iter().any(|a| a == "--help-json") {
+        println!("{}", generate_help_json(Some(command)));
         return Ok(());
     }
 
@@ -16173,8 +16337,9 @@ async fn run(
                 {
                     // --stdin and --base64 take precedence; skip --file if they were already used.
                     if !use_stdin && !use_base64 {
-                        let expression = std::fs::read_to_string(file_path)
-                            .map_err(|e| format!("Failed to read eval file '{}': {}", file_path, e))?;
+                        let resolved = resolve_file_path_with_root_fallback(file_path)?;
+                        let expression = std::fs::read_to_string(&resolved)
+                            .map_err(|e| format!("Failed to read eval file '{}' (resolved to '{}'): {}", file_path, resolved.display(), e))?;
                         let expression = expression.trim().to_string();
                         if expression.is_empty() {
                             return Err(CliError(
@@ -16426,7 +16591,7 @@ async fn run(
             handle_swarm_list(&client, &base_url, &tool_params).await?;
         }
         "swarm-close" => {
-            handle_close(&client, &base_url, global.session_name.as_deref()).await?;
+            handle_swarm_close(&client, &base_url, global.session_name.as_deref()).await?;
         }
         "crawl" => {
             handle_crawl(
@@ -16750,6 +16915,27 @@ async fn run(
     tips::show_tip(command);
 
     Ok(())
+}
+
+/// Resolve a help target from command-line arguments.
+///
+/// Handles spaced prefixed forms (`swarm create`, `agent run`) by rewriting
+/// them to internal flat names. Returns `None` when no target was given.
+fn resolve_help_target(args: &[String]) -> Option<String> {
+    if args.is_empty() {
+        return None;
+    }
+    if let Some(rewritten) = rewrite_prefixed_command(args) {
+        return Some(rewritten[0].clone());
+    }
+    let target = &args[0];
+    let cmd_map = commands_map();
+    if cmd_map.contains_key(target.as_str()) {
+        return Some(target.clone());
+    }
+    // Not a known flat command — return as-is; print_help will try
+    // prefix match, category alias, or report unknown.
+    Some(target.clone())
 }
 
 fn print_help(command_name: Option<&str>) {
@@ -17566,7 +17752,9 @@ mod tests {
 
         assert!(message.contains("🔐 Session required"));
         assert!(message.contains("💡 What to try"));
-        assert!(message.contains("run `browser4-cli open <url>` first."));
+        assert!(message.contains("run `browser4-cli open <url>` to start a new session"));
+        assert!(message.contains("after tab operations, use `goto <url>`"));
+        assert!(message.contains("session list"));
         assert!(message.contains("🧾 Details"));
         assert!(message.contains("No active session is currently stored"));
     }
@@ -17842,6 +18030,7 @@ mod tests {
             proxy_url: None,
             show_tip: false,
             pretty: false,
+            help_json: false,
             timeout_secs: None,
             args: vec![
                 "agent".to_string(),
@@ -17868,6 +18057,7 @@ mod tests {
             proxy_url: None,
             show_tip: false,
             pretty: false,
+            help_json: false,
             timeout_secs: None,
             args: vec!["agent-run".to_string(), "task".to_string()],
         };
