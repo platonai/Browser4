@@ -845,11 +845,12 @@ function Show-InteractiveScenarioPicker {
         Controls:
           ↑/↓       Navigate items
           ←/→       Collapse / expand folder (tree view)
-          Space/Enter  Run the selected scenario in the background
-          v           View the scenario file content (scrollable, Enter to run)
+          Space       Run the selected scenario in the background
+          Enter / v   View-target mode — shows current file index, type digits
+                        to view a different file, Enter to confirm (opens viewer)
           e           Edit the scenario in an external editor (blocks until closed)
           a           AI-refine the scenario with an optional guidance prompt
-          1-9         Quick-goto file by index (Enter=jump, v=jump+view)
+          1-9         Quick-goto file by index (Enter=jump+view, v=jump+view)
           n           Create a new scenario from template (in selected folder)
           t           Toggle tree-view / flat-list
           /           Enter filter mode (type to filter, Esc to clear)
@@ -1467,9 +1468,23 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
                 default  { $agentArgs += @('-p', $prompt) }
             }
 
-            # Run the agent — 2>&1 captures stderr, Out-String suppresses all real-time console output
-            $output = & $agent @agentArgs 2>&1 | Out-String
-            $exitCode = $LASTEXITCODE
+            # Use System.Diagnostics.Process to fully suppress console output.
+            # Direct invocation (&) or Start-Process both leak terminal writes
+            # (spinners, heartbeats) from the agent CLI.
+            $psi = [System.Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName = $agent
+            $psi.Arguments = [string]::Join(' ', $agentArgs)
+            $psi.UseShellExecute = $false
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.CreateNoWindow = $true
+
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            $output = $proc.StandardOutput.ReadToEnd()
+            $null = $proc.StandardError.ReadToEnd()
+            $proc.WaitForExit()
+            $exitCode = $proc.ExitCode
+            $proc.Dispose()
 
             if ($exitCode -ne 0) {
                 Write-Host ''
@@ -1624,7 +1639,7 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
         }
 
         # Controls
-        Write-Host '  ↑↓ nav   ←→ fold   Space/Enter run   v view   e edit   a refine   1-9 goto   n new   t tree   / filter   r refresh   q quit' -ForegroundColor DarkGray
+        Write-Host '  ↑↓ nav   ←→ fold   Space run   v view   e edit   a refine   1-9 goto   n new   t tree   / filter   r refresh   q quit' -ForegroundColor DarkGray
         Write-Host ('─' * 60) -ForegroundColor DarkGray
 
         # Compute render area
@@ -1876,20 +1891,7 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
                 if ($visible.Count -gt 0) {
                     $node = $visible[$cursor]
                     if ($node.Type -eq 'file') {
-                        $canRun = $true
-                        if ($runningProc) {
-                            try { $runningProc.Refresh() } catch { }
-                            if (-not $runningProc.HasExited) {
-                                $canRun = Prompt-RunningConflict
-                            }
-                            else {
-                                try { $runningProc.Dispose() } catch { }
-                                $runningProc = $null
-                            }
-                        }
-                        if ($canRun) {
-                            Start-ScenarioRun -Node $node
-                        }
+                        Show-ScenarioContent -Node $node
                     }
                 }
                 break
@@ -1937,11 +1939,14 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
                 break
             }
             'V' {
-                if ($visible.Count -gt 0) {
-                    $node = $visible[$cursor]
-                    if ($node.Type -eq 'file') {
-                        Show-ScenarioContent -Node $node
-                    }
+                # Enter view-target mode with the current file index pre-filled.
+                # Press Enter to view the current file, or type digits to target
+                # a different file (e.g. v 3 Enter = view file #3).
+                if ($fileCount -gt 0) {
+                    $cursorIdx = if ($fileCursorToIndex.ContainsKey($cursor)) {
+                        [string]$fileCursorToIndex[$cursor]
+                    } else { '1' }
+                    $gotoIndex = $cursorIdx
                 }
                 break
             }

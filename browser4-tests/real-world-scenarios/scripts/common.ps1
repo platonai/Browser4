@@ -2698,9 +2698,13 @@ function Edit-FileInEditor {
     $editorArgs.Add($Path)
 
     try {
-        # -NoNewWindow prevents a console flash for CLI editors (code, vim, etc.)
-        # and is harmless for GUI apps (notepad) which create their own window.
-        $proc = Start-Process -FilePath $editorCmd -ArgumentList $editorArgs -PassThru -Wait -NoNewWindow
+        # CLI editors (code, vim, nano) — invoke directly to avoid a console window.
+        # GUI editors (notepad) — Start-Process -Wait blocks until the window closes.
+        if ($editorCmd -match '\\code(\.cmd)?$|^code$|\\vim|\\nano|\\emacs') {
+            & $editorCmd @editorArgs
+            return ($LASTEXITCODE -eq 0)
+        }
+        $proc = Start-Process -FilePath $editorCmd -ArgumentList $editorArgs -PassThru -Wait
         return ($proc.ExitCode -eq 0)
     } catch {
         Write-Error "Edit-FileInEditor: failed to launch '$editorCmd': $_"
