@@ -282,7 +282,7 @@ function Show-FileContent {
 
     $digits = [Math]::Max(4, ([string]$maxLines).Length)
     for ($i = 0; $i -lt $maxLines; $i++) {
-        $lineNum = '{0,{1}}' -f ($i + 1), $digits
+        $lineNum = "{0,$digits}" -f ($i + 1)
         Write-Color "$lineNum │ " 'DarkGray'
         Write-Host $lines[$i]
     }
@@ -435,7 +435,7 @@ function Show-EditBuffer {
     Write-Line ('─' * 72) 'DarkGray'
     $digits = [Math]::Max(4, ([string]$script:EditBuffer.Count).Length)
     for ($i = 0; $i -lt $script:EditBuffer.Count; $i++) {
-        $lineNum = '{0,{1}}' -f ($i + 1), $digits
+        $lineNum = "{0,$digits}" -f ($i + 1)
         $marker  = if ($script:EditOriginal -and $i -lt $script:EditOriginal.Count -and
                        $script:EditBuffer[$i] -ne $script:EditOriginal[$i]) { ' *' } else { '  ' }
         Write-Color "$lineNum │ " 'DarkGray'
@@ -475,19 +475,19 @@ function Show-EditDiff {
 
         if ($null -eq $bufLine -and $null -ne $origLine) {
             # Removed
-            $ln = '{0,{1}}' -f ($i + 1), $digits
+            $ln = "{0,$digits}" -f ($i + 1)
             Write-Color "$ln - " 'Red'
             Write-Host $origLine -ForegroundColor Red
         }
         elseif ($null -ne $bufLine -and $null -eq $origLine) {
             # Added
-            $ln = '{0,{1}}' -f ($i + 1), $digits
+            $ln = "{0,$digits}" -f ($i + 1)
             Write-Color "$ln + " 'Green'
             Write-Host $bufLine -ForegroundColor Green
         }
         elseif ($bufLine -ne $origLine) {
             # Modified
-            $ln = '{0,{1}}' -f ($i + 1), $digits
+            $ln = "{0,$digits}" -f ($i + 1), $digits
             Write-Color "$ln * " 'Yellow'
             Write-Host $bufLine -ForegroundColor Yellow
         }
@@ -522,7 +522,7 @@ function Edit-SingleLine {
 
     $currentContent = $script:EditBuffer[$LineNumber - 1]
     $digits = [Math]::Max(4, ([string]$script:EditBuffer.Count).Length)
-    $lineLabel = '{0,{1}}' -f $LineNumber, $digits
+    $lineLabel = "{0,$digits}" -f $LineNumber
 
     Write-Line ''
     Write-Color "$lineLabel » " 'DarkGray'
@@ -550,7 +550,7 @@ function Replace-Line {
     $script:EditBuffer[$LineNumber - 1] = $NewText
 
     $digits = [Math]::Max(4, ([string]$script:EditBuffer.Count).Length)
-    $lineLabel = '{0,{1}}' -f $LineNumber, $digits
+    $lineLabel = "{0,$digits}" -f $LineNumber
 
     Write-Color "$lineLabel - " 'Red'
     Write-Line $oldContent 'Red'
@@ -570,7 +570,7 @@ function Delete-Line {
     $script:EditBuffer.RemoveAt($LineNumber - 1)
 
     $digits = [Math]::Max(4, ([string]($script:EditBuffer.Count + 1)).Length)
-    $lineLabel = '{0,{1}}' -f $LineNumber, $digits
+    $lineLabel = "{0,$digits}" -f $LineNumber
     Write-Color "$lineLabel - " 'Red'
     Write-Line $deleted 'Red'
     Write-Line "  Line $LineNumber deleted. $($script:EditBuffer.Count) line(s) remaining." 'DarkGray'
@@ -587,7 +587,7 @@ function Insert-Line {
     $script:EditBuffer.Insert($AfterLine, $Text)
 
     $digits = [Math]::Max(4, ([string]$script:EditBuffer.Count).Length)
-    $lineLabel = '{0,{1}}' -f ($AfterLine + 1), $digits
+    $lineLabel = "{0,$digits}" -f ($AfterLine + 1)
     Write-Color "$lineLabel + " 'Green'
     Write-Line $Text 'Green'
     Write-Line "  Inserted after line $AfterLine. $($script:EditBuffer.Count) line(s) total." 'DarkGray'
