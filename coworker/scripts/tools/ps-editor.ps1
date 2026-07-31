@@ -77,6 +77,8 @@ $script:EditBuffer   = $null     # String array of current edit buffer
 $script:EditOriginal = $null     # Original content for diff
 $script:EditPath     = $null     # Path of file being edited
 $script:Running      = $true
+$script:PageSize     = 30        # Items per page in list/tree view (0 = no pagination)
+$script:CurrentPage  = 0         # 0-indexed current page
 
 # ── ANSI helpers ─────────────────────────────────────────────────────────────
 function Write-Color {
@@ -185,7 +187,25 @@ function Show-FileList {
         return
     }
 
-    foreach ($f in $script:Files) {
+    # ── Pagination ──────────────────────────────────────────────────────────
+    $totalItems = $script:Files.Count
+    $pageSize   = $script:PageSize
+    if ($pageSize -le 0) { $pageSize = $totalItems }  # 0 = show all
+    $totalPages = [Math]::Max(1, [Math]::Ceiling($totalItems / $pageSize))
+
+    # Clamp current page if item count changed (e.g. after cd)
+    if ($script:CurrentPage -ge $totalPages) {
+        $script:CurrentPage = $totalPages - 1
+    }
+    if ($script:CurrentPage -lt 0) {
+        $script:CurrentPage = 0
+    }
+
+    $startIdx = $script:CurrentPage * $pageSize
+    $endIdx   = [Math]::Min($startIdx + $pageSize, $totalItems) - 1
+
+    for ($i = $startIdx; $i -le $endIdx; $i++) {
+        $f       = $script:Files[$i]
         $idxStr  = '[{0,3}]' -f $f.Index
         $sizeStr = if ($f.IsDir) { '<DIR>' } else { Format-FileSize -Bytes $f.Size }
         $modStr  = $f.Modified
@@ -202,7 +222,17 @@ function Show-FileList {
     }
 
     Write-Line ('─' * 72) 'DarkGray'
-    Write-Line "  $($script:Files.Count) item(s)" 'DarkGray'
+
+    # ── Page footer ─────────────────────────────────────────────────────────
+    if ($totalPages -gt 1) {
+        $pageLabel = "Page $($script:CurrentPage + 1)/$totalPages"
+        $rangeLabel = "items $($startIdx + 1)-$($endIdx + 1) of $totalItems"
+        Write-Color "  $pageLabel — $rangeLabel" 'DarkGray'
+        Write-Line '  n=next  p=prev  pagesize <N>' 'DarkGray'
+    }
+    else {
+        Write-Line "  $totalItems item(s)" 'DarkGray'
+    }
     Write-Line ''
 }
 
@@ -696,6 +726,7 @@ function Invoke-ListCommand {
     # ── Toggle tree view ──
     if ($raw -eq 'tree') {
         $script:TreeMode = -not $script:TreeMode
+        $script:CurrentPage = 0
         $modeStr = if ($script:TreeMode) { 'tree' } else { 'list' }
         Write-Line "Switched to $modeStr view." 'Green'
         Update-FileList -Directory $script:WorkDir
@@ -705,6 +736,7 @@ function Invoke-ListCommand {
 
     # ── List files ──
     if ($raw -match '^(ls|dir)(\s+(.+))?$') {
+        $script:CurrentPage = 0
         $targetDir = if ($Matches[3]) { $Matches[3] } else { $script:WorkDir }
         try {
             $targetDir = Resolve-Path -Path $targetDir -ErrorAction Stop
@@ -719,6 +751,7 @@ function Invoke-ListCommand {
 
     # ── Change directory ──
     if ($raw -match '^cd\s+(.+)$') {
+        $script:CurrentPage = 0
         $target = $Matches[1].Trim()
         try {
             $resolvedPath = Resolve-Path -Path $target -ErrorAction Stop
@@ -771,9 +804,57 @@ function Invoke-ListCommand {
         return
     }
 
+    # ── Page navigation ──
+    if ($raw -match '^(n|next)$') {
+        $pageSize = $script:PageSize
+        if ($pageSize -le 0) { $pageSize = $script:Files.Count }
+        $totalPages = [Math]::Max(1, [Math]::Ceiling($script:Files.Count / $pageSize))
+        if ($script:CurrentPage -lt $totalPages - 1) {
+            $script:CurrentPage++
+            Show-FileList
+        }
+        else {
+            Write-Line "Already on the last page ($totalPages)." 'DarkGray'
+        }
+        return
+    }
+    if ($raw -match '^(p|prev)$') {
+        if ($script:CurrentPage -gt 0) {
+            $script:CurrentPage--
+            Show-FileList
+        }
+        else {
+            Write-Line 'Already on the first page.' 'DarkGray'
+        }
+        return
+    }
+
+    # ── Set page size ──
+    if ($raw -match '^pagesize\s+(\d+)$') {
+        $newSize = [int]$Matches[1]
+        if ($newSize -lt 1) {
+            Write-Line 'Page size must be >= 1 (use 0 for no pagination).' 'Red'
+            return
+        }
+        $script:PageSize = $newSize
+        $script:CurrentPage = 0
+        Write-Line "Page size set to $newSize." 'Green'
+        Show-FileList
+        return
+    }
+    if ($raw -match '^pagesize$') {
+        if ($script:PageSize -le 0) {
+            Write-Line 'Pagination disabled (showing all items). Use pagesize <N> to enable.' 'DarkGray'
+        }
+        else {
+            Write-Line "Page size: $($script:PageSize) items. Use pagesize <N> to change, 0 to disable." 'DarkGray'
+        }
+        return
+    }
+
     # ── Unknown ──
     Write-Line "Unknown command: $raw" 'Red'
-    Write-Line '  ls | tree | cd <path> | v <N> | e <N> | a <prompt> | q' 'DarkGray'
+    Write-Line '  ls | tree | cd <path> | v <N> | e <N> | a <prompt> | n/p | pagesize | q' 'DarkGray'
 }
 
 # ── Help ─────────────────────────────────────────────────────────────────────
@@ -791,6 +872,9 @@ function Show-Help {
     Write-Line '    v <N>         View file at index N (with line numbers)' 'White'
     Write-Line '    e <N>         Edit file at index N (line-by-line)' 'White'
     Write-Line '    a <prompt>    AI-improve last viewed/edited file' 'White'
+    Write-Line '    n | next      Next page (when paginated)' 'White'
+    Write-Line '    p | prev      Previous page (when paginated)' 'White'
+    Write-Line '    pagesize [N]  Show/set items per page (0 = no limit)' 'White'
     Write-Line '    q | quit      Exit' 'White'
     Write-Line '    h | help      Show this help' 'White'
     Write-Line ''
