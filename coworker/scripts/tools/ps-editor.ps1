@@ -159,7 +159,7 @@ function Build-TreeView {
         }
 
         if ($item.PSIsContainer) {
-            $nextIndent = $Indent + if ($isLast) { '    ' } else { "$([char]0x2502)   " }
+            $nextIndent = $Indent + $(if ($isLast) { '    ' } else { "$([char]0x2502)   " })
             Build-TreeView -Path $item.FullName -Indent $nextIndent
         }
     }
