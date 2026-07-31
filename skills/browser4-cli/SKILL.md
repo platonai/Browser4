@@ -38,11 +38,13 @@ or `./b4w.sh snapshot -v 0` (Git Bash) when running from source.
 
 ## 1. Core Loop
 
-Every browser4-cli session follows this pattern:
+Every browser4-cli session follows this pattern. **All examples use `browser4-cli` — substitute `./b4w.ps1` (Windows) or `./b4w.sh` (bash) when running from source (see Development Mode above).**
 
 ```
 1. NAVIGATE    browser4-cli goto <url>              # auto-opens/reconnects session
+              ./b4w.ps1 goto <url>                  # (dev-mode equivalent)
 2. SNAPSHOT    browser4-cli snapshot -v 0            # capture accessibility tree (viewport 0 = top)
+              ./b4w.ps1 snapshot -v 0                # (dev-mode equivalent)
 3. INTERACT    browser4-cli click <ref>              # use refs from the snapshot
               browser4-cli fill <ref> <value>
               browser4-cli press Enter
@@ -248,6 +250,8 @@ Need to process multiple pages?
 > **Warning:** CSS selectors are tied to live websites — they break when sites change their HTML. Always discover selectors with `htmlsnapshot inspect` or `htmlsnapshot summary` before extraction. Treat scenario examples as patterns, not copy-paste recipes.
 
 > **Warning:** Shell quoting on Windows — complex JS/SQL with nested quotes causes escaping issues. Prefer `--sql @file.sql` (read from file), `--sql-stdin` (piped), `--sql-base64` (encoded), or `eval --file`/`eval --stdin`/`eval --base64` (JS from file or base64). For `htmlsnapshot inspect`, use `@file`, `--stdin`, or `--selector-base64`. Never inline `--sql "..."` with double-quoted CSS selectors on Windows. See [shell-quoting.md](references/shell-quoting.md) for the full workaround workflow.
+>
+> **Tip:** To generate base64 for `eval --base64`: `echo -n 'document.title' | base64` (Linux/macOS) or `[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('document.title'))` (PowerShell).
 
 > **Warning:** Don't cat snapshot files — they can exceed 256KB. The same applies to `--stdout`, which may dump large accessibility trees (63KB+ for content-rich pages). Use viewport pagination (`snapshot -v 0`), `snapshot grep <pattern>`, or `snapshot --stdout --page 1` instead. For targeted extraction, prefer `snapshot grep` or `htmlsnapshot` commands over full-tree dumps.
 
@@ -504,6 +508,18 @@ browser4-cli install
 curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
 browser4-cli install
 ```
+
+## Known Limitations
+
+### Web Worker Fingerprint Consistency
+
+Browser4 patches `navigator.webdriver`, `navigator.hardwareConcurrency`, and other fingerprint-sensitive properties on the main thread via CDP's `Page.addScriptToEvaluateOnNewDocument`. However, **Web Workers have their own isolated JavaScript contexts** that are not affected by this injection.
+
+As a result, bot-detection services that compare `navigator.hardwareConcurrency` between the main thread and Web Workers (e.g., incolumitas.com, deviceandbrowserinfo.com) will detect an inconsistency: the main thread reports the overridden value, but workers expose the real hardware concurrency.
+
+This is a [known CDP limitation](https://issues.chromium.org/issues/40284755) — `Page.addScriptToEvaluateOnNewDocument` does not propagate to worker targets. A full fix would require intercepting worker creation via `Target.setAutoAttach` and injecting scripts into each worker's execution context.
+
+**Workaround:** When testing against services that check worker consistency, use a machine whose actual `hardwareConcurrency` matches your desired fingerprint value (e.g., set the override to the real core count).
 
 ## Development
 

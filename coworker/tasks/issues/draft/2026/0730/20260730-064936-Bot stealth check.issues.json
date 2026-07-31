@@ -1,0 +1,13 @@
+{
+  "meta": {
+    "scenario": "Bot stealth check",
+    "date": "20260730-064936",
+    "mode": "dev",
+    "source": "20260730-064936-Bot stealth check.full.md"
+  },
+  "background": {
+    "task": "",
+    "executionContext": ""
+  },
+  "issues": []
+}

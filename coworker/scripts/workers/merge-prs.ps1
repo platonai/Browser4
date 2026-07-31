@@ -10,9 +10,10 @@
     1. Lists open PRs targeting the current branch via gh CLI.
     2. Filters to PRs authored by the current GitHub user (use -AllAuthors to
        merge everyone's PRs).
-    3. For each PR: attempts direct merge; on conflict, checks out the PR
-       branch, merges base, invokes the agent to resolve conflicts, pushes,
-       then merges.
+    3. For each PR: auto-marks drafts as ready, attempts direct merge (retrying
+       without --delete-branch when a leftover worktree blocks it); on conflict,
+       checks out the PR branch, merges base, invokes the agent to resolve
+       conflicts, pushes, then merges.
     4. Updates a persistent merge counter (tracked across runs).
     5. If the counter exceeds -CiThreshold (default 5), invokes
        monitor-ci.ps1 to trigger and monitor the full CI pipeline. The
@@ -58,19 +59,19 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# ── Load shared utilities ──────────────────────────────────────────────────
+# Load shared utilities
 $scriptsRoot = Split-Path -Parent $PSScriptRoot
 $configPath = Join-Path $scriptsRoot 'config.ps1'
 if (Test-Path $configPath) { . $configPath }
 
-# ── Script-level mutex ─────────────────────────────────────────────────────
+# Script-level mutex
 $script:__CoworkerLock = New-CoworkerScriptLock -ScriptPath $MyInvocation.MyCommand.Path -SkipIfHeld
 if ($null -eq $script:__CoworkerLock) {
     Write-Host "Another merge-prs.ps1 instance is already running. Exiting."
     exit 0
 }
 
-# ── Load agent helper ──────────────────────────────────────────────────────
+# Load agent helper
 $agentHelper = Join-Path $PSScriptRoot 'agent.ps1'
 if (-not (Test-Path $agentHelper)) {
     Write-Host "ERROR: agent.ps1 not found at $agentHelper"
@@ -79,7 +80,7 @@ if (-not (Test-Path $agentHelper)) {
 }
 . $agentHelper
 
-# ── Resolve repo root and base branch ──────────────────────────────────────
+# Resolve repo root and base branch
 $repoRoot = Get-TargetRepositoryRoot
 if (-not $repoRoot) { $repoRoot = Get-WorkspaceRoot }
 if (-not (Test-Path $repoRoot)) {
@@ -140,7 +141,7 @@ try {
     }
     Write-Host "Base branch: $BaseBranch" -ForegroundColor Cyan
 
-    # ── Verify prerequisites ───────────────────────────────────────────────
+    # Verify prerequisites
     $ghCmd = Get-Command gh -ErrorAction SilentlyContinue
     if (-not $ghCmd) {
         Write-Host "ERROR: gh CLI is not installed or not on PATH."
@@ -153,7 +154,7 @@ try {
     & git checkout $BaseBranch 2>&1 | Out-Null
     & git pull origin $BaseBranch 2>&1 | Out-Null
 
-    # ── Resolve current GitHub user ────────────────────────────────────────
+    # Resolve current GitHub user
     $currentUser = ''
     if (-not $AllAuthors) {
         $currentUser = & gh api user --jq '.login' 2>&1
@@ -166,8 +167,8 @@ try {
         }
     }
 
-    # ── Discover open PRs ──────────────────────────────────────────────────
-    $prsJson = & gh pr list --base $BaseBranch --state open --json number,title,headRefName,mergeable,author 2>&1
+    # Discover open PRs
+    $prsJson = & gh pr list --base $BaseBranch --state open --json number,title,headRefName,mergeable,author,isDraft 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: gh pr list failed: $prsJson"
         Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
@@ -183,7 +184,7 @@ try {
         exit 0
     }
 
-    # ── Filter by author ───────────────────────────────────────────────────
+    # Filter by author
     $foreignPrs = @()
     if ($currentUser) {
         $prs = @($allPrs | Where-Object { $_.author.login -eq $currentUser })
@@ -212,7 +213,7 @@ try {
         Write-Host "  ($($foreignPrs.Count) PR(s) by other authors skipped. Use -AllAuthors to merge them.)" -ForegroundColor DarkGray
     }
 
-    # ── Merge each PR ──────────────────────────────────────────────────────
+    # Merge each PR
     $merged = @()
     $conflictResolved = @()
     $skipped = @()
@@ -224,7 +225,19 @@ try {
 
         Write-Host "`n── PR #${prNum}: $prTitle ──" -ForegroundColor Yellow
 
-        # Try direct merge first
+        # Auto-mark draft PRs as ready if authored by current user
+        if ($pr.isDraft) {
+            Write-Host "  PR is draft. Marking ready for review..." -ForegroundColor DarkGray
+            $readyOutput = & gh pr ready $prNum 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "  WARN: Could not mark PR as ready: $readyOutput" -ForegroundColor Yellow
+                $skipped += $prNum
+                continue
+            }
+            Write-Host "  PR is now ready for review." -ForegroundColor Green
+        }
+
+        # Try direct merge first (with --delete-branch)
         $mergeOutput = & gh pr merge $prNum $MergeMethod --delete-branch 2>&1
         if ($LASTEXITCODE -eq 0) {
             Write-Host "  Merged directly." -ForegroundColor Green
@@ -233,7 +246,19 @@ try {
             continue
         }
 
-        # Merge failed — likely conflicts. Check out PR branch and resolve.
+        # If --delete-branch failed due to leftover worktree, retry without it
+        if ($mergeOutput -match 'delete.*branch|worktree|cannot delete') {
+            Write-Host "  Branch deletion blocked (worktree). Merging without --delete-branch..." -ForegroundColor DarkGray
+            $mergeOutput = & gh pr merge $prNum $MergeMethod 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "  Merged directly (branch kept)." -ForegroundColor Green
+                $merged += $prNum
+                & git pull origin $BaseBranch 2>&1 | Out-Null
+                continue
+            }
+        }
+
+        # Merge failed - likely conflicts. Check out PR branch and resolve.
         if ($mergeOutput -match 'conflict|not mergeable|mergeable') {
             Write-Host "  Direct merge blocked (conflicts or not mergeable). Resolving..." -ForegroundColor Yellow
 
@@ -255,7 +280,7 @@ try {
             # Merge base branch into PR branch to surface conflicts
             $mergeBaseOutput = & git merge "origin/$BaseBranch" 2>&1
             if ($LASTEXITCODE -ne 0) {
-                # Conflicts exist — invoke agent to resolve
+                # Conflicts exist - invoke agent to resolve
                 $conflictFiles = & git diff --name-only --diff-filter=U 2>&1
                 Write-Host "  Conflicts in: $($conflictFiles -join ', ')" -ForegroundColor Magenta
 
@@ -268,7 +293,7 @@ combined logic from both sides. Then stage the resolved files with `git add`.
 Conflicted files:
 $($conflictFiles -join "`n")
 
-After resolving all conflicts, commit the merge. Do NOT push — the script handles that.
+After resolving all conflicts, commit the merge. Do NOT push - the script handles that.
 "@
                 Write-Host "  Invoking agent to resolve conflicts..." -ForegroundColor Cyan
                 try {
@@ -310,7 +335,7 @@ After resolving all conflicts, commit the merge. Do NOT push — the script hand
                 continue
             }
 
-            # Now merge the PR
+            # Now merge the PR (retrying without --delete-branch on worktree errors)
             & git checkout $BaseBranch 2>&1 | Out-Null
             & git pull origin $BaseBranch 2>&1 | Out-Null
             $mergeOutput = & gh pr merge $prNum $MergeMethod --delete-branch 2>&1
@@ -318,6 +343,19 @@ After resolving all conflicts, commit the merge. Do NOT push — the script hand
                 Write-Host "  Merged after conflict resolution." -ForegroundColor Green
                 $conflictResolved += $prNum
                 & git pull origin $BaseBranch 2>&1 | Out-Null
+            }
+            elseif ($mergeOutput -match 'delete.*branch|worktree|cannot delete') {
+                Write-Host "  Branch deletion blocked (worktree). Retrying without --delete-branch..." -ForegroundColor DarkGray
+                $mergeOutput = & gh pr merge $prNum $MergeMethod 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host "  Merged after conflict resolution (branch kept)." -ForegroundColor Green
+                    $conflictResolved += $prNum
+                    & git pull origin $BaseBranch 2>&1 | Out-Null
+                }
+                else {
+                    Write-Host "  Merge still failed: $mergeOutput" -ForegroundColor Red
+                    $skipped += $prNum
+                }
             }
             else {
                 Write-Host "  Merge still failed: $mergeOutput" -ForegroundColor Red
@@ -330,7 +368,7 @@ After resolving all conflicts, commit the merge. Do NOT push — the script hand
         }
     }
 
-    # ── Summary ────────────────────────────────────────────────────────────
+    # Summary
     Write-Host "`n========== Merge Summary ==========" -ForegroundColor Cyan
     Write-Host "  Merged directly:      $($merged.Count) $($merged -join ', ')" -ForegroundColor Green
     Write-Host "  Merged after resolve: $($conflictResolved.Count) $($conflictResolved -join ', ')" -ForegroundColor Green
@@ -344,7 +382,8 @@ After resolving all conflicts, commit the merge. Do NOT push — the script hand
 
     Write-Host "PRs merged since last CI: $mergedSinceLastCi (threshold: $CiThreshold)" -ForegroundColor DarkGray
 
-    # ── Skip all tests ─────────────────────────────────────────────────────
+    # ── Run tests ─────────────────────────────────────────────────────
+
     if ($SkipTests) {
         Write-Host "`nTests skipped (-SkipTests)." -ForegroundColor DarkGray
         Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
@@ -459,7 +498,7 @@ Prompt: |
         exit 0
     }
 
-    # ── Tests failed — create coworker task ────────────────────────────────
+    # Tests failed - create coworker task
     Write-Host "`nTests FAILED (exit $testExitCode). Creating coworker task..." -ForegroundColor Red
 
     Ensure-CoworkerPipelineDirectories -Pipeline 'main'
@@ -495,7 +534,7 @@ Prompt: |
     Set-Content -Path $taskFilePath -Value $taskContent -Encoding UTF8
     Write-Host "  Task written: $taskFilePath" -ForegroundColor Cyan
 
-    # ── Trigger coworker to process the task ───────────────────────────────
+    # Trigger coworker to process the task
     $queueScript = Join-Path $scriptsRoot 'process-coworker-queue.ps1'
     if (Test-Path $queueScript) {
         Write-Host "  Triggering coworker queue processor..." -ForegroundColor Cyan

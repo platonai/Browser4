@@ -815,6 +815,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "submit", description: "Whether to submit entered text (press Enter after)", is_bool: true, short: None },
                 OptionDef { name: "verify", description: "Verify text was correctly typed after completion", is_bool: true, short: None },
                 OptionDef { name: "focus", description: "Click the target element to focus it before typing, ensuring the element is in an interactive state", is_bool: true, short: None },
+                OptionDef { name: "timeout", description: "Max seconds to wait for the element to become interactable (default: 30)", is_bool: false, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
@@ -827,6 +828,11 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if let Some(submit) = get_bool(args, "submit") {
                     p["submit"] = json!(submit);
+                }
+                if let Some(timeout) = get_opt_str(args, "timeout") {
+                    if let Ok(secs) = timeout.parse::<u64>() {
+                        p["timeoutMillis"] = json!(secs * 1000);
+                    }
                 }
                 p
             },
@@ -1052,6 +1058,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "submit", description: "Whether to submit entered text (press Enter after)", is_bool: true, short: None },
                 OptionDef { name: "verify", description: "Verify text was correctly typed after completion", is_bool: true, short: None },
+                OptionDef { name: "timeout", description: "Max seconds to wait for the element to become interactable (default: 30)", is_bool: false, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
@@ -1063,6 +1070,11 @@ pub fn all_commands() -> Vec<CommandDef> {
                 });
                 if let Some(submit) = get_bool(args, "submit") {
                     p["submit"] = json!(submit);
+                }
+                if let Some(timeout) = get_opt_str(args, "timeout") {
+                    if let Ok(secs) = timeout.parse::<u64>() {
+                        p["timeoutMillis"] = json!(secs * 1000);
+                    }
                 }
                 p
             },
@@ -1973,15 +1985,23 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Tabs ----
         CommandDef {
             name: "tab-list",
-            description: "List all tabs",
+            description: "List all tabs with live URLs and titles from the browser",
             category: Category::Tabs,
             hidden: false,
             batch_supported: true,
             args: &[],
-            options: &[],
+            options: &[
+                OptionDef { name: "refresh", description: "Force re-query of live tab state (URLs and titles are always fetched from the browser)", is_bool: true, short: None },
+            ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_tabs".to_string(),
-            tool_params_fn: |_| json!({ "action": "list" }),
+            tool_params_fn: |args| {
+                let mut p = json!({ "action": "list" });
+                if let Some(_refresh) = get_bool(args, "refresh") {
+                    p["refresh"] = json!(true);
+                }
+                p
+            },
         },
         CommandDef {
             name: "tab-new",
@@ -2476,6 +2496,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "max-open-tabs", description: "Maximum open tabs per browser context (default: 8)", is_bool: false, short: None },
                 OptionDef { name: "max-browser-contexts", description: "Number of isolated browser environments (default: 2)", is_bool: false, short: None },
                 OptionDef { name: "display-mode", description: "Display mode: GUI, HEADLESS, SUPERVISED", is_bool: false, short: None },
+                OptionDef { name: "clear-stale", description: "Clear stale swarm tasks from prior sessions before creating the new session", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "open_session".to_string(),
@@ -2489,6 +2510,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(v) = get_opt_str(args, "max-open-tabs") { p["maxOpenTabs"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "max-browser-contexts") { p["maxBrowserContexts"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "display-mode") { p["displayMode"] = json!(v); }
+                if let Some(b) = get_bool(args, "clear-stale") { p["clearStale"] = json!(b); }
                 p
             },
         },
@@ -2984,11 +3006,13 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-export",
-            description: "Export snapshot HTML from Browser4's page storage to a local file",
+            description: "Export snapshot HTML from Browser4's page storage to a local file. The file path can be passed as a positional argument or via --file.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
-            args: &[],
+            args: &[
+                ArgDef { name: "file", description: "Path to save the HTML file (or use --file)", optional: true },
+            ],
             options: &[
                 OptionDef {
                     name: "file",
@@ -3007,6 +3031,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_name_fn: |_| "html_snapshot_export".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
+                // Accept file as --file option (takes precedence) or positional arg
                 if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
                 if let Some(true) = get_bool(args, "clean") { p["clean"] = json!(true); }
                 p
