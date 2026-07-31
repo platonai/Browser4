@@ -928,6 +928,7 @@ function Show-InteractiveScenarioPicker {
     $showTree   = $true
     $filter     = ''
     $filterMode = $false
+    $gotoIndex  = ''
     $cursor     = 0
     $topOffset  = 0
 
@@ -1365,6 +1366,18 @@ function Show-InteractiveScenarioPicker {
             $visible = @($visible | Where-Object { $_.Type -eq 'file' })
         }
 
+        # ── Build file-index maps (1-based, files only) ─────────────────────
+        $fileIndexToCursor = @{}
+        $fileCursorToIndex = @{}
+        $fileCount = 0
+        for ($vi = 0; $vi -lt $visible.Count; $vi++) {
+            if ($visible[$vi].Type -eq 'file') {
+                $fileCount++
+                $fileIndexToCursor[$fileCount] = $vi
+                $fileCursorToIndex[$vi] = $fileCount
+            }
+        }
+
         # ── Clamp cursor ────────────────────────────────────────────────────
         if ($visible.Count -eq 0) {
             $cursor = 0
@@ -1390,12 +1403,16 @@ function Show-InteractiveScenarioPicker {
             Write-Host "  Filter: $filterPrompt  ($($visible.Count) match$(if ($visible.Count -ne 1) { 'es' }))" -ForegroundColor Magenta
         }
 
+        if ($gotoIndex) {
+            Write-Host "  Goto file #: $gotoIndex`_   Enter=jump  v=view  Esc=cancel" -ForegroundColor Cyan
+        }
+
         # Controls
-        Write-Host '  ↑↓ nav   ←→ fold   Space/Enter run   v view   n new   t tree   / filter   r refresh   q quit' -ForegroundColor DarkGray
+        Write-Host '  ↑↓ nav   ←→ fold   Space/Enter run   v view   1-9 goto   n new   t tree   / filter   r refresh   q quit' -ForegroundColor DarkGray
         Write-Host ('─' * 60) -ForegroundColor DarkGray
 
         # Compute render area
-        $headerLines = 4 + $(if ($runningProc) { 1 } else { 0 }) + $(if ($filter) { 1 } else { 0 })
+        $headerLines = 4 + $(if ($runningProc) { 1 } else { 0 }) + $(if ($filter) { 1 } else { 0 }) + $(if ($gotoIndex) { 1 } else { 0 })
         $footerLines = 3
         $renderSlots = [Math]::Max(5, [Console]::WindowHeight - $headerLines - $footerLines)
 
@@ -1427,13 +1444,19 @@ function Show-InteractiveScenarioPicker {
                 }
                 else {
                     $expand  = ' '
-                    $name    = $node.Name
+                    $fileNum = $fileCursorToIndex[$i]
+                    $name    = "[$fileNum] $($node.Name)"
                 }
                 $line = "$indent$expand $name"
             }
             else {
                 $relPath = [System.IO.Path]::GetRelativePath($TasksRoot, $node.FullPath)
-                $line = "  $relPath"
+                if ($node.Type -eq 'file') {
+                    $fileNum = $fileCursorToIndex[$i]
+                    $line = "  [$fileNum] $relPath"
+                } else {
+                    $line = "  $relPath"
+                }
             }
 
             $cursorMark = if ($isCursor) { '▶' } else { ' ' }
@@ -1500,6 +1523,60 @@ function Show-InteractiveScenarioPicker {
         }
 
         $key = [Console]::ReadKey($true)
+
+        # ── Goto mode: accumulate digits, then Enter/V/Esc/Backspace ─────────
+        if ($gotoIndex) {
+            if ($key.KeyChar -match '^[0-9]$') {
+                $gotoIndex += $key.KeyChar
+                continue
+            }
+            switch ($key.Key) {
+                'Enter' {
+                    $idx = [int]$gotoIndex
+                    if ($fileIndexToCursor.ContainsKey($idx)) {
+                        $cursor = $fileIndexToCursor[$idx]
+                        $topOffset = $cursor
+                    }
+                    $gotoIndex = ''
+                    continue
+                }
+                'Escape' {
+                    $gotoIndex = ''
+                    continue
+                }
+                'Backspace' {
+                    if ($gotoIndex.Length -gt 1) {
+                        $gotoIndex = $gotoIndex.Substring(0, $gotoIndex.Length - 1)
+                    } else {
+                        $gotoIndex = ''
+                    }
+                    continue
+                }
+                default {
+                    # 'v' jumps + views; any other key cancels goto
+                    if ($key.KeyChar -ieq 'v') {
+                        $idx = [int]$gotoIndex
+                        if ($fileIndexToCursor.ContainsKey($idx)) {
+                            $cursor = $fileIndexToCursor[$idx]
+                            $topOffset = $cursor
+                            if ($visible[$cursor].Type -eq 'file') {
+                                Show-ScenarioContent -Node $visible[$cursor]
+                            }
+                        }
+                        $gotoIndex = ''
+                        continue
+                    }
+                    $gotoIndex = ''
+                    continue
+                }
+            }
+        }
+
+        # Digit keys start goto mode (files must exist in the visible list)
+        if ($fileCount -gt 0 -and $key.KeyChar -match '^[0-9]$') {
+            $gotoIndex = [string]$key.KeyChar
+            continue
+        }
 
         # '/' enters filter mode (check both KeyChar and Oem2 for layout portability)
         if ($key.KeyChar -eq '/' -and $key.Modifiers -eq 0) {
