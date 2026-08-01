@@ -1,0 +1,31 @@
+Now I have enough evidence. Let me compile the complete evaluation report.
+
+---
+
+## A. Task Result
+
+**Partially Successful.** Only AC1 (basic crawl, depth 0) passed fully. AC2 and AC3 are blocked by a critical server-side Spring bean missing error (`TaskLoops`). AC4 (seed file crawl) completed but with data quality issues.
+
+### Summary:
+- **AC1 (depth 0):** ✅ PASSED — 1 page found, correct title "Crawl Test Hub"
+- **AC2 (link selector + pattern, depth 2):** ❌ BLOCKED — Server throws `NoSuchBeanDefinitionException: TaskLoops` for any depth >= 1 crawl
+- **AC3 (deep crawl, depth 3):** ❌ BLOCKED — Same server-side `TaskLoops` bean issue
+- **AC4 (seed file):** ⚠️ PARTIAL — 2 URLs resolved, 2 pages found, but page titles are empty and one page had consistent 0-byte fetch errors
+
+## B. Execution Trace
+
+| Step | Command | Outcome |
+|------|---------|---------|
+| Prep | `./b4w.ps1 help` | Full help displayed, discovered crawl command and flags |
+| Prep | Read `skills/browser4-cli/SKILL.md` | Learned workflows, command map, crawl reference |
+| Prep | Read `skills/browser4-cli/references/crawl.md` | Learned crawl flags, modes, patterns |
+| Prep | `./b4w.ps1 crawl --help` | Confirmed flag syntax |
+| AC1 | `./b4w.ps1 crawl "http://localhost:18080/generated/crawl/index.html" --depth 0 --refresh` | ✅ 1 page found, "Crawl Test Hub" |
+| AC2 | `./b4w.ps1 crawl "..." -d 2 -ol "a.product" -olp "/product/"` | Server error (TaskLoops bean missing) after misleading warning about link discovery being disabled |
+| AC2 retry | Long-form flags `--out-link-selector`, `--out-link-pattern` | Same result |
+| Investigation | `./b4w.ps1 goto "..."` + `./b4w.ps1 htmlsnapshot` | Verified page structure — links have class `product`, URLs contain `/product/` |
+| Investigation | Background crawl + `crawl result` | Revealed server error: `No qualifying bean of type 'ai.platon.pulsar.loop.TaskLoops' available` |
+| AC4 | Created seed file with 2 product URLs | ✅ URLs: 2, pages found: 2, but titles empty, 0-byte fetch on product/3 |
+| Investigation | `curl` to verify mock pages | Mock pages work (200, ~1200 bytes), issue is in crawl backend |
+
+---

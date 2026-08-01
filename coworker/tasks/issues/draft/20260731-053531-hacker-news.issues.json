@@ -1,0 +1,294 @@
+{
+  "meta": {
+    "scenario": "hacker-news",
+    "mode": "dev",
+    "source": "20260731-053531-hacker-news.full.md",
+    "date": "20260731-053531"
+  },
+  "background": {
+    "executionContext": "**Commands used:**\n1. `mkdir -p .test-sessions` — created temp directory\n2. `./b4w.ps1 help` — learned available commands (90+ commands across 18 categories)\n3. Read `skills/browser4-cli/SKILL.md` — studied full documentation, decision trees, and conventions\n4. `./b4w.ps1 goto \"https://news.ycombinator.com/news\"` — navigated to HN (server auto-started in 6.8s)\n5. `./b4w.ps1 snapshot -v 0 --stdout` — captured accessibility tree (60KB+ output, had to read persisted file)\n6. `./b4w.ps1 goto \"https://greyswansignals.com/?theme=dark\"` — opened story #1\n7. `./b4w.ps1 htmlsnapshot` — captured static HTML snapshot\n8. `./b4w.ps1 htmlsnapshot get all text \"h1, h2, h3, p, article, section\" --limit 30` — extracted article text\n9. `./b4w.ps1 goto \"https://blog.jim-nielsen.com/2026/ai-aesthetic/\"` — opened story #2\n10. `./b4w.ps1 htmlsnapshot` — captured static HTML snapshot\n11. `./b4w.ps1 htmlsnapshot get all text \"article, h1, h2, h3, p, main, .post-content, .entry-content, .content\" --limit 50` — extracted article text\n12. `./b4w.ps1 goto \"https://krebsonsecurity.com/2026/07/read-this-before-you-buy-that-tv-streaming-stick/\"` — opened story #3\n13. `./b4w.ps1 htmlsnapshot` — captured static HTML snapshot\n14. `./b4w.ps1 htmlsnapshot get all text \"article, .entry-content p, .post-content p, #post-74047 p, .post p, h1, h2, h3\" --limit 60` — extracted article text\n\n**Important decisions:**\n- Used `htmlsnapshot get all text` rather than `snapshot grep` for article content extraction since snapshots capture accessibility trees, not article prose\n- Used broad CSS selector lists (`h1, h2, h3, p, article`) since I didn't know the exact site structure in advance\n- Did not use `summarize` or `extract` AI commands since they require LLM API keys\n\n**Workarounds:**\n- For the first article (React SPA), `snapshot` showed only interactive elements, not article text — had to use `htmlsnapshot capture` + `htmlsnapshot get all text` workflow instead\n- Had to guess CSS selectors for article content on each site; used `htmlsnapshot inspect` hints but ultimately enumerated common article selectors\n\n---\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"First command latency: 6.8s server startup on cold start\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run ./b4w.ps1 goto \\\"https://example.com\\\" from a fresh session.\",\n      \"expected\": \"Either a faster startup time, or a clear progress indicator telling the user what's happening (\\\"Starting server, this may take 30 seconds...\\\").\",\n      \"actual\": \"The CLI prints \\\"Starting Browser4 server...\\\" followed by log file paths and technical details. The user waits ~7 seconds with no progress bar or estimated time remaining. The printed log path is useful for debugging but cluttered for a first-time user.\",\n      \"rootCause\": \"The dev-mode daemon auto-starts the backend JAR (Java/Spring Boot) which has inherent JVM startup overhead. The CLI could buffer the technical output and show a spinner/progress bar instead.\",\n      \"codePointer\": \"cli/browser4-cli/src/ — daemon startup/connection module\",\n      \"suggestion\": \"- Show a spinner or progress bar (\\\"Starting server [====>    ] 60%\\\") instead of raw log paths\\n- Display the raw log path only when --verbose is passed or when startup fails\\n- Consider pre-warming the server in the background on shell init (opt-in) to eliminate cold-start latency entirely\"\n    },\n    {\n      \"title\": \"snapshot --stdout produces overwhelming output for content-rich pages\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run ./b4w.ps1 snapshot -v 0 --stdout on news.ycombinator.com.\",\n      \"expected\": \"A manageable, paginated view of the page structure, or clear guidance that the output is large and how to filter it.\",\n      \"actual\": \"Output was 60.2KB and was auto-persisted to a temp file. The first 2KB preview showed header navigation, not the story content. The user had to Read the persisted file with offset/limit to find the story links (starting at ~line 44).\",\n      \"rootCause\": \"The accessibility tree includes every DOM node with full metadata (box coordinates, cursor styles, URLs). For content-dense pages like HN with 30 stories, this balloons quickly. The --stdout path doesn't paginate by default.\",\n      \"codePointer\": \"cli/browser4-cli/src/snapshot.rs — snapshot output rendering\",\n      \"suggestion\": \"- Auto-paginate --stdout output by default (first 100 lines, then \\\"--page 2 for more\\\")\\n- Add a --summary flag that shows only interactive elements (links, buttons, inputs) with their refs, suppressing structural layout nodes\\n- When output exceeds 20KB, show a prominent hint: \\\"Large snapshot (60KB). Use snapshot grep <pattern> to find specific elements, or --page N to paginate.\\\"\"\n    },\n    {\n      \"title\": \"No built-in command to extract article body text without guessing CSS selectors\",\n      \"severity\": \"High\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"Navigate to any article page (e.g., a blog post), then try to extract the article text without knowing the site's HTML structure.\",\n      \"expected\": \"A command like `htmlsnapshot get article` or `htmlsnapshot get main-text` that auto-discovers the main content area and extracts its text, without requiring the user to guess CSS selectors.\",\n      \"actual\": \"The user must either: (a) use `htmlsnapshot inspect` to discover selectors (extra step), (b) guess common selectors (p, article, h1 — which worked but required enumerating many possibilities), or (c) use `snapshot grep` which only searches the accessibility tree (not article prose). For each site I visited, I had to guess a different selector combination.\",\n      \"rootCause\": \"The htmlsnapshot get command requires explicit CSS selectors. There's no content-extraction heuristic (e.g., Readability-style main content detection) or predefined semantic shortcut (e.g., 'article' as a keyword that expands to common content selectors).\",\n      \"codePointer\": \"browser4-rest/ — htmlsnapshot tool executor; could add a content-discovery layer\",\n      \"suggestion\": \"- Add a `get content` or `get article` semantic shortcut that auto-detects the main content region using heuristics (largest text block, <article> tag, role=\\\"main\\\", common content class names)\\n- Add `htmlsnapshot get readable` that applies readability extraction (like Firefox Reader View) to the stored snapshot\\n- At minimum, document a recommended selector pattern for article extraction in the tips: \\\"Try: htmlsnapshot get all text 'article p, main p, .post-content p' --limit 50\\\"\"\n    },\n    {\n      \"title\": \"snapshot captures accessibility tree but article body text requires separate htmlsnapshot workflow\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Navigate to an article page, run `snapshot -v 0 --stdout`, and try to read the article content from the snapshot output.\",\n      \"expected\": \"Either the snapshot includes article text content, or the help/tips clearly distinguish when to use snapshot vs htmlsnapshot for different extraction goals.\",\n      \"actual\": \"The snapshot shows the accessibility tree with element roles (link, button, generic, heading) and their accessible names, but not the paragraph body text. For the first article (React SPA), the snapshot showed buttons and inputs but no article prose. I had to discover that htmlsnapshot get text was needed for prose extraction, which is a separate command family.\",\n      \"rootCause\": \"Snapshot captures the accessibility tree (AXTree) which represents semantic roles and names, not full DOM text content. htmlsnapshot captures the static HTML and allows CSS selector-based extraction. The two are complementary but the documentation in SKILL.md doesn't clearly contrast when to use each for content extraction.\",\n      \"codePointer\": \"skills/browser4-cli/SKILL.md — §4a (Choosing an Extraction Method) decision tree\",\n      \"suggestion\": \"- In the SKILL.md §4a decision tree, add a clearer distinction: \\\"snapshot = page structure & element refs (for interaction); htmlsnapshot = page content & text (for extraction)\\\"\\n- After `goto`, show a tip that distinguishes: \\\"Ready to interact? Use snapshot. Ready to extract? Use htmlsnapshot.\\\"\\n- Consider adding an `htmlsnapshot` shortcut to the goto command: `goto <url> --extract` that auto-captures and returns page text\"\n    },\n    {\n      \"title\": \"SPA content not fully captured in htmlsnapshot for JS-rendered pages\",\n      \"severity\": \"Low\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"Navigate to a React SPA (e.g., greyswansignals.com) and run `htmlsnapshot get all text 'p, h1, h2'`. Compare with what a human sees in the browser.\",\n      \"expected\": \"The extracted text matches what is visible on the rendered page.\",\n      \"actual\": \"Most content was captured correctly (the article paragraphs were extracted), but some dynamically-loaded sections may be missing since the snapshot captures the DOM at the moment of capture. The article text was present, but some interactive dashboard elements were not captured as text.\",\n      \"rootCause\": \"htmlsnapshot captures the DOM as-is at capture time. For SPAs that lazy-load content on scroll or after JS execution, content below the fold may be missing. This didn't significantly impact this task but could be an issue for infinite-scroll pages.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Document in SKILL.md that for SPAs, use `eval` to scroll the page or trigger lazy-loading before capturing htmlsnapshot\\n- Add a `--scroll-to-load` flag on htmlsnapshot that scrolls through the page before capture\\n- Warn in tips when the page uses a JS framework (React, Vue, Angular) that content may be incomplete\"\n    },\n    {\n      \"title\": \"No single-command \\\"open and summarize\\\" workflow for linked articles\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"After getting a list of links from HN, the user must manually: goto each URL → htmlsnapshot → get all text → read output. This is 3+ commands per link.\",\n      \"expected\": \"A streamlined workflow, perhaps: `browser4-cli goto <url> --summarize` that navigates, captures, and extracts the main content in one step.\",\n      \"actual\": \"Each article required 3 separate commands (goto, htmlsnapshot, get all text). For 3 articles, that's 9 commands total from the initial snapshot through final extraction.\",\n      \"rootCause\": \"Commands are designed as atomic building blocks. There's no composition/shortcut layer for common multi-step workflows. While `batch` exists, it requires pre-planning all steps which isn't feasible when discovering URLs dynamically.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Add a `goto <url> --extract` flag that auto-captures htmlsnapshot and returns main text\\n- Add a `goto <url> --summarize` that uses the LLM (if configured) to produce a 2-3 sentence summary\\n- Consider a `read <url>` alias that combines goto + htmlsnapshot capture + get all text for article reading use cases\"\n    },\n    {\n      \"title\": \"Relative URLs in snapshot /url fields are ambiguous without domain context\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run `snapshot -v 0` on news.ycombinator.com and look at link /url fields.\",\n      \"expected\": \"Full absolute URLs for all links, making them directly usable with goto.\",\n      \"actual\": \"Links like `/url: news`, `/url: newest`, `/url: from?site=greyswansignals.com` are relative to the current domain. This is technically correct HTML but means the user can't copy-paste these URLs to navigate — they need to mentally prepend the base domain.\",\n      \"rootCause\": \"The AXTree reports the href attribute as-is from the DOM. Browser4 doesn't resolve relative URLs to absolute form in the snapshot output.\",\n      \"codePointer\": \"browser4-core/browser4-browser/ — snapshot/AXTree serialization\",\n      \"suggestion\": \"- Resolve relative URLs to absolute form in snapshot output (add a /url-absolute field alongside /url)\\n- Alternatively, display the base URL at the top of the snapshot and document that /url fields may be relative\"\n    },\n    {\n      \"title\": \"help output contains 90+ commands with no weighted ranking or frequency guidance\",\n      \"severity\": \"Low\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"Run `./b4w.ps1 help` and try to quickly find the commands you need for a \\\"navigate → extract content\\\" workflow.\",\n      \"expected\": \"Either a curated \\\"quick start\\\" section, a \\\"most common commands\\\" top-10 list, or fuzzy command suggestions when the user's intent is unclear.\",\n      \"actual\": \"The help output is comprehensive (18 command categories) but a first-time user sees 90+ commands at once. The \\\"Common workflows\\\" section at the top helps, but it's easy to miss amid the dense output. There's no weighted guidance — `cookie-set` and `goto` appear with equal visual weight.\",\n      \"rootCause\": \"The help output prioritizes completeness over scannability. All commands are listed with equal prominence regardless of usage frequency.\",\n      \"codePointer\": \"cli/browser4-cli/src/ — help text rendering\",\n      \"suggestion\": \"- Add a \\\"⚡ Quick Start\\\" section at the very top with the 5 most common commands (goto, snapshot, click, fill, htmlsnapshot get)\\n- Bold or highlight high-frequency commands in the command listing\\n- Add a `help popular` subcommand showing commands ranked by usage frequency\\n- Reorder the command categories so Core and Navigation come first, specialized categories (Swarm, Plugins, Skills) come last\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Successful — navigated to Hacker News, identified the top 3 stories, opened each one, extracted their full article text, and produced summaries of all three.\",\n    \"successRate\": \"95% — all major steps completed. One minor friction: the first article was a React SPA where htmlsnapshot interaction was slightly different than expected, but content was still successfully extracted.\",\n    \"issuesFound\": 8,\n    \"majorBlockers\": \"\",\n    \"mostConfusingAspects\": \"1. Distinguishing when to use `snapshot` (AX tree, for element refs) vs `htmlsnapshot get text` (DOM, for article content) — these are separate command families with different purposes but overlapping names. 2. Not knowing which CSS selectors to use for article extraction — had to enumerate common patterns (p, h1, article, .post-content, .entry-content) across three different sites. 3. The first snapshot --stdout produced 60KB of output with no built-in content-aware filtering.\",\n    \"mostValuableImprovements\": \"1. Add a 'get content' or 'get readable' semantic shortcut that auto-discovers main article text without requiring CSS selectors. 2. Show a spinner/progress bar during the 6.8s server cold start instead of raw log paths. 3. Add a 'goto <url> --extract' flag that combines navigation + capture + text extraction in one command. 4. Auto-paginate or auto-summarize large snapshot output instead of dumping 60KB+ to stdout.\",\n    \"usabilityRating\": 7\n  }\n}\n```",
+    "task": "### Top 3 Hacker News Stories — Summaries\n\n**1. \"The AI trade now runs on borrowed money, and the lenders are repricing it\"** (greyswansignals.com — 78 points, 24 comments)\n\nGrey Swan Signals analyzes how the AI infrastructure buildout is increasingly funded by debt, and lenders are repricing that risk. Key findings: Investment Grade Options Adjusted Spread reached its widest level in 76 days with a 10-point single-session move on July 27. Morgan Stanley forecasts ~$570 billion of AI-related borrowing globally in 2026. Cover ratios for hyperscaler bond deals (Amazon, Google, Microsoft) have fallen from nearly 5x to below 2x, signaling reduced investor appetite. Both Treasury yields and credit spreads are rising simultaneously, making debt more expensive on two fronts. CapEx now consumes about 80% of operating cash flow across the five major tech firms. While the market is still clearing new issuance, it's doing so at progressively higher prices, and CCC-level spreads have reached \"Critical\" levels.\n\n**2. \"The AI Aesthetic\"** (blog.jim-nielsen.com — 238 points, 113 comments)\n\nJim Nielsen reflects on the emerging visual and interaction design patterns born from the AI era. He catalogs: the sparkle emoji (✨) becoming synonymous with AI; streaming text from chat interfaces; shimmering effects repurposed from \"AI thinking\" to general async indicators; AI desktop apps (Claude, Codex, Cursor) using tiny, thin icons that clash with native OS conventions; beige/cream color palettes, orange accents, and serif typefaces becoming the AI color scheme; and \"whack-a-mole\" UI controls where toggles trigger full layout shifts. He draws a parallel to the hamburger menu (≡), which emerged from the mobile era's screen constraints and became a permanent interaction paradigm, wondering which AI-era patterns will similarly persist for decades.\n\n**3. \"Read This Before You Buy That TV Streaming Stick\"** (krebsonsecurity.com — 646 points, 368 comments)\n\nBrian Krebs reports on a Bitsight investigation revealing that H96-brand TV streaming sticks are part of a vast ad fraud operation. Researcher Pedro Falé registered an expired telemetry domain and discovered ~38,000 devices globally were spoofing themselves as Samsung, Vivo, Huawei, and Xiaomi phones to click ads on AI-generated websites. The operation is traced to Zhejiang Fengwo IoT Technology Ltd (Fengwo Group) in mainland China. The devices operate in two modes: when HDMI is active (user watching TV) → residential proxy; when the TV is off → ad fraud bot. The Fengwo Group uses Google's Blockly visual programming tool to let low-skilled operators build fraud routines via drag-and-drop. Estimated revenue: ~$50,000/day from ad fraud alone. The FBI has repeatedly warned about these devices, yet major retailers like Amazon continue selling them.\n\n---"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "No built-in command to extract article body text without guessing CSS selectors",
+      "severity": "High",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "Navigate to any article page (e.g., a blog post), then try to extract the article text without knowing the site's HTML structure.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A command like `htmlsnapshot get article` or `htmlsnapshot get main-text` that auto-discovers the main content area and extracts its text, without requiring the user to guess CSS selectors.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The user must either: (a) use `htmlsnapshot inspect` to discover selectors (extra step), (b) guess common selectors (p, article, h1 — which worked but required enumerating many possibilities), or (c) use `snapshot grep` which only searches the accessibility tree (not article prose). For each site I visited, I had to guess a different selector combination.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The htmlsnapshot get command requires explicit CSS selectors. There's no content-extraction heuristic (e.g., Readability-style main content detection) or predefined semantic shortcut (e.g., 'article' as a keyword that expands to common content selectors).",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-rest/ — htmlsnapshot tool executor; could add a content-discovery layer",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add a `get content` or `get article` semantic shortcut that auto-detects the main content region using heuristics (largest text block, <article> tag, role=\"main\", common content class names)\n- Add `htmlsnapshot get readable` that applies readability extraction (like Firefox Reader View) to the stored snapshot\n- At minimum, document a recommended selector pattern for article extraction in the tips: \"Try: htmlsnapshot get all text 'article p, main p, .post-content p' --limit 50\"",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "First command latency: 6.8s server startup on cold start",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run ./b4w.ps1 goto \"https://example.com\" from a fresh session.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Either a faster startup time, or a clear progress indicator telling the user what's happening (\"Starting server, this may take 30 seconds...\").",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The CLI prints \"Starting Browser4 server...\" followed by log file paths and technical details. The user waits ~7 seconds with no progress bar or estimated time remaining. The printed log path is useful for debugging but cluttered for a first-time user.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The dev-mode daemon auto-starts the backend JAR (Java/Spring Boot) which has inherent JVM startup overhead. The CLI could buffer the technical output and show a spinner/progress bar instead.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/ — daemon startup/connection module",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Show a spinner or progress bar (\"Starting server [====>    ] 60%\") instead of raw log paths\n- Display the raw log path only when --verbose is passed or when startup fails\n- Consider pre-warming the server in the background on shell init (opt-in) to eliminate cold-start latency entirely",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "snapshot --stdout produces overwhelming output for content-rich pages",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run ./b4w.ps1 snapshot -v 0 --stdout on news.ycombinator.com.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A manageable, paginated view of the page structure, or clear guidance that the output is large and how to filter it.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Output was 60.2KB and was auto-persisted to a temp file. The first 2KB preview showed header navigation, not the story content. The user had to Read the persisted file with offset/limit to find the story links (starting at ~line 44).",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The accessibility tree includes every DOM node with full metadata (box coordinates, cursor styles, URLs). For content-dense pages like HN with 30 stories, this balloons quickly. The --stdout path doesn't paginate by default.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/snapshot.rs — snapshot output rendering",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Auto-paginate --stdout output by default (first 100 lines, then \"--page 2 for more\")\n- Add a --summary flag that shows only interactive elements (links, buttons, inputs) with their refs, suppressing structural layout nodes\n- When output exceeds 20KB, show a prominent hint: \"Large snapshot (60KB). Use snapshot grep <pattern> to find specific elements, or --page N to paginate.\"",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "snapshot captures accessibility tree but article body text requires separate htmlsnapshot workflow",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Navigate to an article page, run `snapshot -v 0 --stdout`, and try to read the article content from the snapshot output.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Either the snapshot includes article text content, or the help/tips clearly distinguish when to use snapshot vs htmlsnapshot for different extraction goals.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The snapshot shows the accessibility tree with element roles (link, button, generic, heading) and their accessible names, but not the paragraph body text. For the first article (React SPA), the snapshot showed buttons and inputs but no article prose. I had to discover that htmlsnapshot get text was needed for prose extraction, which is a separate command family.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Snapshot captures the accessibility tree (AXTree) which represents semantic roles and names, not full DOM text content. htmlsnapshot captures the static HTML and allows CSS selector-based extraction. The two are complementary but the documentation in SKILL.md doesn't clearly contrast when to use each for content extraction.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "skills/browser4-cli/SKILL.md — §4a (Choosing an Extraction Method) decision tree",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- In the SKILL.md §4a decision tree, add a clearer distinction: \"snapshot = page structure & element refs (for interaction); htmlsnapshot = page content & text (for extraction)\"\n- After `goto`, show a tip that distinguishes: \"Ready to interact? Use snapshot. Ready to extract? Use htmlsnapshot.\"\n- Consider adding an `htmlsnapshot` shortcut to the goto command: `goto <url> --extract` that auto-captures and returns page text",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 5,
+      "title": "SPA content not fully captured in htmlsnapshot for JS-rendered pages",
+      "severity": "Low",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "Navigate to a React SPA (e.g., greyswansignals.com) and run `htmlsnapshot get all text 'p, h1, h2'`. Compare with what a human sees in the browser.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The extracted text matches what is visible on the rendered page.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Most content was captured correctly (the article paragraphs were extracted), but some dynamically-loaded sections may be missing since the snapshot captures the DOM at the moment of capture. The article text was present, but some interactive dashboard elements were not captured as text.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "htmlsnapshot captures the DOM as-is at capture time. For SPAs that lazy-load content on scroll or after JS execution, content below the fold may be missing. This didn't significantly impact this task but could be an issue for infinite-scroll pages.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Document in SKILL.md that for SPAs, use `eval` to scroll the page or trigger lazy-loading before capturing htmlsnapshot\n- Add a `--scroll-to-load` flag on htmlsnapshot that scrolls through the page before capture\n- Warn in tips when the page uses a JS framework (React, Vue, Angular) that content may be incomplete",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 6,
+      "title": "No single-command \"open and summarize\" workflow for linked articles",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "After getting a list of links from HN, the user must manually: goto each URL → htmlsnapshot → get all text → read output. This is 3+ commands per link.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A streamlined workflow, perhaps: `browser4-cli goto <url> --summarize` that navigates, captures, and extracts the main content in one step.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Each article required 3 separate commands (goto, htmlsnapshot, get all text). For 3 articles, that's 9 commands total from the initial snapshot through final extraction.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Commands are designed as atomic building blocks. There's no composition/shortcut layer for common multi-step workflows. While `batch` exists, it requires pre-planning all steps which isn't feasible when discovering URLs dynamically.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Add a `goto <url> --extract` flag that auto-captures htmlsnapshot and returns main text\n- Add a `goto <url> --summarize` that uses the LLM (if configured) to produce a 2-3 sentence summary\n- Consider a `read <url>` alias that combines goto + htmlsnapshot capture + get all text for article reading use cases",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 7,
+      "title": "Relative URLs in snapshot /url fields are ambiguous without domain context",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run `snapshot -v 0` on news.ycombinator.com and look at link /url fields.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Full absolute URLs for all links, making them directly usable with goto.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Links like `/url: news`, `/url: newest`, `/url: from?site=greyswansignals.com` are relative to the current domain. This is technically correct HTML but means the user can't copy-paste these URLs to navigate — they need to mentally prepend the base domain.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The AXTree reports the href attribute as-is from the DOM. Browser4 doesn't resolve relative URLs to absolute form in the snapshot output.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-core/browser4-browser/ — snapshot/AXTree serialization",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Resolve relative URLs to absolute form in snapshot output (add a /url-absolute field alongside /url)\n- Alternatively, display the base URL at the top of the snapshot and document that /url fields may be relative",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 8,
+      "title": "help output contains 90+ commands with no weighted ranking or frequency guidance",
+      "severity": "Low",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "Run `./b4w.ps1 help` and try to quickly find the commands you need for a \"navigate → extract content\" workflow.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Either a curated \"quick start\" section, a \"most common commands\" top-10 list, or fuzzy command suggestions when the user's intent is unclear.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The help output is comprehensive (18 command categories) but a first-time user sees 90+ commands at once. The \"Common workflows\" section at the top helps, but it's easy to miss amid the dense output. There's no weighted guidance — `cookie-set` and `goto` appear with equal visual weight.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The help output prioritizes completeness over scannability. All commands are listed with equal prominence regardless of usage frequency.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/ — help text rendering",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add a \"⚡ Quick Start\" section at the very top with the 5 most common commands (goto, snapshot, click, fill, htmlsnapshot get)\n- Bold or highlight high-frequency commands in the command listing\n- Add a `help popular` subcommand showing commands ranked by usage frequency\n- Reorder the command categories so Core and Navigation come first, specialized categories (Swarm, Plugins, Skills) come last",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}
