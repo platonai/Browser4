@@ -16,6 +16,7 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
     - [Quick Start](#quick-start)
     - [CLI & SKILLS](#cli--skills)
       - [LLM Configuration](#llm-configuration)
+  - [🧭 Tool Selection Guide](#-tool-selection-guide)
   - [🚀 Build from Source](#-build-from-source)
   - [🧬 Auto Extraction](#-auto-extraction)
   - [📦 Modules Overview](#-modules-overview)
@@ -432,6 +433,59 @@ browser4-cli state-save session.json
 # Close the session when done
 browser4-cli close
 ```
+
+---
+
+## 🧭 Tool Selection Guide
+
+Choosing the right tool for your task:
+
+### How to Extract Data
+
+```
+Need to extract data from a page?
+├─ Interactive page (click, fill, scroll first)? → snapshot + refs, then extract
+├─ Static page, one field? → htmlsnapshot get text "<selector>"
+├─ Static page, all matches of one field? → htmlsnapshot get all text "<selector>"
+├─ Static page, multiple correlated fields (title+price+url per item)?
+│  → htmlsnapshot query --sql @query.sql
+├─ Live JS / complex DOM logic? → eval --json
+├─ Natural language ("find the product price")? → extract (needs LLM key)
+└─ High volume, many pages? → crawl or swarm with --sql
+```
+
+### How to Process at Scale
+
+```
+Need to process multiple pages?
+├─ Single list page (search results)? → htmlsnapshot query with DOM_LOAD_AND_SELECT
+├─ List of known URLs (in a file)? → crawl --seed-file urls.txt --depth 0 --sql @query.sql
+├─ Crawl from a start URL (follow links)? → crawl <url> --out-link-selector "..." --depth N
+├─ Need parallel execution (high throughput)? → swarm create → swarm query --seed-file ...
+├─ Repeated monitoring (check every hour)? → loop -- eval "..." -i 3600
+└─ Just a few URLs in a shell script?
+   → for url in ...; do browser4-cli goto "$url"; ... done
+```
+
+### How to Turn HTML into Spreadsheets — Zero Tokens
+
+[WebMiner](https://github.com/platonai/web-miner) runs ML clustering on downloaded HTML files to produce structured spreadsheets and interactive reports — **no LLM tokens, everything runs locally.**
+
+```
+Have HTML files and want structured data — without tokens?
+├─ < 1,000 pages (small to medium)? → WebMiner Free (SMILE ML engine)
+│  java -jar scent-miner.jar all ./pages/
+│  → Interactive HTML report + Excel spreadsheets — local, zero cost
+├─ > 1,000 pages (production scale)? → WebMiner Commercial (Apache Spark ML)
+│  Same encode → cluster → views pipeline, distributed across machines
+└─ Need to acquire pages first?
+   ├─ Single pages: browser4-cli htmlsnapshot export
+   ├─ Bulk download: browser4-cli crawl --seed-file urls.txt --depth 0
+   └─ High throughput: browser4-cli swarm create → swarm query --seed-file ...
+       Then feed the HTML directory to WebMiner
+```
+
+> **Pipeline:** `encode` (HTML → feature vectors → CSV) → `cluster` (KMeans, auto-detected K) → `views` (HTML report + Excel). Free tier uses the [SMILE](https://haifengl.github.io/) ML library for single-machine clustering (< 1,000 pages). Requires JDK 17+. See [web-miner](https://github.com/platonai/web-miner) for install instructions.
 
 ---
 

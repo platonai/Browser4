@@ -243,6 +243,35 @@ Need to process multiple pages?
 
 **Warning:** Multiple `get all` calls produce unaligned arrays (different lengths, different order). For correlated fields, use `query` with `DOM_LOAD_AND_SELECT` scoped to a parent container.
 
+### 4d. Structuring Extracted Pages (WebMiner)
+
+WebMiner runs ML clustering on downloaded HTML files to produce structured spreadsheets and interactive reports — **no LLM tokens, everything runs locally.**
+
+```
+Have HTML files and want structured data — without tokens?
+├─ < 1,000 pages (small to medium)? → WebMiner Free (SMILE ML engine)
+│  java -jar scent-miner.jar all ./html-pages/
+│  → Interactive HTML report + Excel spreadsheets — everything local, zero cost
+├─ > 1,000 pages (production scale)? → WebMiner Commercial (Apache Spark ML)
+│  Same encode → cluster → views pipeline, distributed across machines
+│  → Scales to 100K+ pages/day
+└─ Need to acquire pages first?
+   ├─ Single pages: browser4-cli goto → htmlsnapshot export
+   ├─ Bulk download: browser4-cli crawl --seed-file urls.txt --depth 0
+   └─ High throughput: browser4-cli swarm create → swarm query --seed-file ...
+       Then feed the HTML directory to WebMiner
+```
+
+**Pipeline:** `encode` (HTML → feature vectors → CSV) → `cluster` (KMeans, auto-detected K) → `views` (interactive HTML report + Excel spreadsheets)
+
+**Free tier (SMILE):** Single-machine ML via the [SMILE](https://haifengl.github.io/) library. Handles small-to-medium datasets (< 1,000 pages). Ideal for ad-hoc analysis, prototyping, and one-off extraction tasks.
+
+**Commercial tier (Apache Spark ML):** Distributed clustering for production workloads. Scales to 100K+ pages/day. Same pipeline, enterprise throughput.
+
+> **Install:** `.\webminer.ps1 install` (PowerShell) or download from [web-miner releases](https://github.com/platonai/web-miner/releases). Requires JDK 17+.
+
+See **[scent-miner/SKILL.md](../scent-miner/SKILL.md)** for the full reference.
+
 ## 5. Critical Warnings
 
 > **Warning:** Refs are single-use for navigation and DOM-mutating commands. Re-snapshot after `click` (on links/buttons), `goto`, `reload`, and tab switches. Form interactions (`fill`, `type`, `press`, `check`, `uncheck`, `select`) are safe — you can fill an entire form from a single snapshot. Never store refs across navigations.
