@@ -28,6 +28,7 @@ mod skills;
 mod snapshot;
 mod snapshot_diff;
 mod state;
+mod timing;
 mod tips;
 
 use std::collections::{HashMap, HashSet};
@@ -14730,6 +14731,7 @@ fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::Gl
             show_tip: global.show_tip,
             pretty: global.pretty,
             help_json: global.help_json,
+            timing: global.timing,
             timeout_secs: global.timeout_secs,
             args: rewritten,
         };
@@ -15732,6 +15734,8 @@ async fn run(
     show_tip_init(global.show_tip);
     // Initialise pretty-print mode when --pretty is active.
     pretty_init(global.pretty);
+    // Initialise timing mode when --timing is active.
+    timing::timing_init(global.timing);
 
     // ── Help dispatch ────────────────────────────────────────────────
     //
@@ -15972,6 +15976,9 @@ async fn run(
     }
 
     let client = make_client();
+
+    // Wall-clock start for --timing.
+    let command_start = std::time::Instant::now();
 
     // Dispatch the command
     match command {
@@ -16944,6 +16951,19 @@ async fn run(
                 }
             }
             result?;
+        }
+    }
+
+    // ── Timing report (--timing global flag) ───────────────────────────
+    {
+        let total_ms = command_start.elapsed().as_millis() as u64;
+        if timing::timing_active() {
+            let samples = timing::take_timing_samples();
+            if !samples.is_empty() {
+                json_field("timing", timing::to_json(&samples, total_ms));
+                cli_println!();
+                cli_println!("{}", timing::render_human(&samples, total_ms));
+            }
         }
     }
 
@@ -18094,6 +18114,7 @@ mod tests {
             show_tip: false,
             pretty: false,
             help_json: false,
+            timing: false,
             timeout_secs: None,
             args: vec![
                 "agent".to_string(),
@@ -18121,6 +18142,7 @@ mod tests {
             show_tip: false,
             pretty: false,
             help_json: false,
+            timing: false,
             timeout_secs: None,
             args: vec!["agent-run".to_string(), "task".to_string()],
         };

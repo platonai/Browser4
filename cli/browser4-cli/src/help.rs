@@ -198,6 +198,11 @@ pub fn generate_help() -> String {
         30,
     ));
     lines.push(format_with_gap(
+        "  --timing",
+        "print per-command timing breakdown (total / network / backend)",
+        30,
+    ));
+    lines.push(format_with_gap(
         "  -tip, --show-tip",
         "show a relevant tip on stderr after each command",
         30,
@@ -285,6 +290,7 @@ pub fn generate_quick_reference() -> String {
     lines.push(fmt_cmd("--server <url>", "Override Browser4 server URL"));
     lines.push(fmt_cmd("--timeout <s>", "Override HTTP timeout for tool calls"));
     lines.push(fmt_cmd("--pretty", "Pretty-print JSON output"));
+    lines.push(fmt_cmd("--timing", "Print per-command timing breakdown (total / network / backend)"));
 
     // ── Learn more ──
     lines.push(String::new());
@@ -356,6 +362,7 @@ pub fn generate_help_json(sub_command: Option<&str>) -> String {
         "--timeout": {"type": "int", "description": "Override HTTP timeout for tool calls (seconds)"},
         "--proxy": {"type": "string", "description": "Manual HTTP proxy for downloads"},
         "--pretty": {"type": "bool", "description": "Pretty-print JSON output"},
+        "--timing": {"type": "bool", "description": "Print per-command timing breakdown (total / network / backend)"},
         "-tip, --show-tip": {"type": "bool", "description": "Show relevant tips on stderr after commands"},
         "--help-json": {"type": "bool", "description": "Emit this JSON help and exit"},
     });

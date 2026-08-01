@@ -51,7 +51,10 @@ data class MCPToolCallResponse(
     val isError: Boolean = false,
     @get:JsonProperty("_pagination")
     @param:JsonProperty("_pagination")
-    val pagination: PaginationMeta? = null
+    val pagination: PaginationMeta? = null,
+    @get:JsonProperty("_timing")
+    @param:JsonProperty("_timing")
+    val timing: TimingMeta? = null
 )
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -72,6 +75,17 @@ data class PaginationMeta(
     @param:JsonProperty("totalLines") val totalLines: Int,
     @param:JsonProperty("pageSize") val pageSize: Int,
     @param:JsonProperty("truncated") val truncated: Boolean = true
+)
+
+/**
+ * Server-side timing metadata attached to MCP responses when the client
+ * sends the `X-Timing: 1` request header.
+ * The CLI reads this from the `_timing` envelope field to separate
+ * network latency from backend compute time.
+ */
+@JsonInclude(JsonInclude.Include.NON_NULL)
+data class TimingMeta(
+    @param:JsonProperty("totalMillis") val totalMillis: Long
 )
 
 // ---------------------------------------------------------------------------
@@ -250,14 +264,18 @@ class MCPToolController(
     @PostMapping("/call-tool", consumes = [MediaType.APPLICATION_JSON_VALUE])
     suspend fun callTool(
         @RequestBody request: MCPToolCallRequest,
+        @RequestHeader(value = "X-Timing", required = false) timingHeader: String?,
         response: HttpServletResponse
     ): ResponseEntity<MCPToolCallResponse> {
         addRequestId(response)
 
+        val startedAt = System.currentTimeMillis()
+        val timingRequested = timingHeader?.equals("1", ignoreCase = true) == true
+
         logger.info("Calling tool: ${request.tool} " + request.arguments?.entries?.joinToString(" ") { "--" + it.key + "=" + it.value })
 
         return try {
-            when (request.tool) {
+            attachTiming(when (request.tool) {
                 // Session lifecycle tools — remain inline (no session required to call these)
                 "open_session" -> handleOpenSession(request)
                 "close_session" -> handleCloseSession(request)
@@ -270,11 +288,22 @@ class MCPToolController(
                 "command_batch" -> handleCommandBatch(request)
                 // All other tools → dynamic dispatch through CustomToolRegistry or AgentToolManager
                 else -> dispatchToToolExecutor(request)
-            }
+            }, startedAt, timingRequested)
         } catch (e: Throwable) {
             logger.error("MCP tool call failed | tool={} | {}", request.tool, e.message, e)
-            ResponseEntity.ok(errorResponse("${request.tool} failed: ${exceptionChainMessage(e)}"))
+            attachTiming(ResponseEntity.ok(errorResponse("${request.tool} failed: ${exceptionChainMessage(e)}")), startedAt, timingRequested)
         }
+    }
+
+    /** Attach `_timing` metadata when the client requested it via `X-Timing: 1`. */
+    private fun attachTiming(
+        entity: ResponseEntity<MCPToolCallResponse>,
+        startedAt: Long,
+        requested: Boolean
+    ): ResponseEntity<MCPToolCallResponse> {
+        if (!requested) return entity
+        val body = entity.body ?: return entity
+        return ResponseEntity.ok(body.copy(timing = TimingMeta(System.currentTimeMillis() - startedAt)))
     }
 
     /**

@@ -2,6 +2,7 @@
 
 use reqwest::Client;
 use serde_json::{json, Value};
+use std::time::Instant;
 
 use crate::state::resolve_ref;
 
@@ -363,7 +364,13 @@ async fn call_tool_with_timeout(
     } else {
         request
     };
+    let request = if crate::timing::timing_active() {
+        request.header("X-Timing", "1")
+    } else {
+        request
+    };
 
+    let start = Instant::now();
     let response = request
         .send()
         .await
@@ -374,8 +381,10 @@ async fn call_tool_with_timeout(
         .text()
         .await
         .map_err(|e| format!("Failed to read response body: {e}"))?;
+    let http_ms = start.elapsed().as_millis() as u64;
 
     if !status.is_success() {
+        crate::timing::record_tool_call(tool, http_ms, None);
         let message = response_text.trim();
         if message.is_empty() {
             return Err(format!(
@@ -421,6 +430,12 @@ async fn call_tool_with_timeout(
     let pagination = data
         .get("_pagination")
         .and_then(ServerPaginationMeta::from_json);
+
+    let backend_ms = data
+        .get("_timing")
+        .and_then(|t| t.get("totalMillis"))
+        .and_then(|v| v.as_u64());
+    crate::timing::record_tool_call(tool, http_ms, backend_ms);
 
     Ok(CallToolResult { text, pagination })
 }
