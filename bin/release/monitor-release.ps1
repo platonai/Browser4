@@ -148,7 +148,9 @@ function Extract-MinimalErrors {
 
     if ($errors.Count -eq 0) {
         # No patterns matched — return last 40 lines as fallback
-        $tail = @($LogLines | Select-Object -Last 40)
+        # Select-Object returns Object[]; iterate with ForEach-Object to get strings
+        $tail = [System.Collections.Generic.List[string]]::new()
+        $LogLines | Select-Object -Last 40 | ForEach-Object { $tail.Add([string]$_) }
         $errors.Add("(No specific error patterns matched — last 40 log lines)")
         $errors.AddRange($tail)
     }

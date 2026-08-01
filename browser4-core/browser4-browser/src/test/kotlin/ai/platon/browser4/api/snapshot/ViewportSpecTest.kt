@@ -75,10 +75,10 @@ class ViewportSpecTest {
     }
 
     @Test
-    @DisplayName("negative indices in ranges are clamped to 0")
-    fun testNegativeRangeClamped() {
-        // Range splitting: "0--1" -> parts ["0", "-1"], both clamped to 0 -> [0]
-        assertEquals(listOf(0), ViewportSpec.parse("0--1"))
+    @DisplayName("range endpoints are clamped to 0 (negative ranges not meaningful)")
+    fun testNegativeInRangeClamped() {
+        // Range with negative start: start clamped to 0
+        assertEquals(listOf(0, 1, 2, 3), ViewportSpec.parse("-1-3"))
     }
 
     @Test
