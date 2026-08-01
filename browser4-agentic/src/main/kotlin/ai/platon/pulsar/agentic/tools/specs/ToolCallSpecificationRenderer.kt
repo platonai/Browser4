@@ -2,6 +2,7 @@ package ai.platon.pulsar.agentic.tools.specs
 
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Supported formats for rendering tool-call specifications.
@@ -11,7 +12,7 @@ enum class ToolSpecFormat {
      * Kotlin-like syntax: `domain.method(arg: Type = default): ReturnType`
      */
     KOTLIN,
-    
+
     /**
      * JSON format: structured JSON array with tool definitions
      */
@@ -27,12 +28,43 @@ enum class ToolSpecFormat {
  * Supports two formats:
  * - [ToolSpecFormat.KOTLIN]: Kotlin-like syntax (default)
  * - [ToolSpecFormat.JSON]: JSON format for structured tool definitions
+ *
+ * ## Built-in domain specs (dynamic registry)
+ *
+ * Executors that are part of the core agent (e.g., coding, cli) can register
+ * their tool specs via [registerBuiltinDomainSpecs] so they appear in the LLM
+ * prompt without being hardcoded in [ToolSpecification.TOOL_CALL_SPECIFICATION].
+ * Registration is idempotent — calling it multiple times with the same domain
+ * and specs is safe.
  */
 object ToolCallSpecificationRenderer {
 
     /**
+     * Registry of tool specs for built-in domains that live outside the hardcoded
+     * [ToolSpecification.TOOL_CALL_SPECIFICATION] string (e.g., coding, cli).
+     *
+     * Keyed by domain name; each entry is an immutable list of [ToolSpec].
+     * Populated by [AgentToolManager] (or other framework code) at init time.
+     */
+    private val builtinDomainSpecs = ConcurrentHashMap<String, List<ToolSpec>>()
+
+    /**
+     * Register tool specs for a built-in domain.
+     *
+     * These specs are merged into the prompt tool list alongside the hardcoded
+     * built-in tools.  Domains already present in [ToolSpecification.TOOL_CALL_SPECIFICATION]
+     * are skipped (the hardcoded version takes precedence).
+     *
+     * @param domain  The domain name (e.g. "coding", "cli").
+     * @param specs   The tool specs to expose to the LLM.
+     */
+    fun registerBuiltinDomainSpecs(domain: String, specs: List<ToolSpec>) {
+        builtinDomainSpecs[domain] = specs.toList() // defensive copy
+    }
+
+    /**
      * Render built-in tool-call specs from [ToolSpecification.TOOL_CALL_SPECIFICATION] (verbatim)
-     * plus optional custom tool-call specs.
+     * plus optional custom tool-call specs, plus dynamically-registered built-in domain specs.
      */
     fun render(
         includeCustomDomains: Boolean = true,
@@ -40,27 +72,40 @@ object ToolCallSpecificationRenderer {
     ): String {
         val builtIn = ToolSpecification.TOOL_CALL_SPECIFICATION.trimEnd()
 
-        if (!includeCustomDomains) {
-            return builtIn
+        // Gather extra built-in domain specs for domains NOT already in the hardcoded string.
+        val hardcodedDomains = ToolSpecification.BUILTIN_DOMAINS_IN_SPEC
+        val extraBuiltinSpecs = builtinDomainSpecs
+            .filterKeys { it !in hardcodedDomains }
+            .values
+            .flatten()
+
+        val customSpecs = if (includeCustomDomains) {
+            CustomToolRegistry.instance.getAllDomains()
+                .asSequence()
+                .filter { customDomainFilter?.invoke(it) ?: true }
+                .flatMap { CustomToolRegistry.instance.getToolCallSpecifications(it).asSequence() }
+                .toList()
+        } else {
+            emptyList()
         }
 
-        val customSpecs = CustomToolRegistry.instance.getAllDomains()
-            .asSequence()
-            .filter { customDomainFilter?.invoke(it) ?: true }
-            .flatMap { CustomToolRegistry.instance.getToolCallSpecifications(it).asSequence() }
-            .toList()
-
-        if (customSpecs.isEmpty()) {
+        if (extraBuiltinSpecs.isEmpty() && customSpecs.isEmpty()) {
             return builtIn
         }
-
-        val custom = renderCustomTools(customSpecs)
 
         return buildString {
             append(builtIn)
-            append("\n\n")
-            append("// CustomTool\n")
-            append(custom)
+
+            if (extraBuiltinSpecs.isNotEmpty()) {
+                append("\n\n")
+                append(render(extraBuiltinSpecs))
+            }
+
+            if (customSpecs.isNotEmpty()) {
+                append("\n\n")
+                append("// CustomTool\n")
+                append(renderCustomTools(customSpecs))
+            }
         }.trimEnd()
     }
 
@@ -95,7 +140,14 @@ object ToolCallSpecificationRenderer {
         customDomainFilter: ((String) -> Boolean)? = null,
     ): String {
         val builtInSpecs = parseBuiltInSpecifications()
-        
+
+        // Merge dynamically-registered built-in domain specs (e.g., coding, cli)
+        val hardcodedDomains = ToolSpecification.BUILTIN_DOMAINS_IN_SPEC
+        val extraBuiltinSpecs = builtinDomainSpecs
+            .filterKeys { it !in hardcodedDomains }
+            .values
+            .flatten()
+
         val customSpecs = if (includeCustomDomains) {
             CustomToolRegistry.instance.getAllDomains()
                 .asSequence()
@@ -105,11 +157,11 @@ object ToolCallSpecificationRenderer {
         } else {
             emptyList()
         }
-        
-        val allSpecs = (builtInSpecs + customSpecs)
+
+        val allSpecs = (builtInSpecs + extraBuiltinSpecs + customSpecs)
             .distinctBy { distinctKey(it) }
             .sortedWith(compareBy({ it.domain }, { it.method }, { it.arguments.size }))
-        
+
         return renderSpecsAsJson(allSpecs)
     }
 

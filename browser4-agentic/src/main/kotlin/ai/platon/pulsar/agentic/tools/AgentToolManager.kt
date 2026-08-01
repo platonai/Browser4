@@ -12,6 +12,7 @@ import ai.platon.pulsar.agentic.skills.SkillRegistry
 import ai.platon.pulsar.agentic.skills.tools.SkillToolExecutor
 import ai.platon.pulsar.agentic.skills.tools.SkillToolTarget
 import ai.platon.pulsar.agentic.tools.builtin.*
+import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationRenderer
 import ai.platon.pulsar.common.getLogger
 import ai.platon.browser4.api.WebDriver
 import kotlinx.coroutines.delay
@@ -109,6 +110,20 @@ class AgentToolManager constructor(
     val registeredExecutors: Map<String, ToolExecutor> get() = executor.toolExecutors
 
     val customTargets: Map<String, Any> get() = _customTargets
+
+    init {
+        // Register coding and cli tool specs so they appear in the LLM prompt.
+        // The ToolCallSpecificationRenderer merges these dynamically-registered
+        // specs alongside the hardcoded ToolSpecification.TOOL_CALL_SPECIFICATION.
+        ToolCallSpecificationRenderer.registerBuiltinDomainSpecs(
+            "coding",
+            CodingToolExecutor().getToolSpecs().values.toList()
+        )
+        ToolCallSpecificationRenderer.registerBuiltinDomainSpecs(
+            "cli",
+            cliExecutor.getToolSpecs().values.toList()
+        )
+    }
 
     /**
      * Register a custom target object for a specific domain.
