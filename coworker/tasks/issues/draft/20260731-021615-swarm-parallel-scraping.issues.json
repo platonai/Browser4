@@ -1,0 +1,334 @@
+{
+  "meta": {
+    "source": "20260731-021615-swarm-parallel-scraping.full.md",
+    "date": "20260731-021615",
+    "mode": "dev",
+    "scenario": "swarm-parallel-scraping"
+  },
+  "background": {
+    "task": "**Task: Swarm-based product data extraction from MockSite**\n\nThe task was completed successfully:\n\n1. **Swarm session created** with `--display-mode HEADLESS`, `--max-browser-contexts 2`, `--max-open-tabs 4`. Session ID: `SWARM`.\n\n2. **Seed file created** with 10 product URLs (6 Electronics: B0E000001–B0E000006; 4 Home: B0H000001–B0H000004).\n\n3. **X-SQL query** written to extract `DOM_BASE_URI(DOM) AS url`, `DOM_FIRST_TEXT(DOM, '#productTitle') AS title`, `DOM_FIRST_TEXT(DOM, '#product-price') AS price`, and `DOM_FIRST_ATTR(DOM, '#product-image', 'src') AS image_url` from each product page.\n\n4. **10 X-SQL extraction jobs** submitted via `swarm query --sql @file --seed-file --refresh`. All 10 completed successfully, returning structured data for every product.\n\n5. **1 plain scrape job** submitted via `swarm submit` (no `--sql`). Completed, returning page confirmation (4626 bytes fetched) but no extracted fields — demonstrating the difference between the two submission methods.\n\n6. **All jobs polled and results retrieved.** All 10 X-SQL jobs returned title, price, and image_url for their respective products. The plain scrape job returned only the URL.\n\n7. **Task history listed** via `swarm list` — 22 total tracked tasks (11 new + 11 from prior sessions).\n\n8. **Swarm session closed** — resources released, confirmed by `list` showing no active sessions.\n\n**Extracted data summary:**\n\n| Product ID | Title | Price |\n|---|---|---|\n| B0E000001 | 4K OLED TV 55 | $899.99 |\n| B0E000002 | Wireless Noise-Cancelling Headphones | $199.99 |\n| B0E000003 | Portable Bluetooth Speaker | $49.99 |\n| B0E000004 | Smartphone 128GB | $599.00 |\n| B0E000005 | USB-C Hub 7-in-1 | $29.95 |\n| B0E000006 | Wireless Mouse | $24.99 |\n| B0H000001 | Vacuum Cleaner Smart | $159.99 |\n| B0H000002 | Air Purifier | $129.50 |\n| B0H000003 | Essential Oil Diffuser | $22.99 |\n| B0H000004 | LED Desk Lamp | $35.99 |\n\n---",
+    "executionContext": "**Commands used:**\n1. `curl` — Verified MockSite running on localhost:18080\n2. `curl` — Explored product page HTML structure (B0E000001, B0H000001) to identify CSS selectors\n3. `pwsh ... b4w.ps1 swarm create --display-mode HEADLESS --max-browser-contexts 2 --max-open-tabs 4` — Created swarm session\n4. Created seed file (`.test-sessions/seed-urls.txt`) and X-SQL query (`.test-sessions/extract-products.sql`) via bash heredocs\n5. `pwsh ... b4w.ps1 swarm query --sql @file --seed-file --refresh` — Submitted 10 X-SQL extraction jobs\n6. `pwsh ... b4w.ps1 swarm submit <url> --refresh` — Submitted 1 plain scrape job\n7. `pwsh ... b4w.ps1 swarm list` — Listed all tracked tasks\n8. `pwsh ... b4w.ps1 swarm status <id>` (×11) — Polled each job until `isDone: true`\n9. `pwsh ... b4w.ps1 swarm result <id>` (×11) — Retrieved results for all jobs\n10. `pwsh ... b4w.ps1 swarm close` — Closed swarm session (timed out at 30s but succeeded)\n11. `pwsh ... b4w.ps1 list` — Verified no active sessions remain\n\n**Important decisions:**\n- Used `pwsh -NoProfile -ExecutionPolicy Bypass -File` invocation because `./b4w.sh` failed to resolve the PowerShell path from Git Bash (Unix-style `/d/...` path not recognized by PowerShell)\n- Used individual argument quoting for flags like `\"--sql\"`, `\"--seed-file\"` to prevent PowerShell parameter binding issues\n- Used `:root` as the DOM_LOAD_AND_SELECT scope selector since product pages are detail pages (single product), not list pages\n- Used `DOM_FIRST_ATTR` instead of `DOM_ABS_SRC` for image URL — returned relative paths\n\n**Workarounds required:**\n- Task instructions specified `$(./b4w.ps1)` invocation but this doesn't work in bash — used direct `pwsh` invocation instead\n- `./b4w.sh` wrapper broken in Git Bash due to path translation — bypassed entirely\n- `swarm close` hung beyond 30s timeout; retried with `close-all` (returned 0 sessions), then `swarm close` again (returned \"Session required\"), confirming the first invocation actually succeeded\n- Had to poll individual task statuses because `swarm list` showed stale \"queued\" labels even after jobs completed\n\n---\n\n## C & D. Issues and Assessment\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"b4w.sh wrapper fails in Git Bash due to Unix/Windows path mismatch\",\n      \"severity\": \"High\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"Run `./b4w.sh help` from Git Bash in the repo root.\",\n      \"expected\": \"Browser4 CLI help output.\",\n      \"actual\": \"Error: \\\"The term '/d/workspace/Browser4/Browser4-4.12/b4w.ps1' is not recognized as a name of a cmdlet, function, script file, or executable program.\\\" PowerShell cannot resolve Unix-style paths produced by `pwd` in bash.\",\n      \"rootCause\": \"`b4w.sh` line 37 uses `SCRIPT_DIR=\\\"$(cd \\\"$(dirname \\\"$0\\\")\\\" && pwd)\\\"` which produces a Unix-style path like `/d/workspace/Browser4/...`. This path is passed to `pwsh -File` which cannot resolve it. The fix needs to translate the path to Windows format (e.g., `D:/workspace/...` or `D:\\\\workspace\\\\...`) before passing to pwsh.\",\n      \"codePointer\": \"b4w.sh:37 — SCRIPT_DIR assignment needs cygpath/mountpoint translation for Git Bash on Windows\",\n      \"suggestion\": \"- On Git Bash, use `cygpath -w \\\"$SCRIPT_DIR\\\"` or `cmd //c cd` to produce a Windows-compatible path before passing to pwsh\\n- Alternatively, use `pwsh -Command` with a working-directory parameter instead of resolving the script path\\n- Document that Git Bash users should use `pwsh -File` directly as a workaround\"\n    },\n    {\n      \"title\": \"Task invocation syntax `$(./b4w.ps1)` is ambiguous/incorrect in bash\",\n      \"severity\": \"Medium\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"Read the task instructions which say to invoke as `$(./b4w.ps1) <command>`.\",\n      \"expected\": \"A working bash command.\",\n      \"actual\": \"`$(./b4w.ps1)` is bash command-substitution syntax — it tries to execute b4w.ps1 as a binary and substitute its stdout. This fails because (a) PowerShell scripts aren't bash-executable, and (b) command substitution misinterprets the invocation intent.\",\n      \"rootCause\": \"The `$(...)` notation was probably intended as a placeholder meaning \\\"substitute the appropriate wrapper\\\" but bash interprets it as literal command substitution syntax.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- In task instructions, use a bash-compatible pattern like `./b4w.sh` (Git Bash) or `pwsh -File b4w.ps1` (PowerShell)\\n- Use angle-bracket notation like `<wrapper> <command>` to clearly indicate substitution without bash ambiguity\"\n    },\n    {\n      \"title\": \"swarm list shows stale status labels after jobs complete\",\n      \"severity\": \"Medium\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"Submit swarm jobs, wait a few seconds, run `swarm list`.\",\n      \"expected\": \"Status column reflects actual job state (queued → processing → completed).\",\n      \"actual\": \"`swarm list` showed all 11 new jobs as 'queued' even though `swarm status` showed 8 of them as completed (`isDone: true`). The list only updated to 'completed' after all jobs finished.\",\n      \"rootCause\": \"`swarm list` appears to cache or batch its status updates, or the live backend query for each tracked task isn't triggered on every invocation. Individual `swarm status` calls return the correct live state immediately.\",\n      \"codePointer\": \"cli/browser4-cli/src/ — swarm list command implementation; may need to force a backend status refresh per task\",\n      \"suggestion\": \"- Make `swarm list` perform a live backend query for every tracked task on each invocation (as documented: \\\"queries the backend for live status\\\")\\n- Or add a `--refresh` flag to `swarm list` to force re-query\\n- The current behavior contradicts the documentation which says it queries live status on every invocation\"\n    },\n    {\n      \"title\": \"swarm close command hangs indefinitely\",\n      \"severity\": \"High\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"Run `swarm close` after a swarm session with completed jobs.\",\n      \"expected\": \"Quick confirmation that the swarm session was closed and resources released.\",\n      \"actual\": \"Command exceeded 30s timeout. On retry, `swarm close` returned 'Session required' error (session already closed). The initial close succeeded but produced no visible output before the timeout.\",\n      \"rootCause\": \"The swarm close operation may be waiting for browser context cleanup or worker thread termination. The HTTP request likely completed successfully but the CLI output was delayed or lost. The error message on retry ('Session required') is misleading — it should say 'No active swarm session' or 'Session already closed'.\",\n      \"codePointer\": \"browser4-rest/ — SwarmController or equivalent: close endpoint cleanup logic; cli/browser4-cli — swarm close command output handling\",\n      \"suggestion\": \"- Add a timeout for browser context cleanup during close (e.g., force-kill after 10s)\\n- Ensure close response is sent immediately after session invalidation, even if browser cleanup continues in background\\n- Return a distinct error message for \\\"session already closed\\\" instead of the generic 'Session required'\\n- Consider adding a `--force` flag to skip graceful shutdown\"\n    },\n    {\n      \"title\": \"close-all does not close the SWARM session\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"After a swarm session, run `close-all`.\",\n      \"expected\": \"All sessions including SWARM are closed.\",\n      \"actual\": \"\\\"Closed 0 session(s)\\\" — the SWARM session is not counted or closed by `close-all`. The user must use `swarm close` specifically.\",\n      \"rootCause\": \"The swarm session uses a special session ID (`SWARM`) that is managed separately from named/default sessions tracked by `close-all`.\",\n      \"codePointer\": \"browser4-rest/ — session management: SWARM session should be included in close-all scope, or close-all help should document this exclusion\",\n      \"suggestion\": \"- Include the SWARM session in `close-all` enumeration\\n- Or document in `close-all` help that swarm sessions require `swarm close`\\n- Or add a dedicated `close-all --include-swarm` flag\"\n    },\n    {\n      \"title\": \"swarm create warns about stale tasks but offers no guided resolution\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run `swarm create` when stale tasks from prior sessions exist.\",\n      \"expected\": \"A clear prompt or option to clean stale tasks.\",\n      \"actual\": \"Warning: '11 swarm task(s) from prior sessions are still tracked.' followed by advice to run `swarm list --clear` or `swarm create --clear-stale`. This requires the user to abort, clear, and recreate — a multi-step recovery.\",\n      \"rootCause\": \"Stale task tracking persists across sessions. The create command detects this but doesn't offer an interactive resolution.\",\n      \"codePointer\": \"cli/browser4-cli/src/ — swarm create command: should support interactive prompt or auto-clean\",\n      \"suggestion\": \"- Offer an interactive prompt: 'Clear 11 stale tasks? [Y/n]' during `swarm create`\\n- Or auto-clear stale tasks when creating a new swarm (with a note)\\n- Add the warning to `swarm query` and `swarm submit` as well, since new users may not run `swarm create` separately\"\n    },\n    {\n      \"title\": \"CLI/backend version mismatch warning on every command\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run `status` from a dev build.\",\n      \"expected\": \"Clean status output or a suppressed version mismatch for dev builds.\",\n      \"actual\": \"Warning: 'CLI is 4.12.2 but running backend is 4.12.2-SNAPSHOT. The CLI and backend were built from different versions of the source tree.' This appears on every `swarm status` output, polluting JSON parsing.\",\n      \"rootCause\": \"The dev-mode CLI auto-builds from source producing a release version while the backend runs from a SNAPSHOT JAR. The version check compares literal strings and treats the SNAPSHOT suffix as a mismatch.\",\n      \"codePointer\": \"cli/browser4-cli/src/ — version check logic: should normalize SNAPSHOT suffixes or suppress mismatch for local builds\",\n      \"suggestion\": \"- Treat X.Y.Z matching X.Y.Z-SNAPSHOT as compatible (ignore the -SNAPSHOT suffix)\\n- Or suppress the warning when running from a dev build (detected via build profile or env var)\\n- Or print the warning on stderr only, so `--json` output is not polluted\"\n    },\n    {\n      \"title\": \"DOM_FIRST_ATTR returns relative image URLs; no obvious way to get absolute URLs from docs\",\n      \"severity\": \"Medium\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"Use `DOM_FIRST_ATTR(DOM, '#product-image', 'src')` in an X-SQL query.\",\n      \"expected\": \"Absolute image URL or clear documentation on how to get one.\",\n      \"actual\": \"Returns `/ec/static/img/placeholder.png` (relative path). `DOM_ABS_SRC` exists but is not prominently documented in the quick-start patterns or swarm examples.\",\n      \"rootCause\": \"The X-SQL reference documents `DOM_ABS_SRC` in the function index table but the swarm.md quick-start examples only show `DOM_FIRST_SRC` or `DOM_FIRST_ATTR`. Users who copy the examples get relative URLs.\",\n      \"codePointer\": \"skills/browser4-cli/references/swarm.md — quick-start examples should use DOM_ABS_SRC or note the distinction\",\n      \"suggestion\": \"- Update swarm.md and x-sql.md quick-start examples to use `DOM_ABS_SRC` or `DOM_FIRST_ATTR(... , 'src')` with a note about absolute vs relative\\n- Add a tip in the results section that relative URLs can be resolved by prefixing `DOM_BASE_URI(DOM)`\\n- Consider adding a `DOM_ABS_ATTR` function for consistency\"\n    },\n    {\n      \"title\": \"No --json support on swarm status/result for machine-parsable output\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run `swarm status <id> --json` or `swarm result <id> --json`.\",\n      \"expected\": \"Clean JSON output without the version-mismatch warning and other human-readable text mixed in.\",\n      \"actual\": \"`swarm status` already outputs JSON by default, but it includes the version-mismatch warning on stdout (not stderr), which breaks JSON parsing. `--json` flag doesn't suppress these warnings.\",\n      \"rootCause\": \"Version mismatch warning is printed to stdout alongside JSON output rather than stderr.\",\n      \"codePointer\": \"cli/browser4-cli/src/ — version check warning should route to stderr\",\n      \"suggestion\": \"- Route all warnings, tips, and diagnostic messages to stderr, not stdout\\n- Ensure `--json` mode suppresses all non-JSON output on stdout\\n- Add a `--quiet` mode that suppresses even stderr diagnostics\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Successful — all task steps completed. 10 X-SQL extraction jobs and 1 plain scrape job all completed. Results retrieved for all products (10 Electronics and Home products). Swarm session closed.\",\n    \"successRate\": \"90% — core extraction workflow worked perfectly. 10/10 extraction jobs and 1/1 scrape job succeeded. The only partial failure was `swarm close` timeout (session actually closed, just output not captured).\",\n    \"issuesFound\": 9,\n    \"majorBlockers\": \"None for the core task. The b4w.sh wrapper failure in Git Bash required using direct pwsh invocation as a workaround, but this did not block progress. The swarm close timeout is a reliability concern but the session closed successfully.\",\n    \"mostConfusingAspects\": \"1) The `$(./b4w.ps1)` invocation syntax in task instructions is ambiguous in bash. 2) The `b4w.sh` wrapper silently fails without a clear error about path translation. 3) `swarm list` status labels lag behind actual job state. 4) Stale task accumulation from prior sessions creates noise for first-time users.\",\n    \"mostValuableImprovements\": \"1) Fix b4w.sh path translation for Git Bash on Windows (critical — blocks the documented workflow). 2) Make swarm list show live status on every invocation as documented. 3) Reduce swarm close latency or add graceful timeout. 4) Route all warnings to stderr for JSON-safe stdout. 5) Auto-clean or interactively prompt to clear stale swarm tasks on create.\",\n    \"usabilityRating\": 6\n  }\n}\n```"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "b4w.sh wrapper fails in Git Bash due to Unix/Windows path mismatch",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run `./b4w.sh help` from Git Bash in the repo root."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Browser4 CLI help output."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Error: \"The term '/d/workspace/Browser4/Browser4-4.12/b4w.ps1' is not recognized as a name of a cmdlet, function, script file, or executable program.\" PowerShell cannot resolve Unix-style paths produced by `pwd` in bash."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "`b4w.sh` line 37 uses `SCRIPT_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"` which produces a Unix-style path like `/d/workspace/Browser4/...`. This path is passed to `pwsh -File` which cannot resolve it. The fix needs to translate the path to Windows format (e.g., `D:/workspace/...` or `D:\\workspace\\...`) before passing to pwsh."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "b4w.sh:37 — SCRIPT_DIR assignment needs cygpath/mountpoint translation for Git Bash on Windows"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- On Git Bash, use `cygpath -w \"$SCRIPT_DIR\"` or `cmd //c cd` to produce a Windows-compatible path before passing to pwsh\n- Alternatively, use `pwsh -Command` with a working-directory parameter instead of resolving the script path\n- Document that Git Bash users should use `pwsh -File` directly as a workaround"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "swarm close command hangs indefinitely",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run `swarm close` after a swarm session with completed jobs."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Quick confirmation that the swarm session was closed and resources released."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Command exceeded 30s timeout. On retry, `swarm close` returned 'Session required' error (session already closed). The initial close succeeded but produced no visible output before the timeout."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The swarm close operation may be waiting for browser context cleanup or worker thread termination. The HTTP request likely completed successfully but the CLI output was delayed or lost. The error message on retry ('Session required') is misleading — it should say 'No active swarm session' or 'Session already closed'."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-rest/ — SwarmController or equivalent: close endpoint cleanup logic; cli/browser4-cli — swarm close command output handling"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a timeout for browser context cleanup during close (e.g., force-kill after 10s)\n- Ensure close response is sent immediately after session invalidation, even if browser cleanup continues in background\n- Return a distinct error message for \"session already closed\" instead of the generic 'Session required'\n- Consider adding a `--force` flag to skip graceful shutdown"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "Task invocation syntax `$(./b4w.ps1)` is ambiguous/incorrect in bash",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Read the task instructions which say to invoke as `$(./b4w.ps1) <command>`."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A working bash command."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "`$(./b4w.ps1)` is bash command-substitution syntax — it tries to execute b4w.ps1 as a binary and substitute its stdout. This fails because (a) PowerShell scripts aren't bash-executable, and (b) command substitution misinterprets the invocation intent."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The `$(...)` notation was probably intended as a placeholder meaning \"substitute the appropriate wrapper\" but bash interprets it as literal command substitution syntax."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- In task instructions, use a bash-compatible pattern like `./b4w.sh` (Git Bash) or `pwsh -File b4w.ps1` (PowerShell)\n- Use angle-bracket notation like `<wrapper> <command>` to clearly indicate substitution without bash ambiguity"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "swarm list shows stale status labels after jobs complete",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Submit swarm jobs, wait a few seconds, run `swarm list`."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Status column reflects actual job state (queued → processing → completed)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "`swarm list` showed all 11 new jobs as 'queued' even though `swarm status` showed 8 of them as completed (`isDone: true`). The list only updated to 'completed' after all jobs finished."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "`swarm list` appears to cache or batch its status updates, or the live backend query for each tracked task isn't triggered on every invocation. Individual `swarm status` calls return the correct live state immediately."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ — swarm list command implementation; may need to force a backend status refresh per task"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Make `swarm list` perform a live backend query for every tracked task on each invocation (as documented: \"queries the backend for live status\")\n- Or add a `--refresh` flag to `swarm list` to force re-query\n- The current behavior contradicts the documentation which says it queries live status on every invocation"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 5,
+      "title": "DOM_FIRST_ATTR returns relative image URLs; no obvious way to get absolute URLs from docs",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Use `DOM_FIRST_ATTR(DOM, '#product-image', 'src')` in an X-SQL query."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Absolute image URL or clear documentation on how to get one."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Returns `/ec/static/img/placeholder.png` (relative path). `DOM_ABS_SRC` exists but is not prominently documented in the quick-start patterns or swarm examples."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The X-SQL reference documents `DOM_ABS_SRC` in the function index table but the swarm.md quick-start examples only show `DOM_FIRST_SRC` or `DOM_FIRST_ATTR`. Users who copy the examples get relative URLs."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "skills/browser4-cli/references/swarm.md — quick-start examples should use DOM_ABS_SRC or note the distinction"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Update swarm.md and x-sql.md quick-start examples to use `DOM_ABS_SRC` or `DOM_FIRST_ATTR(... , 'src')` with a note about absolute vs relative\n- Add a tip in the results section that relative URLs can be resolved by prefixing `DOM_BASE_URI(DOM)`\n- Consider adding a `DOM_ABS_ATTR` function for consistency"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 6,
+      "title": "close-all does not close the SWARM session",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "After a swarm session, run `close-all`."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "All sessions including SWARM are closed."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "\"Closed 0 session(s)\" — the SWARM session is not counted or closed by `close-all`. The user must use `swarm close` specifically."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The swarm session uses a special session ID (`SWARM`) that is managed separately from named/default sessions tracked by `close-all`."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-rest/ — session management: SWARM session should be included in close-all scope, or close-all help should document this exclusion"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Include the SWARM session in `close-all` enumeration\n- Or document in `close-all` help that swarm sessions require `swarm close`\n- Or add a dedicated `close-all --include-swarm` flag"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 7,
+      "title": "swarm create warns about stale tasks but offers no guided resolution",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run `swarm create` when stale tasks from prior sessions exist."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A clear prompt or option to clean stale tasks."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Warning: '11 swarm task(s) from prior sessions are still tracked.' followed by advice to run `swarm list --clear` or `swarm create --clear-stale`. This requires the user to abort, clear, and recreate — a multi-step recovery."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Stale task tracking persists across sessions. The create command detects this but doesn't offer an interactive resolution."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ — swarm create command: should support interactive prompt or auto-clean"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Offer an interactive prompt: 'Clear 11 stale tasks? [Y/n]' during `swarm create`\n- Or auto-clear stale tasks when creating a new swarm (with a note)\n- Add the warning to `swarm query` and `swarm submit` as well, since new users may not run `swarm create` separately"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 8,
+      "title": "CLI/backend version mismatch warning on every command",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run `status` from a dev build."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Clean status output or a suppressed version mismatch for dev builds."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Warning: 'CLI is 4.12.2 but running backend is 4.12.2-SNAPSHOT. The CLI and backend were built from different versions of the source tree.' This appears on every `swarm status` output, polluting JSON parsing."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The dev-mode CLI auto-builds from source producing a release version while the backend runs from a SNAPSHOT JAR. The version check compares literal strings and treats the SNAPSHOT suffix as a mismatch."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ — version check logic: should normalize SNAPSHOT suffixes or suppress mismatch for local builds"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Treat X.Y.Z matching X.Y.Z-SNAPSHOT as compatible (ignore the -SNAPSHOT suffix)\n- Or suppress the warning when running from a dev build (detected via build profile or env var)\n- Or print the warning on stderr only, so `--json` output is not polluted"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 9,
+      "title": "No --json support on swarm status/result for machine-parsable output",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run `swarm status <id> --json` or `swarm result <id> --json`."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Clean JSON output without the version-mismatch warning and other human-readable text mixed in."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "`swarm status` already outputs JSON by default, but it includes the version-mismatch warning on stdout (not stderr), which breaks JSON parsing. `--json` flag doesn't suppress these warnings."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Version mismatch warning is printed to stdout alongside JSON output rather than stderr."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ — version check warning should route to stderr"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Route all warnings, tips, and diagnostic messages to stderr, not stdout\n- Ensure `--json` mode suppresses all non-JSON output on stdout\n- Add a `--quiet` mode that suppresses even stderr diagnostics"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}
