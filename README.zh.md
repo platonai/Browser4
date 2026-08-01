@@ -16,6 +16,7 @@
     - [快速入门](#快速入门)
     - [CLI 与 SKILLS](#cli-与-skills)
       - [LLM 配置](#llm-配置)
+  - [🧭 工具选择指南](#-工具选择指南)
   - [🚀 从源码构建](#-从源码构建)
   - [🧬 自动提取](#-自动提取)
   - [📦 模块概览](#-模块概览)
@@ -432,6 +433,59 @@ browser4-cli state-save session.json
 # 完成后关闭会话
 browser4-cli close
 ```
+
+---
+
+## 🧭 工具选择指南
+
+为你的任务选择正确的工具：
+
+### 如何提取数据
+
+```
+需要从页面提取数据？
+├─ 交互页面（需要先点击、填写、滚动）？→ snapshot + refs，然后提取
+├─ 静态页面，单个字段？→ htmlsnapshot get text "<选择器>"
+├─ 静态页面，单个字段的所有匹配项？→ htmlsnapshot get all text "<选择器>"
+├─ 静态页面，多个关联字段（每个商品标题+价格+链接）？
+│  → htmlsnapshot query --sql @query.sql
+├─ 需要执行 JS / 复杂 DOM 逻辑？→ eval --json
+├─ 自然语言（"找出产品价格"）？→ extract（需要 LLM 密钥）
+└─ 大量页面？→ crawl 或 swarm 配合 --sql
+```
+
+### 如何规模化处理
+
+```
+需要处理多个页面？
+├─ 单个列表页（搜索结果）？→ htmlsnapshot query 配合 DOM_LOAD_AND_SELECT
+├─ 已知 URL 列表（存储在文件中）？→ crawl --seed-file urls.txt --depth 0 --sql @query.sql
+├─ 从起始 URL 爬取（跟随链接）？→ crawl <url> --out-link-selector "..." --depth N
+├─ 需要并行执行（高吞吐量）？→ swarm create → swarm query --seed-file ...
+├─ 重复监控（每小时检查）？→ loop -- eval "..." -i 3600
+└─ 只有少量 URL，用 shell 脚本？
+   → for url in ...; do browser4-cli goto "$url"; ... done
+```
+
+### 如何将 HTML 转为电子表格 — 零 Token 消耗
+
+[WebMiner](https://github.com/platonai/web-miner) 对下载的 HTML 文件运行 ML 聚类，生成结构化电子表格和交互式报告 — **无需 LLM token，一切本地运行。**
+
+```
+已有 HTML 文件，想获取结构化数据 — 不消耗 token？
+├─ < 1,000 页（中小规模）？→ WebMiner 免费版（SMILE ML 引擎）
+│  java -jar scent-miner.jar all ./pages/
+│  → 交互式 HTML 报告 + Excel 电子表格 — 本地运行，零成本
+├─ > 1,000 页（生产规模）？→ WebMiner 商业版（Apache Spark ML）
+│  同样的 encode → cluster → views 流程，分布式部署
+└─ 需要先采集页面？
+   ├─ 单页采集：browser4-cli htmlsnapshot export
+   ├─ 批量下载：browser4-cli crawl --seed-file urls.txt --depth 0
+   └─ 高吞吐量：browser4-cli swarm create → swarm query --seed-file ...
+       然后将 HTML 目录提供给 WebMiner
+```
+
+> **流程：** `encode`（HTML → 特征向量 → CSV）→ `cluster`（KMeans 聚类，自动检测 K 值）→ `views`（HTML 报告 + Excel 电子表格）。免费版使用 [SMILE](https://haifengl.github.io/) ML 库进行单机聚类（< 1,000 页）。商业版使用 Apache Spark ML 进行分布式聚类，可扩展至每天 10 万+ 页面。需要 JDK 17+。详见 [web-miner](https://github.com/platonai/web-miner)。
 
 ---
 
