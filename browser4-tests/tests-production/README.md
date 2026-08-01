@@ -48,12 +48,25 @@ browser4-tests/tests-production/run-tests.sh smoke
 | `stress-session.ps1` | stress | Session lifecycle stress (open / goto / close / kill-all cycles) |
 | `stress-install.ps1` | stress | Install / server lifecycle stress (install, auto-start, stop, kill-all, state integrity) |
 | `multi-scenarios.ps1` | orchestrator | Multi-iteration loop over core scenarios |
+| `test-and-fix.ps1` | orchestrator | Two-phase workflow: run acceptance tests, then auto-fix failures via AI analysis |
+| `bundle-download-speed.ps1` | infra | Measure bundle download speed from each configured mirror |
 
 ### Bash tests
 
 | Script | Description |
 |---|---|
 | `swarm-agents.sh` | Swarm create / submit / status lifecycle (bash, identical coverage to `swarm-agents.ps1`) |
+
+### Helper unit tests
+
+These scripts validate the test infrastructure itself — no browser4-cli installation
+or network access required. They run in pure PowerShell via AST parsing and
+argument-escaping validation.
+
+| Script | Description |
+|---|---|
+| `test-production-helpers.ps1` | Unit tests for helper functions in `test-production.ps1` (AST-extracted, no side effects) |
+| `test-utils-helpers.ps1` | Unit tests for `ConvertTo-WindowsCmdArg` in `test-utils.psm1` against MSDN CommandLineToArgvW spec |
 
 ### Utilities & runners
 

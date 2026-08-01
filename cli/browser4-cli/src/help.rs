@@ -143,6 +143,8 @@ pub fn generate_help() -> String {
     lines.push("    eval --file script.js                     # read JS from file (no quoting issues)".to_string());
     lines.push("  Bulk crawl:".to_string());
     lines.push("    crawl <url> --out-link-selector \"...\" --depth 1 --sql @query.sql".to_string());
+    lines.push("  Parallel extraction:".to_string());
+    lines.push("    swarm create  →  swarm query --sql @q.sql --seed-file urls.txt  →  swarm result <id>".to_string());
 
     // Category listing — each category with its commands
     let mut first_category = true;
@@ -534,6 +536,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
+            "  - console.log() output is NOT captured — only the expression's return value is shown."
+                .to_string(),
+        );
+        lines.push(
+            "    Use `return` instead of `console.log` for values you want to see."
+                .to_string(),
+        );
+        lines.push(
             "  - Objects and arrays are serialized as valid JSON. Use --json to JSON-wrap"
                 .to_string(),
         );
@@ -554,8 +564,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  EOF".to_string());
         lines.push("  echo 'document.title' | browser4-cli eval --stdin".to_string());
         lines.push("  echo 'document.title' | browser4-cli eval --js   # --js is a shorthand for --stdin".to_string());
-        lines.push("  # Base64 (inline, avoids quoting):".to_string());
+        lines.push("  # Base64 (inline, avoids quoting). Encode with: echo -n 'expr' | base64".to_string());
         lines.push("  browser4-cli eval --base64 ZG9jdW1lbnQudGl0bGU=".to_string());
+        lines.push("  # On Windows (PowerShell): [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('expr'))".to_string());
         lines.push("  # Inline (simple expressions only — avoid on Windows with complex JS):".to_string());
         lines.push("  browser4-cli eval \"document.title\"".to_string());
         lines.push("  browser4-cli eval --json \"document.title\"".to_string());
@@ -1036,11 +1047,19 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - `--profile-mode` defaults to `SEQUENTIAL` and only supports `SEQUENTIAL` or `TEMPORARY`."
                 .to_string(),
         );
+        lines.push(
+            "  - Use `--clear-stale` to automatically clear stale tasks from prior sessions before creating the new session."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli swarm create".to_string());
         lines.push(
             "  browser4-cli swarm create --profile-mode TEMPORARY --max-open-tabs 12 --max-browser-contexts 3 --display-mode HEADLESS"
+                .to_string(),
+        );
+        lines.push(
+            "  browser4-cli swarm create --clear-stale"
                 .to_string(),
         );
     }

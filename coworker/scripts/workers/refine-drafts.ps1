@@ -52,18 +52,12 @@ $workerDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 $repoRoot = Get-WorkspaceRoot
 
-# ── Directories ──────────────────────────────────────────────────────────────
-$refineRoot = Resolve-TasksPath 'main\0draft\refine'
-$readyDir   = Join-Path $refineRoot '1ready'
-$workingDir = Join-Path $refineRoot '2working'
-$doneDir    = Join-Path $refineRoot '3done'
-$errorDir   = Join-Path $refineRoot '0error'
-
-foreach ($directory in @($readyDir, $workingDir, $doneDir, $errorDir)) {
-    if (-not (Test-Path $directory)) {
-        New-Item -ItemType Directory -Path $directory -Force | Out-Null
-    }
-}
+# ── Directories (centralized pipeline definitions) ─────────────────────────
+Ensure-CoworkerPipelineDirectories -Pipeline 'draft-refinement'
+$readyDir   = Get-CoworkerStageDirectory -PipelineName 'draft-refinement' -StageId '1ready'
+$workingDir = Get-CoworkerStageDirectory -PipelineName 'draft-refinement' -StageId '2working'
+$doneDir    = Get-CoworkerStageDirectory -PipelineName 'draft-refinement' -StageId '3done'
+$errorDir   = Get-CoworkerStageDirectory -PipelineName 'draft-refinement' -StageId '0error'
 
 if ([string]::IsNullOrWhiteSpace($Path)) {
     $Path = $readyDir
@@ -135,27 +129,7 @@ function Get-RefineTargets {
     return @()
 }
 
-function Resolve-UniquePath {
-    param(
-        [Parameter(Mandatory)] [string]$Directory,
-        [Parameter(Mandatory)] [string]$BaseName,
-        [Parameter(Mandatory)] [string]$Extension
-    )
-
-    $candidatePath = Join-Path $Directory "$BaseName$Extension"
-    if (-not (Test-Path $candidatePath)) {
-        return $candidatePath
-    }
-
-    $counter = 2
-    while ($true) {
-        $nextPath = Join-Path $Directory "$BaseName.$counter$Extension"
-        if (-not (Test-Path $nextPath)) {
-            return $nextPath
-        }
-        $counter++
-    }
-}
+# Resolve-UniquePath is now defined in Paths.ps1 (canonical location).
 
 # ── Output validation ────────────────────────────────────────────────────────
 
@@ -297,7 +271,8 @@ Write-CoworkerLog -Message "Refining $($targets.Count) draft(s) from $Path" -Lev
 $failureCount = 0
 
 foreach ($target in $targets) {
-    $workingPath = Resolve-UniquePath -Directory $workingDir -BaseName $target.BaseName -Extension $target.Extension
+    $workingInfo = Resolve-UniquePath -Directory $workingDir -BaseName $target.BaseName -Extension $target.Extension
+    $workingPath = $workingInfo.Path
 
     if ($PSCmdlet.ShouldProcess($target.Name, 'Move to working')) {
         Move-Item -Path $target.FullName -Destination $workingPath -Force
@@ -316,7 +291,8 @@ foreach ($target in $targets) {
             Set-Content -Path $workingFile.FullName -Value $refinedContent -Encoding UTF8
         }
 
-        $donePath = Resolve-UniquePath -Directory $doneDir -BaseName $workingFile.BaseName -Extension $workingFile.Extension
+        $doneInfo = Resolve-UniquePath -Directory $doneDir -BaseName $workingFile.BaseName -Extension $workingFile.Extension
+        $donePath = $doneInfo.Path
         if ($PSCmdlet.ShouldProcess($workingFile.Name, 'Move to done')) {
             Move-Item -Path $workingFile.FullName -Destination $donePath -Force
         }

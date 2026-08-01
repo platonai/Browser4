@@ -3,7 +3,7 @@
         WorkspaceRoot        = '../..'
         CoworkerRoot         = '..'
         TasksRoot            = '../tasks'
-        TargetRepositoryRoot = '../'
+        TargetRepositoryRoot = '../..'
         LogDirectory         = '~/.browser4-coworker/tasks/300logs'
     }
 

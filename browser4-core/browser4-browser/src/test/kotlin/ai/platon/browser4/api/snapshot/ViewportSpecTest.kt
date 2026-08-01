@@ -68,8 +68,8 @@ class ViewportSpecTest {
     }
 
     @Test
-    @DisplayName("negative single indices are allowed (scroll-relative offset)")
-    fun testNegativeIndicesAllowed() {
+    @DisplayName("single negative indices are preserved (scroll-relative offsets)")
+    fun testNegativeSingleIndices() {
         assertEquals(listOf(-1), ViewportSpec.parse("-1"))
         assertEquals(listOf(-3), ViewportSpec.parse("-3"))
     }

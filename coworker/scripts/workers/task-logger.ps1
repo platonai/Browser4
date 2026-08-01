@@ -4,9 +4,11 @@
 function Write-ConsoleLine {
     param(
         [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
         [string]$Message,
         [System.ConsoleColor]$ForegroundColor,
-        [switch]$ErrorStream
+        [switch]$ErrorStream,
+        [switch]$NoNewline
     )
 
     $canUseHost = $false
@@ -19,16 +21,17 @@ function Write-ConsoleLine {
 
     if ($canUseHost) {
         if ($PSBoundParameters.ContainsKey('ForegroundColor')) {
-            Write-Host $Message -ForegroundColor $ForegroundColor
+            Write-Host $Message -ForegroundColor $ForegroundColor -NoNewline:$NoNewline
         } else {
-            Write-Host $Message
+            Write-Host $Message -NoNewline:$NoNewline
         }
         return
     }
 
     $isRedirected = if ($ErrorStream) { [Console]::IsErrorRedirected } else { [Console]::IsOutputRedirected }
     if ($isRedirected) {
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Message + [Environment]::NewLine)
+        $suffix = if ($NoNewline) { '' } else { [Environment]::NewLine }
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Message + $suffix)
         $stream = if ($ErrorStream) { [Console]::OpenStandardError() } else { [Console]::OpenStandardOutput() }
         $stream.Write($bytes, 0, $bytes.Length)
         $stream.Flush()
@@ -36,9 +39,9 @@ function Write-ConsoleLine {
     }
 
     if ($PSBoundParameters.ContainsKey('ForegroundColor')) {
-        Write-Host $Message -ForegroundColor $ForegroundColor
+        Write-Host $Message -ForegroundColor $ForegroundColor -NoNewline:$NoNewline
     } else {
-        Write-Host $Message
+        Write-Host $Message -NoNewline:$NoNewline
     }
 }
 

@@ -1,0 +1,394 @@
+{
+  "meta": {
+    "source": "20260730-164010-Bot stealth check.full.md",
+    "scenario": "Bot stealth check",
+    "mode": "dev",
+    "date": "20260730-164010"
+  },
+  "background": {
+    "executionContext": "- 30+ browser4-cli commands executed across `goto`, `snapshot`, `fill`, `eval`, `htmlsnapshot`, `screenshot`, `click`, `wait`, `tab-list`, `tab-new`, `tab-select`\n- 8 workarounds required (detailed in evaluation)\n- 5 bot detection services tested, 5 screenshots captured",
+    "task": "The bot stealth evaluation is complete. The report is at `target/bot-stealth-report.md`. Key findings:\n\n- **Browser4 successfully evades the most critical check:** `navigator.webdriver` is `false` across all 5 services\n- **2 of 5 services gave a clean PASS** (Sannysoft, BrowserScan)\n- **3 of 5 services flagged Browser4** for non-automation issues: `hardwareConcurrency` leakage in Web Workers, WebGL shader inconsistency, datacenter IP, and timezone mismatch\n- **Google search was blocked** — Google served a CAPTCHA, preventing Phase 1 of the task"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "Google CAPTCHA blocks browser4-cli — bot detected at network level",
+      "severity": "Critical",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 goto \"https://www.google.com/search?q=online+bot+detection+test\" — redirected to google.com/sorry CAPTCHA page.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Google search results page loads normally.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Redirected to https://www.google.com/sorry/index?... CAPTCHA challenge page blocking the search.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Google's bot detection combines IP reputation (datacenter IP: 133.18.123.58, KAGOYA JAPAN Inc.) with browser fingerprint signals. While navigator.webdriver is false, Google uses additional signals — likely WebGL fingerprinting, canvas fingerprinting, IP reputation, and hardwareConcurrency inconsistency between main thread and Web Workers.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Ensure navigator.hardwareConcurrency is consistently overridden across the main thread AND Web Workers\n- Add support for configuring proxy/network settings to route through residential IPs\n- Investigate what specific signals Google uses beyond navigator.webdriver to detect Browser4\n- Consider implementing Google-specific stealth patches (e.g., overriding the Google-specific bot detection APIs)",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "fill --submit does not submit the form on Google (no navigation occurs)",
+      "severity": "High",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "./b4w.ps1 goto \"https://www.google.com\"; ./b4w.ps1 fill <searchbox-ref> \"search query\" --submit — fills text but URL stays at google.com, no navigation.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Text is filled and form is submitted (Enter pressed), navigating to search results.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Text fills successfully and command reports success, but the page URL remains https://www.google.com/ — no navigation occurs.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The --submit flag may only work for <form> elements with standard submit actions. Google's search page uses JavaScript-based form handling that doesn't respond to a traditional Enter/submit. Alternatively, --submit might send Enter to the wrong element or rely on form.submit() which JS-heavy pages intercept.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "CLI: cli/browser4-cli/src/ — fill command handler; Backend: browser4-rest/ — fill tool executor",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- After fill + Enter, verify the page URL changed; if not, explicitly call press Enter on the input element\n- Document the --submit flag's behavior clearly: what exactly it does (press Enter vs form.submit())\n- Add a --submit-selector option to target a specific submit button to click\n- For Google specifically, fill + press Enter should work — document as a known pattern",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "fill command timed out after failed fill --submit",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "After a fill --submit that doesn't navigate (see Issue 2), run ./b4w.ps1 fill <ref> \"text\" — the command times out after 30s.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Second fill completes quickly by filling text into the field.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The fill command timed out (30s) and was moved to background. Page appears to be in an inconsistent state after the first incomplete submit.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "After fill --submit, Google's JS may still be processing the incomplete submit, leaving the element in an unfocusable or locked state. The fill command waits for the element to become interactable and hangs indefinitely.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Add a timeout parameter for fill operations with a sensible default (5-10s)\n- Detect and recover from stuck page states after failed operations\n- Provide a clear error message when an element is not interactable, rather than hanging",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "Session lost after tab operations — requires manual reconnection",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "Run tab-new, then tab-select, then any interaction command. Error: \"No active session is currently stored for this CLI context.\"",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Session persists across tab operations; commands work without reconnection.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "After tab-new and tab-select, the session context was lost. Had to re-run goto to reconnect. Error message requires understanding of CLI session management.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Tab operations may not properly persist or update the CLI-side session tracking. When tab-switching occurs, the CLI's session reference may become stale or not be updated to track the new active tab.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "CLI: cli/browser4-cli/src/ — session management module",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Ensure tab operations (tab-new, tab-select) update the CLI session state\n- Auto-reconnect session transparently if session context is lost\n- Provide a clearer diagnostic: \"Session lost. Run goto <url> or open to reconnect.\"",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "tab-list shows stale/incorrect URLs after navigation",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "After tab-new to google.com and navigation, eval shows actual URL is localhost:18080 but tab-list still shows https://www.google.com.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "tab-list displays the actual current URL of each tab as reported by the browser.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "tab-list showed https://www.google.com for a tab that was actually displaying a mock ecommerce page at localhost:18080.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Tab URL tracking in the CLI may be based on the last navigation command rather than polling actual browser state. When a page redirects or browser internal navigation changes, tab-list may not reflect the actual URL.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "CLI: tab-list command implementation",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- tab-list should query the browser for actual current URLs, not rely on cached navigation history\n- Add a --refresh flag to force polling actual browser state\n- Display a warning indicator when a tab URL may be stale",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "htmlsnapshot export argument syntax unclear — produces error",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 htmlsnapshot export \".test-sessions/results.html\" — error: \"too many arguments: expected 0, received 1\"",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Command accepts a file path and exports snapshot there, OR help text clearly explains where export goes without arguments.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Help says \"Export snapshot HTML to a local file\" but rejects any path argument. Export destination is unknown. User must guess or read source code.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The command likely exports to a fixed location (snapshot directory) but the help text says 'to a local file' implying user control. The argument parser rejects any arguments.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "CLI: htmlsnapshot export command definition",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Accept a file path argument: htmlsnapshot export [path]\n- Or update help text to show the export path: \"Export to <snapshot-dir>/export-<timestamp>.html\"\n- Show the export destination path in command output after successful export",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "Page context becomes stale after htmlsnapshot — eval returns empty",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "goto <url> → htmlsnapshot → eval \"document.body.innerText\" returns \"Eval returned empty/null. The page context may be stale.\"",
+          "label": "Reproduction"
+        },
+        {
+          "body": "eval works after htmlsnapshot to extract live page data. The natural workflow is goto → htmlsnapshot → eval/extract.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "After capturing HTML snapshot, eval on the live page returns empty/null. Required re-running goto before eval could work again.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "htmlsnapshot appears to take a static snapshot and may disconnect from the live page context, or there's a session tracking issue where the live page reference is lost after snapshotting.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "Backend: browser4-rest/ — htmlsnapshot controller; session tracking",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- htmlsnapshot should not affect the live page/session reference\n- If it must disconnect, document this clearly in help and SKILL.md\n- Provide a --keep-context flag to preserve the live page reference\n- Auto-reconnect the live page context when eval detects staleness",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "SKILL.md examples use browser4-cli not ./b4w.ps1 — confusing for dev-mode users",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "Read skills/browser4-cli/SKILL.md — all examples use browser4-cli prefix. Must mentally translate every example to ./b4w.ps1.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Examples use the dev-mode invocation when working from source, or clearly indicate which invocation method to use.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Every example uses browser4-cli. The substitution table is on lines 19-24, easily missed when scrolling to later sections. Creates constant mental friction.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "SKILL.md is written primarily for installed users. Dev-mode is mentioned once at the top.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Add a prominent banner at the top of every example section about dev-mode invocation\n- Provide dual examples: \"Installed: browser4-cli goto ...\" and \"Dev: ./b4w.ps1 goto ...\"\n- Include a --dev-mode flag to display dev-mode commands in help output",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 9,
+      "title": "hardwareConcurrency leaks real value through Web Workers — detected by 3 of 5 services",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "Visit incolumitas.com or deviceandbrowserinfo.com with Browser4. Both detect hasInconsistentWorkerValues: true because hardwareConcurrency is 4 in main thread but 20 in Web Workers.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "If hardwareConcurrency is overridden on the main thread, the same override applies in Web Workers.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Override only applies on the main thread. Web Workers expose the real hardwareConcurrency value (20), creating a detectable inconsistency.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Browser4 likely patches navigator.hardwareConcurrency via CDP's Page.addScriptToEvaluateOnNewDocument which only affects the main document context, not Web Worker contexts which have their own isolated JS environment.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-core/browser4-browser/ — PulsarWebDriver stealth/evasion patches",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Extend navigator.hardwareConcurrency override to Web Worker contexts\n- Alternatively, use a kernel-level or browser-level override that affects all contexts\n- Add a test case specifically for Web Worker navigator consistency\n- Document this as a known limitation if it cannot be fixed",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 10,
+      "title": "No --full-page option for screenshot — cannot capture long result pages",
+      "severity": "Low",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "./b4w.ps1 screenshot on a long result page — only captures the visible viewport. Content below the fold is not included.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Option to capture full-page screenshot (entire scrollable content), or at minimum a --full-page flag.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Only viewport screenshots available. Long result pages (like incolumitas.com) cannot be fully captured in one image.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "screenshot uses CDP's Page.captureScreenshot with default viewport clipping. Full-page screenshots require the captureBeyondViewport or fullPage parameter.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "Backend: browser4-core/browser4-browser/ — PulsarWebDriver screenshot implementation",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add --full-page flag to screenshot for full-page capture\n- Add --clip option to capture specific regions\n- Document the viewport-only limitation in help and SKILL.md",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 11,
+      "title": "help output is comprehensive but overwhelming for first-time users",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run ./b4w.ps1 help — 200+ lines with 50+ commands across 10+ categories, no progressive disclosure.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A quick-start section at the top with the 5 most common commands and examples. Detailed reference below.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "All commands listed uniformly without visual hierarchy. 'Common workflows' section at top helps but assumes knowledge of the snapshot-ref loop.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Help format lists all commands uniformly without visual hierarchy or progressive disclosure.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Add a 'Quick Start' section with 3-5 most common commands with full examples\n- Group commands by frequency (Core > Common > Advanced/Rare)\n- Add help <category> subcommand: ./b4w.ps1 help navigation\n- Add help search <keyword> to find commands matching a keyword",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

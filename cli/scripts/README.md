@@ -36,7 +36,7 @@ Both scripts auto-detect OS, CPU architecture, and libc variant (glibc vs musl o
 
 | Option | Description |
 |--------|-------------|
-| `--version, -v TAG` | Release tag (e.g. `v4.11.0`). Default: latest. |
+| `--version, -v TAG` | Release tag (e.g. `v4.12.0`). Default: latest. |
 | `--install-dir, -d DIR` | Install directory (default: `~/.local/bin` on Unix, `%LOCALAPPDATA%\Programs\browser4-cli` on Windows). |
 | `--source SRC` | Force download source: `github` or `oss`. Default: auto (locale-aware). |
 | `--no-path` / `-AddToPath:$false` | Skip adding the install directory to PATH. |
@@ -44,7 +44,8 @@ Both scripts auto-detect OS, CPU architecture, and libc variant (glibc vs musl o
 | `--dry-run` / `-DryRun` | Print what would be done without doing it. |
 | `--skip-if-installed` / `-SkipIfInstalled` | Skip download if binary already exists. |
 | `--skip-local` / `-SkipLocal` | Skip local bundled binary check; always download. |
-| `--locate` (sh only) | Print detection results and exit (no install). |
+| `--force` / `-Force` (pwsh) | Force reinstallation even if the binary already exists at the target path. |
+| `--locate` / `-Locate` | Print detection results (OS, arch, locale) and exit (no install). |
 
 ### One-liner install
 
@@ -87,7 +88,7 @@ Runs a full CLI smoke test suitable for CI and local development:
 |--------|---------|
 | `npm-publish-check.js` | Shared library: reads package metadata and compares local vs npm registry version |
 | `check-npm-publish-needed.js` | CLI wrapper: checks whether a publish is needed and prints the decision |
-| `publish-if-needed.js` | Publishes to npm only when the local version differs from the registry |
+| `publish-if-needed.js` | Publishes to npm only when the local version differs from the registry. Uses `--tag next` for prerelease versions (containing `-`). |
 | `postinstall.js` | npm `postinstall` hook: downloads the platform native binary after `npm install` |
 
 ### Version check

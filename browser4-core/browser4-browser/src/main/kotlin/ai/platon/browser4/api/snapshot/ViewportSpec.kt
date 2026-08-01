@@ -10,8 +10,9 @@ package ai.platon.browser4.api.snapshot
  * - `"1-3"` — inclusive range (expands to 1, 2, 3).
  * - `"0,2-4,7"` — mix of individual indices and ranges.
  *
- * Invalid tokens are silently ignored. Single integer indices may be negative
- * (e.g. -1 = one viewport above current); range endpoints are clamped to &ge;0.
+ * Invalid tokens are silently ignored. Single negative indices are preserved for
+ * scroll-relative offsets (e.g., -1 = one viewport above current scroll position).
+ * Negative values in ranges are clamped to 0.
  */
 object ViewportSpec {
     /**
