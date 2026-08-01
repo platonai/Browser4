@@ -30,6 +30,18 @@ class CliToolExecutor(
     private val cliPath: String = "browser4-cli",
 ) : AbstractToolExecutor() {
 
+    companion object {
+        /**
+         * Subcommands that would spawn a nested agent, leading to unbounded
+         * recursion (agent → cli → subprocess → backend → new agent → …).
+         * Rejected before any subprocess is launched.
+         */
+        private val AGENT_SPAWN_PATTERN = Regex(
+            """^\s*(agent\s+run|agent-run|act)\s""",
+            RegexOption.IGNORE_CASE,
+        )
+    }
+
     override val domain = "cli"
 
     override val receiverClass: KClass<*> = CodingAgentShell::class
@@ -45,7 +57,9 @@ class CliToolExecutor(
             returnType = "String",
             description = "Execute browser4-cli with the given arguments. " +
                 "Example: coding.cli(args=\"tab navigate --url https://example.com\"). " +
-                "The CLI must be installed and on PATH."
+                "The CLI must be installed and on PATH. " +
+                "NOTE: 'agent run', 'agent-run', and 'act' subcommands are blocked " +
+                "to prevent nested agent spawning."
         )
         toolSpec["version"] = ToolSpec(
             domain = domain, method = "version",
@@ -75,6 +89,7 @@ class CliToolExecutor(
             "run" -> {
                 validateArgs(args, allowed = setOf("args", "timeoutSeconds", "workingDir"), required = setOf("args"), functionName)
                 val cliArgs = paramString(args, "args", functionName)!!
+                requireAgentNotSpawned(cliArgs)
                 val timeout = paramLong(args, "timeoutSeconds", functionName, required = false, default = 120L) ?: 120L
                 val workingDir = paramString(args, "workingDir", functionName, required = false, default = null)
                 shell.execute("$cliPath $cliArgs", timeoutSeconds = timeout, workingDir = workingDir)
@@ -90,6 +105,22 @@ class CliToolExecutor(
                 shell.execute("$cliPath $helpArgs", timeoutSeconds = 10)
             }
             else -> throw IllegalArgumentException("Unsupported cli method: $functionName(${args.keys})")
+        }
+    }
+
+    /**
+     * Reject CLI invocations that would spawn a nested agent.
+     *
+     * Without this guard the chain
+     *   agent → cli.run("agent run …") → subprocess → backend → new agent → …
+     * has no depth limit and leads to unbounded recursion, OS-subprocess
+     * exhaustion, and multiplied LLM spend.
+     */
+    private fun requireAgentNotSpawned(cliArgs: String) {
+        require(!AGENT_SPAWN_PATTERN.containsMatchIn(cliArgs)) {
+            "Nested agent spawning via '${cliArgs.trim().split(" ").first()}' is blocked. " +
+                "Use coding.*, tab.*, or fs.* tools directly instead of spawning " +
+                "a subprocess agent, which would lead to unbounded recursion."
         }
     }
 }
