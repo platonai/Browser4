@@ -187,6 +187,46 @@ object ToolCallSpecificationRenderer {
     }
 
     /**
+     * Collect **all** tool specifications from all three sources (hardcoded,
+     * dynamically-registered built-in domains, and custom registry).
+     *
+     * This is the single source of truth shared by the text-based rendering
+     * path and the LangChain4j native tool-calling path — both see the
+     * same tool coverage.
+     *
+     * @param includeCustomDomains Whether to include specs from [CustomToolRegistry].
+     * @param customDomainFilter   Optional filter for custom domains.
+     * @return De-duplicated, sorted list of all exposed [ToolSpec]s.
+     */
+    fun collectAllToolSpecs(
+        includeCustomDomains: Boolean = true,
+        customDomainFilter: ((String) -> Boolean)? = null,
+    ): List<ToolSpec> {
+        val hardcodedDomains = ToolSpecification.BUILTIN_DOMAINS_IN_SPEC
+
+        val builtIn = parseBuiltInSpecifications()
+
+        val extraBuiltin = builtinDomainSpecs
+            .filterKeys { it !in hardcodedDomains }
+            .values
+            .flatten()
+
+        val custom = if (includeCustomDomains) {
+            CustomToolRegistry.instance.getAllDomains()
+                .asSequence()
+                .filter { customDomainFilter?.invoke(it) ?: true }
+                .flatMap { CustomToolRegistry.instance.getToolCallSpecifications(it).asSequence() }
+                .toList()
+        } else {
+            emptyList()
+        }
+
+        return (builtIn + extraBuiltin + custom)
+            .distinctBy { distinctKey(it) }
+            .sortedWith(compareBy({ it.domain }, { it.method }, { it.arguments.size }))
+    }
+
+    /**
      * Parse built-in tool specifications from [ToolSpecification.TOOL_CALL_SPECIFICATION].
      *
      * @return List of parsed [ToolSpec] objects

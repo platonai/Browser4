@@ -12,6 +12,7 @@ import ai.platon.pulsar.agentic.skills.SkillRegistry
 import ai.platon.pulsar.agentic.skills.tools.SkillToolExecutor
 import ai.platon.pulsar.agentic.skills.tools.SkillToolTarget
 import ai.platon.pulsar.agentic.tools.builtin.*
+import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationRenderer
 import ai.platon.pulsar.common.getLogger
 import ai.platon.browser4.api.WebDriver
@@ -212,6 +213,35 @@ class AgentToolManager constructor(
      */
     fun getAllToolSpecs(): Map<String, Map<String, ToolSpec>> {
         return registeredExecutors.values.associate { executor -> executor.domain to executor.getToolSpecs() }
+    }
+
+    /**
+     * Returns all exposed [ToolSpec]s as a flat list (built-in + custom registry).
+     */
+    fun getAllExposedToolSpecs(): List<ToolSpec> {
+        return registeredExecutors.values.flatMap { it.getToolSpecs().values } +
+            CustomToolRegistry.instance.getAllToolCallSpecifications()
+    }
+
+    /**
+     * Returns LangChain4j [ToolSpecification]s for native tool calling.
+     *
+     * @see ToolCallSpecificationRenderer.collectAllToolSpecs
+     */
+    fun getLangChain4jToolSpecifications(): List<dev.langchain4j.agent.tool.ToolSpecification> {
+        return ToolCallSpecificationRenderer.collectAllToolSpecs().let {
+            ToolSpecificationConverter.toToolSpecifications(it)
+        }
+    }
+
+    /**
+     * Returns a reverse registry mapping LC4j tool names → [ToolSpec]
+     * for decoding [ToolExecutionRequest]s.
+     */
+    fun getLangChain4jToolRegistry(): Map<String, ToolSpec> {
+        return ToolCallSpecificationRenderer.collectAllToolSpecs().let {
+            ToolSpecificationConverter.toRegistry(it)
+        }
     }
 
     /**

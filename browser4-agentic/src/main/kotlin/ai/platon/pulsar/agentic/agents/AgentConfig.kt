@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.agents
 
+import ai.platon.pulsar.agentic.inference.ToolExposeMode
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 
@@ -47,6 +48,8 @@ data class AgentConfig(
     val allowedPorts: Set<Int> = setOf(80, 443, 8080, 8443, 3000, 5000, 8000, 9000),
     val maxSelectorLength: Int = 1000,
     val denyUnknownActions: Boolean = false,
+    // Tool exposure mode: TEXT (default), CHAT, or TOOL_CALLING
+    val toolExposeMode: ToolExposeMode = ToolExposeMode.TEXT,
     // Overall timeout for resolve() to avoid indefinite hangs
     val resolveTimeoutMs: Long = 24.hours.inWholeMilliseconds,
     // Circuit breaker configuration

@@ -4,6 +4,8 @@ data class SimpleMessage(
     val role: String,
     val content: String,
     val name: String? = null,
+    val toolCallId: String? = null,
+    val toolName: String? = null,
 ) {
     enum class Role {
         USER, SYSTEM
@@ -31,7 +33,8 @@ class AgentMessageList(
     }
 
     fun addFirst(message: SimpleMessage) {
-        val msg = SimpleMessage(message.role, message.content, message.name)
+        val msg = SimpleMessage(message.role, message.content, message.name,
+            message.toolCallId, message.toolName)
         messages.add(0, msg)
     }
 
@@ -48,7 +51,8 @@ class AgentMessageList(
     }
 
     fun addLast(message: SimpleMessage) {
-        val msg = SimpleMessage(message.role, message.content, message.name)
+        val msg = SimpleMessage(message.role, message.content, message.name,
+            message.toolCallId, message.toolName)
         messages.add(msg)
     }
 

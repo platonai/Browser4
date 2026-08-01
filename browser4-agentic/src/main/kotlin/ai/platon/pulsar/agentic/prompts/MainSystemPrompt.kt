@@ -99,7 +99,10 @@ ${ToolCallSpecificationRenderer.renderJson(includeCustomDomains = true)}
     return toolSpecContent
 }
 
-fun buildToolUseSections(toolFormat: ToolSpecFormat = ToolSpecFormat.KOTLIN): String {
+fun buildToolUseSections(
+    toolFormat: ToolSpecFormat = ToolSpecFormat.KOTLIN,
+    includeToolList: Boolean = true,
+): String {
     return """
 ## Tool Usage
 
@@ -113,10 +116,11 @@ $SKILL_TOOL_TYPE_DEFINITIONS
 
 $EXTRACTION_TOOL_NOTE_CONTENT
 
+${if (includeToolList) """
 ### Tool List
 
 ${buildToolSpecContent(toolFormat)}
-
+""" else ""}
 ### Available Skills
 
 ${buildSkillSummariesSection()}
@@ -134,7 +138,10 @@ ${buildSkillSummariesSection()}
  *
  * Note: Must be generated on demand so newly registered custom tools/skills are reflected in the tool list.
  */
-fun buildMainSystemPromptV1(toolFormat: ToolSpecFormat): String {
+fun buildMainSystemPromptV1(
+    toolFormat: ToolSpecFormat,
+    includeToolList: Boolean = true,
+): String {
     return """
 # System Instructions
 
@@ -199,7 +206,7 @@ $OBSERVE_RESPONSE_COMPLETE_SCHEMA
 
 ---
 
-${buildToolUseSections(toolFormat)}
+${buildToolUseSections(toolFormat, includeToolList)}
 
         """.trimIndent()
 }
