@@ -10,42 +10,14 @@ tier: decision
 
 Browser automation CLI for AI agents — Chrome/Chromium via CDP with accessibility-tree snapshots.
 
-### Development Mode (Running from Source)
-
-When working from the repository (not using an installed `browser4-cli` binary), use the dev-mode
-wrappers in the repo root. All examples in this document use `browser4-cli` as the installed
-command — substitute accordingly for dev-mode work:
-
-| Platform | Command | Notes |
-|---|---|---|
-| **PowerShell** (Windows) | `./b4w.ps1 <command>` | Auto-builds from source when needed. Uses manual argument parsing — short flags (`-o`, `-i`, `-v`) are safe. Preferred on Windows. |
-| **Git Bash / Linux / macOS** | `./b4w.sh <command>` | Bash wrapper that individually quotes arguments before passing to pwsh. Avoids PowerShell parameter binding entirely. |
-| **CMD** (Windows) | `./b4w.bat <command>` | Uses `--%` stop-parsing token to prevent PowerShell from consuming `-i`/`-v` flags. |
-| **Cargo (any platform)** | `cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>` | Slower (compiles each run unless `--quiet` is added). Good for one-off debugging. |
-
-**Example:** The installed command `browser4-cli snapshot -v 0` becomes `./b4w.ps1 snapshot -v 0` (PowerShell)
-or `./b4w.sh snapshot -v 0` (Git Bash) when running from source.
-
-**Shell selection guide:**
-- `b4w.ps1` — PowerShell (Windows): primary choice. Uses manual `$args` parsing so common
-  short flags (`-o`/`-i`/`-v`) are no longer intercepted by PowerShell's parameter binder.
-  Use long-form flags (`--output`, `--interactive`, `--viewport`) for cross-shell compatibility.
-- `b4w.sh` — Git Bash / Linux / macOS: individually quotes each argument to prevent
-  pwsh from interpreting dash-prefixed CLI flags as PowerShell parameters. Recommended
-  when running from bash environments.
-- `b4w.bat` — cmd.exe: uses PowerShell's `--%` stop-parsing token. Good fallback when
-  both `b4w.ps1` and `b4w.sh` encounter parameter binding issues.
-
 ## 1. Core Loop
 
-Every browser4-cli session follows this pattern. **All examples use `browser4-cli` — substitute `./b4w.ps1` (Windows) or `./b4w.sh` (bash) when running from source (see Development Mode above).**
+Every browser4-cli session follows this pattern.
 
 ```
 1. NAVIGATE    browser4-cli goto <url>              # auto-opens/reconnects session
-              ./b4w.ps1 goto <url>                  # (dev-mode equivalent)
-2. SNAPSHOT    browser4-cli snapshot -v 0            # capture accessibility tree (viewport 0 = top)
-              ./b4w.ps1 snapshot -v 0                # (dev-mode equivalent)
-3. INTERACT    browser4-cli click <ref>              # use refs from the snapshot
+2. SNAPSHOT    browser4-cli snapshot -v 0           # capture accessibility tree (viewport 0 = top)
+3. INTERACT    browser4-cli click <ref>             # use refs from the snapshot
               browser4-cli fill <ref> <value>
               browser4-cli press Enter
 4. RE-SNAPSHOT browser4-cli snapshot -v 0 --auto-diff # verify what changed (diff vs previous)
@@ -530,8 +502,6 @@ irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps
 browser4-cli install
 ```
 
-> **PowerShell wrapper tip:** When running `b4w.ps1` directly in PowerShell, short flags like `-i` and `-v` may be intercepted by PowerShell's parameter binder (matching `-InformationAction` and `-Verbose`). Use `b4w.bat` from Command Prompt or `b4w.sh` from Git Bash to avoid this. When using `b4w.ps1` directly, pass flags after `--` (e.g. `./b4w.ps1 -- snapshot -i`) or quote arguments individually. See [shell-quoting.md](references/shell-quoting.md) for details.
-
 **Linux / macOS (bash):**
 ```bash
 curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
@@ -549,7 +519,3 @@ As a result, bot-detection services that compare `navigator.hardwareConcurrency`
 This is a [known CDP limitation](https://issues.chromium.org/issues/40284755) — `Page.addScriptToEvaluateOnNewDocument` does not propagate to worker targets. A full fix would require intercepting worker creation via `Target.setAutoAttach` and injecting scripts into each worker's execution context.
 
 **Workaround:** When testing against services that check worker consistency, use a machine whose actual `hardwareConcurrency` matches your desired fingerprint value (e.g., set the override to the real core count).
-
-## Development
-
-See [development.md](references/development.md) — prerequisites, building from source, and `cargo run` patterns.
