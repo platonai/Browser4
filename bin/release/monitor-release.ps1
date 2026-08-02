@@ -64,7 +64,7 @@ $ErrorActionPreference = "Stop"
     near-duplicate blocks, and caps at a reasonable size.
 #>
 function Extract-MinimalErrors {
-    param([string[]]$LogLines)
+    param([string[]]$LogLines, [string]$RunId = '')
 
     $errorPatterns = @(
         'error:', 'Error:', 'ERROR:',
@@ -131,15 +131,20 @@ function Extract-MinimalErrors {
                 if (-not $prevWasSeparator -and $errors.Count -gt 0) {
                     $errors.Add("")
                 }
-                $errors.Add("══ block $($errors.Count / 2 + 1) ══")
+                $errors.Add("══ block $($seen.Count) ══")
                 $errors.Add($block)
                 $prevWasSeparator = $false
 
                 # Token safety: ~50 blocks max (≈200-300 lines)
                 if ($seen.Count -ge 50) {
                     $errors.Add("")
-                    $errors.Add("... (truncated at 50 blocks for token efficiency — run " +
-                                "`gh run view $RunId --log-failed` for full logs)")
+                    $truncationMsg = "... (truncated at 50 blocks for token efficiency"
+                    if ($RunId) {
+                        $truncationMsg += " — run `gh run view $RunId --log-failed` for full logs)"
+                    } else {
+                        $truncationMsg += " — use `gh run view --log-failed` for full logs)"
+                    }
+                    $errors.Add($truncationMsg)
                     break
                 }
             }
