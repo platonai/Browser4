@@ -89,6 +89,7 @@ Runs a full CLI smoke test suitable for CI and local development:
 | `npm-publish-check.js` | Shared library: reads package metadata and compares local vs npm registry version |
 | `check-npm-publish-needed.js` | CLI wrapper: checks whether a publish is needed and prints the decision |
 | `publish-if-needed.js` | Publishes to npm only when the local version differs from the registry. Uses `--tag next` for prerelease versions (containing `-`). |
+| `sync-readme.mjs` | Temporarily copies the repository root `README.md` to `cli/README.md` for npm pack/publish, then restores the original CLI README in `postpack`. |
 | `postinstall.js` | npm `postinstall` hook: downloads the platform native binary after `npm install` |
 
 ### Version check
@@ -108,6 +109,23 @@ node scripts/publish-if-needed.js --dry-run   # print what would happen
 ```
 
 Optional env: `BROWSER4_CLI_NPM_REMOTE_VERSION` to override the remote version for testing.
+
+### README sync for npm package
+
+`cli/package.json` wires the README sync into npm packaging hooks:
+
+```shell
+npm run sync:readme       # copy root README.md over cli/README.md
+npm run restore:readme    # restore the original cli/README.md
+```
+
+During `npm pack` / `npm publish`, npm runs:
+
+1. `prepack` → `npm run sync:readme`
+2. package creation / publish
+3. `postpack` → `npm run restore:readme`
+
+This makes the npm package README match the repository root README without leaving the working tree permanently overwritten after publishing.
 
 ### Postinstall
 

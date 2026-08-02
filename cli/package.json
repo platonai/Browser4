@@ -13,6 +13,8 @@
     "browser4": "bin/browser4-cli.js"
   },
   "scripts": {
+    "sync:readme": "node scripts/sync-readme.mjs sync",
+    "restore:readme": "node scripts/sync-readme.mjs restore",
     "version:sync": "node ../bin/version.mjs cli sync",
     "version": "npm run version:sync && git add browser4-cli/Cargo.toml browser4-cli/Cargo.lock",
     "build:native": "npm run version:sync && cargo build --release --manifest-path browser4-cli/Cargo.toml && node scripts/copy-native.js",
@@ -21,6 +23,8 @@
     "build:windows": "npm run version:sync && docker compose -f docker/docker-compose.yml run --rm build-windows",
     "build:all-platforms": "npm run version:sync && (npm run build:linux & npm run build:windows & wait)",
     "build:docker": "docker build -t browser4-builder -f docker/Dockerfile.build .",
+    "prepack": "npm run sync:readme",
+    "postpack": "npm run restore:readme",
     "publish:if-needed": "node scripts/publish-if-needed.js",
     "release": "npm run publish:if-needed",
     "postinstall": "node scripts/postinstall.js"
