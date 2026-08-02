@@ -507,15 +507,3 @@ browser4-cli install
 curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
 browser4-cli install
 ```
-
-## Known Limitations
-
-### Web Worker Fingerprint Consistency
-
-Browser4 patches `navigator.webdriver`, `navigator.hardwareConcurrency`, and other fingerprint-sensitive properties on the main thread via CDP's `Page.addScriptToEvaluateOnNewDocument`. However, **Web Workers have their own isolated JavaScript contexts** that are not affected by this injection.
-
-As a result, bot-detection services that compare `navigator.hardwareConcurrency` between the main thread and Web Workers (e.g., incolumitas.com, deviceandbrowserinfo.com) will detect an inconsistency: the main thread reports the overridden value, but workers expose the real hardware concurrency.
-
-This is a [known CDP limitation](https://issues.chromium.org/issues/40284755) — `Page.addScriptToEvaluateOnNewDocument` does not propagate to worker targets. A full fix would require intercepting worker creation via `Target.setAutoAttach` and injecting scripts into each worker's execution context.
-
-**Workaround:** When testing against services that check worker consistency, use a machine whose actual `hardwareConcurrency` matches your desired fingerprint value (e.g., set the override to the real core count).
