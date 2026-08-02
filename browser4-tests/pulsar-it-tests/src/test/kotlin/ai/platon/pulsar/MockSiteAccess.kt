@@ -14,7 +14,7 @@ import org.springframework.context.annotation.Import
 
 @SpringBootTest(
     classes = [EnableMockServerApplication::class],
-    webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT
+    webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT
 )
 @Import(Browser4AutoConfiguration::class)
 open class MockSiteAccess {
