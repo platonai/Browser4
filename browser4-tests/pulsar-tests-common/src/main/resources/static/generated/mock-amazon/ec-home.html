@@ -5,43 +5,136 @@
   <title>{{TITLE}}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
-    header { background:#222; color:#fff; padding:1rem; }
-    nav ul { list-style:none; padding:0; margin:0; display:grid; grid-template-columns: repeat(auto-fill,minmax(180px,1fr)); gap:.5rem; }
-    nav li { background:#f5f5f5; padding:.5rem .75rem; border-radius:4px; }
-    nav a { text-decoration:none; color:#036; }
-    h1, h2 { margin: .5rem 1rem; }
-    .product-grid { display:grid; grid-template-columns: repeat(auto-fill,minmax(220px,1fr)); gap:1rem; padding:0 1rem; }
-    .product-card { border:1px solid #ccc; padding:.5rem; border-radius:4px; background:#fff; }
-    .product-card img { max-width:100%; height:140px; object-fit:cover; display:block; margin:0 auto .5rem; }
-    .product-title { font-size:1rem; margin:.25rem 0; }
-    .product-link { text-decoration:none; color:inherit; display:block; }
-    .product-meta { font-size:.85rem; color:#333; display:flex; gap:.5rem; }
-    .product-price { font-weight:bold; color:#b12704; }
-    .product-badges { margin-top:.25rem; }
-    .badge { background:#ff9800; color:#000; padding:2px 4px; font-size:.65rem; border-radius:3px; margin-right:2px; }
-    footer { margin-top:2rem; font-size:.8rem; text-align:center; color:#666; }
+    :root {
+      --bg: #f6f7fb;
+      --panel: #ffffff;
+      --ink: #1f2937;
+      --muted: #5b6473;
+      --line: #d6dde8;
+      --brand: #0f172a;
+      --accent: #2563eb;
+      --warm: #f59e0b;
+      --shadow: 0 14px 32px rgba(15, 23, 42, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: var(--bg); color: var(--ink); }
+    a { color: #0b4bb3; }
+    header { background: linear-gradient(135deg, #111827, #1f2937); color: #fff; padding: 1rem 1.5rem; }
+    .topbar, .utility-nav, .spotlight-grid, .editorial-grid, .product-grid { display: grid; gap: 1rem; }
+    .topbar { grid-template-columns: 220px 1fr 320px; align-items: center; }
+    .brand { font-size: 1.35rem; font-weight: 700; }
+    .search-box input {
+      width: 100%; padding: .85rem 1rem; border-radius: 999px; border: 0; font-size: 1rem;
+    }
+    .utility-nav { grid-template-columns: repeat(3, minmax(0, 1fr)); font-size: .9rem; text-align: right; }
+    .utility-nav div { color: rgba(255,255,255,.88); }
+    main { max-width: 1320px; margin: 0 auto; padding: 1.5rem; }
+    .hero { display: grid; grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr); gap: 1.25rem; margin-bottom: 1.5rem; }
+    .hero-card, .sidebar-card, .content-card, .spotlight-card, .product-card {
+      background: var(--panel); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow);
+    }
+    .hero-card, .sidebar-card, .content-card { padding: 1.25rem; }
+    .hero-card h1 { margin: 0 0 .75rem; font-size: 2rem; }
+    .hero-copy { color: var(--muted); line-height: 1.6; margin: 0 0 1rem; }
+    .eyebrow { margin: 0 0 .5rem; color: var(--accent); font-size: .8rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    nav ul { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: .75rem; }
+    nav li { background: #eef2f7; padding: .75rem .9rem; border-radius: 12px; border: 1px solid #dde5f0; }
+    nav a { text-decoration: none; color: #0f2f70; font-weight: 600; }
+    .trending-list { margin: 0; padding-left: 1.1rem; color: var(--muted); display: grid; gap: .5rem; }
+    .content-card h2, .sidebar-card h2 { margin-top: 0; }
+    .spotlight-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-bottom: 1.5rem; }
+    .spotlight-card { padding: 1rem; }
+    .spotlight-card h3 { margin: 0 0 .5rem; font-size: 1rem; }
+    .spotlight-card p { margin: 0; color: var(--muted); line-height: 1.5; }
+    .editorial-grid { grid-template-columns: minmax(0, 1fr) 320px; margin-bottom: 1.5rem; }
+    .editorial-links { margin: 0; padding-left: 1rem; display: grid; gap: .6rem; }
+    .product-grid { grid-template-columns: repeat(auto-fit, minmax(245px, 1fr)); }
+    .product-card { padding: 1rem; }
+    .product-card img { width: 100%; height: 160px; object-fit: cover; display: block; border-radius: 12px; margin: 0 0 .75rem; }
+    .product-title { font-size: 1rem; margin: .25rem 0 .5rem; }
+    .product-link { text-decoration: none; color: inherit; display: block; }
+    .product-meta, .product-ops { font-size: .9rem; color: #334155; display: flex; justify-content: space-between; gap: .5rem; align-items: center; }
+    .product-copy { color: var(--muted); font-size: .92rem; line-height: 1.5; min-height: 2.8em; }
+    .feature-pills { display: flex; flex-wrap: wrap; gap: .4rem; margin: .75rem 0; }
+    .feature-pill { background: #eef4ff; color: #1d4ed8; border-radius: 999px; padding: .25rem .6rem; font-size: .78rem; }
+    .product-price { font-weight: bold; color: #b12704; }
+    .stock-note { color: #0f766e; font-weight: 600; }
+    .secondary-link { font-size: .85rem; }
+    .product-badges { margin-top: .75rem; }
+    .badge { background: #fcd34d; color: #3b2f05; padding: 2px 6px; font-size: .7rem; border-radius: 999px; margin-right: 4px; font-weight: 700; }
+    footer { margin-top: 2rem; padding: 1.5rem; font-size: .85rem; text-align: center; color: var(--muted); }
+    .footer-links { display: flex; flex-wrap: wrap; justify-content: center; gap: .85rem; margin-top: .75rem; }
+    @media (max-width: 980px) {
+      .topbar, .hero, .editorial-grid { grid-template-columns: 1fr; }
+      .utility-nav { text-align: left; }
+    }
   </style>
 </head>
 <body>
-  <header><h1>Mock Ecommerce Home</h1></header>
-  <main>
-    <section id="category-list-section">
-      <h2>Categories</h2>
-      <nav aria-label="Category navigation">
-        <ul id="category-list">
-          <!--CATEGORY_LINKS-->
-        </ul>
-      </nav>
-    </section>
-    <section id="featured-products-section">
-      <h2>Featured Products</h2>
-      <div id="featured-list" class="product-grid">
-        <!--FEATURED_PRODUCTS-->
+  <header>
+    <div class="topbar">
+      <div class="brand">Mock Marketplace</div>
+      <div class="search-box"><input type="text" aria-label="Search products" value="wireless headphones, air purifier, running shoes" /></div>
+      <div class="utility-nav">
+        <div>Deliver to Test City</div>
+        <div>Orders & Returns</div>
+        <div>Deals for You</div>
       </div>
+    </div>
+  </header>
+  <main>
+    <section class="hero">
+      <article class="hero-card">
+        <p class="eyebrow">Back to school + home office</p>
+        <h1>Browse a noisy storefront with category nav, editorial rails, and product-heavy landing sections</h1>
+        <p class="hero-copy">This mock home page intentionally mixes navigation, merchandising, recommendation content, and featured inventory so scraping flows must separate signal from retail-style noise.</p>
+        <nav aria-label="Category navigation">
+          <ul id="category-list">
+            <!--CATEGORY_LINKS-->
+          </ul>
+        </nav>
+      </article>
+      <aside class="sidebar-card">
+        <h2>Trending searches</h2>
+        <ol class="trending-list">
+          <!--TRENDING_SEARCHES-->
+        </ol>
+      </aside>
+    </section>
+
+    <section class="spotlight-grid" aria-label="Editorial spotlights">
+      <!--CATEGORY_SPOTLIGHTS-->
+    </section>
+
+    <section class="editorial-grid">
+      <article class="content-card">
+        <h2>Featured products</h2>
+        <div id="featured-list" class="product-grid">
+          <!--FEATURED_PRODUCTS-->
+        </div>
+      </article>
+      <aside class="content-card">
+        <h2>More to explore</h2>
+        <ul class="editorial-links">
+          <li><a href="/ec/b?node=1292115012">Buying guide: compare headphones, speakers, and TV bundles</a></li>
+          <li><a href="/ec/b?node=1292115013">Home essentials with faster delivery windows</a></li>
+          <li><a href="/ec/b?node=1292115017">Editor picks for cookbooks, fantasy, and study guides</a></li>
+          <li><a href="/ec/b?node=1292115027">Gaming week spotlight: accessories under budget</a></li>
+          <li><a href="/ec/b?node=1292115031">Furniture collections with assembly and dimensions</a></li>
+        </ul>
+      </aside>
     </section>
   </main>
-  <footer>Mock EC &copy; Seeded Data</footer>
+  <footer>
+    <div>Mock EC &copy; Seeded Data</div>
+    <div class="footer-links">
+      <a href="/ec/">Today's deals</a>
+      <a href="/ec/">Customer service</a>
+      <a href="/ec/">Accessibility</a>
+      <a href="/ec/">Gift cards</a>
+      <a href="/ec/">Sell on Mock EC</a>
+      <a href="/ec/">Privacy notice</a>
+    </div>
+  </footer>
 </body>
 </html>
-

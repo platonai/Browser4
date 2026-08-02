@@ -4,22 +4,78 @@
   <meta charset="UTF-8">
   <title>Electronics — Category</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 2rem; }
-    h1 { color: #333; }
-    .product { display: block; padding: .5rem; margin: .25rem 0; border: 1px solid #ddd; }
-    footer { margin-top: 2rem; font-size: .8rem; color: #666; }
+    :root { --bg:#f6f7fb; --panel:#fff; --line:#d7deea; --ink:#1f2937; --muted:#667085; --shadow:0 12px 28px rgba(15,23,42,.08); }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; background: var(--bg); color: var(--ink); }
+    header { background:#111827; color:#fff; padding:1rem 1.5rem; }
+    header a { color:#c7d2fe; text-decoration:none; margin-right:.8rem; }
+    main { max-width: 1240px; margin: 0 auto; padding: 1.5rem; }
+    .page-shell, .sidebar, .product-shell, .editorial { background: var(--panel); border:1px solid var(--line); border-radius:18px; box-shadow:var(--shadow); padding:1.1rem; margin-bottom:1rem; }
+    .page-grid { display:grid; grid-template-columns: 280px minmax(0,1fr); gap:1rem; align-items:start; }
+    .page-shell p, .sidebar li, .editorial li { color: var(--muted); line-height:1.55; }
+    .product-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:.9rem; }
+    .product { display:block; padding:.85rem; border:1px solid #dce3ee; border-radius:14px; text-decoration:none; color:inherit; background:#fbfcff; }
+    .product-title { display:block; font-weight:700; margin-bottom:.3rem; }
+    .product-price { color:#b12704; font-weight:700; }
+    .product-copy { display:block; color:var(--muted); font-size:.92rem; margin-top:.45rem; }
+    .category-link, .guide-link { color:#0b4bb3; }
+    footer { margin-top: 2rem; padding: 1.5rem; font-size: .8rem; color: #666; text-align:center; }
+    @media (max-width: 920px) { .page-grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
-  <nav><a href="../index.html">← Back to Hub</a></nav>
+  <header>
+    <nav><a href="../index.html">← Back to Hub</a><a href="accessories.html">Accessories</a><a href="clearance.html">Clearance</a></nav>
+  </header>
   <main>
-    <h1 id="categoryTitle">Electronics</h1>
-    <p>This category page is linked via a <strong>category-link</strong> class — NOT a product class. When crawling with <code>-ol "a.product"</code>, links on this page will be discovered, but this page itself should not be followed when the starting page filters by <code>a.product</code>.</p>
+    <section class="page-shell">
+      <h1 id="categoryTitle">Electronics</h1>
+      <p>This category page is linked via a <strong>category-link</strong> class — not a product class. Broad crawls can discover it, but selector-based runs starting from the hub should only follow it when explicitly targeted.</p>
+    </section>
 
-    <section class="products">
-      <h2>Products in Electronics</h2>
-      <a class="product" href="../product/1.html">Widget Alpha — $10.00</a>
-      <a class="product" href="../product/2.html">Widget Beta — $20.00</a>
+    <div class="page-grid">
+      <aside class="sidebar">
+        <h2>Buying guide links</h2>
+        <ul>
+          <li><a class="guide-link" href="../index.html#compare-speakers">Compare battery life, panels, and setup complexity</a></li>
+          <li><a class="guide-link" href="../index.html#returns">Warranty and returns breakdown</a></li>
+          <li><a class="category-link" href="accessories.html">Browse accessories and add-ons</a></li>
+        </ul>
+      </aside>
+
+      <section class="product-shell">
+        <h2>Products in Electronics</h2>
+        <div class="product-grid">
+          <a class="product" href="../product/1.html">
+            <span class="product-title">Widget Alpha</span>
+            <span class="product-price">$10.00</span>
+            <span class="product-copy">Entry-level pick with lightweight setup docs and related offer rails.</span>
+          </a>
+          <a class="product" href="../product/2.html">
+            <span class="product-title">Widget Beta</span>
+            <span class="product-price">$20.00</span>
+            <span class="product-copy">Balanced value model that fans out to several related product pages.</span>
+          </a>
+          <a class="product" href="../product/4.html">
+            <span class="product-title">Widget Delta</span>
+            <span class="product-price">$40.00</span>
+            <span class="product-copy">Professional-grade option with deeper navigation paths.</span>
+          </a>
+          <a class="product" href="../product/7.html">
+            <span class="product-title">Widget Lambda</span>
+            <span class="product-price">$70.00</span>
+            <span class="product-copy">High-end model that leads into additional depth-3 nodes.</span>
+          </a>
+        </div>
+      </section>
+    </div>
+
+    <section class="editorial">
+      <h2>Editorial noise</h2>
+      <ul>
+        <li>Sponsored comparison tables, bundle banners, and editorial roundups often sit beside the real product list.</li>
+        <li>These links should not be confused with the main product anchors unless a crawl intentionally follows them.</li>
+      </ul>
     </section>
   </main>
   <footer>Electronics Category — Mock Site</footer>
