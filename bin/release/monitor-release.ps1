@@ -131,7 +131,7 @@ function Extract-MinimalErrors {
                 if (-not $prevWasSeparator -and $errors.Count -gt 0) {
                     $errors.Add("")
                 }
-                $errors.Add("══ block $($errors.Count / 2 + 1) ══")
+                $errors.Add("══ block $($seen.Count) ══")
                 $errors.Add($block)
                 $prevWasSeparator = $false
 

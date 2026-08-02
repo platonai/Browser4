@@ -28,13 +28,12 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 
 ## 🌟 Introduction
 
-💖 **Browser4: a lightning-fast, coroutine-safe browser engine for your AI** 💖
+💖 **Browser4: a fast, intelligent, scalable, multi-scenario agentic browser** 💖
 
 ### ✨ Key Capabilities
 
-* 👽 **Browser Agents** — Fully autonomous browser agents that reason, plan, and execute end-to-end tasks.
-* 🤖 **Browser Automation** — High-performance automation for workflows, navigation, and data extraction.
-* ⚙️ **Machine Learning Agent** — Learns field structures across complex pages without consuming tokens.
+* 🤖 **Agent Browser** — Browser automation CLI for AI agents.
+* ⚙️ **Machine Learning Agent** — Turns complex pages into Excel/structured data without consuming tokens.
 * ⚡ **Extreme Performance** — Fully coroutine-safe; supports 100k ~ 200k complex page visits per machine per day.
 * 🧬 **Data Extraction** — Hybrid of LLM, ML, X-SQL and selectors for clean data across chaotic pages.
 

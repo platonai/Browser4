@@ -381,7 +381,7 @@ Write-Host "━━━ Extract-MinimalErrors: token cap ━━━" -ForegroundCol
 # Generate 100 distinct error blocks (should cap at 50)
 $manyErrors = [System.Collections.Generic.List[string]]::new()
 for ($i = 0; $i -lt 100; $i++) {
-    $manyErrors.Add("ERROR[$i]: Something went wrong in module_$i at line_$i")
+    $manyErrors.Add("ERROR: [$i] Something went wrong in module_$i at line_$i")
 }
 $result = Extract-MinimalErrors -LogLines $manyErrors
 $blockCount = ([regex]::Matches($result, '══ block \d+ ══')).Count
