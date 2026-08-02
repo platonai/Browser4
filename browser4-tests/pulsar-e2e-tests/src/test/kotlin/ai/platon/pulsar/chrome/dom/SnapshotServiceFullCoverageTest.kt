@@ -20,7 +20,8 @@ import kotlin.math.abs
 import kotlin.test.assertIs
 
 class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
-    private val testURL = interactiveDynamicURL
+    // Use getter to resolve port lazily — port is injected by Spring AFTER construction
+    private val testURL get() = interactiveDynamicURL
 
     @Test
     @DisplayName("Get trees, build and serialize end-to-end with assertions")
