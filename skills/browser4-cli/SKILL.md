@@ -59,13 +59,13 @@ Each interactive element has a **ref** (`e5`, `e12`) — the element's Chrome De
 
 ### Ref Lifecycle
 
-Refs are **ephemeral** — they become invalid after commands that change the DOM tree structure:
+Refs are **ephemeral** — treat them as single-use handles. Any interaction can leave you with stale refs if the page re-renders or Chrome remaps backend nodes:
 
-- **Safe (refs survive):** `fill`, `type`, `press`, `check`, `uncheck`, `select` — these only modify element *properties* (value, checked, selectedIndex) without adding/removing DOM nodes.
-- **Unsafe (re-snapshot after):** `click` on navigation links or buttons that trigger page updates, `goto`, `reload`, tab switches — these restructure the DOM or load new pages.
-- **Gray area:** `click` on checkboxes/radio buttons and some dropdown toggles may or may not mutate the DOM. When in doubt, capture a new snapshot after clicking.
+- **Always re-snapshot after interactions:** `click`, `fill`, `type`, `press`, `check`, `uncheck`, `select`, `hover`, `drag`, `dblclick`.
+- **Definitely re-snapshot after page/context changes:** `goto`, `reload`, tab switches, or clicks that navigate/update the page.
+- **If you are chaining form actions:** rely on the automatic post-action snapshot, then use refs from that fresh snapshot for the next step.
 
-**In practice, you can fill an entire form from a single snapshot.** Only re-snapshot if a ref unexpectedly fails — the CLI will surface a clear error so you know when it's needed.
+**In practice, the safest loop is interact → re-snapshot → use new refs.** This is the CLI's current guidance and avoids intermittent stale-ref failures on reactive pages.
 
 Interaction commands capture an automatic snapshot after execution. Pass `--no-snapshot` to skip it when you plan to capture a fresh snapshot manually (saves a round-trip).
 
@@ -73,7 +73,7 @@ Interaction commands capture an automatic snapshot after execution. Pass `--no-s
 
 - **Default** — human-readable output on stdout.
 - **`--show-tip` / `-tip`** — show a relevant, rotating tip on stderr after each successful command. Tips are suppressed by default; use this flag to enable them.
-- **`--json`** — single-line JSON envelope on stdout only. All tips, hints, warnings, and human-readable text are suppressed (clean machine output).
+- **`--json`** — single-line JSON envelope on stdout for commands that support structured output. This is the clean machine-readable mode for commands such as `tab-list`, `htmlsnapshot get`, `htmlsnapshot query`, and `eval`. **Exception:** `snapshot` remains YAML-focused and warns on stderr instead of returning JSON snapshot data.
 - **`--quiet` / `-q`** — suppress all normal output; only errors appear on stderr.
 
 ### Sessions
@@ -228,7 +228,7 @@ Have HTML files and want structured data — without tokens?
 │  Same encode → cluster → views pipeline, distributed across machines
 │  → Scales to 100K+ pages/day
 └─ Need to acquire pages first?
-   ├─ Single pages: browser4-cli goto → htmlsnapshot export
+   ├─ Single pages: browser4-cli goto → htmlsnapshot → htmlsnapshot export
    ├─ Bulk download: browser4-cli crawl --seed-file urls.txt --depth 0
    └─ High throughput: browser4-cli swarm create → swarm query --seed-file ...
        Then feed the HTML directory to WebMiner
@@ -246,7 +246,7 @@ See **[scent-miner/SKILL.md](../scent-miner/SKILL.md)** for the full reference.
 
 ## 5. Critical Warnings
 
-> **Warning:** Refs are single-use for navigation and DOM-mutating commands. Re-snapshot after `click` (on links/buttons), `goto`, `reload`, and tab switches. Form interactions (`fill`, `type`, `press`, `check`, `uncheck`, `select`) are safe — you can fill an entire form from a single snapshot. Never store refs across navigations.
+> **Warning:** Refs are effectively single-use. Re-snapshot after any interaction before using refs again, and always do so after `goto`, `reload`, and tab switches. On reactive pages, even form commands can leave earlier refs stale. Never store refs across navigations or assume a pre-interaction ref is still valid.
 
 > **Warning:** CSS selectors are tied to live websites — they break when sites change their HTML. Always discover selectors with `htmlsnapshot inspect` or `htmlsnapshot summary` before extraction. Treat scenario examples as patterns, not copy-paste recipes.
 
@@ -413,7 +413,7 @@ Agent tasks run asynchronously — submit a task, poll for completion, then fetc
 # 1. Submit a natural-language task (returns <task-id>)
 browser4-cli agent run "Find the top 5 products and their prices on this page"
 
-# 2. Poll until complete (use --wait to block instead)
+# 2. Poll until complete
 browser4-cli agent status <task-id>
 # Look for: "processState": "done" or "isDone": true
 
@@ -421,7 +421,7 @@ browser4-cli agent status <task-id>
 browser4-cli agent result <task-id>
 ```
 
-**Alternative (blocking):** `browser4-cli agent run --wait "<task>"` polls every 2s for up to 10 minutes and prints the result when done.
+**Note:** `agent run` is asynchronous. Submit with `agent run`, then use `agent status` and `agent result` to track completion and fetch output.
 
 **Polling with `isDone`:** The JSON from `agent status` includes `isDone: true` when finished. Shell scripts can parse this:
 ```bash
