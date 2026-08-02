@@ -168,7 +168,7 @@ function Resolve-IssuesFile {
     }
 
     if ($Name) {
-        $allFiles = Find-IssuesFiles
+        $allFiles = @(Find-IssuesFiles)
         $searchLower = $Name.ToLowerInvariant()
         $matches = @($allFiles | Where-Object {
             (Split-Path -Leaf $_).ToLowerInvariant().Contains($searchLower)
@@ -1885,7 +1885,7 @@ function Invoke-Review {
         return
     }
 
-    $allFiles = Find-IssuesFiles -IncludeDone:$All
+    $allFiles = @(Find-IssuesFiles -IncludeDone:$All)
 
     # ── List mode ────────────────────────────────────────────────────────────
     if ($List) {
@@ -1957,7 +1957,7 @@ function Invoke-Review {
 
         # Done / discard / back-to-list — all return to the file picker
         if ($result -eq 'done' -or $result -eq 'discard' -or $result -eq 'back-to-list') {
-            $allFiles = Find-IssuesFiles -IncludeDone:$All
+            $allFiles = @(Find-IssuesFiles -IncludeDone:$All)
             $filePath = Show-FilePicker -Files $allFiles
             if (-not $filePath) { break }
             try {
@@ -1983,7 +1983,7 @@ function Invoke-Review {
         }
         if (-not $nextFilePath) {
             # Hit end of file list — go back to file picker
-            $allFiles = Find-IssuesFiles -IncludeDone:$All
+            $allFiles = @(Find-IssuesFiles -IncludeDone:$All)
             $filePath = Show-FilePicker -Files $allFiles
             if (-not $filePath) { break }
             try {
