@@ -1492,7 +1492,7 @@ $expectedScripts = @(
     'config.psd1',
     'coworker-scheduler.ps1',
     'coworker-scheduler.config.psd1',
-    'coworker.ps1',
+    'engineer.ps1',
     'process-coworker-queue.ps1',
     'process-draft-refinement-queue.ps1',
     'common\Util.ps1',
