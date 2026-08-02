@@ -12,6 +12,7 @@ import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryIndexService
+import ai.platon.pulsar.skeleton.workflow.parse.html.ViBox
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonSetter
@@ -1392,11 +1393,7 @@ internal fun autoDiscoverRepeatingSelector(document: FeaturedDocument, topN: Int
             // in a narrow band at the very top; product cards span the
             // main content area below.
             val yPositions = members.mapNotNull { member ->
-                val vi = member.attr("vi").trim()
-                if (vi.isNotBlank()) {
-                    val parts = vi.split("\\s+".toRegex())
-                    if (parts.size >= 2) parts[1].toDoubleOrNull() else null
-                } else null
+                ViBox.parse(member.attr("vi"))?.y
             }.take(5)
             if (yPositions.isNotEmpty()) {
                 val avgY = yPositions.average()
@@ -1690,38 +1687,35 @@ internal fun inspectDocument(
             }
 
             // 4. PowerCSS :expr() selectors from visual features (vi attribute)
-            val vi = desc.attr("vi").trim()
-            if (vi.isNotBlank()) {
-                val viParts = vi.split("\\s+".toRegex())
-                if (viParts.size >= 4) {
-                    val viWidth = viParts[2].toDoubleOrNull()?.toInt() ?: 0
-                    val viHeight = viParts[3].toDoubleOrNull()?.toInt() ?: 0
+            val viBox = ViBox.parse(desc.attr("vi"))
+            if (viBox != null) {
+                val viWidth = viBox.w.toInt()
+                val viHeight = viBox.h.toInt()
 
-                    // Large elements are likely meaningful content blocks
+                // Large elements are likely meaningful content blocks
+                if (viWidth >= 200) {
+                    val w = (viWidth / 100) * 100 // round down to nearest 100
+                    candidates.add("${descTag}:expr(width>${w})" to "power")
+                    if (viHeight >= 100) {
+                        val h = (viHeight / 100) * 100
+                        candidates.add("${descTag}:expr(width>${w} && height>${h})" to "power")
+                    }
+                }
+
+                // Image containers: elements that contain <img> descendants
+                val imgCount = desc.select("img").size
+                if (imgCount > 0) {
+                    candidates.add("${descTag}:expr(img>0)" to "power")
                     if (viWidth >= 200) {
-                        val w = (viWidth / 100) * 100 // round down to nearest 100
-                        candidates.add("${descTag}:expr(width>${w})" to "power")
-                        if (viHeight >= 100) {
-                            val h = (viHeight / 100) * 100
-                            candidates.add("${descTag}:expr(width>${w} && height>${h})" to "power")
-                        }
+                        val w = (viWidth / 100) * 100
+                        candidates.add("${descTag}:expr(width>${w} && img>0)" to "power")
                     }
+                }
 
-                    // Image containers: elements that contain <img> descendants
-                    val imgCount = desc.select("img").size
-                    if (imgCount > 0) {
-                        candidates.add("${descTag}:expr(img>0)" to "power")
-                        if (viWidth >= 200) {
-                            val w = (viWidth / 100) * 100
-                            candidates.add("${descTag}:expr(width>${w} && img>0)" to "power")
-                        }
-                    }
-
-                    // Link containers: elements that contain <a> descendants
-                    val aCount = desc.select("a").size
-                    if (aCount > 0) {
-                        candidates.add("${descTag}:expr(a>0)" to "power")
-                    }
+                // Link containers: elements that contain <a> descendants
+                val aCount = desc.select("a").size
+                if (aCount > 0) {
+                    candidates.add("${descTag}:expr(a>0)" to "power")
                 }
             }
 
@@ -2057,21 +2051,14 @@ internal fun computeInteractiveWeights(
         ) continue
 
         // ---- parse vi rect ----
-        val vi = el.attr("vi")
-        if (vi.isBlank()) continue
-        val parts = vi.split("\\s+".toRegex())
-        if (parts.size < 4) continue
-        val x = parts[0].toDoubleOrNull() ?: continue
-        val y = parts[1].toDoubleOrNull() ?: continue
-        val w = parts[2].toDoubleOrNull() ?: continue
-        val h = parts[3].toDoubleOrNull() ?: continue
-        if (w <= 0 || h <= 0) continue
+        val box = ViBox.parse(el.attr("vi")) ?: continue
+        if (box.w <= 0 || box.h <= 0) continue
 
-        val area = w * h
+        val area = box.w * box.h
         val tag = el.tagName().lowercase()
         val role = el.attr("role").takeIf { it.isNotBlank() }?.lowercase()
 
-        infos.add(BoxInfo(el, x, y, w, h, area, tag, role))
+        infos.add(BoxInfo(el, box.x, box.y, box.w, box.h, area, tag, role))
     }
 
     // ---- classify ----

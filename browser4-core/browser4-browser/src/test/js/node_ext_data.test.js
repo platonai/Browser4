@@ -122,13 +122,14 @@ describe('NodeExt overflow', () => {
 });
 
 describe('NodeExt formatDOMRect', () => {
-    test('formats rect via __pulsar_utils__', () => {
+    test('formats rect as compact base-36 integers', () => {
         const div = document.body.querySelector('div');
         const ext = createNodeExt(div);
         ext.rect = new DOMRect(10.56, 20.34, 100.78, 200.12);
 
         const formatted = ext.formatDOMRect();
-        expect(formatted).toBe('10.6 20.3 100.8 200.1');
+        // left=11→"b", top=20→"k", width=101→"2t", height=200→"5k"
+        expect(formatted).toBe('b,k,2t,5k');
     });
 });
 

@@ -10,11 +10,16 @@
 /**
  * Format rectangle from individual coordinates.
  *
+ * Values are rounded to integers (pixel precision is sufficient for bounding
+ * boxes) and encoded as base-36 integers, comma-separated, for compactness.
+ * Output order: left,top,width,height (matches DOMRect / formatDOMRect).
+ * Example: "3g,cp,5k,1f" = left:124, top:457, width:200, height:51
+ *
  * @param top {Number}
  * @param left {Number}
  * @param width {Number}
  * @param height {Number}
- * @return {String|Boolean} Formatted string or false if zero dimensions.
+ * @return {String|Boolean} Compact base-36 string or false if zero dimensions.
  * */
 __pulsar_utils__.formatRect = function(top, left, width, height) {
     if (width === 0 && height === 0) {
@@ -22,17 +27,22 @@ __pulsar_utils__.formatRect = function(top, left, width, height) {
     }
 
     return ''
-        + Math.round(top * 10) / 10 + ' '
-        + Math.round(left * 10) / 10 + ' '
-        + Math.round(width * 10) / 10 + ' '
-        + Math.round(height * 10) / 10;
+        + Math.round(left).toString(36) + ','
+        + Math.round(top).toString(36) + ','
+        + Math.round(width).toString(36) + ','
+        + Math.round(height).toString(36);
 };
 
 /**
  * Format a DOMRect object.
  *
+ * Values are rounded to integers (pixel precision is sufficient for bounding
+ * boxes) and encoded as base-36 integers, comma-separated, for compactness.
+ * Output order: left,top,width,height.
+ * Example: "3g,cp,5k,1f" = left:124, top:457, width:200, height:51
+ *
  * @param rect {DOMRect}
- * @return {String|Boolean} Formatted string or false if zero dimensions.
+ * @return {String|Boolean} Compact base-36 string or false if zero dimensions.
  * */
 __pulsar_utils__.formatDOMRect = function(rect) {
     if (!rect || (rect.width === 0 && rect.height === 0)) {
@@ -40,10 +50,10 @@ __pulsar_utils__.formatDOMRect = function(rect) {
     }
 
     return ''
-        + Math.round(rect.left * 10) / 10 + ' '
-        + Math.round(rect.top * 10) / 10 + ' '
-        + Math.round(rect.width * 10) / 10 + ' '
-        + Math.round(rect.height * 10) / 10;
+        + Math.round(rect.left).toString(36) + ','
+        + Math.round(rect.top).toString(36) + ','
+        + Math.round(rect.width).toString(36) + ','
+        + Math.round(rect.height).toString(36);
 };
 
 /**

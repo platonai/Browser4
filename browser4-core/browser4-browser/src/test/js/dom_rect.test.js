@@ -20,9 +20,10 @@ beforeEach(() => {
 });
 
 describe('formatRect', () => {
-    test('formats coordinates to 1 decimal place', () => {
+    test('formats coordinates as compact base-36 integers', () => {
         const result = __pulsar_utils__.formatRect(10.56, 20.34, 100.78, 200.12);
-        expect(result).toBe('10.6 20.3 100.8 200.1');
+        // left=20→"k", top=11→"b", width=101→"2t", height=200→"5k"
+        expect(result).toBe('k,b,2t,5k');
     });
 
     test('returns false for zero dimensions', () => {
@@ -32,10 +33,11 @@ describe('formatRect', () => {
 });
 
 describe('formatDOMRect', () => {
-    test('formats DOMRect to string', () => {
+    test('formats DOMRect as compact base-36 integers', () => {
         const rect = new DOMRect(10.56, 20.34, 100.78, 200.12);
         const result = __pulsar_utils__.formatDOMRect(rect);
-        expect(result).toBe('10.6 20.3 100.8 200.1');
+        // left=11→"b", top=20→"k", width=101→"2t", height=200→"5k"
+        expect(result).toBe('b,k,2t,5k');
     });
 
     test('returns false for null rect', () => {

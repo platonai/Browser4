@@ -18,6 +18,53 @@ import ai.platon.pulsar.dom.FeaturedDocument
  *
  * The algorithm is fully deterministic — no AI model is involved.
  */
+/**
+ * Parsed bounding-box from a `vi` attribute.
+ *
+ * Supports three wire formats (auto-detected):
+ * - **Base-36** (compact): comma-separated base-36 integers containing letters
+ *   e.g. `"3g,cp,5k,1f"` → x=124, y=457, w=200, h=51
+ * - **Compact decimal**: comma-separated decimal integers (no letters)
+ *   e.g. `"0,0,1920,1080"`
+ * - **Legacy decimal**: space-separated decimal numbers
+ *   e.g. `"123.5 456.7 200.3 50.8"`
+ */
+data class ViBox(val x: Double, val y: Double, val w: Double, val h: Double) {
+    companion object {
+        /**
+         * Parse a vi attribute string into a [ViBox].
+         * Returns null when the string is blank or cannot be parsed.
+         */
+        fun parse(raw: String): ViBox? {
+            val trimmed = raw.trim()
+            if (trimmed.isEmpty()) return null
+
+            // Choose delimiter: comma (compact) or whitespace (legacy)
+            val parts: List<String> = if (',' in trimmed) {
+                trimmed.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+            } else {
+                trimmed.split("\\s+".toRegex()).filter { it.isNotEmpty() }
+            }
+
+            if (parts.size < 4) return null
+
+            // Base-36 detection: any part contains a letter a–z (base-36 digits
+            // for values ≥10). Pure-digit strings are always decimal to stay
+            // compatible with existing comma-separated decimal fixtures.
+            val isBase36 = parts.any { part ->
+                part.any { c -> c in 'a'..'z' || c in 'A'..'Z' }
+            }
+
+            val nums = parts.take(4).map {
+                if (isBase36) it.toIntOrNull(36)?.toDouble() else it.toDoubleOrNull()
+            }
+            if (nums.any { it == null }) return null
+
+            return ViBox(nums[0]!!, nums[1]!!, nums[2]!!, nums[3]!!)
+        }
+    }
+}
+
 object PageSummaryIndexService {
 
     // =========================================================================
@@ -718,8 +765,8 @@ object PageSummaryIndexService {
         // Fallback: <html> element's vi attribute
         val htmlEl = document.select("html").first()
         if (htmlEl != null) {
-            val (_, _, w, h) = parseVi(htmlEl.attr("vi"))
-            if (w != null && h != null && w > 0 && h > 0) return w to h
+            val box = ViBox.parse(htmlEl.attr("vi"))
+            if (box != null && box.w > 0 && box.h > 0) return box.w to box.h
         }
 
         // Default
@@ -764,12 +811,12 @@ object PageSummaryIndexService {
             if (vi.isBlank()) continue
             if (vi.contains("_h=1")) continue
 
-            val (x, y, w, h) = parseVi(vi)
-            if (w == null || h == null || w <= 0 || h <= 0) continue
+            val box = ViBox.parse(vi) ?: continue
+            if (box.w <= 0 || box.h <= 0) continue
 
             // Size filters
-            if (w < MIN_CARD_WIDTH || h < MIN_CARD_HEIGHT) continue
-            if (w > maxW) continue
+            if (box.w < MIN_CARD_WIDTH || box.h < MIN_CARD_HEIGHT) continue
+            if (box.w > maxW) continue
 
             // Must contain at least one link
             val links = el.select("a[href]")
@@ -780,11 +827,11 @@ object PageSummaryIndexService {
             candidates.add(
                 CardCandidate(
                     element = el,
-                    x = x ?: 0.0,
-                    y = y ?: 0.0,
-                    w = w,
-                    h = h,
-                    area = w * h,
+                    x = box.x,
+                    y = box.y,
+                    w = box.w,
+                    h = box.h,
+                    area = box.w * box.h,
                     hasLinks = true,
                     hasImages = hasImages,
                     linkCount = links.size,
@@ -795,16 +842,6 @@ object PageSummaryIndexService {
 
         return candidates
     }
-
-    private fun parseVi(vi: String): Quadruple<Double?, Double?, Double?, Double?> {
-        val parts = vi.split(",", " ").map { it.trim() }.filter { it.isNotEmpty() }
-        if (parts.size < 4) return Quadruple(null, null, null, null)
-        // The first 4 numeric parts are x, y, w, h; extra flags like _h=1 follow
-        val nums = parts.take(4).map { it.toDoubleOrNull() }
-        return Quadruple(nums.getOrNull(0), nums.getOrNull(1), nums.getOrNull(2), nums.getOrNull(3))
-    }
-
-    private data class Quadruple<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
 
     // =========================================================================
     // Phase 2: visual clustering
