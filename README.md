@@ -37,6 +37,7 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 * ⚙️ **Machine Learning Agent** — Turns complex pages into Excel/structured data without consuming tokens.
 * ⚡ **Extreme Performance** — Fully coroutine-safe; supports 100k ~ 200k complex page visits per machine per day.
 * 🧬 **Data Extraction** — Hybrid of LLM, ML, X-SQL and selectors for clean data across chaotic pages.
+* 📦 **And More** - Swarm scraping, crawl, batch, loop, stateful sessions, page storage, extension, plugins, and more.
 
 ## Quick Start
 
