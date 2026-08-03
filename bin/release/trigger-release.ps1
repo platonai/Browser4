@@ -19,7 +19,7 @@ $repoRoot = (git rev-parse --show-toplevel 2>$null)
 Set-Location $repoRoot
 
 # Import common utility script
-. $repoRoot\bin\common\Util.ps1
+. (Join-Path $repoRoot "bin" "common" "Util.ps1")
 
 Fix-Encoding-UTF8
 
@@ -72,7 +72,7 @@ if ($version -notmatch "^\d+\.\d+\.\d+(?:-rc\.\d+)?$") {
 Write-Host ""
 Write-Host "Running prerelease checks (version.mjs prerelease-check)..."
 
-$checkScript = "$repoRoot\bin\version.mjs"
+$checkScript = Join-Path $repoRoot "bin" "version.mjs"
 if (!(Test-Path $checkScript)) {
     Write-Error "version.mjs not found at: $checkScript"
     exit 1
@@ -85,6 +85,11 @@ $checkExitCode = $LASTEXITCODE
 
 if ($null -eq $checkExitCode) {
     Write-Error "Failed to run node. Is Node.js installed and on PATH?"
+    exit 1
+}
+
+if ($null -eq $checkOutput -or ($checkOutput -is [string] -and $checkOutput.Trim() -eq '')) {
+    Write-Error "Prerelease check produced no output. Verify node is installed and version.mjs exists at: $checkScript"
     exit 1
 }
 
