@@ -367,7 +367,7 @@ function Get-ReleaseChangelog {
             $log = git log --oneline "$prevTag..$Tag" -- . 2>&1
             if ($log -and $LASTEXITCODE -eq 0) {
                 Pop-Location
-                return "Commits since $prevTag:`n$log"
+                return "Commits since ${prevTag}:`n$log"
             }
         }
 
