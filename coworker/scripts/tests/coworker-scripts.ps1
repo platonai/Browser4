@@ -691,10 +691,36 @@ if (Get-Command New-AgentArguments -ErrorAction SilentlyContinue) {
         -Condition ($args -contains '--verbose')
 }
 
+# PART 13c: agent.ps1 - New-AgentArguments (codex backend)
+Write-Host ''
+Write-Host "━━━ PART 13c: agent.ps1 :: New-AgentArguments (codex) ━━━" -ForegroundColor Cyan
+
+if (Get-Command New-AgentArguments -ErrorAction SilentlyContinue) {
+    $args = New-AgentArguments -BaseArgs @('codex') -Prompt 'test' -Backend 'codex'
+    Assert-True -Label 'New-AgentArguments codex: includes exec' `
+        -Condition ($args -contains 'exec')
+    Assert-True -Label 'New-AgentArguments codex: no -p flag' `
+        -Condition ($args -notcontains '-p')
+    Assert-True -Label 'New-AgentArguments codex: no -- separator' `
+        -Condition ($args -notcontains '--')
+    Assert-True -Label 'New-AgentArguments codex: includes prompt' `
+        -Condition ($args[-1] -eq 'test')
+
+    $args = New-AgentArguments -BaseArgs @('codex') -Prompt 'test' `
+        -AdditionalArguments @('--allow-all-tools', '--allow-all-paths', '--verbose') -Backend 'codex'
+    Assert-False -Label 'New-AgentArguments codex: filters --allow-all-tools' `
+        -Condition ($args -contains '--allow-all-tools')
+    Assert-False -Label 'New-AgentArguments codex: filters --allow-all-paths' `
+        -Condition ($args -contains '--allow-all-paths')
+    Assert-True -Label 'New-AgentArguments codex: keeps --verbose' `
+        -Condition ($args -contains '--verbose')
+}
+
 if (Get-Command Get-AgentBackend -ErrorAction SilentlyContinue) {
-    # Save/restore: config.ps1 (dot-sourced via agent.ps1) sets $CLAUDE/$KIMI.
+    # Save/restore: config.ps1 (dot-sourced via agent.ps1) sets $CLAUDE/$KIMI/$CODEX.
     $savedClaude = $CLAUDE
     $savedKimi = $KIMI
+    $savedCodex = $CODEX
     try {
         $CLAUDE = @('claude'); $KIMI = @('kimi')
         Assert-Equal -Label 'Get-AgentBackend: claude wins over kimi' `
@@ -704,13 +730,18 @@ if (Get-Command Get-AgentBackend -ErrorAction SilentlyContinue) {
         Assert-Equal -Label 'Get-AgentBackend: kimi when no claude' `
             -Actual (Get-AgentBackend) -Expected 'kimi'
 
-        $CLAUDE = $null; $KIMI = $null
+        $CLAUDE = $null; $KIMI = $null; $CODEX = @('codex')
+        Assert-Equal -Label 'Get-AgentBackend: codex when no claude/kimi' `
+            -Actual (Get-AgentBackend) -Expected 'codex'
+
+        $CLAUDE = $null; $KIMI = $null; $CODEX = $null
         Assert-Equal -Label 'Get-AgentBackend: copilot fallback' `
             -Actual (Get-AgentBackend) -Expected 'copilot'
     }
     finally {
         $CLAUDE = $savedClaude
         $KIMI = $savedKimi
+        $CODEX = $savedCodex
     }
 }
 
@@ -793,7 +824,7 @@ if (Get-Command Get-CoworkerConfigData -ErrorAction SilentlyContinue) {
     Assert-NotNull -Label 'Get-CoworkerConfigData: returns config data' -Value $configData
     Assert-True -Label 'Get-CoworkerConfigData: has Paths key' `
         -Condition ($configData.ContainsKey('Paths'))
-    Assert-True -Label 'Get-CoworkerConfigData: has a backend key (CLAUDE/KIMI/COPILOT)' `
+    Assert-True -Label 'Get-CoworkerConfigData: has a backend key (CLAUDE/KIMI/CODEX/COPILOT)' `
         -Condition ($configData.ContainsKey('CLAUDE') -or $configData.ContainsKey('KIMI') -or $configData.ContainsKey('COPILOT'))
 }
 
@@ -1564,7 +1595,7 @@ $configPsd1Path = Join-Path $scriptsDir 'config.psd1'
 if (Test-Path $configPsd1Path) {
     $configData = Import-PowerShellDataFile -Path $configPsd1Path
     Assert-True -Label 'config.psd1: has Paths' -Condition $configData.ContainsKey('Paths')
-    Assert-True -Label 'config.psd1: has at least one backend key (CLAUDE/KIMI/COPILOT)' `
+    Assert-True -Label 'config.psd1: has at least one backend key (CLAUDE/KIMI/CODEX/COPILOT)' `
         -Condition ($configData.ContainsKey('CLAUDE') -or $configData.ContainsKey('KIMI') -or $configData.ContainsKey('COPILOT'))
     Assert-True -Label 'config.psd1: has Scheduler' -Condition $configData.ContainsKey('Scheduler')
 
@@ -1632,6 +1663,7 @@ if (Test-Path $agentPs1) {
             'Get-AgentRepoRoot',
             'Assert-AgentDirectory',
             'Get-AgentCommand',
+            'Get-AgentPromptArgs',
             'New-AgentArguments',
             'Format-AgentCommand',
             'ConvertTo-WindowsCommandLineArgument',

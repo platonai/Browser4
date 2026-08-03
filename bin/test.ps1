@@ -226,7 +226,7 @@ function Print-Usage {
     Write-Host "    --silent                    Suppress agent output"
     Write-Host "    --skip-version-check        Skip browser4-cli version check"
     Write-Host "    --timeout <minutes>         Kill each scenario task after N minutes (default: no timeout)"
-    Write-Host "    --agent <name>              Use a specific agent CLI (claude, kimi, or opencode)"
+    Write-Host "    --agent <name>              Use a specific agent CLI (claude, kimi, opencode, or codex)"
     Write-Host "  resume      Resume from the last failed module (-rf)"
     Write-Host "  main    Run all Browser4 main tests (fast, rest, it, e2e)"
     Write-Host ""
@@ -1463,18 +1463,8 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
         $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
         try {
-            # Build agent CLI arguments — suppress all terminal output during refine
-            $agentArgs = @()
-            switch ($agent) {
-                'claude' {
-                    $agentArgs += '--dangerously-skip-permissions'
-                    $agentArgs += '--silent'
-                    $agentArgs += @('-p', $prompt)
-                }
-                'kimi'   { $agentArgs += @('-p', $prompt) }
-                'opencode' { $agentArgs += @('run', $prompt) }
-                default  { $agentArgs += @('-p', $prompt) }
-            }
+            # Build agent CLI arguments — single source of truth for per-backend args
+            $agentArgs = Get-ScenarioAgentArgs -Agent $agent -Prompt $prompt -Silent
 
             # Use System.Diagnostics.Process to fully suppress console output.
             # Direct invocation (&) or Start-Process both leak terminal writes
@@ -2303,7 +2293,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host '  --silent                  Suppress agent output'
         Write-Host '  --skip-version-check      Skip browser4-cli version check'
         Write-Host '  --timeout <minutes>       Kill each scenario task after N minutes'
-        Write-Host '  --agent <name>            Use a specific agent CLI (claude, kimi, opencode)'
+        Write-Host '  --agent <name>            Use a specific agent CLI (claude, kimi, opencode, or codex)'
         Write-Host ''
         Write-Host 'Examples:'
         Write-Host '  test.ps1 rws sc amazon                    # Run a specific scenario'
@@ -2538,24 +2528,15 @@ $currentContent
 Return ONLY the refined Markdown. Do not include any preamble, commentary, or code fences around your output.
 "@
 
-            # Detect agent
-            $agent = if (Get-Command 'claude' -ErrorAction SilentlyContinue) { 'claude' }
-                     elseif (Get-Command 'kimi' -ErrorAction SilentlyContinue) { 'kimi' }
-                     elseif (Get-Command 'opencode' -ErrorAction SilentlyContinue) { 'opencode' }
-                     else { 'claude' }
+            # Detect agent via shared function
+            $agent = Get-ScenarioAgent
 
             Write-Host "Refining with $agent ..." -ForegroundColor Cyan
             if ($addGuidance) { Write-Host "  Guidance: $addGuidance" -ForegroundColor DarkGray }
 
             try {
-                # Build agent args
-                $agentArgs = @()
-                switch ($agent) {
-                    'claude'   { $agentArgs += '--dangerously-skip-permissions'; $agentArgs += '--silent'; $agentArgs += @('-p', $refinePrompt) }
-                    'kimi'     { $agentArgs += @('-p', $refinePrompt) }
-                    'opencode' { $agentArgs += @('run', $refinePrompt) }
-                    default    { $agentArgs += @('-p', $refinePrompt) }
-                }
+                # Build agent args via shared function
+                $agentArgs = Get-ScenarioAgentArgs -Agent $agent -Prompt $refinePrompt -Silent
 
                 $psi = [System.Diagnostics.ProcessStartInfo]::new()
                 $psi.FileName = $agent

@@ -60,7 +60,7 @@ function Get-AgentCommand {
     }
     $WorkingDirectory = Assert-AgentDirectory -Path $WorkingDirectory -ParameterName 'WorkingDirectory'
 
-    # Get-AgentBackend comes from config.ps1 (dot-sourced above): claude > kimi > copilot.
+    # Get-AgentBackend comes from config.ps1 (dot-sourced above): claude > kimi > codex > copilot.
     $backend = Get-AgentBackend
 
     switch ($backend) {
@@ -82,6 +82,16 @@ function Get-AgentCommand {
                 throw 'KIMI must include at least an executable'
             }
             $command = $KIMI
+            break
+        }
+        'codex' {
+            if ($CODEX -is [string]) {
+                throw "CODEX must be defined as a PowerShell array in $configPath"
+            }
+            if ($CODEX.Count -lt 1) {
+                throw 'CODEX must include at least an executable'
+            }
+            $command = $CODEX
             break
         }
         default {
@@ -110,6 +120,49 @@ function Get-AgentCommand {
     }
 }
 
+function Get-AgentPromptArgs {
+    <#
+    .SYNOPSIS
+        Build the CLI arguments for passing a prompt to the agent backend.
+    .DESCRIPTION
+        Single source of truth for per-backend prompt argument patterns.
+        Used by New-AgentArguments and the stdin redirection path in
+        Start-AgentProcess.
+
+        Backend patterns:
+          copilot:  -- -p <prompt>     (requires -- separator before -p)
+          codex:    exec <prompt>      (non-interactive exec mode)
+          default:  -p <prompt>        (claude, kimi, and unknown backends)
+
+        When $Prompt is empty, returns just the flag portion (for stdin redirect).
+    .PARAMETER Backend
+        The agent backend name (claude, kimi, codex, copilot, etc.).
+    .PARAMETER Prompt
+        The prompt text. Pass $null or '' to get just the flag without prompt.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Backend,
+
+        [string]$Prompt
+    )
+
+    $hasPrompt = $PSBoundParameters.ContainsKey('Prompt') -and $Prompt
+
+    switch ($Backend) {
+        'copilot' {
+            if ($hasPrompt) { return @('--', '-p', $Prompt) } else { return @('--', '-p') }
+        }
+        'codex' {
+            if ($hasPrompt) { return @('exec', $Prompt) } else { return @('exec') }
+        }
+        default {
+            # claude, kimi, and unknown backends use -p <prompt>
+            if ($hasPrompt) { return @('-p', $Prompt) } else { return @('-p') }
+        }
+    }
+}
+
 function New-AgentArguments {
     param(
         # Not Mandatory: a backend configured without extra flags (e.g. KIMI =
@@ -122,26 +175,15 @@ function New-AgentArguments {
     )
 
     $arguments = @($BaseArgs)
-    if ($PSBoundParameters.ContainsKey('Prompt') -and $Prompt) {
-        if ($Backend -eq 'copilot') {
-            $arguments += '--'
-            $arguments += '-p'
-            $arguments += $Prompt
-        }
-        else {
-            # claude and kimi both accept -p <prompt> directly, without a separator.
-            $arguments += '-p'
-            $arguments += $Prompt
-        }
-    }
+    $arguments += Get-AgentPromptArgs -Backend $Backend -Prompt $Prompt
 
     if ($AdditionalArguments) {
         if ($Backend -eq 'copilot') {
             $arguments += $AdditionalArguments
         }
         else {
-            # --allow-all-tools/--allow-all-paths are copilot-only flags; claude and
-            # kimi manage permissions themselves (kimi -p runs with auto permission).
+            # --allow-all-tools/--allow-all-paths are copilot-only flags; all other
+            # backends manage permissions through their own mechanisms.
             $copilotOnlyFlags = @('--allow-all-tools', '--allow-all-paths')
             $filtered = foreach ($arg in $AdditionalArguments) {
                 if ($arg -notin $copilotOnlyFlags) {
@@ -273,16 +315,12 @@ function Start-AgentProcess {
     if ($isWindowsPlatform -and $Prompt) {
         $stdinTempPath = [System.IO.Path]::GetTempFileName()
         Set-Content -Path $stdinTempPath -Value $Prompt -Encoding UTF8 -NoNewline
-        # Rebuild arguments without the prompt text, but keep -p so the agent
-        # runs in non-interactive --print mode (reads prompt from stdin).
+        # Rebuild arguments without the prompt text, but keep the prompt-flag so
+        # the agent runs in non-interactive mode (reads prompt from stdin).
         $arguments = New-AgentArguments -BaseArgs $BaseArgs -Prompt $null -AdditionalArguments $AdditionalArguments -Backend $Backend
-        # Append -p flag (without prompt text) so the backend knows to read from stdin
-        # in non-interactive mode.  claude/kimi accept -p without a value; copilot
-        # requires -- after options before -p.
-        if ($Backend -eq 'copilot') {
-            $arguments += '--'
-        }
-        $arguments += '-p'
+        # Append backend-specific prompt flag (without prompt text) so the backend
+        # knows to read from stdin in non-interactive mode.
+        $arguments += Get-AgentPromptArgs -Backend $Backend -Prompt ''
     }
 
     if ($isWindowsPlatform) {

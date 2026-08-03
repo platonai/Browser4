@@ -423,6 +423,25 @@ Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundCo
     Assert-Equal 'opencode silent: first arg is run' 'run' $script:CapturedArgs[0]
     Assert-True 'opencode silent: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'opencode silent')
 
+    Write-TestGroup 'codex backend'
+    $testAgentCli = 'codex'
+    $script:CapturedArgs = $null
+    Invoke-Agent -Prompt 'codex test'
+    Assert-True 'codex was invoked' ($null -ne $script:CapturedArgs)
+    Assert-NotContains 'codex: no --dangerously-skip-permissions' ($script:CapturedArgs -join ' ') `
+        '--dangerously-skip-permissions'
+    Assert-Equal 'codex: first arg is exec' 'exec' $script:CapturedArgs[0]
+    Assert-True 'codex: has --dangerously-bypass-approvals-and-sandbox' `
+        ($script:CapturedArgs -contains '--dangerously-bypass-approvals-and-sandbox')
+    Assert-True 'codex: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'codex test')
+
+    Write-TestGroup 'codex backend with -Silent flag'
+    $script:CapturedArgs = $null
+    Invoke-Agent -Prompt 'codex silent' -Silent
+    Assert-NotContains 'codex: --silent is never passed' ($script:CapturedArgs -join ' ') '--silent'
+    Assert-Equal 'codex silent: first arg is exec' 'exec' $script:CapturedArgs[0]
+    Assert-True 'codex silent: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'codex silent')
+
     # Clean up the mocks so they do not leak.
     Remove-Item function:Start-NativeCommand -ErrorAction SilentlyContinue
     Remove-Item function:Get-ScenarioAgent -ErrorAction SilentlyContinue
@@ -433,7 +452,7 @@ Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundCo
 # ═══════════════════════════════════════════════════════════════════════════════
 
 Write-Host ''
-Write-Host '━━━ Get-ScenarioAgent: opencode Detection ━━━' -ForegroundColor Yellow
+Write-Host '━━━ Get-ScenarioAgent: Backend Detection (opencode, codex) ━━━' -ForegroundColor Yellow
 
 & {
     $browser4cliMode = 'dev'
@@ -457,14 +476,21 @@ Write-Host '━━━ Get-ScenarioAgent: opencode Detection ━━━' -Foregrou
     $resolved = Get-ScenarioAgent
     Assert-Equal 'Returns claude when overridden' 'claude' $resolved
 
+    Write-TestGroup 'Overridden via $script:scenarioAgentCli returns codex'
+    $script:scenarioAgentCli = 'codex'
+    $resolved = Get-ScenarioAgent
+    Assert-Equal 'Returns codex when overridden' 'codex' $resolved
+
     # Reset override
     $script:scenarioAgentCli = $null
 
-    # Static analysis: verify opencode is in the auto-detection list
+    # Static analysis: verify codex is in the auto-detection list
     $commonPath = Join-Path $PSScriptRoot 'common.ps1'
     $commonContent = Get-Content -LiteralPath $commonPath -Raw -Encoding UTF8
     Assert-True 'Auto-detection includes opencode' `
         ($commonContent -match 'Get-Command opencode.*return.*opencode')
+    Assert-True 'Auto-detection includes codex' `
+        ($commonContent -match 'Get-Command codex.*return.*codex')
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
