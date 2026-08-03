@@ -129,9 +129,18 @@ if ($RemainingArgs -and ($RemainingArgs[0] -eq '--' -or $RemainingArgs[0] -eq '-
 
 # ── Subcommand: coworker ──────────────────────────────────────────────────
 # Delegates to coworker/coworker.ps1, forwarding all remaining arguments.
+# Special case: "coworker start" runs coworker/start.ps1 sched directly.
 if ($CliArgs -and $CliArgs[0] -eq 'coworker') {
-    $CoworkerScript = Join-Path $ScriptDir 'coworker\coworker.ps1'
     $CoworkerArgs = if ($CliArgs.Count -gt 1) { ,$CliArgs[1..($CliArgs.Count - 1)] } else { @() }
+
+    # Route "coworker start" to the dedicated start script.
+    if ($CoworkerArgs -and $CoworkerArgs[0] -eq 'start') {
+        $StartScript = Join-Path $ScriptDir 'coworker\start.ps1'
+        & $StartScript sched
+        exit $LASTEXITCODE
+    }
+
+    $CoworkerScript = Join-Path $ScriptDir 'coworker\coworker.ps1'
     if ($CoworkerArgs) {
         $CoworkerCommand = $CoworkerArgs[0]
         $CoworkerRemaining = @()
@@ -227,6 +236,7 @@ Examples:
 
   # subcommands
   b4w coworker list                     list Coworker tasks
+  b4w coworker start                    start the Coworker scheduler
   b4w test --e2e                        run E2E tests
   b4w sc                                interactive scenario picker
   b4w sc add my-test https://example.com  create a new scenario
@@ -276,6 +286,7 @@ $LauncherSubcommands = @(
     @{ Name = 'b4w-coworker-push';     Args = 'coworker push' },
     @{ Name = 'b4w-coworker-fix';      Args = 'coworker fix' },
     @{ Name = 'b4w-coworker-review';   Args = 'coworker review' },
+    @{ Name = 'b4w-coworker-start';    Args = 'coworker start' },
     @{ Name = 'b4w-sc';              Args = 'sc' },
     @{ Name = 'b4w-sc-add';         Args = 'sc add' },
     @{ Name = 'b4w-test';              Args = 'test' },
