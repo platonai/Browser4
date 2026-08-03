@@ -217,24 +217,34 @@ class Mouse(private val bp: BrowserProtocol) {
     var currentX = 0.0
     var currentY = 0.0
 
-    // Track current pressed buttons bitfield. For left button only, we use 1 as Chromium does.
+    // Track current pressed buttons bitfield.
+    // 1=left, 2=right, 4=middle.
     private var buttonsState: Int = 0
+
+    /** Map button name to (cdpButtonName, bitmask). */
+    private fun buttonInfo(button: String?): Pair<String, Int> = when (button?.lowercase()) {
+        "right" -> "right" to 2
+        "middle" -> "middle" to 4
+        else -> "left" to 1
+    }
 
     /**
      * Shortcut for `mouse.move`, `mouse.down` and `mouse.up`.
      * @param x - Horizontal position of the mouse.
      * @param y - Vertical position of the mouse.
+     * @param button - Mouse button name: "left", "right", or "middle" (default "left").
      */
-    suspend fun click(x: Double, y: Double, clickCount: Int = 1, modifiers: Int? = null, delayMillis: Long = 500) {
+    suspend fun click(x: Double, y: Double, clickCount: Int = 1, modifiers: Int? = null, delayMillis: Long = 500, button: String? = null) {
+        val (cdpButton, buttonMask) = buttonInfo(button)
         moveTo(x, y)
 
         // Proper multi-click semantics: for each click i, use clickCount=i on press/release
         for (cc in 1..max(1, clickCount)) {
-            down(x, y, cc, modifiers)
+            down(x, y, cc, modifiers, buttonMask = buttonMask, cdpButton = cdpButton)
             if (delayMillis > 0) {
                 delay(delayMillis.milliseconds)
             }
-            up(x, y, cc, modifiers)
+            up(x, y, cc, modifiers, buttonMask = buttonMask, cdpButton = cdpButton)
             if (cc < clickCount && delayMillis > 0) {
                 delay(delayMillis.milliseconds)
             }
@@ -277,15 +287,15 @@ class Mouse(private val bp: BrowserProtocol) {
     /**
      * Dispatches a `mousedown` event.
      */
-    suspend fun down(clickCount: Int = 1, modifiers: Int? = null) {
-        down(currentX, currentY, clickCount, modifiers)
+    suspend fun down(clickCount: Int = 1, modifiers: Int? = null, buttonMask: Int = 1, cdpButton: String = "left") {
+        down(currentX, currentY, clickCount, modifiers, buttonMask = buttonMask, cdpButton = cdpButton)
     }
 
     /**
      * Dispatches a `mousedown` event.
      */
-    suspend fun down(point: PointD, clickCount: Int = 1, modifiers: Int? = null) {
-        down(point.x, point.y, clickCount, modifiers)
+    suspend fun down(point: PointD, clickCount: Int = 1, modifiers: Int? = null, buttonMask: Int = 1, cdpButton: String = "left") {
+        down(point.x, point.y, clickCount, modifiers, buttonMask = buttonMask, cdpButton = cdpButton)
     }
 
     /**
@@ -295,31 +305,33 @@ class Mouse(private val bp: BrowserProtocol) {
      * @param y Y coordinate
      * @param modifiers Bit field representing pressed modifier keys. Alt=1, Ctrl=2, Meta/Command=4, Shift=8
      * * (default: 0).
+     * @param buttonMask Button bitmask to add to buttonsState (1=left, 2=right, 4=middle).
+     * @param cdpButton CDP button name to report in the event (MouseButton.LEFT/RIGHT/MIDDLE).
      */
-    suspend fun down(x: Double, y: Double, clickCount: Int = 1, modifiers: Int? = null) {
+    suspend fun down(x: Double, y: Double, clickCount: Int = 1, modifiers: Int? = null, buttonMask: Int = 1, cdpButton: String = "left") {
         currentX = x
         currentY = y
 
-        // Update buttons bitfield to include left button (1)
-        buttonsState = buttonsState or 1
-        bp.dispatchMousePressed(x, y, clickCount, modifiers, buttonsState)
+        // Update buttons bitfield to include the pressed button
+        buttonsState = buttonsState or buttonMask
+        bp.dispatchMousePressed(x, y, clickCount, modifiers, buttonsState, button = cdpButton)
     }
 
-    suspend fun up() {
-        up(currentX, currentY)
+    suspend fun up(buttonMask: Int = 1, cdpButton: String = "left") {
+        up(currentX, currentY, buttonMask = buttonMask, cdpButton = cdpButton)
     }
 
-    suspend fun up(point: PointD) {
-        up(point.x, point.y)
+    suspend fun up(point: PointD, buttonMask: Int = 1, cdpButton: String = "left") {
+        up(point.x, point.y, buttonMask = buttonMask, cdpButton = cdpButton)
     }
 
-    suspend fun up(x: Double, y: Double, clickCount: Int = 1, modifiers: Int? = null) {
+    suspend fun up(x: Double, y: Double, clickCount: Int = 1, modifiers: Int? = null, buttonMask: Int = 1, cdpButton: String = "left") {
         currentX = x
         currentY = y
 
-        // Update buttons bitfield to reflect release of left button
-        buttonsState = buttonsState and 1.inv()
-        bp.dispatchMouseReleased(x, y, clickCount, modifiers, buttonsState)
+        // Update buttons bitfield to reflect release of the button
+        buttonsState = buttonsState and buttonMask.inv()
+        bp.dispatchMouseReleased(x, y, clickCount, modifiers, buttonsState, button = cdpButton)
     }
 
     /**
@@ -782,6 +794,7 @@ class EmulationHandler(
         count: Int,
         position: String = "center",
         modifier: String? = null,
+        button: String? = null,
         delayMillis: Long = 100,
         dispatchCdpMouseEvents: Boolean = true,
     ) {
@@ -804,12 +817,16 @@ class EmulationHandler(
             }
         }
 
+        // Non-left clicks (right, middle) must always go through CDP because
+        // DOM HTMLElement.click() dispatches left-click events only.
+        val isNonLeftButton = button != null && button.lowercase() != "left"
+
         // On Windows, CDP Input.dispatchMouseEvent does not reliably trigger
         // DOM click events in headless Chrome.  When dispatchCdpMouseEvents is
         // false (Windows-only), the caller will use a DOM click fallback instead.
         // We still run the prep work above (point calculation + focus) so the
         // element is ready for interaction.
-        if (!dispatchCdpMouseEvents) {
+        if (!dispatchCdpMouseEvents && !isNonLeftButton) {
             return
         }
 
@@ -821,7 +838,7 @@ class EmulationHandler(
         if (modifier != null) {
             clickWithModifiers(point, modifier, count, delayMillis = delayMillis)
         } else {
-            mouse?.click(point.x, point.y, count, delayMillis = delayMillis)
+            mouse?.click(point.x, point.y, count, delayMillis = delayMillis, button = button)
         }
     }
 
