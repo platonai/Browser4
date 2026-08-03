@@ -16,7 +16,7 @@ Every browser4-cli session follows this pattern.
 
 ```
 1. NAVIGATE    browser4-cli goto <url>              # auto-opens/reconnects session
-2. SNAPSHOT    browser4-cli snapshot -v 0           # capture accessibility tree (viewport 0 = top)
+2. SNAPSHOT    browser4-cli snapshot -v 0           # capture accessibility tree (viewport 0 = current visible screen)
 3. INTERACT    browser4-cli click <ref>             # use refs from the snapshot
               browser4-cli fill <ref> <value>
               browser4-cli press Enter

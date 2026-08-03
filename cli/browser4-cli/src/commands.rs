@@ -1273,7 +1273,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "selector", description: "Scope snapshot to a CSS selector (use --selector; -s is reserved for --session globally). Note: root-to-leaf ancestor elements outside the matched scope are included for tree-path context.", is_bool: false, short: None },
                 OptionDef { name: "raw", description: "Strip page info and return only snapshot content (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print snapshot content to stdout instead of saving to file", is_bool: true, short: None },
-                OptionDef { name: "viewport", description: "Capture specific screen-height page chunks (viewports). Each chunk = one screen height (~viewport height px). Formats: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7). Example: -v 1-3 captures the 2nd through 4th screen-heights.", is_bool: false, short: Some("v") },
+                OptionDef { name: "viewport", description: "Capture specific screen-height page chunks (viewports). Each chunk = one screen height (~viewport height px). Indices are scroll-relative: 0 = current visible screen, 1 = one below, -1 = one above. Formats: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7). Example: -v 1-3 captures the 2nd through 4th screen-heights.", is_bool: false, short: Some("v") },
                 OptionDef { name: "auto-diff", description: "Diff against the previous snapshot — show only what changed since the last capture. Note: after page navigation (goto/open), all elements appear as changed because the entire DOM is new.", is_bool: true, short: None },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated snapshot output (1-based, default: 1)" },
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 2000)" },
@@ -1949,7 +1949,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "filename", description: "File name or path to save the screenshot to. Bare filenames are saved to the snapshot directory; paths (containing / or \\) are resolved relative to the current directory.", is_bool: false, short: None },
                 OptionDef { name: "full-page", description: "When true, takes a screenshot of the full scrollable page", is_bool: true, short: None },
-                OptionDef { name: "viewport", description: "Capture a specific viewport by index (0 = top). Same semantics as snapshot -v.", is_bool: false, short: Some("v") },
+                OptionDef { name: "viewport", description: "Capture a specific viewport by index (0 = current visible screen). Same semantics as snapshot -v.", is_bool: false, short: Some("v") },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_take_screenshot".to_string(),
@@ -5431,6 +5431,24 @@ mod tests {
             Some("1-3"),
             "viewport range should be passed through"
         );
+    }
+
+    #[test]
+    fn test_snapshot_viewport_single_values_passed_through() {
+        // Scroll-relative semantics: -v 0 (current screen), -v 1 (one below),
+        // -v -1 (one above) — each must pass through to the server unchanged.
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        for viewport in ["0", "1", "-1"] {
+            let mut args = HashMap::new();
+            args.insert("viewport".to_string(), json!(viewport));
+            let params = (cmd.tool_params_fn)(&args);
+            assert_eq!(
+                params.get("viewports").and_then(|v| v.as_str()),
+                Some(viewport),
+                "snapshot -v {viewport} should pass viewports through as a string"
+            );
+        }
     }
 
     // ---- screenshot viewport tests ----

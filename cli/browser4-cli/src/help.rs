@@ -1581,8 +1581,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    to keep output manageable: -v 0 (top), -v 1 (next), -v 0-2 (first three), -v all (entire page)."
+            "    to keep output manageable: -v 0 (current screen), -v 1 (one below), -v 0-2 (three screens),"
                 .to_string(),
+        );
+        lines.push(
+            "    -v all (entire page).".to_string(),
         );
         lines.push(
             "  - --viewport accepts single indices (3), comma-separated lists (0,2,4), ranges (1-3),"
@@ -1629,11 +1632,13 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Viewports (page chunks):".to_string());
         lines.push("  A viewport is one screen-height chunk of the page (~viewport height px).".to_string());
+        lines.push("  Indices are scroll-relative: -v 0 is the screen currently visible, -v 1 the one".to_string());
+        lines.push("  below it, and -v -1 the one above. After a fresh navigation -v 0 is the top of the page.".to_string());
         lines.push("  Long pages are split into multiple viewports. -v N captures chunk N (0-indexed).".to_string());
         lines.push("  The snapshot filters the accessibility tree by Y-range — the page is not scrolled.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  # Read the page viewport by viewport (start from the top)".to_string());
+        lines.push("  # Read the page viewport by viewport (0 = current screen)".to_string());
         lines.push("  browser4-cli snapshot -v 0".to_string());
         lines.push(String::new());
         lines.push("  # Capture a range of viewports".to_string());

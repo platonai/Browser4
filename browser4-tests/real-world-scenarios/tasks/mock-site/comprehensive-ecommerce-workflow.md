@@ -3,7 +3,7 @@
 Before running this scenario, ensure MockSite is running on localhost:18080 (`./bin/test.ps1 mock-site`).
 
 1. Go to `http://localhost:18080/ec/` (the MockSite e-commerce home page).
-2. Capture a full-page snapshot (`-v 0`) to see all visible elements on the home page.
+2. Capture a viewport snapshot (`-v 0`) to see all visible elements on the home page.
 3. Capture an interactive-only snapshot (`-i`) to see clickable elements (product links, search, navigation).
 4. Click on the first product link to navigate to a product detail page.
 5. On the product detail page, capture an HTML snapshot for detailed extraction.

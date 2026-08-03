@@ -33,6 +33,7 @@ class ViewportSpecTest {
     fun testSingleViewport() {
         assertEquals(listOf(3), ViewportSpec.parse("3"))
         assertEquals(listOf(1), ViewportSpec.parse("1"))
+        assertEquals(listOf(0), ViewportSpec.parse("0"))
     }
 
     @Test
@@ -72,6 +73,39 @@ class ViewportSpecTest {
     fun testNegativeSingleIndices() {
         assertEquals(listOf(-1), ViewportSpec.parse("-1"))
         assertEquals(listOf(-3), ViewportSpec.parse("-3"))
+    }
+
+    @Test
+    @DisplayName("mixed negative and positive indices are sorted")
+    fun testMixedNegativeAndPositiveSorted() {
+        assertEquals(listOf(-1, 0, 1), ViewportSpec.parse("-1,1,0"))
+        assertEquals(listOf(-3, -1, 2), ViewportSpec.parse("-1,-3,2"))
+    }
+
+    @Test
+    @DisplayName("empty tokens in a list are ignored")
+    fun testEmptyTokensIgnored() {
+        assertEquals(listOf(1, 3), ViewportSpec.parse("1,,3"))
+        assertEquals(listOf(2), ViewportSpec.parse(",2,"))
+    }
+
+    @Test
+    @DisplayName("zero-width range expands to a single index")
+    fun testZeroWidthRange() {
+        assertEquals(listOf(0), ViewportSpec.parse("0-0"))
+    }
+
+    @Test
+    @DisplayName("whitespace around negative tokens is trimmed")
+    fun testWhitespaceAroundNegativeTokens() {
+        assertEquals(listOf(-1, 2), ViewportSpec.parse(" -1 , 2 "))
+    }
+
+    @Test
+    @DisplayName("negative-to-negative ranges are invalid and ignored")
+    fun testNegativeToNegativeRangeInvalid() {
+        assertNull(ViewportSpec.parse("-3--1"))
+        assertNull(ViewportSpec.parse("-1--1"))
     }
 
     @Test
