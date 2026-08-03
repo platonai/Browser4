@@ -461,7 +461,8 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         // Find a button element
         val buttonNode = service.findElement(ElementRefCriteria(cssSelector = "button"))
         assertNotNull(buttonNode, "Expected button element to be found")
-        val buttonText = buttonNode.nodeValue.takeIf { it.isNotEmpty() }
+        val buttonText = buttonNode.axNode?.name?.takeIf { it.isNotEmpty() }
+            ?: buttonNode.nodeValue.takeIf { it.isNotEmpty() }
             ?: buttonNode.attributes["textContent"]
             ?: buttonNode.attributes["value"]
             ?: ""
