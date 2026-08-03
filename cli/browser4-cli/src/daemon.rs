@@ -314,12 +314,15 @@ fn is_china_locale() -> bool {
         }
     }
 
-    // 3 — /etc/timezone on Debian/Ubuntu.
+    // 3 — /etc/timezone on Debian/Ubuntu (only when TZ is not set:
+    //     an explicit TZ takes precedence over the system default).
     #[cfg(unix)]
     {
-        if let Ok(content) = std::fs::read_to_string("/etc/timezone") {
-            if is_china_timezone(content.trim()) {
-                return true;
+        if std::env::var("TZ").is_err() {
+            if let Ok(content) = std::fs::read_to_string("/etc/timezone") {
+                if is_china_timezone(content.trim()) {
+                    return true;
+                }
             }
         }
     }
@@ -5382,7 +5385,7 @@ mod tests {
             env::remove_var("LANG");
             env::remove_var("LC_CTYPE");
             env::remove_var("LC_MESSAGES");
-            env::remove_var("TZ");
+            env::set_var("TZ", "UTC");
         }
         saved
     }

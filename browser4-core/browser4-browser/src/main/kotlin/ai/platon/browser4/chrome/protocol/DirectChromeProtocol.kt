@@ -734,7 +734,7 @@ class DirectChromeProtocol(
     }
 
     override suspend fun dispatchMousePressed(
-        x: Double, y: Double, clickCount: Int, modifiers: Int?, buttons: Int
+        x: Double, y: Double, clickCount: Int, modifiers: Int?, buttons: Int, button: String
     ) {
         command(
             "Input.dispatchMouseEvent",
@@ -742,7 +742,7 @@ class DirectChromeProtocol(
                 put("type", DispatchMouseEventType.MOUSE_PRESSED)
                 put("x", x)
                 put("y", y)
-                put("button", MouseButton.LEFT)
+                put("button", button)
                 modifiers?.let { put("modifiers", it) }
                 put("buttons", buttons)
                 put("clickCount", clickCount)
@@ -752,7 +752,7 @@ class DirectChromeProtocol(
     }
 
     override suspend fun dispatchMouseReleased(
-        x: Double, y: Double, clickCount: Int, modifiers: Int?, buttons: Int
+        x: Double, y: Double, clickCount: Int, modifiers: Int?, buttons: Int, button: String
     ) {
         command(
             "Input.dispatchMouseEvent",
@@ -760,7 +760,7 @@ class DirectChromeProtocol(
                 put("type", DispatchMouseEventType.MOUSE_RELEASED)
                 put("x", x)
                 put("y", y)
-                put("button", MouseButton.LEFT)
+                put("button", button)
                 put("clickCount", clickCount)
                 modifiers?.let { put("modifiers", it) }
                 put("buttons", buttons)
