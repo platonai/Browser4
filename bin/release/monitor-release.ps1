@@ -69,7 +69,7 @@ function ConvertTo-LogLines {
     if ($RawLogs -is [string]) {
         return @($RawLogs -split '\r?\n')
     }
-    if ($RawLogs -is [array]) {
+    if ($RawLogs -is [System.Collections.IEnumerable]) {
         $result = [System.Collections.Generic.List[string]]::new()
         foreach ($item in $RawLogs) {
             if ($item -is [string]) {
