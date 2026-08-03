@@ -5,27 +5,92 @@
   <title>{{TITLE}}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
-    header { background:#222; color:#fff; padding:1rem; }
-    #product-page { display:flex; gap:2rem; margin:2rem; }
-    .product-images { flex:1; }
-    .product-info { flex:2; }
-    .product-image { max-width:100%; height:auto; border:1px solid #ddd; }
-    #productTitle { margin-top:0; }
-    #product-price { font-size:1.4rem; font-weight:bold; color:#b12704; }
-    #product-rating { color:#f90; }
+    :root {
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --ink: #111827;
+      --muted: #667085;
+      --line: #dbe4f1;
+      --shadow: 0 14px 28px rgba(15, 23, 42, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: var(--bg); color: var(--ink); }
+    header { background:#111827; color:#fff; padding:1rem 1.5rem; }
+    header .toolbar { display:flex; justify-content:space-between; gap:1rem; flex-wrap:wrap; align-items:center; }
+    header nav a { color:#c7d2fe; margin-right:1rem; text-decoration:none; font-size:.92rem; }
+    main { max-width: 1380px; margin: 0 auto; padding: 1.5rem; }
+    .breadcrumbs { color: var(--muted); font-size: .92rem; margin-bottom: 1rem; }
+    .breadcrumbs a { color: #0b4bb3; text-decoration:none; }
+    #product-page { display:grid; grid-template-columns: minmax(320px, 1.05fr) minmax(0, 1.8fr) 320px; gap:1.25rem; align-items:start; }
+    .product-images, .product-info, .buybox, .secondary-section, .recommendation-card, .comment-card {
+      background: var(--panel); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow);
+    }
+    .product-images, .product-info, .buybox, .secondary-section { padding: 1.15rem; }
+    .product-image { width:100%; height:auto; border:1px solid #d6ddea; border-radius:14px; background:#fff; }
+    #productTitle { margin:0 0 .5rem; }
+    .description { color: var(--muted); line-height: 1.65; margin: .85rem 0 1rem; }
+    #product-price { font-size:1.55rem; font-weight:bold; color:#b12704; }
+    #product-rating { color:#f59e0b; font-weight:700; }
     #product-category-link { margin-bottom:1rem; }
-    #product-features { margin:1rem 0; }
-    #product-specs { border-collapse:collapse; margin:1rem 0; }
-    #product-specs th, #product-specs td { border:1px solid #ccc; padding:.4rem .6rem; text-align:left; }
-    .product-badges { margin:.5rem 0; }
-    .badge { background:#d00; color:#fff; padding:.2rem .4rem; border-radius:3px; font-size:.75rem; margin-right:.25rem; }
-    footer { margin-top:2rem; font-size:.8rem; text-align:center; color:#666; }
+    #product-features { margin:1rem 0; padding-left: 1.15rem; display:grid; gap:.45rem; }
+    #product-specs { border-collapse:collapse; margin:1rem 0; width: 100%; }
+    #product-specs th, #product-specs td { border:1px solid #dbe4f1; padding:.55rem .7rem; text-align:left; }
+    .product-badges { margin:.75rem 0; }
+    .badge { background:#d00; color:#fff; padding:.25rem .5rem; border-radius:999px; font-size:.72rem; margin-right:.35rem; font-weight:700; }
+    .rating-line { display:flex; gap:.75rem; align-items:center; flex-wrap:wrap; }
+    .info-pills { display:flex; flex-wrap:wrap; gap:.5rem; margin: 1rem 0; }
+    .info-pill { background:#eef4ff; color:#1d4ed8; border-radius:999px; padding:.3rem .7rem; font-size:.8rem; font-weight:600; }
+    .buybox .price-row { display:flex; justify-content:space-between; align-items:flex-end; gap:1rem; }
+    .stock-state { color:#047857; font-weight:700; margin: .75rem 0; }
+    .buybox .meta { color: var(--muted); font-size:.92rem; line-height:1.55; }
+    .buybox .action-stack { display:grid; gap:.6rem; margin-top:1rem; }
+    .buybox button {
+      width:100%; border:0; border-radius:999px; padding:.8rem 1rem; font-weight:700; cursor:pointer;
+    }
+    .buy-now { background:#f59e0b; color:#111827; }
+    .add-cart { background:#ffd814; color:#111827; }
+    .secondary-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:1rem; margin-top:1.25rem; }
+    .secondary-section h2 { margin-top:0; }
+    .secondary-section ul { margin:0; padding-left:1.1rem; display:grid; gap:.55rem; }
+    .recommendations { margin-top:1.25rem; }
+    .recommendation-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:1rem; }
+    .recommendation-card { padding:1rem; }
+    .recommendation-card h3 { margin:.35rem 0 .45rem; font-size:1rem; }
+    .recommendation-copy { color:var(--muted); font-size:.9rem; line-height:1.45; margin:.25rem 0 .65rem; }
+    .recommendation-meta { display:flex; justify-content:space-between; gap:.5rem; font-size:.85rem; }
+    .comments { margin-top:1.25rem; }
+    .comment-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:1rem; }
+    .comment-card { padding:1rem; }
+    .comment-card h3 { margin:.2rem 0 .55rem; font-size:1rem; }
+    .comment-card p { color:var(--muted); line-height:1.55; margin:.25rem 0 .8rem; }
+    .comment-meta { color:#475569; font-size:.84rem; font-weight:600; }
+    .eyebrow { margin:0; color:#2563eb; font-size:.78rem; text-transform:uppercase; letter-spacing:.08em; font-weight:700; }
+    footer { margin-top:2rem; padding:1.5rem; font-size:.8rem; text-align:center; color:#666; }
+    @media (max-width: 1080px) {
+      #product-page { grid-template-columns: 1fr; }
+      .secondary-grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
-  <header><h1>Mock Ecommerce</h1></header>
+  <header>
+    <div class="toolbar">
+      <h1>Mock Ecommerce</h1>
+      <nav aria-label="Store links">
+        <a href="/ec/">Home</a>
+        <a href="/ec/b?node={{PRODUCT_CATEGORY_ID}}">Back to category</a>
+        <a href="/ec/">Today's deals</a>
+        <a href="/ec/">Customer service</a>
+      </nav>
+    </div>
+  </header>
   <main>
+    <div class="breadcrumbs">
+      <a href="/ec/">Home</a> &rsaquo;
+      <a href="/ec/b?node={{PRODUCT_CATEGORY_ID}}">{{PRODUCT_CATEGORY_NAME}}</a> &rsaquo;
+      <span>{{PRODUCT_NAME}}</span>
+    </div>
+
     <article id="product-page" data-product-id="{{PRODUCT_ID}}" data-category-id="{{PRODUCT_CATEGORY_ID}}">
       <div class="product-images">
         <img id="product-image" class="product-image" src="{{PRODUCT_IMAGE}}" alt="{{PRODUCT_NAME}}" />
@@ -38,13 +103,32 @@
         <div class="rating-line">
           <span id="product-rating">{{PRODUCT_RATING}}</span>
           <span id="product-rating-count">{{PRODUCT_RATING_COUNT}}</span>
+          <!--VISIT_SIGNAL-->
         </div>
         <div id="product-price">{{PRODUCT_PRICE}}</div>
         <!--BADGES-->
-        <!--FEATURE_LIST-->
-        <!--SPECS_TABLE-->
+        <p class="description">{{PRODUCT_DESCRIPTION}}</p>
+        <!--INFO_PILLS-->
+        <!--DETAILS_SECTION-->
+        <!--SPECS_SECTION-->
       </div>
+      <aside class="buybox">
+        <div class="price-row">
+          <strong>{{PRODUCT_PRICE}}</strong>
+          <span>Prime-like shipping</span>
+        </div>
+        <p class="stock-state">{{PRODUCT_STOCK_STATUS}}</p>
+        <!--BUYBOX_META-->
+        <div class="action-stack">
+          <button class="add-cart" type="button">Add to cart</button>
+          <button class="buy-now" type="button">Buy now</button>
+        </div>
+      </aside>
     </article>
+
+    <!--SECONDARY_GRID-->
+    <!--RECOMMENDATIONS_SECTION-->
+    <!--COMMENTS_SECTION-->
   </main>
   <footer>Mock EC &copy; Seeded Data</footer>
 </body>

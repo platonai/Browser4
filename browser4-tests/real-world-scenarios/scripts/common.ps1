@@ -2651,6 +2651,10 @@ function Edit-FileInEditor {
         The call blocks until the editor process exits, so the caller can safely
         assume the file has been saved (or discarded) on return.
 
+        Each candidate is tried in order.  If one fails to launch the next is
+        attempted automatically.  Errors are reported as non-terminating warnings
+        so the caller always receives a clean $true / $false return value.
+
     .PARAMETER Path
         Absolute path to the file to open for editing.
 
@@ -2666,48 +2670,101 @@ function Edit-FileInEditor {
     )
 
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        Write-Error "Edit-FileInEditor: file not found: $Path"
+        Write-Warning "Edit-FileInEditor: file not found: $Path"
         return $false
     }
 
-    $editorCmd = $null
-    $editorArgs = [System.Collections.Generic.List[string]]::new()
+    # Build a prioritised list of (editor, args) candidates.
+    # The first editor that exists on PATH and launches successfully wins.
+    # If a candidate fails (missing binary, non-zero exit) the next is tried.
+    $candidates = [System.Collections.Generic.List[hashtable]]::new()
 
+    # -- Candidate 1: $env:EDITOR (user preference, may include extra flags) --
     if ($env:EDITOR) {
         $parts = $env:EDITOR -split '\s+'
         if ($parts.Count -gt 0) {
-            $editorCmd = $parts[0]
-            if ($parts.Count -gt 1) {
-                $editorArgs.AddRange($parts[1..($parts.Count - 1)])
+            $editorName = $parts[0]
+            # Detect bare "code" so we can inject --wait when missing.
+            $isCode = ($editorName -eq 'code' -or $editorName -like '*\code' -or $editorName -like '*\code.cmd')
+            $envArgs = [System.Collections.Generic.List[string]]::new()
+            # Use foreach to avoid PowerShell unrolling single-element arrays
+            # from subscript expressions (e.g. $parts[1..1]).
+            for ($pi = 1; $pi -lt $parts.Count; $pi++) {
+                $envArgs.Add($parts[$pi])
             }
+            $candidates.Add(@{
+                Name      = $editorName
+                ExtraArgs = $envArgs
+                NeedsWait = $isCode
+                Condition = { $true }  # user set it intentionally — always try
+            })
         }
     }
-    elseif (Get-Command code -ErrorAction SilentlyContinue) {
-        $editorCmd = 'code'
-        $editorArgs.Add('--wait')
-    }
-    else {
-        $editorCmd = 'notepad.exe'
-    }
 
-    if (-not $editorCmd) {
-        Write-Error 'Edit-FileInEditor: no editor found. Set $env:EDITOR or install VS Code.'
-        return $false
-    }
+    # -- Candidate 2: VS Code (code --wait) --
+    $codeArgs = [System.Collections.Generic.List[string]]::new()
+    $codeArgs.Add('--wait')
+    $candidates.Add(@{
+        Name      = 'code'
+        ExtraArgs = $codeArgs
+        NeedsWait = $false   # --wait already included
+        Condition = { $null -ne (Get-Command code -ErrorAction SilentlyContinue) }
+    })
 
-    $editorArgs.Add($Path)
+    # -- Candidate 3: notepad.exe (always available on Windows) --
+    $npArgs = [System.Collections.Generic.List[string]]::new()
+    $candidates.Add(@{
+        Name      = 'notepad.exe'
+        ExtraArgs = $npArgs
+        NeedsWait = $false
+        Condition = { $true }
+    })
 
-    try {
-        # CLI editors (code, vim, nano) — invoke directly to avoid a console window.
-        # GUI editors (notepad) — Start-Process -Wait blocks until the window closes.
-        if ($editorCmd -match '\\code(\.cmd)?$|^code$|\\vim|\\nano|\\emacs') {
-            & $editorCmd @editorArgs
-            return ($LASTEXITCODE -eq 0)
+    $triedNames = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($candidate in $candidates) {
+        # Skip candidates whose pre-condition isn't met (e.g. code not on PATH).
+        if (-not (& $candidate.Condition)) { continue }
+
+        $editorCmd  = $candidate.Name
+        $editorArgs = [System.Collections.Generic.List[string]]::new()
+        $editorArgs.AddRange($candidate.ExtraArgs)  # $candidate.ExtraArgs is already a List[string]
+        [void]$triedNames.Add($editorCmd)
+
+        # When $env:EDITOR is set to bare "code" (no --wait), add --wait so the
+        # process blocks until the file tab is closed in VS Code.
+        if ($candidate.NeedsWait -and '--wait' -notin $editorArgs) {
+            $editorArgs.Insert(0, '--wait')
         }
-        $proc = Start-Process -FilePath $editorCmd -ArgumentList $editorArgs -PassThru -Wait
-        return ($proc.ExitCode -eq 0)
-    } catch {
-        Write-Error "Edit-FileInEditor: failed to launch '$editorCmd': $_"
-        return $false
+
+        # Resolve the editor command to a full path.  This is essential on
+        # Windows where Start-Process with UseShellExecute=$false cannot
+        # resolve .cmd files.  Even with shell execution a resolved path is
+        # safer because it eliminates PATH ambiguity.
+        try {
+            $resolved = Get-Command $editorCmd -ErrorAction Stop
+            $editorCmd = $resolved.Source
+        } catch {
+            # Get-Command failed (e.g. $env:EDITOR points to a binary not on
+            # PATH).  Keep the bare name and let Start-Process give it a shot
+            # anyway — shell execution may still find it.
+        }
+
+        $editorArgs.Add($Path)
+
+        try {
+            $proc = Start-Process -FilePath $editorCmd -ArgumentList $editorArgs -PassThru -Wait
+            return ($proc.ExitCode -eq 0)
+        } catch {
+            # Start-Process throws when the binary cannot be found or cannot
+            # be started.  Log a warning and try the next candidate instead
+            # of crashing the caller (Write-Warning is non-terminating even
+            # with $ErrorActionPreference = 'Stop').
+            Write-Warning "Edit-FileInEditor: '$editorCmd' failed to launch: $_"
+            continue
+        }
     }
+
+    Write-Warning "Edit-FileInEditor: no working editor found (tried: $($triedNames -join ', ')). Set `$env:EDITOR or install VS Code."
+    return $false
 }

@@ -5,27 +5,123 @@
   <title>{{TITLE}}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: Arial, sans-serif; margin:0; padding:0; }
-    header { background:#222; color:#fff; padding:1rem; }
-    #category-page { padding:1rem; }
-    .product-grid { display:grid; grid-template-columns: repeat(auto-fill,minmax(220px,1fr)); gap:1rem; }
-    .product-card { border:1px solid #ccc; padding:.5rem; border-radius:4px; background:#fff; }
-    .product-card img { max-width:100%; height:140px; object-fit:cover; display:block; margin:0 auto .5rem; }
-    .product-title { font-size:1rem; margin:.25rem 0; }
-    .product-meta { font-size:.85rem; color:#333; display:flex; gap:.5rem; }
-    .product-badges { margin-top:.25rem; }
-    .badge { background:#ff9800; color:#000; padding:2px 4px; font-size:.65rem; border-radius:3px; margin-right:2px; }
+    :root {
+      --bg: #f4f6fb;
+      --panel: #ffffff;
+      --ink: #111827;
+      --muted: #667085;
+      --line: #d9e1ee;
+      --shadow: 0 14px 28px rgba(15, 23, 42, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin:0; padding:0; background: var(--bg); color: var(--ink); }
+    header { background:#111827; color:#fff; padding:1rem 1.5rem; }
+    header .toolbar { display:flex; justify-content:space-between; gap:1rem; flex-wrap:wrap; align-items:center; }
+    header nav a { color:#c7d2fe; margin-right:1rem; text-decoration:none; font-size:.92rem; }
+    #category-page { max-width: 1380px; margin: 0 auto; padding:1.5rem; }
+    .page-grid { display:grid; grid-template-columns: 280px minmax(0, 1fr); gap:1.25rem; align-items:start; }
+    .sidebar, .content-shell, .promo-rail, .page-header, .product-card, .recommendation-card {
+      background:var(--panel); border:1px solid var(--line); border-radius:18px; box-shadow: var(--shadow);
+    }
+    .sidebar, .content-shell, .promo-rail, .page-header { padding:1.1rem; }
+    .page-header { margin-bottom:1rem; }
+    .page-header h1 { margin:.25rem 0 .5rem; }
+    .page-header p { margin:0; color:var(--muted); line-height:1.55; }
+    .filter-row { display:flex; flex-wrap:wrap; gap:.6rem; margin-top:1rem; }
+    .filter-chip {
+      border:1px solid #c9d4e7; background:#eef4ff; color:#1d4ed8; border-radius:999px; padding:.45rem .8rem; font-weight:600; cursor:pointer;
+    }
+    .sidebar h2, .sidebar h3, .promo-rail h2, .content-shell h2 { margin-top:0; }
+    .sidebar section + section { margin-top:1.25rem; padding-top:1.25rem; border-top:1px solid #e7ecf5; }
+    .sidebar ul { margin:0; padding-left:1.1rem; display:grid; gap:.55rem; }
+    .sidebar p { color:var(--muted); line-height:1.5; margin:.5rem 0 0; }
+    .product-grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(245px,1fr)); gap:1rem; }
+    .product-card { padding:1rem; }
+    .product-card img { width:100%; height:170px; object-fit:cover; display:block; border-radius:12px; margin:0 auto .75rem; }
+    .product-link { text-decoration:none; color:inherit; display:block; }
+    .product-title { font-size:1rem; margin:.25rem 0 .5rem; }
+    .product-meta { font-size:.85rem; color:#334155; display:flex; gap:.5rem; align-items:center; justify-content:space-between; }
+    .product-copy { color:var(--muted); font-size:.92rem; line-height:1.5; min-height:3em; }
+    .feature-pills { display:flex; flex-wrap:wrap; gap:.4rem; margin:.75rem 0; }
+    .feature-pill { background:#eff6ff; color:#1d4ed8; border-radius:999px; padding:.25rem .6rem; font-size:.78rem; }
+    .product-price { font-weight:bold; color:#b12704; }
+    .stock-note { color:#047857; font-weight:600; }
+    .secondary-link { font-size:.85rem; }
+    .product-ops { display:flex; justify-content:space-between; gap:.5rem; align-items:center; }
+    .product-badges { margin-top:.75rem; }
+    .badge { background:#fcd34d; color:#3b2f05; padding:2px 6px; font-size:.7rem; border-radius:999px; margin-right:4px; font-weight:700; }
+    .promo-rail { margin-top:1.25rem; }
+    .promo-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:1rem; }
+    .recommendation-card { padding:1rem; }
+    .recommendation-card h3 { margin:.35rem 0 .5rem; font-size:1rem; }
+    .recommendation-copy { color:var(--muted); font-size:.9rem; line-height:1.45; margin:.25rem 0 .65rem; }
+    .recommendation-meta { display:flex; justify-content:space-between; gap:.5rem; font-size:.85rem; }
+    .eyebrow { margin:0; color:#2563eb; font-size:.78rem; text-transform:uppercase; letter-spacing:.08em; font-weight:700; }
+    footer { margin-top:2rem; font-size:.8rem; text-align:center; color:#666; }
+    @media (max-width: 980px) {
+      .page-grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
-<header><h1>Category: {{CATEGORY_NAME}}</h1><nav><a href="/ec/">Home</a></nav></header>
+<header>
+  <div class="toolbar">
+    <h1>Category: {{CATEGORY_NAME}}</h1>
+    <nav aria-label="Store tools">
+      <a href="/ec/">Home</a>
+      <a href="/ec/b?node={{CATEGORY_ID}}">Refresh results</a>
+      <a href="/ec/">Today's deals</a>
+      <a href="/ec/">Customer service</a>
+    </nav>
+  </div>
+</header>
 <main id="category-page" data-category-id="{{CATEGORY_ID}}">
-  <section aria-label="Products">
-    <div id="product-list" class="product-grid">
-      <!--PRODUCT_LIST-->
+  <section class="page-header" aria-label="Category summary">
+    <p class="eyebrow">Results for {{CATEGORY_NAME}}</p>
+    <h1>{{RESULT_COUNT}} items in {{CATEGORY_NAME}}</h1>
+    <p>{{CATEGORY_SUMMARY}}</p>
+    <div class="filter-row" aria-label="Filter shortcuts">
+      <!--FILTER_CHIPS-->
+    </div>
+  </section>
+
+  <div class="page-grid">
+    <aside class="sidebar">
+      <section>
+        <h2>Departments nearby</h2>
+        <ul>
+          <!--RELATED_CATEGORY_LINKS-->
+        </ul>
+      </section>
+      <section>
+        <h3>Buying guide</h3>
+        <p>Retail pages usually mix products with guidance, filters, merchandising, and links to adjacent departments. This sidebar intentionally adds that noise.</p>
+      </section>
+      <section>
+        <h3>Customer notes</h3>
+        <ul>
+          <li>Fast-shipping picks surface near the top of the page.</li>
+          <li>Sponsored blocks may look product-like but are not part of the main result grid.</li>
+          <li>Ratings, badges, and delivery promises vary by card.</li>
+        </ul>
+      </section>
+    </aside>
+
+    <section class="content-shell" aria-label="Products">
+      <h2>Product results</h2>
+      <div id="product-list" class="product-grid">
+        <!--PRODUCT_LIST-->
+      </div>
+    </section>
+  </div>
+
+  <section class="promo-rail" aria-label="Sponsored and editorial content">
+    <h2>Sponsored and editorial picks</h2>
+    <div class="promo-grid">
+      <!--SPONSORED_PRODUCTS-->
     </div>
   </section>
 </main>
+<footer>Mock EC &copy; Seeded Data</footer>
 </body>
 </html>
-

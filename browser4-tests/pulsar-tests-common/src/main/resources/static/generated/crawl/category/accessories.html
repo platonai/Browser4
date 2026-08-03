@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Accessories — Category</title>
+  <style>
+    :root { --bg:#f6f7fb; --panel:#fff; --line:#d7deea; --ink:#1f2937; --muted:#667085; --shadow:0 12px 28px rgba(15,23,42,.08); }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; background: var(--bg); color: var(--ink); }
+    header { background:#111827; color:#fff; padding:1rem 1.5rem; }
+    header a { color:#c7d2fe; text-decoration:none; margin-right:.8rem; }
+    main { max-width: 1240px; margin: 0 auto; padding: 1.5rem; }
+    .panel, .products { background: var(--panel); border:1px solid var(--line); border-radius:18px; box-shadow:var(--shadow); padding:1.1rem; margin-bottom:1rem; }
+    .product-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:.9rem; }
+    .product { display:block; padding:.85rem; border:1px solid #dce3ee; border-radius:14px; text-decoration:none; color:inherit; background:#fbfcff; }
+    .product-title { display:block; font-weight:700; margin-bottom:.3rem; }
+    .product-price { color:#b12704; font-weight:700; }
+    .product-copy, li { color:var(--muted); line-height:1.55; }
+    .guide-link { color:#0b4bb3; }
+    footer { margin-top: 2rem; padding: 1.5rem; font-size: .8rem; color: #666; text-align:center; }
+  </style>
+</head>
+<body>
+  <header><nav><a href="../index.html">← Back to Hub</a><a href="electronics.html">Electronics</a><a href="clearance.html">Clearance</a></nav></header>
+  <main>
+    <section class="panel">
+      <h1 id="categoryTitle">Accessories</h1>
+      <p>This accessory rail looks product-heavy, but it still mixes merchandising copy and guide links with the real product anchors.</p>
+      <ul>
+        <li><a class="guide-link" href="../index.html#compare-cables">Compare accessories and compatibility notes</a></li>
+        <li><a class="guide-link" href="../index.html#top-picks">Editor's picks under budget</a></li>
+      </ul>
+    </section>
+
+    <section class="products">
+      <h2>Products in Accessories</h2>
+      <div class="product-grid">
+        <a class="product" href="../product/3.html"><span class="product-title">Widget Gamma</span><span class="product-price">$30.00</span><span class="product-copy">Popular accessory with comparison and review noise.</span></a>
+        <a class="product" href="../product/5.html"><span class="product-title">Widget Epsilon</span><span class="product-price">$50.00</span><span class="product-copy">Premium accessory that branches into deeper nodes.</span></a>
+        <a class="product" href="../product/6.html"><span class="product-title">Widget Zeta</span><span class="product-price">$60.00</span><span class="product-copy">Terminal-looking page with storefront fluff.</span></a>
+        <a class="product" href="../product/8.html"><span class="product-title">Widget Mu</span><span class="product-price">$80.00</span><span class="product-copy">Bundle-oriented accessory with extra related links.</span></a>
+        <a class="product" href="../product/9.html"><span class="product-title">Widget Nu</span><span class="product-price">$90.00</span><span class="product-copy">High-value add-on that leads to new depth-3 pages.</span></a>
+      </div>
+    </section>
+  </main>
+  <footer>Accessories Category — Mock Site</footer>
+</body>
+</html>

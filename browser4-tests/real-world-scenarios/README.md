@@ -136,7 +136,7 @@ htmlsnapshot, attach, named sessions, auto-diff).
 
 ### Mock Site (`tasks/mock-site/`)
 
-10 scenarios requiring the local MockSite server (`./bin/test.ps1 mock-site`).
+13 scenarios requiring the local MockSite server (`./bin/test.ps1 mock-site`).
 
 | Task file | Scenario |
 |-----------|----------|
@@ -150,6 +150,9 @@ htmlsnapshot, attach, named sessions, auto-diff).
 | `swarm-parallel-scraping.md` | Swarm session, parallel X-SQL extraction, headless mode |
 | `storage-state-management.md` | Cookies (set with all flags), localStorage, sessionStorage, state-save/load |
 | `comprehensive-ecommerce-workflow.md` | End-to-end e-commerce research: 18 steps combining 15+ commands |
+| `decision-tree/extraction-method-routing.md` | Decision-tree coverage for extraction choices: interact-first, get, get all, query, eval, extract, crawl |
+| `decision-tree/bulk-scale-routing.md` | Decision-tree coverage for bulk-routing choices: single page, crawl, swarm, loop, and few-URL shell loops |
+| `decision-tree/webminer-structuring-routing.md` | Decision-tree coverage for WebMiner routing: single-page export, crawl/swarm acquisition, free vs commercial tiers |
 
 > **Note:** MockSite tasks require the mock server running on `localhost:18080`. Start it with `./bin/test.ps1 mock-site`.
 

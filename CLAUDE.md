@@ -74,5 +74,4 @@ mvn test -pl browser4-rest -am -Dtest=MCPToolControllerTest
 
 ## Development conventions
 
-- **Default:** Always use a git worktree (EnterWorktree) on a new branch — unless the task only touches non-compiled assets.
-- **Exception:** For docs (`.md`), PowerShell scripts (`.ps1`), Python scripts (`.py`), Node scripts, config files, and other non-compiled assets that don't involve Rust (`cli/browser4-cli/` etc.) or the Kotlin/Spring backend (`browser4-rest/`, `browser4-core/`, `pom.xml`), work directly in the current checkout without a branch or worktree. Commit directly to the current branch.
+- **Worktrees:** Disabled. Work directly in the current checkout. Use branches as needed, but do not create git worktrees (no EnterWorktree).

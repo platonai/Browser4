@@ -188,6 +188,42 @@ Skills are AI agent instruction files bundled into the CLI binary at compile tim
 | `-s <name>` | Named session label |
 | `--server <url>` | Override Browser4 server URL |
 
+## Tool Selection Guide
+
+See the [SKILL.md](skills/browser4-cli/SKILL.md) decision trees for the full reference. Quick summary:
+
+### How to Extract Data
+
+```
+Need to extract data from a page?
+├─ Interactive page (click, fill, scroll first)? → snapshot + refs, then extract
+├─ Static page, one field? → htmlsnapshot get text "<selector>"
+├─ Static page, multiple correlated fields? → htmlsnapshot query --sql @query.sql
+├─ Natural language ("find the price")? → extract (needs LLM key)
+└─ High volume, many pages? → crawl or swarm with --sql
+```
+
+### How to Process at Scale
+
+```
+Need to process multiple pages?
+├─ Single list page? → htmlsnapshot query with DOM_LOAD_AND_SELECT
+├─ List of known URLs? → crawl --seed-file urls.txt --depth 0 --sql @query.sql
+├─ Need parallel execution? → swarm create → swarm query --seed-file ...
+└─ Repeated monitoring? → loop -- eval "..." -i 3600
+```
+
+### How to Turn HTML into Spreadsheets — Zero Tokens
+
+[WebMiner](https://github.com/platonai/web-miner) clusters downloaded HTML files into structured spreadsheets via ML — no API keys, no tokens. Free tier (SMILE engine) handles < 1,000 pages; commercial tier (Apache Spark ML) scales to 100K+ pages/day.
+
+```
+java -jar scent-miner.jar all ./html-pages/
+# → Interactive HTML report + Excel spreadsheets
+```
+
+See [web-miner](https://github.com/platonai/web-miner) for install instructions.
+
 ## Build
 
 ```bash

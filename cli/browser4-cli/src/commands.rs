@@ -1959,7 +1959,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(f) = get_opt_str(args, "filename") { p["filename"] = json!(f); }
                 if let Some(fp) = get_bool(args, "full-page") { p["fullPage"] = json!(fp); }
                 if let Some(v) = get_opt_str(args, "viewport") {
-                    if let Ok(n) = v.parse::<i32>() { p["viewport"] = json!(n.max(0)); }
+                    if let Ok(n) = v.parse::<i32>() { p["viewport"] = json!(n); }
                 }
                 p
             },
@@ -2417,6 +2417,46 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(f) = get_opt_str(args, "filename") { p["filename"] = json!(f); }
                 if let Some(true) = get_bool(args, "raw") { p["raw"] = json!(true); }
                 if let Some(true) = get_bool(args, "stdout") { p["stdout"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "chat",
+            description: "Chat with AI without any auto-appended context",
+            category: Category::Agent,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef { name: "prompt", description: "Message to send to the AI", optional: false }],
+            options: &[
+                OptionDef {
+                    name: "async",
+                    description: "Submit asynchronously and return a task ID for later polling",
+                    is_bool: true,
+                    short: None,
+                },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(prompt) = get_opt_str(args, "prompt") { p["prompt"] = json!(prompt); }
+                if let Some(true) = get_bool(args, "async") { p["async"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "chat-result",
+            description: "Get the result of an async chat task",
+            category: Category::Agent,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef { name: "id", description: "Task ID returned by chat --async", optional: false }],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(id) = get_opt_str(args, "id") { p["id"] = json!(id); }
                 p
             },
         },
@@ -3451,6 +3491,8 @@ mod tests {
             "uninstall",
             "doctor",
             "batch",
+            "chat",
+            "chat-result",
             "loop",
             "goto",
             "click",
@@ -5447,7 +5489,7 @@ mod tests {
     }
 
     #[test]
-    fn test_screenshot_viewport_negative_clamped_to_zero() {
+    fn test_screenshot_viewport_negative_allowed() {
         let map = commands_map();
         let cmd = map.get("screenshot").unwrap();
         let mut args = HashMap::new();
@@ -5455,8 +5497,8 @@ mod tests {
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(
             params.get("viewport").and_then(|v| v.as_i64()),
-            Some(0),
-            "negative viewport should be clamped to 0"
+            Some(-1),
+            "negative viewport should be passed through for scroll-relative scrolling"
         );
     }
 

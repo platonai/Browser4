@@ -1547,6 +1547,16 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         level: ScenarioLevel::Basic,
     },
     ScenarioDef {
+        name: "test_e2e_chat_commands",
+        short_name: "test_chat_commands",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_chat_commands,
+        group: Some("agent"),
+        level: ScenarioLevel::Basic,
+    },
+    ScenarioDef {
         name: "test_e2e_htmlsnapshot_error_propagation",
         short_name: "test_htmlsnapshot_error_propagation",
         requires_browser4: false,

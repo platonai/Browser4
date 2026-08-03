@@ -132,7 +132,7 @@ runs:
         echo "::endgroup::"
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@v4
       with:
         platforms: ${{ inputs.platforms }}
 
@@ -491,4 +491,3 @@ runs:
         echo "✅ Image is ready for deployment"
 
         echo "::endgroup::"
-

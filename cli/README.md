@@ -1,43 +1,162 @@
-# browser4-cli
+# 🤖 Browser4
 
-Make websites accessible for AI agents. Automate tasks online with ease.
+[![License: APACHE2](https://img.shields.io/badge/license-APACHE2-green?style=flat-square)](https://github.com/platonai/browser4/blob/main/LICENSE)
 
-## What is browser4-cli?
+---
 
-`browser4-cli` is a command-line browser automation tool. It controls a real
-Chrome browser — clicking, typing, scrolling, and extracting data — through a
-local server that translates CLI commands into browser actions.
+English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platonai_galaxyeye/Browser4)
 
-**What you can do with it:**
+<!-- TOC -->
+**Table of Contents**
+- [🤖 Browser4](#-browser4)
+    - [🌟 Introduction](#-introduction)
+        - [✨ Key Capabilities](#-key-capabilities)
+    - [Quick Start](#quick-start)
+    - [🧭 Tool Selection Guide](#-tool-selection-guide)
+        - [How to Interact with a Page](#how-to-interact-with-a-page)
+        - [How to Extract Data](#how-to-extract-data)
+        - [How to Process at Scale](#how-to-process-at-scale)
+        - [How to Turn HTML into Spreadsheets — Zero Tokens](#how-to-turn-html-into-spreadsheets--zero-tokens)
+    - [📦 Installation](#-installation)
+    - [💡 CLI Guide for Humans](#-cli-guide-for-humans)
+        - [Quick start](#quick-start-1)
+        - [Mental model](#mental-model)
+        - [Global options](#global-options)
+        - [Key concepts before the command list](#key-concepts-before-the-command-list)
+        - [Complete command reference](#complete-command-reference)
+        - [Timeout environment variables](#timeout-environment-variables)
+        - [State persistence](#state-persistence)
+    - [🚀 Build from Source](#-build-from-source)
+    - [Architecture](#architecture)
+    - [📦 Modules Overview](#-modules-overview)
+    - [🧪 Test Fixture Server (MockSite)](#-test-fixture-server-mocksite)
+    - [🤝 Support & Community](#-support--community)
+    - [📜 Documentation](#-documentation)
+    - [🔧 Proxy Configuration](#-proxy-configuration---unblock-website-access)
+    - [License](#license)
+<!-- /TOC -->
 
-- Automate form filling, logins, and multistep web workflows
-- Capture accessibility snapshots (ARIA tree) for interaction and HTML snapshots (HTML) for data analysis
-- Extract structured data with AI, CSS selectors or X-SQL queries
-- Swarm mode: Scrape at scale with parallel browser contexts
-- Crawl websites recursively, following links to a configurable depth
-- Run autonomous AI agent tasks from natural-language instructions
-- Save screenshots, PDFs, and full HTML snapshots
+## 🌟 Introduction
 
-**What makes it different:**
+💖 **Browser4: a fast, intelligent, scalable, multi-scenario agentic browser** 💖
 
-- **HTML snapshots** - static HTML analysis without losing information
-- **X-SQL** — a SQL-like query language for extracting structured data from
-  web pages in a single expression
-- **Session persistence** — browser sessions survive across CLI invocations;
-  come back to the same tabs and state days later
-- **Swarm scraping** — coordinate multiple browser contexts in parallel for
-  high-throughput data collection
+### ✨ Key Capabilities
 
-## Installation
+* 🤖 **Agent Browser** — Browser automation CLI for AI agents.
+* ⚙️ **Machine Learning Agent** — Turns complex pages into Excel/structured data without consuming tokens.
+* ⚡ **Extreme Performance** — Fully coroutine-safe; supports 100k ~ 200k complex page visits per machine per day.
+* 🧬 **Data Extraction** — Hybrid of LLM, ML, X-SQL and selectors for clean data across chaotic pages.
+* 📦 **And More** - Swarm scraping, crawl, batch, loop, stateful sessions, page storage, extension, plugins, and more.
 
-### npm (recommended)
+## Quick Start
+
+Paste the following instruction to your favorite AI agent like claude, codex, workbuddy or openclaw and run it:
+
+```
+Read https://browser4.io/SKILL.md and install browser4-cli (if not installed) for browser automation to perform the following task:
+
+1. go to amazon.com
+2. search for pens to draw on whiteboards
+3. compare the first 4 ones
+4. write the result to a markdown file
+```
+
+## 🧭 Tool Selection Guide
+
+Choosing the right tool for your task:
+
+### How to Interact with a Page
+
+```
+Need to interact with a page?
+├─ Need to open or recover a browser session? → open [url] or goto <url>
+├─ Need to see what is clickable/typeable right now? → snapshot -i --boxes
+├─ Need to click a button, link, checkbox, or menu item? → click <ref>
+├─ Need to fill a form field and replace existing text? → fill <ref> "<text>"
+├─ Need to type naturally into the current field or send Enter/Tab? → type / press
+├─ Need to choose from a dropdown? → select <ref> <value>
+├─ Need to hover, drag, scroll, or use the mouse directly? → hover / drag / scroll / mouse*
+├─ Need to wait for the page to settle before the next step?
+│  ├─ Element appears? → wait <ref|selector>
+│  ├─ Text appears? → wait --text "..."
+│  ├─ URL changes? → wait --url "**/target"
+│  └─ Loading/network finishes? → wait --load networkidle
+├─ Need to verify what changed after the action? → snapshot, get, or eval
+└─ Need to repeat many UI steps efficiently? → batch "goto ..." "click ..." "fill ..."
+```
+
+Typical interactive flow:
 
 ```bash
+browser4-cli goto https://example.com/login
+browser4-cli snapshot -i --boxes
+browser4-cli fill e3 "user@example.com"
+browser4-cli fill e4 "secret" --submit
+browser4-cli wait --load networkidle
+browser4-cli snapshot -i
+```
+
+### How to Extract Data
+
+```
+Need to extract data from a page?
+├─ Interactive page (click, fill, scroll first)? → snapshot + refs, then extract
+├─ Static page, one field? → htmlsnapshot get text "<selector>"
+├─ Static page, all matches of one field? → htmlsnapshot get all text "<selector>"
+├─ Static page, multiple correlated fields (title+price+url per item)?
+│  → htmlsnapshot query --sql @query.sql
+├─ Live JS / complex DOM logic? → eval --json
+├─ Natural language ("find the product price")? → extract (needs LLM key)
+└─ High volume, many pages? → crawl or swarm with --sql
+```
+
+### How to Process at Scale
+
+```
+Need to process multiple pages?
+├─ Single list page (search results)? → htmlsnapshot query with DOM_LOAD_AND_SELECT
+├─ List of known URLs (in a file)? → crawl --seed-file urls.txt --depth 0 --sql @query.sql
+├─ Crawl from a start URL (follow links)? → crawl <url> --out-link-selector "..." --depth N
+├─ Need parallel execution (high throughput)? → swarm create → swarm query --seed-file ...
+├─ Repeated monitoring (check every hour)? → loop -- eval "..." -i 3600
+└─ Just a few URLs in a shell script?
+   → for url in ...; do browser4-cli goto "$url"; ... done
+```
+
+### How to Turn HTML into Spreadsheets — Zero Tokens
+
+[WebMiner](https://github.com/platonai/web-miner) runs ML clustering on downloaded HTML files to produce structured spreadsheets and interactive reports — **no LLM tokens, everything runs locally.**
+
+```
+Have HTML files and want structured data — without tokens?
+├─ < 1,000 pages (small to medium)? → WebMiner Free (SMILE ML engine)
+│  java -jar scent-miner.jar all ./pages/
+│  → Interactive HTML report + Excel spreadsheets — local, zero cost
+├─ > 1,000 pages (production scale)? → WebMiner Commercial (Apache Spark ML)
+│  Same encode → cluster → views pipeline, distributed across machines
+└─ Need to acquire pages first?
+   ├─ Single pages: browser4-cli htmlsnapshot export
+   ├─ Bulk download: browser4-cli crawl --seed-file urls.txt --depth 0
+   └─ High throughput: browser4-cli swarm create → swarm query --seed-file ...
+       Then feed the HTML directory to WebMiner
+```
+
+> **Pipeline:** `encode` (HTML → feature vectors → CSV) → `cluster` (KMeans, auto-detected K) → `views` (HTML report + Excel). Free tier uses the [SMILE](https://haifengl.github.io/) ML library for single-machine clustering (< 1,000 pages). Requires JDK 17+. See [web-miner](https://github.com/platonai/web-miner) for install instructions.
+
+---
+
+## 📦 Installation
+
+Manually installation is optional since your AI agent is smart enough to install it after reading the SKILL.
+
+Install browser4-cli globally using npm (requires Node.js):
+
+```shell
 npm install -g browser4-cli
 browser4-cli install
 ```
 
-### Standalone installers (no npm needed)
+Or bootstrap the native binary directly with a single command:
 
 **Windows (PowerShell):**
 ```powershell
@@ -45,876 +164,576 @@ irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps
 browser4-cli install
 ```
 
-**Linux / macOS:**
+**Linux / macOS (bash):**
 ```bash
 curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
 browser4-cli install
 ```
 
-## Quick start
+## 💡 CLI Guide for Humans
+
+`browser4-cli` is a human-usable browser automation shell, not just an agent backend. You can drive a real browser, inspect state, extract structured data, run X-SQL, orchestrate crawl/swarm jobs, manage server plugins and skills, and hand long-running work to built-in AI features.
+
+If you want the embedded agent-facing instructions, see [skills/browser4-cli/SKILL.md](skills/browser4-cli/SKILL.md). This section is the human reference.
+
+### Quick start
 
 ```bash
 # Open a browser session
 browser4-cli open --headed https://browser4.io
 
-# Navigate to a page — auto-opens a session if none is active
-browser4-cli goto https://browser4.io
-
-# Inspect the page — note the eN labels on interactive nodes
+# Inspect the page and get element refs
 browser4-cli snapshot --boxes
 
-# Interact using refs from the snapshot
+# Interact using a ref from the snapshot
 browser4-cli click e15
-browser4-cli type e15 "Hello World"
-browser4-cli press e15 Enter
+browser4-cli fill e16 "Browser4" --submit
 
-# Extract data with CSS selectors
-browser4-cli get text ".product-title"
-browser4-cli get attr ".product-image" data-src
+# Extract data from the live page
+browser4-cli get text "h1"
 
-# HTML snapshot with X-SQL
-browser4-cli htmlsnapshot capture
+# Capture a static DOM snapshot for repeated extraction
 browser4-cli htmlsnapshot
 browser4-cli htmlsnapshot get text "#main-content"
 browser4-cli htmlsnapshot query --sql @query.sql
-browser4-cli htmlsnapshot grep -i "error"
 
-# AI-powered extraction and summarization (requires LLM key — see LLM Configuration below)
-browser4-cli extract "product name, price, and rating as JSON"
-browser4-cli summarize "key points in 3 bullets"
-
-# Autonomous agent task
-browser4-cli agent run "Search amazon for mechanical keyboards, compare the top 3, write a summary"
-
-# Parallel scraping with swarm
-browser4-cli swarm create --max-open-tabs 12 --display-mode HEADLESS
-browser4-cli swarm submit --seed-file ./urls.txt --refresh
-browser4-cli swarm result scrape-task-1
-
-# Batch multiple commands
-browser4-cli batch "goto https://browser4.io" "snapshot" "screenshot"
-
-# Take a screenshot
-browser4-cli screenshot --full-page
-
-# Manage cookies and storage
-browser4-cli cookie-list
-browser4-cli state-save session.json
-
-# Close the session when done
-browser4-cli close
-```
-
-## Global options
-
-| Flag | Description |
-|---|---|
-| `-h`, `--help [command]` | Print help (optionally for a command) |
-| `-v`, `--version` | Print version |
-| `-s <name>` | Named session (isolated state per name) |
-| `--server <url>` | Override Browser4 server URL |
-| `--proxy <url>` | HTTP proxy for runtime downloads only |
-| `--json` | Emit machine-parseable JSON to stdout |
-| `-q`, `--quiet` | Suppress normal output |
-| `-tip`, `--show-tip` | Show a relevant tip on stderr after each command |
-| `--pretty` | Pretty-print JSON output |
-| `--timeout <seconds>` | Override the default HTTP timeout for tool calls |
-
-Sessions persist independently per name. Omit `-s` to use the default session
-(`~/.browser4/cli-state.json`). With `-s <name>`, state is stored under
-`~/.browser4/sessions/<name>.json`.
-
-`--json` makes the CLI emit only the JSON envelope on stdout — all human-readable
-text, tips, hints, and side information are suppressed (equivalent to `--quiet`
-but with structured output). Every successful command writes a single-line JSON
-envelope: `{"status":"ok","command":"<name>","output":{...}}`. Errors also
-produce a JSON envelope with `"status":"error"` and an `"error"` object.
-
-## Command reference
-
-### Session management
-
-| Command | Description |
-|---|---|
-| `open [url]` | Open or reuse a browser session. `--headed` / `--headless`, `--profile <path>`, `--profile-mode <mode>` (temporary / sequential / default), `--interact-level <level>` (FASTEST / FAST / DEFAULT). |
-| `attach` | Attach to an existing browser via CDP endpoint or channel name. `--cdp <url\|channel>` (e.g. `http://localhost:9222` or `chrome`), `--endpoint <url>` for remote Browser4 servers. |
-| `close` | Close the active session. |
-| `list` | List sessions with status (Active / Stale / Unknown). `--all` to list across workspaces. |
-| `close-all` | Close all sessions, keep the backend running. |
-| `kill-all` | Forcefully stop the backend and all browser processes. |
-| `stop` | Gracefully stop the Browser4 server. |
-| `status` | Check whether the backend is reachable. `--server <url>` to check a specific server. |
-| `doctor` | Run system diagnostics. `--server <url>`, `--file <log-name>`, `--lines <n>`. |
-
-```bash
-browser4-cli open --headed https://example.com
-browser4-cli open --profile-mode temporary https://example.com
-browser4-cli attach --cdp chrome
-browser4-cli list
-browser4-cli status
-```
-
-### Navigation
-
-| Command | Description |
-|---|---|
-| `goto <url>` | Navigate to a URL. Auto-opens a session if none is active. |
-| `go-back` | Go back to the previous page. |
-| `go-forward` | Go forward to the next page. |
-| `reload` | Reload the current page. |
-
-```bash
-browser4-cli goto https://example.com
-browser4-cli -s mysession goto https://example.com
-```
-
-### Page interaction
-
-| Command | Description |
-|---|---|
-| `click <ref> [button]` | Click an element. `--modifiers` for modifier keys, `--follow` to detect and switch to new tabs opened by the click, `--auto-dismiss-dialogs` to auto-accept any dialog triggered by the click. |
-| `dblclick <ref> [button]` | Double-click an element. `--modifiers` for modifier keys, `--follow` to detect and switch to new tabs, `--auto-dismiss-dialogs` to auto-accept any dialog triggered by the double-click. |
-| `hover <ref>` | Hover over an element. |
-| `drag <startRef> <endRef>` | Drag and drop between two elements. |
-| `fill <ref> <text>` | Fill text into an editable element. `--submit` to press Enter after. `--verify` to confirm. |
-| `type <text> [ref]` | Type text. `--submit`, `--verify`, `--focus` (click first to focus). |
-| `select <ref> <val>` | Select an option in a dropdown. `--verify` to confirm. |
-| `check <ref>` | Check a checkbox or radio. |
-| `uncheck <ref>` | Uncheck a checkbox or radio. |
-
-All interaction commands accept element references from `snapshot` (e.g. `e15`)
-or CSS selectors (e.g. `#submit-btn`, `.menu-item`).
-
-Interaction commands take an automatic accessibility-tree snapshot after executing
-to verify results. Pass `--no-snapshot` to skip this automatic snapshot when you
-plan to capture a fresh snapshot manually.
-
-```bash
-browser4-cli click e15
-browser4-cli fill e7 "John Doe" --submit
-browser4-cli type "search term" e3
-browser4-cli select e12 "option-value"
-```
-
-### Keyboard & mouse
-
-| Command | Description |
-|---|---|
-| `press <key> [ref]` | Press a key (`a`, `Enter`, `ArrowLeft`, `Escape`). Supports `--verify`, `--follow` (detect new tabs). |
-| `keydown <key>` | Press and hold a key. |
-| `keyup <key>` | Release a key. |
-| `mousemove <x> <y>` | Move mouse to coordinates. |
-| `mousedown [button]` | Press mouse button (defaults to left). |
-| `mouseup [button]` | Release mouse button. |
-| `mousewheel <dx> <dy>` | Scroll the mouse wheel. |
-| `scroll <direction> <pixels>` | Scroll the page (`up` / `down` / `left` / `right`). |
-
-```bash
-browser4-cli press Enter e7
-browser4-cli mousemove 200 400
-browser4-cli scroll down 300
-```
-
-### Waiting & dialogs
-
-| Command | Description |
-|---|---|
-| `wait [target]` | Wait for a condition — six modes available. |
-| `dialog-accept [prompt]` | Accept a browser dialog (alert, confirm, prompt). |
-| `dialog-dismiss` | Dismiss a browser dialog. |
-
-`wait` supports six modes, selected by which option you provide:
-
-| Mode | Syntax | Example |
-|---|---|---|
-| **selector** | `wait <ref\|selector>` | `browser4-cli wait e1` |
-| **time** | `wait <milliseconds>` | `browser4-cli wait 2000` |
-| **text** | `wait --text <text>` | `browser4-cli wait --text "Success"` |
-| **url** | `wait --url <glob>` | `browser4-cli wait --url "**/dashboard"` |
-| **load** | `wait --load <state>` | `browser4-cli wait --load networkidle` |
-| **fn** | `wait --fn <JS expr>` | `browser4-cli wait --fn "window.ready === true"` |
-
-All modes accept `--timeout <ms>` (default: 30000). Load states: `networkidle`,
-`domcontentloaded`, `load`.
-
-### Screenshots & PDF
-
-| Command | Description |
-|---|---|
-| `screenshot [ref]` | Take a screenshot. `--filename <path>`, `--full-page`, `--viewport <n>`. Optionally of a specific element. |
-| `pdf` | Save page as PDF. `--filename <path>`. |
-
-```bash
+# Save output
 browser4-cli screenshot --full-page --filename page.png
-browser4-cli screenshot --viewport 0 --filename top.png
 browser4-cli pdf --filename page.pdf
 ```
 
-### Tabs
+### Mental model
 
-| Command | Description |
+1. **Session-oriented**: commands work against the current browser session; use `-s <name>` for isolated named sessions.
+2. **Two page views**: `snapshot` is for interactive work with element refs like `e15`; `htmlsnapshot` is for DOM/X-SQL extraction with CSS selectors.
+3. **Interactive vs static extraction**: use `click`, `fill`, `type`, `press`, `wait` when the page must be manipulated first; use `htmlsnapshot query` when you need structured extraction from the DOM.
+4. **Synchronous vs async jobs**: `agent`, `swarm`, `crawl`, and async chat-style commands return task IDs you poll later.
+
+### Global options
+
+These flags can appear before any command.
+
+| Flag | Meaning |
 |---|---|
-| `tab-list` | List all tabs with their zero-based index and stable GUID. Use `--json` for full GUIDs. |
-| `tab-new [url]` | Open a new tab. |
-| `tab-close [index]` | Close a tab (current tab if no index). Use `--guid <guid>` for GUID-based close. |
-| `tab-select <index>` | Switch to a tab by index. Use `--guid <guid>` for GUID-based select. |
+| `-h`, `--help [command\|category]` | Show top-level help, category help, or detailed command help |
+| `--help-json` | Emit the machine-readable command reference |
+| `-v`, `--version` | Print the CLI version |
+| `-s`, `--session <name>` | Use a named session instead of the default session |
+| `--server <url>` | Override the Browser4 server URL |
+| `--timeout <seconds>` | Override the HTTP timeout for the current command |
+| `--proxy <url>` | Proxy used for runtime downloads/install operations |
+| `--json` | Emit machine-readable JSON only |
+| `--pretty` | Pretty-print JSON output |
+| `-q`, `--quiet` | Suppress normal human-readable output |
+| `-tip`, `--show-tip` | Show a relevant tip on stderr after commands |
 
-```bash
-browser4-cli tab-list
-browser4-cli tab-list --json            # JSON output with full GUIDs
-browser4-cli tab-select 1
-browser4-cli tab-select --guid 1B46D74FB  # select by stable GUID
-browser4-cli tab-new https://example.com
-browser4-cli tab-close 1
-browser4-cli tab-close --guid 1B46D74FB  # close by stable GUID
-```
+### Key concepts before the command list
 
-### Element inspection
+#### Element refs vs CSS selectors
 
-| Command | Description |
-|---|---|
-| `snapshot` | Capture an accessibility snapshot. See [Snapshot](#snapshot) below. |
-| `get <mode> <selector> [name]` | Extract data from a page element in one of six modes (see below). |
-| `eval <expression> [ref]` | Evaluate JavaScript on the page or a target element. `--file <path>`, `--base64`, or `--stdin` to provide the expression. `--json` to wrap scalar results. |
-| `generate-locator <ref>` | Generate a stable CSS selector path for an element. |
-| `htmlsnapshot` | Short form of `htmlsnapshot capture`. Capture a static HTML snapshot. See [HTML Snapshot](#dom-snapshot) below. |
-| `htmlsnapshot capture` | Capture a static HTML snapshot. See [HTML Snapshot](#dom-snapshot) below. |
-| `extract <instruction>` | Extract structured data with AI. `--schema <json>` for typed output. `--filename <path>`, `--raw`. |
-| `summarize [instruction]` | Summarize page content with AI. `--selector <css>`, `--filename <path>`, `--raw`. |
+- `snapshot` returns accessibility-tree refs such as `e5`, `e12`, `e42`
+- most interaction commands accept either a snapshot ref or a CSS selector
+- `htmlsnapshot` commands use CSS selectors, not accessibility refs
 
-`get` modes:
+#### `snapshot` vs `htmlsnapshot`
 
-| Mode | Returns | Example |
-|---|---|---|
-| `text` | Visible inner text | `browser4-cli get text ".price"` |
-| `html` | Inner HTML | `browser4-cli get html e3` |
-| `box` | Bounding box `{x,y,w,h}` | `browser4-cli get box "#header"` |
-| `styles` | Computed CSS styles | `browser4-cli get styles e9` |
-| `property` | DOM property value | `browser4-cli get property "input" value` |
-| `attr` | HTML attribute value | `browser4-cli get attr "a.link" href` |
+| Tool | Best for | Input model | Output model |
+|---|---|---|---|
+| `snapshot` | clicking, typing, finding interactive elements | live accessibility tree | refs like `e15` |
+| `htmlsnapshot` | DOM inspection, CSS extraction, X-SQL | stored HTML snapshot | CSS selectors and query results |
 
-```bash
-browser4-cli eval "document.title"
-browser4-cli eval "el => el.textContent" e15
-browser4-cli eval --file script.js
-browser4-cli eval --base64 ZG9jdW1lbnQudGl0bGU=
-browser4-cli generate-locator e5
-browser4-cli extract "product name, price, and rating"
-browser4-cli extract "contacts" --schema '{"type":"object","properties":{"name":{"type":"string"},"email":{"type":"string"}}}'
-browser4-cli summarize --selector "#reviews"
-```
+#### LLM configuration
 
-### Browser storage
+AI-powered commands such as `extract`, `summarize`, `chat`, `agent run`, and X-SQL `llm_*` functions require an LLM provider key.
 
-| Command | Description |
-|---|---|
-| `state-save [path]` | Save cookies & localStorage to a JSON file. |
-| `state-load <path>` | Restore cookies & localStorage from a saved state. |
-| `cookie-list` | List cookies. `--domain`, `--path` filters. |
-| `cookie-get <name>` | Get a cookie by name. |
-| `cookie-set <name> <value>` | Set a cookie. `--domain`, `--path`, `--expires`, `--httpOnly`, `--secure`, `--sameSite` (Strict / Lax / None). |
-| `cookie-delete <name>` | Delete a cookie. `--domain`, `--path` overrides. |
-| `cookie-clear` | Clear all cookies. |
-| `localstorage-list` | List localStorage entries. |
-| `localstorage-get <key>` | Get a localStorage value. |
-| `localstorage-set <key> <value>` | Set a localStorage value. |
-| `localstorage-delete <key>` | Delete a localStorage key. |
-| `localstorage-clear` | Clear all localStorage. |
-| `sessionstorage-list` | List sessionStorage entries. |
-| `sessionstorage-get <key>` | Get a sessionStorage value. |
-| `sessionstorage-set <key> <value>` | Set a sessionStorage value. |
-| `sessionstorage-delete <key>` | Delete a sessionStorage key. |
-| `sessionstorage-clear` | Clear all sessionStorage. |
-
-```bash
-browser4-cli state-save auth.json
-browser4-cli state-load auth.json
-browser4-cli cookie-set token abc123 --httpOnly --secure --sameSite Lax
-browser4-cli cookie-list --domain example.com
-```
-
-### Batch & loop
-
-| Command | Description |
-|---|---|
-| `batch [command...]` | Execute multiple commands in one invocation. `--bail` to stop on first failure. `--json` to read commands from stdin JSON. |
-| `loop <task>` | Execute a task repeatedly on an interval. Supports plain text tasks, X-SQL, shell commands (`--shell`), and CLI subcommands (after `--`). |
-
-`batch` only supports DOM operations (navigation, keyboard, mouse, core
-interactions, screenshots, tabs). Session lifecycle commands (`open`, `close`)
-must run separately.
-
-```bash
-# Batch form fill
-browser4-cli batch "fill e1 'John'" "fill e2 'john@example.com'" "click e3"
-
-# Stop on first failure
-browser4-cli batch --bail "goto https://example.com" "click e1" "screenshot"
-
-# Pipe commands as JSON
-echo '[
-  ["goto", "https://example.com"],
-  ["fill", "#name", "Bob"],
-  ["click", "#submit"]
-]' | browser4-cli batch --json
-
-# Loop: run every 5 minutes, 10 iterations
-browser4-cli loop "load https://example.com and extract the page title" -i 300 -n 10
-
-# Loop a shell command
-browser4-cli loop --shell "curl -s https://api.example.com/health" -i 60 -n 10
-```
-
-### Server management
-
-| Command | Description |
-|---|---|
-| `install` | Download the Browser4 runtime bundle. `--tag <version>`, `--force`. |
-| `upgrade` | Upgrade the runtime. `--tag <version>`, `--force`. |
-| `uninstall` | Remove browser4-cli and its runtime data. `-y` / `--yes` to skip confirmation, `--dry-run` to preview. |
-
-```bash
-browser4-cli install
-browser4-cli install --tag v4.11.0
-browser4-cli upgrade --force
-browser4-cli uninstall --dry-run
-browser4-cli uninstall -y
-```
-
-### Skills
-
-Manage bundled skill files embedded in the browser4-cli binary. Skill files are AI agent
-instructions that always match the installed CLI version.
-
-| Command | Description |
-|---|---|
-| `skills` | List all bundled skill names. Same as `skills list`. |
-| `skills list` | List available bundled skills with file counts. |
-| `skills get <name>` | Output a skill's SKILL.md content. `--full` includes references and templates. `--all` outputs every skill. |
-| `skills path [name]` | Print the skills directory path. With a name, prints the path to that skill's subdirectory. |
-| `skills unpack [dest]` | Unpack bundled skill files to a directory (defaults to the skills directory). |
-
-Skill files are unpacked to the versioned installation directory during `browser4-cli install`.
-Use `skills unpack` to refresh or relocate skill files without reinstalling.
-Set `BROWSER4_SKILLS_DIR` to override the skills directory path.
-
-```bash
-browser4-cli skills                         # List bundled skills
-browser4-cli skills get browser4-cli        # Get the CLI skill's main content
-browser4-cli skills get browser4-cli --full # Include references and templates
-browser4-cli skills get --all               # Output every skill
-browser4-cli skills path                    # Print skills root directory
-browser4-cli skills path browser4-cli       # Print path to a specific skill
-browser4-cli skills unpack                  # Unpack to default skills directory
-browser4-cli skills unpack /custom/path     # Unpack to a custom directory
-```
-
-### Other
-
-| Command | Description |
-|---|---|
-| `resize <w> <h>` | Resize the browser window. |
-| `delete-data` | Delete session data (cookies, storage, cache). |
-| `console [min-level]` | List console messages. `--clear` to clear. |
-| `upload <ref> <file>` | Upload files to a file input. |
-
-### Plugins
-
-Installed server-side plugins expose their tools through the `plugin-<name>` pattern:
-
-| Command | Description |
-|---|---|
-| `plugin list` | List installed plugins and their status. |
-| `plugin info <name>` | Show detailed information about a plugin. |
-| `plugin install <name>` | Install a plugin from the registry. |
-| `plugin remove <name>` | Remove an installed plugin. |
-
-Plugin tools are invoked via `plugin-<name> <method>`. Use `plugin list` to see
-available plugin tool domains and their methods.
-
-```
-browser4-cli plugin list
-browser4-cli plugin info <name>
-browser4-cli plugin install <name>
-browser4-cli plugin-<name> <method> [args...]
-```
-
----
-
-## Commands with subcommands
-
-### Snapshot
-
-`snapshot` captures an accessibility tree of the current page. Every interactive
-element is labeled with a ref (`e15`, `e42`) that you can pass directly to
-`click`, `type`, `fill`, and other interaction commands.
-
-```
-browser4-cli snapshot [options]
-browser4-cli snapshot grep [OPTIONS] <pattern>
-```
-
-#### snapshot
-
-Capture the accessibility snapshot.
-
-| Option | Description |
-|---|---|
-| `--filename <path>` | Save snapshot to file instead of stdout |
-| `--boxes` | Include bounding boxes `[box=x,y,w,h]` per element |
-| `-i`, `--interactive` | Show only interactive elements |
-| `-u`, `--urls` | Include href URLs for link elements |
-| `-c`, `--compact` | Remove empty structural nodes (default) |
-| `--no-compact` | Include all structural nodes |
-| `-d`, `--depth <n>` | Limit tree depth |
-| `-l`, `--limit <n>` | Cap total rendered nodes |
-| `-s`, `--selector <css>` | Scope snapshot to a CSS selector |
-| `--raw`, `--stdout` | Print directly to stdout (for piping) |
-| `-vp`, `--viewport <spec>` | Capture specific viewports (e.g. `0,2,4` or `1-3`) |
-
-```bash
-# Full snapshot with bounding boxes
-browser4-cli snapshot --boxes
-
-# Interactive elements only, depth-limited
-browser4-cli snapshot -i -c -d 5
-
-# Scope to a specific section, pipe to grep
-browser4-cli snapshot -s "#main-content" --raw | grep "button"
-
-# Capture specific viewports
-browser4-cli snapshot --viewport 0,2,4
-```
-
-#### snapshot grep
-
-Search the accessibility-tree YAML with regex patterns and grep-style output.
-Line numbers are shown by default.
-
-| Flag | Description |
-|---|---|
-| `-i` | Case-insensitive matching |
-| `-A N`, `-B N`, `-C N` | Context lines after / before / around each match |
-| `-v` | Invert match (non-matching lines) |
-| `-c` | Print only count of matching lines |
-| `-l` | Print only whether matches exist |
-| `-F` | Treat pattern as a literal string |
-| `-w` | Match whole words only |
-| `--no-line-number` | Suppress line numbers |
-| `--selector <css>` | Scope search to a CSS selector |
-| `--page N`, `--page-size N`, `--all` | Output pagination (2000 lines per page default) |
-
-```bash
-browser4-cli snapshot grep -i error
-browser4-cli snapshot grep -C 2 "timeout"
-browser4-cli snapshot grep -F -w "Error" --selector main
-```
-
----
-
-### HTML Snapshot
-
-`htmlsnapshot` captures a **static HTML snapshot** of the current page — a full
-HTML capture stored in the backend that can be queried repeatedly without
-re-fetching. Unlike the accessibility `snapshot`, this works against the raw DOM.
-
-```
-browser4-cli htmlsnapshot capture
-browser4-cli htmlsnapshot
-browser4-cli htmlsnapshot get <field> [selector] [name]
-browser4-cli htmlsnapshot get all <field> [selector] [name]
-browser4-cli htmlsnapshot query [url] --sql <query>
-browser4-cli htmlsnapshot export [--file <path>] [--clean]
-browser4-cli htmlsnapshot summary
-browser4-cli htmlsnapshot grep [OPTIONS] <pattern>
-browser4-cli htmlsnapshot inspect [selector] [--max N] [--depth D]
-```
-
-#### htmlsnapshot / htmlsnapshot capture
-
-Capture the DOM and display metadata (URL, title, timestamps, image/link counts,
-interactive elements with tag, class, id, aria, and bounding boxes).
-`htmlsnapshot` is a short form of `htmlsnapshot capture`.
-
-```bash
-browser4-cli htmlsnapshot capture
-browser4-cli htmlsnapshot
-```
-
-#### htmlsnapshot get
-
-Extract elements from the stored snapshot by CSS selector.
-
-| Field | Returns | Example |
-|---|---|---|
-| `text` | Inner text of the first match | `htmlsnapshot get text "#title"` |
-| `html` | Inner HTML of the first match | `htmlsnapshot get html "body"` |
-| `attr` | Attribute value (requires `name`) | `htmlsnapshot get attr "a" href` |
-
-Selector defaults to `:root`. `get html` output is paginated (2000 lines per page);
-`get text` is not paginated by default. Use `--page N`, `--page-size N`, or `--all`.
-
-```bash
-browser4-cli htmlsnapshot get text "#productTitle"
-browser4-cli htmlsnapshot get html "#main-content"
-browser4-cli htmlsnapshot get attr "a.product-link" href
-browser4-cli htmlsnapshot get html "body" --page 2
-browser4-cli htmlsnapshot get html --all
-```
-
-#### htmlsnapshot get all
-
-Like `get`, but extracts ALL matching elements (querySelectorAll semantics).
-Supports `--offset N` and `--limit N` for element-level pagination, plus
-`--page N`, `--page-size N`, `--all` for output pagination. `get all html` is
-paginated at 2000 lines by default; `get all text` is not paginated by default.
-
-> **Note:** Each `get all` call scans the whole document independently. For
-> **correlated multi-field extraction** (title + price + URL per item), use
-> `htmlsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT` — it scopes each row
-> to a parent container so fields stay aligned. See the
-> [list-page scraping pattern](skills/browser4-cli/references/x-sql-dom-load-select.md).
-
-```bash
-browser4-cli htmlsnapshot get all text "h2 a"
-browser4-cli htmlsnapshot get all text ".result" --offset 10 --limit 5
-browser4-cli htmlsnapshot get all text "p" --page-size 500
-```
-
-#### htmlsnapshot query
-
-Run an X-SQL query against the stored HTML snapshot. `--sql` is required. Use
-`@url` as a placeholder for the target page URL (unquoted — the server handles
-escaping).
-
-**Recommended:** Write queries to a `.sql` file to avoid shell escaping issues.
-Prefix the `--sql` value with `@` to read from a file. Use `--sql-stdin` for
-piped/scripted workflows, or `--sql-base64` for transport-safe encoded queries.
-
-```bash
-# From a file (recommended — no shell escaping)
-cat > query.sql << 'SQLEOF'
-SELECT
-  dom_base_uri(dom) AS url,
-  dom_first_text(dom, 'h1') AS title
-FROM load_and_select(@url, ':root')
-SQLEOF
-browser4-cli htmlsnapshot query --sql @query.sql
-
-# From stdin
-cat query.sql | browser4-cli htmlsnapshot query --sql-stdin
-
-# From base64 (transport-safe, no quoting issues)
-browser4-cli htmlsnapshot query --sql "$(base64 -w0 query.sql)" --sql-base64
-
-# Inline (simple queries only — quoted selectors require escaping on Windows)
-browser4-cli htmlsnapshot query --sql "
-  SELECT dom_base_uri(dom) AS url, dom_first_text(dom, 'h1') AS title
-  FROM load_and_select(@url, ':root')
-"
-```
-
-#### htmlsnapshot export
-
-Save the full snapshot HTML to a local file. Use `--clean` to strip `<script>`, `<style>`, comments, and non-standard attributes — producing minimal HTML ideal for LLM consumption.
-
-```bash
-browser4-cli htmlsnapshot export --file snapshot.html
-browser4-cli htmlsnapshot export --file page.html --clean
-```
-
-#### htmlsnapshot summary
-
-Generate a compressed Web Page Summary Index (WPSI) — page type, structure, key
-content nodes, repeated lists, tables, and stats — typically <1% of the original
-HTML size.
-
-```bash
-browser4-cli htmlsnapshot summary
-```
-
-#### htmlsnapshot grep
-
-Search the HTML snapshot HTML with regex patterns. Same grep flags as
-`snapshot grep`: `-i`, `-A N`, `-B N`, `-C N`, `-v`, `-c`, `-l`, `-F`, `-w`,
-`--no-line-number`, `--selector <css>`, `--page N`, `--page-size N`, `--all`.
-
-```bash
-browser4-cli htmlsnapshot grep -i error
-browser4-cli htmlsnapshot grep -F -C 2 "404 Not Found"
-browser4-cli htmlsnapshot grep --selector main "Submit"
-browser4-cli htmlsnapshot grep --all "TODOs"
-```
-
-#### htmlsnapshot inspect
-
-Analyze DOM structure and discover CSS selectors for recurring patterns (product
-cards, prices, titles). Run without arguments to auto-discover the page's most
-prominent repeating content. When the selector matches multiple similar elements,
-it compares their child structures and ranks selectors by recurrence.
-
-```bash
-browser4-cli htmlsnapshot inspect                        # auto-discover repeating patterns
-browser4-cli htmlsnapshot inspect ".product_pod"         # inspect a specific container
-browser4-cli htmlsnapshot inspect ".s-result-item" --depth 6 --max 20
-```
-
----
-
-### LLM Configuration
-
-AI-powered commands (`agent`, `extract`, `summarize`) and X-SQL `llm_*` functions
-require an LLM API key. Configure one provider via environment variables:
-
-| Provider | Environment Variables |
+| Provider | Environment variables |
 |---|---|
 | DeepSeek | `DEEPSEEK_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL_NAME`, `OPENROUTER_BASE_URL` |
-| Volcengine (ByteDance) | `VOLCENGINE_API_KEY`, `VOLCENGINE_MODEL_NAME`, `VOLCENGINE_BASE_URL` |
+| Volcengine | `VOLCENGINE_API_KEY`, `VOLCENGINE_MODEL_NAME`, `VOLCENGINE_BASE_URL` |
 | OpenAI-compatible | `OPENAI_API_KEY`, `OPENAI_MODEL_NAME`, `OPENAI_BASE_URL` |
-| Aliyun Qwen (DashScope) | `OPENAI_API_KEY`, `OPENAI_MODEL_NAME`, `OPENAI_BASE_URL` |
-
-Example:
+| Aliyun Qwen | `OPENAI_API_KEY`, `OPENAI_MODEL_NAME`, `OPENAI_BASE_URL` |
 
 ```bash
 export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-If no valid LLM key is configured, AI commands fail fast with a clear error at startup.
+### Complete command reference
 
----
+#### Session lifecycle and server administration
 
-### Agent
-
-The `agent` subcommands submit natural-language tasks that the Browser4 backend
-executes autonomously — it plans, browses, and returns a result.
-
-```
-browser4-cli agent run <task>
-browser4-cli agent status <id>
-browser4-cli agent result <id>
-```
-
-#### agent run
-
-Submit an asynchronous natural-language task. Returns immediately with a task ID.
-
-```bash
-browser4-cli agent run "Open browser4.io and summarize the hero section"
-# → Task submitted: agent-task-1
-# → Use 'browser4-cli agent status agent-task-1' to check progress.
-```
-
-#### agent status
-
-Poll the status of a running task.
+| Command | Description |
+|---|---|
+| `open [url]` | Open a browser session or reconnect to an existing one. Supports `--headed`, `--headless`, `--profile <path>`, `--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`, `--interact-level <FASTEST\|FAST\|DEFAULT>`. |
+| `attach` | Attach to an existing browser via CDP or the Browser4 extension. Supports `--cdp <url\|port\|channel>` and remote endpoint options. |
+| `close` | Close the active browser session. |
+| `list` | List browser sessions with their status and next-open behavior. Supports `--all`. |
+| `session-default <name>` | Make a named session become the default unnamed session. |
+| `close-all` | Close all sessions without stopping the backend. |
+| `kill-all` | Force-stop the backend and Browser4-managed browser processes. |
+| `stop` | Gracefully stop the Browser4 server. |
+| `status` | Show server version, port, and health. |
+| `doctor` | Run diagnostics: build info, LLM status, stale daemon cleanup, optional repair. Supports `--verbose` and `--fix`. |
+| `doctor log [name]` | List, view, tail, or grep backend log files. Supports `--tail`, grep-style flags, and `doctor log <name> grep <pattern>`. |
+| `doctor metrics [filter]` | List, filter, or grep backend metrics. Supports `doctor metrics grep <pattern>`. |
+| `delete-data` | Delete session data. |
+| `install` | Install the Browser4 runtime bundle. Supports `--tag <version>` and `--force`. |
+| `upgrade` | Upgrade the CLI/runtime bundle. Supports `--tag <version>` and `--force`. |
+| `uninstall` | Remove global installs and runtime data. Supports `-y`, `--yes`, and `--dry-run`. |
 
 ```bash
+browser4-cli open --headed https://example.com
+browser4-cli attach --cdp chrome
+browser4-cli doctor --verbose
+browser4-cli doctor log server.log --tail
+browser4-cli doctor metrics grep request
+```
+
+#### Navigation
+
+| Command | Description |
+|---|---|
+| `goto <url>` | Navigate to a URL; auto-opens/reconnects a session if needed. |
+| `go-back` | Go back in browser history. |
+| `go-forward` | Go forward in browser history. |
+| `reload` | Reload the current page. |
+
+#### Core interaction
+
+All interaction commands accept a snapshot ref such as `e15` or a CSS selector unless noted otherwise. Most of them also support `--no-snapshot` to skip the automatic post-action accessibility snapshot.
+
+| Command | Description |
+|---|---|
+| `click <ref> [button]` | Click an element. Supports `--modifiers`, `--follow`, `--auto-dismiss-dialogs`. |
+| `dblclick <ref> [button]` | Double-click an element. Supports `--modifiers`, `--follow`, `--auto-dismiss-dialogs`. |
+| `hover <ref>` | Hover over an element. |
+| `fill <ref> <text>` | Clear and fill text into an editable field. Supports `--submit`, `--verify`. |
+| `type <text> [ref]` | Type text into the focused element or a target element. Supports `--submit`, `--verify`, `--focus`, `--interactable-timeout`. |
+| `press <key> [ref]` | Press a key on the focused element or a target element. Supports `--verify`, `--follow`. |
+| `select <ref> <value>` | Select a dropdown value. Supports `--verify`. |
+| `check <ref>` | Check a checkbox or radio button. |
+| `uncheck <ref>` | Uncheck a checkbox or radio button. |
+| `drag <startRef> <endRef>` | Drag and drop from one element to another. |
+| `wait [target]` | Wait for a selector/ref, duration, text, URL pattern, page-load state, or JavaScript expression. Supports `--timeout`, `--text`, `--url`, `--load`, `--fn`. |
+
+`wait --load` accepts `domcontentloaded`, `load`, and `networkidle`.
+
+```bash
+browser4-cli click e8 --follow
+browser4-cli fill e4 "john@example.com" --submit
+browser4-cli type "Browser4" e7 --verify
+browser4-cli wait --text "Success"
+browser4-cli wait --load networkidle
+```
+
+#### Keyboard and mouse
+
+| Command | Description |
+|---|---|
+| `keydown <key>` | Press and hold a key. |
+| `keyup <key>` | Release a held key. |
+| `mousemove <x> <y>` | Move the mouse to screen/page coordinates. |
+| `mousedown [button]` | Press a mouse button. |
+| `mouseup [button]` | Release a mouse button. |
+| `mousewheel <dx> <dy>` | Scroll using a wheel delta. |
+| `scroll <direction> <pixels>` | Scroll the page `up`, `down`, `left`, or `right`. |
+
+#### Page inspection and live extraction
+
+| Command | Description |
+|---|---|
+| `snapshot` | Capture an accessibility-tree snapshot. Supports `--boxes`, `-i/--interactive`, `-u/--urls`, `-c/--compact`, `--no-compact`, `-d/--depth`, `-l/--limit`, `-s/--selector`, `--raw`, `--stdout`, `-vp/--viewport`, `--filename`. |
+| `snapshot grep <pattern>` | Search saved/current snapshot YAML with grep-style flags such as `-i`, `-v`, `-c`, `-l`, `-F`, `-w`, `-A`, `-B`, `-C`, `--selector`, `--page`, `--page-size`, `--all`. |
+| `snapshot list` | List saved snapshot files with timestamps and sizes. |
+| `snapshot clean` | Remove old snapshot files. Supports `--dry-run`. |
+| `get <mode> <selector> [name]` | Extract `text`, `html`, `box`, `styles`, `property`, or `attr` from a live page element. |
+| `eval [expression] [ref]` | Evaluate JavaScript on the page or an element. Supports `--file`, `--stdin`, `--base64`, `--await`, `--wait-selector`, `--json`. |
+| `console [min-level]` | List browser console messages. Supports `--clear`. |
+| `cdp <method>` | Send an arbitrary Chrome DevTools Protocol command. Supports `--json <params>`. |
+| `generate-locator <ref>` | Generate the best CSS selector for a snapshot ref or existing selector. |
+| `resize <width> <height>` | Resize the browser window. |
+| `dialog-accept [prompt]` | Accept an alert/confirm/prompt dialog, optionally filling the prompt. |
+| `dialog-dismiss` | Dismiss an alert/confirm/prompt dialog. |
+
+`get` modes:
+
+| Mode | Meaning | Example |
+|---|---|---|
+| `text` | visible inner text | `browser4-cli get text ".price"` |
+| `html` | inner HTML | `browser4-cli get html "#main"` |
+| `box` | bounding box | `browser4-cli get box "#hero"` |
+| `styles` | computed styles | `browser4-cli get styles e9` |
+| `property` | DOM property value | `browser4-cli get property "input" value` |
+| `attr` | HTML attribute value | `browser4-cli get attr "a" href` |
+
+```bash
+browser4-cli snapshot -i --boxes
+browser4-cli snapshot grep -C 2 "button"
+browser4-cli eval "document.title"
+browser4-cli eval --file script.js --await
+browser4-cli console warn
+browser4-cli cdp Runtime.evaluate --json '{"expression":"document.title"}'
+```
+
+#### HTML snapshot and X-SQL extraction
+
+`htmlsnapshot` captures a stored raw DOM snapshot and is the center of Browser4's structured extraction workflow.
+
+| Command | Description |
+|---|---|
+| `htmlsnapshot` | Short form of `htmlsnapshot capture`. |
+| `htmlsnapshot capture` | Capture and store a static HTML snapshot with metadata about the page and interactive elements. |
+| `htmlsnapshot get <field> [selector] [name]` | Extract the first matching `text`, `html`, or `attr` from the stored snapshot. |
+| `htmlsnapshot get all <field> [selector] [name]` | Extract all matching values from the stored snapshot. Supports `--offset` and `--limit`. |
+| `htmlsnapshot query [url]` | Run X-SQL. Supports `--sql <query\|@file>`, `--sql-stdin`, `--sql-base64`, result pagination, and extraction-focused output flags. |
+| `htmlsnapshot export` | Export stored HTML to a file. Supports positional file path or `--file <path>` plus `--clean`. |
+| `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI). |
+| `htmlsnapshot grep <pattern>` | Search stored HTML with grep-style flags. |
+| `htmlsnapshot inspect [selector]` | Discover recurring DOM patterns and selector candidates. Supports `--max`, `--depth`, `--stdin`, `--selector-base64`. |
+
+Important rules:
+
+- use `snapshot` when you need refs and interaction
+- use `htmlsnapshot` when you need repeated DOM extraction
+- `htmlsnapshot query --sql @query.sql` is the recommended way to avoid shell quoting issues
+- for correlated list extraction, prefer `htmlsnapshot query` over repeated `get all`
+
+```bash
+browser4-cli htmlsnapshot
+browser4-cli htmlsnapshot get text "#productTitle"
+browser4-cli htmlsnapshot get all text ".result-title" --offset 10 --limit 5
+browser4-cli htmlsnapshot inspect ".s-result-item" --depth 6 --max 20
+browser4-cli htmlsnapshot export --file page.html --clean
+browser4-cli htmlsnapshot query --sql @query.sql
+```
+
+For deep X-SQL usage, see [skills/browser4-cli/references/htmlsnapshot.md](skills/browser4-cli/references/htmlsnapshot.md) and [skills/browser4-cli/references/x-sql-dom-load-select.md](skills/browser4-cli/references/x-sql-dom-load-select.md).
+
+#### Screenshots and PDF
+
+| Command | Description |
+|---|---|
+| `screenshot [ref]` | Take a page or element screenshot. Supports `--filename`, `--full-page`, `--viewport`. |
+| `pdf` | Save the current page as PDF. Supports `--filename`. |
+
+#### Tabs
+
+| Command | Description |
+|---|---|
+| `tab-list` | List open tabs with indexes, titles, and URLs; use `--json` for full GUIDs. |
+| `tab-new [url]` | Open a new tab, optionally navigating to a URL. |
+| `tab-close [index]` | Close a tab by index; supports `--guid <guid>`. |
+| `tab-select <index>` | Switch to a tab by index; supports `--guid <guid>`. |
+
+#### Browser storage and local page data
+
+| Command | Description |
+|---|---|
+| `state-save [filename]` | Save cookies and localStorage to a JSON file. |
+| `state-load <filename>` | Restore cookies and localStorage from a JSON file. |
+| `cookie-list` | List cookies. Supports `--domain`, `--path`. |
+| `cookie-get <name>` | Get a cookie by name. |
+| `cookie-set <name> <value>` | Set a cookie. Supports `--domain`, `--path`, `--expires`, `--httpOnly`, `--secure`, `--sameSite`. |
+| `cookie-delete <name>` | Delete a cookie by name. Supports `--domain`, `--path`. |
+| `cookie-clear` | Clear all cookies. |
+| `localstorage-list` | List localStorage entries. |
+| `localstorage-get <key>` | Read a localStorage key. |
+| `localstorage-set <key> <value>` | Set a localStorage key. |
+| `localstorage-delete <key>` | Delete a localStorage key. |
+| `localstorage-clear` | Clear localStorage. |
+| `sessionstorage-list` | List sessionStorage entries. |
+| `sessionstorage-get <key>` | Read a sessionStorage key. |
+| `sessionstorage-set <key> <value>` | Set a sessionStorage key. |
+| `sessionstorage-delete <key>` | Delete a sessionStorage key. |
+| `sessionstorage-clear` | Clear sessionStorage. |
+| `webdb export <dir>` | Export pages from the Browser4 web database to a local directory. |
+| `webdb normalize <url>` | Normalize a URL into the web database key format. |
+
+#### AI extraction, chat, and autonomous agent tasks
+
+These commands require an LLM key.
+
+| Command | Description |
+|---|---|
+| `extract <instruction>` | Extract structured data from the current page. Supports `--schema <json\|@file>`, `--filename`, `--raw`, `--stdout`. |
+| `summarize [instruction]` | Summarize the current page. Supports `--selector`, `--filename`, `--raw`, `--stdout`. |
+| `chat <message>` | Send a plain AI chat request without auto-appended browser context. |
+| `chat-result <id>` | Retrieve the result of an async chat task. |
+| `agent run <task>` | Submit an autonomous browser task and immediately receive a task ID. |
+| `agent status <id>` | Check a running task. |
+| `agent result <id>` | Fetch a completed result. |
+| `agent list` | List tracked agent tasks and their status. |
+
+```bash
+browser4-cli extract "product name, price, rating"
+browser4-cli extract "contacts" --schema @schema.json
+browser4-cli summarize --selector "#reviews"
+browser4-cli agent run "Go to amazon.com, compare the first 3 keyboards, write a summary"
 browser4-cli agent status agent-task-1
 ```
 
-#### agent result
+#### Batch and loop automation
 
-Fetch the completed task result.
-
-```bash
-browser4-cli agent result agent-task-1
-```
-
-Agent commands are task-ID based and do not require an active browser session.
-They are not supported inside `batch` mode.
-
----
-
-### Swarm
-
-Swarm mode coordinates multiple browser contexts in parallel for high-throughput
-scraping and data extraction.
-
-```
-browser4-cli swarm create [options]
-browser4-cli swarm submit [url] [options]
-browser4-cli swarm query <url> --sql <query>
-browser4-cli swarm status <id>
-browser4-cli swarm result <id>
-```
-
-#### swarm create
-
-Create a swarm scrape session.
-
-| Option | Default | Description |
-|---|---|---|
-| `--profile-mode` | `SEQUENTIAL` | Profile mode: `SEQUENTIAL` or `TEMPORARY` |
-| `--max-open-tabs` | `8` | Max open tabs per browser context |
-| `--max-browser-contexts` | `2` | Number of isolated browser environments |
-| `--display-mode` | — | Display mode: `GUI`, `HEADLESS`, `SUPERVISED` |
-
-```bash
-browser4-cli swarm create \
-  --profile-mode TEMPORARY \
-  --max-open-tabs 12 \
-  --max-browser-contexts 3 \
-  --display-mode HEADLESS
-```
-
-#### swarm submit
-
-Submit URLs as scrape jobs. Accepts a direct URL, a `--seed-file` (one URL per
-line; `#` comments and blank lines ignored), or both.
-
-| Option | Description |
+| Command | Description |
 |---|---|
-| `--seed-file <path>` | File of URLs to submit |
-| `--sql <query>` | X-SQL query (inline or `@file.sql`). Sends to query API instead of submit. |
-| `--deadline <ISO 8601>` | Task completion deadline |
-| `--expires <duration>` | Cache expiration (e.g. `1d`, `1h`) |
-| `--refresh` | Force fresh fetch, ignore cache |
-| `--parse` | Parse page immediately after fetching |
+| `batch [command...]` | Execute multiple commands in one invocation. Supports `--bail` and `--json` for stdin-driven command arrays. |
+| `loop [task]` | Run a task repeatedly. Supports `--name`, `-i/--interval`, `-n/--count`, `-t/--timeout`, `--shell`, `--list`, `--pause`, `--resume`, `--pause-all`, `--resume-all`, `--stop`, `--stop-all`, `--status`, `--history`, `--keep-state`. |
+
+Batch-compatible commands:
+
+```text
+goto  go-back  go-forward  reload  press  type  keydown  keyup
+click  dblclick  hover  fill  select  check  uncheck  drag
+mousemove  mousedown  mouseup  mousewheel  scroll  wait
+get  eval  snapshot  screenshot  pdf  dialog-accept  dialog-dismiss
+resize  tab-list  tab-new  tab-close  tab-select
+```
 
 ```bash
-# Submit URLs from a file
-browser4-cli swarm submit --seed-file ./urls.txt \
-  --deadline 2026-03-30T00:00:00Z \
-  --expires 1d --refresh
-
-# Submit with inline X-SQL
-browser4-cli swarm submit "https://www.amazon.com/dp/B08PP5MSVB" --sql "
-  SELECT
-    dom_base_uri(dom) AS url,
-    dom_first_text(dom, '#productTitle') AS title
-  FROM load_and_select(@url, 'body')
-"
-
-# Submit with X-SQL from a file
-browser4-cli swarm submit "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql
+browser4-cli batch --bail "goto https://example.com" "snapshot" "screenshot"
+browser4-cli loop "load https://example.com and extract the title" -i 300 -n 10
+browser4-cli loop --shell "curl -s https://api.example.com/health" -i 60
+browser4-cli loop --list
 ```
 
-#### swarm query
+#### Swarm and crawl for scale
 
-Run an X-SQL query against loaded webpages. `--sql` is required. Supports a
-direct URL, `--seed-file`, or both — runs the same query against each. Also
-accepts `--deadline`, `--expires`, `--refresh`.
+The `co` prefix is accepted as an alias for `swarm`.
+
+| Command | Description |
+|---|---|
+| `swarm create` | Create a parallel scraping session. Supports `--profile-mode`, `--max-open-tabs`, `--max-browser-contexts`, `--display-mode`. |
+| `swarm submit [url]` | Submit URLs or X-SQL payloads as jobs. Supports `--seed-file`, `--sql`, `--deadline`, `--expires`, `--refresh`, `--parse`. |
+| `swarm query <url>` | Run an X-SQL extraction job against one or more loaded pages. Supports `--sql`, `--seed-file`, `--deadline`, `--expires`, `--refresh`. |
+| `swarm status <id>` | Check a swarm task status. |
+| `swarm result <id>` | Fetch a completed swarm result. |
+| `swarm list` | List tracked swarm tasks. |
+| `swarm close` | Close the swarm session and release browser resources. |
+| `crawl [url]` | Crawl from a URL or seed file. Supports `--seed-file`, `--sql`, `--sql-stdin`, `--sql-base64`, `--format`, `--output`, `-d/--depth`, `-ol/--out-link-selector`, `-olp/--out-link-pattern`, `-tl/--top-links`, `-a/--args`, `--refresh`, `--parse`, `--expires`, `-p/--priority`, `--page-load-timeout`, `--ignore-url-query`, `--no-norm`, `--readonly`, `-bg/--background`. |
+| `crawl status <id>` | Check crawl task status. |
+| `crawl result <id>` | Fetch crawl results. |
+| `crawl cancel <id>` | Cancel a running crawl. |
+| `crawl clear` | Remove terminal-state crawl tasks; supports force-style cleanup options. |
+| `crawl list` | List tracked crawl tasks. |
 
 ```bash
-# Inline X-SQL
-browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
-  SELECT dom_first_text(dom, '#productTitle') AS title
-  FROM load_and_select(@url, 'body')
-"
-
-# From a file, with seed URLs
-browser4-cli swarm query --sql @query.sql --seed-file ./urls.txt --refresh
-```
-
-#### swarm status / swarm result
-
-Poll and fetch results — same pattern as `agent status` / `agent result`.
-
-```bash
-browser4-cli swarm status scrape-task-4
-browser4-cli swarm result scrape-task-4
-```
-
----
-
-### Crawl
-
-Recursive website crawling from a seed URL. Reuses the swarm infrastructure.
-
-```
-browser4-cli crawl <url> [options]
-```
-
-| Flag | Default | Description |
-|---|---|---|
-| `-d`, `--depth` | `1` | Maximum crawl depth |
-| `-ol`, `--out-link-selector` | — | CSS selector to extract links from each page |
-| `-olp`, `--out-link-pattern` | `.+` | Regex filter for extracted links |
-| `-tl`, `--top-links` | `20` | Max links extracted per page |
-| `-a`, `--args` | — | Additional LoadOptions passthrough (e.g. `-a "-nMaxRetry 5"`) |
-| `--refresh` | — | Force fresh fetch |
-| `--parse` | — | Parse pages immediately after fetching |
-| `--expires` | — | Cache expiration (e.g. `1d`, `1h`, `30m`) |
-| `-p`, `--priority` | — | Queue priority (lower = higher) |
-| `--ignore-url-query` | — | Strip query params during URL normalization |
-| `--no-norm` | — | Disable URL normalization |
-| `--readonly` | — | Non-destructive mode |
-| `--page-load-timeout` | — | Max wait for each page load |
-| `-bg`, `--background` | — | Submit crawl and return immediately; use `crawl list` to track |
-
-```bash
-# Depth 1: extract all links from homepage, load each linked page
-browser4-cli crawl "https://example.com" --out-link-selector "a[href]"
-
-# Depth 2: follow product links, filter by pattern
-browser4-cli crawl "https://shop.example.com" \
-  --depth 2 \
-  --out-link-selector "a.product-link" \
-  --out-link-pattern "/product/" \
-  --top-links 10
-
-# Deep crawl with refresh and content storage
-browser4-cli crawl "https://example.com" --depth 3 --refresh
-
-# Background crawl — submit and return immediately
-browser4-cli crawl "https://example.com" -ol "a[href]" --background
+browser4-cli swarm create --max-open-tabs 12 --display-mode HEADLESS
+browser4-cli swarm query --seed-file urls.txt --sql @query.sql --refresh
+browser4-cli crawl "https://example.com" --depth 2 --out-link-selector "a[href]"
 browser4-cli crawl list
 ```
 
----
+#### Bundled skill files vs installed runtime skills
 
-## Element references
+Browser4 has two different "skill" surfaces:
 
-The `snapshot` command returns an accessibility tree where every interactive
-element is labeled with a ref like `e15`. Pass this ref to any interaction
-command:
+1. **`skills ...`** manages bundled, embedded skill documents that ship with the CLI.
+2. **`skill-*`** manages installed runtime skills exposed by the backend.
+
+##### Bundled CLI skills
+
+| Command | Description |
+|---|---|
+| `skills` | List bundled skill names. |
+| `skills list` | Same as `skills`. |
+| `skills get <name>` | Print a skill's `SKILL.md`. Supports `--full` and `--all`. |
+| `skills path [name]` | Print the bundled skill directory path. |
+| `skills unpack [dest]` | Unpack bundled skill files to a directory. |
+
+##### Installed runtime skills
+
+| Command | Description |
+|---|---|
+| `skill-list` | List installed backend skills. |
+| `skill-info <id>` | Show detailed skill metadata. |
+| `skill-install <path>` | Install a skill from a directory containing `SKILL.md`. Supports `--overwrite`. |
+| `skill-uninstall <id>` | Remove a skill by ID. |
+| `skill-reload <id>` | Reload a skill from its source directory. |
+
+#### Progressive experience memory
+
+These commands operate on Browser4's learned experience store.
+
+| Command | Description |
+|---|---|
+| `experience save <url> <trace>` | Save a task execution trace. Supports `--outcome`, `--intent`, `--task-type`. |
+| `experience query <url>` | Query known selectors, blockers, and hints for a URL/domain. Supports `--intent`. |
+| `experience list` | List stored experience entries. Supports `--filter`, `--intent-filter`, `--page`, `--page-size`. |
+| `experience deep-learn <url> <intent>` | Run deeper analysis on stored traces. Supports `--force`. |
+
+#### Plugins
+
+Plugins are server-side JARs that extend Browser4.
+
+| Command | Description |
+|---|---|
+| `plugin list` | List installed plugins. |
+| `plugin info <name>` | Show plugin details. |
+| `plugin install <file>` | Install a plugin from a local JAR file. Supports `--replace`. |
+| `plugin remove <name>` | Remove a plugin. Supports `-y`, `--yes`. |
+
+#### Advanced and currently hidden commands
+
+These commands exist in the CLI but are intentionally kept out of the default public help.
+
+| Command | Description |
+|---|---|
+| `upload <ref> <file>` | Upload one or multiple files to a file input. |
+| `act <description>` | Experimental natural-language action translator that turns plain text into a browser command and runs it. |
+
+### Timeout environment variables
+
+| Variable | Default | Used for |
+|---|---:|---|
+| `BROWSER4_CLI_HTTP_TIMEOUT_SECS` | `30` | most commands |
+| `BROWSER4_CLI_INPUT_TIMEOUT_SECS` | `90` | `type`, `fill`, and other slower input workflows |
+| `BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS` | `120` | `goto`, `reload`, `go-back`, `go-forward` |
 
 ```bash
-browser4-cli snapshot       # see e15 is the search input
-browser4-cli click e15      # click it
-browser4-cli type "query" e15  # type into it
+export BROWSER4_CLI_INPUT_TIMEOUT_SECS=180
+export BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS=300
 ```
 
-You can also use CSS selectors (e.g. `#search`, `.btn-primary`,
-`input[name=email]`) anywhere a ref is accepted.
+### State persistence
 
-## Development (running from source)
+CLI state lives under `~/.browser4` unless overridden.
 
-When working from the repository (not using an installed `browser4-cli` binary),
-use the dev-mode wrappers in the repo root:
+- default session: `~/.browser4/cli-state.json`
+- named sessions: `~/.browser4/sessions/<name>.json`
+- loops: `~/.browser4/loops/<name>.json`
 
-| Platform | Command | Notes |
-|---|---|---|
-| **PowerShell** (Windows) | `./b4w.ps1 <command>` | Primary choice. Auto-builds from source when needed. Uses manual argument parsing — short flags (`-o`, `-i`, `-v`) are safe. |
-| **Git Bash / Linux / macOS** | `./b4w.sh <command>` | Bash wrapper that individually quotes arguments before passing to pwsh. |
-| **CMD** (Windows) | `./b4w.bat <command>` | Uses `--%` stop-parsing token to prevent PowerShell from consuming flags. |
-| **Cargo (any platform)** | `cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>` | Slower (compiles each run). Good for one-off debugging. |
+The runtime bundle is stored separately in a platform-conventional application-data directory, so clearing session state does not force a re-download of Browser4 itself.
 
-**Example:** The installed command `browser4-cli snapshot -v 0` becomes `./b4w.ps1 snapshot -v 0` (PowerShell) or `./b4w.sh snapshot -v 0` (Git Bash) when running from source.
+---
 
-## State persistence
+## 🚀 Build from Source
 
-CLI state is stored under `~/.browser4` (override with `BROWSER4_CLI_STATE_DIR`):
+**Prerequisites:** Git, JDK 17+ (21+ recommended), Chrome/Chromium, and PowerShell 7 (Linux/macOS only). For the full prerequisites table, platform-specific tools, and Chrome auto-detection paths, see [Build from Source](docs/build-from-source.md).
 
-- Default session: `~/.browser4/cli-state.json`
-- Named sessions (`-s <name>`): `~/.browser4/sessions/<name>.json`
+1. **Clone the repository**
+   ```shell
+   git clone https://github.com/platonai/Browser4.git
+   cd Browser4
+   ```
 
-Each state file stores the session ID, server URL, and cursor position — so your
-next `open` or `goto` picks up right where you left off.
+2. **Configure your LLM API key**
 
-The Browser4 runtime bundle (~200 MB) is stored separately in a
-platform-conventional data directory so clearing CLI session state does not
-require re-downloading:
+   > Edit [application.properties](application.properties) and add your API key, or set environment variables. See [LLM Configuration](#llm-configuration) for supported providers and variable names.
 
-| Platform | Path |
-|---|---|
-| Linux | `~/.local/share/browser4/runtime/<version>/` |
-| macOS | `~/Library/Application Support/browser4/runtime/<version>/` |
-| Windows | `%APPDATA%/browser4/runtime/<version>/` |
+3. **Build the project**
+   ```shell
+   ./mvnw -DskipTests
+   ```
 
-Override the runtime data root with `BROWSER4_RUNTIME_DIR`.
+4. **Build and run the CLI (from source)**
+   ```shell
+   # Build the Rust CLI (requires Rust toolchain)
+   cd cli/browser4-cli && cargo build --release
+
+   # Or run directly without installing:
+   cargo run --manifest-path cli/browser4-cli/Cargo.toml -- --help
+
+   # Add --quiet to suppress Cargo build-status output:
+   cargo run --quiet --manifest-path cli/browser4-cli/Cargo.toml -- <command>
+
+   # Or install globally:
+   cd cli/browser4-cli && cargo install --path .
+   ```
+   > On Windows, prefix the command with `chcp 65001 >nul &&` for proper UTF-8 output.
+   > See [Build from Source](docs/build-from-source.md) for full platform-specific instructions.
+
+   **Dev-mode wrappers (no install needed):** The repo root provides shell wrappers
+   that auto-build from source. Use `./b4w.ps1 <command>` (PowerShell),
+   `./b4w.sh <command>` (Git Bash / Linux / macOS), or `./b4w.bat <command>`
+   (CMD) — all accept the same arguments as the installed `browser4-cli` binary.
+
+---
+
+🎬 YouTube:
+[![Watch the video](https://img.youtube.com/vi/_BcryqWzVMI/0.jpg)](https://www.youtube.com/watch?v=_BcryqWzVMI)
+
+📺 Bilibili:
+[https://www.bilibili.com/video/BV1kM2rYrEFC](https://www.bilibili.com/video/BV1kM2rYrEFC)
+
+---
+
+## Architecture
+
+```
+browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) ──▶ PulsarWebDriver (Kotlin/CDP)
+```
+
+- **CLI** (`cli/browser4-cli`) — native Rust binary, talks to the backend via MCP tool calls
+- **Backend** (`browser4-rest`) — Spring Boot server, dispatches MCP tools to browser drivers
+- **Browser driver** (`browser4-core/browser4-browser`) — wraps Chrome DevTools Protocol
+- **Agent tools** (`browser4-agentic`) — maps MCP tool names to browser automation methods
+
+## 📦 Modules Overview
+
+| Module | Description                                                          |
+|---|----------------------------------------------------------------------|
+| `cli/browser4-cli` | Rust CLI — fast, native binary for browser automation                |
+| `skills/browser4-cli` | AI agent skill definitions (SKILL.md)                                |
+| `browser4-core` | Core engine: sessions, scheduling, DOM, browser control              |
+| `browser4-dependencies` | BOM and dependency version alignment                                 |
+| `browser4-tools` | Operational tools and launch helpers                                 |
+| `browser4-agentic` | AI agents, MCP integration, skill registration                       |
+| `browser4-agent-tools` | High-level agent tools: scraping, crawling, stateful page interaction |
+| `browser4-rest` | Spring Boot REST layer & command endpoints                           |
+| `browser4-apps/browser4-standalone` | Product packaging — unified launcher (`target/Browser4.jar`)         |
+| `examples/browser4-examples` | Runnable examples and demos                                          |
+| `browser4-tests` | E2E, integration, and scenario test suites                           |
+| `cdp-protocol` | Chrome DevTools Protocol JSON definitions                            |
+| `coworker/` | Builtin AI coworker                                                  |
+
+---
+
+## 🧪 Test Fixture Server (MockSite)
+
+Browser4 includes a lightweight **MockSite** server that serves static HTML pages for testing and demos. Start it from the repository root:
+
+**Windows:** `./bin/test.ps1 mock-site -Dmock.site.port=18080`
+**Linux/macOS:** `./bin/test.sh mock-site -Dmock.site.port=18080`
+
+Key demo pages are served at `http://localhost:18080/generated/`. For the full page listing, environment variables, Python fallback, and Maven-based launch, see [MockSite](docs/mocksite.md). For the test taxonomy and tagging system, see [Test Taxonomy](docs/TESTING.md).
+
+---
+
+## 🤝 Support & Community
+
+Join our community for support, feedback, and collaboration!
+
+- **GitHub Discussions**: Engage with developers and users.
+- **Issue Tracker**: Report bugs or request features.
+- **Social Media**: Follow us for updates and news.
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
+---
+
+## 📜 Documentation
+
+Comprehensive documentation is available in the `docs/` directory and on our [GitHub Pages site](https://platonai.github.io/browser4/).
+
+---
+
+## 🔧 Proxy Configuration - Unblock Website Access
+
+<details>
+
+Set the environment variable `PROXY_ROTATION_URL` to the rotation URL provided by your proxy service provider:
+
+```shell
+export PROXY_ROTATION_URL=https://your-proxy-provider.com/rotation-endpoint
+```
+
+Each time you access this rotation URL, it should return a response containing one or more fresh proxy IPs.
+If you need this type of URL, please contact your proxy service provider.
+
+</details>
+
+---
 
 ## License
 
-Apache-2.0
+Apache 2.0 License. See [LICENSE](LICENSE) for details.

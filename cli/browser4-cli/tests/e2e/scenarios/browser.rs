@@ -38,7 +38,7 @@ pub(super) fn test_session_lifecycle(ctx: &mut E2ECtx) {
         combined_output
     );
     assert!(
-        combined_output.contains("run `browser4-cli open <url>` first."),
+        combined_output.contains("run `browser4-cli open <url>` to start a new session."),
         "Expected missing-session guidance in output:\n{}",
         combined_output
     );
@@ -909,11 +909,12 @@ pub(super) fn test_eval_return_types(ctx: &mut E2ECtx) {
     // wraps genuinely empty eval results in quotes to make them visible
     // on stdout, so accept "undefined", the quoted empty string ("\"\""),
     // or a genuinely empty trimmed result.
+    // The CLI may append a diagnostic tip on the next line when the result
+    // is empty — only check the first line.
     let undef_val = eval_text(ctx, "void 0");
-    // Accept either "undefined" or "" (or quoted-empty) as valid serializations.
-    let trimmed = undef_val.trim();
+    let first_line = undef_val.lines().next().unwrap_or("").trim();
     assert!(
-        trimmed == "undefined" || trimmed.is_empty() || trimmed == "\"\"",
+        first_line == "undefined" || first_line.is_empty() || first_line == "\"\"",
         "Expected undefined, empty string, or quoted-empty for `void 0`, got: {undef_val}"
     );
 

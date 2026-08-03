@@ -131,7 +131,7 @@ if ($RemainingArgs -and ($RemainingArgs[0] -eq '--' -or $RemainingArgs[0] -eq '-
 # Delegates to coworker/coworker.ps1, forwarding all remaining arguments.
 if ($CliArgs -and $CliArgs[0] -eq 'coworker') {
     $CoworkerScript = Join-Path $ScriptDir 'coworker\coworker.ps1'
-    $CoworkerArgs = if ($CliArgs.Count -gt 1) { @($CliArgs[1..($CliArgs.Count - 1)]) } else { @() }
+    $CoworkerArgs = if ($CliArgs.Count -gt 1) { ,$CliArgs[1..($CliArgs.Count - 1)] } else { @() }
     if ($CoworkerArgs) {
         $CoworkerCommand = $CoworkerArgs[0]
         $CoworkerRemaining = @()
@@ -149,7 +149,7 @@ if ($CliArgs -and $CliArgs[0] -eq 'coworker') {
 # Delegates to bin/test.ps1, forwarding all remaining arguments.
 if ($CliArgs -and $CliArgs[0] -eq 'test') {
     $TestScript = Join-Path $ScriptDir 'bin\test.ps1'
-    $TestArgs = if ($CliArgs.Count -gt 1) { $CliArgs[1..($CliArgs.Count - 1)] } else { @() }
+    $TestArgs = if ($CliArgs.Count -gt 1) { ,$CliArgs[1..($CliArgs.Count - 1)] } else { @() }
     if ($TestArgs) {
         & $TestScript @TestArgs
     } else {
@@ -162,7 +162,7 @@ if ($CliArgs -and $CliArgs[0] -eq 'test') {
 # Delegates to bin/build.ps1, forwarding all remaining arguments.
 if ($CliArgs -and $CliArgs[0] -eq 'build') {
     $BuildScript = Join-Path $ScriptDir 'bin\build.ps1'
-    $BuildArgs = if ($CliArgs.Count -gt 1) { $CliArgs[1..($CliArgs.Count - 1)] } else { @() }
+    $BuildArgs = if ($CliArgs.Count -gt 1) { ,$CliArgs[1..($CliArgs.Count - 1)] } else { @() }
     if ($BuildArgs) {
         & $BuildScript @BuildArgs
     } else {
