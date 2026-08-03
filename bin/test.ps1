@@ -203,6 +203,12 @@ function Print-Usage {
     Write-Host "  ps          Run all PowerShell *.tests.ps1 files in the project"
     Write-Host "  rws         Run real-world scenario tests (requires a mode)"
     Write-Host "              sc, scenarios <names...>  run named tasks via run-tests.ps1"
+    Write-Host "              sc add <name> <url>       create a scenario from template"
+    Write-Host "                --refine, -r              AI-refine after creation"
+    Write-Host "                --guidance, -g <hint>     refinement hint"
+    Write-Host "                --title <title>           custom heading"
+    Write-Host "                --dir, -d <path>          target directory"
+    Write-Host "                --category, -c <cat>      generic, browser4, mock-site"
     Write-Host "              dir, directory <path>     run all .md tasks in a directory"
     Write-Host "              dir --tree, -t  [path]  tree view of task directories (display only)"
     Write-Host "              dir --files, -f [path]  list .md task files (display only)"
@@ -261,6 +267,8 @@ function Print-Usage {
     Write-Host "  test.ps1 rws dir -f -m                     # Short forms for --files --metadata"
     Write-Host "  test.ps1 rws dir --interactive             # Interactive directory picker"
     Write-Host "  test.ps1 rws sc --interactive              # Interactive scenario picker"
+    Write-Host "  test.ps1 rws sc add my-test https://example.com  # Create a new scenario"
+    Write-Host "  test.ps1 rws sc add my-test https://example.com --refine  # Create + AI refine"
     Write-Host "  test.ps1 main                       # Run all Browser4 main tests"
     Write-Host "  test.ps1 session list               # List all past test sessions"
     Write-Host "  test.ps1 session view 20260724T1917 # View a specific session (prefix match)"
@@ -695,6 +703,27 @@ function Show-RwsFileListing {
     Write-Host "Total: $($files.Count) file(s)" -ForegroundColor DarkGray
 }
 
+function Test-InteractiveConsoleAvailable {
+    param([string]$ModeName)
+
+    try {
+        if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) {
+            Write-Error "$ModeName requires an interactive terminal. Run this command in a local PowerShell terminal and try again."
+            return $false
+        }
+
+        # Accessing console dimensions triggers the same invalid-handle path
+        # that interactive UI rendering depends on.
+        [void][Console]::WindowWidth
+        [void][Console]::WindowHeight
+        return $true
+    }
+    catch {
+        Write-Error "$ModeName requires a valid interactive console handle. Run this command in a local terminal and try again."
+        return $false
+    }
+}
+
 function Show-InteractiveDirPicker {
     <#
     .SYNOPSIS
@@ -722,6 +751,9 @@ function Show-InteractiveDirPicker {
 
     if (-not (Test-Path -LiteralPath $TasksRoot -PathType Container)) {
         Write-Error "Tasks root not found: $TasksRoot"
+        return @()
+    }
+    if (-not (Test-InteractiveConsoleAvailable -ModeName 'Interactive directory picker')) {
         return @()
     }
 
@@ -821,7 +853,13 @@ function Show-InteractiveScenarioPicker {
         Controls:
           ↑/↓       Navigate items
           ←/→       Collapse / expand folder (tree view)
-          Space/Enter  Run the selected scenario in the background
+          Space       Run the selected scenario in the background
+          Enter / v   View-target mode — shows current file index, type digits
+                        to view a different file, Enter to confirm (opens viewer)
+          e           Edit the scenario in an external editor (blocks until closed)
+          a           AI-refine the scenario with an optional guidance prompt
+          1-9         Quick-goto file by index (Enter=jump+view, v=jump+view)
+          n           Create a new scenario from template (in selected folder)
           t           Toggle tree-view / flat-list
           /           Enter filter mode (type to filter, Esc to clear)
           r           Refresh file list from disk
@@ -844,6 +882,9 @@ function Show-InteractiveScenarioPicker {
 
     if (-not (Test-Path -LiteralPath $TasksRoot -PathType Container)) {
         Write-Error "Tasks root not found: $TasksRoot"
+        return
+    }
+    if (-not (Test-InteractiveConsoleAvailable -ModeName 'Interactive scenario picker')) {
         return
     }
 
@@ -884,7 +925,9 @@ function Show-InteractiveScenarioPicker {
         if ($Node.Type -eq 'dir' -and $Node.Expanded) {
             foreach ($child in $Node.Children) {
                 $descendants = Get-VisibleNodes -Node $child
-                $result.AddRange($descendants)
+                foreach ($descendant in @($descendants)) {
+                    $result.Add($descendant)
+                }
             }
         }
         return $result
@@ -897,18 +940,26 @@ function Show-InteractiveScenarioPicker {
     $showTree   = $true
     $filter     = ''
     $filterMode = $false
+    $gotoIndex  = ''
     $cursor     = 0
     $topOffset  = 0
 
-    $runningProc = $null
-    $runningName = ''
+    $script:runningProc = $null
+    $script:runningName = ''
 
     $rwsScriptsDir = Join-Path $repoRoot 'browser4-tests' 'real-world-scenarios' 'scripts'
     $taskRunner = Join-Path $rwsScriptsDir 'run-task.ps1'
+    $commonPs1    = Join-Path $rwsScriptsDir 'common.ps1'
 
     if (-not (Test-Path -LiteralPath $taskRunner)) {
         Write-Error "Task runner not found at $taskRunner"
         return
+    }
+    # Dot-source common.ps1 for Edit-FileInEditor and agent helpers.
+    # Safe: the module is idempotent and sets ErrorActionPreference=Stop
+    # which is fine for the interactive picker.
+    if (Test-Path -LiteralPath $commonPs1) {
+        . $commonPs1
     }
 
     # ── Launch a scenario in the background ─────────────────────────────────
@@ -997,6 +1048,506 @@ function Show-InteractiveScenarioPicker {
         return $false  # cancel quit
     }
 
+    function Resolve-ScenarioTargetDir {
+        param([PSCustomObject]$CurrentNode)
+
+        if ($null -eq $CurrentNode) {
+            return $TasksRoot
+        }
+        if ($CurrentNode.Type -eq 'dir') {
+            return $CurrentNode.FullPath
+        }
+        return Split-Path -Parent $CurrentNode.FullPath
+    }
+
+    function Build-ScenarioTemplateContent {
+        param(
+            [string]$ScenarioTitle,
+            [string]$StartUrl
+        )
+
+        $template = @'
+# {0}
+
+1. Go to `{1}`.
+2. Discover the key interactive elements needed for this scenario.
+3. Complete the intended workflow step-by-step.
+4. Verify the expected result on the page.
+5. Write the final findings to a markdown file in the `./target/` directory.
+'@
+        return [string]::Format($template, $ScenarioTitle, $StartUrl)
+    }
+
+    function New-ScenarioFromTemplate {
+        param([PSCustomObject]$CurrentNode)
+
+        $targetDir = Resolve-ScenarioTargetDir -CurrentNode $CurrentNode
+        $targetDirRel = [System.IO.Path]::GetRelativePath($TasksRoot, $targetDir)
+        function Read-ScenarioPanelInput {
+            param([string]$Prompt)
+
+            Write-Host -NoNewline $Prompt
+            $buffer = [System.Text.StringBuilder]::new()
+
+            while ($true) {
+                $key = [Console]::ReadKey($true)
+
+                if (($key.Modifiers -band [ConsoleModifiers]::Control) -and $key.Key -eq [ConsoleKey]::C) {
+                    Write-Host ''
+                    return [PSCustomObject]@{ Back = $true; Value = $null }
+                }
+
+                if ($key.Key -eq [ConsoleKey]::Enter) {
+                    Write-Host ''
+                    return [PSCustomObject]@{ Back = $false; Value = $buffer.ToString() }
+                }
+
+                if ($key.Key -eq [ConsoleKey]::Backspace) {
+                    if ($buffer.Length -gt 0) {
+                        [void]$buffer.Remove($buffer.Length - 1, 1)
+                        $left = [Console]::CursorLeft
+                        $top = [Console]::CursorTop
+                        if ($left -gt 0) {
+                            [Console]::SetCursorPosition($left - 1, $top)
+                            [Console]::Write(' ')
+                            [Console]::SetCursorPosition($left - 1, $top)
+                        }
+                    }
+                    continue
+                }
+
+                $code = [int][char]$key.KeyChar
+                if ($code -ge 32) {
+                    [void]$buffer.Append($key.KeyChar)
+                    [Console]::Write($key.KeyChar)
+                }
+            }
+        }
+
+        $previousTreatControlCAsInput = [Console]::TreatControlCAsInput
+        [Console]::TreatControlCAsInput = $true
+        try {
+            while ($true) {
+                [Console]::Clear()
+                Write-Host 'Create New Scenario (Template)' -ForegroundColor Cyan
+                Write-Host ('─' * 60) -ForegroundColor DarkGray
+                Write-Host "Target directory: $targetDirRel" -ForegroundColor DarkGray
+                Write-Host 'Press Ctrl+C at any prompt to return to the main scenario picker.' -ForegroundColor DarkGray
+                Write-Host ''
+
+                $rawFileNameInput = Read-ScenarioPanelInput -Prompt 'File name (without .md, e.g. my-new-scenario): '
+                if ($rawFileNameInput.Back) { return $null }
+                $rawFileName = $rawFileNameInput.Value
+                if ([string]::IsNullOrWhiteSpace($rawFileName)) {
+                    Write-Host 'File name is required.' -ForegroundColor Yellow
+                    Start-Sleep -Milliseconds 900
+                    continue
+                }
+
+                $slug = $rawFileName.Trim().ToLowerInvariant()
+                $slug = $slug -replace '[^a-z0-9]+', '-'
+                $slug = $slug -replace '^-+', ''
+                $slug = $slug -replace '-+$', ''
+                if ([string]::IsNullOrWhiteSpace($slug)) {
+                    Write-Host 'Invalid file name after normalization. Use letters or numbers.' -ForegroundColor Red
+                    Start-Sleep -Milliseconds 1100
+                    continue
+                }
+
+                $scenarioTitleInput = Read-ScenarioPanelInput -Prompt "Scenario heading [default: $slug]: "
+                if ($scenarioTitleInput.Back) { return $null }
+                $scenarioTitle = $scenarioTitleInput.Value
+                if ([string]::IsNullOrWhiteSpace($scenarioTitle)) {
+                    $scenarioTitle = $slug
+                }
+                else {
+                    $scenarioTitle = $scenarioTitle.Trim()
+                }
+
+                $startUrlInput = Read-ScenarioPanelInput -Prompt 'Starting URL [default: https://example.com/]: '
+                if ($startUrlInput.Back) { return $null }
+                $startUrl = $startUrlInput.Value
+                if ([string]::IsNullOrWhiteSpace($startUrl)) {
+                    $startUrl = 'https://example.com/'
+                }
+                else {
+                    $startUrl = $startUrl.Trim()
+                }
+
+                $newFilePath = Join-Path $targetDir "$slug.md"
+                if (Test-Path -LiteralPath $newFilePath) {
+                    $existingRel = [System.IO.Path]::GetRelativePath($TasksRoot, $newFilePath)
+                    Write-Host "Scenario already exists: $existingRel" -ForegroundColor Red
+                    Write-Host 'Use a different file name, or press Ctrl+C to return.' -ForegroundColor DarkGray
+                    Start-Sleep -Milliseconds 1400
+                    continue
+                }
+
+                $templateContent = Build-ScenarioTemplateContent -ScenarioTitle $scenarioTitle -StartUrl $startUrl
+                $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+                [System.IO.File]::WriteAllText($newFilePath, $templateContent, $utf8NoBom)
+
+                $newFileRel = [System.IO.Path]::GetRelativePath($TasksRoot, $newFilePath)
+                Write-Host ''
+                Write-Host "Created: $newFileRel" -ForegroundColor Green
+                Write-Host 'Press any key to return to the picker...' -ForegroundColor DarkGray
+                [Console]::ReadKey($true) | Out-Null
+                return $newFilePath
+            }
+        }
+        finally {
+            [Console]::TreatControlCAsInput = $previousTreatControlCAsInput
+        }
+    }
+
+    # ── View scenario content ──────────────────────────────────────────────
+    function Show-ScenarioContent {
+        param([PSCustomObject]$Node)
+
+        if ($null -eq $Node -or $Node.Type -ne 'file') { return }
+
+        $relPath = [System.IO.Path]::GetRelativePath($TasksRoot, $Node.FullPath)
+
+        try {
+            $raw = Get-Content -LiteralPath $Node.FullPath -Raw -Encoding UTF8 -ErrorAction Stop
+        } catch {
+            [Console]::Clear()
+            Write-Host "Could not read scenario file:" -ForegroundColor Red
+            Write-Host "  $relPath" -ForegroundColor DarkGray
+            Write-Host ''
+            Write-Host "Error: $_" -ForegroundColor Red
+            Write-Host ''
+            Write-Host 'Press any key to return...' -ForegroundColor DarkGray
+            [Console]::ReadKey($true) | Out-Null
+            return
+        }
+
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            [Console]::Clear()
+            Write-Host "Scenario file is empty:" -ForegroundColor Yellow
+            Write-Host "  $relPath" -ForegroundColor DarkGray
+            Write-Host ''
+            Write-Host 'Press any key to return...' -ForegroundColor DarkGray
+            [Console]::ReadKey($true) | Out-Null
+            return
+        }
+
+        # Split into lines for scrollable display
+        $contentLines = $raw -split '\r?\n'
+        $scrollOffset = 0
+        $viewDone = $false
+
+        while (-not $viewDone) {
+            [Console]::Clear()
+
+            # Header
+            Write-Host 'Scenario Content Viewer' -ForegroundColor Cyan
+            Write-Host ('─' * [Math]::Min(76, [Console]::WindowWidth - 1)) -ForegroundColor DarkGray
+            Write-Host "  File: $relPath" -ForegroundColor DarkGray
+            Write-Host ('─' * [Math]::Min(76, [Console]::WindowWidth - 1)) -ForegroundColor DarkGray
+
+            # Compute usable area
+            $headerUsed = 4
+            $footerUsed = 2
+            $viewHeight = [Math]::Max(5, [Console]::WindowHeight - $headerUsed - $footerUsed)
+            $maxScroll = [Math]::Max(0, $contentLines.Count - $viewHeight)
+            $scrollOffset = [Math]::Max(0, [Math]::Min($scrollOffset, $maxScroll))
+
+            # Scroll indicator
+            if ($scrollOffset -gt 0) {
+                Write-Host "  ^^ $scrollOffset more lines above ^^" -ForegroundColor DarkGray
+            }
+
+            # Render content lines
+            $renderEnd = [Math]::Min($scrollOffset + $viewHeight, $contentLines.Count)
+            for ($li = $scrollOffset; $li -lt $renderEnd; $li++) {
+                $line = $contentLines[$li]
+                # Truncate to console width to avoid wrapping artifacts
+                $maxWidth = [Console]::WindowWidth - 2
+                if ($line.Length -gt $maxWidth) {
+                    $line = $line.Substring(0, $maxWidth)
+                }
+                # Dim headings for visual structure
+                if ($line -match '^#+\s') {
+                    Write-Host " $line" -ForegroundColor Yellow
+                } elseif ($line -match '^```') {
+                    Write-Host " $line" -ForegroundColor DarkGray
+                } elseif ($line -match '^\s*[-*]\s') {
+                    Write-Host " $line" -ForegroundColor DarkCyan
+                } elseif ($line -match '^\d+\.\s') {
+                    Write-Host " $line" -ForegroundColor DarkCyan
+                } else {
+                    Write-Host " $line" -ForegroundColor Gray
+                }
+            }
+
+            # Scroll indicator
+            if ($renderEnd -lt $contentLines.Count) {
+                $more = $contentLines.Count - $renderEnd
+                Write-Host "  vv $more more lines below vv" -ForegroundColor DarkGray
+            }
+
+            # Footer
+            Write-Host ('─' * [Math]::Min(76, [Console]::WindowWidth - 1)) -ForegroundColor DarkGray
+            Write-Host '  ↑↓/PgUp/PgDn/Home/End scroll   Esc/q back   Enter run this scenario' -ForegroundColor DarkGray
+
+            $key = [Console]::ReadKey($true)
+            switch ($key.Key) {
+                'UpArrow'    { $scrollOffset = [Math]::Max(0, $scrollOffset - 1); break }
+                'DownArrow'  { $scrollOffset = [Math]::Min($maxScroll, $scrollOffset + 1); break }
+                'PageUp'     { $scrollOffset = [Math]::Max(0, $scrollOffset - $viewHeight); break }
+                'PageDown'   { $scrollOffset = [Math]::Min($maxScroll, $scrollOffset + $viewHeight); break }
+                'Home'       { $scrollOffset = 0; break }
+                'End'        { $scrollOffset = $maxScroll; break }
+                'Enter'      {
+                    # Run the scenario from the viewer
+                    $canRun = $true
+                    if ($script:runningProc) {
+                        try { $script:runningProc.Refresh() } catch { }
+                        if (-not $script:runningProc.HasExited) {
+                            $canRun = Prompt-RunningConflict
+                        } else {
+                            try { $script:runningProc.Dispose() } catch { }
+                            $script:runningProc = $null
+                        }
+                    }
+                    if ($canRun) {
+                        Start-ScenarioRun -Node $Node
+                        $viewDone = $true  # exit viewer, back to the main loop
+                    }
+                    break
+                }
+                'Escape'     { $viewDone = $true; break }
+                default {
+                    if ($key.KeyChar -eq 'q' -or $key.KeyChar -eq 'Q') {
+                        $viewDone = $true
+                    }
+                    break
+                }
+            }
+        }
+    }
+
+    # ── Edit scenario file in external editor ──────────────────────────────
+    function Edit-ScenarioFile {
+        param([PSCustomObject]$Node)
+
+        if ($null -eq $Node -or $Node.Type -ne 'file') { return }
+
+        $relPath = [System.IO.Path]::GetRelativePath($TasksRoot, $Node.FullPath)
+
+        [Console]::Clear()
+        Write-Host 'Opening editor...' -ForegroundColor Cyan
+        Write-Host "  File: $relPath" -ForegroundColor DarkGray
+        Write-Host ''
+        Write-Host 'The editor will open in a new window.' -ForegroundColor DarkGray
+        Write-Host 'Save and close the editor to continue.' -ForegroundColor DarkGray
+        Start-Sleep -Milliseconds 800
+
+        $ok = Edit-FileInEditor -Path $Node.FullPath
+
+        [Console]::Clear()
+        if ($ok) {
+            # Refresh file tree to pick up any changes
+            $newTree = Build-FileTree -Path $TasksRoot -Depth 0
+            $newTree.Expanded = $true
+            Set-Variable -Scope 1 -Name tree -Value $newTree
+            Write-Host 'Editor closed.' -ForegroundColor Green
+        } else {
+            Write-Host 'Editor closed with errors.' -ForegroundColor Yellow
+        }
+        Write-Host "  File: $relPath" -ForegroundColor DarkGray
+        Write-Host ''
+        Write-Host 'Press any key to return to the scenario list' -ForegroundColor DarkGray
+        [Console]::ReadKey($true) | Out-Null
+    }
+
+    # ── AI refine scenario content ─────────────────────────────────────────
+    function Refine-ScenarioWithAI {
+        param([PSCustomObject]$Node)
+
+        if ($null -eq $Node -or $Node.Type -ne 'file') { return }
+
+        $relPath = [System.IO.Path]::GetRelativePath($TasksRoot, $Node.FullPath)
+
+        # Read current content
+        try {
+            $currentContent = Get-Content -LiteralPath $Node.FullPath -Raw -Encoding UTF8 -ErrorAction Stop
+        } catch {
+            Write-Host "Could not read scenario file: $_" -ForegroundColor Red
+            Start-Sleep -Seconds 1
+            return
+        }
+
+        # Prompt for optional refinement guidance
+        [Console]::Clear()
+        Write-Host 'AI Scenario Refine' -ForegroundColor Cyan
+        Write-Host ('─' * 60) -ForegroundColor DarkGray
+        Write-Host "  File: $relPath" -ForegroundColor DarkGray
+        Write-Host ''
+        Write-Host 'Refinement hint (optional, Enter to skip):' -ForegroundColor DarkGray
+        Write-Host '  e.g. "add error handling", "make steps more specific",' -ForegroundColor DarkGray
+        Write-Host '  "include verification steps", "shorten and simplify"' -ForegroundColor DarkGray
+        Write-Host ''
+
+        Write-Host -NoNewline '> '
+        $buffer = [System.Text.StringBuilder]::new()
+        while ($true) {
+            $key = [Console]::ReadKey($true)
+            if ($key.Key -eq 'Enter') { Write-Host ''; break }
+            if ($key.Key -eq 'Escape') {
+                Write-Host ''
+                Write-Host 'Refine cancelled.' -ForegroundColor DarkGray
+                Start-Sleep -Milliseconds 600
+                return
+            }
+            if ($key.Key -eq 'Backspace') {
+                if ($buffer.Length -gt 0) {
+                    [void]$buffer.Remove($buffer.Length - 1, 1)
+                    $left = [Console]::CursorLeft
+                    $top  = [Console]::CursorTop
+                    if ($left -gt 2) {
+                        [Console]::SetCursorPosition($left - 1, $top)
+                        [Console]::Write(' ')
+                        [Console]::SetCursorPosition($left - 1, $top)
+                    }
+                }
+                continue
+            }
+            $code = [int][char]$key.KeyChar
+            if ($code -ge 32) {
+                [void]$buffer.Append($key.KeyChar)
+                [Console]::Write($key.KeyChar)
+            }
+        }
+        $userHint = $buffer.ToString().Trim()
+
+        # Build the refine prompt
+        $hintLine = if ($userHint) { "`nUser's refinement guidance: $userHint" } else { '' }
+        $prompt = @"
+You are refining a browser automation scenario written in Markdown format.
+The scenario describes step-by-step instructions for a web agent to follow.
+
+Refinement guidelines:
+- Keep the same general structure: a single `# Heading` followed by numbered steps
+- Make each step more specific, actionable, and unambiguous
+- Add verification/assertion steps at the end if missing
+- Preserve the original intent and all URL targets
+- Fix grammar, clarity, and formatting issues
+- Do NOT add fluff, introductions, or explanations — keep it concise
+
+$hintLine
+
+Original scenario content:
+---
+$currentContent
+---
+
+Return ONLY the refined Markdown. Do not include any preamble, commentary, or code fences around your output.
+"@
+
+        # Detect agent
+        $agent = Get-ScenarioAgent
+
+        [Console]::Clear()
+        Write-Host "Refining with $agent ..." -ForegroundColor Cyan
+        Write-Host "  File: $relPath" -ForegroundColor DarkGray
+        if ($userHint) { Write-Host "  Hint: $userHint" -ForegroundColor DarkGray }
+        Write-Host ''
+
+        # Build a temp file for the prompt to avoid command-line length limits
+        $tempDir = Join-Path $repoRoot 'target'
+        if (-not (Test-Path -LiteralPath $tempDir)) {
+            New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+        }
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+
+        try {
+            # Build agent CLI arguments — suppress all terminal output during refine
+            $agentArgs = @()
+            switch ($agent) {
+                'claude' {
+                    $agentArgs += '--dangerously-skip-permissions'
+                    $agentArgs += '--silent'
+                    $agentArgs += @('-p', $prompt)
+                }
+                'kimi'   { $agentArgs += @('-p', $prompt) }
+                'opencode' { $agentArgs += @('run', $prompt) }
+                default  { $agentArgs += @('-p', $prompt) }
+            }
+
+            # Use System.Diagnostics.Process to fully suppress console output.
+            # Direct invocation (&) or Start-Process both leak terminal writes
+            # (spinners, heartbeats) from the agent CLI.
+            $psi = [System.Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName = $agent
+            $psi.Arguments = [string]::Join(' ', $agentArgs)
+            $psi.UseShellExecute = $false
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.CreateNoWindow = $true
+
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            $output = $proc.StandardOutput.ReadToEnd()
+            $null = $proc.StandardError.ReadToEnd()
+            $proc.WaitForExit()
+            $exitCode = $proc.ExitCode
+            $proc.Dispose()
+
+            if ($exitCode -ne 0) {
+                Write-Host ''
+                Write-Host "WARNING: $agent exited with code $exitCode" -ForegroundColor Yellow
+                Write-Host 'The original file was NOT modified.' -ForegroundColor Yellow
+                Write-Host ''
+                Write-Host 'Press any key to return...' -ForegroundColor DarkGray
+                [Console]::ReadKey($true) | Out-Null
+                return
+            }
+
+            # Try to extract the refined markdown from the output.
+            # Claude often wraps in ```markdown fences; strip those.
+            $refined = $output
+            if ($refined -match '(?s)```(?:markdown|md)?\s*\n(.+?)\n```') {
+                $refined = $Matches[1]
+            }
+            $refined = $refined.Trim()
+
+            if ([string]::IsNullOrWhiteSpace($refined)) {
+                Write-Host ''
+                Write-Host 'WARNING: Agent returned empty output.' -ForegroundColor Yellow
+                Write-Host 'The original file was NOT modified.' -ForegroundColor Yellow
+                Write-Host ''
+                Write-Host 'Press any key to return...' -ForegroundColor DarkGray
+                [Console]::ReadKey($true) | Out-Null
+                return
+            }
+
+            # Ensure the output starts with a heading
+            if ($refined -notmatch '^#\s') {
+                $refined = "# $refined"
+            }
+
+            # Write the refined content back
+            [System.IO.File]::WriteAllText($Node.FullPath, "$refined`n", $utf8NoBom)
+
+            # Refresh the file tree in the parent scope
+            $newTree = Build-FileTree -Path $TasksRoot -Depth 0
+            $newTree.Expanded = $true
+            Set-Variable -Scope 1 -Name tree -Value $newTree
+
+            Write-Host ''
+            Write-Host 'Scenario refined successfully.' -ForegroundColor Green
+            Write-Host "  File: $relPath" -ForegroundColor DarkGray
+        } catch {
+            Write-Host ''
+            Write-Host "ERROR: Refine failed: $_" -ForegroundColor Red
+            Write-Host 'The original file was NOT modified.' -ForegroundColor Red
+        }
+        Write-Host ''
+        Write-Host 'Press any key to return to the scenario list' -ForegroundColor DarkGray
+        [Console]::ReadKey($true) | Out-Null
+    }
+
     # ═══════════════════════════════════════════════════════════════════════
     #  Main interactive loop — only 'q' exits
     # ═══════════════════════════════════════════════════════════════════════
@@ -1005,12 +1556,12 @@ function Show-InteractiveScenarioPicker {
     while (-not $quitRequested) {
 
         # ── Check background process ────────────────────────────────────────
-        if ($runningProc) {
-            try { $runningProc.Refresh() } catch { }
-            if ($runningProc.HasExited) {
-                $exitCode = $runningProc.ExitCode
-                try { $runningProc.Dispose() } catch { }
-                $runningProc = $null
+        if ($script:runningProc) {
+            try { $script:runningProc.Refresh() } catch { }
+            if ($script:runningProc.HasExited) {
+                $exitCode = $script:runningProc.ExitCode
+                try { $script:runningProc.Dispose() } catch { }
+                $script:runningProc = $null
                 $statusMark  = if ($exitCode -eq 0) { '[PASS]' } else { "[FAIL:$exitCode]" }
                 $statusColor = if ($exitCode -eq 0) { 'Green' } else { 'Red' }
 
@@ -1019,14 +1570,14 @@ function Show-InteractiveScenarioPicker {
                 Write-Host '  Scenario Complete' -ForegroundColor Cyan
                 Write-Host '══════════════════════════════════' -ForegroundColor Cyan
                 Write-Host ''
-                Write-Host "  $runningName   $statusMark" -ForegroundColor $statusColor
+                Write-Host "  $script:runningName   $statusMark" -ForegroundColor $statusColor
                 if ($exitCode -eq 124) {
                     Write-Host '  (timed out)' -ForegroundColor Yellow
                 }
                 Write-Host ''
                 Write-Host 'Press any key to return to the scenario list' -ForegroundColor DarkGray
                 [Console]::ReadKey($true) | Out-Null
-                $runningName = ''
+                $script:runningName = ''
                 continue
             }
         }
@@ -1054,6 +1605,18 @@ function Show-InteractiveScenarioPicker {
             $visible = @($visible | Where-Object { $_.Type -eq 'file' })
         }
 
+        # ── Build file-index maps (1-based, files only) ─────────────────────
+        $fileIndexToCursor = @{}
+        $fileCursorToIndex = @{}
+        $fileCount = 0
+        for ($vi = 0; $vi -lt $visible.Count; $vi++) {
+            if ($visible[$vi].Type -eq 'file') {
+                $fileCount++
+                $fileIndexToCursor[$fileCount] = $vi
+                $fileCursorToIndex[$vi] = $fileCount
+            }
+        }
+
         # ── Clamp cursor ────────────────────────────────────────────────────
         if ($visible.Count -eq 0) {
             $cursor = 0
@@ -1066,8 +1629,8 @@ function Show-InteractiveScenarioPicker {
         [Console]::Clear()
 
         # Header
-        if ($runningProc) {
-            Write-Host "  ⏳ RUNNING: $runningName  (PID $($runningProc.Id))" -ForegroundColor Yellow
+        if ($script:runningProc) {
+            Write-Host "  ⏳ RUNNING: $script:runningName  (PID $($script:runningProc.Id))" -ForegroundColor Yellow
         }
         else {
             Write-Host 'Interactive Scenario Picker' -ForegroundColor Cyan
@@ -1079,12 +1642,16 @@ function Show-InteractiveScenarioPicker {
             Write-Host "  Filter: $filterPrompt  ($($visible.Count) match$(if ($visible.Count -ne 1) { 'es' }))" -ForegroundColor Magenta
         }
 
+        if ($gotoIndex) {
+            Write-Host "  Goto file #: $gotoIndex`_   Enter=jump+view  v=view  Esc=cancel" -ForegroundColor Cyan
+        }
+
         # Controls
-        Write-Host '  ↑↓ nav   ←→ fold   Space/Enter run   t view   / filter   r refresh   q quit' -ForegroundColor DarkGray
+        Write-Host '  ↑↓ nav   ←→ fold   Space run   v view   e edit   a refine   1-9 goto   n new   t tree   / filter   r refresh   q quit' -ForegroundColor DarkGray
         Write-Host ('─' * 60) -ForegroundColor DarkGray
 
         # Compute render area
-        $headerLines = 4 + $(if ($runningProc) { 1 } else { 0 }) + $(if ($filter) { 1 } else { 0 })
+        $headerLines = 4 + $(if ($script:runningProc) { 1 } else { 0 }) + $(if ($filter) { 1 } else { 0 }) + $(if ($gotoIndex) { 1 } else { 0 })
         $footerLines = 3
         $renderSlots = [Math]::Max(5, [Console]::WindowHeight - $headerLines - $footerLines)
 
@@ -1116,13 +1683,19 @@ function Show-InteractiveScenarioPicker {
                 }
                 else {
                     $expand  = ' '
-                    $name    = $node.Name
+                    $fileNum = $fileCursorToIndex[$i]
+                    $name    = "[$fileNum] $($node.Name)"
                 }
                 $line = "$indent$expand $name"
             }
             else {
                 $relPath = [System.IO.Path]::GetRelativePath($TasksRoot, $node.FullPath)
-                $line = "  $relPath"
+                if ($node.Type -eq 'file') {
+                    $fileNum = $fileCursorToIndex[$i]
+                    $line = "  [$fileNum] $relPath"
+                } else {
+                    $line = "  $relPath"
+                }
             }
 
             $cursorMark = if ($isCursor) { '▶' } else { ' ' }
@@ -1190,6 +1763,64 @@ function Show-InteractiveScenarioPicker {
 
         $key = [Console]::ReadKey($true)
 
+        # ── Goto mode: accumulate digits, then Enter/V/Esc/Backspace ─────────
+        if ($gotoIndex) {
+            if ($key.KeyChar -match '^[0-9]$') {
+                $gotoIndex += $key.KeyChar
+                continue
+            }
+            switch ($key.Key) {
+                'Enter' {
+                    $idx = [int]$gotoIndex
+                    $gotoIndex = ''
+                    if ($fileIndexToCursor.ContainsKey($idx)) {
+                        $cursor = $fileIndexToCursor[$idx]
+                        $topOffset = $cursor
+                        # Open the viewer so Enter never accidentally runs the scenario
+                        if ($visible[$cursor].Type -eq 'file') {
+                            Show-ScenarioContent -Node $visible[$cursor]
+                        }
+                    }
+                    continue
+                }
+                'Escape' {
+                    $gotoIndex = ''
+                    continue
+                }
+                'Backspace' {
+                    if ($gotoIndex.Length -gt 1) {
+                        $gotoIndex = $gotoIndex.Substring(0, $gotoIndex.Length - 1)
+                    } else {
+                        $gotoIndex = ''
+                    }
+                    continue
+                }
+                default {
+                    # 'v' also jumps + views; any other key cancels goto
+                    if ($key.KeyChar -ieq 'v') {
+                        $idx = [int]$gotoIndex
+                        $gotoIndex = ''
+                        if ($fileIndexToCursor.ContainsKey($idx)) {
+                            $cursor = $fileIndexToCursor[$idx]
+                            $topOffset = $cursor
+                            if ($visible[$cursor].Type -eq 'file') {
+                                Show-ScenarioContent -Node $visible[$cursor]
+                            }
+                        }
+                        continue
+                    }
+                    $gotoIndex = ''
+                    continue
+                }
+            }
+        }
+
+        # Digit keys start goto mode (files must exist in the visible list)
+        if ($fileCount -gt 0 -and $key.KeyChar -match '^[0-9]$') {
+            $gotoIndex = [string]$key.KeyChar
+            continue
+        }
+
         # '/' enters filter mode (check both KeyChar and Oem2 for layout portability)
         if ($key.KeyChar -eq '/' -and $key.Modifiers -eq 0) {
             $filterMode = $true
@@ -1247,14 +1878,14 @@ function Show-InteractiveScenarioPicker {
                     $node = $visible[$cursor]
                     if ($node.Type -eq 'file') {
                         $canRun = $true
-                        if ($runningProc) {
-                            try { $runningProc.Refresh() } catch { }
-                            if (-not $runningProc.HasExited) {
+                        if ($script:runningProc) {
+                            try { $script:runningProc.Refresh() } catch { }
+                            if (-not $script:runningProc.HasExited) {
                                 $canRun = Prompt-RunningConflict
                             }
                             else {
-                                try { $runningProc.Dispose() } catch { }
-                                $runningProc = $null
+                                try { $script:runningProc.Dispose() } catch { }
+                                $script:runningProc = $null
                             }
                         }
                         if ($canRun) {
@@ -1268,20 +1899,7 @@ function Show-InteractiveScenarioPicker {
                 if ($visible.Count -gt 0) {
                     $node = $visible[$cursor]
                     if ($node.Type -eq 'file') {
-                        $canRun = $true
-                        if ($runningProc) {
-                            try { $runningProc.Refresh() } catch { }
-                            if (-not $runningProc.HasExited) {
-                                $canRun = Prompt-RunningConflict
-                            }
-                            else {
-                                try { $runningProc.Dispose() } catch { }
-                                $runningProc = $null
-                            }
-                        }
-                        if ($canRun) {
-                            Start-ScenarioRun -Node $node
-                        }
+                        Show-ScenarioContent -Node $node
                     }
                 }
                 break
@@ -1298,16 +1916,76 @@ function Show-InteractiveScenarioPicker {
                 Write-Host "Refreshed." -ForegroundColor DarkGray
                 break
             }
+            'N' {
+                $currentNode = if ($visible.Count -gt 0) { $visible[$cursor] } else { $null }
+                $newFilePath = New-ScenarioFromTemplate -CurrentNode $currentNode
+                if ($newFilePath) {
+                    $tree = Build-FileTree -Path $TasksRoot -Depth 0
+                    $tree.Expanded = $true
+                    $filter = ''
+                    $filterMode = $false
+
+                    $allVisibleAfterCreate = Get-VisibleNodes -Node $tree
+                    $newIndex = -1
+                    for ($idx = 0; $idx -lt $allVisibleAfterCreate.Count; $idx++) {
+                        $candidate = $allVisibleAfterCreate[$idx]
+                        if ($candidate.Type -eq 'file' -and
+                            [string]::Equals($candidate.FullPath, $newFilePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+                            $newIndex = $idx
+                            break
+                        }
+                    }
+
+                    if ($newIndex -ge 0) {
+                        $cursor = $newIndex
+                    }
+                    else {
+                        $cursor = 0
+                    }
+                    $topOffset = 0
+                }
+                break
+            }
+            'V' {
+                # Enter view-target mode with the current file index pre-filled.
+                # Press Enter to view the current file, or type digits to target
+                # a different file (e.g. v 3 Enter = view file #3).
+                if ($fileCount -gt 0) {
+                    $cursorIdx = if ($fileCursorToIndex.ContainsKey($cursor)) {
+                        [string]$fileCursorToIndex[$cursor]
+                    } else { '1' }
+                    $gotoIndex = $cursorIdx
+                }
+                break
+            }
+            'E' {
+                if ($visible.Count -gt 0) {
+                    $node = $visible[$cursor]
+                    if ($node.Type -eq 'file') {
+                        Edit-ScenarioFile -Node $node
+                    }
+                }
+                break
+            }
+            'A' {
+                if ($visible.Count -gt 0) {
+                    $node = $visible[$cursor]
+                    if ($node.Type -eq 'file') {
+                        Refine-ScenarioWithAI -Node $node
+                    }
+                }
+                break
+            }
             'Q' {
-                if ($runningProc) {
-                    try { $runningProc.Refresh() } catch { }
-                    if (-not $runningProc.HasExited) {
+                if ($script:runningProc) {
+                    try { $script:runningProc.Refresh() } catch { }
+                    if (-not $script:runningProc.HasExited) {
                         $proceed = Prompt-QuitConflict
                         if (-not $proceed) { break }
                     }
                     else {
-                        try { $runningProc.Dispose() } catch { }
-                        $runningProc = $null
+                        try { $script:runningProc.Dispose() } catch { }
+                        $script:runningProc = $null
                     }
                 }
                 $quitRequested = $true
@@ -1353,6 +2031,92 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         if ($arg -in 'scenarios', 'sc', '--scenarios', '-sc') {
             $mode = 'scenarios'
             $i++
+            # ── sc add <name> <url> [--refine] [--guidance <hint>] … ──────────
+            if ($i -lt $additionalArgs.Count -and $additionalArgs[$i] -eq 'add') {
+                $mode = 'scenarios-add'
+                $i++
+                # Collect required positional args: <name> <url>
+                $addScenarioName = $null
+                $addScenarioUrl  = $null
+                if ($i -lt $additionalArgs.Count -and -not $additionalArgs[$i].StartsWith('-')) {
+                    $addScenarioName = $additionalArgs[$i]
+                    $i++
+                }
+                if ($i -lt $additionalArgs.Count -and -not $additionalArgs[$i].StartsWith('-')) {
+                    $addScenarioUrl = $additionalArgs[$i]
+                    $i++
+                }
+                $addRefine   = $false
+                $addGuidance = $null
+                $addTitle    = $null
+                $addDir      = $null
+                $addCategory = $null
+                while ($i -lt $additionalArgs.Count) {
+                    $flag = $additionalArgs[$i]
+                    if ($flag -in '--refine', '-Refine', '-r') {
+                        $addRefine = $true
+                        $i++
+                    }
+                    elseif ($flag -in '--guidance', '-Guidance', '-g') {
+                        if (($i + 1) -lt $additionalArgs.Count) {
+                            $addGuidance = $additionalArgs[$i + 1]
+                            $i += 2
+                        } else {
+                            Write-Error '--guidance requires a value'
+                            exit 1
+                        }
+                    }
+                    elseif ($flag -in '--title', '-Title') {
+                        if (($i + 1) -lt $additionalArgs.Count) {
+                            $addTitle = $additionalArgs[$i + 1]
+                            $i += 2
+                        } else {
+                            Write-Error '--title requires a value'
+                            exit 1
+                        }
+                    }
+                    elseif ($flag -in '--dir', '-Dir', '-d') {
+                        if (($i + 1) -lt $additionalArgs.Count) {
+                            $addDir = $additionalArgs[$i + 1]
+                            $i += 2
+                        } else {
+                            Write-Error '--dir requires a value'
+                            exit 1
+                        }
+                    }
+                    elseif ($flag -in '--category', '-Category', '-c') {
+                        if (($i + 1) -lt $additionalArgs.Count) {
+                            $addCategory = $additionalArgs[$i + 1]
+                            $i += 2
+                        } else {
+                            Write-Error '--category requires a value'
+                            exit 1
+                        }
+                    }
+                    else {
+                        break
+                    }
+                }
+                if (-not $addScenarioName) {
+                    Write-Host ''
+                    Write-Host "sc add requires a scenario name." -ForegroundColor Yellow
+                    Write-Host ''
+                    Write-Host "Usage:  test.ps1 rws sc add <name> <url> [--refine] [--guidance <hint>] [--title <title>] [--dir <path>] [--category <generic|browser4|mock-site>]"
+                    Write-Host ''
+                    Write-Host "Examples:"
+                    Write-Host "  test.ps1 rws sc add my-scenario https://example.com"
+                    Write-Host "  test.ps1 rws sc add my-scenario https://example.com --refine"
+                    Write-Host "  test.ps1 rws sc add my-scenario https://example.com --refine --guidance 'add error handling steps'"
+                    Write-Host "  test.ps1 rws sc add my-scenario https://example.com --category generic"
+                    Write-Host ''
+                    exit 1
+                }
+                if (-not $addScenarioUrl) {
+                    $addScenarioUrl = 'https://example.com/'
+                }
+                $modeLabel = "add scenario: $addScenarioName"
+            }
+            else {
             # Collect required scenario names (bare words until a --flag or end)
             $scenarioNames = @()
             while ($i -lt $additionalArgs.Count -and -not $additionalArgs[$i].StartsWith('-')) {
@@ -1391,9 +2155,14 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
                     Write-Host 'sc requires at least one scenario name.' -ForegroundColor Yellow
                     Write-Host ''
                     Write-Host 'Usage:  test.ps1 rws sc <names...> [options]'
+                    Write-Host '        test.ps1 rws sc add <name> <url> [--refine] [...]'
                     Write-Host ''
                     Write-Host 'Discover available scenarios:'
                     Write-Host '  test.ps1 rws sc --list'
+                    Write-Host ''
+                    Write-Host 'Create a new scenario:'
+                    Write-Host '  test.ps1 rws sc add my-test https://example.com'
+                    Write-Host '  test.ps1 rws sc add my-test https://example.com --refine'
                     Write-Host ''
                     Write-Host 'Interactive mode:'
                     Write-Host '  test.ps1 rws sc --interactive'
@@ -1407,6 +2176,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
             }
             $modeLabel = "real-world scenarios: $($scenarioNames -join ', ')"
             $passThroughArgs += $scenarioNames
+            }
         }
         elseif ($arg -in 'dir', 'directory', '--dir', '--directory') {
             $mode = 'dir'
@@ -1510,7 +2280,13 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host ''
         Write-Host 'Modes (required, pick one):'
         Write-Host '  sc, scenarios <names...>  Run named agent-scenario tasks via run-tests.ps1'
-        Write-Host '  sc, scenarios --interactive  Interactive file picker (tree, filter, bg run)'
+        Write-Host '  sc, scenarios --interactive  Interactive file picker (tree, filter, view, bg run)'
+        Write-Host '  sc add <name> <url>       Create a new scenario from template'
+        Write-Host '    --refine, -r              AI-refine the scenario after creation'
+        Write-Host '    --guidance, -g <hint>     Refinement hint for the AI'
+        Write-Host '    --title <title>           Custom heading (default: scenario name)'
+        Write-Host '    --dir, -d <path>          Target directory for the new file'
+        Write-Host '    --category, -c <cat>      Category: generic, browser4, mock-site'
         Write-Host '  dir, directory <path>     Run all .md task files in a directory'
         Write-Host '  dir, directory --list     List available scenario directories'
         Write-Host '  dir --tree, -t [path]  Show directory tree view (display only)'
@@ -1546,6 +2322,9 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host '  test.ps1 rws dir -f -m                      # Short forms for --files --metadata'
         Write-Host '  test.ps1 rws dir --interactive              # Interactive directory picker'
         Write-Host '  test.ps1 rws sc --interactive              # Interactive scenario picker'
+        Write-Host '  test.ps1 rws sc add my-test https://example.com  # Create a new scenario'
+        Write-Host '  test.ps1 rws sc add my-test https://example.com --refine  # Create + AI refine'
+        Write-Host '  test.ps1 rws sc add my-test https://example.com -r -g "add checks" --category generic'
         exit 0
     }
 
@@ -1634,6 +2413,191 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
             Show-InteractiveScenarioPicker -TasksRoot $tasksRoot
         }
 
+        exit 0
+    }
+
+    # -- sc add execution ----------------------------------------------------
+    if ($mode -eq 'scenarios-add') {
+        $tasksRoot = Join-Path $repoRoot 'browser4-tests' 'real-world-scenarios' 'tasks'
+
+        # Honor -Show / -DryRun
+        if ($script:Show) {
+            Write-CommandBanner -Label '[SHOW] Would create scenario:' `
+                -Subtitle "  name=$addScenarioName  url=$addScenarioUrl  refine=$addRefine  dir=$addDir  category=$addCategory"
+            exit 0
+        }
+        if ($script:DryRun) {
+            Write-CommandBanner -Label '[DRY RUN] Would create scenario:' `
+                -Subtitle "  name=$addScenarioName  url=$addScenarioUrl  refine=$addRefine  dir=$addDir  category=$addCategory"
+            exit 0
+        }
+
+        # ── Resolve target directory ───────────────────────────────────────
+        $targetDir = $tasksRoot
+        if ($addDir) {
+            $resolvedDir = $addDir
+            if (-not [System.IO.Path]::IsPathRooted($resolvedDir)) {
+                # Try relative to tasks root first, then relative to repo root
+                $fromTasks = Join-Path $tasksRoot $resolvedDir
+                if (Test-Path -LiteralPath $fromTasks -PathType Container) {
+                    $resolvedDir = $fromTasks
+                } else {
+                    $resolvedDir = Join-Path $repoRoot $resolvedDir
+                }
+            }
+            $resolvedDir = [System.IO.Path]::GetFullPath($resolvedDir)
+            if (-not (Test-Path -LiteralPath $resolvedDir -PathType Container)) {
+                Write-Error "Target directory not found: $resolvedDir"
+                exit 1
+            }
+            $targetDir = $resolvedDir
+        }
+        elseif ($addCategory) {
+            $catLower = $addCategory.ToLowerInvariant()
+            $catMap = @{
+                'generic'   = Join-Path $tasksRoot 'real-world' 'generic'
+                'browser4'  = Join-Path $tasksRoot 'real-world' 'browser4'
+                'mock-site' = Join-Path $tasksRoot 'mock-site'
+                'mock'      = Join-Path $tasksRoot 'mock-site'
+            }
+            if ($catMap.ContainsKey($catLower)) {
+                $targetDir = $catMap[$catLower]
+            } else {
+                Write-Error "Unknown category '$addCategory'. Valid categories: generic, browser4, mock-site"
+                exit 1
+            }
+        }
+
+        # ── Slugify the name ───────────────────────────────────────────────
+        $slug = $addScenarioName.Trim().ToLowerInvariant()
+        $slug = $slug -replace '[^a-z0-9]+', '-'
+        $slug = $slug -replace '^-+', ''
+        $slug = $slug -replace '-+$', ''
+        if ([string]::IsNullOrWhiteSpace($slug)) {
+            Write-Error "Invalid scenario name after normalization. Use letters or numbers."
+            exit 1
+        }
+
+        # ── Resolve title ──────────────────────────────────────────────────
+        $scenarioTitle = if ($addTitle) { $addTitle.Trim() } else { $addScenarioName.Trim() }
+
+        # ── Check for existing file ────────────────────────────────────────
+        $newFilePath = Join-Path $targetDir "$slug.md"
+        if (Test-Path -LiteralPath $newFilePath) {
+            $existingRel = [System.IO.Path]::GetRelativePath($tasksRoot, $newFilePath)
+            Write-Error "Scenario already exists: $existingRel"
+            exit 1
+        }
+
+        # ── Build template content ─────────────────────────────────────────
+        $template = @'
+# {0}
+
+1. Go to `{1}`.
+2. Discover the key interactive elements needed for this scenario.
+3. Complete the intended workflow step-by-step.
+4. Verify the expected result on the page.
+5. Write the final findings to a markdown file in the `./target/` directory.
+'@
+        $templateContent = [string]::Format($template, $scenarioTitle, $addScenarioUrl)
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText($newFilePath, $templateContent, $utf8NoBom)
+
+        $newFileRel = [System.IO.Path]::GetRelativePath($tasksRoot, $newFilePath)
+        Write-Host "Created: $newFileRel" -ForegroundColor Green
+
+        # ── AI refine (if requested) ───────────────────────────────────────
+        if ($addRefine) {
+            $rwsScriptsDir = Join-Path $repoRoot 'browser4-tests' 'real-world-scenarios' 'scripts'
+            $commonPs1 = Join-Path $rwsScriptsDir 'common.ps1'
+            if (Test-Path $commonPs1) { . $commonPs1 }
+
+            # Read back the file we just wrote
+            $currentContent = Get-Content -LiteralPath $newFilePath -Raw -Encoding UTF8 -ErrorAction Stop
+
+            $hintLine = if ($addGuidance) { "`nUser's refinement guidance: $addGuidance" } else { '' }
+            $refinePrompt = @"
+You are refining a browser automation scenario written in Markdown format.
+The scenario describes step-by-step instructions for a web agent to follow.
+
+Refinement guidelines:
+- Keep the same general structure: a single `# Heading` followed by numbered steps
+- Make each step more specific, actionable, and unambiguous
+- Add verification/assertion steps at the end if missing
+- Preserve the original intent and all URL targets
+- Fix grammar, clarity, and formatting issues
+- Do NOT add fluff, introductions, or explanations — keep it concise
+
+$hintLine
+
+Original scenario content:
+---
+$currentContent
+---
+
+Return ONLY the refined Markdown. Do not include any preamble, commentary, or code fences around your output.
+"@
+
+            # Detect agent
+            $agent = if (Get-Command 'claude' -ErrorAction SilentlyContinue) { 'claude' }
+                     elseif (Get-Command 'kimi' -ErrorAction SilentlyContinue) { 'kimi' }
+                     elseif (Get-Command 'opencode' -ErrorAction SilentlyContinue) { 'opencode' }
+                     else { 'claude' }
+
+            Write-Host "Refining with $agent ..." -ForegroundColor Cyan
+            if ($addGuidance) { Write-Host "  Guidance: $addGuidance" -ForegroundColor DarkGray }
+
+            try {
+                # Build agent args
+                $agentArgs = @()
+                switch ($agent) {
+                    'claude'   { $agentArgs += '--dangerously-skip-permissions'; $agentArgs += '--silent'; $agentArgs += @('-p', $refinePrompt) }
+                    'kimi'     { $agentArgs += @('-p', $refinePrompt) }
+                    'opencode' { $agentArgs += @('run', $refinePrompt) }
+                    default    { $agentArgs += @('-p', $refinePrompt) }
+                }
+
+                $psi = [System.Diagnostics.ProcessStartInfo]::new()
+                $psi.FileName = $agent
+                $psi.Arguments = [string]::Join(' ', $agentArgs)
+                $psi.UseShellExecute = $false
+                $psi.RedirectStandardOutput = $true
+                $psi.RedirectStandardError = $true
+                $psi.CreateNoWindow = $true
+
+                $proc = [System.Diagnostics.Process]::Start($psi)
+                $output = $proc.StandardOutput.ReadToEnd()
+                $null = $proc.StandardError.ReadToEnd()
+                $proc.WaitForExit()
+                $exitCode = $proc.ExitCode
+                $proc.Dispose()
+
+                if ($exitCode -ne 0) {
+                    Write-Host "WARNING: $agent exited with code $exitCode — keeping original template." -ForegroundColor Yellow
+                } else {
+                    $refined = $output
+                    if ($refined -match '(?s)```(?:markdown|md)?\s*\n(.+?)\n```') {
+                        $refined = $Matches[1]
+                    }
+                    $refined = $refined.Trim()
+
+                    if ([string]::IsNullOrWhiteSpace($refined)) {
+                        Write-Host 'WARNING: Agent returned empty output — keeping original template.' -ForegroundColor Yellow
+                    } else {
+                        if ($refined -notmatch '^#\s') {
+                            $refined = "# $refined"
+                        }
+                        [System.IO.File]::WriteAllText($newFilePath, "$refined`n", $utf8NoBom)
+                        Write-Host 'Scenario refined successfully.' -ForegroundColor Green
+                    }
+                }
+            } catch {
+                Write-Host "WARNING: Refine failed: $_ — keeping original template." -ForegroundColor Yellow
+            }
+        }
+
+        Write-Host ''
+        Write-Host "Scenario ready: $newFileRel" -ForegroundColor Cyan
         exit 0
     }
 
@@ -1761,7 +2725,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         $runnerKind = 'Task runner'
     }
     else {
-        Write-Error "Unknown RWS mode '$mode'. Valid modes: sc (scenarios), dir (directory), task"
+        Write-Error "Unknown RWS mode '$mode'. Valid modes: sc (scenarios), sc add, dir (directory), task"
         exit 1
     }
 

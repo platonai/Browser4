@@ -11,7 +11,7 @@ import org.springframework.test.web.servlet.client.RestTestClient
 
 @SpringBootTest(
     classes = [EnableMockServerApplication::class],
-    webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT
+    webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT
 )
 class MockWebSiteAccess {
 

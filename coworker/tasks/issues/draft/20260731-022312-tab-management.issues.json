@@ -1,0 +1,182 @@
+{
+  "meta": {
+    "date": "20260731-022312",
+    "scenario": "tab-management",
+    "source": "20260731-022312-tab-management.full.md",
+    "mode": "dev"
+  },
+  "background": {
+    "executionContext": "**Commands used:**\n```\n./b4w.ps1 goto \"https://en.wikipedia.org/wiki/Web_scraping\"\n./b4w.ps1 tab-list\n./b4w.ps1 tab-new \"https://news.ycombinator.com\"\n./b4w.ps1 tab-new \"https://en.wikipedia.org/wiki/Data_mining\"\n./b4w.ps1 tab-list\n./b4w.ps1 tab-select 2\n./b4w.ps1 snapshot -v 0 --stdout\n./b4w.ps1 tab-select 1\n./b4w.ps1 snapshot -v 0 --stdout\n./b4w.ps1 tab-close 1\n./b4w.ps1 tab-list\n./b4w.ps1 tab-select 0\n./b4w.ps1 snapshot -v 0 --stdout\n./b4w.ps1 tab-select 1\n./b4w.ps1 snapshot -v 0 --stdout\n```\n\n**Major decisions:**\n- Used `snapshot -v 0 --stdout` for inline verification rather than opening snapshot files, as recommended by SKILL.md for quick viewing\n- Used tab indices (not GUIDs) for targeting since indices were stable enough for this workflow\n- Used `head -15` / `head -30` to limit snapshot output for context verification without overwhelming the terminal\n\n**Workarounds required:**\n- None — all commands worked as documented without errors\n\n**Notable behavior:**\n- Chrome inserts new tabs at index 0 (before the active tab), not \"after the active tab\" as stated in the SKILL.md documentation. This caused all three `tab-new` calls to output \"Switched to tab 0\" regardless of how many tabs existed.\n\n---\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"chrome inserts new tabs at index 0, contradicting documentation\",\n      \"severity\": \"Medium\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"./b4w.ps1 goto \\\"https://en.wikipedia.org/wiki/Web_scraping\\\"\\n./b4w.ps1 tab-new \\\"https://news.ycombinator.com\\\"\\n./b4w.ps1 tab-new \\\"https://en.wikipedia.org/wiki/Data_mining\\\"\\n./b4w.ps1 tab-list\",\n      \"expected\": \"New tabs appear after the active tab (as SKILL.md states: 'typically after the active tab'). If starting with one tab at index 0, new tabs would appear at indices 1, 2, etc.\",\n      \"actual\": \"All new tabs appear at index 0 (before the previously active tab). The final tab layout was: [0: Data mining, 1: Hacker News, 2: Web scraping]. Every tab-new call output 'Switched to tab 0' making it impossible to know the tab's position without running tab-list.\",\n      \"rootCause\": \"Chrome's native tab creation behavior in this environment (Windows 11, headless CDP) inserts new tabs at position 0 rather than after the active tab. The SKILL.md documentation assumes Chrome inserts after the active tab, which may vary by Chrome version, platform, or configuration. The CDP Target.createTarget call likely doesn't specify an explicit index, leaving placement to Chrome's default.\",\n      \"codePointer\": \"skills/browser4-cli/SKILL.md:137 — the line 'The position depends on Chrome\\\\u2019s native behavior \\\\u2014 typically after the active tab.'\",\n      \"suggestion\": \"- Update SKILL.md to note that Chrome insertion behavior varies: tabs may appear at index 0 (before active), at the end (after all tabs), or after the active tab, depending on Chrome version and platform\\n- Add a recommendation to always run tab-list after bulk tab-new operations to confirm indices before switching\\n- Consider passing an explicit index to CDP Target.createTarget to guarantee consistent insertion position\"\n    },\n    {\n      \"title\": \"tab-list output has no active tab indicator\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Open multiple tabs and run: ./b4w.ps1 tab-list\",\n      \"expected\": \"The active tab is visually marked (e.g., an asterisk, arrow, or bold text) so users know which tab is currently focused without running additional commands or relying on memory.\",\n      \"actual\": \"All tabs are displayed identically in the table — no visual distinction between the active tab and inactive tabs. After a sequence of tab operations, it's impossible to determine the current tab from tab-list output alone.\",\n      \"rootCause\": \"The tab-list rendering code outputs a plain table with columns Index, GUID, Title, URL but does not include an 'Active' column or mark the active row. The activeTabId is likely available from the CDP session but is not surfaced in the CLI output.\",\n      \"codePointer\": \"cli/browser4-cli/src/ — the tab-list output formatting likely in a function that renders tab tables without checking or displaying active tab state.\",\n      \"suggestion\": \"- Add a visual indicator to the active tab row (e.g., '>' prefix on the index, or an 'Active' column with a checkmark)\\n- Consider adding a standalone 'tab-current' command to show which tab is active\\n- In JSON output mode, include an 'active' boolean field on each tab object\"\n    },\n    {\n      \"title\": \"tab-select requires separate snapshot command for verification\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 tab-select 2\\n# Must then run a separate command to verify:\\n./b4w.ps1 snapshot -v 0 --stdout\",\n      \"expected\": \"A --snapshot flag on tab-select could auto-capture a snapshot after switching, reducing the common 'switch and verify' workflow from two commands to one. Alternatively, tab-select could print a brief page context summary (title + first heading) without a full snapshot.\",\n      \"actual\": \"tab-select only outputs 'Switched to tab N (URL)' with no page content context. Users must always follow with a separate snapshot command to confirm they're on the right page, doubling the command count for every tab switch.\",\n      \"rootCause\": \"This is by design as documented in SKILL.md: 'No auto-snapshot: tab-list and tab-close do NOT trigger automatic snapshots. After tab-select, run snapshot explicitly to get fresh element refs for the new active tab.' The design choice is sound for element ref management but creates friction for page context verification.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Add a --verify flag to tab-select that runs a lightweight page identity check (title + URL match) without a full accessibility tree snapshot\\n- Consider printing the page title in tab-select output (e.g., 'Switched to tab 2: Web scraping - Wikipedia (https://en.wikipedia.org/wiki/Web_scraping)')\\n- Document the 'tab-select + snapshot' two-step pattern more prominently as a recommended workflow\"\n    },\n    {\n      \"title\": \"tab-new output shows index 0 for every new tab regardless of actual position\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run multiple tab-new commands in sequence and observe that every one says 'Switched to tab 0'.\",\n      \"expected\": \"tab-new output should reflect the actual index the new tab was assigned (e.g., 'Switched to tab 0', then 'Switched to tab 1', etc.), or at minimum include enough context (GUID, URL) for the user to identify the tab without running tab-list.\",\n      \"actual\": \"Every tab-new command outputs 'Switched to tab 0 (URL)' even when multiple tabs exist. A user running 'tab-new' twice sees identical 'Switched to tab 0' messages and cannot distinguish which message corresponds to which tab without running tab-list.\",\n      \"rootCause\": \"The output shows the actual index (which happens to be 0 each time due to Chrome's insertion behavior), but the message format doesn't include the GUID of the created tab, making it impossible to correlate multiple tab-new calls with their tabs without running tab-list. The SKILL.md example output shows 'Switched to tab 1' suggesting the expected behavior differs from reality.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Include the tab GUID in the tab-new output message (e.g., 'Created tab 0 [ABC123...]: Hacker News')\\n- Standardize Chrome's tab insertion position by specifying an explicit index in the CDP call so new tabs predictably appear at the end\\n- Update the SKILL.md example to show a realistic output that matches Chrome's default behavior\"\n    },\n    {\n      \"title\": \"snapshot --stdout output is verbose for simple context verification\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 snapshot -v 0 --stdout | head -15\",\n      \"expected\": \"For quick 'am I on the right page?' checks, a lightweight command or mode that outputs just the page title, URL, and maybe the h1 text would suffice.\",\n      \"actual\": \"snapshot --stdout dumps the full accessibility tree YAML (10+ viewports, hundreds of refs). Users must pipe through head/tail or grep to extract meaningful context, adding friction to a very common workflow.\",\n      \"rootCause\": \"The snapshot command is designed for element targeting (refs) rather than page identity verification. There's no dedicated 'page info' or 'context check' command — users must use snapshot (which is heavy) or eval (which requires JavaScript knowledge) for basic identity checks.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Add a 'page-info' or 'context' command that outputs just URL, title, and key metadata without the full accessibility tree\\n- Add a --brief or --meta flag to snapshot that outputs only viewport state and page-level metadata (skip element refs)\\n- Document the 'snapshot --stdout | head' pattern as a quick verification technique\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Successful — all 10 task steps completed without errors, failures, or retries. Tab creation, switching, closing, and snapshot verification all worked correctly.\",\n    \"successRate\": \"100%\",\n    \"issuesFound\": 5,\n    \"majorBlockers\": \"\",\n    \"mostConfusingAspects\": \"Most confusing aspects for a first-time user: (1) tab-new always shows 'Switched to tab 0' regardless of how many tabs exist — makes it seem like the command isn't working or tabs aren't being created at distinct indices. Must run tab-list to discover actual tab layout. (2) No way to tell which tab is currently active from tab-list output — after a series of tab operations, you lose track of state. (3) Chrome inserts tabs at index 0 rather than 'after the active tab' as documented, causing a mental model mismatch between documentation and reality.\",\n    \"mostValuableImprovements\": \"Most valuable suggested improvements: (1) Add an active tab indicator to tab-list output (highest UX impact for lowest effort). (2) Include tab GUID in tab-new output so users can correlate multiple tab creations. (3) Update documentation to reflect actual Chrome tab insertion behavior on Windows. (4) Add a --verify flag to tab-select for one-command 'switch and confirm' workflows.\",\n    \"usabilityRating\": 7\n  }\n}\n```\n\n---\n\n### Usability Rating: 7/10\n\n**Justification:** The core tab management workflow (`tab-new`, `tab-select`, `tab-close`, `tab-list`) is functional and reliable — every command worked correctly on first attempt with no errors. The CLI provides clear output for each operation. However, the experience is marred by discoverability and UX friction: tab indices don't match documented expectations, there's no active-tab indicator, and basic verification requires two commands where one should suffice. The SKILL.md documentation is comprehensive but contains an inaccuracy about Chrome's tab insertion behavior that would confuse a first-time user. These are quality-of-life issues rather than functional blockers — the commands do work correctly once you understand the actual behavior.",
+    "task": "All steps of the tab management workflow completed successfully:\n\n1. ✅ Navigated to `https://en.wikipedia.org/wiki/Web_scraping` — page loaded, snapshot captured\n2. ✅ Listed open tabs — 1 tab shown (Web scraping at index 0)\n3. ✅ Opened new tab → `https://news.ycombinator.com` — created with GUID F54A3C18...\n4. ✅ Opened new tab → `https://en.wikipedia.org/wiki/Data_mining` — created with GUID 18084F8A...\n5. ✅ Listed all 3 tabs — confirmed layout: Data mining (0), Hacker News (1), Web scraping (2)\n6. ✅ Switched to Web scraping tab (index 2) — snapshot confirmed Wikipedia content\n7. ✅ Switched to Hacker News tab (index 1) — snapshot confirmed HN content\n8. ✅ Closed Hacker News tab — output confirmed removal\n9. ✅ Listed tabs — confirmed only 2 tabs remain (Data mining, Web scraping)\n10. ✅ Switched to both remaining tabs — snapshots confirmed both pages still functional"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "chrome inserts new tabs at index 0, contradicting documentation",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 goto \"https://en.wikipedia.org/wiki/Web_scraping\"\n./b4w.ps1 tab-new \"https://news.ycombinator.com\"\n./b4w.ps1 tab-new \"https://en.wikipedia.org/wiki/Data_mining\"\n./b4w.ps1 tab-list"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "New tabs appear after the active tab (as SKILL.md states: 'typically after the active tab'). If starting with one tab at index 0, new tabs would appear at indices 1, 2, etc."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "All new tabs appear at index 0 (before the previously active tab). The final tab layout was: [0: Data mining, 1: Hacker News, 2: Web scraping]. Every tab-new call output 'Switched to tab 0' making it impossible to know the tab's position without running tab-list."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Chrome's native tab creation behavior in this environment (Windows 11, headless CDP) inserts new tabs at position 0 rather than after the active tab. The SKILL.md documentation assumes Chrome inserts after the active tab, which may vary by Chrome version, platform, or configuration. The CDP Target.createTarget call likely doesn't specify an explicit index, leaving placement to Chrome's default."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "skills/browser4-cli/SKILL.md:137 — the line 'The position depends on Chrome\\u2019s native behavior \\u2014 typically after the active tab.'"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Update SKILL.md to note that Chrome insertion behavior varies: tabs may appear at index 0 (before active), at the end (after all tabs), or after the active tab, depending on Chrome version and platform\n- Add a recommendation to always run tab-list after bulk tab-new operations to confirm indices before switching\n- Consider passing an explicit index to CDP Target.createTarget to guarantee consistent insertion position"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "tab-list output has no active tab indicator",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Open multiple tabs and run: ./b4w.ps1 tab-list"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The active tab is visually marked (e.g., an asterisk, arrow, or bold text) so users know which tab is currently focused without running additional commands or relying on memory."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "All tabs are displayed identically in the table — no visual distinction between the active tab and inactive tabs. After a sequence of tab operations, it's impossible to determine the current tab from tab-list output alone."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The tab-list rendering code outputs a plain table with columns Index, GUID, Title, URL but does not include an 'Active' column or mark the active row. The activeTabId is likely available from the CDP session but is not surfaced in the CLI output."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ — the tab-list output formatting likely in a function that renders tab tables without checking or displaying active tab state."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a visual indicator to the active tab row (e.g., '>' prefix on the index, or an 'Active' column with a checkmark)\n- Consider adding a standalone 'tab-current' command to show which tab is active\n- In JSON output mode, include an 'active' boolean field on each tab object"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "tab-select requires separate snapshot command for verification",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 tab-select 2\n# Must then run a separate command to verify:\n./b4w.ps1 snapshot -v 0 --stdout"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A --snapshot flag on tab-select could auto-capture a snapshot after switching, reducing the common 'switch and verify' workflow from two commands to one. Alternatively, tab-select could print a brief page context summary (title + first heading) without a full snapshot."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "tab-select only outputs 'Switched to tab N (URL)' with no page content context. Users must always follow with a separate snapshot command to confirm they're on the right page, doubling the command count for every tab switch."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "This is by design as documented in SKILL.md: 'No auto-snapshot: tab-list and tab-close do NOT trigger automatic snapshots. After tab-select, run snapshot explicitly to get fresh element refs for the new active tab.' The design choice is sound for element ref management but creates friction for page context verification."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a --verify flag to tab-select that runs a lightweight page identity check (title + URL match) without a full accessibility tree snapshot\n- Consider printing the page title in tab-select output (e.g., 'Switched to tab 2: Web scraping - Wikipedia (https://en.wikipedia.org/wiki/Web_scraping)')\n- Document the 'tab-select + snapshot' two-step pattern more prominently as a recommended workflow"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "tab-new output shows index 0 for every new tab regardless of actual position",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run multiple tab-new commands in sequence and observe that every one says 'Switched to tab 0'."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "tab-new output should reflect the actual index the new tab was assigned (e.g., 'Switched to tab 0', then 'Switched to tab 1', etc.), or at minimum include enough context (GUID, URL) for the user to identify the tab without running tab-list."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Every tab-new command outputs 'Switched to tab 0 (URL)' even when multiple tabs exist. A user running 'tab-new' twice sees identical 'Switched to tab 0' messages and cannot distinguish which message corresponds to which tab without running tab-list."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The output shows the actual index (which happens to be 0 each time due to Chrome's insertion behavior), but the message format doesn't include the GUID of the created tab, making it impossible to correlate multiple tab-new calls with their tabs without running tab-list. The SKILL.md example output shows 'Switched to tab 1' suggesting the expected behavior differs from reality."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Include the tab GUID in the tab-new output message (e.g., 'Created tab 0 [ABC123...]: Hacker News')\n- Standardize Chrome's tab insertion position by specifying an explicit index in the CDP call so new tabs predictably appear at the end\n- Update the SKILL.md example to show a realistic output that matches Chrome's default behavior"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 5,
+      "title": "snapshot --stdout output is verbose for simple context verification",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 snapshot -v 0 --stdout | head -15"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "For quick 'am I on the right page?' checks, a lightweight command or mode that outputs just the page title, URL, and maybe the h1 text would suffice."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "snapshot --stdout dumps the full accessibility tree YAML (10+ viewports, hundreds of refs). Users must pipe through head/tail or grep to extract meaningful context, adding friction to a very common workflow."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The snapshot command is designed for element targeting (refs) rather than page identity verification. There's no dedicated 'page info' or 'context check' command — users must use snapshot (which is heavy) or eval (which requires JavaScript knowledge) for basic identity checks."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a 'page-info' or 'context' command that outputs just URL, title, and key metadata without the full accessibility tree\n- Add a --brief or --meta flag to snapshot that outputs only viewport state and page-level metadata (skip element refs)\n- Document the 'snapshot --stdout | head' pattern as a quick verification technique"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}

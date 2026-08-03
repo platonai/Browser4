@@ -4,39 +4,87 @@
   <meta charset="UTF-8">
   <title>Crawl Test Hub</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 2rem; }
-    h1 { color: #333; }
-    .products { margin: 1rem 0; }
-    .product { display: block; padding: .5rem; margin: .25rem 0; border: 1px solid #ddd; }
-    .categories { margin: 1rem 0; padding: 1rem; background: #f5f5f5; }
-    .category-link { color: #06c; }
-    footer { margin-top: 2rem; font-size: .8rem; color: #666; }
+    :root { --bg:#f6f7fb; --panel:#fff; --line:#d7deea; --ink:#1f2937; --muted:#667085; --shadow:0 12px 28px rgba(15,23,42,.08); }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; background: var(--bg); color: var(--ink); }
+    header { background: linear-gradient(135deg, #0f172a, #1f2937); color: #fff; padding: 1.2rem 1.5rem; }
+    .toolbar { display:grid; grid-template-columns: 220px 1fr 280px; gap: 1rem; align-items: center; }
+    .toolbar input { width: 100%; padding: .8rem 1rem; border: 0; border-radius: 999px; }
+    .toolbar nav { text-align: right; font-size: .92rem; }
+    .toolbar nav a { color: #c7d2fe; text-decoration: none; margin-left: .8rem; }
+    main { max-width: 1280px; margin: 0 auto; padding: 1.5rem; }
+    .hero, .rail, .products, .categories, .guides { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); padding: 1.1rem; margin-bottom: 1.2rem; }
+    h1, h2, h3 { margin-top: 0; }
+    .hero p, .guides li, .categories li { color: var(--muted); line-height: 1.55; }
+    .product-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: .9rem; }
+    .product { display: block; padding: .85rem; border: 1px solid #dce3ee; border-radius: 14px; text-decoration: none; color: inherit; background: #fbfcff; }
+    .product-title { display: block; font-weight: 700; margin-bottom: .3rem; }
+    .product-price { color: #b12704; font-weight: 700; }
+    .product-copy { display: block; color: var(--muted); font-size: .92rem; margin-top: .45rem; }
+    .category-list, .guide-list, .utility-list { margin: 0; padding-left: 1.1rem; display: grid; gap: .55rem; }
+    .category-link { color: #0b4bb3; }
+    .promo-link, .guide-link, .utility-link { color: #0b4bb3; }
+    footer { margin-top: 2rem; padding: 1.5rem; font-size: .82rem; color: #666; text-align: center; }
+    @media (max-width: 900px) { .toolbar { grid-template-columns: 1fr; } .toolbar nav { text-align: left; } }
   </style>
 </head>
 <body>
-  <h1 id="pageTitle">Crawl Test Hub</h1>
-  <p>This page contains <strong>product links</strong> (class="product") and <strong>category links</strong> (class="category-link") for testing crawl link discovery with CSS selectors and URL patterns.</p>
+  <header>
+    <div class="toolbar">
+      <strong>Mock Crawl Center</strong>
+      <input type="text" value="wireless gadget, deal alert, setup guide" aria-label="Search query" />
+      <nav>
+        <a class="utility-link" href="index.html#help">Help Center</a>
+        <a class="utility-link" href="index.html#delivery">Delivery Info</a>
+        <a class="utility-link" href="index.html#returns">Returns</a>
+      </nav>
+    </div>
+  </header>
+  <main>
+    <section class="hero">
+      <h1 id="pageTitle">Crawl Test Hub</h1>
+      <p>This page intentionally mixes <strong>product links</strong>, <strong>category links</strong>, editorial copy, and navigation noise. Selector-based crawls should follow only the anchors you target, while broad crawls should encounter a more realistic storefront layout.</p>
+    </section>
 
-  <section class="products" id="product-list">
-    <h2>Featured Products</h2>
-    <a class="product" id="prod-1" href="product/1.html">
-      <span class="product-title">Widget Alpha</span>
-      <span class="product-price">$10.00</span>
-    </a>
-    <a class="product" id="prod-2" href="product/2.html">
-      <span class="product-title">Widget Beta</span>
-      <span class="product-price">$20.00</span>
-    </a>
-    <a class="product" id="prod-3" href="product/3.html">
-      <span class="product-title">Widget Gamma</span>
-      <span class="product-price">$30.00</span>
-    </a>
-  </section>
+    <section class="products" id="product-list">
+      <h2>Featured Products</h2>
+      <div class="product-grid">
+        <a class="product" id="prod-1" href="product/1.html">
+          <span class="product-title">Widget Alpha</span>
+          <span class="product-price">$10.00</span>
+          <span class="product-copy">Budget-friendly starter model with setup tips, buying guidance, and support noise on the detail page.</span>
+        </a>
+        <a class="product" id="prod-2" href="product/2.html">
+          <span class="product-title">Widget Beta</span>
+          <span class="product-price">$20.00</span>
+          <span class="product-copy">Mid-range option that leads to additional recommendation rails and related product links.</span>
+        </a>
+        <a class="product" id="prod-3" href="product/3.html">
+          <span class="product-title">Widget Gamma</span>
+          <span class="product-price">$30.00</span>
+          <span class="product-copy">Popular seller with extra accessories and comparison-style noise sections.</span>
+        </a>
+      </div>
+    </section>
 
-  <section class="categories">
-    <h2>Categories</h2>
-    <a class="category-link" id="cat-electronics" href="category/electronics.html">Electronics Category</a>
-  </section>
+    <section class="rail">
+      <h2>Promotions and guides</h2>
+      <ul class="guide-list">
+        <li><a class="promo-link" href="index.html#bundle-deals">Bundle deals and trade-in banners</a></li>
+        <li><a class="guide-link" href="index.html#buying-guide">How to compare specs before checkout</a></li>
+        <li><a class="guide-link" href="index.html#faq">Warranty, sizing, and returns FAQ</a></li>
+      </ul>
+    </section>
+
+    <section class="categories">
+      <h2>Categories</h2>
+      <ul class="category-list">
+        <li><a class="category-link" id="cat-electronics" href="category/electronics.html">Electronics Category</a></li>
+        <li><a class="category-link" id="cat-accessories" href="category/accessories.html">Accessories Category</a></li>
+        <li><a class="category-link" id="cat-clearance" href="category/clearance.html">Clearance Category</a></li>
+      </ul>
+    </section>
+  </main>
 
   <footer>Crawl Test Hub — Mock Site</footer>
 </body>

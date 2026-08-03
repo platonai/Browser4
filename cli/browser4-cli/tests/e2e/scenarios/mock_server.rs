@@ -5152,3 +5152,78 @@ pub(super) fn test_upload_error_backend_failure(ctx: &mut E2ECtx) {
 
     let _ = std::fs::remove_file(&tmp_path);
 }
+
+// ---------------------------------------------------------------------------
+// Chat commands — synchronous and async (chat / chat-result)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_chat_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // ---- synchronous chat ----
+    let chat_result = run_command(ctx, &["chat", "Hello, how are you?"]);
+    assert!(
+        chat_result.stdout.contains("Mock chat response for your prompt."),
+        "Expected mock chat response in:\n{}",
+        chat_result.stdout
+    );
+
+    // ---- async chat ----
+    let async_result = run_command(ctx, &["chat", "--async", "Tell me a joke"]);
+    assert!(
+        async_result.stdout.contains("Chat task submitted:"),
+        "Expected async task submission output in:\n{}",
+        async_result.stdout
+    );
+    assert!(
+        async_result.stdout.contains("chat-task-"),
+        "Expected chat task ID in:\n{}",
+        async_result.stdout
+    );
+    assert!(
+        async_result.stdout.contains("chat result chat-task-"),
+        "Expected chat result hint in:\n{}",
+        async_result.stdout
+    );
+
+    // Extract task ID from output
+    let task_id: String = async_result
+        .stdout
+        .lines()
+        .find_map(|line| {
+            if line.contains("chat-task-") {
+                line.split("chat-task-")
+                    .nth(1)
+                    .map(|s| format!("chat-task-{}", s.trim().trim_matches(|c: char| !c.is_ascii_digit())))
+            } else {
+                None
+            }
+        })
+        .expect("Failed to extract chat task ID");
+
+    // ---- chat result ----
+    let result = run_command(ctx, &["chat", "result", &task_id]);
+    assert_eq!(
+        strip_snapshot_output(&result.stdout),
+        format!("Mock chat result for task {task_id}.")
+    );
+
+    // Verify mock server recorded the right calls
+    let snapshot = mock_server.snapshot();
+    assert_eq!(
+        snapshot.plain_commands,
+        vec![
+            "Hello, how are you?".to_string(),
+            "Tell me a joke".to_string(),
+        ]
+    );
+    assert!(
+        snapshot.result_queries.contains(&task_id),
+        "Expected chat-result to query task {task_id}, got {:?}",
+        snapshot.result_queries
+    );
+}

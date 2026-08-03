@@ -10,40 +10,14 @@ tier: decision
 
 Browser automation CLI for AI agents — Chrome/Chromium via CDP with accessibility-tree snapshots.
 
-### Development Mode (Running from Source)
-
-When working from the repository (not using an installed `browser4-cli` binary), use the dev-mode
-wrappers in the repo root. All examples in this document use `browser4-cli` as the installed
-command — substitute accordingly for dev-mode work:
-
-| Platform | Command | Notes |
-|---|---|---|
-| **PowerShell** (Windows) | `./b4w.ps1 <command>` | Auto-builds from source when needed. Uses manual argument parsing — short flags (`-o`, `-i`, `-v`) are safe. Preferred on Windows. |
-| **Git Bash / Linux / macOS** | `./b4w.sh <command>` | Bash wrapper that individually quotes arguments before passing to pwsh. Avoids PowerShell parameter binding entirely. |
-| **CMD** (Windows) | `./b4w.bat <command>` | Uses `--%` stop-parsing token to prevent PowerShell from consuming `-i`/`-v` flags. |
-| **Cargo (any platform)** | `cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>` | Slower (compiles each run unless `--quiet` is added). Good for one-off debugging. |
-
-**Example:** The installed command `browser4-cli snapshot -v 0` becomes `./b4w.ps1 snapshot -v 0` (PowerShell)
-or `./b4w.sh snapshot -v 0` (Git Bash) when running from source.
-
-**Shell selection guide:**
-- `b4w.ps1` — PowerShell (Windows): primary choice. Uses manual `$args` parsing so common
-  short flags (`-o`/`-i`/`-v`) are no longer intercepted by PowerShell's parameter binder.
-  Use long-form flags (`--output`, `--interactive`, `--viewport`) for cross-shell compatibility.
-- `b4w.sh` — Git Bash / Linux / macOS: individually quotes each argument to prevent
-  pwsh from interpreting dash-prefixed CLI flags as PowerShell parameters. Recommended
-  when running from bash environments.
-- `b4w.bat` — cmd.exe: uses PowerShell's `--%` stop-parsing token. Good fallback when
-  both `b4w.ps1` and `b4w.sh` encounter parameter binding issues.
-
 ## 1. Core Loop
 
-Every browser4-cli session follows this pattern:
+Every browser4-cli session follows this pattern.
 
 ```
 1. NAVIGATE    browser4-cli goto <url>              # auto-opens/reconnects session
-2. SNAPSHOT    browser4-cli snapshot -v 0            # capture accessibility tree (viewport 0 = top)
-3. INTERACT    browser4-cli click <ref>              # use refs from the snapshot
+2. SNAPSHOT    browser4-cli snapshot -v 0           # capture accessibility tree (viewport 0 = top)
+3. INTERACT    browser4-cli click <ref>             # use refs from the snapshot
               browser4-cli fill <ref> <value>
               browser4-cli press Enter
 4. RE-SNAPSHOT browser4-cli snapshot -v 0 --auto-diff # verify what changed (diff vs previous)
@@ -85,18 +59,21 @@ Each interactive element has a **ref** (`e5`, `e12`) — the element's Chrome De
 
 ### Ref Lifecycle
 
-Refs are **ephemeral** — they become invalid after commands that change the DOM tree structure:
+Refs are **ephemeral** — treat them as single-use handles. Any interaction can leave you with stale refs if the page re-renders or Chrome remaps backend nodes:
 
-- **Safe (refs survive):** `fill`, `type`, `press`, `check`, `uncheck`, `select` — these only modify element *properties* (value, checked, selectedIndex) without adding/removing DOM nodes.
-- **Unsafe (re-snapshot after):** `click` on navigation links or buttons that trigger page updates, `goto`, `reload`, tab switches — these restructure the DOM or load new pages.
-- **Gray area:** `click` on checkboxes/radio buttons and some dropdown toggles may or may not mutate the DOM. When in doubt, capture a new snapshot after clicking.
+- **Always re-snapshot after interactions:** `click`, `fill`, `type`, `press`, `check`, `uncheck`, `select`, `hover`, `drag`, `dblclick`.
+- **Definitely re-snapshot after page/context changes:** `goto`, `reload`, tab switches, or clicks that navigate/update the page.
+- **If you are chaining form actions:** rely on the automatic post-action snapshot, then use refs from that fresh snapshot for the next step.
 
-**In practice, you can fill an entire form from a single snapshot.** Only re-snapshot if a ref unexpectedly fails — the CLI will surface a clear error so you know when it's needed.
+**In practice, the safest loop is interact → re-snapshot → use new refs.** This is the CLI's current guidance and avoids intermittent stale-ref failures on reactive pages.
+
+Interaction commands capture an automatic snapshot after execution. Pass `--no-snapshot` to skip it when you plan to capture a fresh snapshot manually (saves a round-trip).
 
 ### Output Modes
 
-- **Default** — human-readable output on stdout with tips on stderr.
-- **`--json`** — single-line JSON envelope on stdout only. All tips, hints, warnings, and human-readable text are suppressed (clean machine output).
+- **Default** — human-readable output on stdout.
+- **`--show-tip` / `-tip`** — show a relevant, rotating tip on stderr after each successful command. Tips are suppressed by default; use this flag to enable them.
+- **`--json`** — single-line JSON envelope on stdout for commands that support structured output. This is the clean machine-readable mode for commands such as `tab-list`, `htmlsnapshot get`, `htmlsnapshot query`, and `eval`. **Exception:** `snapshot` remains YAML-focused and warns on stderr instead of returning JSON snapshot data.
 - **`--quiet` / `-q`** — suppress all normal output; only errors appear on stderr.
 
 ### Sessions
@@ -238,13 +215,44 @@ Need to process multiple pages?
 
 **Warning:** Multiple `get all` calls produce unaligned arrays (different lengths, different order). For correlated fields, use `query` with `DOM_LOAD_AND_SELECT` scoped to a parent container.
 
+### 4d. Structuring Extracted Pages (WebMiner)
+
+WebMiner runs ML clustering on downloaded HTML files to produce structured spreadsheets and interactive reports — **no LLM tokens, everything runs locally.**
+
+```
+Have HTML files and want structured data — without tokens?
+├─ < 1,000 pages (small to medium)? → WebMiner Free (SMILE ML engine)
+│  java -jar scent-miner.jar all ./html-pages/
+│  → Interactive HTML report + Excel spreadsheets — everything local, zero cost
+├─ > 1,000 pages (production scale)? → WebMiner Commercial (Apache Spark ML)
+│  Same encode → cluster → views pipeline, distributed across machines
+│  → Scales to 100K+ pages/day
+└─ Need to acquire pages first?
+   ├─ Single pages: browser4-cli goto → htmlsnapshot → htmlsnapshot export
+   ├─ Bulk download: browser4-cli crawl --seed-file urls.txt --depth 0
+   └─ High throughput: browser4-cli swarm create → swarm query --seed-file ...
+       Then feed the HTML directory to WebMiner
+```
+
+**Pipeline:** `encode` (HTML → feature vectors → CSV) → `cluster` (KMeans, auto-detected K) → `views` (interactive HTML report + Excel spreadsheets)
+
+**Free tier (SMILE):** Single-machine ML via the [SMILE](https://haifengl.github.io/) library. Handles small-to-medium datasets (< 1,000 pages). Ideal for ad-hoc analysis, prototyping, and one-off extraction tasks.
+
+**Commercial tier (Apache Spark ML):** Distributed clustering for production workloads. Scales to 100K+ pages/day. Same pipeline, enterprise throughput.
+
+> **Install:** `.\webminer.ps1 install` (PowerShell) or download from [web-miner releases](https://github.com/platonai/web-miner/releases). Requires JDK 17+.
+
+See **[scent-miner/SKILL.md](../scent-miner/SKILL.md)** for the full reference.
+
 ## 5. Critical Warnings
 
-> **Warning:** Refs are single-use for navigation and DOM-mutating commands. Re-snapshot after `click` (on links/buttons), `goto`, `reload`, and tab switches. Form interactions (`fill`, `type`, `press`, `check`, `uncheck`, `select`) are safe — you can fill an entire form from a single snapshot. Never store refs across navigations.
+> **Warning:** Refs are effectively single-use. Re-snapshot after any interaction before using refs again, and always do so after `goto`, `reload`, and tab switches. On reactive pages, even form commands can leave earlier refs stale. Never store refs across navigations or assume a pre-interaction ref is still valid.
 
 > **Warning:** CSS selectors are tied to live websites — they break when sites change their HTML. Always discover selectors with `htmlsnapshot inspect` or `htmlsnapshot summary` before extraction. Treat scenario examples as patterns, not copy-paste recipes.
 
 > **Warning:** Shell quoting on Windows — complex JS/SQL with nested quotes causes escaping issues. Prefer `--sql @file.sql` (read from file), `--sql-stdin` (piped), `--sql-base64` (encoded), or `eval --file`/`eval --stdin`/`eval --base64` (JS from file or base64). For `htmlsnapshot inspect`, use `@file`, `--stdin`, or `--selector-base64`. Never inline `--sql "..."` with double-quoted CSS selectors on Windows. See [shell-quoting.md](references/shell-quoting.md) for the full workaround workflow.
+>
+> **Tip:** To generate base64 for `eval --base64`: `echo -n 'document.title' | base64` (Linux/macOS) or `[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('document.title'))` (PowerShell).
 
 > **Warning:** Don't cat snapshot files — they can exceed 256KB. The same applies to `--stdout`, which may dump large accessibility trees (63KB+ for content-rich pages). Use viewport pagination (`snapshot -v 0`), `snapshot grep <pattern>`, or `snapshot --stdout --page 1` instead. For targeted extraction, prefer `snapshot grep` or `htmlsnapshot` commands over full-tree dumps.
 
@@ -308,7 +316,7 @@ browser4-cli dialog-accept "Hello from Browser4"  # fill prompt and accept
 browser4-cli dialog-dismiss                       # cancel/dismiss any dialog
 ```
 
-**Note:** `dialog-accept` and `dialog-dismiss` must be run in a separate invocation — they cannot be part of the same command as the triggering `click`.
+**Note:** `dialog-accept` and `dialog-dismiss` must be run in a separate invocation — they cannot be part of the same command as the triggering `click`. Alternatively, use `click --auto-dismiss-dialogs <ref>` to auto-accept any dialog triggered by the click in a single invocation.
 
 ### Verifying Results (verify-after-interaction)
 
@@ -405,7 +413,7 @@ Agent tasks run asynchronously — submit a task, poll for completion, then fetc
 # 1. Submit a natural-language task (returns <task-id>)
 browser4-cli agent run "Find the top 5 products and their prices on this page"
 
-# 2. Poll until complete (use --wait to block instead)
+# 2. Poll until complete
 browser4-cli agent status <task-id>
 # Look for: "processState": "done" or "isDone": true
 
@@ -413,7 +421,7 @@ browser4-cli agent status <task-id>
 browser4-cli agent result <task-id>
 ```
 
-**Alternative (blocking):** `browser4-cli agent run --wait "<task>"` polls every 2s for up to 10 minutes and prints the result when done.
+**Note:** `agent run` is asynchronous. Submit with `agent run`, then use `agent status` and `agent result` to track completion and fetch output.
 
 **Polling with `isDone`:** The JSON from `agent status` includes `isDone: true` when finished. Shell scripts can parse this:
 ```bash
@@ -494,14 +502,8 @@ irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps
 browser4-cli install
 ```
 
-> **PowerShell wrapper tip:** When running `b4w.ps1` directly in PowerShell, short flags like `-i` and `-v` may be intercepted by PowerShell's parameter binder (matching `-InformationAction` and `-Verbose`). Use `b4w.bat` from Command Prompt or `b4w.sh` from Git Bash to avoid this. When using `b4w.ps1` directly, pass flags after `--` (e.g. `./b4w.ps1 -- snapshot -i`) or quote arguments individually. See [shell-quoting.md](references/shell-quoting.md) for details.
-
 **Linux / macOS (bash):**
 ```bash
 curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
 browser4-cli install
 ```
-
-## Development
-
-See [development.md](references/development.md) — prerequisites, building from source, and `cargo run` patterns.

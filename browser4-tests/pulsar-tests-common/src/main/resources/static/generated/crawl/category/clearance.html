@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Clearance — Category</title>
+  <style>
+    :root { --bg:#f6f7fb; --panel:#fff; --line:#d7deea; --ink:#1f2937; --muted:#667085; --shadow:0 12px 28px rgba(15,23,42,.08); }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; background: var(--bg); color: var(--ink); }
+    header { background:#111827; color:#fff; padding:1rem 1.5rem; }
+    header a { color:#c7d2fe; text-decoration:none; margin-right:.8rem; }
+    main { max-width: 1160px; margin: 0 auto; padding: 1.5rem; }
+    .panel, .products { background: var(--panel); border:1px solid var(--line); border-radius:18px; box-shadow:var(--shadow); padding:1.1rem; margin-bottom:1rem; }
+    .product { display:block; padding:.85rem; border:1px solid #dce3ee; border-radius:14px; text-decoration:none; color:inherit; background:#fbfcff; margin-bottom:.75rem; }
+    .product-title { display:block; font-weight:700; margin-bottom:.3rem; }
+    .product-price { color:#b12704; font-weight:700; }
+    .product-copy, li { color:var(--muted); line-height:1.55; }
+    footer { margin-top: 2rem; padding: 1.5rem; font-size: .8rem; color: #666; text-align:center; }
+  </style>
+</head>
+<body>
+  <header><nav><a href="../index.html">← Back to Hub</a><a href="electronics.html">Electronics</a><a href="accessories.html">Accessories</a></nav></header>
+  <main>
+    <section class="panel">
+      <h1 id="categoryTitle">Clearance</h1>
+      <p>Clearance-style pages often include lower inventory messaging, policy links, and promotional copy alongside the product links.</p>
+    </section>
+    <section class="products">
+      <h2>Clearance products</h2>
+      <a class="product" href="../product/10.html"><span class="product-title">Widget Omicron</span><span class="product-price">$100.00</span><span class="product-copy">Closeout model with policy-heavy noise sections.</span></a>
+      <a class="product" href="../product/11.html"><span class="product-title">Widget Sigma</span><span class="product-price">$110.00</span><span class="product-copy">Last-chance inventory with related service links.</span></a>
+    </section>
+  </main>
+  <footer>Clearance Category — Mock Site</footer>
+</body>
+</html>

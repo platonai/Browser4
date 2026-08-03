@@ -261,20 +261,28 @@ function Start-AgentProcess {
         $isWindowsPlatform = [bool]$IsWindows
     }
 
-    # ── Stdin redirection for large prompts ─────────────────────────────────
-    # Windows CreateProcess has a command-line length limit (~8191 chars legacy,
-    # ~32767 modern). When the prompt is large enough that the total command line
-    # would exceed a safe margin, write the prompt to a temp file and redirect
-    # it as stdin instead of passing it via -p.
+    # ── Stdin redirection for all prompts on Windows ──────────────────────
+    # Windows command-line passing chains through PowerShell → .NET Process.Start
+    # → CreateProcess → cmd.exe → claude.cmd → claude.exe.  Long or
+    # special-character-rich prompts can be parsed incorrectly at one of
+    # these layers, causing -p/--print to appear without its prompt argument.
+    # Writing the prompt to a temp file and redirecting stdin avoids this
+    # entire class of bugs: the prompt never touches the command line, and
+    # claude --print reads it from stdin.
     $stdinTempPath = $null
     if ($isWindowsPlatform -and $Prompt) {
-        $estimatedLen = $Executable.Length + 1
-        foreach ($a in $arguments) { $estimatedLen += $a.Length + 1 }
-        if ($estimatedLen -gt 7000) {
-            $stdinTempPath = [System.IO.Path]::GetTempFileName()
-            Set-Content -Path $stdinTempPath -Value $Prompt -Encoding UTF8 -NoNewline
-            $arguments = New-AgentArguments -BaseArgs $BaseArgs -Prompt $null -AdditionalArguments $AdditionalArguments -Backend $Backend
+        $stdinTempPath = [System.IO.Path]::GetTempFileName()
+        Set-Content -Path $stdinTempPath -Value $Prompt -Encoding UTF8 -NoNewline
+        # Rebuild arguments without the prompt text, but keep -p so the agent
+        # runs in non-interactive --print mode (reads prompt from stdin).
+        $arguments = New-AgentArguments -BaseArgs $BaseArgs -Prompt $null -AdditionalArguments $AdditionalArguments -Backend $Backend
+        # Append -p flag (without prompt text) so the backend knows to read from stdin
+        # in non-interactive mode.  claude/kimi accept -p without a value; copilot
+        # requires -- after options before -p.
+        if ($Backend -eq 'copilot') {
+            $arguments += '--'
         }
+        $arguments += '-p'
     }
 
     if ($isWindowsPlatform) {

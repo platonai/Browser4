@@ -7,6 +7,8 @@ import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
 import ai.platon.browser4.api.model.NavigateEntry
 import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
 import java.time.Duration
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -587,22 +589,76 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "type" -> {
                 when {
                     args.containsKey("selector") && args.containsKey("text") -> {
-                        validateArgs(args, allowed("selector", "text", "submit"), setOf("selector", "text"), functionName)
-                        driver.type(
-                            paramString(args, "text", functionName)!!,
-                            paramString(args, "selector", functionName)!!
-                        )
-                        if (args["submit"] == true) {
-                            driver.press("Enter")
+                        validateArgs(args, allowed("selector", "text", "submit", "timeoutMillis"), setOf("selector", "text"), functionName)
+                        val selector = paramString(args, "selector", functionName)!!
+                        val timeoutMillis = paramLong(args, "timeoutMillis", functionName, required = false)
+                        val typeBlock: suspend () -> Unit = {
+                            driver.type(
+                                paramString(args, "text", functionName)!!,
+                                selector
+                            )
+                            if (args["submit"] == true) {
+                                // Target the filled element for the same reason as fill
+                                // above: JS-heavy pages may shift focus after type.
+                                val urlBefore = driver.currentUrl()
+                                driver.press("Enter", selector)
+                                delay(300)
+                                if (driver.currentUrl() == urlBefore) {
+                                    driver.evaluate("""
+                                        (function(){
+                                            var el=document.querySelector('${selector.replace("'", "\\'")}');
+                                            if(!el)return false;
+                                            el.focus();
+                                            var o={key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true};
+                                            el.dispatchEvent(new KeyboardEvent('keydown',o));
+                                            el.dispatchEvent(new KeyboardEvent('keypress',o));
+                                            el.dispatchEvent(new KeyboardEvent('keyup',o));
+                                            var form=el.closest('form');
+                                            if(form){try{form.requestSubmit();}catch(e){}form.submit();}
+                                            return true;
+                                        })()
+                                    """.trimIndent())
+                                }
+                            }
+                        }
+                        if (timeoutMillis != null && timeoutMillis > 0) {
+                            try {
+                                withTimeout(timeoutMillis) { typeBlock() }
+                            } catch (e: TimeoutCancellationException) {
+                                throw IllegalStateException(
+                                    "Type timed out after ${timeoutMillis}ms. " +
+                                    "The element may be in a non-interactable state. " +
+                                    "Try refreshing the page (goto <url>) or check with 'snapshot' first. " +
+                                    "Selector: $selector"
+                                )
+                            }
+                        } else {
+                            typeBlock()
                         }
                         Unit
                     }
 
                     args.containsKey("text") -> {
-                        validateArgs(args, allowed("text", "submit"), setOf("text"), functionName)
-                        driver.type(paramString(args, "text", functionName)!!)
-                        if (args["submit"] == true) {
-                            driver.press("Enter")
+                        validateArgs(args, allowed("text", "submit", "timeoutMillis"), setOf("text"), functionName)
+                        val timeoutMillis = paramLong(args, "timeoutMillis", functionName, required = false)
+                        val typeBlock: suspend () -> Unit = {
+                            driver.type(paramString(args, "text", functionName)!!)
+                            if (args["submit"] == true) {
+                                driver.press("Enter")
+                            }
+                        }
+                        if (timeoutMillis != null && timeoutMillis > 0) {
+                            try {
+                                withTimeout(timeoutMillis) { typeBlock() }
+                            } catch (e: TimeoutCancellationException) {
+                                throw IllegalStateException(
+                                    "Type timed out after ${timeoutMillis}ms. " +
+                                    "The page may be in an unresponsive state. " +
+                                    "Try refreshing the page (goto <url>) first."
+                                )
+                            }
+                        } else {
+                            typeBlock()
                         }
                         Unit
                     }
@@ -612,12 +668,54 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             }
 
             "fill" -> {
-                validateArgs(args, allowed("selector", "text", "submit"), setOf("selector", "text"), functionName); driver.fill(
-                    paramString(args, "selector", functionName)!!,
-                    paramString(args, "text", functionName)!!
-                )
-                if (args["submit"] == true) {
-                    driver.press("Enter")
+                validateArgs(args, allowed("selector", "text", "submit", "timeoutMillis"), setOf("selector", "text"), functionName)
+                val selector = paramString(args, "selector", functionName)!!
+                val timeoutMillis = paramLong(args, "timeoutMillis", functionName, required = false)
+                val fillBlock: suspend () -> Unit = {
+                    driver.fill(selector, paramString(args, "text", functionName)!!)
+                    if (args["submit"] == true) {
+                        // Dispatch Enter on the target element so CDP key events land
+                        // on the correct input even when JS-heavy pages (e.g. Google
+                        // Search) shift focus after fill.  This also re-focuses the
+                        // element before dispatching, ensuring the active element is
+                        // the one we filled.
+                        val urlBefore = driver.currentUrl()
+                        driver.press("Enter", selector)
+                        // Fallback: if the CDP Enter + form.requestSubmit() did not
+                        // cause navigation (JS-heavy SPAs may intercept both), dispatch
+                        // DOM keyboard events and form.submit() directly via JS.
+                        delay(300)
+                        if (driver.currentUrl() == urlBefore) {
+                            driver.evaluate("""
+                                (function(){
+                                    var el=document.querySelector('${selector.replace("'", "\\'")}');
+                                    if(!el)return false;
+                                    el.focus();
+                                    var o={key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true};
+                                    el.dispatchEvent(new KeyboardEvent('keydown',o));
+                                    el.dispatchEvent(new KeyboardEvent('keypress',o));
+                                    el.dispatchEvent(new KeyboardEvent('keyup',o));
+                                    var form=el.closest('form');
+                                    if(form){try{form.requestSubmit();}catch(e){}form.submit();}
+                                    return true;
+                                })()
+                            """.trimIndent())
+                        }
+                    }
+                }
+                if (timeoutMillis != null && timeoutMillis > 0) {
+                    try {
+                        withTimeout(timeoutMillis) { fillBlock() }
+                    } catch (e: TimeoutCancellationException) {
+                        throw IllegalStateException(
+                            "Fill timed out after ${timeoutMillis}ms. " +
+                            "The element may be in a non-interactable state. " +
+                            "Try refreshing the page (goto <url>) or check with 'snapshot' first. " +
+                            "Selector: $selector"
+                        )
+                    }
+                } else {
+                    fillBlock()
                 }
                 Unit
             }
@@ -1032,14 +1130,16 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
                     args.containsKey("viewport") -> {
                         validateArgs(args, allowed("viewport"), setOf("viewport"), functionName)
-                        val viewportIndex = paramInt(args, "viewport", functionName)!!.coerceAtLeast(0)
+                        val viewportIndex = paramInt(args, "viewport", functionName)!!
                         val w = driver.evaluateValue("window.innerWidth")?.toString()?.toDoubleOrNull() ?: 1920.0
                         val h = driver.evaluateValue("window.innerHeight")?.toString()?.toDoubleOrNull() ?: 1080.0
+                        // Scroll to the target viewport (scroll-relative) so lazy-loaded
+                        // content renders before capture. Use the returned scrollY so the
+                        // screenshot rect matches the actual post-scroll position.
+                        val actualScrollY = driver.scrollToViewport(viewportIndex.toDouble())
                         val rect = ai.platon.pulsar.common.math.geometric.RectD(
-                            0.0, viewportIndex * h, w, h
+                            0.0, actualScrollY, w, h
                         )
-                        // Scroll to the target viewport so lazy-loaded content renders before capture.
-                        driver.scrollToViewport(viewportIndex.toDouble())
                         driver.screenshot(rect)
                     }
 

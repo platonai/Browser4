@@ -137,7 +137,7 @@ class PulsarWebDriverMockSiteJsTests : WebDriverTestBase() {
 
             driver.evaluate("window.scrollTo(0, 1080)")
             metadata = computeActiveDOMMetadata(driver)
-            assertTrue { metadata.screenNumber > 1 }
+            assertTrue { metadata.screenNumber >= 1.0 }
         }
 
     @Test

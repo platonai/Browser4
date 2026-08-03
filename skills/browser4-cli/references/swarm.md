@@ -43,7 +43,7 @@ swarm close         →  closes the swarm session and releases resources
 ### 1. Create a Swarm Session
 
 ```bash
-browser4-cli swarm create [--profile-mode SEQUENTIAL|TEMPORARY] [--max-open-tabs 8] [--max-browser-contexts 2] [--display-mode GUI|HEADLESS|SUPERVISED]
+browser4-cli swarm create [--profile-mode SEQUENTIAL|TEMPORARY] [--max-open-tabs 8] [--max-browser-contexts 2] [--display-mode GUI|HEADLESS|SUPERVISED] [--clear-stale]
 ```
 
 | Option | Default | Description |
@@ -52,6 +52,7 @@ browser4-cli swarm create [--profile-mode SEQUENTIAL|TEMPORARY] [--max-open-tabs
 | `--max-open-tabs` | `8` | Max open tabs per browser context |
 | `--max-browser-contexts` | `2` | Number of isolated browser instances |
 | `--display-mode` | `GUI` | `GUI`, `HEADLESS`, or `SUPERVISED` |
+| `--clear-stale` | (flag) | Automatically clear stale tasks from prior sessions before creating |
 
 The session persists until `browser4-cli swarm close` or `close`.
 
@@ -104,6 +105,13 @@ Core X-SQL pattern: `SELECT <fn>(dom, <selector>) FROM DOM_LOAD_AND_SELECT(@url,
 
 Common extraction functions: `DOM_BASE_URI`, `DOM_FIRST_TEXT`, `DOM_ALL_TEXTS`, `DOM_FIRST_HREF`, `DOM_ALL_HREFS`, `DOM_FIRST_SRC`, `DOM_FIRST_SLIM_HTML`, `DOM_ALL_SLIM_HTML`, `DOM_FIRST_ATTR`. Full reference: [x-sql.md](x-sql.md).
 
+> **Tip:** X-SQL result rows do **not** automatically include the source URL — they only contain the columns you explicitly select. To make results self-contained, always include the source URL as a column:
+> ```sql
+> SELECT DOM_BASE_URI(DOM) AS url, DOM_FIRST_TEXT(DOM, '#title') AS title
+> FROM DOM_LOAD_AND_SELECT(@url, ':root')
+> ```
+> `DOM_BASE_URI(DOM)` returns the absolute URL of the page. `DOM_LOCATION(DOM)` can also be used (returns the same value).
+
 ### 4. Poll Status & Fetch Results
 
 ```bash
@@ -132,7 +140,7 @@ browser4-cli swarm list --clear   # remove all tracked swarm tasks
 
 > **Note:** `swarm list` queries the backend for live status of each tracked task on every invocation. It shows a status summary (N total, X completed, Y queued, Z failed) followed by the task table. The STATUS column uses task-oriented labels: `queued` (waiting for worker), `processing`, `completed`, or `failed (<reason>)`. The COMMAND column distinguishes `swarm-submit` from `swarm-query`. Use `--clear` to clean up stale entries between sessions.
 
-> **Tip:** `swarm create` warns if stale tasks from prior sessions are still tracked, since old completed tasks can interfere with the worker pool. If jobs get stuck, use `swarm list --clear` before recreating the session.
+> **Tip:** `swarm create` warns if stale tasks from prior sessions are still tracked, since old completed tasks can interfere with the worker pool. Use `swarm create --clear-stale` to clear and recreate in one step, or `swarm list --clear` to remove stale entries manually.
 
 ### 6. Close the Swarm Session
 
@@ -167,7 +175,7 @@ Swarm tasks progress through these states:
 | Long-running tasks | Set `--deadline` to bound execution |
 | Swarm subcommands in batch mode | Not supported — use standalone commands |
 | Lost task IDs | Use `swarm list` to rediscover all tracked tasks |
-| Stale tasks in list | Use `swarm list --clear` to remove old entries |
+| Stale tasks in list | Use `swarm list --clear` to remove old entries, or `swarm create --clear-stale` to clear and recreate in one step |
 
 ## Notes
 

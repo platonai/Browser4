@@ -17,8 +17,8 @@ function Test-HasPendingCoworkerTasks {
         [string]$RepoRoot
     )
 
-    $createdTasks = Get-ChildItem -Path (Join-Path $RepoRoot 'coworker\tasks\main\1ready') -File -ErrorAction SilentlyContinue
-    $approvedTasks = Get-ChildItem -Path (Join-Path $RepoRoot 'coworker\tasks\main\5approved') -File -Recurse -ErrorAction SilentlyContinue
+    $createdTasks = Get-ChildItem -Path (Get-CoworkerStageDirectory -PipelineName 'main' -StageId '1ready') -File -ErrorAction SilentlyContinue
+    $approvedTasks = Get-ChildItem -Path (Get-CoworkerStageDirectory -PipelineName 'main' -StageId '5approved') -File -Recurse -ErrorAction SilentlyContinue
     return [bool]($createdTasks -or $approvedTasks)
 }
 
@@ -115,8 +115,8 @@ $scriptPath = Join-Path $PSScriptRoot 'engineer.ps1'
 $scriptName = 'engineer.ps1'
 $wrapperName = 'process-coworker-queue.ps1'
 $watchPaths = @(
-    (Join-Path $repoRoot 'coworker\tasks\main\1ready')
-    (Join-Path $repoRoot 'coworker\tasks\main\5approved')
+    (Get-CoworkerStageDirectory -PipelineName 'main' -StageId '1ready')
+    (Get-CoworkerStageDirectory -PipelineName 'main' -StageId '5approved')
 )
 $watchRegistrations = @()
 

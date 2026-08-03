@@ -4,29 +4,59 @@
   <meta charset="UTF-8">
   <title>Widget Alpha — $10.00</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 2rem; }
-    h1 { color: #333; }
-    .product-image { max-width: 300px; border: 1px solid #ddd; }
+    :root { --bg:#f6f7fb; --panel:#fff; --line:#d7deea; --ink:#1f2937; --muted:#667085; --shadow:0 12px 28px rgba(15,23,42,.08); }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; background: var(--bg); color: var(--ink); }
+    header { background:#111827; color:#fff; padding:1rem 1.5rem; }
+    header a { color:#c7d2fe; text-decoration:none; margin-right:.8rem; }
+    main { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+    .breadcrumbs { color: var(--muted); font-size: .92rem; margin-bottom: 1rem; }
+    .shell, .sidebar, .related, .support { background: var(--panel); border:1px solid var(--line); border-radius:18px; box-shadow:var(--shadow); padding:1.1rem; margin-bottom:1rem; }
+    .layout { display:grid; grid-template-columns: minmax(0, 2fr) 320px; gap:1rem; align-items:start; }
+    .product-image { max-width: 300px; border: 1px solid #ddd; border-radius: 12px; }
     .price { font-size: 1.4rem; font-weight: bold; color: #b12704; }
-    .related { margin: 2rem 0; padding: 1rem; background: #f9f9f9; }
-    footer { margin-top: 2rem; font-size: .8rem; color: #666; }
+    .meta, .support li { color: var(--muted); line-height:1.55; }
+    .product { display:block; padding:.7rem; margin:.45rem 0; border:1px solid #dce3ee; border-radius:12px; text-decoration:none; color:inherit; background:#fbfcff; }
+    .help-link { color:#0b4bb3; }
+    footer { margin-top: 2rem; padding: 1.5rem; font-size: .8rem; color: #666; text-align:center; }
+    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
-  <nav><a href="../index.html">← Back to Hub</a></nav>
+  <header><nav><a href="../index.html">← Back to Hub</a><a href="../category/electronics.html">Electronics</a><a href="../category/accessories.html">Accessories</a></nav></header>
   <main>
-    <h1 id="productTitle">Widget Alpha</h1>
-    <img class="product-image" src="../img/widget-alpha.png" alt="Widget Alpha" />
-    <p id="product-price" class="price">$10.00</p>
-    <p id="product-sku" data-sku="WA-001">SKU: WA-001</p>
-    <div id="product-description">
-      <p>Widget Alpha is our entry-level widget, perfect for beginners.</p>
+    <div class="breadcrumbs">Home &rsaquo; Electronics &rsaquo; Widget Alpha</div>
+    <div class="layout">
+      <article class="shell">
+        <h1 id="productTitle">Widget Alpha</h1>
+        <img class="product-image" src="../img/widget-alpha.png" alt="Widget Alpha" />
+        <p id="product-price" class="price">$10.00</p>
+        <p id="product-sku" data-sku="WA-001">SKU: WA-001</p>
+        <div id="product-description">
+          <p>Widget Alpha is our entry-level widget, perfect for beginners.</p>
+        </div>
+        <p class="meta">This page intentionally includes extra storefront copy, support links, and recommendation modules so extraction tests must target the right fields.</p>
+      </article>
+
+      <aside class="sidebar">
+        <h3>Need help deciding?</h3>
+        <ul class="support">
+          <li><a class="help-link" href="../index.html#starter-guide">Starter guide for first-time buyers</a></li>
+          <li><a class="help-link" href="../index.html#returns">Returns and warranty overview</a></li>
+          <li><a class="help-link" href="../index.html#shipping">Shipping options and delivery timing</a></li>
+        </ul>
+      </aside>
     </div>
 
     <section class="related">
       <h3>Related Products</h3>
       <a class="product" href="4.html">Widget Delta — $40.00</a>
       <a class="product" href="5.html">Widget Epsilon — $50.00</a>
+    </section>
+    <section class="related">
+      <h3>Customer comments</h3>
+      <article><strong>Alice:</strong> The description was easy to find, but I still had to scan past support notes and recommendations before deciding.</article>
+      <article><strong>Ben:</strong> Good starter option. The SKU and price were clear once I ignored the surrounding buying-guide noise.</article>
     </section>
   </main>
   <footer>Widget Alpha — Mock Site Product Page</footer>

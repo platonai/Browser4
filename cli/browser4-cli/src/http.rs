@@ -455,6 +455,130 @@ pub async fn submit_plain_command(
     .await
 }
 
+/// Send a chat message to the AI via the conversations API.
+/// Returns the AI's text response.
+pub async fn chat_with_ai(
+    client: &Client,
+    base_url: &str,
+    prompt: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, "/api/conversations");
+    let timeout = std::time::Duration::from_secs(timeout_secs_from_env(
+        "BROWSER4_CLI_CHAT_TIMEOUT_SECS",
+        120,
+    ));
+    let response = client
+        .post(&url)
+        .header("Content-Type", "text/plain")
+        .body(prompt.to_string())
+        .timeout(timeout)
+        .send()
+        .await
+        .map_err(|e| {
+            if e.is_timeout() {
+                format!(
+                    "Chat request timed out after {}s. Increase with BROWSER4_CLI_CHAT_TIMEOUT_SECS env var.",
+                    timeout.as_secs()
+                )
+            } else {
+                format!("Failed to call chat endpoint: {e}")
+            }
+        })?;
+
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read chat response body: {e}"))?;
+
+    if !status.is_success() {
+        return Err(format_http_error(status, &response_text));
+    }
+
+    Ok(response_text)
+}
+
+/// Submit a chat message asynchronously via the conversations API.
+/// Returns a task ID that can be polled via the /api/conversations/{id} endpoint.
+pub async fn chat_with_ai_async(
+    client: &Client,
+    base_url: &str,
+    prompt: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, "/api/conversations/async");
+    let timeout = std::time::Duration::from_secs(timeout_secs_from_env(
+        "BROWSER4_CLI_CHAT_TIMEOUT_SECS",
+        30,
+    ));
+    let response = client
+        .post(&url)
+        .header("Content-Type", "text/plain")
+        .body(prompt.to_string())
+        .timeout(timeout)
+        .send()
+        .await
+        .map_err(|e| {
+            if e.is_timeout() {
+                format!(
+                    "Chat async submission timed out after {}s.",
+                    timeout.as_secs()
+                )
+            } else {
+                format!("Failed to call chat async endpoint: {e}")
+            }
+        })?;
+
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read chat async response body: {e}"))?;
+
+    if !status.is_success() {
+        return Err(format_http_error(status, &response_text));
+    }
+
+    // The async endpoint returns a task ID as plain text (possibly JSON-quoted)
+    Ok(response_text.trim().trim_matches('"').to_string())
+}
+
+/// Poll for the result of an async chat task.
+pub async fn get_chat_result(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/conversations/{}", task_id));
+    let timeout = std::time::Duration::from_secs(timeout_secs_from_env(
+        "BROWSER4_CLI_CHAT_TIMEOUT_SECS",
+        120,
+    ));
+    let response = client
+        .get(&url)
+        .timeout(timeout)
+        .send()
+        .await
+        .map_err(|e| {
+            if e.is_timeout() {
+                format!("Chat result request timed out after {}s.", timeout.as_secs())
+            } else {
+                format!("Failed to get chat result: {e}")
+            }
+        })?;
+
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read chat result body: {e}"))?;
+
+    if !status.is_success() {
+        return Err(format_http_error(status, &response_text));
+    }
+
+    Ok(response_text)
+}
+
 /// Submit a natural language description to the server, which translates it
 /// to a CLI command via LLM and executes it synchronously.
 /// Returns the command output on success.

@@ -276,7 +276,7 @@ jobs:
 
       - name: Install Zig
         if: matrix.use_zigbuild
-        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406  # v2.2.1
+        uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1  # v1.0.2
         with:
           version: '0.13.0'
 

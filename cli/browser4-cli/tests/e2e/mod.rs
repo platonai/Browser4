@@ -203,6 +203,8 @@ struct FixturePages {
     interactive_html: String,
     other_html: String,
     form_html: String,
+    mouse_html: String,
+    keyboard_html: String,
 }
 
 impl FixtureServer {
@@ -222,6 +224,8 @@ impl FixtureServer {
             interactive_html: load_html_fixture(INTERACTIVE_FIXTURE_FILE),
             other_html: load_html_fixture(OTHER_FIXTURE_FILE),
             form_html: load_html_fixture(FORM_FIXTURE_FILE),
+            mouse_html: load_html_fixture(MOUSE_FIXTURE_FILE),
+            keyboard_html: load_html_fixture(KEYBOARD_FIXTURE_FILE),
         });
 
         thread::spawn(move || {
@@ -297,6 +301,18 @@ fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePage
             "200 OK",
             "text/html; charset=utf-8",
             pages.form_html.clone(),
+        )
+    } else if path == MOUSE_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.mouse_html.clone(),
+        )
+    } else if path == KEYBOARD_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.keyboard_html.clone(),
         )
     } else {
         (
@@ -613,6 +629,9 @@ struct MockBrowser4State {
     /// Custom browser_snapshot response. When set, overrides the default mock
     /// response for `browser_snapshot` tool calls (used by snapshot-grep, etc.).
     custom_browser_snapshot_response: Option<String>,
+    /// Track async chat submissions (prompt → task_id).
+    chat_async_submissions: Vec<(String, String)>,
+    next_chat_task_id: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1367,6 +1386,57 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             .to_string();
             write_http_response(&mut stream, "200 OK", "application/json", &response);
         }
+        // ---- chat REST endpoints ----
+        _ if method == "POST" && route == "/api/conversations" => {
+            let prompt = String::from_utf8_lossy(&body).trim().to_string();
+            state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .plain_commands
+                .push(prompt);
+            // Return a mock AI chat response
+            write_http_response(
+                &mut stream,
+                "200 OK",
+                "text/plain; charset=utf-8",
+                "Mock chat response for your prompt.",
+            );
+        }
+        _ if method == "POST" && route == "/api/conversations/async" => {
+            let prompt = String::from_utf8_lossy(&body).trim().to_string();
+            let task_id = {
+                let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
+                guard.next_chat_task_id += 1;
+                let task_id = format!("chat-task-{}", guard.next_chat_task_id);
+                guard
+                    .chat_async_submissions
+                    .push((prompt.clone(), task_id.clone()));
+                guard.plain_commands.push(prompt);
+                task_id
+            };
+            write_http_response(
+                &mut stream,
+                "200 OK",
+                "text/plain; charset=utf-8",
+                &format!("\"{}\"", task_id),
+            );
+        }
+        _ if method == "GET" && route.starts_with("/api/conversations/") => {
+            let task_id = route
+                .strip_prefix("/api/conversations/")
+                .unwrap_or_default();
+            state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .result_queries
+                .push(task_id.to_string());
+            write_http_response(
+                &mut stream,
+                "200 OK",
+                "text/plain; charset=utf-8",
+                &format!("Mock chat result for task {task_id}."),
+            );
+        }
         _ => write_http_response(
             &mut stream,
             "404 Not Found",
@@ -1852,6 +1922,14 @@ impl E2ECtx {
 
     fn form_url(&self) -> String {
         format!("{}{}", self.fixture_base_url, FORM_PATH)
+    }
+
+    fn mouse_url(&self) -> String {
+        format!("{}{}", self.fixture_base_url, MOUSE_PATH)
+    }
+
+    fn keyboard_url(&self) -> String {
+        format!("{}{}", self.fixture_base_url, KEYBOARD_PATH)
     }
 
     fn clear_step_timings(&mut self) {
@@ -4218,6 +4296,9 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "agent-result",
         // test_agent_list_*, test_agent_full_lifecycle_with_mock
         "agent-list",
+        // test_chat_commands
+        "chat",
+        "chat-result",
         // test_swarm_submission_commands
         "swarm-create",
         "swarm-submit",

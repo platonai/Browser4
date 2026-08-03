@@ -75,6 +75,29 @@ class EcommerceControllerTest {
         assertThat(resp.body).contains("product-price")
     }
 
+    @Test
+    fun productPagesVaryOptionalSections() {
+        val productIds = listOf(
+            "B0E000001",
+            "B0Y000003",
+            "B0B000002",
+            "B0H000003",
+            "B0A000004",
+            "B0G000005",
+            "B0PET0004"
+        )
+        val pages = productIds.map { getHtml("/ec/dp/$it").body!! }
+
+        assertThat(pages.any { it.contains("Customer comments") }).isTrue()
+        assertThat(pages.any { !it.contains("Customer comments") }).isTrue()
+
+        assertThat(pages.any { it.contains("Frequently asked questions") }).isTrue()
+        assertThat(pages.any { !it.contains("Frequently asked questions") }).isTrue()
+
+        assertThat(pages.any { it.contains("Customers also viewed") }).isTrue()
+        assertThat(pages.any { !it.contains("Customers also viewed") }).isTrue()
+    }
+
 
     @Test
     fun missingCategoryParam() {

@@ -604,10 +604,13 @@ data class ClientInfo(
     val timeZone: String = ZoneId.systemDefault().id,
     // locale: "zh_CN"
     val locale: Locale = Locale.getDefault(),
-    val viewportWidth: Int = VIEWPORT.width,
-    val viewportHeight: Int = VIEWPORT.height,
-    val screenWidth: Int = VIEWPORT.width,
-    val screenHeight: Int = VIEWPORT.height
+    // 0 means "not measured yet" — callers should populate via
+    // CDPSnapshotService.getBrowserUseState() which evaluates the actual
+    // window.innerWidth/innerHeight at runtime.
+    val viewportWidth: Int = 0,
+    val viewportHeight: Int = 0,
+    val screenWidth: Int = 0,
+    val screenHeight: Int = 0
 )
 
 /**

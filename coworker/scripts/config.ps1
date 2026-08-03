@@ -29,6 +29,8 @@ function Get-CoworkerTimestamp {
 . (Join-Path $PSScriptRoot 'common\Watchers.ps1')
 . (Join-Path $PSScriptRoot 'common\Logging.ps1')
 . (Join-Path $PSScriptRoot 'common\Locks.ps1')
+. (Join-Path $PSScriptRoot 'common\StateMachine.ps1')
+. (Join-Path $PSScriptRoot 'common\TaskRegistry.ps1')
 
 # ── Ensure common tool directories are on PATH ────────────────────────────
 # Scheduled tasks run with -NoProfile, so user-profile tool shims (scoop, etc.)
