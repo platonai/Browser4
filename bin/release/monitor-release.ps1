@@ -494,7 +494,7 @@ function New-CoworkerFailureTask {
     $taskContent = @'
 Title: Fix $WorkflowName failure for tag $Tag
 Description: The $WorkflowName workflow run $RunId (tag $Tag) failed. Investigate the root cause, apply a fix, verify with tests, and commit.
-Prompt: The release workflow `$WorkflowName` (run $RunId) for tag `$Tag` failed in CI.
+Prompt: The workflow `$WorkflowName` (run $RunId) for tag `$Tag` failed in CI.
 
 ## Context
 
