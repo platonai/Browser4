@@ -442,7 +442,7 @@ pub(super) fn test_storage_state_commands(ctx: &mut E2ECtx) {
     wait_for_eval_text(
         ctx,
         "window.localStorage.getItem('theme') ?? ''",
-        "",
+        "\"\"",
         2_000,
         "Expected localstorage-delete to remove theme",
     );
@@ -514,7 +514,7 @@ pub(super) fn test_storage_state_commands(ctx: &mut E2ECtx) {
     wait_for_eval_text(
         ctx,
         "window.sessionStorage.getItem('step') ?? ''",
-        "",
+        "\"\"",
         2_000,
         "Expected sessionstorage-delete to remove step",
     );
@@ -589,7 +589,7 @@ pub(super) fn test_storage_state_commands(ctx: &mut E2ECtx) {
     wait_for_eval_text(
         ctx,
         "window.localStorage.getItem('savedKey') ?? ''",
-        "",
+        "\"\"",
         2_000,
         "Expected delete-data to clear localStorage before restoring state",
     );
