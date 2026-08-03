@@ -68,13 +68,13 @@ function ConvertTo-LogLines {
         $result = [System.Collections.Generic.List[string]]::new()
         foreach ($item in $RawLogs) {
             if ($item -is [string]) {
-                $sub = $item -split '\r?\n'
+                $sub = [string[]]($item -split '\r?\n')
                 $result.AddRange($sub)
             } else {
                 $result.Add([string]$item)
             }
         }
-        return $result.ToArray()
+        return [string[]]$result.ToArray()
     }
     return @([string]$RawLogs)
 }
