@@ -275,8 +275,8 @@ interface BrowserProtocol {
     fun onDragIntercepted(handler: (DragIntercepted) -> Unit): EventListener
 
     suspend fun dispatchMouseMoved(x: Double, y: Double, buttons: Int?, modifiers: Int? = null): Unit
-    suspend fun dispatchMousePressed(x: Double, y: Double, clickCount: Int, modifiers: Int?, buttons: Int): Unit
-    suspend fun dispatchMouseReleased(x: Double, y: Double, clickCount: Int, modifiers: Int?, buttons: Int): Unit
+    suspend fun dispatchMousePressed(x: Double, y: Double, clickCount: Int, modifiers: Int?, buttons: Int, button: String = "left"): Unit
+    suspend fun dispatchMouseReleased(x: Double, y: Double, clickCount: Int, modifiers: Int?, buttons: Int, button: String = "left"): Unit
     suspend fun dispatchMouseWheel(x: Double, y: Double, deltaX: Double, deltaY: Double, modifiers: Int? = null): Unit
 
     suspend fun setInterceptDrags(enabled: Boolean): Unit
