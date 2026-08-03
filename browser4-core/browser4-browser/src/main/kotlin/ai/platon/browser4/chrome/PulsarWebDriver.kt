@@ -1278,17 +1278,22 @@ open class PulsarWebDriver constructor(
         rpc.invokeOnElement(selector, "press") {
             val node = page.focusOnSelector(selector) ?: return@invokeOnElement
             emulator.click(node, 1, position = "right")
-            // Ensure the cursor is at the end of any existing text so that the
-            // pressed key appends rather than prepends.  CDP focus + click may
-            // leave the cursor at position 0 on some platforms.
-            try {
-                js.evaluate(
-                    "document.querySelector('${selector.replace("'", "\\'")}')" +
-                    ".setSelectionRange(99999, 99999)"
-                )
-            } catch (_: Exception) {
-                // Non-text elements (buttons, divs) don't support setSelectionRange.
-                // Silently ignore — the press will still work for non-text targets.
+            // For single printable characters, ensure the cursor is at the end of
+            // any existing text so typed chars append rather than prepend.  CDP
+            // focus + click may leave the cursor at position 0 on some platforms.
+            // Navigation keys (Home, Delete, ArrowLeft, etc.) must NOT reposition
+            // the cursor, or chained navigations like Home→Delete break: the second
+            // press would reset the cursor to end before dispatching the key.
+            if (key.length == 1 && !key[0].isISOControl()) {
+                try {
+                    js.evaluate(
+                        "document.querySelector('${selector.replace("'", "\\'")}')" +
+                        ".setSelectionRange(99999, 99999)"
+                    )
+                } catch (_: Exception) {
+                    // Non-text elements (buttons, divs) don't support setSelectionRange.
+                    // Silently ignore — the press will still work for non-text targets.
+                }
             }
             keyboard?.press(key, randomDelayMillis("press"))
             // CDP-dispatched Enter may not trigger implicit form submission (HTML spec §4.10.2.2).

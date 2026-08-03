@@ -3264,7 +3264,7 @@ pub(super) fn test_swarm_close_session(ctx: &mut E2ECtx) {
     let close_result = run_command(ctx, &["swarm", "close"]);
     let close_output = strip_snapshot_output(&close_result.stdout);
     assert!(
-        close_output.contains("Session closed") || close_output.contains("SWARM"),
+        close_output.contains("session closed") || close_output.contains("Swarm"),
         "Expected session-close confirmation in:\n{}",
         close_result.stdout
     );

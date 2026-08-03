@@ -501,16 +501,22 @@ class Keyboard(private val bp: BrowserProtocol) {
     private val pressedKeys = mutableSetOf<String>()
 
     suspend fun type(text: String, delayMillis: Long) {
-        text.forEach { char ->
-            if (Character.isISOControl(char)) {
-                press("$char", delayMillis)
+        var i = 0
+        while (i < text.length) {
+            val codePoint = text.codePointAt(i)
+            val charCount = Character.charCount(codePoint)
+            val charString = text.substring(i, i + charCount)
+
+            if (Character.isISOControl(codePoint)) {
+                press(charString, delayMillis)
             } else {
-                bp.insertText("$char")
+                bp.insertText(charString)
             }
 
             if (delayMillis > 0) {
                 delay(delayMillis.milliseconds)
             }
+            i += charCount
         }
     }
 
