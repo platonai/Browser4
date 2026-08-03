@@ -439,13 +439,13 @@ function New-CoworkerFailureTask {
     # ── Build changelog section ──
     $changelogSection = ''
     if ($Changelog) {
-        $changelogSection = "`n## Release Changelog`n`n```text`n$Changelog`n```"
+        $changelogSection = "`n## Release Changelog`n`n``````text`n$Changelog`n``````"
     }
 
     # ── Build domain-specific investigation hints ──
     $hintSection = ''
     if ($FailingTests -and ($FailingTests -match 'e2e')) {
-        $hintSection = @"
+        $hintSection = @'
 
 ## Investigation Hints (E2E test failures)
 
@@ -456,9 +456,9 @@ function New-CoworkerFailureTask {
 - Check if fixture server port resolution, HTML fixtures, or state verification changed
 - Key files (per CLAUDE.md): `PulsarWebDriver.kt`, `MCPToolController.kt`, `commands.rs`, `main.rs`
 - Run locally: `cd cli/browser4-cli && cargo test --test e2e -- --nocapture`
-"@
+'@
     } elseif ($FailingTests -and (($FailingTests -match 'Snapshot') -or ($FailingTests -match 'Pulsar'))) {
-        $hintSection = @"
+        $hintSection = @'
 
 ## Investigation Hints (Kotlin/backend test failures)
 
@@ -466,7 +466,7 @@ function New-CoworkerFailureTask {
 - Browser driver tests: check `browser4-core/browser4-browser/`
 - Key files: `PulsarWebDriver.kt`, `MCPToolControllerTest.kt`, `ArgumentNormalizersTest.kt`
 - Snapshot tests may need AX accessible name checks — see recent commits for patterns
-"@
+'@
     }
 
     # ── Cap error body at 4000 chars ──
@@ -491,7 +491,7 @@ function New-CoworkerFailureTask {
         "(run: gh run view $RunId --web)"
     }
 
-    $taskContent = @"
+    $taskContent = @'
 Title: Fix $WorkflowName failure for tag $Tag
 Description: The $WorkflowName workflow run $RunId (tag $Tag) failed. Investigate the root cause, apply a fix, verify with tests, and commit.
 Prompt: The release workflow `$WorkflowName` (run $RunId) for tag `$Tag` failed in CI.
@@ -538,8 +538,11 @@ $hintSection
 5. **Verify:** Run the relevant test suite locally or examine the CI output for
    the specific test that failed. Make sure your change would resolve it.
 6. **Commit:** Use a conventional-commit message, e.g.:
-   `fix(test): update test assertions for changed CLI output`
-"@
+   ``fix(test): update test assertions for changed CLI output``
+'@
+
+    # Expand variables in the single-quoted template
+    $taskContent = $ExecutionContext.InvokeCommand.ExpandString($taskContent)
 
     Set-Content -Path $taskPath -Value $taskContent -Encoding UTF8
     Write-Host "  Coworker task created: $taskPath" -ForegroundColor Green
@@ -606,7 +609,7 @@ function Invoke-WorkflowFailureHandler {
             $jobLogs = Get-JobLogs -RunId $RunId -JobId $kv.Value
             if ($jobLogs) {
                 $allLogs.Add("=== Job: $($kv.Key) (ID: $($kv.Value)) ===")
-                $allLogs.AddRange(ConvertTo-LogLines -RawLogs $jobLogs)
+                $allLogs.AddRange($(ConvertTo-LogLines -RawLogs $jobLogs))
                 Write-Host "  Collected logs for: $($kv.Key)" -ForegroundColor DarkGray
             } else {
                 Write-Host "  Warning: Could not fetch logs for job '$($kv.Key)'" -ForegroundColor Yellow
@@ -625,7 +628,7 @@ function Invoke-WorkflowFailureHandler {
             Write-Host "  Coworker task will contain metadata only." -ForegroundColor Yellow
             $allLogs.Add("(No failed logs available — use `gh run view $RunId --web` to inspect the run)")
         } else {
-            $allLogs.AddRange(ConvertTo-LogLines -RawLogs $rawLogs)
+            $allLogs.AddRange($(ConvertTo-LogLines -RawLogs $rawLogs))
         }
     }
 
