@@ -732,17 +732,19 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     (driver as PulsarWebDriver).autoDismissDialogs = true
                 }
                 try {
+                val button = args["button"]?.toString()
                 when {
                     args.containsKey("selector") && args.containsKey("count") && !args.containsKey("modifier") -> {
-                        validateArgs(args, allowed("selector", "count", "autoDismissDialogs"), setOf("selector", "count"), functionName)
+                        validateArgs(args, allowed("selector", "count", "button", "autoDismissDialogs"), setOf("selector", "count"), functionName)
                         driver.click(
                             selector = paramString(args, "selector", functionName)!!,
-                            count = paramInt(args, "count", functionName)!!
+                            count = paramInt(args, "count", functionName)!!,
+                            button = button,
                         )
                     }
 
                     args.containsKey("selector") && args.containsKey("modifier") && !args.containsKey("count") -> {
-                        validateArgs(args, allowed("selector", "modifier", "autoDismissDialogs"), setOf("selector", "modifier"), functionName)
+                        validateArgs(args, allowed("selector", "modifier", "button", "autoDismissDialogs"), setOf("selector", "modifier"), functionName)
                         driver.click(
                             selector = paramString(args, "selector", functionName)!!,
                             modifier = paramString(args, "modifier", functionName)!!
@@ -750,11 +752,11 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     }
 
                     args.containsKey("selector") && !args.containsKey("count") && !args.containsKey("modifier") -> {
-                        validateArgs(args, allowed("selector", "autoDismissDialogs"), setOf("selector"), functionName)
-                        driver.click(selector = paramString(args, "selector", functionName)!!)
+                        validateArgs(args, allowed("selector", "button", "autoDismissDialogs"), setOf("selector"), functionName)
+                        driver.click(selector = paramString(args, "selector", functionName)!!, button = button)
                     }
 
-                    else -> throw IllegalArgumentException("click requires 'selector' plus optionally one of 'count' or 'modifier'")
+                    else -> throw IllegalArgumentException("click requires 'selector' plus optionally one of 'count', 'modifier', or 'button'")
                 }
                 } finally {
                     if (wasAutoDismiss) {

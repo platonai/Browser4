@@ -612,14 +612,28 @@ open class PulsarWebDriver constructor(
         rpc.invokeOnPage("mouseWheel") {
             // Primary: CDP mouse wheel — dispatches trusted wheel DOM events that
             // page listeners can observe (required for interactive fixtures).
-            // Fallback: JS window.scrollBy() when CDP fails (bypasses the
-            // Input.dispatchMouseEvent wheel race condition crbug.com/444929150).
+            // Fallback: JS window.scrollBy() + synthetic WheelEvent when CDP fails
+            // (bypasses the Input.dispatchMouseEvent wheel race condition
+            // crbug.com/444929150).  The synthetic WheelEvent ensures page
+            // listeners (e.g. the mouse fixture's wheelEvents tracker) observe
+            // the scroll.
             try {
                 withTimeout(wheelTimeout(deltaX, deltaY)) {
                     m.wheel(deltaX, deltaY)
                 }
             } catch (_: Exception) {
-                js.evaluate("window.scrollBy($deltaX, $deltaY)")
+                val x = m.currentX
+                val y = m.currentY
+                js.evaluate("""
+                    (function() {
+                        window.scrollBy($deltaX, $deltaY);
+                        window.dispatchEvent(new WheelEvent('wheel', {
+                            deltaX: $deltaX, deltaY: $deltaY, deltaMode: 0,
+                            clientX: $x, clientY: $y,
+                            bubbles: true, cancelable: true
+                        }));
+                    })()
+                """.trimIndent())
             }
         }
     }
@@ -634,14 +648,26 @@ open class PulsarWebDriver constructor(
                 // Primary: CDP mouse wheel — dispatches trusted wheel DOM events.
                 // Fallback: JS element.scrollBy() when CDP fails (bypasses the
                 // Input.dispatchMouseEvent wheel race condition crbug.com/444929150).
+                val m = mouse ?: return@invokeOnElement
                 try {
-                    val m = mouse ?: return@invokeOnElement
                     withTimeout(wheelTimeout(deltaX, deltaY)) {
                         m.moveTo(point, steps = 1)
                         m.wheel(deltaX, deltaY)
                     }
                 } catch (_: Exception) {
-                    js.evaluate("document.querySelector('${selector.replace("'", "\\'")}').scrollBy($deltaX, $deltaY)")
+                    val x = m.currentX
+                    val y = m.currentY
+                    js.evaluate("""
+                        (function() {
+                            var el = document.querySelector('${selector.replace("'", "\\'")}');
+                            if (el) { el.scrollBy($deltaX, $deltaY); }
+                            window.dispatchEvent(new WheelEvent('wheel', {
+                                deltaX: $deltaX, deltaY: $deltaY, deltaMode: 0,
+                                clientX: $x, clientY: $y,
+                                bubbles: true, cancelable: true
+                            }));
+                        })()
+                    """.trimIndent())
                 }
             }
         } catch (e: ChromeDriverException) {
@@ -754,12 +780,14 @@ open class PulsarWebDriver constructor(
         }
 
     @Throws(WebDriverException::class)
-    override suspend fun click(selector: String, count: Int) {
+    override suspend fun click(selector: String, count: Int, button: String?) {
         // Drain any stale dialog before clicking — a leftover dialog from a
         // previous operation would block CDP health checks and deadlock the
         // current click.  DialogHandler handles the deferral/no-op when the
         // queue is empty.
         dialogHandler.dismissAllPending()
+
+        val isNonLeftButton = button != null && button.lowercase() != "left"
 
         rpc.invokeOnElement(selector, "click", scrollIntoView = true) { node ->
             waitForScrollSettled(selector)
@@ -768,7 +796,10 @@ open class PulsarWebDriver constructor(
             // does not reliably trigger DOM click events in headless Chrome.
             // Use a DOM click as the sole mechanism (skip CDP mouse events to
             // avoid double-firing).  On Linux/macOS the CDP path works reliably.
-            if (isWindows) {
+            //
+            // Non-left clicks (right, middle) must always go through CDP because
+            // HTMLElement.click() dispatches left-click events only.
+            if (isWindows && !isNonLeftButton) {
                 emulator.click(
                     node, count, position = "center", modifier = null,
                     delayMillis = 0, dispatchCdpMouseEvents = false,
@@ -776,7 +807,7 @@ open class PulsarWebDriver constructor(
                 dispatchDomClick(node, count)
             } else {
                 val delayMillis = randomDelayMillis("click")
-                emulator.click(node, count, position = "center", modifier = null, delayMillis = delayMillis)
+                emulator.click(node, count, position = "center", modifier = null, delayMillis = delayMillis, button = button)
             }
         }
 
@@ -917,6 +948,11 @@ open class PulsarWebDriver constructor(
                                emitClick(this, cx, cy, detail);
                              }
                              function emitClick(el, cx, cy, d) {
+                               // Explicitly focus the element before the click
+                               // sequence so that focus events fire reliably even
+                               // in headless Chrome where HTMLElement.click() may
+                               // not trigger implicit focus.
+                               if (typeof el.focus === 'function') { el.focus(); }
                                var ptr = new PointerEvent('pointerdown', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:1,button:0,detail:d});
                                var md  = new MouseEvent('mousedown', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:1,button:0,detail:d});
                                el.dispatchEvent(ptr);
@@ -945,6 +981,11 @@ open class PulsarWebDriver constructor(
                                this.dispatchEvent(new MouseEvent('dblclick', {bubbles:true,cancelable:true,view:window,detail:2}));
                              }
                              function emitClick(el, cx, cy, d) {
+                               // Explicitly focus the element before the click
+                               // sequence so that focus events fire reliably even
+                               // in headless Chrome where HTMLElement.click() may
+                               // not trigger implicit focus.
+                               if (typeof el.focus === 'function') { el.focus(); }
                                var ptr = new PointerEvent('pointerdown', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:1,button:0,detail:d});
                                var md  = new MouseEvent('mousedown', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:1,button:0,detail:d});
                                el.dispatchEvent(ptr);
@@ -1193,6 +1234,10 @@ open class PulsarWebDriver constructor(
             browserProtocol.callFunctionOn(
                 """function(text) {
                     if (typeof this.focus === 'function') { this.focus(); }
+                    // Respect HTML maxlength constraint — the browser enforces it
+                    // for user input but not for programmatic value assignment.
+                    var maxLen = this.maxLength;
+                    if (maxLen > 0 && text.length > maxLen) { text = text.substring(0, maxLen); }
                     this.value = text;
                     this.dispatchEvent(new Event('input', { bubbles: true }));
                     this.dispatchEvent(new Event('change', { bubbles: true }));
@@ -1278,17 +1323,22 @@ open class PulsarWebDriver constructor(
         rpc.invokeOnElement(selector, "press") {
             val node = page.focusOnSelector(selector) ?: return@invokeOnElement
             emulator.click(node, 1, position = "right")
-            // Ensure the cursor is at the end of any existing text so that the
-            // pressed key appends rather than prepends.  CDP focus + click may
-            // leave the cursor at position 0 on some platforms.
-            try {
-                js.evaluate(
-                    "document.querySelector('${selector.replace("'", "\\'")}')" +
-                    ".setSelectionRange(99999, 99999)"
-                )
-            } catch (_: Exception) {
-                // Non-text elements (buttons, divs) don't support setSelectionRange.
-                // Silently ignore — the press will still work for non-text targets.
+            // For single printable characters, ensure the cursor is at the end of
+            // any existing text so typed chars append rather than prepend.  CDP
+            // focus + click may leave the cursor at position 0 on some platforms.
+            // Navigation keys (Home, Delete, ArrowLeft, etc.) must NOT reposition
+            // the cursor, or chained navigations like Home→Delete break: the second
+            // press would reset the cursor to end before dispatching the key.
+            if (key.length == 1 && !key[0].isISOControl()) {
+                try {
+                    js.evaluate(
+                        "document.querySelector('${selector.replace("'", "\\'")}')" +
+                        ".setSelectionRange(99999, 99999)"
+                    )
+                } catch (_: Exception) {
+                    // Non-text elements (buttons, divs) don't support setSelectionRange.
+                    // Silently ignore — the press will still work for non-text targets.
+                }
             }
             keyboard?.press(key, randomDelayMillis("press"))
             // CDP-dispatched Enter may not trigger implicit form submission (HTML spec §4.10.2.2).
