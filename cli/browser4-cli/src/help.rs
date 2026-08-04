@@ -842,6 +842,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Uses AI to extract structured data from the current page based on a natural-language instruction."
                 .to_string(),
         );
+        lines.push(
+            "  - Requires: OPENROUTER_API_KEY (or equivalent LLM API key) configured in the environment."
+                .to_string(),
+        );
         lines.push(wrap_text(
             "--schema accepts a JSON schema to constrain the extracted data.  Both standard JSON Schema ({\"type\":\"object\",\"properties\":{...}}) and the compact {fields:[{name,type,description,required}]} format are supported.  Use @file.json to avoid shell quoting issues.",
             "  - ",
@@ -868,6 +872,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Notes:".to_string());
         lines.push(
             "  - Uses AI to generate a natural-language summary of the current page content."
+                .to_string(),
+        );
+        lines.push(
+            "  - Requires: OPENROUTER_API_KEY (or equivalent LLM API key) configured in the environment."
                 .to_string(),
         );
         lines.push(wrap_text(
@@ -897,6 +905,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Notes:".to_string());
         lines.push(
             "  - Agent tasks are available only via the spaced `agent <subcommand>` form."
+                .to_string(),
+        );
+        lines.push(
+            "  - Requires: OPENROUTER_API_KEY (or equivalent LLM API key) configured in the environment."
                 .to_string(),
         );
         lines.push(String::new());
@@ -1581,7 +1593,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             4,
         ));
         lines.push(wrap_text(
-            "Analyze DOM structure and discover CSS selectors for recurring patterns with `htmlsnapshot inspect [selector]`. When the selector matches multiple elements (e.g. `.product-card`), it compares child structures across matches and suggests selectors ranked by recurrence. Use --max to control sample size and --depth to limit descendant traversal.",
+            "Analyze DOM structure and discover CSS selectors for recurring patterns with `htmlsnapshot inspect [selector]`. When the selector matches multiple elements (e.g. `.product-card`), it compares child structures across matches and suggests selectors ranked by recurrence. Use --max to control sample size and --depth to limit descendant traversal. For detail pages (single product, article) where no repeating patterns exist, inspect falls back to showing the page's top-level container structure — use `htmlsnapshot get` and `htmlsnapshot summary` to extract individual fields.",
             "  - ",
             4,
         ));

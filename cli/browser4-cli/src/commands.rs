@@ -749,17 +749,21 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "goto",
-            description: "Navigate to a URL, auto-opening or refreshing the session when needed",
+            description: "Navigate to a URL, auto-opening or refreshing the session when needed. Use --new-tab to open the URL in a new browser tab instead of the current tab.",
             category: Category::Navigation,
             hidden: false,
             batch_supported: true,
             args: &[ArgDef { name: "url", description: "The URL to navigate to", optional: false }],
-            options: &[],
+            options: &[
+                OptionDef { name: "new-tab", description: "Open the URL in a new browser tab instead of navigating the current tab", is_bool: true, short: None },
+            ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_navigate".to_string(),
             tool_params_fn: |args| {
                 let url = get_str(args, "url").unwrap_or_default();
-                json!({ "url": url })
+                let mut p = json!({ "url": url });
+                if let Some(true) = get_bool(args, "new-tab") { p["newTab"] = json!(true); }
+                p
             },
         },
         CommandDef {
@@ -1973,7 +1977,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "ref", description: "Target element: snapshot ref (e5, backend:15) or CSS selector (#id, .class, tag[attr])", optional: true }],
             options: &[
-                OptionDef { name: "filename", description: "File name or path to save the screenshot to. Bare filenames are saved to the snapshot directory; paths (containing / or \\) are resolved relative to the current directory.", is_bool: false, short: None },
+                OptionDef { name: "filename", description: "File name or path to save the screenshot to. Bare filenames are saved to the snapshot directory; paths (containing / or \\) are resolved relative to the current directory.", is_bool: false, short: Some("o") },
                 OptionDef { name: "full-page", description: "When true, takes a screenshot of the full scrollable page", is_bool: true, short: None },
                 OptionDef { name: "viewport", description: "Capture a specific viewport by index (0 = current visible screen). Same semantics as snapshot -v.", is_bool: false, short: Some("v") },
             ],
@@ -2461,7 +2465,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "chat",
-            description: "Chat with AI without any auto-appended context",
+            description: "Chat with AI without any auto-appended context. Requires: OPENROUTER_API_KEY (or equivalent LLM API key) configured in the environment.",
             category: Category::Agent,
             hidden: false,
             batch_supported: false,

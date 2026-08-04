@@ -57,7 +57,9 @@ class ScrapeService(
      * */
     fun executeQuery(request: ScrapeRequest): ScrapeResponse {
         try {
-            val response = executeQueryOnce(request)
+            var lastResponse: ScrapeResponse? = null
+            val maxRetries = 3
+            val baseDelayMs = 500L
 
             // Pre-load the target page BEFORE the first query attempt to warm
             // the session's WebDB cache.  Without this, the first
@@ -116,12 +118,15 @@ class ScrapeService(
                         val preloadSql = "select dom_base_uri(dom) as _url from load_and_select('$extractedUrl', ':root')"
                         executeQueryOnce(ScrapeRequest(preloadSql), retrySession)
                     } catch (e: Exception) {
-                        logger.warn("X-SQL pre-load retry failed: {}", e.message)
+                        logger.warn("X-SQL pre-load retry failed (attempt {}): {}", attempt + 1, e.message)
                     }
                 }
             }
 
-            return response
+            logger.warn("X-SQL query failed after {} retries", maxRetries)
+            return lastResponse ?: ScrapeResponse(
+                "", ResourceStatus.SC_EXPECTATION_FAILED, ProtocolStatusCodes.EXCEPTION
+            )
         } catch (e: TimeoutException) {
             logger.warn("Timeout executing query: >>>${request.sql}<<<", e)
             return ScrapeResponse("", ResourceStatus.SC_REQUEST_TIMEOUT, ProtocolStatusCodes.REQUEST_TIMEOUT)

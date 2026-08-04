@@ -72,6 +72,17 @@ mvn test -pl browser4-rest -am -Dtest=MCPToolControllerTest
 | `ArgumentNormalizersTest.kt` | 7 new tests |
 | `MCPToolControllerTest.kt` | 7 new focus-expression tests |
 
+## CLI Invocation
+
+Invoke the CLI from the repo root:
+- **PowerShell:** `./b4w.ps1 <command>` — auto-builds from source when needed
+- **Bash / Git Bash:** `./b4w.sh <command>` — wrapper that quotes args safely for pwsh
+- **Direct:** `browser4-cli <command>` — if installed globally
+
+> **Anti-pattern:** `$(./b4w.ps1) <command>` is **command substitution** in bash
+> (it runs the script and substitutes its output). This does NOT invoke the CLI
+> correctly. Use `./b4w.sh <command>` instead.
+
 ## Development conventions
 
 - **Worktrees:** Enabled. Use `EnterWorktree` to create isolated git worktrees for parallel or experimental work. Worktrees are created under `.claude/worktrees/`.
