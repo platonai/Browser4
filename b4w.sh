@@ -27,9 +27,15 @@
 #   snapshot -v 0 --stdout  →  Unknown command: 'snapshot-0'
 #   swarm query --sql @q.sql →  Missing required argument: <url>
 #
-# To prevent this, we quote every argument individually before passing
-# it to pwsh.  PowerShell treats quoted tokens as string values, never
-# as parameter bindings.
+# To prevent this, we wrap every argument in PowerShell single quotes
+# before passing it to pwsh.  PowerShell treats single-quoted tokens as
+# literal string values — no variable expansion, no escape processing
+# (except '' for a literal single quote).  This safely handles arguments
+# containing spaces, double quotes, dollar signs, and backticks.
+#
+# Prior approach (double-quote wrapping with \" escaping) broke on JSON
+# values like '{"lang":"en"}' because \" inside -Command interacts
+# destructively with PowerShell's command-line parser.
 #
 # Workaround for direct ./b4w.ps1 users in Git Bash:
 #   ./b4w.ps1 "swarm" "query" "--sql" "@query.sql" "--seed-file" "./urls.txt"
@@ -43,15 +49,19 @@ if command -v cygpath >/dev/null 2>&1; then
 fi
 ARGS=""
 for arg in "$@"; do
-    # Escape any double-quote characters inside the argument
-    safe="${arg//\"/\\\"}"
-    ARGS="$ARGS \"$safe\""
+    # Wrap each argument in PowerShell single quotes so that special
+    # characters (spaces, double quotes, $, backticks) are treated
+    # literally.  PowerShell single-quoted strings only recognise ''
+    # as an escape (for a literal single quote), so we escape any
+    # embedded single quotes before wrapping.
+    safe="${arg//\'/\'\'}"
+    ARGS="$ARGS '$safe'"
 done
 
 if [ -z "$ARGS" ]; then
     exec pwsh -NoProfile -ExecutionPolicy Bypass -File "$SCRIPT_DIR/b4w.ps1"
 else
     # Use -Command with the call operator (&) so PowerShell evaluates the
-    # individually-quoted arguments as string literals.
+    # individually single-quoted arguments as string literals.
     exec pwsh -NoProfile -ExecutionPolicy Bypass -Command "& '$SCRIPT_DIR/b4w.ps1' $ARGS"
 fi

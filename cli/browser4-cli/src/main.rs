@@ -4156,7 +4156,7 @@ async fn handle_storage_clear(
         &format!("{} clear result", storage_area_label(storage_area)),
     )?;
     cli_println!(
-        "{} cleared: {} entrie(s).",
+        "{} cleared: {} entries.",
         storage_area_label(storage_area),
         result.cleared
     );

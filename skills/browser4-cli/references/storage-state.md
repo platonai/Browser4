@@ -1,6 +1,6 @@
 ---
 title: "Storage Management"
-description: "Reference for cookie, localStorage, sessionStorage, and storage state commands. Save and restore complete browser state including cookies and storage."
+description: "Reference for cookie, localStorage, sessionStorage, and storage state commands. Save and restore browser storage state (cookies and localStorage; sessionStorage is not persisted)."
 tier: catalog
 ---
 
@@ -10,7 +10,7 @@ Manage cookies, localStorage, sessionStorage, and browser storage state.
 
 ## Storage State
 
-Save and restore complete browser state including cookies and storage.
+Save and restore browser storage state (cookies and localStorage). Note: sessionStorage is not persisted — it is intentionally scoped to the browsing session.
 
 ### Save Storage State
 
@@ -90,8 +90,10 @@ browser4-cli cookie-get session_id
 
 ### Set a Cookie
 
+When `--domain` is omitted, the cookie is scoped to the current page domain.
+
 ```bash
-# Basic cookie
+# Basic cookie (scoped to current page domain)
 browser4-cli cookie-set session abc123
 
 # Cookie with options

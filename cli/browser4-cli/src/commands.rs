@@ -1671,7 +1671,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "value", description: "Cookie value", optional: false },
             ],
             options: &[
-                OptionDef { name: "domain", description: "Cookie domain", is_bool: false, short: None },
+                OptionDef { name: "domain", description: "Cookie domain (defaults to current page domain if omitted)", is_bool: false, short: None },
                 OptionDef { name: "path", description: "Cookie path", is_bool: false, short: None },
                 OptionDef { name: "expires", description: "Cookie expiration Unix timestamp", is_bool: false, short: None },
                 OptionDef { name: "httpOnly", description: "Mark the cookie as HttpOnly", is_bool: true, short: None },
@@ -1718,7 +1718,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 optional: false,
             }],
             options: &[
-                OptionDef { name: "domain", description: "Cookie domain override", is_bool: false, short: None },
+                OptionDef { name: "domain", description: "Cookie domain (defaults to current page domain if omitted)", is_bool: false, short: None },
                 OptionDef { name: "path", description: "Cookie path override", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,

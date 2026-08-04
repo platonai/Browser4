@@ -2378,6 +2378,166 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli tab-select --guid <guid> # Select by stable GUID".to_string());
     }
 
+    if cmd.name == "state-save" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Saves cookies and localStorage only. sessionStorage is NOT persisted"
+                .to_string(),
+        );
+        lines.push(
+            "    — it is intentionally scoped to the browsing session."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli state-save".to_string());
+        lines.push("  browser4-cli state-save auth-state.json".to_string());
+    }
+
+    if cmd.name == "state-load" {
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli state-load auth-state.json".to_string());
+        lines.push("  browser4-cli state-load auth-state.json && browser4-cli open https://example.com".to_string());
+    }
+
+    if cmd.name == "cookie-set" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - When --domain is omitted, the cookie is scoped to the current page domain."
+                .to_string(),
+        );
+        lines.push(
+            "  - --expires takes a Unix timestamp (seconds since epoch), not a duration."
+                .to_string(),
+        );
+        lines.push(
+            "  - --sameSite values: Strict, Lax, or None (case-sensitive)."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli cookie-set session abc123".to_string());
+        lines.push("  browser4-cli cookie-set session abc123 --domain localhost --path / --httpOnly --secure".to_string());
+        lines.push("  browser4-cli cookie-set theme dark --sameSite Lax --expires 1786474749".to_string());
+    }
+
+    if cmd.name == "cookie-list" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Use cookie-get <name> to look up a single cookie by name."
+                .to_string(),
+        );
+        lines.push(
+            "  - Output is always JSON (an array of cookie objects)."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli cookie-list".to_string());
+        lines.push("  browser4-cli cookie-list --domain localhost".to_string());
+        lines.push("  browser4-cli cookie-list --domain example.com --path /api".to_string());
+    }
+
+    if cmd.name == "cookie-get" {
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli cookie-get session_id".to_string());
+        lines.push("  browser4-cli cookie-get theme".to_string());
+    }
+
+    if cmd.name == "cookie-delete" {
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli cookie-delete session_id".to_string());
+        lines.push("  browser4-cli cookie-delete session_id --domain localhost --path /".to_string());
+    }
+
+    if cmd.name == "cookie-clear" {
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli cookie-clear".to_string());
+    }
+
+    if cmd.name == "localstorage-set" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - For JSON values containing spaces or double quotes, use single quotes"
+                .to_string(),
+        );
+        lines.push(
+            "    in bash (e.g. '{\"key\":\"val\"}') or escaped double quotes in PowerShell."
+                .to_string(),
+        );
+        lines.push(
+            "    See the storage-state.md reference for quoting workarounds."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli localstorage-set theme dark".to_string());
+        lines.push("  browser4-cli localstorage-set user_prefs '{\"lang\":\"en\",\"tz\":\"UTC\"}'".to_string());
+    }
+
+    if cmd.name == "localstorage-get" {
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli localstorage-get token".to_string());
+    }
+
+    if cmd.name == "localstorage-list" {
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli localstorage-list".to_string());
+    }
+
+    if cmd.name == "localstorage-delete" {
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli localstorage-delete token".to_string());
+    }
+
+    if cmd.name == "localstorage-clear" {
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli localstorage-clear".to_string());
+    }
+
+    if cmd.name == "sessionstorage-set" {
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli sessionstorage-set step 3".to_string());
+        lines.push("  browser4-cli sessionstorage-set form_data '{\"name\":\"value\"}'".to_string());
+    }
+
+    if cmd.name == "sessionstorage-get" {
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli sessionstorage-get form_data".to_string());
+    }
+
+    if cmd.name == "sessionstorage-list" {
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli sessionstorage-list".to_string());
+    }
+
+    if cmd.name == "sessionstorage-delete" {
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli sessionstorage-delete step".to_string());
+    }
+
+    if cmd.name == "sessionstorage-clear" {
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli sessionstorage-clear".to_string());
+    }
+
     lines.join("\n")
 }
 

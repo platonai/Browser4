@@ -1666,9 +1666,13 @@ function Write-IssuesToDraft {
             $consBody += "3. Ensure the backend server is running.`n"
             $consBody += "4. All commands: ``browser4-cli <command>```n`n"
         } else {
-            $consBody += "2. The CLI is invoked via ``./b4w.ps1`` which auto-builds from source when needed.`n"
+            $consBody += "2. The CLI is invoked via ``./b4w.ps1`` (PowerShell) or ``./b4w.sh`` (Bash / Git Bash), which auto-build from source when needed.`n"
             $consBody += "3. The backend server starts automatically in dev mode.`n"
-            $consBody += "4. All commands from repo root: ``./b4w.ps1 <command>```n`n"
+            $consBody += "4. All commands from repo root:`n`n"
+            $consBody += "   - **PowerShell:** ``./b4w.ps1 <command>```n"
+            $consBody += "   - **Bash / Git Bash:** ``./b4w.sh <command>```n"
+            $consBody += "   - **Direct:** ``browser4-cli <command>`` (if installed globally)`n`n"
+            $consBody += "   > **Note:** ```$(./b4w.ps1)``` is command substitution in bash — do NOT use it.`n`n"
         }
 
         $consBody += "### Per-Issue Reproduction Steps`n`n"
