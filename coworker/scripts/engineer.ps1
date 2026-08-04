@@ -421,8 +421,15 @@ INSTRUCTIONS:
    b. Understand the root cause before making changes.
    c. Implement the fix or feature.
    d. Verify your change is correct (review the diff, run tests if applicable).
-4. After all issues are addressed, provide a brief summary of what was changed and why.
-5. If an issue is already fixed, unclear, or not actionable, note that explicitly instead
+4. ⚠️ HUMAN NOTES ARE TOP PRIORITY. If any issue contains a "Notes:" field or
+   human-written review annotations (e.g. in the "Human Review" section), those
+   notes OVERRIDE everything else — including the AI-suggested improvements and
+   the original issue description. Treat human notes as the authoritative fix
+   specification. When Notes: and AI-suggested fixes conflict, follow the human
+   notes exactly, even if you disagree. Do NOT reinterpret, soften, or expand
+   human notes into something else.
+5. After all issues are addressed, provide a brief summary of what was changed and why.
+6. If an issue is already fixed, unclear, or not actionable, note that explicitly instead
    of making unnecessary changes.
 
 --- TASK CONTENT BELOW ---
