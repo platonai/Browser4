@@ -1342,12 +1342,31 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
     run_command(ctx, &["tab-select", "--guid", &other_guid]);
 
     // ── 6. tab-close by GUID — verify target tab disappears ─────────
-    run_command(ctx, &["tab-close", "--guid", &other_guid]);
+    eprintln!(
+        "[tab_commands] closing tab with GUID={other_guid}  other_url={other_url}  interactive_url={interactive_url}  form_url={form_url}"
+    );
+    let close_result = run_command(ctx, &["tab-close", "--guid", &other_guid]);
+    eprintln!(
+        "[tab_commands] tab-close stdout: >>>\n{}\n<<<  stderr: >>>\n{}\n<<<",
+        close_result.stdout, close_result.stderr
+    );
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(5_000);
     let mut after_close_output = String::new();
+    let mut after_close_raw = String::new();
     while std::time::Instant::now() < deadline {
         let check = run_command(ctx, &["tab-list", "--json"]);
+        after_close_raw = check.stdout.clone();
         after_close_output = strip_snapshot_output(&check.stdout);
+        eprintln!(
+            "[tab_commands] poll tab-list: raw_stdout(len={}) >>>\n{}\n<<<  stripped(len={}) >>>\n{}\n<<<  contains_other={}  contains_interactive={}  contains_form={}",
+            after_close_raw.len(),
+            after_close_raw,
+            after_close_output.len(),
+            after_close_output,
+            after_close_output.contains(&other_url),
+            after_close_output.contains(&interactive_url),
+            after_close_output.contains(&form_url),
+        );
         if !after_close_output.contains(&other_url) {
             break;
         }
@@ -1355,15 +1374,15 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
     }
     assert!(
         !after_close_output.contains(&other_url),
-        "Expected tab-close --guid {other_guid} to remove '{other_url}' from tab-list:\n{after_close_output}"
+        "Expected tab-close --guid {other_guid} to remove '{other_url}' from tab-list:\n{after_close_output}\nRaw stdout:\n{after_close_raw}"
     );
     assert!(
         after_close_output.contains(&interactive_url),
-        "Expected interactive URL to survive GUID-based close"
+        "Expected interactive URL to survive GUID-based close.\ninteractive_url={interactive_url}\nother_guid={other_guid}\nStripped output:\n{after_close_output}\nRaw stdout:\n{after_close_raw}"
     );
     assert!(
         after_close_output.contains(&form_url),
-        "Expected form URL to survive GUID-based close"
+        "Expected form URL to survive GUID-based close.\nform_url={form_url}\nStripped output:\n{after_close_output}\nRaw stdout:\n{after_close_raw}"
     );
 
     // ── 7. tab-close current tab (no args) — verify tab count drops ──
