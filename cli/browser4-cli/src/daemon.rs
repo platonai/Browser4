@@ -3984,7 +3984,6 @@ fn browser4_root_search_start_dir_from_env() -> Option<PathBuf> {
 }
 
 fn find_browser4_root_from(start: &Path, deep_search: bool) -> Option<PathBuf> {
-    eprintln!("Finding browser4 root from {:?}", start.display());
 
     let start_dir = if start.is_dir() {
         start

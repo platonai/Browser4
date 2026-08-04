@@ -78,14 +78,18 @@ Titles are truncated with ellipsis (e.g., "A Light in the ...", "Sapiens: A Brie
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+<<<<<<<< HEAD:coworker/tasks/main/3done/2026/0805/html-snapshot-inspect-discovery.md
 [AI review unavailable — defaulted to DEFER]
+========
+[AI suggested: ACCEPT] Valid product issue. `get text` returns rendered/visible text (innerText semantics), which CSS overflow truncates — surprising when users expect `textContent`. Adding a `textcontent` field type or `--full-text` flag is the right fix. Also add a warning when output lines end with "…" to signal possible truncation. This is the highest-severity issue in the batch: it silently returns incorrect data.
+>>>>>>>> 84e2b0c4d (feat(snapshot): add textcontent extraction field and polish CLI UX):coworker/tasks/main/3done/2026/0804/htmlsnapshot-inspect-discovery-issues.md
 
 ---
 
@@ -126,13 +130,22 @@ The working directory during `cargo run` is `cli/browser4-cli/`, so `@query.sql`
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+<<<<<<<< HEAD:coworker/tasks/main/3done/2026/0805/html-snapshot-inspect-discovery.md
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+========
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+>>>>>>>> 84e2b0c4d (feat(snapshot): add textcontent extraction field and polish CLI UX):coworker/tasks/main/3done/2026/0804/htmlsnapshot-inspect-discovery-issues.md
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+<<<<<<<< HEAD:coworker/tasks/main/3done/2026/0805/html-snapshot-inspect-discovery.md
 [AI review unavailable — defaulted to DEFER]
+========
+[AI suggested: ACCEPT with improvements] The core fix already exists — `resolve_sql_file()` (commands.rs:5966) tries the Browser4 repo root before falling back to CWD, so files placed in the repo root are found even when `cargo run` sets CWD to `cli/browser4-cli/`. However, two improvements remain: (a) `find_browser4_root_from()` at daemon.rs:3987 has an unconditional `eprintln!` debug log that leaks into user output — remove or gate behind `--verbose`; (b) the error message at commands.rs:6004 lists tried paths but doesn't explain *why* CWD differs from the user's invocation directory — add a note about `cargo run` CWD behavior.
+>>>>>>>> 84e2b0c4d (feat(snapshot): add textcontent extraction field and polish CLI UX):coworker/tasks/main/3done/2026/0804/htmlsnapshot-inspect-discovery-issues.md
 
 ---
 
@@ -171,14 +184,18 @@ The query response is the raw backend API response, not filtered for CLI consump
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+<<<<<<<< HEAD:coworker/tasks/main/3done/2026/0805/html-snapshot-inspect-discovery.md
 [AI review unavailable — defaulted to DEFER]
+========
+[AI suggested: ACCEPT] Both suggested improvements already exist: `--result-only` strips the envelope (commands.rs:3040), and `--format` defaults to `"table"` for human-readable output (commands.rs:3053). This issue is functionally resolved, but its existence signals a discoverability problem — cross-reference with Issue 5. Consider adding a tip after the first `htmlsnapshot query` run that mentions `--result-only` and `--format table`, similar to the existing inline SQL tip at commands.rs:6320.
+>>>>>>>> 84e2b0c4d (feat(snapshot): add textcontent extraction field and polish CLI UX):coworker/tasks/main/3done/2026/0804/htmlsnapshot-inspect-discovery-issues.md
 
 ---
 
@@ -216,13 +233,22 @@ Both produce identical output because the `.product_pod` structure is only 3-4 l
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+<<<<<<<< HEAD:coworker/tasks/main/3done/2026/0805/html-snapshot-inspect-discovery.md
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+========
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+>>>>>>>> 84e2b0c4d (feat(snapshot): add textcontent extraction field and polish CLI UX):coworker/tasks/main/3done/2026/0804/htmlsnapshot-inspect-discovery-issues.md
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+<<<<<<<< HEAD:coworker/tasks/main/3done/2026/0805/html-snapshot-inspect-discovery.md
 [AI review unavailable — defaulted to DEFER]
+========
+[AI suggested: ACCEPT with improvements] The `--depth` flag works correctly, but the issue is valid as a feedback gap. When the actual DOM under a selector is shallower than the requested depth, output is identical for `--depth 3` vs `--depth 1` with no indication why. The suggested improvements are low-cost and high-clarity: (a) note in output "Depth limited to N (actual DOM depth under selector)" when the DOM is shallower than requested, and (b) document this behavior in the option help text. No backend change needed — this is CLI-side output annotation only.
+>>>>>>>> 84e2b0c4d (feat(snapshot): add textcontent extraction field and polish CLI UX):coworker/tasks/main/3done/2026/0804/htmlsnapshot-inspect-discovery-issues.md
 
 ---
 
@@ -257,14 +283,18 @@ The `inspect` command is deeply nested (`htmlsnapshot inspect`) and its help is 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+<<<<<<<< HEAD:coworker/tasks/main/3done/2026/0805/html-snapshot-inspect-discovery.md
 [AI review unavailable — defaulted to DEFER]
+========
+[AI suggested: ACCEPT] Valid discoverability gap. The top-level `htmlsnapshot --help` lists subcommands but `htmlsnapshot inspect --help` has no detailed flag descriptions or examples. The pattern to follow already exists elsewhere — `htmlsnapshot query --help` shows rich option descriptions (commands.rs:3020-3056). Extend `htmlsnapshot-inspect` with the same detail level, and add 1-2 inspect examples to the top-level `htmlsnapshot --help` output. This is the lowest-cost fix in the batch and addresses the systemic discoverability problem seen across Issues 2 and 3.
+>>>>>>>> 84e2b0c4d (feat(snapshot): add textcontent extraction field and polish CLI UX):coworker/tasks/main/3done/2026/0804/htmlsnapshot-inspect-discovery-issues.md
 
 ---
 

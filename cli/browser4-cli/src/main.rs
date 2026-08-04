@@ -5799,9 +5799,9 @@ async fn handle_html_snapshot_get(
     if field.is_empty() {
         return Err("Field is required: text, html, or attr.".to_string());
     }
-    if !["text", "html", "attr"].contains(&field) {
+    if !["text", "textcontent", "html", "attr"].contains(&field) {
         return Err(format!(
-            "Unknown field '{}'. Use text, html, or attr.",
+            "Unknown field '{}'. Use text, textcontent, html, or attr.",
             field
         ));
     }
@@ -5950,6 +5950,24 @@ async fn handle_html_snapshot_get(
         cli_println!("{}", text);
     }
 
+    // Warn when text output contains truncated lines (CSS text-overflow ellipsis).
+    // textcontent field bypasses this — it uses Jsoup's text() which returns
+    // the full text content regardless of CSS rendering.
+    if field == "text" && !empty_result && !json_active() {
+        let has_truncated = text.lines().any(|line| {
+            line.trim_end().ends_with('\u{2026}') || line.trim_end().ends_with("...")
+        });
+        if has_truncated {
+            cli_println!("");
+            cli_println!(
+                "💡 Some text lines appear truncated (ending with '…' or '...'). \
+                 This can happen when CSS text-overflow clips rendered text. \
+                 Try `htmlsnapshot get textcontent \"...\"` to retrieve the full text content, \
+                 or `htmlsnapshot get attr \"...\" title` for the element's title attribute."
+            );
+        }
+    }
+
     json_field("result", json!(&text));
     json_field("mode", json!(field));
     if !selector.is_empty() {
@@ -6002,7 +6020,11 @@ fn resolve_sql_file(file_path: &str) -> Result<String, String> {
         }
     }
     Err(format!(
-        "Failed to read file '{}'\n  Tried: {}",
+        "Failed to read file '{}'\n  Tried: {}\n  \
+         Tip: When using `cargo run --manifest-path cli/browser4-cli/Cargo.toml`, the working \
+         directory is set to cli/browser4-cli/, not the directory where you invoked cargo. \
+         Use an absolute path (@/full/path/file.sql) or place your file in the repo root \
+         to ensure it is found regardless of CWD.",
         file_path,
         tried.join("\n  Tried: "),
     ))
@@ -6325,6 +6347,15 @@ async fn handle_html_snapshot_query(
             "   Also: CSS selectors in X-SQL must use single quotes (SQL string literal syntax). \
              Double quotes are interpreted as SQL identifiers.\n\
                Example: DOM_FIRST_TEXT(DOM, 'h1') — NOT DOM_FIRST_TEXT(DOM, \"h1\")"
+        );
+    }
+
+    // Tip: suggest --result-only and --format table for cleaner output.
+    // These options already exist but users may not know about them.
+    if !json_active() && !output.is_empty() && !result_only {
+        cli_println!(
+            "\n💡 Tip: Add --result-only to extract just the data from the response envelope, \
+             or --format table for human-readable tabular output."
         );
     }
 
@@ -7188,6 +7219,25 @@ async fn handle_html_snapshot_inspect(
         cli_println!("     htmlsnapshot get attr \"img[src]:expr(width > 200 && height > 200)\" src --limit 20  # large images only");
         cli_println!("    Narrow the scope with a more specific CSS selector for targeted extraction:");
         cli_println!("     htmlsnapshot inspect \".card\" --max 20 --depth 6");
+    }
+
+    // Depth note: --depth limits traversal to a maximum depth under the selector.
+    // When the actual DOM under the selector is shallower than --depth, the output
+    // is identical for different depth values — there is no "depth reached" indicator
+    // because the deepest descendant simply doesn't exceed the cap.
+    let requested_depth = tool_params
+        .get("depth")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<i64>().ok());
+    if let Some(d) = requested_depth {
+        if d > 2 {
+            cli_println!("");
+            cli_println!(
+                "  ℹ️  --depth {} limits traversal to at most {} levels under the selector. \
+                 If the DOM is shallower, output is identical for higher --depth values.",
+                d, d
+            );
+        }
     }
 
     // When auto-discovery was triggered, show alternative candidates that were
@@ -17335,6 +17385,17 @@ fn print_help(command_name: Option<&str>) {
                 let mut lines: Vec<String> = vec![format!("{} subcommands:\n", name)];
                 for cmd in matching {
                     lines.push(generate_help_entry(cmd));
+                }
+                // Add quick examples for common groups
+                if name == "htmlsnapshot" {
+                    lines.push(String::new());
+                    lines.push("Quick examples:".to_string());
+                    lines.push("  # Auto-discover repeating patterns (product cards, search results)".to_string());
+                    lines.push("  browser4-cli htmlsnapshot inspect".to_string());
+                    lines.push("  # Inspect a specific container to find data extraction selectors".to_string());
+                    lines.push("  browser4-cli htmlsnapshot inspect \".product_pod\" --max 5 --depth 3".to_string());
+                    lines.push("  # Extract all matching text with querySelectorAll semantics".to_string());
+                    lines.push("  browser4-cli htmlsnapshot get all text \"h3 a\" --all".to_string());
                 }
                 cli_println!("{}", lines.join("\n"));
                 return;

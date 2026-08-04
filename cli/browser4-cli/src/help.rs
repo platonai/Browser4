@@ -646,6 +646,60 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli htmlsnapshot query --sql @query.sql --format table".to_string());
     }
 
+    if cmd.name == "htmlsnapshot-inspect" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Without a selector, auto-discovers repeating content patterns (product cards,"
+                .to_string(),
+        );
+        lines.push(
+            "    search results, article lists) across the entire page."
+                .to_string(),
+        );
+        lines.push(
+            "  - With a selector, analyzes matched elements and suggests child CSS selectors"
+                .to_string(),
+        );
+        lines.push(
+            "    for extracting text, attributes, or nested values."
+                .to_string(),
+        );
+        lines.push(
+            "  - --max controls how many of the matched elements to analyze (default: 20)."
+                .to_string(),
+        );
+        lines.push(
+            "  - --depth limits how many descendant levels to explore for selector suggestions"
+                .to_string(),
+        );
+        lines.push(
+            "    (default: 5). If the DOM under the selector is shallower, the actual depth is used."
+                .to_string(),
+        );
+        lines.push(
+            "  - Suggested selectors are ranked by quality (★ = high, reliable for extraction)."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use the output selectors with `htmlsnapshot get` to extract data."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use --stdin or --selector-base64 to avoid shell quoting issues on Windows."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  # Auto-discover repeating patterns on the current page".to_string());
+        lines.push("  browser4-cli htmlsnapshot inspect".to_string());
+        lines.push("  # Analyze product cards and find selectors for titles, prices, images".to_string());
+        lines.push("  browser4-cli htmlsnapshot inspect \".product_pod\" --max 5 --depth 3".to_string());
+        lines.push("  # Inspect a sidebar or navigation for link selectors".to_string());
+        lines.push("  browser4-cli htmlsnapshot inspect \".sidebar\" --max 10".to_string());
+        lines.push("  # Read selector from file or stdin (avoids quoting issues on Windows)".to_string());
+        lines.push("  browser4-cli htmlsnapshot inspect --stdin < selector.txt".to_string());
+    }
+
     if cmd.name == "wait" {
         lines.push("Notes:".to_string());
         lines.push(
@@ -2752,8 +2806,8 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-get").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli htmlsnapshot get <field> [selector] [name]"));
-        assert!(help.contains("Extract elements from the HTML snapshot stored in Browser4's page storage (text, html, attr)"));
-        assert!(help.contains("What to extract: text, html, or attr"));
+        assert!(help.contains("Extract elements from the HTML snapshot stored in Browser4's page storage (text, textcontent, html, attr)"));
+        assert!(help.contains("What to extract: text, textcontent, html, or attr"));
         assert!(help.contains("Attribute name (required for attr field)"));
         assert!(!help.contains("browser4-cli htmlsnapshot-get"));
     }
@@ -2810,7 +2864,7 @@ mod tests {
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli htmlsnapshot get all <field> [selector] [name]"));
         assert!(help.contains("Extract ALL matching elements from the HTML snapshot (querySelectorAll semantics)"));
-        assert!(help.contains("What to extract: text, html, or attr"));
+        assert!(help.contains("What to extract: text, textcontent, html, or attr"));
         assert!(help.contains("Attribute name (required for attr field)"));
         assert!(help.contains("--offset"));
         assert!(help.contains("--limit"));

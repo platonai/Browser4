@@ -2950,12 +2950,12 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-get",
-            description: "Extract elements from the HTML snapshot stored in Browser4's page storage (text, html, attr). Supports batch mode for multi-step workflows.",
+            description: "Extract elements from the HTML snapshot stored in Browser4's page storage (text, textcontent, html, attr). Supports batch mode for multi-step workflows.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: true,
             args: &[
-                ArgDef { name: "field", description: "What to extract: text, html, or attr", optional: false },
+                ArgDef { name: "field", description: "What to extract: text, textcontent, html, or attr. text returns visible text (may be truncated by CSS overflow); textcontent returns the full text content", optional: false },
                 ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
                 ArgDef { name: "name", description: "Attribute name (required for attr field)", optional: true },
             ],
@@ -2981,7 +2981,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[
-                ArgDef { name: "field", description: "What to extract: text, html, or attr", optional: false },
+                ArgDef { name: "field", description: "What to extract: text, textcontent, html, or attr. text returns visible text (may be truncated by CSS overflow); textcontent returns the full text content", optional: false },
                 ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
                 ArgDef { name: "name", description: "Attribute name (required for attr field)", optional: true },
             ],
@@ -3330,7 +3330,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "max", description: "Max matching elements to analyze (default: 20)", is_bool: false, short: None },
-                OptionDef { name: "depth", description: "Max descendant depth for selector suggestions (default: 5)", is_bool: false, short: None },
+                OptionDef { name: "depth", description: "Max descendant depth for selector suggestions (default: 5). If the DOM under the selector is shallower than --depth, the actual DOM depth is used and output is identical for higher depth values.", is_bool: false, short: None },
                 OptionDef { name: "stdin", description: "Read the CSS selector from stdin instead of an inline argument (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "selector-base64", description: "Base64-encoded CSS selector (avoids shell quoting issues on Windows)", is_bool: false, short: None },
             ],
