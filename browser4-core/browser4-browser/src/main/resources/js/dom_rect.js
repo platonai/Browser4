@@ -10,6 +10,14 @@
 /**
  * Format rectangle from individual coordinates.
  *
+ * Compression mode is controlled by the VI_COMPRESSION config option:
+ * - "base36" (default): comma-separated base-36 integers, ~56% smaller
+ *   Example: "3g,cp,5k,1f" = left:124, top:457, width:200, height:51
+ * - "none": space-separated decimals (legacy format)
+ *   Example: "124 457 201 51"
+ *
+ * Output order: left,top,width,height (matches DOMRect / formatDOMRect).
+ *
  * @param top {Number}
  * @param left {Number}
  * @param width {Number}
@@ -21,15 +29,35 @@ __pulsar_utils__.formatRect = function(top, left, width, height) {
         return false;
     }
 
+    var config = this.getConfig ? this.getConfig() : __pulsar_DEFAULT_CONFIGS;
+    var compression = config.VI_COMPRESSION || 'base36';
+
+    if (compression === 'base36') {
+        return ''
+            + Math.round(left).toString(36) + ','
+            + Math.round(top).toString(36) + ','
+            + Math.round(width).toString(36) + ','
+            + Math.round(height).toString(36);
+    }
+
+    // Legacy space-separated integer format
     return ''
-        + Math.round(top * 10) / 10 + ' '
-        + Math.round(left * 10) / 10 + ' '
-        + Math.round(width * 10) / 10 + ' '
-        + Math.round(height * 10) / 10;
+        + Math.round(left) + ' '
+        + Math.round(top) + ' '
+        + Math.round(width) + ' '
+        + Math.round(height);
 };
 
 /**
  * Format a DOMRect object.
+ *
+ * Compression mode is controlled by the VI_COMPRESSION config option:
+ * - "base36" (default): comma-separated base-36 integers, ~56% smaller
+ *   Example: "3g,cp,5k,1f" = left:124, top:457, width:200, height:51
+ * - "none": space-separated decimals (legacy format)
+ *   Example: "124 457 201 51"
+ *
+ * Output order: left,top,width,height.
  *
  * @param rect {DOMRect}
  * @return {String|Boolean} Formatted string or false if zero dimensions.
@@ -39,11 +67,23 @@ __pulsar_utils__.formatDOMRect = function(rect) {
         return false;
     }
 
+    var config = this.getConfig ? this.getConfig() : __pulsar_DEFAULT_CONFIGS;
+    var compression = config.VI_COMPRESSION || 'base36';
+
+    if (compression === 'base36') {
+        return ''
+            + Math.round(rect.left).toString(36) + ','
+            + Math.round(rect.top).toString(36) + ','
+            + Math.round(rect.width).toString(36) + ','
+            + Math.round(rect.height).toString(36);
+    }
+
+    // Legacy space-separated integer format
     return ''
-        + Math.round(rect.left * 10) / 10 + ' '
-        + Math.round(rect.top * 10) / 10 + ' '
-        + Math.round(rect.width * 10) / 10 + ' '
-        + Math.round(rect.height * 10) / 10;
+        + Math.round(rect.left) + ' '
+        + Math.round(rect.top) + ' '
+        + Math.round(rect.width) + ' '
+        + Math.round(rect.height);
 };
 
 /**
