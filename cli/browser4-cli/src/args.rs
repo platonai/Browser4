@@ -203,6 +203,14 @@ pub fn parse_raw_args(
     while i < raw_args.len() {
         let arg = &raw_args[i];
         if let Some(rest) = arg.strip_prefix("--") {
+            // POSIX end-of-options marker: bare `--` stops option parsing
+            // and treats all remaining tokens as positional arguments.
+            if rest.is_empty() {
+                for j in i + 1..raw_args.len() {
+                    positional.push(json!(&raw_args[j]));
+                }
+                break;
+            }
             if let Some(eq) = rest.find('=') {
                 // --key=value
                 let key = rest[..eq].to_string();

@@ -11615,7 +11615,7 @@ async fn handle_loop(
     if parsed.list {
         let entries = state::list_loop_states(None);
         if entries.is_empty() {
-            cli_println!("No persisted loops. Start one with `browser4-cli loop <task>`.");
+            cli_println!("No persisted loops. Start one with `browser4-cli loop <task>`. Use `browser4-cli loop --history` to see recently completed loops.");
         } else {
             cli_println!("{} persisted loop(s):\n", entries.len());
             for entry in &entries {
@@ -12500,8 +12500,35 @@ async fn handle_loop(
         }
     };
 
+    // Aggregate success/failure counts so the summary reflects reality.
+    let succeeded = results
+        .iter()
+        .filter(|r| r.get("ok").and_then(|v| v.as_bool()).unwrap_or(false))
+        .count();
+    let failed = total as usize - succeeded;
+
+    let (icon, summary) = if failed == 0 {
+        ("✓", format!("{} iteration(s) completed.", total))
+    } else if succeeded == 0 {
+        (
+            "✗",
+            format!(
+                "{} iteration(s): {} succeeded, {} failed.",
+                total, succeeded, failed
+            ),
+        )
+    } else {
+        (
+            "⚠",
+            format!(
+                "{} iteration(s): {} succeeded, {} failed.",
+                total, succeeded, failed
+            ),
+        )
+    };
+
     cli_println!("\n========================================");
-    cli_println!("✓  Loop finished — {} iteration(s) completed.", total);
+    cli_println!("{}  Loop finished — {}", icon, summary);
 
     // Write a history entry so users can review past loop completions.
     let history_entry = state::LoopHistoryEntry {
@@ -16261,6 +16288,17 @@ async fn run(
         return Ok(());
     }
 
+    // `loop` is handled early — its task tokens are variadic (multi-word
+    // subcommand after --), so we bypass the standard arg parser which would
+    // reject them as "too many positional arguments".  handle_loop runs its
+    // own parse_loop_args that correctly handles variadic tokens.
+    if command == "loop" {
+        ensure_server_running(&base_url).await?;
+        let client = make_client();
+        handle_loop(&client, &base_url, global).await?;
+        return Ok(());
+    }
+
     // Parse positional + named arguments BEFORE starting the backend, so
     // malformed/illegal commands fail fast without a 30 s server launch.
     let (short_to_long, bool_opts) = build_short_option_map(cmd_def.options);
@@ -17057,9 +17095,6 @@ async fn run(
         }
         "experience-deep-learn" => {
             handle_experience_deep_learn(&client, &base_url, &tool_params).await?;
-        }
-        "loop" => {
-            handle_loop(&client, &base_url, global).await?;
         }
         "htmlsnapshot" | "htmlsnapshot-capture" => {
             handle_html_snapshot_capture(

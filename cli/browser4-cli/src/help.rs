@@ -700,6 +700,57 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli htmlsnapshot inspect --stdin < selector.txt".to_string());
     }
 
+    if cmd.name == "loop" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Three task modes: plain text (requires a configured LLM provider), --shell"
+                .to_string(),
+        );
+        lines.push(
+            "    (runs a shell command each iteration), and -- (browser4-cli subcommand, for"
+                .to_string(),
+        );
+        lines.push(
+            "    multi-token subcommands like batch)."
+                .to_string(),
+        );
+        lines.push(
+            "  - Progress is persisted to disk under a configurable --name (default: default)."
+                .to_string(),
+        );
+        lines.push(
+            "    Loops survive interruption and can be resumed."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use --history to see recently completed loops (up to 200 most recent)."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use --pause combined with a task to create a loop that starts in paused state."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  # Plain-text task (requires LLM backend)".to_string());
+        lines.push("  browser4-cli loop \"check if the login page loads\" --interval 300".to_string());
+        lines.push("  # Shell command, run every 60 seconds".to_string());
+        lines.push("  browser4-cli loop --shell \"curl -s https://api.example.com/health\" --interval 60".to_string());
+        lines.push("  # Browser4 CLI subcommand (use -- separator for multi-token commands)".to_string());
+        lines.push("  browser4-cli loop --count 5 --interval 10 -- status".to_string());
+        lines.push("  # Multi-token subcommand: batch a sequence of browser operations".to_string());
+        lines.push("  browser4-cli loop --count 3 --interval 30 -- batch \"goto https://example.com\" snapshot status".to_string());
+        lines.push("  # Run 10 times then stop".to_string());
+        lines.push("  browser4-cli loop --count 10 --interval 3600 --shell \"backup.sh\"".to_string());
+        lines.push("  # Lifecycle: pause, resume, stop a named loop".to_string());
+        lines.push("  browser4-cli loop --pause --name my-loop".to_string());
+        lines.push("  browser4-cli loop --resume --name my-loop".to_string());
+        lines.push("  browser4-cli loop --stop --name my-loop".to_string());
+        lines.push("  # List all active loops and view history".to_string());
+        lines.push("  browser4-cli loop --list".to_string());
+        lines.push("  browser4-cli loop --history".to_string());
+    }
+
     if cmd.name == "wait" {
         lines.push("Notes:".to_string());
         lines.push(
