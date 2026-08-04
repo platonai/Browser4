@@ -51,7 +51,9 @@ param(
 
     [string]$ConfigPath,
     [switch]$Background,
-    [switch]$Once
+    [switch]$Once,
+
+    [string]$PidFile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -263,9 +265,19 @@ if ($Command -eq 'gui') {
 # ── Scheduler-only mode ────────────────────────────────────────────────────
 if ($Command -eq 'sched') {
     if ($Background) {
-        $null = Invoke-Scheduler -ReturnProcess
+        $proc = Invoke-Scheduler -ReturnProcess
+        if ($PidFile -and $proc) {
+            $pidDir = Split-Path -Parent $PidFile
+            if ($pidDir -and -not (Test-Path $pidDir)) {
+                New-Item -ItemType Directory -Path $pidDir -Force | Out-Null
+            }
+            $proc.Id | Out-File -FilePath $PidFile -NoNewline
+            Write-Host "[coworker] PID file written: $PidFile"
+        }
         Write-Host '[coworker] This terminal can be closed.'
-        Write-Host "[coworker] To stop: look for the pwsh process running coworker-scheduler.ps1"
+        if (-not $PidFile) {
+            Write-Host "[coworker] To stop: look for the pwsh process running coworker-scheduler.ps1"
+        }
         return
     }
     Write-Host '[coworker] Starting scheduler (Ctrl+C to stop all)...'

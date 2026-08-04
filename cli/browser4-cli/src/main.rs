@@ -4267,16 +4267,21 @@ async fn handle_snapshot(
         .filter(|s| !s.is_empty());
     let header = if let Some(vp) = viewports {
         format!(
-            "# Snapshot viewport(s): {}\n\
+            "# Page URL: {}\n\
+             # Snapshot viewport(s): {}\n\
              # This file contains the accessibility tree for the requested viewport(s) only.\n\
+             # /url fields may be relative — resolve against the Page URL above.\n\
              # Use `browser4-cli snapshot grep <pattern>` to search the full in-memory tree.\n\
              # Use `browser4-cli snapshot -v all` to capture all viewports.\n",
-            vp
+            url, vp
         )
     } else {
         format!(
-            "# Snapshot — current viewport (use -v N for other viewports, -v all for full page).\n\
-             # Use `browser4-cli snapshot grep <pattern>` to search the tree.\n"
+            "# Page URL: {}\n\
+             # Snapshot — current viewport (use -v N for other viewports, -v all for full page).\n\
+             # /url fields may be relative — resolve against the Page URL above.\n\
+             # Use `browser4-cli snapshot grep <pattern>` to search the tree.\n",
+            url
         )
     };
     let snap_with_header = format!("{}\n{}", header, snap);
@@ -4386,6 +4391,18 @@ async fn handle_snapshot(
             eprintln!(
                 "ℹ️  /url fields may be relative (e.g. /url: news, /url: newest). \
                  Use the page URL to resolve them: {url}",
+            );
+        }
+        // Large snapshot hint: when output is big and not already filtered,
+        // suggest ways to narrow the output.
+        if !json_active() && snap_len > 10_240 && !has_filter {
+            eprintln!(
+                "\n💡 Tip: Snapshot is large ({} KB, {} lines). To focus the output:\n\
+                   --viewport, -v <N>       Capture a specific viewport (-v 0 = current, -v 1 = next below)\n\
+                   -s, --selector <CSS>     Scope to a CSS selector\n\
+                   -i, --interactive        Only show interactive elements\n\
+                   snapshot grep <pat>      Search for specific text patterns",
+                snap_kb, snap_lines
             );
         }
     } else {

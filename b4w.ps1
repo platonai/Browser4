@@ -129,14 +129,55 @@ if ($RemainingArgs -and ($RemainingArgs[0] -eq '--' -or $RemainingArgs[0] -eq '-
 
 # ── Subcommand: coworker ──────────────────────────────────────────────────
 # Delegates to coworker/coworker.ps1, forwarding all remaining arguments.
-# Special case: "coworker start" runs coworker/start.ps1 sched directly.
+# Special cases:
+#   coworker start   — run coworker/start.ps1 sched in the background
+#   coworker stop    — stop the background scheduler
+#   coworker restart — stop and restart the background scheduler
 if ($CliArgs -and $CliArgs[0] -eq 'coworker') {
     $CoworkerArgs = if ($CliArgs.Count -gt 1) { ,$CliArgs[1..($CliArgs.Count - 1)] } else { @() }
+    $CoworkerPidFile = Join-Path $ScriptDir '.coworker\scheduler.pid'
 
-    # Route "coworker start" to the dedicated start script.
+    # ── coworker start ───────────────────────────────────────────────────
     if ($CoworkerArgs -and $CoworkerArgs[0] -eq 'start') {
         $StartScript = Join-Path $ScriptDir 'coworker\start.ps1'
-        & $StartScript sched
+        & $StartScript sched -Background -PidFile $CoworkerPidFile
+        exit $LASTEXITCODE
+    }
+
+    # ── coworker stop ────────────────────────────────────────────────────
+    if ($CoworkerArgs -and $CoworkerArgs[0] -eq 'stop') {
+        if (-not (Test-Path $CoworkerPidFile)) {
+            Write-Host 'No running Coworker scheduler found.' -ForegroundColor Yellow
+            exit 0
+        }
+        $pid = Get-Content $CoworkerPidFile -Raw
+        $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+        if ($proc) {
+            Write-Host "Stopping Coworker scheduler (PID $pid)..." -ForegroundColor Cyan
+            $proc.Kill()
+            Write-Host 'Coworker scheduler stopped.' -ForegroundColor Green
+        } else {
+            Write-Host "Coworker scheduler (PID $pid) is no longer running." -ForegroundColor Yellow
+        }
+        Remove-Item $CoworkerPidFile -Force -ErrorAction SilentlyContinue
+        exit 0
+    }
+
+    # ── coworker restart ─────────────────────────────────────────────────
+    if ($CoworkerArgs -and $CoworkerArgs[0] -eq 'restart') {
+        # Stop if running
+        if (Test-Path $CoworkerPidFile) {
+            $pid = Get-Content $CoworkerPidFile -Raw
+            $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+            if ($proc) {
+                Write-Host "Stopping Coworker scheduler (PID $pid)..." -ForegroundColor Cyan
+                $proc.Kill()
+            }
+            Remove-Item $CoworkerPidFile -Force -ErrorAction SilentlyContinue
+        }
+        # Start fresh
+        $StartScript = Join-Path $ScriptDir 'coworker\start.ps1'
+        & $StartScript sched -Background -PidFile $CoworkerPidFile
         exit $LASTEXITCODE
     }
 
@@ -236,7 +277,9 @@ Examples:
 
   # subcommands
   b4w coworker list                     list Coworker tasks
-  b4w coworker start                    start the Coworker scheduler
+  b4w coworker start                    start the Coworker scheduler (background)
+  b4w coworker stop                     stop the background scheduler
+  b4w coworker restart                  restart the background scheduler
   b4w test --e2e                        run E2E tests
   b4w sc                                interactive scenario picker
   b4w sc add my-test https://example.com  create a new scenario

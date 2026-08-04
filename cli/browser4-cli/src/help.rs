@@ -146,13 +146,18 @@ pub fn generate_help() -> String {
         format!("Usage: browser4-cli [-s <session>] <command> [args] [options]"),
     ];
 
-    // Quick Start — the 5 most common commands for first-time users
-    lines.push("\n⚡ Quick Start ──────────────────────────────────────────────────────".to_string());
-    for (cmd, desc) in QUICK_START_COMMANDS {
-        lines.push(format_with_gap(cmd, desc, 36));
-    }
-    lines.push("  Run `browser4-cli help <command>` for detailed options and examples.".to_string());
-    lines.push("  Run `browser4-cli --help-json` for machine-readable command reference.".to_string());
+    // Quick Start — the 5 most common commands for new users
+    lines.push("\n╔══ Quick Start ═══════════════════════════════════════════════════════".to_string());
+    lines.push("║  These are the commands you'll use most often:".to_string());
+    lines.push("║".to_string());
+    lines.push("║    goto <url>         Navigate to a page (auto-starts server & session)".to_string());
+    lines.push("║    snapshot [-v <N>]  Capture accessibility tree with element refs".to_string());
+    lines.push("║    click <ref>        Click an element by its ref (e5) or CSS selector".to_string());
+    lines.push("║    fill <ref> \"<txt>\"  Fill a form field (--submit to press Enter)".to_string());
+    lines.push("║    htmlsnapshot       Capture static HTML for content extraction".to_string());
+    lines.push("║".to_string());
+    lines.push("║  Learn more: browser4-cli --help <command>  or  --help-json for AI/scripts".to_string());
+    lines.push("╚══════════════════════════════════════════════════════════════════════════".to_string());
 
     // Common workflows — compact pipe-style
     lines.push("\n── Common workflows ─────────────────────────────────────────────────".to_string());

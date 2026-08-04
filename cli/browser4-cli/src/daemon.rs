@@ -917,7 +917,6 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
     print_server_starting_message();
 
     let launch_spec = resolve_server_launch_spec(port).await?;
-    eprintln!("{}", launch_spec.description);
 
     start_server(&launch_spec, base_url, port).await
 }
@@ -4526,10 +4525,11 @@ async fn start_server(
         &startup_log.path,
         format!("Browser4 reported ready at {base_url}; managed pid {managed_pid}"),
     );
-    eprintln!(
-        "Server is up and running in {:.1}s.",
-        server_start.elapsed().as_secs_f64(),
-    );
+    let elapsed = server_start.elapsed().as_secs_f64();
+    // Clear the spinner line and print a clean ready message.
+    // Log path is only shown on failure (via format_server_startup_failure_message).
+    eprint!("\r\x1b[K");
+    eprintln!("Server ready in {:.1}s", elapsed);
     Ok(())
 }
 
@@ -4852,8 +4852,27 @@ async fn wait_for_server_ready(
     let mut last_progress_log_at = Instant::now() - Duration::from_secs(10);
     let initial_quiet_wait = initial_server_ready_quiet_wait(timeout);
 
+    // Spinner frames for cold-start progress indication.
+    const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    let is_cold_start = startup_log_path.is_some();
+
     if !initial_quiet_wait.is_zero() {
-        tokio::time::sleep(initial_quiet_wait).await;
+        if is_cold_start {
+            let mut frame = 0usize;
+            let start_sleep = Instant::now();
+            while start_sleep.elapsed() < initial_quiet_wait {
+                let elapsed = Instant::now().duration_since(start).as_secs();
+                eprint!(
+                    "\r  {} Starting server... ({}s)",
+                    SPINNER[frame % SPINNER.len()],
+                    elapsed
+                );
+                frame += 1;
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        } else {
+            tokio::time::sleep(initial_quiet_wait).await;
+        }
         if start.elapsed() >= timeout {
             last_error = format!(
                 "readiness checks were deferred during the initial {}s startup grace period",
@@ -4862,6 +4881,7 @@ async fn wait_for_server_ready(
         }
     }
 
+    let mut spinner_frame = 0usize;
     while start.elapsed() <= timeout {
         let progress_status = match probe_server_state(client, base_url).await {
             ServerState::Ready => return Ok(()),
@@ -4875,7 +4895,17 @@ async fn wait_for_server_ready(
             }
         };
 
-        if last_progress_log_at.elapsed() >= Duration::from_secs(10) {
+        if is_cold_start {
+            let elapsed = start.elapsed().as_secs();
+            let remaining = timeout.as_secs().saturating_sub(elapsed);
+            eprint!(
+                "\r  {} Starting server... ({}s elapsed, ~{}s remaining)",
+                SPINNER[spinner_frame % SPINNER.len()],
+                elapsed,
+                remaining
+            );
+            spinner_frame += 1;
+        } else if last_progress_log_at.elapsed() >= Duration::from_secs(10) {
             let elapsed = start.elapsed().as_secs();
             let remaining = timeout.as_secs().saturating_sub(elapsed);
             eprintln!(
