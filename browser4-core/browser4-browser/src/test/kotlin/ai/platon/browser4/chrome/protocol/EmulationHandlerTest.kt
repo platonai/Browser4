@@ -57,8 +57,8 @@ class EmulationHandlerTest {
             mouse.click(100.0, 200.0, clickCount = 1, delayMillis = 0)
 
             inOrder.verify(bp).dispatchMouseMoved(eq(100.0), eq(200.0), any(), anyOrNull())
-            inOrder.verify(bp).dispatchMousePressed(eq(100.0), eq(200.0), eq(1), eq(null), eq(1))
-            inOrder.verify(bp).dispatchMouseReleased(eq(100.0), eq(200.0), eq(1), eq(null), eq(0))
+            inOrder.verify(bp).dispatchMousePressed(eq(100.0), eq(200.0), eq(1), eq(null), eq(1), anyOrNull())
+            inOrder.verify(bp).dispatchMouseReleased(eq(100.0), eq(200.0), eq(1), eq(null), eq(0), anyOrNull())
         }
 
         @Test
@@ -69,11 +69,11 @@ class EmulationHandlerTest {
 
             // First click: clickCount=1
             inOrder.verify(bp).dispatchMouseMoved(eq(100.0), eq(200.0), any(), anyOrNull())
-            inOrder.verify(bp).dispatchMousePressed(eq(100.0), eq(200.0), eq(1), eq(null), eq(1))
-            inOrder.verify(bp).dispatchMouseReleased(eq(100.0), eq(200.0), eq(1), eq(null), eq(0))
+            inOrder.verify(bp).dispatchMousePressed(eq(100.0), eq(200.0), eq(1), eq(null), eq(1), anyOrNull())
+            inOrder.verify(bp).dispatchMouseReleased(eq(100.0), eq(200.0), eq(1), eq(null), eq(0), anyOrNull())
             // Second click: clickCount=2
-            inOrder.verify(bp).dispatchMousePressed(eq(100.0), eq(200.0), eq(2), eq(null), eq(1))
-            inOrder.verify(bp).dispatchMouseReleased(eq(100.0), eq(200.0), eq(2), eq(null), eq(0))
+            inOrder.verify(bp).dispatchMousePressed(eq(100.0), eq(200.0), eq(2), eq(null), eq(1), anyOrNull())
+            inOrder.verify(bp).dispatchMouseReleased(eq(100.0), eq(200.0), eq(2), eq(null), eq(0), anyOrNull())
         }
 
         @Test
@@ -85,8 +85,8 @@ class EmulationHandlerTest {
             // moveTo(x, y) inside click() is called without modifiers
             verify(bp).dispatchMouseMoved(eq(50.0), eq(75.0), any(), anyOrNull())
             // down/up receive the modifier bitmask
-            verify(bp).dispatchMousePressed(eq(50.0), eq(75.0), any(), eq(altMask), any())
-            verify(bp).dispatchMouseReleased(eq(50.0), eq(75.0), any(), eq(altMask), any())
+            verify(bp).dispatchMousePressed(eq(50.0), eq(75.0), any(), eq(altMask), any(), anyOrNull())
+            verify(bp).dispatchMouseReleased(eq(50.0), eq(75.0), any(), eq(altMask), any(), anyOrNull())
         }
 
         @Test
@@ -100,8 +100,8 @@ class EmulationHandlerTest {
 
             val inOrder = inOrder(bp)
             inOrder.verify(bp).dispatchMouseMoved(eq(500.0), eq(600.0), any(), eq(null))
-            inOrder.verify(bp).dispatchMousePressed(eq(500.0), eq(600.0), any(), eq(null), any())
-            inOrder.verify(bp).dispatchMouseReleased(eq(500.0), eq(600.0), any(), eq(null), any())
+            inOrder.verify(bp).dispatchMousePressed(eq(500.0), eq(600.0), any(), eq(null), any(), anyOrNull())
+            inOrder.verify(bp).dispatchMouseReleased(eq(500.0), eq(600.0), any(), eq(null), any(), anyOrNull())
         }
     }
 
@@ -190,7 +190,7 @@ class EmulationHandlerTest {
             reset(bp)
 
             mouse.down(100.0, 200.0)
-            verify(bp).dispatchMousePressed(any(), any(), any(), eq(null), eq(1))
+            verify(bp).dispatchMousePressed(any(), any(), any(), eq(null), eq(1), anyOrNull())
         }
 
         @Test
@@ -199,11 +199,11 @@ class EmulationHandlerTest {
             val buttonsCaptor = argumentCaptor<Int>()
 
             mouse.down(100.0, 200.0)
-            verify(bp).dispatchMousePressed(any(), any(), any(), eq(null), buttonsCaptor.capture())
+            verify(bp).dispatchMousePressed(any(), any(), any(), eq(null), buttonsCaptor.capture(), anyOrNull())
             assertEquals(1, buttonsCaptor.lastValue)
 
             mouse.up(100.0, 200.0)
-            verify(bp).dispatchMouseReleased(any(), any(), any(), eq(null), buttonsCaptor.capture())
+            verify(bp).dispatchMouseReleased(any(), any(), any(), eq(null), buttonsCaptor.capture(), anyOrNull())
             assertEquals(0, buttonsCaptor.lastValue)
         }
 
@@ -213,11 +213,11 @@ class EmulationHandlerTest {
             val buttonsCaptor = argumentCaptor<Int>()
 
             mouse.down(100.0, 200.0)
-            verify(bp).dispatchMousePressed(any(), any(), any(), eq(null), buttonsCaptor.capture())
+            verify(bp).dispatchMousePressed(any(), any(), any(), eq(null), buttonsCaptor.capture(), anyOrNull())
             assertEquals(1, buttonsCaptor.firstValue)
 
             mouse.down(150.0, 250.0)
-            verify(bp, times(2)).dispatchMousePressed(any(), any(), any(), eq(null), buttonsCaptor.capture())
+            verify(bp, times(2)).dispatchMousePressed(any(), any(), any(), eq(null), buttonsCaptor.capture(), anyOrNull())
             // buttonsState should still be 1 (OR with 1 = 1)
             assertEquals(1, buttonsCaptor.secondValue)
         }
@@ -231,7 +231,7 @@ class EmulationHandlerTest {
 
             // After the click, buttonsState should be 0 (up() clears it)
             // Verify by doing another down and checking the released state
-            verify(bp, atLeastOnce()).dispatchMouseReleased(any(), any(), any(), eq(null), buttonsCaptor.capture())
+            verify(bp, atLeastOnce()).dispatchMouseReleased(any(), any(), any(), eq(null), buttonsCaptor.capture(), anyOrNull())
             assertEquals(0, buttonsCaptor.lastValue)
         }
 
@@ -311,7 +311,7 @@ class EmulationHandlerTest {
             verify(bp).onDragIntercepted(any())
             // Cleanup always happens in finally block
             verify(bp).setInterceptDrags(false)
-            verify(bp, atLeastOnce()).dispatchMouseReleased(any(), any(), any(), anyOrNull(), any())
+            verify(bp, atLeastOnce()).dispatchMouseReleased(any(), any(), any(), anyOrNull(), any(), anyOrNull())
         }
     }
 

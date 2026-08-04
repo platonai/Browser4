@@ -49,6 +49,10 @@ pub fn public_command_name(name: &str) -> &str {
         "plugin-info" => "plugin info",
         "plugin-install" => "plugin install",
         "plugin-remove" => "plugin remove",
+        "config-list" => "config list",
+        "config-get" => "config get",
+        "config-set" => "config set",
+        "config-delete" => "config delete",
         _ => name,
     }
 }
@@ -70,6 +74,7 @@ pub const CATEGORY_TITLES: &[(&str, &str)] = &[
     ("swarm", "Swarm"),
     ("install", "Install"),
     ("browsers", "Browser sessions"),
+    ("config", "Config"),
     ("skills", "Skills"),
     ("plugins", "Plugins"),
 ];
@@ -93,6 +98,8 @@ const CATEGORY_ALIASES: &[(&str, &str)] = &[
     ("plugin", "plugins"),
     ("swarm", "swarm"),
     ("crawl", "swarm"),
+    ("cfg", "config"),
+    ("settings", "config"),
 ];
 
 /// Resolve a category alias to its canonical category name, or return the
