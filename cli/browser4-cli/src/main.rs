@@ -5039,7 +5039,8 @@ async fn handle_tool_command_with_options(
 
     // Success confirmation for interaction commands.
     let ref_val = tool_params.get("ref").and_then(|v| v.as_str()).unwrap_or("");
-    if !ref_val.is_empty() {
+    let drag_start = tool_params.get("startRef").and_then(|v| v.as_str()).unwrap_or("");
+    if !ref_val.is_empty() || tool_name == "browser_drag" && !drag_start.is_empty() {
         match tool_name {
             "browser_click" => {
                 let is_double = tool_params
@@ -5060,7 +5061,7 @@ async fn handle_tool_command_with_options(
                     .get("endRef")
                     .and_then(|v| v.as_str())
                     .unwrap_or("?");
-                cli_println!("✓ Dragged {} → {}", ref_val, end_ref);
+                cli_println!("✓ Dragged {} → {}", drag_start, end_ref);
             }
             "browser_check" => {
                 cli_println!("✓ Checked {}", ref_val);
@@ -7716,7 +7717,11 @@ fn run_grep_on_source(
     }
 
     if !output_parts.is_empty() {
-        let full_output = output_parts.join("\n");
+        // Show timestamp so users know when this live snapshot was captured.
+        let now = chrono::Utc::now();
+        let ts = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let header = format!("# {} snapshot captured at {}", source_label, ts);
+        let full_output = format!("{}\n{}", header, output_parts.join("\n"));
         if skip_pagination(show_all) {
             cli_println!("{}", full_output);
         } else {
@@ -7726,6 +7731,7 @@ fn run_grep_on_source(
                 cli_println!("{}", format_pagination_footer(&meta));
             }
         }
+        json_field("snapshot_timestamp", json!(ts));
         json_field("total_chars", json!(full_output.len()));
         json_field("total_lines", json!(full_output.lines().count()));
         json_field("page_size", json!(page_size));

@@ -102,7 +102,7 @@ if (!$Rebuild -and (Test-Path $Exe)) {
     $ExeTime = (Get-Item $Exe).LastWriteTime
     $CrateDir = Join-Path $ScriptDir "cli/browser4-cli"
     $SrcDir = Join-Path $CrateDir "src"
-    $Stale = @(Get-ChildItem -Path $SrcDir -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt $ExeTime })
+    $Stale = @(Get-ChildItem -Path $SrcDir -Recurse -File -Filter "*.rs" -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt $ExeTime })
     if (-not $Stale) {
         foreach ($f in @("$CrateDir/Cargo.toml", "$CrateDir/Cargo.lock")) {
             if ((Test-Path $f) -and ((Get-Item $f).LastWriteTime -gt $ExeTime)) { $Stale = @($true); break }

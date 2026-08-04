@@ -343,6 +343,25 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
         waitBeforeReadIfNeeded(functionName)
 
+        // Detect if a native JavaScript dialog (alert/confirm/prompt) is
+        // blocking the page.  Read-state actions like ariaSnapshot, evaluate,
+        // and select* require JS execution via CDP; when a dialog is open,
+        // Chrome queues CDP commands behind the dialog and they never complete.
+        // Instead of hanging, surface a clear error so the user knows to accept
+        // or dismiss the dialog first.
+        if (functionName in READ_PAGE_STATE_ACTIONS && driver is PulsarWebDriver) {
+            val dh = driver.dialogHandler
+            if (dh.hasPendingDialog()) {
+                val dialog = dh.peekPendingDialog()
+                val type = dialog?.type ?: "unknown"
+                val message = dialog?.message?.let { m -> if (m.length > 80) m.take(80) + "..." else m } ?: ""
+                throw IllegalStateException(
+                    "Page is blocked by a native $type dialog${if (message.isNotEmpty()) ": \"$message\"" else ""}. " +
+                    "Use dialog-accept or dialog-dismiss to handle the dialog before reading page state."
+                )
+            }
+        }
+
         val result = when (functionName) {
             // Navigation
             "open" -> {

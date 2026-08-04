@@ -146,6 +146,7 @@ pub fn generate_help() -> String {
     lines.push("║    click <ref>        Click an element by its ref (e5) or CSS selector".to_string());
     lines.push("║    fill <ref> \"<txt>\"  Fill a form field (--submit to press Enter)".to_string());
     lines.push("║    htmlsnapshot       Capture static HTML for content extraction".to_string());
+    lines.push("║    dialog-accept      Accept a native JavaScript dialog (alert/confirm/prompt)".to_string());
     lines.push("║".to_string());
     lines.push("║  Learn more: browser4-cli --help <command>  or  --help-json for AI/scripts".to_string());
     lines.push("╚══════════════════════════════════════════════════════════════════════════".to_string());
@@ -159,6 +160,9 @@ pub fn generate_help() -> String {
     lines.push("    htmlsnapshot query --sql @query.sql       # structured extraction".to_string());
     lines.push("  Form interaction:".to_string());
     lines.push("    fill <ref> \"<text>\" --submit              # fill + press Enter".to_string());
+    lines.push("  Handle dialogs (two-step):".to_string());
+    lines.push("    click <ref> --auto-dismiss-dialogs        # auto-accept dialog in one step".to_string());
+    lines.push("    OR click <ref>  →  dialog-accept          # separate click + accept".to_string());
     lines.push("  Run JavaScript:".to_string());
     lines.push("    eval --file script.js                     # read JS from file (no quoting issues)".to_string());
     lines.push("  Bulk crawl:".to_string());

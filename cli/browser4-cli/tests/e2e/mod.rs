@@ -4368,6 +4368,7 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "tab-new",
         "tab-select",
         "tab-close",
+        "page-info",
         // eval is exercised directly by dedicated scenarios and shared helpers
         "eval",
         // test_cdp_command
