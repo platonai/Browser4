@@ -439,10 +439,11 @@ class CrawlService(
                 if (page.contentLength == 0L) {
                     val msg = "fetch returned 0 bytes (possible protocol handler not ready)"
                     if (attempt < MAX_FETCH_RETRIES - 1) {
+                        val retryDelay = FETCH_RETRY_DELAY_MS * (1L shl attempt)
                         logger.warn("Crawl {}: {} for '{}', retrying in {}ms (attempt {}/{})",
-                            taskId, msg, request.url, FETCH_RETRY_DELAY_MS, attempt + 1, MAX_FETCH_RETRIES)
+                            taskId, msg, request.url, retryDelay, attempt + 1, MAX_FETCH_RETRIES)
                         runCatching { session.close() }
-                        delay(FETCH_RETRY_DELAY_MS)
+                        delay(retryDelay)
                         return@repeat
                     }
                     logger.error("Crawl {}: {} for '{}' after {} attempts", taskId, msg, request.url, MAX_FETCH_RETRIES)
@@ -458,9 +459,16 @@ class CrawlService(
                     executeSqlQuery(session, request.url, request.sql)
                 } else Pair(null, null)
 
+                // Fallback: if document.title is blank, try extracting <title>
+                // from the raw HTML. The parse pipeline may skip title extraction
+                // on cached/stale content, leaving document.title null/empty even
+                // though the raw HTML has a valid <title> tag.
+                val title = document.title.takeIf { !it.isNullOrBlank() }
+                    ?: extractTitleFromHtml(document.html)
+
                 val result = CrawlPageResult(
                     url = request.url,
-                    title = document.title,
+                    title = title,
                     contentLength = page.contentLength,
                     depth = 0,
                     extracted = extractionResult.first,
@@ -473,10 +481,11 @@ class CrawlService(
                 val isProtocolError = e.message?.contains("Protocol not found", ignoreCase = true) == true
                     || e.javaClass.simpleName.contains("ProtocolNotFound")
                 if (attempt < MAX_FETCH_RETRIES - 1 && isProtocolError) {
+                    val retryDelay = FETCH_RETRY_DELAY_MS * (1L shl attempt)
                     logger.warn("Crawl {}: protocol error for '{}', retrying in {}ms (attempt {}/{})",
-                        taskId, request.url, FETCH_RETRY_DELAY_MS, attempt + 1, MAX_FETCH_RETRIES)
+                        taskId, request.url, retryDelay, attempt + 1, MAX_FETCH_RETRIES)
                     runCatching { session.close() }
-                    delay(FETCH_RETRY_DELAY_MS)
+                    delay(retryDelay)
                     return@repeat
                 }
                 logger.error("Crawl {}: failed to fetch seed URL {}", taskId, request.url, e)
@@ -594,7 +603,8 @@ class CrawlService(
                     results.add(
                         CrawlPageResult(
                             url = linkUrl,
-                            title = _document.title,
+                            title = _document.title.takeIf { !it.isNullOrBlank() }
+                                ?: extractTitleFromHtml(_document.html),
                             contentLength = _page.contentLength,
                             depth = 1,
                             extracted = extractionResult.first,
@@ -674,7 +684,8 @@ class CrawlService(
                 results.add(
                     CrawlPageResult(
                         url = pageUrl,
-                        title = document.title,
+                        title = document.title.takeIf { !it.isNullOrBlank() }
+                            ?: extractTitleFromHtml(document.html),
                         contentLength = page.contentLength,
                         depth = currentDepth,
                         extracted = extractionResult.first,
@@ -912,11 +923,11 @@ class CrawlService(
         /** Maximum fetch retries when content is 0 bytes or protocol error occurs. */
         private const val MAX_FETCH_RETRIES = 3
 
-        /** Delay in ms between fetch retries to allow protocol handler re-registration. */
-        private const val FETCH_RETRY_DELAY_MS = 500L
+        /** Base delay in ms between fetch retries; doubles each attempt (exponential backoff). */
+        private const val FETCH_RETRY_DELAY_MS = 1000L
 
         /** Delay in ms between seed URL processing to allow session cleanup. */
-        private const val SEED_INTERVAL_MS = 100L
+        private const val SEED_INTERVAL_MS = 500L
 
         /** Maximum time (ms) a crawl task may run before being cancelled. */
         private const val CRAWL_TASK_TIMEOUT_MS = 600_000L // 10 minutes
@@ -925,6 +936,18 @@ class CrawlService(
             System.getProperty("browser4.data.dir", System.getProperty("user.home")),
             ".browser4", "data", "crawl", "crawl-tasks.jsonl"
         )
+    }
+
+    /**
+     * Extract the <title> text from raw HTML when [FeaturedDocument.title]
+     * returns blank.  Handles the case where the parse pipeline skips title
+     * extraction on cached content.  Returns null when no <title> tag is found.
+     */
+    private fun extractTitleFromHtml(html: String?): String? {
+        if (html.isNullOrBlank()) return null
+        val match = Regex("""<title[^>]*>\s*(.*?)\s*</title>""", RegexOption.IGNORE_CASE)
+            .find(html)
+        return match?.groupValues?.get(1)?.trim()?.takeIf { it.isNotBlank() }
     }
 
     private fun matchesPattern(url: String, pattern: String?): Boolean {

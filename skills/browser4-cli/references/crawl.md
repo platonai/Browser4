@@ -368,6 +368,71 @@ follow these guidelines:
 - Prefer `crawl` with conservative `--depth` and `--page-load-timeout` for automated multi-page traversal
 - For `swarm`, control parallelism with `--max-browser-contexts` and `--max-open-tabs`
 
+## Subcommands
+
+When you submit a crawl with `--background`, the CLI returns immediately with a
+task ID.  Use these subcommands to manage and monitor background crawl tasks.
+
+### crawl status
+
+Check the current status of a crawl task.
+
+```bash
+browser4-cli crawl status <task-id>
+```
+
+Shows whether the task is CREATED, PROCESSING, or completed (OK), along with
+pages found so far and any error information.
+
+### crawl result
+
+Retrieve the full result of a completed crawl task.  Returns the same output
+as a foreground crawl: page listing (without `--sql`) or formatted extraction
+data (with `--sql`).
+
+```bash
+browser4-cli crawl result <task-id>
+```
+
+> **Note:** Only returns results for tasks in terminal state (OK, TIMEOUT,
+> ERROR).  Use `crawl status` first to verify completion.
+
+### crawl cancel
+
+Cancel a running or queued crawl task.
+
+```bash
+browser4-cli crawl cancel <task-id>
+```
+
+The task transitions to TIMEOUT status.  Cancelled tasks remain visible in
+`crawl list` until manually cleared or expired by TTL.
+
+### crawl clear
+
+Remove completed, cancelled, or failed crawl tasks from the task store.
+Running tasks are not affected.
+
+```bash
+browser4-cli crawl clear
+```
+
+### crawl list
+
+List all tracked crawl tasks across all sessions.
+
+```bash
+browser4-cli crawl list
+browser4-cli crawl list --limit 20
+browser4-cli crawl list --clear
+```
+
+| Flag | Type | Description |
+|---|---|---|
+| `--limit` | int | Show at most N tasks (latest first) |
+| `--offset` | int | Skip the first N tasks |
+| `--clear` | bool | Remove all tracked tasks from the list |
+
 ## See also
 
 - [X-SQL: DOM_LOAD_AND_SELECT](x-sql-dom-load-select.md) — the table-source

@@ -10698,6 +10698,32 @@ async fn handle_crawl(
                     let mut page_lines: Vec<String> = Vec::new();
                     page_lines.push(format!("Crawl completed. {} pages found.", page_count));
 
+                    // Surface seed-level errors even in non-verbose mode.
+                    // When a seed URL fails (e.g. link discovery crashes, protocol
+                    // handler not ready), the error is stored in seedStatuses but
+                    // the page listing shows a hollow "depth=0 | URL | " entry with
+                    // no indication of failure.  Without this warning, users see
+                    // "Crawl completed. N pages found." and assume all succeeded.
+                    if let Some(seed_statuses) = parsed["seedStatuses"].as_array() {
+                        let failed: Vec<&Value> = seed_statuses.iter()
+                            .filter(|ss| ss["status"].as_str().unwrap_or("") == "error")
+                            .collect();
+                        if !failed.is_empty() {
+                            page_lines.push(format!(
+                                "\n⚠ {} of {} seed URL(s) failed:",
+                                failed.len(), seed_statuses.len()
+                            ));
+                            for ss in &failed {
+                                let s_url = ss["url"].as_str().unwrap_or("");
+                                let s_error = ss["error"].as_str().unwrap_or("unknown error");
+                                page_lines.push(format!("    ✗ {} — {}", s_url, s_error));
+                            }
+                            page_lines.push(
+                                "  Use --verbose for full per-seed diagnostics.".to_string()
+                            );
+                        }
+                    }
+
                     // Display per-seed-URL status when verbose
                     if verbose {
                         if let Some(seed_statuses) = parsed["seedStatuses"].as_array() {
