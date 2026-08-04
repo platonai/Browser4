@@ -583,6 +583,22 @@ To use a different port:
         Write-CommandBanner -Label '[DRY RUN] Executing in rest-tests:' -Subtitle "  $mvnwScript $($mvnArgs -join ' ')"
     }
 
+    # Pre-flight: install parent POM and dependency BOM locally.
+    # On a clean checkout, the browser4-dependencies SNAPSHOT POM is not in
+    # Maven Central, so mvn install it first to avoid "Non-resolvable import POM"
+    # failures when the mock-site module resolves its BOM.
+    if (-not $script:DryRun) {
+        $preflightArgs = @(
+            'install',
+            '-pl', 'browser4-dependencies',
+            '-am',
+            '-DskipTests',
+            '-q'
+        )
+        Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @preflightArgs } `
+            -Label 'InstallDependencyBOM' -PreExecPath $repoRoot
+    }
+
     Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @mvnArgs } -Label 'MockSiteBoot' -PreExecPath $mockSiteModuleDir
 }
 

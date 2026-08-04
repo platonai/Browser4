@@ -1,0 +1,13 @@
+{
+  "meta": {
+    "date": "20260804-134036",
+    "scenario": "webminer-structuring-routing",
+    "source": "20260804-134036-webminer-structuring-routing.full.md",
+    "mode": "dev"
+  },
+  "background": {
+    "task": "",
+    "executionContext": ""
+  },
+  "issues": []
+}

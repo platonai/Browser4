@@ -110,12 +110,14 @@ Error: "The term '/d/workspace/Browser4/Browser4-4.12/b4w.ps1' is not recognized
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Legitimate path-translation bug in the Git Bash wrapper — `pwd` produces `/d/workspace/...` which pwsh can't resolve. A `cygpath -w` or `cmd //c cd` translation is the correct fix.
 
 ---
 
@@ -154,11 +156,13 @@ The swarm close operation may be waiting for browser context cleanup or worker t
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Root cause analysis is plausible (cleanup hangs waiting for browser context teardown) but speculative — needs confirmation. The misleading "Session required" error on retry is independently a clear bug. Add a cleanup timeout and a distinct "already closed" error message; the `--force` flag suggestion is worth including.
 
 ---
 
@@ -190,12 +194,14 @@ The `$(...)` notation was probably intended as a placeholder meaning "substitute
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The `$(...)` syntax is bash command substitution and produces a confusing failure. This is a pure documentation fix — replace with `<wrapper>` angle-bracket notation or reference the actual `./b4w.sh` / `pwsh -File b4w.ps1` commands. Low effort, high clarity payoff.
 
 ---
 
@@ -232,12 +238,14 @@ Status column reflects actual job state (queued → processing → completed).
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Behavior contradicts the documented claim that "swarm list queries the backend for live status on each invocation." Individual `swarm status` calls return live state but `swarm list` appears to cache. Needs investigation: is this a deliberate batch vs. per-item querying shortcut, or an unintended caching bug?
 
 ---
 
@@ -274,12 +282,14 @@ The X-SQL reference documents `DOM_ABS_SRC` in the function index table but the 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Documentation gap — the quick-start examples use `DOM_FIRST_SRC`/`DOM_FIRST_ATTR` (relative URLs) but `DOM_ABS_SRC` exists and is in the function index. Updating swarm.md examples to use the absolute variants (or add a prominent note) is a low-effort doc fix. The `DOM_ABS_ATTR` function suggestion is a nice-to-have for consistency but not required for this fix.
 
 ---
 
@@ -317,11 +327,13 @@ The swarm session uses a special session ID (`SWARM`) that is managed separately
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The "Closed 0 session(s)" output when a SWARM session exists is misleading UX regardless of whether the exclusion is intentional. Minimum fix: document the exclusion in `close-all` help text. Better fix: include SWARM in the enumeration. Related to Issues 2 and 7 (all touch swarm session lifecycle management).
 
 ---
 
@@ -359,11 +371,13 @@ Stale task tracking persists across sessions. The create command detects this bu
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Good UX suggestion — the multi-step "abort, clear, recreate" flow is friction that an interactive `[Y/n]` prompt would eliminate. Related to Issue 2 (swarm lifecycle). The suggestion to add the stale-task warning to `swarm query` and `swarm submit` as well is solid defensive UX.
 
 ---
 
@@ -400,12 +414,14 @@ The dev-mode CLI auto-builds from source producing a release version while the b
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] SNAPSHOT suffix comparison is overly strict for dev builds — X.Y.Z should be treated as compatible with X.Y.Z-SNAPSHOT. Related to Issue 9 (both concern output quality): fixing the comparison here eliminates the warning at the source, while Issue 9 covers the fallback of routing remaining diagnostics to stderr.
 
 ---
 
@@ -442,12 +458,14 @@ Version mismatch warning is printed to stdout alongside JSON output rather than 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Separate concern from Issue 8 — even after fixing the SNAPSHOT comparison, any future warning/diagnostic mixed into stdout will break JSON consumers. The fix is orthogonal: route all diagnostics to stderr and make `--json` mode suppress non-JSON stdout. Complements Issue 8 rather than duplicating it.
 
 ---
 

@@ -2749,6 +2749,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let mut load_opts = Vec::new();
                 if let Some(v) = get_opt_str(args, "out-link-selector") {
                     load_opts.push(format!("-outLink \"{}\"", v));
+                    // Store in tool_params so main.rs can check for it in the
+                    // warning about "no --out-link-selector".
+                    p["out-link-selector"] = json!(v);
                 }
                 if let Some(v) = get_opt_str(args, "out-link-pattern") {
                     load_opts.push(format!("-outLinkPattern \"{}\"", v));
@@ -3023,7 +3026,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 },
                 OptionDef {
                     name: "format",
-                    description: "Output format: json, csv, or table (default: json)",
+                    description: "Output format: json, csv, or table (default: table)",
                     is_bool: false,
                     short: None,
                 },

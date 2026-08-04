@@ -10,6 +10,23 @@ tier: decision
 
 Browser automation CLI for AI agents — Chrome/Chromium via CDP with accessibility-tree snapshots.
 
+### Invocation
+
+The docs use `browser4-cli` as the generic command name. From within the Browser4
+source tree use one of the following:
+
+| Shell | Command | Notes |
+|-------|---------|-------|
+| PowerShell (Windows) | `./b4w.ps1 <command>` | Primary dev wrapper; builds from source if needed |
+| Git Bash (Windows) | `./b4w.sh <command>` | Quotes args automatically for pwsh safety |
+| Git Bash (alt) | `pwsh ./b4w.ps1 <command>` | Direct PowerShell invocation |
+| Linux / macOS | `./b4w.sh <command>` | Same script works cross-platform |
+| Any (installed) | `browser4-cli <command>` | After `browser4-cli install` |
+
+> **Important:** The `$(./b4w.ps1) <command>` syntax shown in some task
+> instructions does **not** work in bash — `$(…)` is command substitution, not
+> invocation.  Use `pwsh ./b4w.ps1 <command>` or `./b4w.sh <command>` instead.
+
 ## 1. Core Loop
 
 Every browser4-cli session follows this pattern.
@@ -243,6 +260,65 @@ Have HTML files and want structured data — without tokens?
 > **Install:** `.\webminer.ps1 install` (PowerShell) or download from [web-miner releases](https://github.com/platonai/web-miner/releases). Requires JDK 17+.
 
 See **[scent-miner/SKILL.md](../scent-miner/SKILL.md)** for the full reference.
+
+### 4e. X-SQL Quickstart Template
+
+X-SQL lets you extract correlated fields (e.g., title + price + URL) from a
+list page using a scoped CSS selector and standard SQL.  Copy this template,
+swap the selectors and column names, and you have a working query:
+
+```sql
+SELECT
+  DOM_TEXT(DOM, 'h2')    AS title,
+  DOM_TEXT(DOM, '.price') AS price,
+  DOM_BASE_URI(DOM)       AS url
+FROM
+  DOM_LOAD_AND_SELECT(@url, '.product-card')
+```
+
+**Save to a file** (avoids shell quoting issues):
+```bash
+# 1. Write the query (copy and customize)
+cat > query.sql << 'XSQL'
+SELECT
+  DOM_TEXT(DOM, 'h2')    AS title,
+  DOM_TEXT(DOM, '.price') AS price,
+  DOM_BASE_URI(DOM)       AS url
+FROM
+  DOM_LOAD_AND_SELECT(@url, '.product-card')
+XSQL
+
+# 2. Discover the right CSS selector to replace .product-card:
+browser4-cli htmlsnapshot inspect --selector-base64 <base64-of-selector>
+
+# 3. Run it
+browser4-cli htmlsnapshot query "https://example.com/products" --sql @query.sql
+```
+
+**Critical syntax rules** (H2 SQL engine — violating these produces opaque errors):
+
+| Rule | Correct | Wrong |
+|------|---------|-------|
+| CSS selectors use **single** quotes (SQL string literals) | `'h2'`, `'.price'` | `"h2"` (SQL identifier) |
+| `@url` placeholder is **unquoted** | `@url` | `'@url'` (literal string) |
+| FROM source is always `DOM_LOAD_AND_SELECT` | `DOM_LOAD_AND_SELECT(@url, '...')` | Any other table name |
+| No CTEs (`WITH`), no `JOIN`, no subqueries | Simple `SELECT … FROM …` | `WITH t AS (…) SELECT …` |
+
+**Discover selectors** before writing the query:
+```bash
+browser4-cli htmlsnapshot inspect                    # interactive: lists all elements with CSS classes/ids
+browser4-cli htmlsnapshot summary                    # statistical summary of selectors on the page
+browser4-cli htmlsnapshot get text ".price" --all    # quick test: does this selector match elements?
+```
+
+**Common mistakes and solutions:**
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| `Column "h2" not found` | Double quotes around CSS selector → treated as SQL column name | Use single quotes: `'h2'` |
+| `Table "..." not found` | Wrong FROM source or quoted `@url` | Use `DOM_LOAD_AND_SELECT(@url, 'selector')` |
+| Empty result set | Selector doesn't match any elements | Run `htmlsnapshot inspect` to find valid selectors |
+| `Syntax error in SQL statement` | `--sql` value contains shell-escaped characters | Use `--sql @query.sql` instead of inline SQL |
 
 ## 5. Critical Warnings
 

@@ -6002,7 +6002,7 @@ async fn handle_html_snapshot_query(
     let format = tool_params
         .get("format")
         .and_then(|v| v.as_str())
-        .unwrap_or("json")
+        .unwrap_or("table")
         .to_ascii_lowercase();
 
     // Validate --format value
@@ -11198,13 +11198,45 @@ async fn run_browser4_cli(tokens: &[String]) -> Result<String, String> {
     let exe = std::env::current_exe()
         .map_err(|e| format!("Cannot determine CLI path: {}", e))?;
 
-    let tokens = tokens.to_vec();
+    let mut tokens = tokens.to_vec();
+
+    // Extract -s / --session flags from the token stream and pass them
+    // as BROWSER4_CLI_SESSION so parse_global_flags picks them up in the
+    // spawned process.  These are global flags that parse_global_flags only
+    // recognises before the first positional argument; when the loop
+    // subcommand spawns a nested browser4-cli the tokens come from
+    // task_tokens (everything after --), so -s appears *after* the command
+    // name and would be silently dropped.
+    let mut env_session: Option<String> = None;
+    let mut filtered = Vec::with_capacity(tokens.len());
+    let mut i = 0;
+    while i < tokens.len() {
+        let arg = &tokens[i];
+        if arg == "-s" || arg == "--session" {
+            if i + 1 < tokens.len() && !tokens[i + 1].starts_with('-') {
+                env_session = Some(tokens[i + 1].clone());
+                i += 1; // skip the value too
+            }
+        } else if arg.starts_with("-s=") {
+            env_session = Some(arg["-s=".len()..].to_string());
+        } else if arg.starts_with("--session=") {
+            env_session = Some(arg["--session=".len()..].to_string());
+        } else {
+            filtered.push(arg.clone());
+        }
+        i += 1;
+    }
+    tokens = filtered;
+
     let output = tokio::task::spawn_blocking(move || {
-        std::process::Command::new(&exe)
-            .args(&tokens)
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.args(&tokens)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output()
+            .stderr(std::process::Stdio::piped());
+        if let Some(ref session) = env_session {
+            cmd.env("BROWSER4_CLI_SESSION", session);
+        }
+        cmd.output()
     })
     .await
     .map_err(|e| format!("Subprocess spawn failed: {}", e))?
