@@ -2737,7 +2737,23 @@ async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String>
 
     // Report the locally-tracked count instead of the server's count, which may
     // include internal sessions that the user never sees in `list` output.
-    cli_println!("Closed {} session(s)", local_count);
+    if local_count > 0 {
+        cli_println!("Closed {} session(s)", local_count);
+    } else {
+        // Check if swarm tasks are still tracked — the swarm session may have
+        // already been closed.
+        let tasks = read_async_tasks(None);
+        let swarm_task_count = tasks
+            .tasks
+            .iter()
+            .filter(|t| t.command == "swarm-submit" || t.command == "swarm-query")
+            .count();
+        if swarm_task_count > 0 {
+            cli_println!("Closed 0 session(s) — any active swarm session was likely already closed. {} swarm task(s) are still tracked. Use `swarm list --clear` to remove them.", swarm_task_count);
+        } else {
+            cli_println!("Closed 0 session(s)");
+        }
+    }
     if !close_summary.errors.is_empty() {
         eprintln!("close-all warnings: {}", close_summary.errors.join(" | "));
     }
@@ -8922,20 +8938,66 @@ async fn handle_swarm_create(
             cli_println!("Cleared {} stale swarm task(s) from prior sessions.", removed);
             json_field("cleared_stale_tasks", json!(removed));
         } else {
-            cli_println!(
-                "Note: {} swarm task(s) from prior sessions are still tracked.",
-                swarm_tasks.len()
-            );
-            cli_println!(
-                "  If new jobs get stuck in \"Created\" status, run `swarm list --clear` to remove stale entries,"
-            );
-            cli_println!(
-                "  then recreate the swarm session before resubmitting."
-            );
-            cli_println!(
-                "  Or use `swarm create --clear-stale` to clear and recreate in one step."
-            );
-            json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+            // Offer an interactive prompt to clear stale tasks,
+            // eliminating the multi-step "abort, clear, recreate" flow.
+            let is_interactive = std::io::stdin().is_terminal();
+            if is_interactive {
+                eprintln!();
+                eprintln!("{} swarm task(s) from prior sessions are still tracked.", swarm_tasks.len());
+                eprintln!("Stale tasks can block the worker pool, causing new jobs to stay \"Created\".");
+                eprintln!();
+                eprintln!("Clear them now? [Y/n]");
+
+                let mut input = String::new();
+                match std::io::stdin().read_line(&mut input) {
+                    Ok(_) => {
+                        let trimmed = input.trim().to_lowercase();
+                        if trimmed.is_empty() || trimmed == "y" || trimmed == "yes" {
+                            let mut list = existing;
+                            let before = list.tasks.len();
+                            list.tasks
+                                .retain(|t| t.command != "swarm-submit" && t.command != "swarm-query");
+                            let removed = before - list.tasks.len();
+                            write_async_tasks(&list, None).map_err(|e| e.to_string())?;
+                            cli_println!("Cleared {} stale swarm task(s).", removed);
+                            json_field("cleared_stale_tasks", json!(removed));
+                        } else {
+                            cli_println!(
+                                "Keeping {} tracked task(s). Use `swarm list --clear` to remove later, or `swarm create --clear-stale` next time.",
+                                swarm_tasks.len()
+                            );
+                            json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+                        }
+                    }
+                    Err(_) => {
+                        // Can't read stdin — keep tasks and show guidance.
+                        cli_println!(
+                            "Note: {} swarm task(s) from prior sessions are still tracked.",
+                            swarm_tasks.len()
+                        );
+                        cli_println!(
+                            "  Run `swarm list --clear` to remove stale entries, or `swarm create --clear-stale` to clear and recreate in one step."
+                        );
+                        json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+                    }
+                }
+            } else {
+                // Non-interactive (pipe, CI, script): show the warning but don't block.
+                cli_println!(
+                    "Note: {} swarm task(s) from prior sessions are still tracked.",
+                    swarm_tasks.len()
+                );
+                cli_println!(
+                    "  If new jobs get stuck in \"Created\" status, run `swarm list --clear` to remove stale entries,"
+                );
+                cli_println!(
+                    "  then recreate the swarm session before resubmitting."
+                );
+                cli_println!(
+                    "  Or use `swarm create --clear-stale` to clear and recreate in one step."
+                );
+                json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+            }
         }
     }
 
@@ -8951,7 +9013,20 @@ async fn handle_swarm_close(
     let state = read_state(None, session_name);
     let Some(session_id) = get_session_id_for_close(&state).map(str::to_string) else {
         clear_state(None, session_name);
-        eprintln!("{}", no_active_session_message());
+        // Distinguish "session already closed" from "no session ever existed"
+        // so users don't see the misleading "Session required" after a
+        // successful-but-slow close.
+        let existing = read_async_tasks(None);
+        let has_swarm_tasks = existing
+            .tasks
+            .iter()
+            .any(|t| t.command == "swarm-submit" || t.command == "swarm-query");
+        if has_swarm_tasks {
+            let count = existing.tasks.iter().filter(|t| t.command == "swarm-submit" || t.command == "swarm-query").count();
+            eprintln!("No active swarm session — it may have already been closed. {} tracked task(s) retained for history. Use `swarm list --clear` to remove.", count);
+        } else {
+            eprintln!("No active swarm session. Use `swarm create` to start one.");
+        }
         json_field("session_id", json!(null));
         json_field("closed", json!(false));
         return Ok(());
@@ -13742,15 +13817,18 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
     // Version comparison: use the live server version if available; fall back
     // to the installed bundle only when the server is unreachable.
     if let Some(ref server_ver) = server_version {
-        if server_ver != VERSION {
-            cli_println!(
+        // Strip leading 'v' and trailing '-SNAPSHOT' so dev builds
+        // (e.g. "4.12.2" vs "4.12.2-SNAPSHOT") don't produce a
+        // false-positive version mismatch warning on every command.
+        if normalize_version(server_ver) != normalize_version(VERSION) {
+            eprintln!(
                 "⚠  Version mismatch: CLI is {} but running backend is {}.",
                 VERSION, server_ver
             );
-            cli_println!(
+            eprintln!(
                 "   The CLI and backend were built from different versions of the source tree."
             );
-            cli_println!(
+            eprintln!(
                 "   Rebuild both to match:  mvn install -pl browser4-rest -am && cargo build --manifest-path cli/browser4-cli/Cargo.toml"
             );
             json_field("version_mismatch", json!(true));
@@ -13762,16 +13840,16 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
         if let Some(ref metadata) =
             daemon::read_installed_browser4_runtime_metadata()
         {
-            let installed_ver = metadata.tag.trim().trim_start_matches('v');
-            if installed_ver != VERSION.trim() {
-                cli_println!(
+            let installed_ver = metadata.tag.trim();
+            if normalize_version(installed_ver) != normalize_version(VERSION) {
+                eprintln!(
                     "⚠  Version mismatch: CLI is {} but installed backend is {}.",
                     VERSION, metadata.tag
                 );
-                cli_println!(
+                eprintln!(
                     "   The backend is not running, so the installed bundle version is shown."
                 );
-                cli_println!(
+                eprintln!(
                     "   Start the backend to compare against the live server version."
                 );
                 json_field("version_mismatch", json!(true));

@@ -35,6 +35,12 @@
 #   ./b4w.ps1 "swarm" "query" "--sql" "@query.sql" "--seed-file" "./urls.txt"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# On Git Bash (MSYS2/Cygwin), pwd produces Unix-style paths like
+# /d/workspace/... that pwsh cannot resolve.  Translate to a
+# Windows-compatible path (e.g. D:/workspace/...).
+if command -v cygpath >/dev/null 2>&1; then
+    SCRIPT_DIR="$(cygpath -w "$SCRIPT_DIR")"
+fi
 ARGS=""
 for arg in "$@"; do
     # Escape any double-quote characters inside the argument
