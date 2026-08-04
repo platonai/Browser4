@@ -135,7 +135,10 @@ const TIPS_EVAL: &[Tip] = &[
         text: "For structured data extraction without quoting pain, consider X-SQL: `htmlsnapshot query --sql \"...\"`",
     },
     Tip {
-        text: "Use `eval` with a `[ref]` argument to scope JS execution to a specific element: `eval \"this.textContent\" e5`",
+        text: "Use `eval` with a `[ref]` argument to scope JS execution to a specific element: the expression MUST be an arrow function, e.g. `eval \"element => element.textContent\" e5`",
+    },
+    Tip {
+        text: "When using `eval --ref`, write `element => element.property` — the element DOM node is passed as the first argument to your arrow function",
     },
     Tip {
         text: "Use `eval --wait-selector <css>` to wait for async-rendered content (React/SPA) before querying the DOM",

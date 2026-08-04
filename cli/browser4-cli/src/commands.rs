@@ -1427,10 +1427,10 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[
                 ArgDef { name: "expression", description: "JavaScript expression or function to evaluate", optional: true },
-                ArgDef { name: "ref", description: "Optional CSS selector or snapshot ref (for example e5)", optional: true },
+                ArgDef { name: "ref", description: "CSS selector or snapshot ref to scope evaluation to an element. Expression must be an arrow function: element => element.property", optional: true },
             ],
             options: &[
-                OptionDef { name: "ref", description: "CSS selector or snapshot ref to scope evaluation (equivalent to positional [ref])", is_bool: false, short: None },
+                OptionDef { name: "ref", description: "CSS selector or snapshot ref to scope evaluation. Expression must be an arrow function: element => element.property", is_bool: false, short: None },
                 OptionDef { name: "file", description: "Read JavaScript expression from a file instead of the command line (RECOMMENDED on Windows to avoid shell quoting)", is_bool: false, short: None },
                 OptionDef { name: "stdin", description: "Read JavaScript expression from stdin (useful for piping multi-line scripts without shell quoting)", is_bool: true, short: None },
                 OptionDef { name: "js", description: "Shorthand for --stdin: read JavaScript expression from stdin", is_bool: true, short: None },

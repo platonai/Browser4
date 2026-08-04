@@ -575,6 +575,18 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    scalar results (strings get quoted, numbers/booleans/null pass through)."
                 .to_string(),
         );
+        lines.push(
+            "  - When using --ref or [ref] to scope evaluation to an element, the expression"
+                .to_string(),
+        );
+        lines.push(
+            "    MUST be an arrow function: element => element.property (NOT element.property)."
+                .to_string(),
+        );
+        lines.push(
+            "    The element DOM node is passed as the first argument to your function."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  # Primary (recommended): read JavaScript from a file — no shell quoting needed".to_string());
@@ -594,6 +606,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  # Inline (simple expressions only — avoid on Windows with complex JS):".to_string());
         lines.push("  browser4-cli eval \"document.title\"".to_string());
         lines.push("  browser4-cli eval --json \"document.title\"".to_string());
+        lines.push("  # Element-scoped evaluation (expression MUST be an arrow function):".to_string());
+        lines.push("  browser4-cli eval \"element => element.textContent\" --ref e5".to_string());
+        lines.push("  browser4-cli eval \"element => element.tagName\" e5       # positional ref (e5 → element)".to_string());
+        lines.push("  browser4-cli eval --file script.js e5                    # positional ref with --file".to_string());
     }
 
     if cmd.name == "htmlsnapshot-query" {
