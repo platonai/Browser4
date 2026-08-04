@@ -4205,8 +4205,19 @@ async fn handle_snapshot(
     let snap_lines = snap.lines().count();
 
     // Pagination: prefer server-side metadata when available; fall back to
-    // local pagination otherwise.
+    // local pagination otherwise. For snapshot --stdout on content-rich pages
+    // (60KB+ accessibility trees), use a smaller default page size so users
+    // get a manageable view and can paginate forward with --page N.
     let (page, page_size, show_all) = parse_page_opts(tool_params);
+    // Snapshot --stdout without explicit pagination: reduce default from 2000
+    // to 100 lines/page to avoid dumping 2000+ lines of accessibility tree.
+    let user_set_page = tool_params.get("page").is_some();
+    let user_set_page_size = tool_params.get("page-size").is_some();
+    let effective_page_size = if raw && !user_set_page && !user_set_page_size && !show_all {
+        100usize
+    } else {
+        page_size
+    };
 
     if raw {
         if let Some(ref pm) = server_pagination {
@@ -4222,10 +4233,18 @@ async fn handle_snapshot(
                 );
             }
         } else if !skip_pagination(show_all) {
-            let (page_text, meta) = paginate_output(snap, page, page_size);
+            let (page_text, meta) = paginate_output(snap, page, effective_page_size);
             println!("{}", page_text);
             if meta.is_truncated && !json_active() {
                 eprintln!("{}", format_pagination_footer(&meta));
+            }
+            // For large snapshots (>20KB or >500 lines), suggest tools that
+            // are better suited than scrolling through raw tree text.
+            if (snap_len > 20 * 1024 || snap_lines > 500) && !json_active() {
+                eprintln!(
+                    "💡 Large snapshot ({} KB, {} lines). Use `snapshot grep <pattern>` to find specific elements, or `--page N` / `--all` to control output.",
+                    snap_kb, snap_lines
+                );
             }
         } else {
             println!("{}", snap);
@@ -4244,6 +4263,10 @@ async fn handle_snapshot(
             eprintln!(
                 "ℹ️  Element refs (e.g. e5, e36) are valid only until the next browser \
                  interaction. Re-run snapshot before reusing refs."
+            );
+            eprintln!(
+                "ℹ️  /url fields may be relative (e.g. /url: news, /url: newest). \
+                 Use the page URL to resolve them: {url}",
             );
         }
     } else {
@@ -5648,14 +5671,24 @@ async fn handle_html_snapshot_get(
     }
 
     // Validate selector - reject element references
-    let selector = tool_params
+    let raw_selector = tool_params
         .get("selector")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    // Expand semantic keywords (article, readable, content, main-text) to
+    // combined CSS selectors targeting common article containers, so users
+    // don't need to guess CSS selectors for content extraction.
+    let selector = commands::expand_semantic_selector(raw_selector).unwrap_or(raw_selector);
     if is_element_reference(selector) {
         return Err(format!(
             "Element references ('{selector}') are not supported in htmlsnapshot get. Use a CSS selector instead."
         ));
+    }
+
+    // Clone tool_params with the expanded selector (in case a semantic keyword was used)
+    let mut effective_params = tool_params.clone();
+    if selector != raw_selector {
+        effective_params["selector"] = json!(selector);
     }
 
     // Validate attr field requires a name
@@ -5679,7 +5712,7 @@ async fn handle_html_snapshot_get(
         let client = client.clone();
         let base_url = base_url.to_string();
         let tool_name = tool_name.to_string();
-        let mut params = tool_params.clone();
+        let mut params = effective_params.clone();
         params["sessionId"] = json!(session_id);
         async move { call_tool_with_result(&client, &base_url, &tool_name, params).await }
     })

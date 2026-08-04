@@ -74,6 +74,8 @@ After commands that modify browser state, browser4-cli saves an **accessibility-
 
 Each interactive element has a **ref** (`e5`, `e12`) — the element's Chrome DevTools Protocol backend node ID, prefixed with `e` (so `e12345` refers to backend node 12345). Use them to target elements in `click`, `fill`, `type`, `get attr`, etc.
 
+> **Note:** `/url` fields may be **relative** (e.g. `/url: news`, `/url: from?site=example.com`). The snapshot output includes the page URL at the top for resolution. For absolute URLs, use `htmlsnapshot get all attr "a[href]" href` which returns full URLs after redirect resolution.
+
 ### Ref Lifecycle
 
 Refs are **ephemeral** — treat them as single-use handles. Any interaction can leave you with stale refs if the page re-renders or Chrome remaps backend nodes:
@@ -196,6 +198,18 @@ Set `BROWSER4_SKILLS_DIR` to override the skills directory location. Skill files
 
 ### 4a. Choosing an Extraction Method
 
+> **📋 snapshot vs htmlsnapshot — the essential distinction:**
+>
+> | | `snapshot` | `htmlsnapshot` |
+> |---|---|---|
+> | **What it captures** | Accessibility tree (AXTree) — semantic roles, names, refs | Raw HTML DOM — full text content |
+> | **Primary use** | **Interaction** — get element refs for click, fill, type | **Extraction** — get article text, data, attributes |
+> | **Output** | YAML tree with `[ref=e5]` handles | Text/HTML/JSON via CSS selectors |
+> | **Key commands** | `snapshot`, `snapshot grep`, `click <ref>` | `htmlsnapshot get`, `query`, `inspect` |
+> | **When to use** | "I need to click a button" or "find an input field" | "I need to read the article text" or "extract prices" |
+>
+> **Rule of thumb:** If you want to **interact** with elements → `snapshot`. If you want to **read content** → `htmlsnapshot`.
+
 > **⚠️ Important:** `htmlsnapshot` captures the **initial server-rendered HTML** at page load. Content added or modified by JavaScript after load (form submission results, dynamic updates, SPA route changes) **will not be reflected** in the stored snapshot. For pages where you have interacted (clicked, filled forms, submitted) or where JS modifies the DOM, use `eval` for live-DOM access. See [§5 Critical Warnings](#5-critical-warnings) for more.
 
 ```
@@ -206,6 +220,7 @@ Need to extract data from a page?
 │  → eval --json for live DOM (use --stdin or --file on Windows)
 ├─ Static page, one field? → htmlsnapshot get text "<selector>"
 ├─ Static page, one field, ALL matches? → htmlsnapshot get all text "<selector>"
+├─ Don't know the right CSS selector? → htmlsnapshot get text article  (auto-discovers content)
 ├─ Static page, multiple correlated fields (title+price+url per item)?
 │  → htmlsnapshot query with X-SQL DOM_LOAD_AND_SELECT
 ├─ Dynamic/complex JS logic needed? → eval --json
