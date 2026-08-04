@@ -868,7 +868,6 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
     if !is_local_port_open(base_url) {
         print_server_starting_message();
         let launch_spec = resolve_server_launch_spec(port).await?;
-        eprintln!("{}", launch_spec.description);
         return start_server(&launch_spec, base_url, port).await;
     }
 
@@ -932,7 +931,7 @@ fn extract_port(base_url: &str) -> u16 {
 }
 
 fn print_server_starting_message() {
-    eprintln!("Starting Browser4 server...");
+    eprintln!("Starting Browser4 server (first launch may take a few seconds)...");
 }
 
 pub fn is_local_port_open(base_url: &str) -> bool {
@@ -4425,7 +4424,9 @@ async fn start_server(
         eprintln!("Failed to initialize Browser4 startup log: {error}");
         error
     })?;
-    eprintln!("Browser4 startup log: {}", startup_log.path.display());
+    // Suppress the startup log path during normal operation — it's useful
+    // for debugging but clutters the output for first-time users. The path
+    // is always shown on failure (via format_server_startup_failure_message).
 
     let PreparedLaunchCommand {
         mut command,
@@ -4526,9 +4527,8 @@ async fn start_server(
         format!("Browser4 reported ready at {base_url}; managed pid {managed_pid}"),
     );
     eprintln!(
-        "Server is up and running in {:.1}s. Startup log: {}",
+        "Server is up and running in {:.1}s.",
         server_start.elapsed().as_secs_f64(),
-        startup_log.path.display()
     );
     Ok(())
 }

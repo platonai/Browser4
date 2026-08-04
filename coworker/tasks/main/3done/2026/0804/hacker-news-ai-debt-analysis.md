@@ -193,12 +193,14 @@ The htmlsnapshot get command requires explicit CSS selectors. There's no content
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Core usability gap — requiring users to guess CSS selectors for the most common task (extracting article text) is a real friction point. The proposed semantic shortcuts (`get article`, `get readable`) are practical and aligned with how users think about the task. This is the highest-impact fix among all issues.
 
 ---
 
@@ -236,11 +238,13 @@ The dev-mode daemon auto-starts the backend JAR (Java/Spring Boot) which has inh
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The spinner/progress-bar suggestion is a clear UX win and low-effort. Pre-warming the server on shell init is worth deferring — it adds complexity (opt-in config, background process management) for a problem (cold start) that only hits once per session. Scope this to: spinner + bury raw log paths behind `--verbose`.
 
 ---
 
@@ -277,12 +281,14 @@ The accessibility tree includes every DOM node with full metadata (box coordinat
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] 60KB of undifferentiated output without pagination or guidance defeats the purpose of `--stdout`. Auto-pagination and a size-aware hint ("Large snapshot — use grep or --page") are sensible defaults. The `--summary` flag (interactive elements only) is a good complement but can be a follow-up.
 
 ---
 
@@ -319,12 +325,14 @@ Snapshot captures the accessibility tree (AXTree) which represents semantic role
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] This is primarily a documentation fix — the `snapshot` vs `htmlsnapshot` distinction is the most important concept for new users to grasp, and the current SKILL.md decision tree doesn't make it sharp enough. The suggested one-liner contrast ("snapshot = structure & refs; htmlsnapshot = content & text") should be added to §4a and echoed in after-goto tips.
 
 ---
 
@@ -359,10 +367,12 @@ htmlsnapshot captures the DOM as-is at capture time. For SPAs that lazy-load con
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DEFER] SPA lazy-loading is a fundamental web challenge, not a Browser4-specific bug. The mitigations (document in SKILL.md, consider `--scroll-to-load` flag) are reasonable long-term ideas, but this didn't block the evaluation task and fixing it properly (scroll triggering, mutation observer, configurable wait) is a significant feature. Document the limitation for now; revisit when there's a concrete use case that depends on it.
 
 ---
 
@@ -400,7 +410,9 @@ Commands are designed as atomic building blocks. There's no composition/shortcut
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DUPLICATE] This is the same underlying need as Issue 1 — reducing the command count for the "navigate → extract content" workflow. Once Issue 1 delivers semantic content extraction (`htmlsnapshot get article`), the compose-with-goto concern becomes a natural follow-on (`goto --extract`). Track as a dependent enhancement of Issue 1 rather than a separate work item.
 
 ---
 
@@ -436,12 +448,14 @@ The AXTree reports the href attribute as-is from the DOM. Browser4 doesn't resol
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Resolving relative URLs to absolute form in snapshot output is a straightforward, low-risk change with clear user benefit — it makes `/url` fields directly copy-pasteable for `goto`. Adding a `/url-absolute` field alongside the existing `/url` preserves backward compatibility.
 
 ---
 
@@ -480,11 +494,13 @@ The help output prioritizes completeness over scannability. All commands are lis
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The Quick Start section and category reordering (Core/Navigation first, specialized last) are the high-leverage changes and are low-effort. The `help popular` subcommand is over-engineered for the problem — it requires usage telemetry infrastructure that doesn't exist. Bold/highlight for high-frequency commands is a reasonable middle ground. Scope to: Quick Start top-5 + reorder categories + bold common commands.
 
 ---
 

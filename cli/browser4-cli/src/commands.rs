@@ -170,6 +170,30 @@ pub fn is_element_reference(value: &str) -> bool {
         || trimmed.starts_with("backend:")
 }
 
+/// Semantic keywords for htmlsnapshot get that auto-discover the main content area
+/// without requiring the user to guess CSS selectors.
+///
+/// Maps user-friendly keywords (e.g., "article", "readable") to combined CSS
+/// selectors that target common article/content container patterns across
+/// different site structures (HTML5 semantic tags, ARIA roles, common class names).
+const SEMANTIC_SELECTORS: &[(&str, &str)] = &[
+    ("article", "article, main, [role=\"main\"], .post-content, .entry-content, .article-content, .post-body, .content, #content, #main, #article, .post, .entry, .single-post"),
+    ("readable", "article, main, [role=\"main\"], .post-content, .entry-content, .article-content, .post-body, .content, #content, #main, #article, .post, .entry, .single-post"),
+    ("content", "article, main, [role=\"main\"], .post-content, .entry-content, .article-content, .post-body, .content, #content, #main, #article, .post, .entry, .single-post"),
+    ("main-text", "article, main, [role=\"main\"], .post-content, .entry-content, .article-content, .post-body, .content, #content, #main, #article, .post, .entry, .single-post"),
+];
+
+/// Expand a semantic keyword selector to a combined CSS selector.
+/// Returns `Some(expanded_selector)` if the input is a known semantic keyword,
+/// or `None` if it should be treated as a regular CSS selector.
+pub fn expand_semantic_selector(selector: &str) -> Option<&'static str> {
+    let trimmed = selector.trim().to_lowercase();
+    SEMANTIC_SELECTORS
+        .iter()
+        .find(|(keyword, _)| *keyword == trimmed)
+        .map(|(_, expanded)| *expanded)
+}
+
 /// Returns true if the value is a bare CSS selector (e.g. "#id", ".class", "[attr]")
 /// that does not already have a known prefix (`css:`, `backend:`, `xpath:`, `text=`).
 /// These selectors need a `css:` prefix so the backend can distinguish them from
@@ -2749,6 +2773,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let mut load_opts = Vec::new();
                 if let Some(v) = get_opt_str(args, "out-link-selector") {
                     load_opts.push(format!("-outLink \"{}\"", v));
+                    // Store in tool_params so main.rs can check for it in the
+                    // warning about "no --out-link-selector".
+                    p["out-link-selector"] = json!(v);
                 }
                 if let Some(v) = get_opt_str(args, "out-link-pattern") {
                     load_opts.push(format!("-outLinkPattern \"{}\"", v));
@@ -3023,7 +3050,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 },
                 OptionDef {
                     name: "format",
-                    description: "Output format: json, csv, or table (default: json)",
+                    description: "Output format: json, csv, or table (default: table)",
                     is_bool: false,
                     short: None,
                 },

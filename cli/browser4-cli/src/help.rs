@@ -62,21 +62,30 @@ pub fn public_command_name(name: &str) -> &str {
 pub const CATEGORY_TITLES: &[(&str, &str)] = &[
     ("core", "Core"),
     ("navigation", "Navigation"),
+    ("snapshot", "HTML Snapshot (htmlsnapshot)"),
     ("keyboard", "Keyboard"),
     ("mouse", "Mouse"),
     ("export", "Capture"),
     ("tabs", "Tabs"),
     ("storage", "Storage"),
     ("devtools", "DevTools"),
-    ("snapshot", "HTML Snapshot (htmlsnapshot)"),
     ("agent", "Agent"),
-    ("act", "Act"),
     ("swarm", "Swarm"),
-    ("install", "Install"),
+    ("act", "Act"),
     ("browsers", "Browser sessions"),
     ("config", "Config"),
+    ("install", "Install"),
     ("skills", "Skills"),
     ("plugins", "Plugins"),
+];
+
+/// Top 5 most common commands for the Quick Start section in help output.
+const QUICK_START_COMMANDS: &[(&str, &str)] = &[
+    ("  goto <url>",               "Navigate to a page (auto-starts server)"),
+    ("  snapshot -v 0 --stdout",   "Capture page structure with element refs"),
+    ("  click <ref>",              "Click an element by its snapshot ref"),
+    ("  fill <ref> \"<text>\"",     "Type text into an input field"),
+    ("  htmlsnapshot get text <css>", "Extract page content via CSS selector"),
 ];
 
 /// Short aliases for category-based help filtering.
@@ -136,6 +145,14 @@ pub fn generate_help() -> String {
         format!("browser4-cli {} — Control a Browser4 server from the command line", VERSION),
         format!("Usage: browser4-cli [-s <session>] <command> [args] [options]"),
     ];
+
+    // Quick Start — the 5 most common commands for first-time users
+    lines.push("\n⚡ Quick Start ──────────────────────────────────────────────────────".to_string());
+    for (cmd, desc) in QUICK_START_COMMANDS {
+        lines.push(format_with_gap(cmd, desc, 36));
+    }
+    lines.push("  Run `browser4-cli help <command>` for detailed options and examples.".to_string());
+    lines.push("  Run `browser4-cli --help-json` for machine-readable command reference.".to_string());
 
     // Common workflows — compact pipe-style
     lines.push("\n── Common workflows ─────────────────────────────────────────────────".to_string());
@@ -2187,9 +2204,39 @@ pub fn generate_help_entry(cmd: &CommandDef) -> String {
         args_text = format!("{} [--sql <query>] [--seed-file <file>] [--wait]", args_text.trim_end());
     }
 
-    let prefix = format!("  {} {}", public_command_name(cmd.name), args_text);
+    let public_name = public_command_name(cmd.name);
+    // Mark high-frequency commands with a ★ so first-time users can
+    // identify the most useful commands at a glance.
+    let marker = if is_high_frequency_command(cmd.name) { "★ " } else { "  " };
+    let prefix = format!("{}{} {}", marker, public_name, args_text);
     let prefix = prefix.trim_end();
-    format_with_gap(prefix, cmd.description, 30)
+    format_with_gap(prefix, cmd.description, 32)
+}
+
+/// Commands that appear in the Quick Start section or are among the most
+/// commonly used. Marked with `★` in category listings for scannability.
+fn is_high_frequency_command(name: &str) -> bool {
+    matches!(
+        name,
+        "goto"
+        | "open"
+        | "snapshot"
+        | "snapshot-grep"
+        | "click"
+        | "fill"
+        | "type"
+        | "press"
+        | "eval"
+        | "htmlsnapshot-get"
+        | "htmlsnapshot-get-all"
+        | "htmlsnapshot-query"
+        | "extract"
+        | "tab-list"
+        | "tab-new"
+        | "tab-select"
+        | "screenshot"
+        | "scroll"
+    )
 }
 
 /// Word-wrap prose text so no output line exceeds `max_width`.

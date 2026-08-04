@@ -10,5 +10,6 @@ const __pulsar_DEFAULT_CONFIGS = {
     "ATTR_ELEMENT_NODE_VI": "vi",
     "ATTR_TEXT_NODE_VI": "tv",
     "ATTR_COMPUTED_STYLE": null,
-    "ATTR_ELEMENT_NODE_DATA": null
+    "ATTR_ELEMENT_NODE_DATA": null,
+    "VI_COMPRESSION": "base36"
 };

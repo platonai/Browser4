@@ -2407,30 +2407,87 @@ function Write-WorkflowBanner {
 
 # ── Agent invocation ────────────────────────────────────────────────────────
 
+function Get-ScenarioAgentArgs {
+    <#
+    .SYNOPSIS
+        Build the CLI argument array for the configured agent backend.
+    .DESCRIPTION
+        Each agent CLI has a different invocation pattern:
+          claude:   --dangerously-skip-permissions -p <prompt> [--silent]
+          kimi:     -p <prompt>
+          opencode: run <prompt>
+          codex:    exec --dangerously-bypass-approvals-and-sandbox --ephemeral <prompt>
+
+        This is the single source of truth for agent CLI argument building.
+        All scenario scripts and the test runner use this function instead of
+        duplicating the backend switch block.
+    .PARAMETER Agent
+        The agent backend name (claude, kimi, opencode, or codex).
+    .PARAMETER Prompt
+        The task prompt text.
+    .PARAMETER Silent
+        For claude, appends --silent to suppress terminal UI output.
+        Other backends ignore this flag (no --silent equivalent).
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Agent,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Prompt,
+
+        [switch]$Silent
+    )
+
+    switch ($Agent) {
+        'claude' {
+            $args = @('--dangerously-skip-permissions', '-p', $Prompt)
+            if ($Silent) { $args += '--silent' }
+            return $args
+        }
+        'kimi' {
+            return @('-p', $Prompt)
+        }
+        'opencode' {
+            return @('run', $Prompt)
+        }
+        'codex' {
+            # exec = non-interactive; --dangerously-bypass-approvals-and-sandbox = auto-approve;
+            # --ephemeral = skip session persistence for clean exit
+            return @('exec', '--dangerously-bypass-approvals-and-sandbox', '--ephemeral', $Prompt)
+        }
+        default {
+            # Unknown agent — assume -p mode (claude-compatible)
+            return @('-p', $Prompt)
+        }
+    }
+}
+
 function Get-ScenarioAgent {
     <#
     .SYNOPSIS
-        Resolve which agent CLI (claude, kimi, or opencode) scenario scripts
-        should invoke.
+        Resolve which agent CLI (claude, kimi, opencode, or codex) scenario
+        scripts should invoke.
     .DESCRIPTION
         Callers may force a backend by setting $script:scenarioAgentCli = 'kimi'
-        (or 'claude', 'opencode') after dot-sourcing this module.  Otherwise
-        auto-detects with priority claude > kimi > opencode.  Falls back to
-        'claude' when none are on PATH so the invocation fails with a clear
-        command-not-found error.
+        (or 'claude', 'opencode', 'codex') after dot-sourcing this module.
+        Otherwise auto-detects with priority claude > kimi > opencode > codex.
+        Falls back to 'claude' when none are on PATH so the invocation fails
+        with a clear command-not-found error.
     #>
     if ($script:scenarioAgentCli) { return $script:scenarioAgentCli }
     if (Get-Command claude -ErrorAction SilentlyContinue) { return 'claude' }
     if (Get-Command kimi -ErrorAction SilentlyContinue) { return 'kimi' }
     if (Get-Command opencode -ErrorAction SilentlyContinue) { return 'opencode' }
+    if (Get-Command codex -ErrorAction SilentlyContinue) { return 'codex' }
     return 'claude'
 }
 
 function Invoke-Agent {
     <#
     .SYNOPSIS
-        Invoke the configured agent CLI (claude or kimi) to run a scenario and
-        evaluate browser4-cli usability.
+        Invoke the configured agent CLI (claude, kimi, opencode, or codex) to run
+        a scenario and evaluate browser4-cli usability.
     .DESCRIPTION
         Runs the agent CLI resolved by Get-ScenarioAgent with the given prompt.
         When -ScenarioName is provided, captures output and writes evaluation
@@ -2441,11 +2498,11 @@ function Invoke-Agent {
         user can watch the agent work) and saved to a temp file for post-processing.
 
         Backend differences:
-          - claude: invoked with --dangerously-skip-permissions; -Silent appends
-            --silent to the CLI arguments.
-          - kimi:   -p mode auto-approves tool calls, so no permission flags are
-            passed; kimi has no --silent flag, so -Silent only suppresses this
-            script's own status messages.
+          - claude: invoked with --dangerously-skip-permissions -p <prompt>;
+            -Silent appends --silent to the CLI arguments.
+          - kimi:   -p <prompt>; auto-approves tool calls via -p mode.
+          - opencode: run <prompt>; no permission or --silent flags.
+          - codex:  exec --dangerously-bypass-approvals-and-sandbox <prompt>.
     .PARAMETER Prompt
         The full prompt including the general evaluation instructions and
         task-specific instructions.
@@ -2488,28 +2545,14 @@ function Invoke-Agent {
     }
 
     # ── Build agent arguments ───────────────────────────────────────────────
-    # Each agent CLI has a different invocation pattern:
-    #   claude:   claude --dangerously-skip-permissions -p <prompt> [--silent]
-    #   kimi:     kimi -p <prompt>           (no --silent flag exists)
-    #   opencode: opencode run <prompt>      (no --silent flag exists)
-    $agentArgs = @()
-    switch ($agent) {
-        'claude' {
-            $agentArgs += '--dangerously-skip-permissions'
-            $agentArgs += @('-p', $Prompt)
-            if ($Silent) { $agentArgs += '--silent' }
-        }
-        'kimi' {
-            $agentArgs += @('-p', $Prompt)
-        }
-        'opencode' {
-            $agentArgs += @('run', $Prompt)
-        }
-        default {
-            # Unknown agent — assume -p mode (claude-compatible)
-            $agentArgs += @('-p', $Prompt)
-        }
+    # Delegates to Get-ScenarioAgentArgs — the single source of truth for
+    # per-backend argument building.
+    $getArgsParams = @{
+        Agent  = $agent
+        Prompt = $Prompt
     }
+    if ($Silent) { $getArgsParams['Silent'] = $true }
+    $agentArgs = Get-ScenarioAgentArgs @getArgsParams
 
     # ── Ensure .test-sessions directory exists ────────────────────────────────
     # Agents are instructed to create temp files here.  Pre-create the directory

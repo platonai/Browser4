@@ -2751,7 +2751,23 @@ async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String>
 
     // Report the locally-tracked count instead of the server's count, which may
     // include internal sessions that the user never sees in `list` output.
-    cli_println!("Closed {} session(s)", local_count);
+    if local_count > 0 {
+        cli_println!("Closed {} session(s)", local_count);
+    } else {
+        // Check if swarm tasks are still tracked — the swarm session may have
+        // already been closed.
+        let tasks = read_async_tasks(None);
+        let swarm_task_count = tasks
+            .tasks
+            .iter()
+            .filter(|t| t.command == "swarm-submit" || t.command == "swarm-query")
+            .count();
+        if swarm_task_count > 0 {
+            cli_println!("Closed 0 session(s) — any active swarm session was likely already closed. {} swarm task(s) are still tracked. Use `swarm list --clear` to remove them.", swarm_task_count);
+        } else {
+            cli_println!("Closed 0 session(s)");
+        }
+    }
     if !close_summary.errors.is_empty() {
         eprintln!("close-all warnings: {}", close_summary.errors.join(" | "));
     }
@@ -4308,8 +4324,19 @@ async fn handle_snapshot(
     let snap_lines = snap.lines().count();
 
     // Pagination: prefer server-side metadata when available; fall back to
-    // local pagination otherwise.
+    // local pagination otherwise. For snapshot --stdout on content-rich pages
+    // (60KB+ accessibility trees), use a smaller default page size so users
+    // get a manageable view and can paginate forward with --page N.
     let (page, page_size, show_all) = parse_page_opts(tool_params);
+    // Snapshot --stdout without explicit pagination: reduce default from 2000
+    // to 100 lines/page to avoid dumping 2000+ lines of accessibility tree.
+    let user_set_page = tool_params.get("page").is_some();
+    let user_set_page_size = tool_params.get("page-size").is_some();
+    let effective_page_size = if raw && !user_set_page && !user_set_page_size && !show_all {
+        100usize
+    } else {
+        page_size
+    };
 
     if raw {
         if let Some(ref pm) = server_pagination {
@@ -4325,10 +4352,18 @@ async fn handle_snapshot(
                 );
             }
         } else if !skip_pagination(show_all) {
-            let (page_text, meta) = paginate_output(snap, page, page_size);
+            let (page_text, meta) = paginate_output(snap, page, effective_page_size);
             println!("{}", page_text);
             if meta.is_truncated && !json_active() {
                 eprintln!("{}", format_pagination_footer(&meta));
+            }
+            // For large snapshots (>20KB or >500 lines), suggest tools that
+            // are better suited than scrolling through raw tree text.
+            if (snap_len > 20 * 1024 || snap_lines > 500) && !json_active() {
+                eprintln!(
+                    "💡 Large snapshot ({} KB, {} lines). Use `snapshot grep <pattern>` to find specific elements, or `--page N` / `--all` to control output.",
+                    snap_kb, snap_lines
+                );
             }
         } else {
             println!("{}", snap);
@@ -4347,6 +4382,10 @@ async fn handle_snapshot(
             eprintln!(
                 "ℹ️  Element refs (e.g. e5, e36) are valid only until the next browser \
                  interaction. Re-run snapshot before reusing refs."
+            );
+            eprintln!(
+                "ℹ️  /url fields may be relative (e.g. /url: news, /url: newest). \
+                 Use the page URL to resolve them: {url}",
             );
         }
     } else {
@@ -4919,16 +4958,33 @@ async fn handle_tool_command_with_options(
         // When eval returns empty or null, the page context may have changed
         // (e.g. after htmlsnapshot capture or other commands that interact
         // with the browser). Give the user a diagnostic hint.
+        //
+        // Distinguish between:
+        //   - JS null → the expression evaluated but the result is null
+        //     (element not found, property doesn't exist, etc.)
+        //   - Empty/undefined → could be JS returning undefined/"" or a
+        //     stale page context where the evaluation silently fails.
         let expression = tool_params
             .get("expression")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if result.is_empty() || result == "null" {
+        if result == "null" {
             if !json_active() {
                 cli_println!(
-                    "💡 Tip: Eval returned empty/null. The page context may be stale.\n\
-                       Try re-navigating with: goto <url>\n\
+                    "💡 Expression returned null.\n\
+                       The queried element or property may not exist on this page.\n\
+                       Try verifying: eval \"document.querySelector('<your-selector>') !== null\"\n\
                        Or check the current page: eval \"window.location.href\""
+                );
+            }
+        } else if result.is_empty() {
+            if !json_active() {
+                cli_println!(
+                    "💡 Expression returned empty/undefined.\n\
+                       This could mean:\n\
+                       - The page context is stale (try: goto <url>)\n\
+                       - The JS expression returned undefined or \"\"\n\
+                       Check current page: eval \"window.location.href\""
                 );
                 // If the expression looked like it should produce output (e.g.
                 // `document.title`), offer a specific suggestion.
@@ -5734,14 +5790,24 @@ async fn handle_html_snapshot_get(
     }
 
     // Validate selector - reject element references
-    let selector = tool_params
+    let raw_selector = tool_params
         .get("selector")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    // Expand semantic keywords (article, readable, content, main-text) to
+    // combined CSS selectors targeting common article containers, so users
+    // don't need to guess CSS selectors for content extraction.
+    let selector = commands::expand_semantic_selector(raw_selector).unwrap_or(raw_selector);
     if is_element_reference(selector) {
         return Err(format!(
             "Element references ('{selector}') are not supported in htmlsnapshot get. Use a CSS selector instead."
         ));
+    }
+
+    // Clone tool_params with the expanded selector (in case a semantic keyword was used)
+    let mut effective_params = tool_params.clone();
+    if selector != raw_selector {
+        effective_params["selector"] = json!(selector);
     }
 
     // Validate attr field requires a name
@@ -5765,7 +5831,7 @@ async fn handle_html_snapshot_get(
         let client = client.clone();
         let base_url = base_url.to_string();
         let tool_name = tool_name.to_string();
-        let mut params = tool_params.clone();
+        let mut params = effective_params.clone();
         params["sessionId"] = json!(session_id);
         async move { call_tool_with_result(&client, &base_url, &tool_name, params).await }
     })
@@ -6121,7 +6187,7 @@ async fn handle_html_snapshot_query(
     let format = tool_params
         .get("format")
         .and_then(|v| v.as_str())
-        .unwrap_or("json")
+        .unwrap_or("table")
         .to_ascii_lowercase();
 
     // Validate --format value
@@ -9025,20 +9091,66 @@ async fn handle_swarm_create(
             cli_println!("Cleared {} stale swarm task(s) from prior sessions.", removed);
             json_field("cleared_stale_tasks", json!(removed));
         } else {
-            cli_println!(
-                "Note: {} swarm task(s) from prior sessions are still tracked.",
-                swarm_tasks.len()
-            );
-            cli_println!(
-                "  If new jobs get stuck in \"Created\" status, run `swarm list --clear` to remove stale entries,"
-            );
-            cli_println!(
-                "  then recreate the swarm session before resubmitting."
-            );
-            cli_println!(
-                "  Or use `swarm create --clear-stale` to clear and recreate in one step."
-            );
-            json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+            // Offer an interactive prompt to clear stale tasks,
+            // eliminating the multi-step "abort, clear, recreate" flow.
+            let is_interactive = std::io::stdin().is_terminal();
+            if is_interactive {
+                eprintln!();
+                eprintln!("{} swarm task(s) from prior sessions are still tracked.", swarm_tasks.len());
+                eprintln!("Stale tasks can block the worker pool, causing new jobs to stay \"Created\".");
+                eprintln!();
+                eprintln!("Clear them now? [Y/n]");
+
+                let mut input = String::new();
+                match std::io::stdin().read_line(&mut input) {
+                    Ok(_) => {
+                        let trimmed = input.trim().to_lowercase();
+                        if trimmed.is_empty() || trimmed == "y" || trimmed == "yes" {
+                            let mut list = existing;
+                            let before = list.tasks.len();
+                            list.tasks
+                                .retain(|t| t.command != "swarm-submit" && t.command != "swarm-query");
+                            let removed = before - list.tasks.len();
+                            write_async_tasks(&list, None).map_err(|e| e.to_string())?;
+                            cli_println!("Cleared {} stale swarm task(s).", removed);
+                            json_field("cleared_stale_tasks", json!(removed));
+                        } else {
+                            cli_println!(
+                                "Keeping {} tracked task(s). Use `swarm list --clear` to remove later, or `swarm create --clear-stale` next time.",
+                                swarm_tasks.len()
+                            );
+                            json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+                        }
+                    }
+                    Err(_) => {
+                        // Can't read stdin — keep tasks and show guidance.
+                        cli_println!(
+                            "Note: {} swarm task(s) from prior sessions are still tracked.",
+                            swarm_tasks.len()
+                        );
+                        cli_println!(
+                            "  Run `swarm list --clear` to remove stale entries, or `swarm create --clear-stale` to clear and recreate in one step."
+                        );
+                        json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+                    }
+                }
+            } else {
+                // Non-interactive (pipe, CI, script): show the warning but don't block.
+                cli_println!(
+                    "Note: {} swarm task(s) from prior sessions are still tracked.",
+                    swarm_tasks.len()
+                );
+                cli_println!(
+                    "  If new jobs get stuck in \"Created\" status, run `swarm list --clear` to remove stale entries,"
+                );
+                cli_println!(
+                    "  then recreate the swarm session before resubmitting."
+                );
+                cli_println!(
+                    "  Or use `swarm create --clear-stale` to clear and recreate in one step."
+                );
+                json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+            }
         }
     }
 
@@ -9054,7 +9166,20 @@ async fn handle_swarm_close(
     let state = read_state(None, session_name);
     let Some(session_id) = get_session_id_for_close(&state).map(str::to_string) else {
         clear_state(None, session_name);
-        eprintln!("{}", no_active_session_message());
+        // Distinguish "session already closed" from "no session ever existed"
+        // so users don't see the misleading "Session required" after a
+        // successful-but-slow close.
+        let existing = read_async_tasks(None);
+        let has_swarm_tasks = existing
+            .tasks
+            .iter()
+            .any(|t| t.command == "swarm-submit" || t.command == "swarm-query");
+        if has_swarm_tasks {
+            let count = existing.tasks.iter().filter(|t| t.command == "swarm-submit" || t.command == "swarm-query").count();
+            eprintln!("No active swarm session — it may have already been closed. {} tracked task(s) retained for history. Use `swarm list --clear` to remove.", count);
+        } else {
+            eprintln!("No active swarm session. Use `swarm create` to start one.");
+        }
         json_field("session_id", json!(null));
         json_field("closed", json!(false));
         return Ok(());
@@ -11318,13 +11443,45 @@ async fn run_browser4_cli(tokens: &[String]) -> Result<String, String> {
     let exe = std::env::current_exe()
         .map_err(|e| format!("Cannot determine CLI path: {}", e))?;
 
-    let tokens = tokens.to_vec();
+    let mut tokens = tokens.to_vec();
+
+    // Extract -s / --session flags from the token stream and pass them
+    // as BROWSER4_CLI_SESSION so parse_global_flags picks them up in the
+    // spawned process.  These are global flags that parse_global_flags only
+    // recognises before the first positional argument; when the loop
+    // subcommand spawns a nested browser4-cli the tokens come from
+    // task_tokens (everything after --), so -s appears *after* the command
+    // name and would be silently dropped.
+    let mut env_session: Option<String> = None;
+    let mut filtered = Vec::with_capacity(tokens.len());
+    let mut i = 0;
+    while i < tokens.len() {
+        let arg = &tokens[i];
+        if arg == "-s" || arg == "--session" {
+            if i + 1 < tokens.len() && !tokens[i + 1].starts_with('-') {
+                env_session = Some(tokens[i + 1].clone());
+                i += 1; // skip the value too
+            }
+        } else if arg.starts_with("-s=") {
+            env_session = Some(arg["-s=".len()..].to_string());
+        } else if arg.starts_with("--session=") {
+            env_session = Some(arg["--session=".len()..].to_string());
+        } else {
+            filtered.push(arg.clone());
+        }
+        i += 1;
+    }
+    tokens = filtered;
+
     let output = tokio::task::spawn_blocking(move || {
-        std::process::Command::new(&exe)
-            .args(&tokens)
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.args(&tokens)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output()
+            .stderr(std::process::Stdio::piped());
+        if let Some(ref session) = env_session {
+            cmd.env("BROWSER4_CLI_SESSION", session);
+        }
+        cmd.output()
     })
     .await
     .map_err(|e| format!("Subprocess spawn failed: {}", e))?
@@ -13813,15 +13970,18 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
     // Version comparison: use the live server version if available; fall back
     // to the installed bundle only when the server is unreachable.
     if let Some(ref server_ver) = server_version {
-        if server_ver != VERSION {
-            cli_println!(
+        // Strip leading 'v' and trailing '-SNAPSHOT' so dev builds
+        // (e.g. "4.12.2" vs "4.12.2-SNAPSHOT") don't produce a
+        // false-positive version mismatch warning on every command.
+        if normalize_version(server_ver) != normalize_version(VERSION) {
+            eprintln!(
                 "⚠  Version mismatch: CLI is {} but running backend is {}.",
                 VERSION, server_ver
             );
-            cli_println!(
+            eprintln!(
                 "   The CLI and backend were built from different versions of the source tree."
             );
-            cli_println!(
+            eprintln!(
                 "   Rebuild both to match:  mvn install -pl browser4-rest -am && cargo build --manifest-path cli/browser4-cli/Cargo.toml"
             );
             json_field("version_mismatch", json!(true));
@@ -13833,16 +13993,16 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
         if let Some(ref metadata) =
             daemon::read_installed_browser4_runtime_metadata()
         {
-            let installed_ver = metadata.tag.trim().trim_start_matches('v');
-            if installed_ver != VERSION.trim() {
-                cli_println!(
+            let installed_ver = metadata.tag.trim();
+            if normalize_version(installed_ver) != normalize_version(VERSION) {
+                eprintln!(
                     "⚠  Version mismatch: CLI is {} but installed backend is {}.",
                     VERSION, metadata.tag
                 );
-                cli_println!(
+                eprintln!(
                     "   The backend is not running, so the installed bundle version is shown."
                 );
-                cli_println!(
+                eprintln!(
                     "   Start the backend to compare against the live server version."
                 );
                 json_field("version_mismatch", json!(true));

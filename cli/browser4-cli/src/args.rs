@@ -53,10 +53,17 @@ pub struct BatchArgs {
 pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
     let mut flags = GlobalFlags::default();
 
-    // Default session name from environment variable
+    // Default session name and server URL from environment variables
     if let Ok(env_session) = std::env::var("BROWSER4_CLI_SESSION") {
         if !env_session.is_empty() {
             flags.session_name = Some(env_session);
+        }
+    }
+    if flags.server_url.is_none() {
+        if let Ok(env_server) = std::env::var("BROWSER4_CLI_SERVER") {
+            if !env_server.is_empty() {
+                flags.server_url = Some(env_server);
+            }
         }
     }
 

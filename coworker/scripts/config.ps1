@@ -55,12 +55,16 @@ if ($script:configData.ContainsKey('CLAUDE')) {
 if ($script:configData.ContainsKey('KIMI')) {
     $KIMI = @($script:configData['KIMI'])
 }
+if ($script:configData.ContainsKey('CODEX')) {
+    $CODEX = @($script:configData['CODEX'])
+}
 
 # ── Shared agent backend detection ───────────────────────────────────────────
 # Single source of truth for all worker scripts (agent.ps1, prompt-utils.ps1,
-# browser4-eval-prompt.ps1 dot-source this file). Priority: claude > kimi > copilot.
+# browser4-eval-prompt.ps1 dot-source this file). Priority: claude > kimi > codex > copilot.
 function Get-AgentBackend {
     if ($CLAUDE) { return 'claude' }
     if ($KIMI) { return 'kimi' }
+    if ($CODEX) { return 'codex' }
     return 'copilot'
 }

@@ -4588,6 +4588,10 @@ fn run_named_scenario(
 
     std::io::stdout().flush().expect("stdout flush failed");
     resources.ctx.clear_step_timings();
+    // Save and restore browser4_base_url so that mock-server scenarios which
+    // temporarily point it at a MockBrowser4Server don't leak a stale URL into
+    // subsequent real-backend scenarios that consult external_service + base_url.
+    let saved_browser4_base_url = resources.ctx.browser4_base_url.clone();
     let total_started_at = Instant::now();
     let mut harness_steps = Vec::new();
     if fail_fast {
@@ -4614,6 +4618,7 @@ fn run_named_scenario(
         steps.extend(cleanup_steps);
         let report = TimingReport::new(name, total_started_at.elapsed(), steps);
         println!("ok ({})", format_duration(report.total));
+        resources.ctx.browser4_base_url = saved_browser4_base_url;
         return ScenarioOutcome {
             report,
             failures: Vec::new(),
@@ -4658,6 +4663,11 @@ fn run_named_scenario(
     };
     let report = TimingReport::new(name, total_started_at.elapsed(), steps);
     let mut failures = Vec::new();
+
+    // Restore the original browser4_base_url so that mock-server scenarios
+    // which temporarily pointed it at a MockBrowser4Server don't leak a
+    // stale URL into subsequent real-backend scenarios.
+    resources.ctx.browser4_base_url = saved_browser4_base_url;
 
     match result {
         Ok(()) => {

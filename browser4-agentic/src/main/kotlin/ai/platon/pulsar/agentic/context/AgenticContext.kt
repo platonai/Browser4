@@ -7,6 +7,8 @@ import ai.platon.browser4.api.BrowserManager
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.browser4.protocol.browser.DefaultBrowserManager
+import ai.platon.pulsar.loop.TaskLoops
+import ai.platon.pulsar.loop.impl.StreamingTaskLoop
 import ai.platon.pulsar.ql.SQLSession
 import ai.platon.pulsar.ql.context.SQLContext
 import ai.platon.pulsar.ql.session.SessionDelegate
@@ -44,6 +46,14 @@ abstract class AbstractAgenticContext(
         // TODO: consider changed settings, for example, REST-level sessionId requires associated PulsarSession
         return sessions.values.filterIsInstance<AgenticSession>().firstOrNull() ?: createSession()
     }
+
+    /**
+     * TaskLoops with graceful fallback for dev-mode contexts where the bean is not
+     * wired. Uses [getBeanOrNull] first; falls back to a default [StreamingTaskLoop]
+     * so that link discovery (crawl depth >= 1) works without a Spring bean.
+     */
+    override val taskLoops: TaskLoops
+        get() = getBeanOrNull() ?: TaskLoops(StreamingTaskLoop(this, configuration))
 }
 
 open class BasicAgenticContext(

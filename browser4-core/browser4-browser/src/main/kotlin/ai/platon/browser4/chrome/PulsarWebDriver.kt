@@ -80,7 +80,7 @@ open class PulsarWebDriver constructor(
         // -----------------------------------------------------------------------
 
         /** Used by [selectOption] to manipulate <select> elements via CDP callFunctionOn. */
-        val SELECT_OPTION_JS = """function(jsonValues){const values=JSON.parse(jsonValues);const element=this;if(!element||element.tagName!=='SELECT'){throw new Error('Element is not a <select> element');}const optionsToSelect=new Set(values);const selectedValues=[];let hasChanged=false;if(!element.multiple){for(let i=0;i<element.options.length;i++){const option=element.options[i];if(optionsToSelect.has(option.value)||optionsToSelect.has(option.label)||optionsToSelect.has(option.text)){if(!option.selected){option.selected=true;hasChanged=true;}selectedValues.push(option.value);break;}}}else{for(let i=0;i<element.options.length;i++){const option=element.options[i];const shouldSelect=optionsToSelect.has(option.value)||optionsToSelect.has(option.label)||optionsToSelect.has(option.text);if(shouldSelect!=option.selected){option.selected=shouldSelect;hasChanged=true;}if(shouldSelect){selectedValues.push(option.value);}}}if(hasChanged){element.dispatchEvent(new Event('input',{bubbles:true}));element.dispatchEvent(new Event('change',{bubbles:true}));}return selectedValues;}"""
+        val SELECT_OPTION_JS = """function(jsonValues){const values=JSON.parse(jsonValues);const element=this;if(!element||element.tagName!=='SELECT'){throw new Error('Element is not a <select> element');}const optionsToSelect=new Set(values);const selectedValues=[];let hasChanged=false;if(!element.multiple){for(let i=0;i<element.options.length;i++){const option=element.options[i];if(optionsToSelect.has(option.value)||optionsToSelect.has(option.label)||optionsToSelect.has(option.text)){if(!option.selected){option.selected=true;hasChanged=true;}selectedValues.push(option.value);break;}}}else{for(let i=0;i<element.options.length;i++){const option=element.options[i];const shouldSelect=optionsToSelect.has(option.value)||optionsToSelect.has(option.label)||optionsToSelect.has(option.text);if(shouldSelect!=option.selected){option.selected=shouldSelect;hasChanged=true;}if(shouldSelect){selectedValues.push(option.value);}}}if(selectedValues.length===0&&values.length>0){var available=[];for(var i=0;i<element.options.length;i++){available.push(element.options[i].text||element.options[i].label||element.options[i].value);}throw new Error('No option matching "'+values.join('", "')+'" found. Available: ['+available.map(function(o){return '"'+o+'"';}).join(', ')+']');}if(hasChanged){element.dispatchEvent(new Event('input',{bubbles:true}));element.dispatchEvent(new Event('change',{bubbles:true}));element.dispatchEvent(new Event('blur',{bubbles:true}));}return selectedValues;}"""
 
         /** Used by [generateLocator] to build a unique CSS selector for an element. */
         val GENERATE_LOCATOR_JS = """element=>{if(!element||element.nodeType!==1)return null;function cssEscape(v){if(typeof CSS!=='undefined'&&CSS.escape)return CSS.escape(v);return v.replace(/[!"#$%&'()*+,./:;<=>?@[\]^`{|}~]/g,'\\$&');}function segmentFor(el){var tag=el.tagName.toLowerCase();if(el.id)return '#'+cssEscape(el.id);if(el.classList&&el.classList.length>0){var classes=Array.from(el.classList).filter(function(c){return!/[A-Z]/.test(c)&&!/^[a-z]+-[a-z0-9]{6,}$/.test(c)&&c.indexOf('_')===-1&&c.length>1;});if(classes.length>0)return tag+'.'+classes.map(cssEscape).join('.');}if(el.parentNode){var siblings=Array.from(el.parentNode.children);var sameTag=siblings.filter(function(s){return s.tagName===el.tagName;});if(sameTag.length>1){return tag+':nth-of-type('+(sameTag.indexOf(el)+1)+')';}}return tag;}var parts=[];var cur=element;while(cur&&cur.nodeType===1){parts.unshift(segmentFor(cur));if(cur.id)break;if(cur.tagName.toLowerCase()==='body')break;cur=cur.parentNode;}return parts.join(' > ');}"""
@@ -1154,6 +1154,23 @@ open class PulsarWebDriver constructor(
             keyboard?.type(text, randomDelayMillis("type"))
 
             gap("fill")
+
+            // Dispatch DOM events that JS validation frameworks expect after
+            // programmatic input. CDP Input.insertText fires trusted input
+            // events but not change (committed value) or blur (focus exit),
+            // so frameworks listening for those events won't recognize the
+            // change and will still show validation errors.
+            withNodeObjectId(browserProtocol, node) { objectId ->
+                browserProtocol.callFunctionOn(
+                    """function() {
+                        this.dispatchEvent(new Event('change', { bubbles: true }));
+                        this.dispatchEvent(new Event('blur', { bubbles: true }));
+                    }""",
+                    objectId = objectId,
+                    returnByValue = false,
+                    userGesture = true,
+                )
+            }
 
             // Verify the text actually landed. Despite the delays above, fill()
             // was still observed to silently no-op in CI's Docker headless Chrome

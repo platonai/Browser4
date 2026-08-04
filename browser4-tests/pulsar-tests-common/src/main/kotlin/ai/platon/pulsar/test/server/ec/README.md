@@ -78,8 +78,11 @@ Load once at application start; keep immutable in memory.
 
 ## Page Templates
 
-The primary `EcommerceController` + `HtmlRenderer` uses these templates under
-`/pulsar-tests-common/src/main/resources/static/generated/mock-amazon/`:
+Two rendering paths coexist:
+
+### Primary: `EcommerceController` + `HtmlRenderer`
+
+Templates under `/pulsar-tests-common/src/main/resources/static/generated/mock-amazon/`:
 - Home: `ec-home.html`
 - Category: `ec-category.html`
 - Product: `ec-product.html`
@@ -87,8 +90,30 @@ The primary `EcommerceController` + `HtmlRenderer` uses these templates under
 Placeholders use `{{VARIABLE}}` syntax for scalar values and `<!--BLOCK_NAME-->` HTML comments
 for repeated/multi-line content injection.
 
-An alternative renderer (`ListPageRenderer`) also renders category pages from
-`list/index.html` using direct string replacement on the stock Amazon-mock layout.
+**Home page placeholders:** `<!--CATEGORY_LINKS-->`, `<!--FEATURED_PRODUCTS-->`,
+`<!--TRENDING_SEARCHES-->`, `<!--CATEGORY_SPOTLIGHTS-->`, `{{TITLE}}`
+
+**Category page placeholders:** `{{CATEGORY_ID}}`, `{{CATEGORY_NAME}}`, `{{RESULT_COUNT}}`,
+`{{CATEGORY_SUMMARY}}`, `<!--FILTER_CHIPS-->`, `<!--RELATED_CATEGORY_LINKS-->`,
+`<!--SPONSORED_PRODUCTS-->`, `<!--PRODUCT_LIST-->`, `{{TITLE}}`
+
+**Product page placeholders:** `{{PRODUCT_ID}}`, `{{PRODUCT_NAME}}`, `{{PRODUCT_PRICE}}`,
+`{{PRODUCT_RATING}}`, `{{PRODUCT_RATING_COUNT}}`, `{{PRODUCT_IMAGE}}`,
+`{{PRODUCT_CATEGORY_ID}}`, `{{PRODUCT_CATEGORY_NAME}}`, `{{PRODUCT_DESCRIPTION}}`,
+`{{PRODUCT_STOCK_STATUS}}`, `<!--VISIT_SIGNAL-->`, `<!--INFO_PILLS-->`,
+`<!--DETAILS_SECTION-->`, `<!--SPECS_SECTION-->`, `<!--BUYBOX_META-->`, `<!--BADGES-->`,
+`<!--SECONDARY_GRID-->`, `<!--RECOMMENDATIONS_SECTION-->`, `<!--COMMENTS_SECTION-->`,
+`{{TITLE}}`
+
+### Alternative: `EcCategoryController` + `ListPageRenderer`
+
+Renders category pages from `list/index.html` using direct string replacement on the stock
+Amazon-mock layout. Fixes relative asset paths so CSS/JS load correctly under `/ec/b`,
+replaces the product list `<div>` content, and updates the page `<title>`.
+
+Both controllers respond at `/ec/b?node={categoryId}` — Spring's default ambiguity resolution
+applies (the more specific `produces` match on `EcCategoryController` takes priority for
+`text/html` requests).
 
 > **CRITICAL REQUIREMENT: DO NOT ALTER THE TEMPLATE LAYOUT, EXISTING JAVASCRIPT, OR CSS—ONLY INJECT DYNAMIC PRODUCT DATA INTO PLACEHOLDERS.**
 
@@ -115,6 +140,35 @@ An alternative renderer (`ListPageRenderer`) also renders category pages from
 - Use `<nav>` for category navigation on home.
 - Use `<section>` / `<article>` for product listings.
 - Provide `<ul>` for feature lists; `<table>` only for tabular specs.
+
+### Product Page Enrichment (Conditional Sections)
+
+Product detail pages include multiple optional sections that appear based on product
+attributes and a deterministic `sectionRoll()` hash, ensuring reproducible variation
+across products for realistic scraping/test scenarios:
+
+| Section | Rendered when | Template placeholder |
+|---------|---------------|---------------------|
+| Visit signal | Popular product or roll < 42 | `<!--VISIT_SIGNAL-->` |
+| Info pills | Premium (≥$80) or roll < 74 | `<!--INFO_PILLS-->` |
+| Feature section | Has features AND (price ≥$20 or roll < 30) | `<!--DETAILS_SECTION-->` |
+| Specs table | Has specs AND (premium or roll < 58) | `<!--SPECS_SECTION-->` |
+| Buybox meta | Low stock, premium, or roll < 86 | `<!--BUYBOX_META-->` |
+| FAQ section | Has specs AND (popular or roll < 44) | `<!--SECONDARY_GRID-->` |
+| Seller notes | Low stock, premium, or roll < 78 | `<!--SECONDARY_GRID-->` |
+| Recommendations | Has related products AND (popular or roll < 68) | `<!--RECOMMENDATIONS_SECTION-->` |
+| Customer comments | Popular, premium, or roll < 57 | `<!--COMMENTS_SECTION-->` |
+
+A product is "popular" when `ratingCount >= 150` or it has a "Bestseller" badge.
+"Premium" means `price >= $80.00`. "Low stock" means `qty` between 1–20.
+
+The `sectionRoll(product, salt)` function hashes `{productId}:{categoryId}:{salt}`
+and takes the result modulo 100, producing a stable integer in [0, 99] per product+section
+pair — same product always gets the same sections.
+
+Home page also includes dynamic sections: featured products (top 6 bestsellers),
+trending search links (from featured product names), and category spotlights
+(first 4 categories shown as buying-guide cards).
 
 ## Error Handling
 | Scenario | Status | Response |
@@ -158,12 +212,13 @@ Automated or manual tests should assert:
 
 ## Quick Implementation Steps
 1. Create (or generate) the JSON data file with categories & products.
-2. Implement `CatalogLoader` to parse JSON into `Catalog` data classes and build in-memory indexes (`byId`, `byCategory`).
-3. Implement `CatalogService` wrapper with sorted product queries.
-4. Implement `HtmlRenderer` to load templates and perform placeholder replacement (`{{VAR}}` + `<!--BLOCK-->`).
-5. Implement `EcommerceController` route handlers for `/ec/`, `/ec/b`, `/ec/dp/{id}`, `/ec/static/**`, and fallback 404.
-6. Add error responses with `#error-page` and `error-code-{status}` conventions.
-7. Verify with test checklist.
+2. Implement `CatalogLoader` to parse JSON into `Catalog` data classes and build in-memory indexes (`byId`, `byCategory`) plus `allProducts()` lookup.
+3. Implement `CatalogService` wrapper with sorted product queries, `allProducts()`, and `getBestsellers(limit)`.
+4. Implement `HtmlRenderer` to load templates and perform placeholder replacement (`{{VAR}}` + `<!--BLOCK-->`). The product page includes conditionally rendered sections (visit signal, info pills, buybox meta, specs, FAQ, seller notes, customer comments, recommendations) gated by `sectionProfile()` which uses deterministic `sectionRoll()` for reproducible page variation.
+5. Implement `EcommerceController` route handlers for `/ec/`, `/ec/b`, `/ec/dp/{id}`, `/ec/static/**`, and fallback 404. Home page passes bestseller products to the renderer.
+6. Optionally implement `EcCategoryController` + `ListPageRenderer` as an alternative category-page rendering path using the stock Amazon-mock list template.
+7. Add error responses with `#error-page` and `error-code-{status}` conventions.
+8. Verify with test checklist.
 
 ## Seeds & Determinism
 

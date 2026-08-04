@@ -58,9 +58,7 @@ src/main/kotlin/${pluginPackage}/
     └── MyToolExecutor.kt        # Custom LLM agent tools (optional)
 
 src/main/resources/META-INF/
-├── browser4-plugin.json                                 # Plugin manifest (required)
-└── spring/
-    └── org.springframework.boot.autoconfigure.AutoConfiguration.imports  # Spring registration (required)
+└── browser4-plugin.json                                 # Plugin manifest + discovery (required)
 ```
 
 ## Key Concepts
