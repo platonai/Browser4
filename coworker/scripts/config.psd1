@@ -26,6 +26,15 @@
     #     'kimi'
     # )
 
+    # codex exec runs non-interactively; --dangerously-bypass-approvals-and-sandbox
+    # auto-approves all tool use; --ephemeral skips session persistence for clean exit.
+    # Do NOT add -p or --yolo: they conflict with exec mode.
+    # CODEX = @(
+    #     'codex'
+    #     '--dangerously-bypass-approvals-and-sandbox'
+    #     '--ephemeral'
+    # )
+
     CLAUDE = @(
         'claude'
         '--dangerously-skip-permissions'
