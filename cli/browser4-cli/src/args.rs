@@ -102,10 +102,16 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
             flags.help_json = true;
         } else if arg.starts_with("--timeout=") {
             flags.timeout_secs = arg["--timeout=".len()..].parse().ok();
+            if let Some(secs) = flags.timeout_secs {
+                crate::http::set_global_timeout_override(secs);
+            }
         } else if arg == "--timeout" {
             if i + 1 < argv.len() {
                 i += 1;
                 flags.timeout_secs = argv[i].parse().ok();
+                if let Some(secs) = flags.timeout_secs {
+                    crate::http::set_global_timeout_override(secs);
+                }
             }
         } else if arg.starts_with("--server=") {
             flags.server_url = Some(arg["--server=".len()..].to_string());

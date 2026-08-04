@@ -197,6 +197,7 @@ function Print-Usage {
     Write-Host "  cli         Run Rust Browser4 CLI tests from cli\browser4-cli"
     Write-Host "  mock-site  Launch mock site from browser4-tests\browser4-rest-tests"
     Write-Host "              (aliases: server, mocksite, mocksiteboot)"
+    Write-Host "              First run installs ~25 Maven modules; ~10-15 min cold."
     Write-Host "  rest        Run REST module tests"
     Write-Host "  skills      Run skills-focused agentic tests"
     Write-Host "  mcp         Run MCP-focused agentic tests"
@@ -583,20 +584,38 @@ To use a different port:
         Write-CommandBanner -Label '[DRY RUN] Executing in rest-tests:' -Subtitle "  $mvnwScript $($mvnArgs -join ' ')"
     }
 
-    # Pre-flight: install parent POM and dependency BOM locally.
-    # On a clean checkout, the browser4-dependencies SNAPSHOT POM is not in
-    # Maven Central, so mvn install it first to avoid "Non-resolvable import POM"
-    # failures when the mock-site module resolves its BOM.
+    # Pre-flight: install parent POM, dependency BOM, and browser4-rest
+    # locally. On a clean checkout, the browser4-dependencies SNAPSHOT POM
+    # and browser4-rest JAR (plus its transitive dependencies like
+    # pulsar-tests-common) are not in Maven Central.  We mvn install them
+    # first to avoid "Non-resolvable import POM" and dependency resolution
+    # errors when the mock-site module boots.
+    #
+    # On a cold machine this step takes ~10-15 minutes.  Subsequent runs
+    # are near-instant (Maven reuses the cached artifacts).
     if (-not $script:DryRun) {
-        $preflightArgs = @(
+        # Phase 1: dependency BOM (fast — POM only, no compilation)
+        $preflightBomArgs = @(
             'install',
             '-pl', 'browser4-dependencies',
             '-am',
             '-DskipTests',
             '-q'
         )
-        Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @preflightArgs } `
+        Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @preflightBomArgs } `
             -Label 'InstallDependencyBOM' -PreExecPath $repoRoot
+
+        # Phase 2: browser4-rest + transitive deps (slow on first build —
+        #          browser4-rest compiles ~25 modules; 10-15 min cold).
+        $preflightRestArgs = @(
+            'install',
+            '-pl', 'browser4-rest',
+            '-am',
+            '-DskipTests',
+            '-q'
+        )
+        Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @preflightRestArgs } `
+            -Label 'InstallBrowser4Rest' -PreExecPath $repoRoot
     }
 
     Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @mvnArgs } -Label 'MockSiteBoot' -PreExecPath $mockSiteModuleDir

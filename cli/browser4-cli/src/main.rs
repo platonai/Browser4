@@ -9281,6 +9281,11 @@ async fn handle_swarm_close(
     } else {
         cli_println!("Swarm session closed. Browser terminated.");
     }
+    cli_println!(
+        "Note: If you had other named sessions (e.g. via `session-default`), they may\n\
+         have been closed as well. Use `list` to check active sessions, or re-create\n\
+         them with `session-default <name>`."
+    );
     Ok(())
 }
 
@@ -9906,7 +9911,12 @@ async fn swarm_wait_for_jobs(
     );
 
     let poll_interval = std::time::Duration::from_secs(2);
-    let max_wait = std::time::Duration::from_secs(300); // 5-minute timeout
+    // Respect the global --timeout flag (BROWSER4_CLI_GLOBAL_TIMEOUT_SECS)
+    // when a user passes e.g. --timeout 600.  Falls back to 300 s if no
+    // override is set.
+    let max_wait = crate::http::global_timeout_override()
+        .unwrap_or(300);
+    let max_wait = std::time::Duration::from_secs(max_wait);
     let start = std::time::Instant::now();
 
     let mut completed = vec![false; total];
@@ -9969,13 +9979,24 @@ async fn swarm_wait_for_jobs(
                 .filter(|(i, _)| !completed[*i])
                 .map(|(_, id)| id.clone())
                 .collect();
+            let done_count = completed.iter().filter(|&&c| c).count();
             cli_println!(
-                "Timeout after {:.0}s. {} of {} job(s) completed. {} job(s) still pending. Use 'swarm status <id>' to check manually.",
+                "\nTimeout after {:.0}s. {}/{} job(s) completed, {} still pending.",
                 start.elapsed().as_secs_f64(),
-                completed.iter().filter(|&&c| c).count(),
+                done_count,
                 total,
                 pending.len(),
             );
+            if !pending.is_empty() {
+                cli_println!("Pending job IDs:");
+                for id in &pending {
+                    cli_println!("  swarm status {}", id);
+                }
+                cli_println!(
+                    "\nTip: Increase the timeout with --timeout <seconds> \
+                     (e.g. --timeout 600 for 10 minutes)."
+                );
+            }
             json_field("pending_task_ids", json!(pending));
             return Ok(());
         }
@@ -10726,7 +10747,12 @@ async fn handle_crawl(
     }
 
     let poll_interval = std::time::Duration::from_secs(2);
-    let timeout = crawl_request_timeout();
+    // Use the global --timeout override as a floor, falling back to the
+    // crawl-specific default (600 s via BROWSER4_CLI_CRAWL_TIMEOUT_SECS).
+    let timeout = crate::http::global_timeout_override()
+        .map(std::time::Duration::from_secs)
+        .unwrap_or_else(crawl_request_timeout)
+        .max(crawl_request_timeout()); // never lower than the crawl default
     let start = std::time::Instant::now();
     let mut last_report = std::time::Duration::ZERO;
     // First progress report after 5s (quick feedback), then every 10s
@@ -19252,6 +19278,24 @@ mod tests {
         assert!(parsed.is_subcommand);
         assert!(!parsed.is_shell);
         assert_eq!(parsed.task_tokens, vec!["eval", "document.title"]);
+    }
+
+    #[test]
+    fn test_parse_loop_args_dash_dash_with_session_flag() {
+        // Issue 6: -s <name> after -- should be passed through to
+        // run_browser4_cli which extracts them via BROWSER4_CLI_SESSION.
+        let args: Vec<String> = vec![
+            "loop", "--", "-s", "price-watch", "eval", "document.title",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert!(parsed.is_subcommand);
+        assert_eq!(
+            parsed.task_tokens,
+            vec!["-s", "price-watch", "eval", "document.title"]
+        );
     }
 
     #[test]

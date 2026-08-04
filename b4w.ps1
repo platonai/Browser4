@@ -88,7 +88,8 @@ $OriginalCwd = Get-Location
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Manifest = "$ScriptDir/cli/browser4-cli/Cargo.toml"
-$Exe = Join-Path $ScriptDir "cli/browser4-cli/target/debug/browser4-cli.exe"
+$ExeName = if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'browser4-cli.exe' } else { 'browser4-cli' }
+$Exe = Join-Path $ScriptDir "cli/browser4-cli/target/debug/$ExeName"
 
 if ($Rebuild) {
     Write-Host "Rebuilding browser4-cli..." -ForegroundColor Yellow

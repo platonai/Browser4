@@ -79,15 +79,6 @@ pub const CATEGORY_TITLES: &[(&str, &str)] = &[
     ("plugins", "Plugins"),
 ];
 
-/// Top 5 most common commands for the Quick Start section in help output.
-const QUICK_START_COMMANDS: &[(&str, &str)] = &[
-    ("  goto <url>",               "Navigate to a page (auto-starts server)"),
-    ("  snapshot -v 0 --stdout",   "Capture page structure with element refs"),
-    ("  click <ref>",              "Click an element by its snapshot ref"),
-    ("  fill <ref> \"<text>\"",     "Type text into an input field"),
-    ("  htmlsnapshot get text <css>", "Extract page content via CSS selector"),
-];
-
 /// Short aliases for category-based help filtering.
 /// e.g. `browser4-cli --help nav` shows Navigation commands.
 const CATEGORY_ALIASES: &[(&str, &str)] = &[
