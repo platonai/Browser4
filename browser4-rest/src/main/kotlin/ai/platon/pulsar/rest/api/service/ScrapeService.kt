@@ -2,6 +2,7 @@ package ai.platon.pulsar.rest.api.service
 
 import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agent.tool.UserCommandExecutor.Companion.FLOW_POLLING_INTERVAL
+import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.GenericAgenticSession
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
@@ -76,6 +77,7 @@ class ScrapeService(
                 } catch (e: Exception) {
                     logger.warn("X-SQL: pre-load of '{}' before first attempt failed: {}",
                         extractedUrl, e.message)
+                        extractedUrl, e.message)
                 }
             }
 
@@ -136,9 +138,12 @@ class ScrapeService(
         }
     }
 
-    private fun executeQueryOnce(request: ScrapeRequest): ScrapeResponse {
-        val hyperlink = createScrapeHyperlink(request)
-        session.submit(hyperlink)
+    private fun executeQueryOnce(
+        request: ScrapeRequest,
+        agenticSession: AgenticSession
+    ): ScrapeResponse {
+        val hyperlink = createScrapeHyperlink(request, agenticSession)
+        agenticSession.submit(hyperlink)
         return hyperlink.get(120, TimeUnit.SECONDS)
     }
 
@@ -161,13 +166,13 @@ class ScrapeService(
      * Submit a scraping task
      * */
     fun submitJob(request: ScrapeRequest): String {
-        val hyperlink = createScrapeHyperlink(request)
-        responseCache[hyperlink.uuid] = hyperlink.response
-        hyperlink.response.id = hyperlink.uuid
         val s = session
         require(s is GenericAgenticSession) {
             "Expected GenericAgenticSession but got ${s::class.simpleName} (uuid=${s.uuid})"
         }
+        val hyperlink = createScrapeHyperlink(request, s)
+        responseCache[hyperlink.uuid] = hyperlink.response
+        hyperlink.response.id = hyperlink.uuid
         s.submit(hyperlink)
         logger.info("Scrape task submitted: {} sql={}", hyperlink.uuid, request.sql)
         return hyperlink.uuid
@@ -230,8 +235,11 @@ class ScrapeService(
         }
     }
 
-    private fun createScrapeHyperlink(request: ScrapeRequest): ScrapeHyperlink {
-        return ScrapeHyperlinkFactory.create(request, session) { link ->
+    private fun createScrapeHyperlink(
+        request: ScrapeRequest,
+        agenticSession: AgenticSession
+    ): ScrapeHyperlink {
+        return ScrapeHyperlinkFactory.create(request, agenticSession) { link ->
             responseCache[link.uuid] = link.response
             responseStatusIndex[link.response.statusCode].add(link.uuid)
         }

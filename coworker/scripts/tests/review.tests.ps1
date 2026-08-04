@@ -310,8 +310,13 @@ The CLI help generator does not include examples.
 ### Common Setup
 
 1. Clone the repository and `cd` to the repo root.
-2. The CLI is invoked via `./b4w.ps1` which auto-builds from source.
+2. Invoke the CLI:
+   - **PowerShell:** `./b4w.ps1 <command>` (auto-builds from source)
+   - **Bash / Git Bash:** `./b4w.sh <command>`
+   - **Direct:** `browser4-cli <command>` (if installed globally)
+   > **Note:** `$(./b4w.ps1)` is command substitution in bash — do NOT use it.
 3. The backend server starts automatically in dev mode.
+4. All commands from repo root.
 
 ### Per-Issue Reproduction Steps
 

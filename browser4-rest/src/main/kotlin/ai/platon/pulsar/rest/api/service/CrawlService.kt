@@ -201,57 +201,93 @@ class CrawlService(
                     val results = mutableListOf<CrawlPageResult>()
                     val seedStatuses = mutableListOf<CrawlSeedStatus>()
                     val totalSeeds = seedUrls.size
-                    for ((index, seedUrl) in seedUrls.withIndex()) {
-                        logger.info(
-                            "Crawl {}: processing seed URL {}/{}: {}",
-                            taskId, index + 1, totalSeeds, seedUrl
-                        )
-                        val seedRequest = request.copy(url = seedUrl, urls = null)
-                        val pages = try {
-                            val fetched = when {
-                                seedRequest.depth == 0 -> crawlDepth0(taskId, seedRequest)
-                                seedRequest.depth <= 1 -> crawlDepth1(taskId, seedRequest)
-                                else -> crawlDepthN(taskId, seedRequest)
-                            }
-                            logger.info(
-                                "Crawl {}: seed URL {}/{} completed: {} → {} page(s)",
-                                taskId, index + 1, totalSeeds, seedUrl, fetched.size
-                            )
-                            seedStatuses.add(CrawlSeedStatus(
-                                url = seedUrl,
-                                status = "fetched",
-                                pagesReturned = fetched.size
-                            ))
-                            fetched
-                        } catch (e: Exception) {
-                            logger.error(
-                                "Crawl {}: seed URL {}/{} failed: {} — {}",
-                                taskId, index + 1, totalSeeds, seedUrl, e.message, e
-                            )
-                            seedStatuses.add(CrawlSeedStatus(
-                                url = seedUrl,
-                                status = "error",
-                                pagesReturned = 0,
-                                error = e.message
-                            ))
-                            listOf(
-                                CrawlPageResult(
-                                    url = seedUrl,
-                                    title = null,
-                                    contentLength = null,
-                                    depth = 0
-                                )
-                            )
-                        }
-                        results.addAll(pages)
 
-                        // Small delay between seed URLs to allow protocol handler
-                        // cleanup from the previous session to complete before the
-                        // next session is created. Prevents "Protocol not found" errors
-                        // when processing multiple seed URLs in the same crawl.
-                        if (index < totalSeeds - 1) {
-                            delay(SEED_INTERVAL_MS)
+                    // For depth=0 (bulk fetch mode), reuse a single session across
+                    // all seed URLs.  Creating a new session per seed causes the HTTP
+                    // protocol handler to be deregistered when the previous session is
+                    // closed, and the next session's handler may not re-register in time
+                    // for the page load — producing "Protocol not found" (status 1600)
+                    // for every seed after the first.  A single session avoids the
+                    // deregistration/re-registration cycle entirely.
+                    val sharedDepth0Session = if (request.depth == 0) {
+                        AgenticContexts.createSession()
+                    } else {
+                        null
+                    }
+
+                    try {
+                        for ((index, seedUrl) in seedUrls.withIndex()) {
+                            logger.info(
+                                "Crawl {}: processing seed URL {}/{}: {}",
+                                taskId, index + 1, totalSeeds, seedUrl
+                            )
+                            val seedRequest = request.copy(url = seedUrl, urls = null)
+                            val pages = try {
+                                val fetched = when {
+                                    seedRequest.depth == 0 -> crawlDepth0(taskId, seedRequest, sharedDepth0Session)
+                                    seedRequest.depth <= 1 -> crawlDepth1(taskId, seedRequest)
+                                    else -> crawlDepthN(taskId, seedRequest)
+                                }
+                                logger.info(
+                                    "Crawl {}: seed URL {}/{} completed: {} → {} page(s)",
+                                    taskId, index + 1, totalSeeds, seedUrl, fetched.size
+                                )
+                                seedStatuses.add(CrawlSeedStatus(
+                                    url = seedUrl,
+                                    status = "fetched",
+                                    pagesReturned = fetched.size
+                                ))
+                                fetched
+                            } catch (e: Exception) {
+                                logger.error(
+                                    "Crawl {}: seed URL {}/{} failed: {} — {}",
+                                    taskId, index + 1, totalSeeds, seedUrl, e.message, e
+                                )
+                                seedStatuses.add(CrawlSeedStatus(
+                                    url = seedUrl,
+                                    status = "error",
+                                    pagesReturned = 0,
+                                    error = e.message
+                                ))
+                                listOf(
+                                    CrawlPageResult(
+                                        url = seedUrl,
+                                        title = null,
+                                        contentLength = null,
+                                        depth = 0
+                                    )
+                                )
+                            }
+                            results.addAll(pages)
+
+                            // Publish incremental progress to the in-memory task
+                            // store so the CLI polling loop can show per-seed
+                            // extraction progress (e.g. "2/5 seeds done, 4 rows
+                            // extracted so far").  We only update the in-memory
+                            // store — persistence.append is deferred until the
+                            // crawl completes to avoid writing intermediate states.
+                            val currentResult = taskStore.getIfPresent(taskId)
+                            val incrementalResponse = CrawlResponse(
+                                taskId = taskId,
+                                status = "PROCESSING",
+                                pagesFound = results.size,
+                                pages = results.toList(),
+                                diagnostic = currentResult?.diagnostic,
+                                startedTime = currentResult?.startedTime ?: java.time.Instant.now(),
+                                seedStatuses = seedStatuses.toList()
+                            )
+                            taskStore.put(taskId, incrementalResponse)
+
+                            // Small delay between seed URLs to allow the browser
+                            // time to settle between page loads.  When using a shared
+                            // session this is less critical (no protocol handler
+                            // re-registration), but still prevents resource contention.
+                            if (index < totalSeeds - 1) {
+                                delay(SEED_INTERVAL_MS)
+                            }
                         }
+                    } finally {
+                        runCatching { sharedDepth0Session?.close() }
                     }
                     Pair(results, seedStatuses)
                 }
@@ -419,30 +455,45 @@ class CrawlService(
     // Depth=0: fetch each seed URL directly, no link discovery
     // ------------------------------------------------------------------
 
-    private suspend fun crawlDepth0(taskId: String, request: CrawlRequest): List<CrawlPageResult> {
+    /**
+     * Fetch a single seed URL at depth=0 and optionally run X-SQL extraction.
+     *
+     * @param sharedSession When provided, this session is reused instead of
+     *   creating a new one, and it is NOT closed when the method returns.
+     *   This eliminates protocol-handler deregistration races when processing
+     *   multiple depth=0 seeds in sequence.
+     */
+    private suspend fun crawlDepth0(
+        taskId: String,
+        request: CrawlRequest,
+        sharedSession: PulsarSession? = null
+    ): List<CrawlPageResult> {
         // Depth=0 bulk-fetch: always use -refresh so that internal HTTP
         // caches and protocol-level state from prior sessions don't cause
-        // 0-byte responses or "Protocol not found" for URLs after the first.
+        // 0-byte responses for URLs after the first.
         val effectiveArgs = if (request.args.isBlank()) "-refresh" else "${request.args} -refresh"
 
         var lastError: Exception? = null
         repeat(MAX_FETCH_RETRIES) { attempt ->
-            val session = AgenticContexts.createSession()
+            // Reuse the shared session if provided; otherwise create a private one.
+            // Only private (owned) sessions are closed in the finally block.
+            val ownsSession = sharedSession == null
+            val session: PulsarSession = sharedSession ?: AgenticContexts.createSession()
+
             try {
                 val options = parseOptions(session, effectiveArgs)
                 val page = session.load(request.url, options)
 
                 // If the page loaded but content is empty, retry after a delay.
-                // This handles transient "Protocol not found" errors where the
-                // HTTP protocol handler hasn't re-registered after the previous
-                // session was closed.
+                // When using a shared session the protocol handler shouldn't be
+                // an issue, but transient network problems can still cause this.
                 if (page.contentLength == 0L) {
                     val msg = "fetch returned 0 bytes (possible protocol handler not ready)"
                     if (attempt < MAX_FETCH_RETRIES - 1) {
                         val retryDelay = FETCH_RETRY_DELAY_MS * (1L shl attempt)
                         logger.warn("Crawl {}: {} for '{}', retrying in {}ms (attempt {}/{})",
                             taskId, msg, request.url, retryDelay, attempt + 1, MAX_FETCH_RETRIES)
-                        runCatching { session.close() }
+                        if (ownsSession) runCatching { session.close() }
                         delay(retryDelay)
                         return@repeat
                     }
@@ -484,7 +535,7 @@ class CrawlService(
                     val retryDelay = FETCH_RETRY_DELAY_MS * (1L shl attempt)
                     logger.warn("Crawl {}: protocol error for '{}', retrying in {}ms (attempt {}/{})",
                         taskId, request.url, retryDelay, attempt + 1, MAX_FETCH_RETRIES)
-                    runCatching { session.close() }
+                    if (ownsSession) runCatching { session.close() }
                     delay(retryDelay)
                     return@repeat
                 }
@@ -498,7 +549,7 @@ class CrawlService(
                     )
                 )
             } finally {
-                runCatching { session.close() }
+                if (ownsSession) runCatching { session.close() }
             }
         }
 
@@ -816,16 +867,27 @@ class CrawlService(
             // UDFs find the page in the local cache.  Without this the X-SQL
             // engine may silently return 0 rows even when the page was loaded
             // earlier in a different session lifecycle stage.
-            try {
+            val preloadSucceeded = try {
                 runBlocking {
                     withTimeout(10_000L) {
                         session.load(pageUrl, "-refresh")
                     }
                 }
                 logger.debug("Crawl X-SQL: pre-loaded '{}' into session cache", pageUrl)
+                true
             } catch (preloadError: Exception) {
-                logger.debug("Crawl X-SQL: pre-load of '{}' not needed or failed: {}",
-                    pageUrl, preloadError.message)
+                // Pre-load failure means the WebDB cache may be empty for this
+                // page, and DOM_LOAD_AND_SELECT / DOM UDFs will not find the
+                // page content.  This is a warning (not debug) because it
+                // directly causes empty extraction results for the user.
+                logger.warn(
+                    "Crawl X-SQL: pre-load of '{}' failed ({}). " +
+                    "X-SQL extraction may return 0 rows or empty fields. " +
+                    "This can happen when the session's WebDB cache was cleared " +
+                    "between page load and query execution.",
+                    pageUrl, preloadError.message
+                )
+                false
             }
 
             val processedSql = SQLTemplate(sql).createSQL(pageUrl)
@@ -839,11 +901,62 @@ class CrawlService(
                 }
             val rs: ResultSet = sqlContext.executeQuery(processedSql)
             val copied = ResultSetUtils.copyResultSet(rs)
-            val rows = ResultSetUtils.getTextEntitiesFromResultSet(copied)
+
+            // Read column names from ResultSetMetaData BEFORE converting to
+            // text entities.  JDBC metadata preserves the SQL SELECT column
+            // order, which is the deterministic source of truth for column
+            // ordering in CSV/JSON/table output.  Without this, column order
+            // depends on Map iteration order which varies across implementations.
+            val metaData = copied.metaData
+            val sqlColumnOrder = (1..metaData.columnCount).map { metaData.getColumnName(it) }
+
+            val rawRows = ResultSetUtils.getTextEntitiesFromResultSet(copied)
+            // Reorder each row to match the SQL SELECT column order so that
+            // CSV headers, JSON keys, and table columns are deterministic.
+            val rows = if (sqlColumnOrder.isNotEmpty()) {
+                rawRows.map { row ->
+                    val ordered = linkedMapOf<String, Any?>()
+                    for (col in sqlColumnOrder) {
+                        ordered[col] = row[col]
+                    }
+                    // Append any columns not in metadata (computed/dynamic names)
+                    for ((key, value) in row) {
+                        if (key !in sqlColumnOrder) {
+                            ordered[key] = value
+                        }
+                    }
+                    ordered
+                }
+            } else {
+                rawRows
+            }
             if (rows.isEmpty()) {
                 logger.info("Crawl X-SQL: query returned 0 rows for '{}'", pageUrl)
             } else {
                 logger.info("Crawl X-SQL: extracted {} row(s) from '{}'", rows.size, pageUrl)
+
+                // Detect silent failures: rows exist but ALL extracted data
+                // fields (excluding URL/URI columns) are empty.  This almost
+                // always means the WebDB cache was empty when the UDFs ran,
+                // which happens when the pre-load above fails or the cache
+                // layer used by session.load() differs from the one the UDFs
+                // read.  Surface this as a warning so the user knows something
+                // is wrong.
+                val nonUrlColumnsHaveContent = rows.any { row ->
+                    row.any { (key, value) ->
+                        !key.contains("url", ignoreCase = true)
+                            && !key.contains("uri", ignoreCase = true)
+                            && !key.contains("base", ignoreCase = true)
+                            && value != null && value.toString().isNotBlank()
+                    }
+                }
+                if (!nonUrlColumnsHaveContent && !preloadSucceeded) {
+                    val msg = "All extracted fields are empty — the WebDB cache may have been " +
+                        "empty when the X-SQL UDFs ran. This is likely a cache-coherence issue " +
+                        "between session.load() and the DOM UDF layer."
+                    logger.warn("Crawl X-SQL: {} for '{}'", msg, pageUrl)
+                    return Pair(rows, msg)
+                }
             }
             Pair(rows, null)
         } catch (e: Exception) {

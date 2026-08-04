@@ -102,12 +102,25 @@ open class XSQLHyperlink(
         }
 
         val rs = executeQuery(request, response)
+
+        // Read column names from ResultSetMetaData BEFORE converting to text
+        // entities.  JDBC metadata preserves the SQL SELECT column order, which
+        // is the deterministic source of truth for column ordering.  Without
+        // this, column order depends on the iteration order of row-key maps,
+        // which varies across Map implementations and causes inconsistent CSV
+        // headers, JSON field order, and table columns.
+        val metaData = rs.metaData
+        val sqlColumnOrder = (1..metaData.columnCount).map { metaData.getColumnName(it) }
+
         val rawResultSet = ResultSetUtils.getTextEntitiesFromResultSet(rs)
 
         // Ensure all column keys are present in every row. When a selector
         // finds no match, the corresponding column should contain null rather
         // than being silently absent — missing data must be visible.
+        // Use SQL column order first, then append any extra keys discovered
+        // during row iteration (edge case: computed columns with dynamic names).
         val allKeys = linkedSetOf<String>()
+        allKeys.addAll(sqlColumnOrder)
         for (row in rawResultSet) {
             allKeys.addAll(row.keys)
         }

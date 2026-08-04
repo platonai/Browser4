@@ -1,0 +1,13 @@
+{
+  "meta": {
+    "date": "20260804-184806",
+    "source": "20260804-184806-extraction-method-routing.full.md",
+    "scenario": "extraction-method-routing",
+    "mode": "dev"
+  },
+  "background": {
+    "executionContext": "",
+    "task": "| AC | Description | Status |\n|----|-------------|--------|\n| AC1 | Interact first, then extract form results | ✅ Success |\n| AC2 | Static page, single field extraction | ✅ Success |\n| AC3 | Static page, all-matches extraction | ✅ Success |\n| AC4 | X-SQL correlated multi-field rows | ⚠️ Partial — X-SQL broken; `eval` workaround |\n| AC5 | Dynamic page `eval --json` | ✅ Success |\n| AC6 | Natural-language extraction | ✅ Success (backend LLM configured) |\n| AC7 | High-volume crawl with X-SQL | ⚠️ Partial — 3/5 pages; flaky |\n\n### Issues Found: 8\n\n**Critical (1):** `htmlsnapshot query` (X-SQL) is **completely broken** — every attempt fails with \"scrape session closed before query could execute.\" This blocks the primary documented path for structured single-page extraction.\n\n**High (1):** Crawl extraction is **flaky** — 2/5 pages on first run, 3/5 on retry. Truncated content for some pages.\n\n**Medium (3):** Misleading documentation about `htmlsnapshot` staleness, `inspect` discovers wrong patterns on detail pages, Windows shell quoting complexity.\n\n**Low (3):** `extract` output format is Java serialization, excessive terminal noise from auto-snapshots, no per-page progress during crawl.\n\n### Key Strengths Observed\n- `htmlsnapshot inspect` is excellent for selector discovery on listing pages\n- `eval --json` with `--file` is a reliable escape hatch for complex extraction\n- The decision tree in SKILL.md §4a provides clear guidance\n- Form interaction with refs works well when following the re-snapshot pattern\n- `extract` worked even without explicit LLM key (backend-configured)\n\n### Overall Usability Rating: **6/10**\n\nThe tool has a solid foundation with well-designed extraction primitives, but reliability issues with X-SQL and crawl scraping significantly undermine confidence. The documentation is comprehensive but contains one critical inaccuracy about `htmlsnapshot` behavior. The Windows shell quoting issue, while documented, adds friction to every complex query.\n\n**Full findings written to:** `.test-sessions/findings.json` and `.test-sessions/evaluation-report.md`"
+  },
+  "issues": []
+}

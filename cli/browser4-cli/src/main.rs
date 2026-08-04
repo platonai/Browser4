@@ -10592,12 +10592,79 @@ async fn handle_crawl(
         if elapsed - last_report >= interval {
             last_report = elapsed;
             if pages_found > 0 {
-                cli_println!(
-                    "Crawling... {}/{} pages found ({}s elapsed)",
-                    pages_found,
-                    url_count,
-                    elapsed.as_secs()
-                );
+                // When X-SQL extraction is active, include per-seed progress
+                // with extracted row counts from the intermediate response so
+                // the user can see extraction results as they come in.
+                if has_sql {
+                    let extracted_count = parsed["pages"].as_array()
+                        .map(|pages| {
+                            pages.iter().filter(|p| {
+                                p["extracted"].as_array()
+                                    .map_or(false, |e| !e.is_empty())
+                            }).count()
+                        })
+                        .unwrap_or(0);
+                    let total_rows: usize = parsed["pages"].as_array()
+                        .map(|pages| {
+                            pages.iter().map(|p| {
+                                p["extracted"].as_array()
+                                    .map(|a| a.len())
+                                    .unwrap_or(0)
+                            }).sum()
+                        })
+                        .unwrap_or(0);
+
+                    // Show a one-line preview of the latest extraction if available
+                    let preview = parsed["pages"].as_array()
+                        .and_then(|pages| pages.iter().rev()
+                            .find(|p| p["extracted"].as_array()
+                                .map_or(false, |e| !e.is_empty()))
+                        )
+                        .and_then(|page| {
+                            page["extracted"].as_array()
+                                .and_then(|rows| rows.first())
+                                .map(|row| {
+                                    let vals: Vec<String> = row.as_object()
+                                        .map(|obj| obj.values()
+                                            .filter_map(|v| v.as_str())
+                                            .filter(|s| !s.is_empty())
+                                            .take(2)  // first 2 non-empty values
+                                            .map(|s| {
+                                                if s.len() > 30 {
+                                                    format!("{}...", &s[..27])
+                                                } else {
+                                                    s.to_string()
+                                                }
+                                            })
+                                            .collect()
+                                        )
+                                        .unwrap_or_default();
+                                    if vals.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!(" ({})", vals.join(" / "))
+                                    }
+                                })
+                        })
+                        .unwrap_or_default();
+
+                    cli_println!(
+                        "Crawling... {}/{} seeds done, {} pages found, {} rows extracted{} ({}s elapsed)",
+                        extracted_count,
+                        url_count,
+                        pages_found,
+                        total_rows,
+                        preview,
+                        elapsed.as_secs()
+                    );
+                } else {
+                    cli_println!(
+                        "Crawling... {}/{} pages found ({}s elapsed)",
+                        pages_found,
+                        url_count,
+                        elapsed.as_secs()
+                    );
+                }
             } else {
                 cli_println!(
                     "Crawling... waiting for first page ({}s elapsed, {} URLs queued)",
@@ -10672,7 +10739,8 @@ async fn handle_crawl(
                         cli_println!(
                             "⚠ X-SQL returned {} rows but all fields are empty ({} pages crawled). \
                              The query executed but selectors did not match any elements. \
-                             Verify selectors with 'htmlsnapshot inspect' or 'htmlsnapshot grep'.",
+                             Verify selectors with 'htmlsnapshot inspect' or 'htmlsnapshot grep'. \
+                             If the page loaded successfully, try adding --refresh.",
                             all_extracted.len(), page_count
                         );
                     } else {
