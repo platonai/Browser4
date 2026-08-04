@@ -254,7 +254,7 @@ function Print-Usage {
     Write-Host "  test.ps1 rws sc amazon              # Run a specific scenario task"
     Write-Host "  test.ps1 rws sc amazon hn           # Run multiple scenarios"
     Write-Host "  test.ps1 rws scenarios --list       # List available scenarios"
-    Write-Host "  test.ps1 rws dir tasks/real-world/generic  # Run all .md tasks in a directory"
+    Write-Host "  test.ps1 rws dir real-world/generic  # Run all .md tasks in a directory"
     Write-Host "  test.ps1 rws sc amazon --timeout 30 # Run with 30-minute per-task timeout"
     Write-Host "  test.ps1 rws sc amazon --production # Run against installed CLI"
     Write-Host "  test.ps1 rws task tasks/real-world/generic/amazon.md  # Run a single task file"
@@ -262,7 +262,7 @@ function Print-Usage {
     Write-Host "  test.ps1 rws dir --files             # List all .md task files"
     Write-Host "  test.ps1 rws dir --absolute          # List files with absolute paths"
     Write-Host "  test.ps1 rws dir --metadata          # List files with size and date"
-    Write-Host "  test.ps1 rws dir --tree tasks/real-world  # Tree view of a specific dir"
+    Write-Host "  test.ps1 rws dir --tree real-world  # Tree view of a specific dir"
     Write-Host "  test.ps1 rws dir -t mock-site              # Short form of --tree"
     Write-Host "  test.ps1 rws dir -f -m                     # Short forms for --files --metadata"
     Write-Host "  test.ps1 rws dir --interactive             # Interactive directory picker"
@@ -2299,7 +2299,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host '  test.ps1 rws sc amazon                    # Run a specific scenario'
         Write-Host '  test.ps1 rws sc amazon hn                 # Run multiple scenarios'
         Write-Host '  test.ps1 rws scenarios --list             # List discovered tasks'
-        Write-Host '  test.ps1 rws dir tasks/real-world/generic # Run all .md tasks in a directory'
+        Write-Host '  test.ps1 rws dir real-world/generic # Run all .md tasks in a directory'
         Write-Host '  test.ps1 rws task tasks/amazon.md         # Run a single task file'
         Write-Host '  test.ps1 rws sc amazon --production       # Run against installed CLI'
         Write-Host '  test.ps1 rws dir --list                    # List available scenario directories'
@@ -2307,7 +2307,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host '  test.ps1 rws dir --files                   # List all .md task files'
         Write-Host '  test.ps1 rws dir --absolute                # List files with absolute paths'
         Write-Host '  test.ps1 rws dir --metadata                # List files with size and date'
-        Write-Host '  test.ps1 rws dir --tree tasks/real-world   # Tree view of a specific directory'
+        Write-Host '  test.ps1 rws dir --tree real-world   # Tree view of a specific directory'
         Write-Host '  test.ps1 rws dir -t mock-site               # Short form of --tree'
         Write-Host '  test.ps1 rws dir -f -m                      # Short forms for --files --metadata'
         Write-Host '  test.ps1 rws dir --interactive              # Interactive directory picker'
@@ -2677,14 +2677,26 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
             }
             Write-Host ''
             Write-Host 'Usage: test.ps1 rws dir <relative-or-absolute-path>' -ForegroundColor Cyan
-            Write-Host '  test.ps1 rws dir tasks/real-world/generic' -ForegroundColor Cyan
-            Write-Host '  test.ps1 rws dir tasks/real-world/browser4' -ForegroundColor Cyan
-            Write-Host '  test.ps1 rws dir tasks/mock-site' -ForegroundColor Cyan
+            Write-Host '  test.ps1 rws dir real-world/generic' -ForegroundColor Cyan
+            Write-Host '  test.ps1 rws dir real-world/browser4' -ForegroundColor Cyan
+            Write-Host '  test.ps1 rws dir mock-site' -ForegroundColor Cyan
+            Write-Host '  test.ps1 rws dir mock-site/decision-tree' -ForegroundColor Cyan
             Write-Host ''
             exit 0
         }
         if (-not [System.IO.Path]::IsPathRooted($taskDir)) {
-            $taskDir = Join-Path $repoRoot $taskDir
+            # Relative paths are resolved against the tasks directory
+            # (browser4-tests/real-world-scenarios/tasks/), not the repo root.
+            # This matches the --list output which shows paths relative to tasks/.
+            $tasksBase = Join-Path $repoRoot 'browser4-tests' 'real-world-scenarios' 'tasks'
+            $candidate = Join-Path $tasksBase $taskDir
+            if (Test-Path -LiteralPath $candidate -PathType Container) {
+                $taskDir = $candidate
+            } else {
+                # Fall back: try as a full path from repo root (e.g.
+                # "browser4-tests/real-world-scenarios/tasks/mock-site")
+                $taskDir = Join-Path $repoRoot $taskDir
+            }
         }
         $taskDir = [System.IO.Path]::GetFullPath($taskDir)
         $modeLabel = "real-world scenario dir: $taskDir"
