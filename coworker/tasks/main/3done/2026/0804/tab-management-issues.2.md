@@ -169,16 +169,12 @@ Chrome's native tab creation behavior in this environment (Windows 11, headless 
 
 - [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-<<<<<<<< HEAD:coworker/tasks/main/2working/tab-management-issues.md
-[AI suggested: ACCEPT] Documentation should reflect observed Chrome behavior. The SKILL.md claim that tabs appear "typically after the active tab" is incorrect for this environment. Update docs and consider passing an explicit index to `Target.createTarget` for deterministic placement. This is the root cause behind Issue 4's confusion as well.
-========
-[AI review unavailable — defaulted to DEFER]
->>>>>>>> 00e17790a (chore(build): make test.ps1 executable):coworker/tasks/main/3done/2026/0804/tab-management-issues.2.md
+[AI suggested: ACCEPT] Documentation is factually incorrect — SKILL.md assumes Chrome inserts tabs after the active tab, but CDP's default behavior on Windows headless inserts at index 0. Fixing the CDP call to pass an explicit index would make behavior consistent and predictable across platforms, solving both the doc bug and the actual behavior.
 
 ---
 
@@ -217,16 +213,12 @@ The tab-list rendering code outputs a plain table with columns Index, GUID, Titl
 
 - [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-<<<<<<<< HEAD:coworker/tasks/main/2working/tab-management-issues.md
-[AI suggested: ACCEPT] Clear UX gap with low implementation cost. The active tab ID is available from CDP — surfacing it with a `>` prefix or "Active" column in tab-list output is a high-value, low-effort fix. This pairs naturally with Issues 1/4: once tab positioning is predictable, the active indicator becomes the primary way to orient after bulk tab operations.
-========
-[AI review unavailable — defaulted to DEFER]
->>>>>>>> 00e17790a (chore(build): make test.ps1 executable):coworker/tasks/main/3done/2026/0804/tab-management-issues.2.md
+[AI suggested: ACCEPT] Clear UX gap — after any tab operation, users have no way to identify the active tab from tab-list output without running additional commands. An active-row indicator (prefix, column, or ANSI formatting) is straightforward to implement and has no design trade-offs. This is independent of the other issues and should be fixed regardless.
 
 ---
 
@@ -262,22 +254,13 @@ This is by design as documented in SKILL.md: 'No auto-snapshot: tab-list and tab
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-<<<<<<<< HEAD:coworker/tasks/main/2working/tab-management-issues.md
 - [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-========
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
->>>>>>>> 00e17790a (chore(build): make test.ps1 executable):coworker/tasks/main/3done/2026/0804/tab-management-issues.2.md
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-<<<<<<<< HEAD:coworker/tasks/main/2working/tab-management-issues.md
-[AI suggested: ACCEPT with improvements] The SKILL.md design choice ("No auto-snapshot on tab-select") is sound — element refs are page-specific and implicit snapshots would surprise users. But printing the page title in tab-select output (e.g., "Switched to tab 2: Web scraping - Wikipedia") is a lightweight win that doesn't break the ref contract. Defer the `--verify` auto-snapshot flag; it muddies the ref lifecycle guarantees.
-========
-[AI review unavailable — defaulted to DEFER]
->>>>>>>> 00e17790a (chore(build): make test.ps1 executable):coworker/tasks/main/3done/2026/0804/tab-management-issues.2.md
+[AI suggested: ACCEPT with improvements] The design decision to avoid auto-snapshot on tab-select is correct (element refs must be explicitly requested). However, printing the page title and URL in tab-select output (e.g., "Switched to tab 2: Page Title — https://…") is a cheap, high-value improvement that eliminates most "switch and verify" friction without a full snapshot. A --verify or --snapshot flag would over-engineer this; just always show the title.
 
 ---
 
@@ -310,18 +293,14 @@ The output shows the actual index (which happens to be 0 each time due to Chrome
 
 #### Human Review
 
-- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- [x] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-<<<<<<<< HEAD:coworker/tasks/main/2working/tab-management-issues.md
-[AI suggested: ACCEPT] Caused by the same root issue as Issue 1 (Chrome inserting at index 0), but addresses a different layer: the output message format. Including the tab GUID in the message (e.g., "Created tab 0 [abc123]: Hacker News") would let users correlate multiple `tab-new` calls without running `tab-list`. Fix Issue 1's insertion index first, then this becomes less critical but still useful.
-========
-[AI review unavailable — defaulted to DEFER]
->>>>>>>> 00e17790a (chore(build): make test.ps1 executable):coworker/tasks/main/3done/2026/0804/tab-management-issues.2.md
+[AI suggested: DUPLICATE] This is a symptom of Issue 1's root cause — Chrome inserting all new tabs at index 0 means every tab-new says "Switched to tab 0." Fixing Issue 1 (explicit CDP index) eliminates the confusing output. The separate suggestion to include the tab GUID in output is a minor, separable UX enhancement that can be folded into Issue 1's fix.
 
 ---
 
@@ -354,20 +333,14 @@ The snapshot command is designed for element targeting (refs) rather than page i
 
 #### Human Review
 
-- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-<<<<<<<< HEAD:coworker/tasks/main/2working/tab-management-issues.md
-[AI suggested: ACCEPT] Valid friction point. `snapshot` is correctly scoped for element targeting, but the "am I on the right page?" workflow is common enough to deserve a lighter tool. A `--brief` flag (title + URL + h1, no accessibility tree) or a standalone `page-info` command would fill this gap. Lowest priority of the five — the `snapshot | head` workaround exists and the tab-select page-title improvement from Issue 3 partially mitigates this.
----
-**Cross-issue summary:** Issues 1 and 4 share a root cause (Chrome insertion index). Issues 3 and 5 share a workflow (page identity verification). The highest-impact fix order: (1) fix tab insertion index in code, (2) add active tab indicator to tab-list, (3) print page title in tab-select output. Issues 4 and 5 become lower priority once 1 and 3 are addressed.
-========
-[AI review unavailable — defaulted to DEFER]
->>>>>>>> 00e17790a (chore(build): make test.ps1 executable):coworker/tasks/main/3done/2026/0804/tab-management-issues.2.md
+[AI suggested: ACCEPT with improvements] Lightweight page context verification is a valid need, and piping snapshot through head/grep is a brittle workaround. The cleanest solution: always print title+URL in tab-select output (addressed by Issue 3 above), plus optionally add a focused `page-info` or `context` command for direct identity checks. Adding --brief/--meta flags to snapshot would bloat an already complex command; a dedicated command is cleaner.
 
 ---
 

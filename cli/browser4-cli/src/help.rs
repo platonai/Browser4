@@ -2102,6 +2102,48 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli skills unpack /custom/path".to_string());
     }
 
+    if cmd.name == "page-info" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Shows the current page identity — title and URL — without the full"
+                .to_string(),
+        );
+        lines.push(
+            "    accessibility tree or HTML snapshot."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use this for quick 'what page am I on?' checks instead of piping"
+                .to_string(),
+        );
+        lines.push(
+            "    `snapshot --stdout | head` or running a full `tab-list`."
+                .to_string(),
+        );
+        lines.push(
+            "  - In JSON mode (`--json`), returns an array of page objects with"
+                .to_string(),
+        );
+        lines.push(
+            "    title, url, index, and guid fields."
+                .to_string(),
+        );
+        lines.push(
+            "  - page-info does NOT trigger a post-command snapshot — it is"
+                .to_string(),
+        );
+        lines.push(
+            "    read-only."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli page-info".to_string());
+        lines.push("  browser4-cli --json page-info".to_string());
+        lines.push("  browser4-cli -s <session> page-info".to_string());
+    }
+
     if cmd.name == "tab-new" {
         lines.push(String::new());
         lines.push("Notes:".to_string());
@@ -2110,11 +2152,19 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Tab insertion position is determined by Chrome (not Browser4). In most"
+            "  - Tab insertion position is determined by Chrome (not Browser4). The"
                 .to_string(),
         );
         lines.push(
-            "    cases the new tab appears immediately after the currently active tab."
+            "    position varies by platform: on Windows headless CDP, new tabs appear"
+                .to_string(),
+        );
+        lines.push(
+            "    at index 0 (before the active tab); on macOS they typically appear"
+                .to_string(),
+        );
+        lines.push(
+            "    after the active tab. Always run `tab-list` to verify positions."
                 .to_string(),
         );
         lines.push(
@@ -2237,7 +2287,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - New tabs are inserted after the currently active tab (Chrome default)."
+            "  - New tabs are inserted by Chrome — position varies by platform (Windows"
+                .to_string(),
+        );
+        lines.push(
+            "    headless CDP inserts at index 0; macOS inserts after the active tab)."
                 .to_string(),
         );
         lines.push(
@@ -2332,6 +2386,7 @@ fn is_high_frequency_command(name: &str) -> bool {
         | "htmlsnapshot-get-all"
         | "htmlsnapshot-query"
         | "extract"
+        | "page-info"
         | "tab-list"
         | "tab-new"
         | "tab-select"

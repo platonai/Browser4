@@ -2092,6 +2092,19 @@ pub fn all_commands() -> Vec<CommandDef> {
                 p
             },
         },
+        // ---- Page Info ----
+        CommandDef {
+            name: "page-info",
+            description: "Show current page identity — title, URL, and key metadata without the full accessibility tree",
+            category: Category::Navigation,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_tabs".to_string(),
+            tool_params_fn: |_| json!({ "action": "list" }),
+        },
         // ---- Browsers / Sessions ----
         CommandDef {
             name: "list",

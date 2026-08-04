@@ -1,0 +1,286 @@
+{
+  "meta": {
+    "mode": "dev",
+    "source": "20260804-173305-advanced-mouse-interaction.full.md",
+    "scenario": "advanced-mouse-interaction",
+    "date": "20260804-173305"
+  },
+  "background": {
+    "executionContext": "| Step | Command | Outcome |\n|------|---------|---------|\n| Setup | `./b4w.ps1 help`, read SKILL.md | Learned commands and conventions |\n| 1 | `./b4w.ps1 goto \"http://localhost:18080/generated/interactive-5.html\"` | Page loaded, server auto-started in 5.7s |\n| 2 | `./b4w.ps1 snapshot -i --stdout` | Full interactive element tree discovered: tooltips (e22, e25), cards (e27, e31), drag list (e39-e42), dblclick zones (e45, e51), dialog buttons (e57-e60) |\n| 3 | `./b4w.ps1 hover e22`, `./b4w.ps1 hover e25` | Hovered both tooltip terms; verified tooltip text embedded in AX accessible names |\n| 4 | `./b4w.ps1 hover e27` | Hovered product card; verified expansion: box height grew from 73px→126px, detail text from 0px→53px |\n| 5 | `./b4w.ps1 drag e39 e42` | Dragged \"High Priority\" to Backlog; verified reorder: High Priority moved from index 0 to index 3 |\n| 6 | `./b4w.ps1 scroll down 400`, `./b4w.ps1 dblclick e45` | Double-clicked activation zone; verified status \"ACTIVATED ✅\", dblClickCount=1 |\n| 7 | `./b4w.ps1 dblclick e51` | Double-clicked reset zone; verified status \"idle\", counters zeroed |\n| 8 | `./b4w.ps1 generate-locator e57` | Produced resilient CSS selector `#alertBtn` |\n| 9 | `./b4w.ps1 get text \"#alertBtn\"` | Retrieved \"🔔 Show Alert\" (with leading whitespace) |\n| 10 | `./b4w.ps1 click e57` → timeout → `taskkill` → `./b4w.ps1 dialog-accept` | Alert dismissed; dialogResult: \"[alert] User dismissed the alert dialog.\" |\n| 11 | `./b4w.ps1 click --auto-dismiss-dialogs e58` → timeout → `taskkill` → `./b4w.ps1 dialog-accept` then `dialog-dismiss` | Confirm accepted (result=true) then re-triggered and dismissed (result=false); both logged |\n| 12 | `./b4w.ps1 click e59` → timeout → `taskkill` → `./b4w.ps1 dialog-accept \"Hello from Browser4\"` | Prompt accepted with input; dialogResult: `[prompt] User entered: \"Hello from Browser4\"` |\n| 13 | `./b4w.ps1 screenshot`, scroll down, `./b4w.ps1 screenshot` | Two screenshots captured (dialog section + interaction log) → copied to `.test-sessions/` |\n\n**Workarounds applied:** Manual `taskkill /F /IM browser4-cli.exe` after every dialog-triggering click to unlock the binary for rebuild. Background task cleanup via `TaskStop` for each timed-out command.\n\n**Decisions made:** Used interactive snapshot (`-i`) instead of regular snapshot for initial discovery since the page has generic div containers. Used `--stdout` flag throughout to avoid opening snapshot files. Switched to `cmd //c \"taskkill ...\"` syntax to avoid Git Bash path-mangling of `/PID`.\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"Binary locked by zombie processes after dialog-triggering clicks time out\",\n      \"severity\": \"Critical\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"./b4w.ps1 click e57 (where e57 triggers alert/confirm/prompt). Command times out, leaves browser4-cli.exe running. Run any other ./b4w.ps1 command — it fails with 'error: failed to remove file ... browser4-cli.exe ... 拒绝访问。 (os error 5)' because b4w.ps1 detects source changes and tries to rebuild but can't overwrite the locked binary.\",\n      \"expected\": \"The background process from a timed-out command should be auto-terminated, or the CLI should not require a rebuild when sources haven't changed, or the locking process should release the binary immediately after timeout.\",\n      \"actual\": \"Every dialog-triggering click timed out, left a browser4-cli.exe zombie, and every subsequent command failed at the rebuild step because the zombie held a lock on target/debug/browser4-cli.exe. Required manual cmd //c \\\"taskkill /F /IM browser4-cli.exe\\\" between every single command.\",\n      \"rootCause\": \"When a click command triggers a native dialog (alert/confirm/prompt), the WebDriver call blocks waiting for the dialog to resolve. The Bash tool's timeout fires and moves the task to background, but the underlying browser4-cli.exe process continues running because it's still waiting for the CDP dialog-handling response. This running process holds a file handle on its own executable. Meanwhile, b4w.ps1 detects that 'Rust sources changed' (likely due to background task output files or temp files appearing in the project tree) and triggers a cargo rebuild, which fails because Windows won't let you delete a running executable.\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs — the click command handler should set a client-side timeout or implement a non-blocking dialog-aware execution path. The b4w.ps1 script's source-change detection is also a contributing factor.\",\n      \"suggestion\": \"- Auto-kill the browser4-cli.exe process when a command times out and is moved to background\\n- Add a server-side timeout for dialog-blocking WebDriver calls so the CLI process exits cleanly\\n- Fix the b4w.ps1 source-change detection to not trigger on temp/output files written by background tasks\\n- Or: implement dialog handling as a server-side option so click+dialog-accept is truly single-invocation\"\n    },\n    {\n      \"title\": \"--auto-dismiss-dialogs flag does not work reliably for native dialogs\",\n      \"severity\": \"High\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"./b4w.ps1 click --auto-dismiss-dialogs e58 (where e58 is a button that triggers confirm()). The command timed out after 30s and was moved to background.\",\n      \"expected\": \"The --auto-dismiss-dialogs flag should auto-accept the dialog and the click command should complete within a few seconds.\",\n      \"actual\": \"Command timed out identically to a regular click, providing no benefit over the two-step approach.\",\n      \"rootCause\": \"The --auto-dismiss-dialogs flag may only handle auto-dismissal at the client layer but the underlying CDP call still blocks on the dialog. Or the flag may not be wired through correctly to the backend for confirm/prompt dialogs (which require a response value, not just dismissal). Investigation needed to determine whether this is a client-side or server-side issue.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Ensure --auto-dismiss-dialogs sets a short timeout on the CDP call and accepts the dialog server-side\\n- For confirm, default to accept=true; for prompt, default to empty string or expose a --dialog-input flag\\n- Add integration tests that verify --auto-dismiss-dialogs completes within 5 seconds for alert, confirm, and prompt\"\n    },\n    {\n      \"title\": \"snapshot grep and other commands hang when a native browser dialog is open\",\n      \"severity\": \"High\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"1. Click a button that triggers alert() — click hangs. 2. In another terminal, run ./b4w.ps1 snapshot grep \\\"anything\\\" — this also hangs indefinitely.\",\n      \"expected\": \"Snapshot commands should either (a) detect that a dialog is blocking the page and report it clearly, or (b) complete successfully on the pre-dialog page state.\",\n      \"actual\": \"snapshot grep timed out after 30s with no error message, just a background task notification. The user gets no feedback about why the command is stuck.\",\n      \"rootCause\": \"Native browser dialogs (alert/confirm/prompt) block the page's JavaScript main thread. Any CDP command that requires JS execution (like DOM.getDocument for accessibility tree) gets queued behind the dialog and never completes. The CLI has no detection or timeout mechanism for this state.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Add dialog-state detection before snapshot/eval commands: if a dialog is open, report 'Page is blocked by a native dialog — use dialog-accept or dialog-dismiss first'\\n- Set a reasonable timeout for snapshot-related CDP calls and surface a clear error when it fires\\n- Consider using Page.handleJavaScriptDialog to detect dialog state proactively\"\n    },\n    {\n      \"title\": \"drag command has no visible confirmation message in output\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 drag e39 e42\",\n      \"expected\": \"Output should include something like '✓ Dragged e39 onto e42' or '✓ Drag completed', similar to how hover outputs '✓ Hovered e22' and dblclick outputs '✓ Double-clicked e45'.\",\n      \"actual\": \"Output jumps directly from the command invocation to '### Page' snapshot header with no intervening confirmation that the drag action executed.\",\n      \"rootCause\": \"The drag command handler in the CLI doesn't emit a success message before displaying the post-interaction snapshot. Compare with hover and dblclick which do.\",\n      \"codePointer\": \"cli/browser4-cli/src/ — the drag command handler, look for where hover/dblclick emit their '✓' messages and add equivalent for drag.\",\n      \"suggestion\": \"- Add '✓ Dragged <source-ref> → <target-ref>' confirmation message before the snapshot output\\n- Ensure all interaction commands (click, dblclick, hover, drag, fill, type, press) follow the same confirmation pattern\"\n    },\n    {\n      \"title\": \"get text output contains excessive leading whitespace\",\n      \"severity\": \"Low\",\n      \"category\": \"Product\",\n      \"reproduction\": \"./b4w.ps1 get text \\\"#alertBtn\\\"\",\n      \"expected\": \"Output should be the element's trimmed text content: '🔔 Show Alert'.\",\n      \"actual\": \"Output contains many leading spaces: '            🔔 Show Alert'.\",\n      \"rootCause\": \"The get-text handler likely returns the raw textContent of the DOM node, which includes whitespace from the HTML source indentation. No trimming is applied.\",\n      \"codePointer\": \"browser4-core — the get text WebDriver command implementation; textContent should be trimmed before returning.\",\n      \"suggestion\": \"- Trim whitespace from text content in the get text handler before returning\\n- Consider adding a --trim flag (defaulting to true) for explicit control\"\n    },\n    {\n      \"title\": \"Dialog handling workflow is poorly discoverable and cumbersome for new users\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"A first-time user wanting to click a button that triggers alert() must: 1. Read SKILL.md to learn dialogs require separate invocation 2. Try click → observe timeout 3. Realize they need a second terminal 4. Run dialog-accept 5. Discover the binary is now locked 6. Google how to kill processes on Windows 7. Kill the zombie process 8. Retry dialog-accept 9. Verify result.\",\n      \"expected\": \"The workflow should be either: (a) click --auto-dismiss-dialogs works in a single step, or (b) the click command clearly states 'Dialog detected — use dialog-accept or dialog-dismiss in a separate invocation' and exits cleanly instead of timing out.\",\n      \"actual\": \"Nine-step manual process with binary lockouts. The click timeout message gives no indication a dialog is the cause.\",\n      \"rootCause\": \"Multiple compounding issues: no dialog detection on the client side, no clean exit on dialog detection, binary locking from timeouts, and --auto-dismiss-dialogs not working. Each alone is minor; together they create a very poor experience.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Make click commands detect dialog-blocking and report 'Dialog detected: alert/confirm/prompt. Use dialog-accept or dialog-dismiss.' instead of timing out\\n- Fix --auto-dismiss-dialogs to actually work end-to-end\\n- Add an example to the Quick Start section showing the full dialog handling pattern\\n- Consider a click --dialog-accept and click --dialog-dismiss combined flag\"\n    },\n    {\n      \"title\": \"Rust sources changed rebuild triggers spuriously, slowing every command\",\n      \"severity\": \"Medium\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"Run several browser4-cli commands in sequence without editing any source files. After a background task is stopped or a command times out, subsequent commands show 'Rust sources changed, rebuilding browser4-cli...'.\",\n      \"expected\": \"Rebuild should only trigger when actual Rust source files have been modified.\",\n      \"actual\": \"Rebuild triggers after background tasks are stopped or after killing zombie processes, likely because temp files or task output files modify timestamps in the project tree that the change-detection logic monitors.\",\n      \"rootCause\": \"The b4w.ps1 script's source-change detection appears to monitor file modification timestamps in the project directory too broadly, picking up temp files, task output files, or other artifacts created during command execution. Each rebuild takes 2-12 seconds, compounding the dialog-handling delay.\",\n      \"codePointer\": \"b4w.ps1 — the source-change detection logic, likely a file timestamp comparison that scans too many directories.\",\n      \"suggestion\": \"- Scope source-change detection to only watch .rs files in cli/browser4-cli/src/\\n- Or use git diff to detect actual source changes instead of filesystem timestamps\\n- Exclude .browser4-cli/, temp/, and task output directories from change detection\"\n    },\n    {\n      \"title\": \"No warning when snapshot grep would search a stale snapshot after interactions\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run several interaction commands, then snapshot grep without re-snapshotting. The grep searches the most recent automatic snapshot which may reflect an intermediate state rather than the current page state.\",\n      \"expected\": \"A clear indication of which snapshot is being searched, or a warning if the snapshot is from a different interaction than the most recent one.\",\n      \"actual\": \"snapshot grep runs silently on whatever the last automatic post-interaction snapshot was. The user must track mentally which snapshot corresponds to which state.\",\n      \"rootCause\": \"Automatic post-interaction snapshots are convenient but can create confusion when the user expects snapshot grep to reflect the current page state. There's no linkage between 'the last interaction' and 'the snapshot being searched'.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Show the snapshot timestamp/file being searched at the top of snapshot grep output\\n- Consider adding 'snapshot grep --latest' that always captures a fresh snapshot first\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Successful — all 13 task steps completed. Two screenshots captured showing final page state including the complete interaction log. However, significant workarounds were required for dialog handling: each dialog-triggering click required manual process killing before the next command could run.\",\n    \"successRate\": \"85% — task steps themselves all succeeded, but the dialog-handling workflow (steps 10-12) required 3x more commands than documented due to binary locking issues\",\n    \"issuesFound\": 8,\n    \"majorBlockers\": \"The binary-locking issue (Critical severity) blocked all progress between dialog-handling steps, requiring manual taskkill every time. The --auto-dismiss-dialogs flag (High severity) is documented as the solution but does not work, leaving users with the painful two-step approach. Dialog-blocking also causes snapshot commands to hang silently (High severity).\",\n    \"mostConfusingAspects\": \"1. Why does every command start a Rust rebuild when I haven't edited any code? 2. Why does the click command hang forever when a dialog appears, instead of telling me a dialog is blocking? 3. Why does the binary get locked and prevent all subsequent commands after a timeout? 4. The two-terminal dialog handling pattern is not obvious from the help output — you have to read the full SKILL.md.\",\n    \"mostValuableImprovements\": \"1. Fix the binary locking issue (auto-kill zombie processes, fix spurious rebuild detection) 2. Make --auto-dismiss-dialogs actually work end-to-end 3. Detect dialog-blocking state and surface clear error messages instead of hanging 4. Add dialog-handling example to Quick Start / --help 5. Add confirmation messages to all interaction commands (drag is missing one)\",\n    \"usabilityRating\": 5\n  }\n}\n```",
+    "task": "All 13 task steps completed successfully. The interactive-5.html test page was fully exercised: hover tooltips revealed, product card expanded, drag reorder confirmed, double-click activation and reset verified, CSS locator generated and validated with `get text`, and all three dialog types (alert, confirm, prompt) were triggered and handled with results verified in the interaction log. Final screenshots captured the complete page state.\n\n**Key workaround required:** Every dialog-triggering click timed out and left a zombie `browser4-cli.exe` process that locked the binary, requiring manual `taskkill` between each dialog step. This turned a simple 3-dialog workflow into a 9-step process of click→kill→dialog-accept→repeat.\n\n---"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "Binary locked by zombie processes after dialog-triggering clicks time out",
+      "severity": "Critical",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 click e57 (where e57 triggers alert/confirm/prompt). Command times out, leaves browser4-cli.exe running. Run any other ./b4w.ps1 command — it fails with 'error: failed to remove file ... browser4-cli.exe ... 拒绝访问。 (os error 5)' because b4w.ps1 detects source changes and tries to rebuild but can't overwrite the locked binary."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The background process from a timed-out command should be auto-terminated, or the CLI should not require a rebuild when sources haven't changed, or the locking process should release the binary immediately after timeout."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Every dialog-triggering click timed out, left a browser4-cli.exe zombie, and every subsequent command failed at the rebuild step because the zombie held a lock on target/debug/browser4-cli.exe. Required manual cmd //c \"taskkill /F /IM browser4-cli.exe\" between every single command."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "When a click command triggers a native dialog (alert/confirm/prompt), the WebDriver call blocks waiting for the dialog to resolve. The Bash tool's timeout fires and moves the task to background, but the underlying browser4-cli.exe process continues running because it's still waiting for the CDP dialog-handling response. This running process holds a file handle on its own executable. Meanwhile, b4w.ps1 detects that 'Rust sources changed' (likely due to background task output files or temp files appearing in the project tree) and triggers a cargo rebuild, which fails because Windows won't let you delete a running executable."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs — the click command handler should set a client-side timeout or implement a non-blocking dialog-aware execution path. The b4w.ps1 script's source-change detection is also a contributing factor."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Auto-kill the browser4-cli.exe process when a command times out and is moved to background\n- Add a server-side timeout for dialog-blocking WebDriver calls so the CLI process exits cleanly\n- Fix the b4w.ps1 source-change detection to not trigger on temp/output files written by background tasks\n- Or: implement dialog handling as a server-side option so click+dialog-accept is truly single-invocation"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "--auto-dismiss-dialogs flag does not work reliably for native dialogs",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 click --auto-dismiss-dialogs e58 (where e58 is a button that triggers confirm()). The command timed out after 30s and was moved to background."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The --auto-dismiss-dialogs flag should auto-accept the dialog and the click command should complete within a few seconds."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Command timed out identically to a regular click, providing no benefit over the two-step approach."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The --auto-dismiss-dialogs flag may only handle auto-dismissal at the client layer but the underlying CDP call still blocks on the dialog. Or the flag may not be wired through correctly to the backend for confirm/prompt dialogs (which require a response value, not just dismissal). Investigation needed to determine whether this is a client-side or server-side issue."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Ensure --auto-dismiss-dialogs sets a short timeout on the CDP call and accepts the dialog server-side\n- For confirm, default to accept=true; for prompt, default to empty string or expose a --dialog-input flag\n- Add integration tests that verify --auto-dismiss-dialogs completes within 5 seconds for alert, confirm, and prompt"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "snapshot grep and other commands hang when a native browser dialog is open",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1. Click a button that triggers alert() — click hangs. 2. In another terminal, run ./b4w.ps1 snapshot grep \"anything\" — this also hangs indefinitely."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Snapshot commands should either (a) detect that a dialog is blocking the page and report it clearly, or (b) complete successfully on the pre-dialog page state."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "snapshot grep timed out after 30s with no error message, just a background task notification. The user gets no feedback about why the command is stuck."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Native browser dialogs (alert/confirm/prompt) block the page's JavaScript main thread. Any CDP command that requires JS execution (like DOM.getDocument for accessibility tree) gets queued behind the dialog and never completes. The CLI has no detection or timeout mechanism for this state."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add dialog-state detection before snapshot/eval commands: if a dialog is open, report 'Page is blocked by a native dialog — use dialog-accept or dialog-dismiss first'\n- Set a reasonable timeout for snapshot-related CDP calls and surface a clear error when it fires\n- Consider using Page.handleJavaScriptDialog to detect dialog state proactively"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "Dialog handling workflow is poorly discoverable and cumbersome for new users",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "A first-time user wanting to click a button that triggers alert() must: 1. Read SKILL.md to learn dialogs require separate invocation 2. Try click → observe timeout 3. Realize they need a second terminal 4. Run dialog-accept 5. Discover the binary is now locked 6. Google how to kill processes on Windows 7. Kill the zombie process 8. Retry dialog-accept 9. Verify result."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The workflow should be either: (a) click --auto-dismiss-dialogs works in a single step, or (b) the click command clearly states 'Dialog detected — use dialog-accept or dialog-dismiss in a separate invocation' and exits cleanly instead of timing out."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Nine-step manual process with binary lockouts. The click timeout message gives no indication a dialog is the cause."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Multiple compounding issues: no dialog detection on the client side, no clean exit on dialog detection, binary locking from timeouts, and --auto-dismiss-dialogs not working. Each alone is minor; together they create a very poor experience."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Make click commands detect dialog-blocking and report 'Dialog detected: alert/confirm/prompt. Use dialog-accept or dialog-dismiss.' instead of timing out\n- Fix --auto-dismiss-dialogs to actually work end-to-end\n- Add an example to the Quick Start section showing the full dialog handling pattern\n- Consider a click --dialog-accept and click --dialog-dismiss combined flag"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 5,
+      "title": "Rust sources changed rebuild triggers spuriously, slowing every command",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run several browser4-cli commands in sequence without editing any source files. After a background task is stopped or a command times out, subsequent commands show 'Rust sources changed, rebuilding browser4-cli...'."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Rebuild should only trigger when actual Rust source files have been modified."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Rebuild triggers after background tasks are stopped or after killing zombie processes, likely because temp files or task output files modify timestamps in the project tree that the change-detection logic monitors."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The b4w.ps1 script's source-change detection appears to monitor file modification timestamps in the project directory too broadly, picking up temp files, task output files, or other artifacts created during command execution. Each rebuild takes 2-12 seconds, compounding the dialog-handling delay."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "b4w.ps1 — the source-change detection logic, likely a file timestamp comparison that scans too many directories."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Scope source-change detection to only watch .rs files in cli/browser4-cli/src/\n- Or use git diff to detect actual source changes instead of filesystem timestamps\n- Exclude .browser4-cli/, temp/, and task output directories from change detection"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 6,
+      "title": "drag command has no visible confirmation message in output",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 drag e39 e42"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Output should include something like '✓ Dragged e39 onto e42' or '✓ Drag completed', similar to how hover outputs '✓ Hovered e22' and dblclick outputs '✓ Double-clicked e45'."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Output jumps directly from the command invocation to '### Page' snapshot header with no intervening confirmation that the drag action executed."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The drag command handler in the CLI doesn't emit a success message before displaying the post-interaction snapshot. Compare with hover and dblclick which do."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ — the drag command handler, look for where hover/dblclick emit their '✓' messages and add equivalent for drag."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add '✓ Dragged <source-ref> → <target-ref>' confirmation message before the snapshot output\n- Ensure all interaction commands (click, dblclick, hover, drag, fill, type, press) follow the same confirmation pattern"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 7,
+      "title": "get text output contains excessive leading whitespace",
+      "severity": "Low",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 get text \"#alertBtn\""
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Output should be the element's trimmed text content: '🔔 Show Alert'."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Output contains many leading spaces: '            🔔 Show Alert'."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The get-text handler likely returns the raw textContent of the DOM node, which includes whitespace from the HTML source indentation. No trimming is applied."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-core — the get text WebDriver command implementation; textContent should be trimmed before returning."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Trim whitespace from text content in the get text handler before returning\n- Consider adding a --trim flag (defaulting to true) for explicit control"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 8,
+      "title": "No warning when snapshot grep would search a stale snapshot after interactions",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run several interaction commands, then snapshot grep without re-snapshotting. The grep searches the most recent automatic snapshot which may reflect an intermediate state rather than the current page state."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A clear indication of which snapshot is being searched, or a warning if the snapshot is from a different interaction than the most recent one."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "snapshot grep runs silently on whatever the last automatic post-interaction snapshot was. The user must track mentally which snapshot corresponds to which state."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Automatic post-interaction snapshots are convenient but can create confusion when the user expects snapshot grep to reflect the current page state. There's no linkage between 'the last interaction' and 'the snapshot being searched'."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Show the snapshot timestamp/file being searched at the top of snapshot grep output\n- Consider adding 'snapshot grep --latest' that always captures a fresh snapshot first"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}

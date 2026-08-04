@@ -399,6 +399,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "swarm-status",
         "swarm-result",
         "swarm-list",
+        "page-info",
         "tab-list",
         "tab-new",
         "tab-close",
@@ -634,6 +635,7 @@ struct TabInfo {
     url: String,
     title: String,
     guid: Option<String>,
+    active: bool,
 }
 
 /// Normalize a tab GUID for display. Extension sessions use numeric Chrome tab
@@ -716,12 +718,17 @@ fn parse_tab_entry(value: &Value) -> Option<TabInfo> {
         .get("guid")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+    let active = obj
+        .get("active")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     // We need at least an index to track the tab.
     index.map(|idx| TabInfo {
         index: idx,
         url,
         title,
         guid,
+        active,
     })
 }
 
@@ -2229,6 +2236,84 @@ async fn handle_close(
 // Tab command handlers
 // ---------------------------------------------------------------------------
 
+/// Handle `page-info` — show current page identity (title, URL) without the full
+/// accessibility tree. Uses the tab list to find all tabs and shows each one's
+/// key metadata in a compact format. When the active-tab field is available
+/// (see Issue 2), the active tab is highlighted.
+async fn handle_page_info(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        async move {
+            call_tool(
+                &client,
+                &base_url,
+                "browser_tabs",
+                json!({ "sessionId": session_id, "action": "list" }),
+            )
+            .await
+        }
+    })
+    .await?;
+
+    let tabs = parse_tab_list(&result);
+
+    if tabs.is_empty() {
+        cli_println!("No page is currently open.");
+        return Ok(());
+    }
+
+    if json_active() {
+        let json_tabs: Vec<Value> = tabs
+            .iter()
+            .map(|t| {
+                json!({
+                    "index": t.index,
+                    "title": t.title,
+                    "url": t.url,
+                    "guid": format_guid_display(t.guid.as_deref()),
+                    "active": t.active,
+                })
+            })
+            .collect();
+        json_field("pages", json!(json_tabs));
+        json_field("count", json!(tabs.len()));
+    } else {
+        // Compact page-identity view — title first, then URL.
+        // Highlight the active tab when known.
+        if let Some(active_tab) = tabs.iter().find(|t| t.active) {
+            cli_println!("▶ Active page:");
+            cli_println!(
+                "  Title:  {}",
+                if active_tab.title.is_empty() { "(no title)" } else { &active_tab.title }
+            );
+            cli_println!("  URL:    {}", active_tab.url);
+            if tabs.len() > 1 {
+                cli_println!("  ({}/{} tabs total)", tabs.len(), tabs.len());
+            }
+        } else if tabs.len() == 1 {
+            let t = &tabs[0];
+            cli_println!("Title:  {}", if t.title.is_empty() { "(no title)" } else { &t.title });
+            cli_println!("URL:    {}", t.url);
+        } else {
+            for tab in &tabs {
+                cli_println!(
+                    "  ─ Page {} ─\n  Title:  {}\n  URL:    {}",
+                    tab.index,
+                    if tab.title.is_empty() { "(no title)" } else { &tab.title },
+                    tab.url,
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 async fn handle_tab_list(
     client: &Client,
     base_url: &str,
@@ -2260,6 +2345,7 @@ async fn handle_tab_list(
                 "guid": format_guid_display(t.guid.as_deref()),
                 "url": t.url,
                 "title": t.title,
+                "active": t.active,
             })
         })
         .collect();
@@ -2276,6 +2362,8 @@ async fn handle_tab_list(
         return Ok(());
     } else {
         // Human-readable table: Index | GUID | Title | URL
+        // The active tab is marked with a ▶ prefix on its index.
+        let has_active = tabs.iter().any(|t| t.active);
         let idx_w = "Index".len().max(
             tabs.last().map(|t| t.index.to_string().len()).unwrap_or(0),
         );
@@ -2317,9 +2405,10 @@ async fn handle_tab_list(
             } else {
                 tab.url.clone()
             };
+            let active_marker = if tab.active && has_active { "▶ " } else { "  " };
             cli_println!(
-                "  {:<idx_w$}  {:<guid_w$}  {:<title_w$}  {:<url_w$}",
-                tab.index, guid_display, title, url,
+                "  {}{:<idx_w$}  {:<guid_w$}  {:<title_w$}  {:<url_w$}",
+                active_marker, tab.index, guid_display, title, url,
                 idx_w = idx_w,
                 guid_w = guid_w,
                 title_w = title_w,
@@ -2509,10 +2598,15 @@ async fn handle_tab_select(
             }
         });
         if let Some(t) = target {
-            cli_println!("Switched to tab {} ({})", t.index, t.url);
+            if !t.title.is_empty() {
+                cli_println!("Switched to tab {}: {} — {}", t.index, t.title, t.url);
+            } else {
+                cli_println!("Switched to tab {} ({})", t.index, t.url);
+            }
             json_field("selected_tab", json!({
                 "index": t.index,
                 "url": t.url,
+                "title": t.title,
                 "guid": format_guid_display(t.guid.as_deref()),
             }));
         } else {
@@ -16848,6 +16942,14 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
                 follow,
+            )
+            .await?;
+        }
+        "page-info" => {
+            handle_page_info(
+                &client,
+                &base_url,
+                global.session_name.as_deref(),
             )
             .await?;
         }
