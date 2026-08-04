@@ -4800,16 +4800,33 @@ async fn handle_tool_command_with_options(
         // When eval returns empty or null, the page context may have changed
         // (e.g. after htmlsnapshot capture or other commands that interact
         // with the browser). Give the user a diagnostic hint.
+        //
+        // Distinguish between:
+        //   - JS null → the expression evaluated but the result is null
+        //     (element not found, property doesn't exist, etc.)
+        //   - Empty/undefined → could be JS returning undefined/"" or a
+        //     stale page context where the evaluation silently fails.
         let expression = tool_params
             .get("expression")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if result.is_empty() || result == "null" {
+        if result == "null" {
             if !json_active() {
                 cli_println!(
-                    "💡 Tip: Eval returned empty/null. The page context may be stale.\n\
-                       Try re-navigating with: goto <url>\n\
+                    "💡 Expression returned null.\n\
+                       The queried element or property may not exist on this page.\n\
+                       Try verifying: eval \"document.querySelector('<your-selector>') !== null\"\n\
                        Or check the current page: eval \"window.location.href\""
+                );
+            }
+        } else if result.is_empty() {
+            if !json_active() {
+                cli_println!(
+                    "💡 Expression returned empty/undefined.\n\
+                       This could mean:\n\
+                       - The page context is stale (try: goto <url>)\n\
+                       - The JS expression returned undefined or \"\"\n\
+                       Check current page: eval \"window.location.href\""
                 );
                 // If the expression looked like it should produce output (e.g.
                 // `document.title`), offer a specific suggestion.

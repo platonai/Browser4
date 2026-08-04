@@ -196,14 +196,19 @@ Set `BROWSER4_SKILLS_DIR` to override the skills directory location. Skill files
 
 ### 4a. Choosing an Extraction Method
 
+> **⚠️ Important:** `htmlsnapshot` captures the **initial server-rendered HTML** at page load. Content added or modified by JavaScript after load (form submission results, dynamic updates, SPA route changes) **will not be reflected** in the stored snapshot. For pages where you have interacted (clicked, filled forms, submitted) or where JS modifies the DOM, use `eval` for live-DOM access. See [§5 Critical Warnings](#5-critical-warnings) for more.
+
 ```
 Need to extract data from a page?
-├─ Need to interact first (click, fill, scroll)? → snapshot + refs, then extract
+├─ Need to interact first (click, fill, scroll)?
+│  → snapshot + refs, then eval for extraction (htmlsnapshot may be stale)
+├─ Page has JS-updated content (after interaction, form submit, SPA)?
+│  → eval --json for live DOM (use --stdin or --file on Windows)
 ├─ Static page, one field? → htmlsnapshot get text "<selector>"
 ├─ Static page, one field, ALL matches? → htmlsnapshot get all text "<selector>"
 ├─ Static page, multiple correlated fields (title+price+url per item)?
 │  → htmlsnapshot query with X-SQL DOM_LOAD_AND_SELECT
-├─ Dynamic/complex JS logic needed? → eval --json (use --stdin or --file on Windows)
+├─ Dynamic/complex JS logic needed? → eval --json
 ├─ Natural language ("find the product price")? → extract (needs LLM key)
 └─ High volume, many pages? → crawl or swarm with --sql
 ```
@@ -334,7 +339,9 @@ browser4-cli htmlsnapshot get text ".price" --all    # quick test: does this sel
 
 > **Note:** Output pagination defaults — `get html`, `get all html`, and `grep` paginate at 2K lines. `get text` and `get all text` are not paginated by default. Use `--all` to disable pagination, or `--page N` for subsequent pages.
 
-> **Note:** Interactive mode (`snapshot -i`) strips generic `<div>` containers. Many e-commerce product cards use generic divs, not semantic elements. Prefer `--viewport 0` or `htmlsnapshot` for shopping/search pages.
+> **Warning:** Interactive mode (`snapshot -i`) strips generic `<div>` containers. Many e-commerce product cards use generic divs, not semantic elements. Prefer `--viewport 0` or `htmlsnapshot` for shopping/search pages.
+
+> **Warning:** `htmlsnapshot` captures the **initial page HTML**, not the live DOM. After interactions (form fills, clicks, submissions) or on pages where JavaScript updates the DOM (SPA route changes, dynamic content), the snapshot will be **stale** — it won't reflect the current page state. For JS-updated pages, use `eval` for live-DOM access instead. The `htmlsnapshot inspect` command also reads from the stored initial HTML, not the live DOM.
 
 ## 6. Quick Patterns
 

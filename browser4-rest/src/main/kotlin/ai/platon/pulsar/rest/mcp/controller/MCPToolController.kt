@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.mcp.controller
 
+import ai.platon.pulsar.agentic.ExtractResult
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.model.TcException
 import ai.platon.pulsar.agentic.model.ToolCall
@@ -932,6 +933,14 @@ class MCPToolController(
                     is Number, is Boolean -> v.toString()
                     // Maps, Lists, arrays etc. — serialize as valid JSON
                     is Map<*, *>, is Collection<*>, is Array<*> -> pulsarObjectMapper().writeValueAsString(v)
+                    // ExtractResult — serialize clean JSON with success, message, and data fields
+                    is ExtractResult -> pulsarObjectMapper().writeValueAsString(
+                        mapOf(
+                            "success" to v.success,
+                            "message" to v.message,
+                            "data" to v.data
+                        )
+                    )
                     // Non-serializable domain objects (WebDriver, Browser, etc.) —
                     // wrap in a description object so internal object graphs are never
                     // exposed to the client
