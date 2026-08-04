@@ -83,12 +83,29 @@ class SwarmService(
     @Volatile
     var taskTtlMinutes: Int = 43200 // 30 days
 
+    /**
+     * Maximum time (seconds) a swarm task may remain in CREATED state before
+     * being automatically transitioned to a TIMEOUT/failed state.  This catches
+     * tasks that are picked up by a worker but hang during fetch (e.g. due to
+     * "Protocol not found" for localhost URLs) and never update their status.
+     */
+    @Volatile
+    var staleTaskTimeoutSeconds: Long = 120
+
     init {
         // Periodically compact the JSONL file so stale entries don't accumulate forever.
         cleanupScope.launch {
             while (isActive) {
                 delay(5 * 60 * 1000L) // every 5 minutes
                 compactPersistence()
+            }
+        }
+        // Periodically check for stale QUEUED tasks that never transitioned
+        // to a terminal state (e.g. protocol-not-found hung the worker).
+        cleanupScope.launch {
+            while (isActive) {
+                delay(30 * 1000L) // every 30 seconds
+                transitionStaleTasks()
             }
         }
     }
@@ -136,6 +153,51 @@ class SwarmService(
         // Rewrite the persistence file so compacted tasks don't revive on restart.
         persistence.clear()
         responseCache.asMap().values.forEach { persistence.append(it) }
+    }
+
+    /**
+     * Transition swarm tasks that have been stuck in CREATED (queued) state
+     * for longer than [staleTaskTimeoutSeconds] to a TIMEOUT/failed state.
+     *
+     * This catches tasks whose workers hung during fetch (e.g. "Protocol not found"
+     * for localhost URLs or other unreachable hosts) and never updated their status.
+     * Without this, these tasks appear as "queued" indefinitely with statusCode 201.
+     */
+    private fun transitionStaleTasks() {
+        val now = Instant.now()
+        val staleCutoff = now.minusSeconds(staleTaskTimeoutSeconds)
+        val createdStatusCode = ResourceStatus.SC_CREATED
+
+        val stale = responseCache.asMap().entries.filter {
+            val r = it.value
+            r.statusCode == createdStatusCode
+                && !r.isDone
+                && r.createdTime?.isBefore(staleCutoff) == true
+                && r.startedTime == null // hasn't been picked up by a worker at all
+        }
+
+        for ((id, response) in stale) {
+            response.statusCode = ResourceStatus.SC_REQUEST_TIMEOUT
+            response.pageStatusCode = ProtocolStatusCodes.SC_REQUEST_TIMEOUT
+            response.finishTime = now
+            response.lastModifiedTime = now
+            response.isDone = true
+            responseStatusIndex[createdStatusCode]?.remove(id)
+            responseStatusIndex[response.statusCode]?.add(id)
+            persistence.append(response)
+            logger.warn(
+                "Swarm task {} auto-timed-out after {}s in CREATED state " +
+                "(staleTaskTimeoutSeconds={}). Likely cause: worker hung during fetch.",
+                id, staleTaskTimeoutSeconds, staleTaskTimeoutSeconds
+            )
+        }
+
+        if (stale.isNotEmpty()) {
+            logger.info(
+                "Transitioned {} stale swarm task(s) from CREATED to TIMEOUT " +
+                "(threshold: {}s)", stale.size, staleTaskTimeoutSeconds
+            )
+        }
     }
 
     /**

@@ -1,0 +1,13 @@
+{
+  "meta": {
+    "mode": "dev",
+    "scenario": "extraction-method-routing",
+    "date": "20260804-194532",
+    "source": "20260804-194532-extraction-method-routing.full.md"
+  },
+  "background": {
+    "executionContext": "",
+    "task": "All 7 acceptance criteria covering every branch of SKILL.md §4a (Choosing an Extraction Method) were evaluated:\n\n- **AC1–AC6: ✅ Fully successful** — Using the documented tools as specified (snapshot+eval, htmlsnapshot get, htmlsnapshot get all, htmlsnapshot query with X-SQL, eval --json, extract)\n- **AC7: ⚠️ Partial** — Both `crawl` and `swarm` failed with reliability issues; bulk extraction demonstrated successfully via the documented shell-loop fallback\n\n### Key Findings\n\n| Severity | Count | Most Critical |\n|----------|-------|---------------|\n| Critical | 1 | `crawl` hangs indefinitely — 0 pages processed |\n| High | 2 | `swarm` ~100x too slow; CLI invocation docs conflict |\n| Medium | 5 | Stale htmlsnapshot no runtime warning; extract double-JSON-encoded; CSS quoting broken; missing staleness guard |\n| Low | 4 | Compile warnings; selector variability; --quiet ineffective; price concatenation |\n\n### What Worked Well\n- **htmlsnapshot inspect** — excellent selector discovery tool, correctly identified `div.product-title` at 100% coverage\n- **X-SQL DOM_LOAD_AND_SELECT** — powerful correlated extraction, 6 rows perfectly aligned\n- **eval --json --file** — reliable live-DOM access when htmlsnapshot is stale\n- **extract** — LLM extraction worked with correct product data (just needs output format cleanup)\n- **Decision tree §4a** — accurately predicted every extraction path; the documentation was correct in all cases\n- **Shell-loop fallback** — worked perfectly as documented alternative when bulk tools failed\n\n### Deliverables\n\n- Full report: `.test-sessions/evaluation-report.md`\n- Machine-readable issues: `.test-sessions/issues.json`\n- All test artifacts in `.test-sessions/`"
+  },
+  "issues": []
+}

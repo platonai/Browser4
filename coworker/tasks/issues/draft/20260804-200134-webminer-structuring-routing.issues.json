@@ -1,0 +1,330 @@
+{
+  "meta": {
+    "mode": "dev",
+    "scenario": "webminer-structuring-routing",
+    "source": "20260804-200134-webminer-structuring-routing.full.md",
+    "date": "20260804-200134"
+  },
+  "background": {
+    "executionContext": "### Commands used (in order)\n\n1. `./b4w.sh help` — learned available commands\n2. `./b4w.sh goto \"http://localhost:18080/ec/dp/B0E000001\"` — navigate to product page 1\n3. `./b4w.sh htmlsnapshot capture` — capture static HTML (note: needed explicitly; goto doesn't auto-capture htmlsnapshot)\n4. `./b4w.sh htmlsnapshot export --file .test-sessions/html-corpus/B0E000001.html` — export HTML\n5. `./b4w.sh goto \"http://localhost:18080/ec/dp/B0E000002\"` — product page 2\n6. `./b4w.sh htmlsnapshot export --file .test-sessions/html-corpus/B0E000002.html` — export\n7. `./b4w.sh goto \"http://localhost:18080/ec/dp/B0H000001\"` + `htmlsnapshot export` — product page 3\n8. `pwsh ./skills/scent-miner/scripts/webminer.ps1 install` — failed (Windows-only path)\n9. `curl -fsSL ... -o ~/.scent/webminer/lib/scent-miner.jar` — manual JAR download\n10. `java -jar scent-miner.jar all .test-sessions/html-corpus/` — pipeline ran; views stage crashed\n11. `./b4w.sh crawl --seed-file .test-sessions/seed-urls.txt --depth 0 --refresh` — timed out\n12. `./b4w.sh swarm create --display-mode HEADLESS --clear-stale` — session created\n13. `./b4w.sh swarm query --seed-file ... --sql @query.sql --refresh --wait` — all jobs stuck queued\n\n### Workarounds required\n\n- **WebMiner install:** Downloaded JAR directly from GitHub releases (webminer.ps1 is Windows-only)\n- **htmlsnapshot capture:** Had to run explicit `htmlsnapshot capture` before export (not obvious that goto doesn't do this)\n- **Crawl/swarm:** Neither worked for localhost; had to cancel and move on\n\n### Key decision: Manual JAR download\n\nThe `webminer.ps1` script hardcodes `$env:USERPROFILE\\.scent\\webminer` which doesn't exist on Linux. Downloaded the JAR directly from `https://github.com/platonai/web-miner/releases/latest/download/scent-miner.jar` to `~/.scent/webminer/lib/`.\n\n---",
+    "task": "### Overall: Partially Successful (~50% of acceptance criteria met)\n\n| Criterion | Status | Summary |\n|---|---|---|\n| **AC3** — Single-page acquisition | ✅ Success | 3 product pages exported via `goto` + `htmlsnapshot capture` + `htmlsnapshot export` |\n| **AC1** — WebMiner free pipeline | ⚠️ Partial | encode + cluster stages completed; views stage crashed (POI error with too few docs); only 1/3 files encoded |\n| **AC4** — Crawl bulk acquisition | ❌ Failed | \"Protocol not found\" for localhost URLs; crawl took ~2 min/page; CLI timed out |\n| **AC5** — Swarm high-throughput | ❌ Failed | All 6 jobs stuck in \"queued\" state; same \"Protocol not found\" issue |\n| **AC2** — Production-scale decision | ✅ Documented | Decision analysis completed (theoretical, as specified) |\n\nThe fundamental blocker: both `crawl` and `swarm` use the Pulsar internal scrape API which cannot fetch `http://localhost` URLs (returns \"Protocol not found\"), while `goto` works perfectly via the browser-based CDP navigation path.\n\n---"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "Scrape API returns 'Protocol not found' for localhost URLs — breaks crawl and swarm",
+      "severity": "Critical",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.sh crawl --seed-file seed-urls.txt --depth 0 --refresh  (with localhost:18080 URLs)\n./b4w.sh swarm query --seed-file seed-urls.txt --sql @query.sql --refresh --wait",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Crawl and swarm should fetch localhost URLs the same way goto does, completing quickly.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Crawl: each URL takes ~2 minutes with 'Protocol not found' warning before eventually succeeding. Swarm: all jobs stuck in 'queued' state indefinitely with 'Protocol not found' warnings. The goto command works instantly for the same URLs.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "goto uses the browser's CDP-based navigation (which handles any protocol the browser supports), while crawl and swarm use the Pulsar internal fetch component (FetchComponent) which appears to lack a protocol handler for http://localhost. The warning 'Protocol not found | http://localhost:18080/...' in the logs (pulsar log, FetchComponent class) confirms this.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-core/browser4-browser/...FetchComponent.kt (the class emitting 'Protocol not found' warnings)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Register an HTTP protocol handler for localhost in the Pulsar fetch component\n- As a workaround, use 127.0.0.1 instead of localhost (though this should be tested)\n- Add a clear CLI-level error message when localhost URLs are detected, suggesting the goto path instead\n- Consider falling back to browser-based fetch when the protocol handler is missing for a URL scheme",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "webminer.ps1 installer hardcodes Windows-only $env:USERPROFILE path",
+      "severity": "High",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "pwsh ./skills/scent-miner/scripts/webminer.ps1 install",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Installer works cross-platform (Linux, macOS, Windows) since Java is cross-platform.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Join-Path fails with 'Cannot bind argument to parameter Path because it is null' because $env:USERPROFILE does not exist on Linux. The script should use $HOME or ~ on Unix platforms.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The PowerShell script at line 56 uses $env:USERPROFILE which is a Windows-only environment variable. On Linux/macOS, the home directory is in $HOME or ~.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "skills/scent-miner/scripts/webminer.ps1:56",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Replace $env:USERPROFILE with a cross-platform expression: if ($IsWindows) { $env:USERPROFILE } else { $env:HOME }\n- Or use Join-Path ~ '.scent/webminer' which PowerShell resolves correctly on all platforms\n- Add a fallback check: if neither env var exists, error with a clear message telling the user to set HOME",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "Swarm jobs stuck in 'queued' state with no progress or clear error feedback",
+      "severity": "High",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Submit swarm query jobs against localhost URLs. Wait 5+ minutes.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Jobs should either: (a) execute and complete, (b) fail with a clear error message explaining why, or (c) show incremental progress.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "All 6 jobs remain in 'queued' state (statusCode 201 Created) indefinitely. The CLI polling shows '0/6 completed' with elapsed time. The only clue is the 'Protocol not found' warning buried in server logs. No error surfaced to the CLI user.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The swarm worker picks up the job, encounters 'Protocol not found' during fetch, but the job stays in 'Created'/'queued' state instead of transitioning to a failed/error state with a descriptive message. The statusCode 201 (Created) is misleading — it suggests the job was just created, not that it's stuck.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-rest/src/.../CrawlService.kt or swarm task lifecycle management",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- When a fetch fails with 'Protocol not found' or any fatal fetch error, transition the job to a 'failed' state with the error message\n- Include the failure reason in swarm status output: 'Failed: Protocol not found for http://localhost:18080/...'\n- Add a timeout for queued jobs: if a job stays in 'queued' for >60s, surface a warning in swarm list",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "goto does not automatically capture htmlsnapshot — requires separate explicit capture step",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "1. ./b4w.sh goto 'http://localhost:18080/ec/'\n2. ./b4w.sh htmlsnapshot inspect '.product-card'\n3. Observe: 0 matches (no snapshot captured)\n4. ./b4w.sh htmlsnapshot capture  (explicit step)\n5. ./b4w.sh htmlsnapshot inspect '.product-card'\n6. Observe: 5 matches",
+          "label": "Reproduction"
+        },
+        {
+          "body": "goto should either auto-capture htmlsnapshot, or the error message should clearly say 'No HTML snapshot has been captured yet. Run htmlsnapshot capture first.'",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "After goto, htmlsnapshot inspect reports '0 matches' with a generic message about checking the CSS selector. It does not tell the user that no snapshot was ever captured.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "goto auto-captures an accessibility tree (AXTree) snapshot for element refs but does NOT trigger htmlsnapshot capture (which stores the static HTML DOM). The htmlsnapshot inspect/get/summary commands read from a separate storage that is only populated by explicit htmlsnapshot capture. Users naturally expect the navigation to capture both.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/commands.rs or the goto handler — where post-goto auto-snapshot is triggered",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Consider auto-capturing htmlsnapshot after goto, or at minimum after the first htmlsnapshot command following a navigation\n- At minimum, improve the '0 matches' error message to include: 'No HTML snapshot found. Run htmlsnapshot capture first.'\n- Document in the goto output tip that htmlsnapshot capture is needed for content extraction",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 5,
+      "title": "WebMiner views stage crashes with empty-sheet POI exception when too few documents are encoded",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "Run java -jar scent-miner.jar all on a directory with only 3 HTML files, where only 1 gets encoded.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Graceful error message: 'Not enough documents encoded (1) to build meaningful views. Need at least N documents.'",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "java.lang.IllegalArgumentException: Sheet index (0) is out of range (no sheets) at XSSFWorkbook.validateSheetIndex — a raw Java stack trace with no user-facing explanation.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The ContextualColumnsBuilder.loadRevisedRecords() method at line 86 tries to read sheet 0 from a workbook that has no sheets. This happens when there are too few encoded documents to produce meaningful Excel output. There is no guard clause checking whether the workbook has any sheets before accessing them.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "ai.platon.scent.ml.ContextualColumnsBuilder.loadRevisedRecords (ContextualColumnsBuilder.kt:86)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add a guard clause before accessing sheet 0: check workbook.getNumberOfSheets() > 0\n- Surface a user-friendly error: 'Cannot build views: clustering produced no grouped results. Try with more input documents.'\n- Document minimum document count requirements in the SKILL.md (e.g., 'at least 10-20 documents recommended')",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 6,
+      "title": "WebMiner encoder silently skips HTML files without clear explanation",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run scent-miner.jar all with 3 HTML files. Output shows 'Found 3 HTML file(s)' but 'Encoded 1 document(s)' with no explanation for the 2 skipped files.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Clear per-file status: which files were skipped and why (e.g., 'B0E000001.html: skipped — no valid text nodes found', 'B0E000002.html: skipped — encoding failed with X error').",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The pipeline reports 'Scanned 3 of 3 HTML file(s)' and 'Encoded 1 document(s)' with no indication of which files failed or why. The user cannot diagnose the problem.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The encoder's progress reporting only shows counts (scanned vs encoded) without per-file status. Failed/skipped files are silently dropped during the encoding loop, possibly in the HTML parsing or feature extraction phase where exceptions are caught and files are skipped without logging.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "ai.platon.scent.miner.WebMinerEngine or the encoder stage implementation",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Log each skipped file with a reason at WARN level during the encoding loop\n- Add a summary at the end: 'Skipped 2 files: B0E000001.html (no text content), B0E000002.html (parse error)'\n- Consider lowering the validity threshold for very small corpora to avoid skipping files",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 7,
+      "title": "Crawl progress display shows no per-URL status or error details",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run crawl --seed-file ... --depth 0 and watch the 'Crawling... waiting for first page' output.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Show per-URL progress: 'Fetching 1/6: http://localhost:18080/ec/dp/B0E000001 (10s elapsed)' with status updates.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Repeated 'Crawling... waiting for first page (Xs elapsed)' with no per-URL details. After 4 minutes only shows the same message. The user has no idea which URL is being processed or whether anything is happening.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The crawl CLI polling uses a generic 'waiting for first page' message that doesn't update with per-URL status from the backend. The backend does log per-URL progress ('processing seed URL 1/6') but this is only visible in server logs, not in the CLI output.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/commands.rs — the crawl polling/display logic",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Enhance the polling display to show per-URL status: current URL, completed count, failed count\n- When a crawl URL takes >30s, show a warning with the URL: 'Still fetching http://... — may be slow or unreachable'\n- Add a --verbose flag to show per-URL timing and status from the backend",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 8,
+      "title": "Task instructions specify $(./b4w.ps1) which does not work on Linux/bash",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "Run $(./b4w.ps1) goto 'http://example.com' in bash on Linux.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Task instructions should specify a working cross-platform invocation or note the platform-specific wrapper.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "SKILL.md already documents this as a known issue: 'The $(./b4w.ps1) <command> syntax shown in some task instructions does not work in bash — $(…) is command substitution, not invocation.' Nevertheless, the task prompt itself uses this syntax.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Task instructions were written assuming Windows/PowerShell. In bash, $(...) is command substitution which tries to execute the output of ./b4w.ps1 as a command, which fails.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Update task templates to use platform-agnostic or multi-platform invocation patterns\n- Or document at the top of task instructions: 'On Linux/macOS, replace $(./b4w.ps1) with ./b4w.sh'",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 9,
+      "title": "No distinction between primary and secondary product URLs — B0E000003 unexpectedly worked",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "The home page showed 5 trending products (B0E000001, B0E000002, B0H000001, B0T000001, B0B000001). B0E000003 was not listed but was still accessible.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Documentation or the mock site should clearly indicate which product IDs are available and what URL patterns exist.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "B0E000003 existed as 'Portable Bluetooth Speaker' even though it wasn't linked from the home page. A user has no way to discover available URLs on the mock site without guessing.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The MockSite generates product pages programmatically with sequential IDs. Some are linked from the home page, others exist but are undiscoverable without browsing category pages or guessing IDs.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Document the MockSite URL structure in a readme or the test fixture description\n- Add a sitemap endpoint (e.g., /ec/sitemap.xml) listing all available product URLs\n- List all available product IDs in the test scenario instructions",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}

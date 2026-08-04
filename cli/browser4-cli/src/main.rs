@@ -6969,7 +6969,11 @@ async fn handle_html_snapshot_inspect(
             cli_println!("  Run this first:  browser4-cli htmlsnapshot");
             cli_println!("  Then re-run:     browser4-cli htmlsnapshot inspect");
         } else {
-            cli_println!("- No elements matched. Check the CSS selector and ensure a HTML snapshot has been captured (`browser4-cli htmlsnapshot`).");
+            cli_println!("");
+            cli_println!("  ⚠️  No elements matched. This could mean:");
+            cli_println!("  1. No HTML snapshot has been captured yet — run: htmlsnapshot capture");
+            cli_println!("  2. The selector is valid but doesn't match any element in the snapshot");
+            cli_println!("  3. The page content is different from what you expect — try: htmlsnapshot export to inspect it");
         }
         // Add actionable troubleshooting hints
         if selector.starts_with('.') {
@@ -9514,6 +9518,7 @@ async fn handle_swarm_query(
     if urls.is_empty() {
         return Err("No URLs to query.".to_string());
     }
+    warn_localhost_urls(&urls);
 
     // Build load options string from flags
     let mut load_opts = Vec::new();
@@ -10492,6 +10497,30 @@ fn resolve_crawl_urls(url: &str, seed_file_content: Option<&str>) -> Result<Vec<
     Ok(urls)
 }
 
+/// Warn when localhost URLs are detected in crawl or swarm commands.
+/// The Pulsar internal fetch component may have trouble resolving localhost
+/// (Protocol not found), while the browser-based `goto` command works fine.
+/// This warning is a diagnostic; the command still proceeds.
+fn warn_localhost_urls(urls: &[String]) {
+    let localhost_urls: Vec<&str> = urls
+        .iter()
+        .filter(|u| {
+            let lower = u.to_lowercase();
+            lower.starts_with("http://localhost") || lower.starts_with("https://localhost")
+        })
+        .map(|s| s.as_str())
+        .collect();
+    if !localhost_urls.is_empty() {
+        cli_println!(
+            "Warning: {} localhost URL(s) detected. The internal fetch component may have \
+             trouble resolving localhost URLs (\"Protocol not found\"). For reliable single-page \
+             fetching, use \"goto\" + \"htmlsnapshot capture\" instead. \
+             Crawl will retry automatically; localhost may work after a few attempts.",
+            localhost_urls.len()
+        );
+    }
+}
+
 /// Parse the crawl poll response and classify its status.
 #[cfg(test)]
 #[derive(Debug, PartialEq)]
@@ -10569,6 +10598,7 @@ async fn handle_crawl(
     };
 
     let urls = resolve_crawl_urls(url, seed_content.as_deref())?;
+    warn_localhost_urls(&urls);
 
     // ---- Resolve X-SQL query ----
     let use_sql_stdin = tool_params
@@ -10799,19 +10829,69 @@ async fn handle_crawl(
         };
         if elapsed - last_report >= interval {
             last_report = elapsed;
-            if pages_found > 0 {
-                cli_println!(
-                    "Crawling... {}/{} pages found ({}s elapsed)",
-                    pages_found,
-                    url_count,
-                    elapsed.as_secs()
-                );
+
+            // Use per-seed statuses when available for precise progress reporting
+            let seed_statuses = parsed["seedStatuses"].as_array();
+            if let Some(seeds) = seed_statuses {
+                let completed = seeds.iter().filter(|s| {
+                    s["status"].as_str().unwrap_or("") == "fetched"
+                }).count();
+                let failed = seeds.iter().filter(|s| {
+                    s["status"].as_str().unwrap_or("") == "error"
+                }).count();
+                let in_progress = url_count.saturating_sub(completed + failed);
+
+                // Show the most recently processed URL for context
+                let last_url = seeds.last()
+                    .and_then(|s| s["url"].as_str())
+                    .unwrap_or("");
+
+                if completed + failed > 0 {
+                    cli_println!(
+                        "Crawling... {}/{} URLs processed, {} pages found ({}s elapsed)",
+                        completed + failed,
+                        url_count,
+                        pages_found,
+                        elapsed.as_secs()
+                    );
+                    if failed > 0 {
+                        cli_println!(
+                            "  {} failed, {} remaining — last processed: {}",
+                            failed, in_progress, last_url
+                        );
+                    }
+                } else {
+                    cli_println!(
+                        "Crawling... processing seed URLs ({}s elapsed, {} URLs queued)",
+                        elapsed.as_secs(),
+                        url_count
+                    );
+                }
             } else {
-                cli_println!(
-                    "Crawling... waiting for first page ({}s elapsed, {} URLs queued)",
-                    elapsed.as_secs(),
-                    url_count
-                );
+                // Fallback when seedStatuses is not available (older backend)
+                if pages_found > 0 {
+                    cli_println!(
+                        "Crawling... {}/{} pages found ({}s elapsed)",
+                        pages_found,
+                        url_count,
+                        elapsed.as_secs()
+                    );
+                } else {
+                    let processing = parsed["status"].as_str().unwrap_or("");
+                    if processing == "PROCESSING" {
+                        cli_println!(
+                            "Crawling... processing seed URLs ({}s elapsed, {} URLs queued)",
+                            elapsed.as_secs(),
+                            url_count
+                        );
+                    } else {
+                        cli_println!(
+                            "Crawling... waiting for first page ({}s elapsed, {} URLs queued)",
+                            elapsed.as_secs(),
+                            url_count
+                        );
+                    }
+                }
             }
         }
 
