@@ -71,9 +71,13 @@ abstract class AbstractScrapeHyperlink(
             rs = executeQuery(sql.sql)
         } catch (e: JdbcSQLException) {
             response.statusCode = ResourceStatus.SC_EXPECTATION_FAILED
+            // Capture the SQL error message so the CLI can display it
+            // instead of the misleading "scrape session closed" default.
+            response.message = e.message ?: e.toString()
             logger.warn("Failed to execute X-SQL #${response.id} | state: ${response.statusCode} | \n{}", e.brief())
         } catch (e: Throwable) {
             response.statusCode = ResourceStatus.SC_EXPECTATION_FAILED
+            response.message = e.message ?: e.toString()
             logger.warn("[Unexpected] Failed to execute X-SQL #${response.id}\n{}", e.brief())
         }
 
@@ -97,9 +101,11 @@ abstract class AbstractScrapeHyperlink(
                     val message = e.toString()
                     if (message.contains("Syntax error in SQL statement")) {
                         response.statusCode = ResourceStatus.SC_BAD_REQUEST
+                        response.message = "X-SQL syntax error: ${e.message}"
                         logger.warn("Syntax error in SQL statement #${response.id}>>>\n{}\n<<<", e.sql)
                     } else {
                         response.statusCode = ResourceStatus.SC_EXPECTATION_FAILED
+                        response.message = e.message ?: message
                         if (AppContext.isActive) {
                             logger.warn("Failed to execute scrape task #${response.id}", e)
                         }

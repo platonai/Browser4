@@ -64,11 +64,14 @@ if ($B4wFoundScript -ne $B4wMyPathNormalized) {
 # Otherwise, we ARE the correct b4w.ps1 — continue below.
 
 $Rebuild = $false
+$NoBuild = $false
 $RemainingArgs = @()
 
 for ($i = 0; $i -lt $args.Count; $i++) {
     if ($args[$i] -eq '-Rebuild') {
         $Rebuild = $true
+    } elseif ($args[$i] -eq '-NoBuild' -or $args[$i] -eq '--no-build') {
+        $NoBuild = $true
     } else {
         $RemainingArgs += $args[$i]
     }
@@ -97,21 +100,69 @@ if ($Rebuild) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
-# Auto-detect stale sources and rebuild if needed
-if (!$Rebuild -and (Test-Path $Exe)) {
+# Auto-detect stale sources and rebuild if needed.
+# Uses a source-content hash cache to avoid redundant cargo build
+# invocations when running multiple b4w.ps1 commands in parallel.
+# Without the cache, each concurrent invocation detects stale sources
+# independently and all try to acquire the cargo build lock, causing
+# "Blocking waiting for file lock on build directory" delays.
+if (!$Rebuild -and !$NoBuild -and (Test-Path $Exe)) {
     $ExeTime = (Get-Item $Exe).LastWriteTime
     $CrateDir = Join-Path $ScriptDir "cli/browser4-cli"
     $SrcDir = Join-Path $CrateDir "src"
-    $Stale = @(Get-ChildItem -Path $SrcDir -Recurse -File -Filter "*.rs" -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt $ExeTime })
-    if (-not $Stale) {
-        foreach ($f in @("$CrateDir/Cargo.toml", "$CrateDir/Cargo.lock")) {
-            if ((Test-Path $f) -and ((Get-Item $f).LastWriteTime -gt $ExeTime)) { $Stale = @($true); break }
+    $HashFile = Join-Path $CrateDir "target/.source-hash"
+
+    # Compute a content hash of all source files to detect real changes.
+    # Timestamp comparison alone triggers rebuilds when multiple instances
+    # start before any one finishes — the exe is still old so all instances
+    # see "stale" sources.  A content hash cached after successful build
+    # lets subsequent instances skip the build when nothing actually changed.
+    $CurrentHash = $null
+    try {
+        $Hasher = [System.Security.Cryptography.SHA256]::Create()
+        $Files = @(Get-ChildItem -Path $SrcDir -Recurse -File -Filter "*.rs" -ErrorAction SilentlyContinue | Sort-Object FullName)
+        $Files += @(Get-Item "$CrateDir/Cargo.toml", "$CrateDir/Cargo.lock" -ErrorAction SilentlyContinue | Where-Object { $_ })
+        foreach ($f in $Files) {
+            $Content = [System.IO.File]::ReadAllBytes($f.FullName)
+            $Hasher.TransformBlock($Content, 0, $Content.Length, $Content, 0) > $null
         }
+        $Hasher.TransformFinalBlock(@(), 0, 0) > $null
+        $CurrentHash = [BitConverter]::ToString($Hasher.Hash) -replace '-'
+        $Hasher.Dispose()
+    } catch {
+        # If hashing fails (e.g. permission), fall back to timestamp check.
     }
-    if ($Stale) {
-        Write-Host "Rust sources changed, rebuilding browser4-cli..." -ForegroundColor Yellow
-        cargo build --manifest-path $Manifest
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    $CachedHash = $null
+    if ($CurrentHash -and (Test-Path $HashFile)) {
+        $CachedHash = (Get-Content $HashFile -ErrorAction SilentlyContinue).Trim()
+    }
+
+    if ($CachedHash -and $CurrentHash -and $CachedHash -eq $CurrentHash) {
+        # Sources haven't changed since last build — skip rebuild.
+    } else {
+        # Fall back to timestamp-based detection when hash cache is
+        # unavailable or sources have genuinely changed.
+        $Stale = @(Get-ChildItem -Path $SrcDir -Recurse -File -Filter "*.rs" -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt $ExeTime })
+        if (-not $Stale) {
+            foreach ($f in @("$CrateDir/Cargo.toml", "$CrateDir/Cargo.lock")) {
+                if ((Test-Path $f) -and ((Get-Item $f).LastWriteTime -gt $ExeTime)) { $Stale = @($true); break }
+            }
+        }
+        if ($Stale) {
+            Write-Host "Rust sources changed, rebuilding browser4-cli..." -ForegroundColor Yellow
+            cargo build --manifest-path $Manifest
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            # Persist the new source hash so the next invocation can skip
+            # the build.  Always write after a successful build so parallel
+            # invocations benefit from the cache.
+            if ($CurrentHash) {
+                try {
+                    New-Item -Path (Split-Path $HashFile -Parent) -ItemType Directory -Force -ErrorAction SilentlyContinue > $null
+                    $CurrentHash | Out-File -FilePath $HashFile -Encoding ascii -NoNewline
+                } catch { }
+            }
+        }
     }
 }
 

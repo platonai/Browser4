@@ -48,6 +48,9 @@ data class ScrapeResponse(
     var resultSet: List<Map<String, Any?>>? = null,
 
     var event: String = "",
+
+    /** Diagnostic message for failed tasks (e.g. X-SQL type mismatch, syntax error). */
+    var message: String? = null,
 ) {
     val status: String get() = ResourceStatus.getStatusText(statusCode)
 
@@ -68,14 +71,15 @@ data class ScrapeResponse(
             id, ResourceStatus.SC_NOT_FOUND, ResourceStatus.SC_NOT_FOUND
         ).apply { createdTime = null }
 
-        fun failed(id: String, statusCode: Int, pageStatusCode: Int) =
-            ScrapeResponse(id, statusCode = statusCode, pageStatusCode = pageStatusCode)
+        fun failed(id: String, statusCode: Int, pageStatusCode: Int, message: String? = null) =
+            ScrapeResponse(id, statusCode = statusCode, pageStatusCode = pageStatusCode, message = message)
 
         fun failed(id: String, e: Exception) =
             ScrapeResponse(
                 id,
                 statusCode = ResourceStatus.SC_EXPECTATION_FAILED,
-                pageStatusCode = ResourceStatus.SC_EXPECTATION_FAILED
+                pageStatusCode = ResourceStatus.SC_EXPECTATION_FAILED,
+                message = e.message ?: e.toString()
             )
     }
 }

@@ -132,6 +132,15 @@ open class XSQLHyperlink(
             filled
         }
 
+        // Always ensure resultSet is non-null before transitioning to a
+        // terminal state.  A null resultSet combined with isDone=true creates
+        // a race where the CLI fetches an empty resultSet for a "completed"
+        // task.  By guaranteeing at least an empty list here, the CLI always
+        // sees a consistent (empty or populated) resultSet.
+        if (response.resultSet == null) {
+            response.resultSet = emptyList()
+        }
+
         response.refresh(response.statusCode, page.protocolStatus.minorCode, false)
     }
 }

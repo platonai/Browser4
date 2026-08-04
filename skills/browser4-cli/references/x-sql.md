@@ -127,45 +127,114 @@ FROM DOM_LOAD_AND_SELECT('https://shop.example.com/product/42', 'body');
 
 ---
 
+## Function Input/Output Types & Composability
+
+X-SQL functions fall into **two type categories** based on how they interact with DOM elements:
+
+| Type | Signature | Examples | Can compose with |
+|------|-----------|----------|-----------------|
+| **ValueDom functions** | Take `(DOM [, selector])` where `DOM` is a `ValueDom` node | `DOM_TEXT(DOM)`, `DOM_ABS_SRC(DOM)`, `DOM_HREF(DOM)`, `DOM_DOC_TITLE(DOM)` | Other ValueDom functions: `DOM_ABS_SRC(DOM_SELECT_FIRST(DOM, 'img'))` ✅ |
+| **Scalar functions** | Take `(DOM, selector)` and return `String`/`Int`/`Float` | `DOM_FIRST_TEXT(DOM, 'h1')`, `DOM_FIRST_ATTR(DOM, 'img', 'src')`, `DOM_FIRST_IMG(DOM, 'img')` | String functions: `STR_DEFAULT_IF_BLANK(DOM_FIRST_TEXT(...), 'N/A')` ✅ |
+
+**Critical rule:** You cannot pass a `String` (from a scalar function) where a `ValueDom` is expected, and vice versa.
+
+### Common Composition Mistakes
+
+```sql
+-- ❌ WRONG: DOM_FIRST_IMG returns a String (the src attribute), not a ValueDom.
+--    DOM_ABS_SRC expects a ValueDom, so it receives a String and fails with a
+--    misleading 417 "scrape session closed" error.
+SELECT DOM_ABS_SRC(DOM_FIRST_IMG(DOM, 'img')) AS image_url
+FROM DOM_LOAD_AND_SELECT(@url, '#product');
+
+-- ✅ CORRECT: Use DOM_FIRST_ATTR to get the src attribute directly.
+--    No DOM_ABS_SRC needed — just pass the attribute name.
+SELECT DOM_FIRST_ATTR(DOM, 'img', 'src') AS image_url
+FROM DOM_LOAD_AND_SELECT(@url, '#product');
+
+-- ✅ ALSO CORRECT: Select the DOM element first, then get the absolute src.
+SELECT DOM_ABS_SRC(DOM_SELECT_FIRST(DOM, 'img')) AS image_url
+FROM DOM_LOAD_AND_SELECT(@url, '#product');
+```
+
+### Visual Composition Graph
+
+```
+ValueDom functions (input: DOM element, output: varies)
+┌─────────────────────────────────────────────┐
+│ DOM_LOAD()     → ValueDom                   │
+│ DOM_SELECT_FIRST(DOM, sel) → ValueDom       │
+│ DOM_PARENT(DOM) → ValueDom                  │
+│ DOM_ANCESTOR(DOM, tag) → ValueDom           │
+│                                             │
+│ DOM_TEXT(DOM) → String                      │
+│ DOM_ABS_SRC(DOM) → String      ⚠ expects    │
+│ DOM_ABS_HREF(DOM) → String      ValueDom!   │
+│ DOM_HREF(DOM) → String                      │
+│ DOM_SRC(DOM) → String                       │
+│ DOM_DOC_TITLE(DOM) → String                 │
+│ DOM_BASE_URI(DOM) → String                  │
+└─────────────────────────────────────────────┘
+        ▲
+        │ CAN compose: DOM_ABS_SRC(DOM_SELECT_FIRST(DOM, 'img'))
+        │
+        │ CANNOT compose: DOM_ABS_SRC(DOM_FIRST_IMG(DOM, 'img'))
+        │                 ↑ returns String, not ValueDom
+        ▼
+Scalar functions (input: DOM + selector string, output: scalar)
+┌─────────────────────────────────────────────┐
+│ DOM_FIRST_TEXT(DOM, sel) → String           │
+│ DOM_FIRST_ATTR(DOM, sel, attr) → String     │
+│ DOM_FIRST_IMG(DOM, sel) → String (src attr) │
+│ DOM_FIRST_HREF(DOM, sel) → String           │
+│ DOM_ALL_TEXTS(DOM, sel) → ValueArray        │
+│ DOM_ALL_ATTRS(DOM, sel, attr) → ValueArray  │
+└─────────────────────────────────────────────┘
+```
+
+---
+
 ## Function Index by SQL Alias
 
 **Where to find detailed docs:** Functions in the "Element property", "Tree navigation", "Text", "Link/Image", "Regex", "HTML", "Feature", and "State check" categories are documented in [x-sql-dom-functions.md](x-sql-dom-functions.md). Functions in the "CSS select", "Attribute extraction", "Visual", and "DOM manipulation" categories are documented in [x-sql-dom-select-functions.md](x-sql-dom-select-functions.md). "Page loading" functions are in [x-sql-dom-load-select.md](x-sql-dom-load-select.md). String functions are in [x-sql-string-functions.md](x-sql-string-functions.md). Array functions are in [x-sql-array-functions.md](x-sql-array-functions.md).
 
 ### DOM Namespace
 
-| SQL Alias | Returns | Category |
-|-----------|---------|----------|
-| `DOM_LOAD_AND_SELECT` | `ResultSet` | Page loading + CSS selection |
-| `DOM_LOAD` | `ValueDom` | Page loading |
-| `DOM_FETCH` | `ValueDom` | Page loading |
-| `DOM_IS_NIL` | `Boolean` | State check |
-| `DOM_IS_NOT_NIL` | `Boolean` | State check |
-| `DOM_ATTR` | `String` | Element property → DomFunctions |
-| `DOM_LABELS` | `String` | Element property |
-| `DOM_FEATURE` | `Double` | Element property |
-| `DOM_HAS_ATTR` | `Boolean` | Element property |
-| `DOM_STYLE` | `String` | Element property |
-| `DOM_SEQUENCE` | `Int` | Element property |
-| `DOM_DEPTH` | `Int` | Element property |
-| `DOM_CSS_SELECTOR` | `String` | Element property |
-| `DOM_CSS_PATH` | `String` | Element property |
-| `DOM_SIBLING_SIZE` | `Int` | Tree navigation |
-| `DOM_SIBLING_INDEX` | `Int` | Tree navigation |
-| `DOM_ELEMENT_SIBLING_SIZE` | `Int` | Tree navigation |
-| `DOM_ELEMENT_SIBLING_INDEX` | `Int` | Tree navigation |
-| `DOM_URI` | `String` | URL/Location |
-| `DOM_BASE_URI` | `String` | URL/Location |
-| `DOM_ABS_URL` | `String` | URL/Location |
-| `DOM_LOCATION` | `String` | URL/Location |
-| `DOM_CHILD_NODE_SIZE` | `Int` | Tree navigation |
-| `DOM_CHILD_ELEMENT_SIZE` | `Int` | Tree navigation |
-| `DOM_TAG_NAME` | `String` | Element identity |
-| `DOM_HREF` | `String` | Link/Image |
-| `DOM_ABS_HREF` | `String` | Link/Image |
-| `DOM_SRC` | `String` | Link/Image |
-| `DOM_ABS_SRC` | `String` | Link/Image |
-| `DOM_TITLE` | `String` | Title |
-| `DOM_DOC_TITLE` | `String` | Title |
+> **Legend:** `DOM` = `ValueDom` node (from `FROM DOM_LOAD_AND_SELECT`). `DOM, sel` = ValueDom + CSS selector string. `DOM, sel, attr` = ValueDom + selector + attribute name.
+
+| SQL Alias | Input | Returns | Category |
+|-----------|-------|---------|----------|
+| `DOM_LOAD_AND_SELECT` | `(url, sel)` | `ResultSet` | Page loading + CSS selection |
+| `DOM_LOAD` | `(url)` | `ValueDom` | Page loading |
+| `DOM_FETCH` | `(url)` | `ValueDom` | Page loading |
+| `DOM_IS_NIL` | `(DOM)` | `Boolean` | State check |
+| `DOM_IS_NOT_NIL` | `(DOM)` | `Boolean` | State check |
+| `DOM_ATTR` | `(DOM, attr)` | `String` | Element property → DomFunctions |
+| `DOM_LABELS` | `(DOM)` | `String` | Element property |
+| `DOM_FEATURE` | `(DOM, feat)` | `Double` | Element property |
+| `DOM_HAS_ATTR` | `(DOM, attr)` | `Boolean` | Element property |
+| `DOM_STYLE` | `(DOM, prop)` | `String` | Element property |
+| `DOM_SEQUENCE` | `(DOM)` | `Int` | Element property |
+| `DOM_DEPTH` | `(DOM)` | `Int` | Element property |
+| `DOM_CSS_SELECTOR` | `(DOM)` | `String` | Element property |
+| `DOM_CSS_PATH` | `(DOM)` | `String` | Element property |
+| `DOM_SIBLING_SIZE` | `(DOM)` | `Int` | Tree navigation |
+| `DOM_SIBLING_INDEX` | `(DOM)` | `Int` | Tree navigation |
+| `DOM_ELEMENT_SIBLING_SIZE` | `(DOM)` | `Int` | Tree navigation |
+| `DOM_ELEMENT_SIBLING_INDEX` | `(DOM)` | `Int` | Tree navigation |
+| `DOM_URI` | `(DOM)` | `String` | URL/Location |
+| `DOM_BASE_URI` | `(DOM)` | `String` | URL/Location |
+| `DOM_ABS_URL` | `(DOM, url)` | `String` | URL/Location |
+| `DOM_LOCATION` | `(DOM)` | `String` | URL/Location |
+| `DOM_CHILD_NODE_SIZE` | `(DOM)` | `Int` | Tree navigation |
+| `DOM_CHILD_ELEMENT_SIZE` | `(DOM)` | `Int` | Tree navigation |
+| `DOM_TAG_NAME` | `(DOM)` | `String` | Element identity |
+| `DOM_HREF` | `(DOM)` | `String` | Link/Image |
+| `DOM_ABS_HREF` | `(DOM)` | `String` | Link/Image |
+| `DOM_SRC` | `(DOM)` | `String` | Link/Image |
+| `DOM_ABS_SRC` | `(DOM)` ⚠ | `String` | Link/Image |
+| `DOM_TITLE` | `(DOM)` | `String` | Title |
+| `DOM_DOC_TITLE` | `(DOM)` | `String` | Title |
 | `DOM_HAS_TEXT` | `Boolean` | Text |
 | `DOM_TEXT` | `String` | Text |
 | `DOM_TEXT_LEN` | `Int` | Text |
@@ -210,42 +279,42 @@ FROM DOM_LOAD_AND_SELECT('https://shop.example.com/product/42', 'body');
 | `DOM_HEIGHT` | `Double` | Feature |
 | `DOM_AREA` | `Double` | Feature |
 | `DOM_ASPECT_RATIO` | `Double` | Feature |
-| `DOM_SELECT_ALL` | `ValueArray` | CSS select |
-| `DOM_SELECT_FIRST` | `ValueDom` | CSS select |
-| `DOM_SELECT_NTH` | `ValueDom` | CSS select |
-| `DOM_ALL_TEXTS` | `ValueArray` | CSS select |
-| `DOM_FIRST_TEXT` | `String` | CSS select |
-| `DOM_NTH_TEXT` | `String` | CSS select |
-| `DOM_ALL_OWN_TEXTS` | `ValueArray` | CSS select |
-| `DOM_FIRST_OWN_TEXT` | `String` | CSS select |
-| `DOM_NTH_OWN_TEXT` | `String` | CSS select |
-| `DOM_WHOLE_TEXTS` | `ValueArray` | CSS select |
-| `DOM_FIRST_WHOLE_TEXT` | `String` | CSS select |
-| `DOM_NTH_WHOLE_TEXT` | `String` | CSS select |
-| `DOM_ALL_SLIM_HTMLS` | `ValueArray` | CSS select |
-| `DOM_FIRST_SLIM_HTML` | `String` | CSS select |
-| `DOM_NTH_SLIM_HTML` | `String` | CSS select |
-| `DOM_ALL_MINIMAL_HTMLS` | `ValueArray` | CSS select |
-| `DOM_FIRST_MINIMAL_HTML` | `String` | CSS select |
-| `DOM_NTH_MINIMAL_HTML` | `String` | CSS select |
-| `DOM_ALL_INTEGERS` | `ValueArray` | CSS select |
-| `DOM_FIRST_INTEGER` | `Int` | CSS select |
-| `DOM_NTH_INTEGER` | `Int` | CSS select |
-| `DOM_ALL_FLOATS` | `ValueArray` | CSS select |
-| `DOM_FIRST_FLOAT` | `ValueFloat` | CSS select |
-| `DOM_NTH_FLOAT` | `ValueFloat` | CSS select |
-| `DOM_ALL_ATTRS` | `ValueArray` | CSS select |
-| `DOM_FIRST_ATTR` | `String` | CSS select |
-| `DOM_NTH_ATTR` | `String` | CSS select |
-| `DOM_ALL_MULTI_ATTRS` | `ValueArray` | CSS select |
-| `DOM_FIRST_MULTI_ATTRS` | `List` | CSS select |
-| `DOM_NTH_MULTI_ATTRS` | `List` | CSS select |
-| `DOM_ALL_IMGS` | `ValueArray` | CSS select |
-| `DOM_FIRST_IMG` | `String` | CSS select |
-| `DOM_NTH_IMG` | `String` | CSS select |
-| `DOM_ALL_HREFS` | `ValueArray` | CSS select |
-| `DOM_FIRST_HREF` | `String` | CSS select |
-| `DOM_NTH_HREF` | `String` | CSS select |
+| `DOM_SELECT_ALL` | `(DOM, sel)` | `ValueArray` | CSS select |
+| `DOM_SELECT_FIRST` | `(DOM, sel)` | `ValueDom` | CSS select |
+| `DOM_SELECT_NTH` | `(DOM, sel, n)` | `ValueDom` | CSS select |
+| `DOM_ALL_TEXTS` | `(DOM, sel)` | `ValueArray` | CSS select |
+| `DOM_FIRST_TEXT` | `(DOM, sel)` | `String` | CSS select |
+| `DOM_NTH_TEXT` | `(DOM, sel, n)` | `String` | CSS select |
+| `DOM_ALL_OWN_TEXTS` | `(DOM, sel)` | `ValueArray` | CSS select |
+| `DOM_FIRST_OWN_TEXT` | `(DOM, sel)` | `String` | CSS select |
+| `DOM_NTH_OWN_TEXT` | `(DOM, sel, n)` | `String` | CSS select |
+| `DOM_WHOLE_TEXTS` | `(DOM, sel)` | `ValueArray` | CSS select |
+| `DOM_FIRST_WHOLE_TEXT` | `(DOM, sel)` | `String` | CSS select |
+| `DOM_NTH_WHOLE_TEXT` | `(DOM, sel, n)` | `String` | CSS select |
+| `DOM_ALL_SLIM_HTMLS` | `(DOM, sel)` | `ValueArray` | CSS select |
+| `DOM_FIRST_SLIM_HTML` | `(DOM, sel)` | `String` | CSS select |
+| `DOM_NTH_SLIM_HTML` | `(DOM, sel, n)` | `String` | CSS select |
+| `DOM_ALL_MINIMAL_HTMLS` | `(DOM, sel)` | `ValueArray` | CSS select |
+| `DOM_FIRST_MINIMAL_HTML` | `(DOM, sel)` | `String` | CSS select |
+| `DOM_NTH_MINIMAL_HTML` | `(DOM, sel, n)` | `String` | CSS select |
+| `DOM_ALL_INTEGERS` | `(DOM, sel)` | `ValueArray` | CSS select |
+| `DOM_FIRST_INTEGER` | `(DOM, sel)` | `Int` | CSS select |
+| `DOM_NTH_INTEGER` | `(DOM, sel, n)` | `Int` | CSS select |
+| `DOM_ALL_FLOATS` | `(DOM, sel)` | `ValueArray` | CSS select |
+| `DOM_FIRST_FLOAT` | `(DOM, sel)` | `ValueFloat` | CSS select |
+| `DOM_NTH_FLOAT` | `(DOM, sel, n)` | `ValueFloat` | CSS select |
+| `DOM_ALL_ATTRS` | `(DOM, sel, attr)` | `ValueArray` | CSS select |
+| `DOM_FIRST_ATTR` | `(DOM, sel, attr)` | `String` | CSS select |
+| `DOM_NTH_ATTR` | `(DOM, sel, attr, n)` | `String` | CSS select |
+| `DOM_ALL_MULTI_ATTRS` | `(DOM, sel, attrs)` | `ValueArray` | CSS select |
+| `DOM_FIRST_MULTI_ATTRS` | `(DOM, sel, attrs)` | `List` | CSS select |
+| `DOM_NTH_MULTI_ATTRS` | `(DOM, sel, attrs, n)` | `List` | CSS select |
+| `DOM_ALL_IMGS` | `(DOM, sel)` | `ValueArray` | CSS select |
+| `DOM_FIRST_IMG` | `(DOM, sel)` ⚠ | `String` | CSS select |
+| `DOM_NTH_IMG` | `(DOM, sel, n)` ⚠ | `String` | CSS select |
+| `DOM_ALL_HREFS` | `(DOM, sel)` | `ValueArray` | CSS select |
+| `DOM_FIRST_HREF` | `(DOM, sel)` ⚠ | `String` | CSS select |
+| `DOM_NTH_HREF` | `(DOM, sel, n)` ⚠ | `String` | CSS select |
 | `DOM_ALL_NODES_LABELS` | `ValueArray` | CSS select |
 | `DOM_FIRST_NODE_LABELS` | `String` | CSS select |
 | `DOM_NTH_NODE_LABELS` | `String` | CSS select |
@@ -253,6 +322,8 @@ FROM DOM_LOAD_AND_SELECT('https://shop.example.com/product/42', 'body');
 | `DOM_FIRST_RE1` | `String` | CSS select + regex |
 | `DOM_ALL_RE2` | `ValueArray` | CSS select + regex |
 | `DOM_FIRST_RE2` | `ValueArray` | CSS select + regex |
+
+> ⚠ **Warning:** Functions marked with ⚠ return a **scalar** (`String`), not a `ValueDom`. They select an element AND extract a property in one step. Their results **cannot** be passed to `ValueDom` functions like `DOM_ABS_SRC`, `DOM_ABS_HREF`, `DOM_TEXT`, etc. Use the `DOM_SELECT_*` + property-function pattern instead for composable DOM access (see [§Composability](#function-inputoutput-types--composability) above).
 
 ### STR Namespace
 

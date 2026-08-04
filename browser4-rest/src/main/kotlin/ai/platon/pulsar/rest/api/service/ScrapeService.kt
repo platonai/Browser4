@@ -77,7 +77,6 @@ class ScrapeService(
                 } catch (e: Exception) {
                     logger.warn("X-SQL: pre-load of '{}' before first attempt failed: {}",
                         extractedUrl, e.message)
-                        extractedUrl, e.message)
                 }
             }
 
@@ -126,15 +125,30 @@ class ScrapeService(
             }
 
             logger.warn("X-SQL query failed after {} retries", maxRetries)
-            return lastResponse ?: ScrapeResponse(
+            val response = lastResponse ?: ScrapeResponse(
                 "", ResourceStatus.SC_EXPECTATION_FAILED, ProtocolStatusCodes.EXCEPTION
             )
+            // Ensure a diagnostic message is present — if the hyperlink
+            // didn't capture one (e.g., DegenerateXSQLScrapeHyperlink), add
+            // a generic message so the CLI doesn't show an empty error.
+            if (response.message.isNullOrBlank()) {
+                response.message = "X-SQL query failed with status ${response.statusCode}. " +
+                    "This may indicate a function type mismatch (e.g., passing a string " +
+                    "to a DOM-element function like DOM_ABS_SRC)."
+            }
+            return response
         } catch (e: TimeoutException) {
             logger.warn("Timeout executing query: >>>${request.sql}<<<", e)
-            return ScrapeResponse("", ResourceStatus.SC_REQUEST_TIMEOUT, ProtocolStatusCodes.REQUEST_TIMEOUT)
+            return ScrapeResponse(
+                "", ResourceStatus.SC_REQUEST_TIMEOUT, ProtocolStatusCodes.REQUEST_TIMEOUT,
+                message = "X-SQL query timed out after 120s. The page may be too large or the session may be unresponsive."
+            )
         } catch (e: Exception) {
             logger.error("Unexpected error executing query: >>>${request.sql}<<<", e)
-            return ScrapeResponse("", ResourceStatus.SC_INTERNAL_SERVER_ERROR, ProtocolStatusCodes.EXCEPTION)
+            return ScrapeResponse(
+                "", ResourceStatus.SC_INTERNAL_SERVER_ERROR, ProtocolStatusCodes.EXCEPTION,
+                message = e.message ?: e.toString()
+            )
         }
     }
 

@@ -9068,20 +9068,63 @@ async fn handle_swarm_create(
             cli_println!("Cleared {} stale swarm task(s) from prior sessions.", removed);
             json_field("cleared_stale_tasks", json!(removed));
         } else {
-            cli_println!(
-                "Note: {} swarm task(s) from prior sessions are still tracked.",
-                swarm_tasks.len()
-            );
-            cli_println!(
-                "  If new jobs get stuck in \"Created\" status, run `swarm list --clear` to remove stale entries,"
-            );
-            cli_println!(
-                "  then recreate the swarm session before resubmitting."
-            );
-            cli_println!(
-                "  Or use `swarm create --clear-stale` to clear and recreate in one step."
-            );
-            json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+            // Offer an interactive prompt to clear stale tasks,
+            // eliminating the multi-step "abort, clear, recreate" flow.
+            let is_interactive = std::io::stdin().is_terminal();
+            if is_interactive {
+                eprintln!();
+                eprintln!("╔══════════════════════════════════════════════════════════╗");
+                eprintln!("║ ⚠ {} swarm task(s) from prior sessions are still tracked. ║", swarm_tasks.len());
+                eprintln!("║ Stale tasks can block the worker pool, causing new jobs    ║");
+                eprintln!("║ to stay \"Created\" indefinitely.                           ║");
+                eprintln!("╚══════════════════════════════════════════════════════════╝");
+                eprintln!();
+                eprintln!("Clear them now? [Y/n]");
+
+                let mut input = String::new();
+                match std::io::stdin().read_line(&mut input) {
+                    Ok(_) => {
+                        let trimmed = input.trim().to_lowercase();
+                        if trimmed.is_empty() || trimmed == "y" || trimmed == "yes" {
+                            let mut list = existing;
+                            let before = list.tasks.len();
+                            list.tasks
+                                .retain(|t| t.command != "swarm-submit" && t.command != "swarm-query");
+                            let removed = before - list.tasks.len();
+                            write_async_tasks(&list, None).map_err(|e| e.to_string())?;
+                            cli_println!("Cleared {} stale swarm task(s).", removed);
+                            json_field("cleared_stale_tasks", json!(removed));
+                        } else {
+                            cli_println!(
+                                "Keeping {} tracked task(s). Use `swarm list --clear` to remove later, or `swarm create --clear-stale` next time.",
+                                swarm_tasks.len()
+                            );
+                            json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+                        }
+                    }
+                    Err(_) => {
+                        // Can't read stdin — keep tasks and show guidance.
+                        cli_println!(
+                            "Note: {} swarm task(s) from prior sessions are still tracked.",
+                            swarm_tasks.len()
+                        );
+                        cli_println!(
+                            "  Run `swarm list --clear` to remove stale entries, or `swarm create --clear-stale` to clear and recreate in one step."
+                        );
+                        json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+                    }
+                }
+            } else {
+                // Non-interactive (pipe, CI, script): show a prominent warning.
+                eprintln!();
+                eprintln!("⚠ {} swarm task(s) from prior sessions are still tracked.",
+                    swarm_tasks.len()
+                );
+                eprintln!("  If new jobs get stuck in \"Created\" status, run `swarm list --clear` to remove stale entries,");
+                eprintln!("  then recreate the swarm session before resubmitting.");
+                eprintln!("  Or use `swarm create --clear-stale` to clear and recreate in one step.");
+                json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+            }
         }
     }
 
@@ -9541,10 +9584,11 @@ async fn handle_swarm_status(
     let is_done = parsed.get("isDone").and_then(|v| v.as_bool()).unwrap_or(false);
     let status_code = parsed.get("statusCode").and_then(|v| v.as_i64()).unwrap_or(0);
 
-    // Heuristic: if the server didn't set isDone but statusCode indicates
-    // completion (200 = SC_OK), treat as done. This covers backends that
-    // infer isDone from a completion state.
-    let effective_is_done = is_done || status_code == 200;
+    // Treat any terminal status as done — not just success (200).
+    // Failed tasks (417, 4xx, 5xx) and timeout tasks (408) have reached
+    // a terminal state and should show isDone: true.  Tasks that are still
+    // in progress (201=Created, 202=Accepted) are NOT terminal.
+    let effective_is_done = is_done || status_code == 200 || status_code >= 400;
 
     let summary = json!({
         "id": parsed.get("id").and_then(|v| v.as_str()).unwrap_or(&id),
@@ -9690,8 +9734,10 @@ async fn handle_swarm_list(
                             .filter(|s| !s.is_empty())
                         {
                             entry.completed_at = Some(ts.to_string());
-                        } else if is_done || status_code == 200 {
+                        } else if is_done || status_code == 200 || status_code >= 400 {
                             // Backend doesn't have finishTime yet — use local time.
+                            // Covers failed tasks (417, 4xx, 5xx) that have reached
+                            // a terminal state but whose finishTime may be missing.
                             if entry.completed_at.is_none() {
                                 entry.completed_at =
                                     Some(chrono::Utc::now().to_rfc3339());
@@ -9720,15 +9766,44 @@ async fn handle_swarm_list(
     // Persist updated statuses so prune_async_tasks works next time.
     let _ = write_async_tasks(&list, None);
 
-    let filtered: Vec<_> = list
+    let mut filtered: Vec<_> = list
         .tasks
         .iter()
         .filter(|t| t.command == "swarm-submit" || t.command == "swarm-query")
         .cloned()
         .collect();
 
+    // Sort by submission time (earliest first) so the task list is stable
+    // across invocations.  Without explicit ordering, the display order
+    // depends on the backend's iteration order, which changes on every call.
+    filtered.sort_by(|a, b| a.submitted_at.cmp(&b.submitted_at));
+
     if !filtered.is_empty() {
         cli_println!("{}", summarize_async_tasks(&filtered));
+
+        // Detect stuck jobs: tasks that have been queued for >60s while
+        // OTHER tasks in the same batch have already completed.  This
+        // suggests non-FIFO dequeuing or worker pool starvation.
+        let now = chrono::Utc::now();
+        let has_terminal = filtered.iter().any(|t| {
+            t.last_status == "completed" || t.last_status.starts_with("failed")
+        });
+        let stuck: Vec<_> = filtered.iter()
+            .filter(|t| {
+                t.last_status == "queued"
+                && t.submitted_at.parse::<chrono::DateTime<chrono::Utc>>()
+                    .map(|ts| (now - ts).num_seconds() > 60)
+                    .unwrap_or(false)
+            })
+            .collect();
+        if has_terminal && !stuck.is_empty() {
+            eprintln!(
+                "⚠ {} job(s) still queued after >60s while other jobs completed. \
+                 The worker pool may be starved. Try increasing --max-browser-contexts, \
+                 or clear stale tasks with `swarm list --clear`.",
+                stuck.len()
+            );
+        }
     }
 
     let limit = tool_params
@@ -9776,14 +9851,13 @@ async fn swarm_wait_for_jobs(
                         .get("isDone")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
-                    // Also check statusCode: 200 = SC_OK means the task completed.
-                    // This handles backends that omit isDone when it is false
-                    // (Jackson NON_DEFAULT serialization).
+                    // Also check statusCode: 200 = SC_OK completed, 4xx/5xx = failed.
+                    // Any terminal state means the task is done, not just success.
                     let status_code = parsed
                         .get("statusCode")
                         .and_then(|v| v.as_i64())
                         .unwrap_or(0);
-                    if is_done || status_code == 200 {
+                    if is_done || status_code == 200 || status_code >= 400 {
                         completed[i] = true;
                     } else {
                         all_done = false;

@@ -60,6 +60,13 @@ open class DegenerateXSQLScrapeHyperlink(
             warnUnexpected(this, t, "Failed to execute query")
             throw t
         } finally {
+            // Ensure resultSet is never null when isDone becomes true.
+            // Without this guard, a ResultSetUtils failure above would leave
+            // resultSet=null while complete() sets isDone=true, creating a
+            // race where the CLI fetches an empty resultSet.
+            if (response.resultSet == null) {
+                response.resultSet = emptyList()
+            }
             this.complete(page ?: GoraWebPage.NIL)
         }
     }
