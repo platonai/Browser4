@@ -930,7 +930,7 @@ fn extract_port(base_url: &str) -> u16 {
 }
 
 fn print_server_starting_message() {
-    eprintln!("Starting Browser4 server (first launch may take a few seconds)...");
+    eprintln!("Starting Browser4 server (first launch ~10s for JVM + Spring Boot; subsequent starts faster)...");
 }
 
 pub fn is_local_port_open(base_url: &str) -> bool {
@@ -4861,8 +4861,10 @@ async fn wait_for_server_ready(
             let start_sleep = Instant::now();
             while start_sleep.elapsed() < initial_quiet_wait {
                 let elapsed = Instant::now().duration_since(start).as_secs();
+                // Show the initial startup phase — at this point the JVM and
+                // Spring Boot are loading; the TCP port isn't open yet.
                 eprint!(
-                    "\r  {} Starting server... ({}s)",
+                    "\r  {} Starting server... ({}s) — JVM loading, waiting for TCP port...",
                     SPINNER[frame % SPINNER.len()],
                     elapsed
                 );
@@ -4897,11 +4899,14 @@ async fn wait_for_server_ready(
         if is_cold_start {
             let elapsed = start.elapsed().as_secs();
             let remaining = timeout.as_secs().saturating_sub(elapsed);
+            // Include the stage-level progress so users can see what phase
+            // the server is in (JVM, Spring Boot, MCP tools, browser init).
             eprint!(
-                "\r  {} Starting server... ({}s elapsed, ~{}s remaining)",
+                "\r  {} Starting server... ({}s elapsed, ~{}s remaining) — {}",
                 SPINNER[spinner_frame % SPINNER.len()],
                 elapsed,
-                remaining
+                remaining,
+                progress_status
             );
             spinner_frame += 1;
         } else if last_progress_log_at.elapsed() >= Duration::from_secs(10) {

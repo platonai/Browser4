@@ -29,6 +29,8 @@ source tree use one of the following:
 
 ## 1. Core Loop
 
+> **⚡ First-run latency:** The Browser4 backend (Spring Boot + JVM) takes ~10s to start on first launch. Subsequent commands are instant — the server stays alive between invocations. The spinner shows stage-level progress (JVM → Spring Boot → MCP tools) so you can see what's happening.
+
 Every browser4-cli session follows this pattern.
 
 ```
@@ -358,7 +360,30 @@ browser4-cli htmlsnapshot get text ".price" --all    # quick test: does this sel
 
 > **Note:** Output pagination defaults — `get html`, `get all html`, and `grep` paginate at 2K lines. `get text` and `get all text` are not paginated by default. Use `--all` to disable pagination, or `--page N` for subsequent pages.
 
-> **Warning:** Interactive mode (`snapshot -i`) strips generic `<div>` containers. Many e-commerce product cards use generic divs, not semantic elements. Prefer `--viewport 0` or `htmlsnapshot` for shopping/search pages.
+> **Snapshot modes — when to use `-v 0` vs `-i` vs default:**
+>
+> | Mode | What it shows | Best for |
+> |------|--------------|----------|
+> | `snapshot` (default) | Full AX tree with all element refs | General exploration, first look at a page |
+> | `snapshot -v 0` | Full AX tree, no viewport trim | Pages with complex/long content where default viewport clipping hides elements |
+> | `snapshot -i` | **Interactive elements only:** buttons, links, inputs, selects, textareas. Strips generic `<div>`, `<span>`, and other non-interactive containers | Simple forms, login pages, sparse pages with clear interactive controls. Reduces noise when you only need clickable/fillable elements |
+> | `htmlsnapshot` | Static HTML (CSS selectors) | Content extraction (text, attributes), when you need CSS selectors instead of AX refs |
+>
+> **`-i` trade-off:** Interactive mode discards structural context. On e-commerce/search pages where product cards use generic `<div>` wrappers, `-i` may strip the containers you need. For these pages, prefer `--viewport 0` or use `htmlsnapshot` for CSS-based extraction.
+>
+> **Example — simple form page:**
+> ```bash
+> # Without -i: shows full page tree including header, footer, nav, etc.
+> browser4-cli snapshot --stdout
+> # ... 200+ lines ...
+>
+> # With -i: shows only form fields and buttons
+> browser4-cli snapshot -i --stdout
+> # e5  textbox  "Email"       /url: /login
+> # e6  textbox  "Password"    /url: /login
+> # e7  button   "Sign In"     /url: /login
+> # 12 lines — just the interactive controls
+> ```
 
 > **Warning:** `htmlsnapshot` captures the **initial page HTML**, not the live DOM. After interactions (form fills, clicks, submissions) or on pages where JavaScript updates the DOM (SPA route changes, dynamic content), the snapshot will be **stale** — it won't reflect the current page state. For JS-updated pages, use `eval` for live-DOM access instead. The `htmlsnapshot inspect` command also reads from the stored initial HTML, not the live DOM.
 

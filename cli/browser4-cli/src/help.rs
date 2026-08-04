@@ -834,6 +834,23 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli get styles e9".to_string());
         lines.push("  browser4-cli get property \"input[name=email]\" value".to_string());
         lines.push("  browser4-cli get attr \"a.link\" href".to_string());
+        lines.push(String::new());
+        lines.push(
+            "  ⚠️  `get` operates on the live accessibility tree (AXTree), NOT raw CSS selectors."
+                .to_string(),
+        );
+        lines.push(
+            "  For CSS selector extraction on stored HTML, use `htmlsnapshot get` instead:"
+                .to_string(),
+        );
+        lines.push(
+            "    browser4-cli htmlsnapshot             # capture the current DOM"
+                .to_string(),
+        );
+        lines.push(
+            "    browser4-cli htmlsnapshot get text h1  # query with CSS selectors"
+                .to_string(),
+        );
     }
 
     if cmd.name == "extract" {
@@ -1554,6 +1571,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         ));
         lines.push(
             "  - Element references (`e5`, `backend:15`) are NOT supported by `htmlsnapshot get` — use CSS selectors only."
+                .to_string(),
+        );
+        lines.push(
+            "  - Unlike top-level `get` (accessibility tree), `htmlsnapshot get` uses CSS selectors on stored HTML."
+                .to_string(),
+        );
+        lines.push(
+            "    For live page queries (AXTree-based), use `get text <ref>`. For CSS extraction, capture with `htmlsnapshot` first."
                 .to_string(),
         );
         lines.push(wrap_text(

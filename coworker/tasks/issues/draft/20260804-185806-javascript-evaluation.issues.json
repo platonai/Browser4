@@ -1,0 +1,158 @@
+{
+  "meta": {
+    "mode": "dev",
+    "source": "20260804-185806-javascript-evaluation.full.md",
+    "scenario": "javascript-evaluation",
+    "date": "20260804-185806"
+  },
+  "background": {
+    "task": "All 8 evaluation steps completed successfully. The browser4-cli `eval` command supports four invocation modes (inline, `--json`, `--file`, `--stdin`) plus element-scoped evaluation via `--ref`. A key discoverability issue was found: `--ref` requires an arrow function (`element => ...`) as the expression, which is not documented in the help output or SKILL.md.",
+    "executionContext": "1. **`goto`** — Navigated to `http://localhost:18080/generated/interactive-1.html`, auto-reused DEFAULT session. Page loaded with title \"Interactive Single Page\".\n2. **`snapshot -v 0 --stdout`** — Captured accessibility tree. Discovered refs: `e2656` (h1 heading), `e2642` (textbox), `e2643` (combobox), `e2644`/`e2645` (spinbuttons), `e2700` (button).\n3. **`eval \"document.title\"`** — Returned `Interactive Single Page`. Simple inline expression worked.\n4. **`eval --json \"JSON.stringify({...})\"`** — Returned structured JSON envelope with `url`, `title`, `linkCount: 0`.\n5. **`eval --file .test-sessions/page_info.js`** — File-based JS executed, returned `{\"images\":0,\"links\":0,\"forms\":0}`.\n6. **`eval --stdin`** (piped) — Extracted all heading text: `Welcome to the Interactive Page | 📋 User Information | 📊 Preferences | 🧮 Quick Calculator | 🎯 Dynamic Toggle`.\n7. **`eval --ref e2656`** — First attempt with `element.tagName` returned `null`. After investigating the source code test cases, discovered the expression must be an arrow function `element => element.tagName + ...`. Second attempt succeeded.\n8. **Consistency check** — Cross-referenced results across all methods; all consistent.\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"eval --ref requires arrow function syntax (element => ...) but this is undocumented\",\n      \"severity\": \"High\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"Run `browser4-cli eval \\\"document.title\\\" --ref e5` or `browser4-cli eval \\\"element.tagName\\\" --ref e5`\",\n      \"expected\": \"The expression should be evaluated with `element` bound to the target DOM node, or the documentation should clearly state the required function signature.\",\n      \"actual\": \"When expression is not an arrow function, the result is `null` with a generic error tip. Only arrow functions like `element => element.textContent` work. This is discoverable only by reading the Rust test code in `commands.rs`.\",\n      \"rootCause\": \"The backend `browser_evaluate` tool expects the expression to be a function that receives the element as a parameter when a ref is provided. The CLI passes the expression and ref as separate params and the backend wraps them. Neither the CLI help text nor SKILL.md documents that the expression must be an arrow function `element => ...` — the test cases at commands.rs:4351-4356 show the expected pattern but users never see this.\",\n      \"codePointer\": \"cli/browser4-cli/src/commands.rs:1431 — the `ref` option definition's description says 'CSS selector or snapshot ref to scope evaluation' but doesn't mention the arrow function requirement. Also cli/browser4-cli/src/help.rs for the help text generation.\",\n      \"suggestion\": \"- Update the --ref option description to include: 'Expression must be an arrow function (element => ...) when using --ref'\\n- Add an example to eval --help: browser4-cli eval \\\"element => element.textContent\\\" --ref e5\\n- Add to SKILL.md §3 Command Map > eval entry: mention the arrow function requirement\\n- Consider auto-detecting non-arrow-function expressions with --ref and showing a clear error: 'When using --ref, the expression must be an arrow function like element => element.textContent, not element.textContent'\"\n    },\n    {\n      \"title\": \"Misleading null output when eval --ref gets wrong expression form\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run `browser4-cli eval \\\"element.tagName\\\" --ref e2656`\",\n      \"expected\": \"A clear error message indicating the expression form is incorrect, e.g. 'When using --ref, wrap your expression as an arrow function: element => element.tagName'\",\n      \"actual\": \"Output is `null` with tip: 'Expression returned null. The queried element or property may not exist on this page.' This misleads users into thinking the element ref is invalid or the page state is wrong, rather than that the expression syntax is incorrect.\",\n      \"rootCause\": \"When the expression is not a function, the backend likely tries to call it as a function with the element argument, gets undefined, and returns null. The CLI's generic null-handling tip does not account for the --ref case where the most likely cause is a missing arrow function wrapper.\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs or the output formatting logic that prints the null tip. The backend browser_evaluate handler in browser4-rest or browser4-agentic.\",\n      \"suggestion\": \"- When --ref is present and the result is null, add a specific hint: 'Did you use an arrow function? With --ref, write: element => element.property'\\n- Alternatively, the backend could detect that the expression is not a function and auto-wrap it, making `eval \\\"element.tagName\\\" --ref e5` just work\"\n    },\n    {\n      \"title\": \"eval --help usage line shows [ref] as positional arg but examples only show --ref flag\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run `browser4-cli eval --help` and compare the usage line with the examples section.\",\n      \"expected\": \"The usage line should match the documented examples, or examples should show both forms.\",\n      \"actual\": \"Usage line says `eval [expression] [ref]` suggesting ref can be positional, but all examples use `--ref` as a named option. The inconsistency is confusing for a first-time user trying to understand which form to use.\",\n      \"rootCause\": \"The command definition allows both positional and named ref, but examples only show the named form. The positional form in the usage line might not actually work or might be undocumented behavior.\",\n      \"codePointer\": \"cli/browser4-cli/src/commands.rs:1427-1431 — the arg definition and option definition for ref.\",\n      \"suggestion\": \"- Add a positional ref example: browser4-cli eval \\\"element => element.textContent\\\" e5\\n- Or remove [ref] from the usage line and keep only --ref if positional is deprecated\\n- Ensure both forms actually work and are tested\"\n    },\n    {\n      \"title\": \"No eval tips shown by --show-tip despite being a core command\",\n      \"severity\": \"Low\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"Run `browser4-cli eval \\\"document.title\\\" --show-tip` and observe tips output\",\n      \"expected\": \"Tips about eval modes (--file, --stdin, --json, --ref with arrow function) should appear, especially for new users.\",\n      \"actual\": \"No eval-specific tips were observed during testing. The only tips shown were for htmlsnapshot, unrelated to the eval workflow.\",\n      \"rootCause\": \"The tips rotation may not include eval-specific tips, or the tips shown are not context-sensitive to the command being run. The tip system could benefit from command-context-aware tip selection.\",\n      \"codePointer\": \"cli/browser4-cli/src/tips.rs\",\n      \"suggestion\": \"- Add eval-specific tips covering: --file for Windows quoting, --stdin for piping, --json for structured output, arrow function requirement with --ref\\n- Consider showing context-sensitive tips based on the command just executed\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Successful — all 8 evaluation steps completed. The task objective was fully met, with all four eval invocation modes (inline, --json, --file, --stdin) and --ref scoped evaluation verified working correctly. Results were cross-validated for consistency.\",\n    \"successRate\": \"100% — all steps worked, though step 7 required source-code investigation to discover the undocumented arrow function syntax requirement for --ref.\",\n    \"issuesFound\": 4,\n    \"majorBlockers\": \"The --ref arrow function requirement is a documentation gap that would block a real first-time user from using element-scoped eval. A user would try eval 'element.tagName' --ref e5, get null, and conclude the feature is broken — when it actually works with the correct (undocumented) syntax.\",\n    \"mostConfusingAspects\": \"1) The --ref arrow function requirement is completely undocumented — discovered only by reading Rust test source code. 2) The misleading 'element may not exist' error when the real problem is expression syntax. 3) The usage line showing [ref] as positional vs examples using --ref creates ambiguity about which form to use.\",\n    \"mostValuableImprovements\": \"1) Document the arrow function requirement in eval --help and SKILL.md. 2) Improve the null-result error message when --ref is used. 3) Add eval-specific tips to the tip rotation. 4) Consider auto-wrapping non-function expressions with --ref so 'element.tagName' just works.\",\n    \"usabilityRating\": 7\n  }\n}\n```"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "eval --ref requires arrow function syntax (element => ...) but this is undocumented",
+      "severity": "High",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "Run `browser4-cli eval \"document.title\" --ref e5` or `browser4-cli eval \"element.tagName\" --ref e5`",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The expression should be evaluated with `element` bound to the target DOM node, or the documentation should clearly state the required function signature.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "When expression is not an arrow function, the result is `null` with a generic error tip. Only arrow functions like `element => element.textContent` work. This is discoverable only by reading the Rust test code in `commands.rs`.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The backend `browser_evaluate` tool expects the expression to be a function that receives the element as a parameter when a ref is provided. The CLI passes the expression and ref as separate params and the backend wraps them. Neither the CLI help text nor SKILL.md documents that the expression must be an arrow function `element => ...` — the test cases at commands.rs:4351-4356 show the expected pattern but users never see this.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/commands.rs:1431 — the `ref` option definition's description says 'CSS selector or snapshot ref to scope evaluation' but doesn't mention the arrow function requirement. Also cli/browser4-cli/src/help.rs for the help text generation.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Update the --ref option description to include: 'Expression must be an arrow function (element => ...) when using --ref'\n- Add an example to eval --help: browser4-cli eval \"element => element.textContent\" --ref e5\n- Add to SKILL.md §3 Command Map > eval entry: mention the arrow function requirement\n- Consider auto-detecting non-arrow-function expressions with --ref and showing a clear error: 'When using --ref, the expression must be an arrow function like element => element.textContent, not element.textContent'",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "Misleading null output when eval --ref gets wrong expression form",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run `browser4-cli eval \"element.tagName\" --ref e2656`",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A clear error message indicating the expression form is incorrect, e.g. 'When using --ref, wrap your expression as an arrow function: element => element.tagName'",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Output is `null` with tip: 'Expression returned null. The queried element or property may not exist on this page.' This misleads users into thinking the element ref is invalid or the page state is wrong, rather than that the expression syntax is incorrect.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "When the expression is not a function, the backend likely tries to call it as a function with the element argument, gets undefined, and returns null. The CLI's generic null-handling tip does not account for the --ref case where the most likely cause is a missing arrow function wrapper.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs or the output formatting logic that prints the null tip. The backend browser_evaluate handler in browser4-rest or browser4-agentic.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- When --ref is present and the result is null, add a specific hint: 'Did you use an arrow function? With --ref, write: element => element.property'\n- Alternatively, the backend could detect that the expression is not a function and auto-wrap it, making `eval \"element.tagName\" --ref e5` just work",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "eval --help usage line shows [ref] as positional arg but examples only show --ref flag",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run `browser4-cli eval --help` and compare the usage line with the examples section.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The usage line should match the documented examples, or examples should show both forms.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Usage line says `eval [expression] [ref]` suggesting ref can be positional, but all examples use `--ref` as a named option. The inconsistency is confusing for a first-time user trying to understand which form to use.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The command definition allows both positional and named ref, but examples only show the named form. The positional form in the usage line might not actually work or might be undocumented behavior.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/commands.rs:1427-1431 — the arg definition and option definition for ref.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add a positional ref example: browser4-cli eval \"element => element.textContent\" e5\n- Or remove [ref] from the usage line and keep only --ref if positional is deprecated\n- Ensure both forms actually work and are tested",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "No eval tips shown by --show-tip despite being a core command",
+      "severity": "Low",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "Run `browser4-cli eval \"document.title\" --show-tip` and observe tips output",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Tips about eval modes (--file, --stdin, --json, --ref with arrow function) should appear, especially for new users.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "No eval-specific tips were observed during testing. The only tips shown were for htmlsnapshot, unrelated to the eval workflow.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The tips rotation may not include eval-specific tips, or the tips shown are not context-sensitive to the command being run. The tip system could benefit from command-context-aware tip selection.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/tips.rs",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add eval-specific tips covering: --file for Windows quoting, --stdin for piping, --json for structured output, arrow function requirement with --ref\n- Consider showing context-sensitive tips based on the command just executed",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}
