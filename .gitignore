@@ -153,6 +153,7 @@ bin/maintenance/state/*.lock
 /.junie/
 /.workbuddy/
 /.claude/
+/.coworker/
 .build-state
 /.build/
 /b4w
