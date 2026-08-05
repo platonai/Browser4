@@ -68,22 +68,12 @@ The `submit_plain_command` function in `handle_loop` sends the text to `http://l
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-<<<<<<<< HEAD:coworker/tasks/main/3done/2026/0805/loop-monitoring-usability-issues.md
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-========
 - [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
->>>>>>>> 84e2b0c4d (feat(snapshot): add textcontent extraction field and polish CLI UX):coworker/tasks/main/1ready/20260709-223327-loop-monitoring.issues.md
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
-- **Notes:**
-<<<<<<<< HEAD:coworker/tasks/main/3done/2026/0805/loop-monitoring-usability-issues.md
-[AI review unavailable — defaulted to DEFER]
-========
-[AI suggested: ACCEPT with improvements] The pre-flight validation suggestion is sound, but the simplest effective fix is using the already-tracked success/failure data (lines 12327–12349) in the completion summary (addressed in Issue 4). A lightweight pre-flight probe would add complexity and latency for a corner case. Instead, combine with Issue 4: aggregate `oks`/`errors` counters and report them in the summary, so users immediately see "0 succeeded, 2 failed" and don't need a separate pre-flight.
->>>>>>>> 84e2b0c4d (feat(snapshot): add textcontent extraction field and polish CLI UX):coworker/tasks/main/1ready/20260709-223327-loop-monitoring.issues.md
+- **Notes:** Combined with Issue 4: aggregate `oks`/`errors` counters and report them in the summary, so users immediately see "0 succeeded, 2 failed" and don't need a separate pre-flight. Fixed 2026-08-04.
 
 ---
 
@@ -131,16 +121,11 @@ The combination means: `--` followed by N tokens consumes 1 as a phantom option 
 
 - [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
-- **Notes:**
-<<<<<<<< HEAD:coworker/tasks/main/3done/2026/0805/loop-monitoring-usability-issues.md
-[AI review unavailable — defaulted to DEFER]
-========
-[AI suggested: ACCEPT] Confirmed root cause. In `parse_raw_args` (args.rs:205), bare `--` produces `rest = ""` which falls through to the key-value branch and consumes the next token as a value. The recommended fix is to add a POSIX `--` end-of-options check: when `rest` is empty, stop parsing options and push all remaining tokens as positionals. This is cleaner than special-casing `loop` in the dispatch, and benefits all commands. The `handle_loop` function's own `parse_loop_args` at line 11560 would then correctly receive all variadic tokens.
->>>>>>>> 84e2b0c4d (feat(snapshot): add textcontent extraction field and polish CLI UX):coworker/tasks/main/1ready/20260709-223327-loop-monitoring.issues.md
+- **Notes:** Fixed in `parse_raw_args` (args.rs:206-213): bare `--` stops option parsing and pushes all remaining tokens as positionals (POSIX convention). This is cleaner than special-casing `loop` in the dispatch, and benefits all commands. Fixed 2026-08-04.
 
 ---
 
@@ -184,16 +169,11 @@ The loop ran, completed, and vanished. A user who returns to check on their loop
 
 - [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
-- **Notes:**
-<<<<<<<< HEAD:coworker/tasks/main/3done/2026/0805/loop-monitoring-usability-issues.md
-[AI review unavailable — defaulted to DEFER]
-========
-[AI suggested: ACCEPT] Confirmed at line 12470: `state::clear_loop_state` removes completed loops immediately. At line 11568, the `--list` empty message has no hint about `--history`. The simplest fix: append "Use `browser4-cli loop --history` to see recently completed loops." to the "No persisted loops" message. The 60-second retention suggestion adds complexity without clear benefit — the `--history` hint fixes the discoverability problem directly.
->>>>>>>> 84e2b0c4d (feat(snapshot): add textcontent extraction field and polish CLI UX):coworker/tasks/main/1ready/20260709-223327-loop-monitoring.issues.md
+- **Notes:** Fixed by appending "Use `browser4-cli loop --history` to see recently completed loops." to the "No persisted loops" message in `--list` output (main.rs:11618). The `--history` hint fixes the discoverability problem directly. Fixed 2026-08-04.
 
 ---
 
@@ -238,16 +218,11 @@ The loop's completion summary at the end of `handle_loop` always uses "✓" and 
 
 - [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
-- **Notes:**
-<<<<<<<< HEAD:coworker/tasks/main/3done/2026/0805/loop-monitoring-usability-issues.md
-[AI review unavailable — defaulted to DEFER]
-========
-[AI suggested: ACCEPT] Confirmed at line 12454: the summary always prints "✓  Loop finished". The `results` Vec already tracks `ok: true/false` per iteration (lines 12334–12348). The fix is straightforward: count successes vs failures from `results`, use checkmark only on 100% success, use "⚠" or "✗" for partial/total failure, and print the breakdown (e.g., "2 succeeded, 0 failed"). Combine implementation with Issue 1's summary improvement.
->>>>>>>> 84e2b0c4d (feat(snapshot): add textcontent extraction field and polish CLI UX):coworker/tasks/main/1ready/20260709-223327-loop-monitoring.issues.md
+- **Notes:** Fixed by aggregating success/failure counts from the `results` Vec in the completion summary (main.rs:12696-12724). Uses ✓ for 100% success, ✗ for total failure, ⚠ for partial failure. Prints breakdown: "N iteration(s): X succeeded, Y failed." Combined with Issue 1's summary improvement. Fixed 2026-08-04.
 
 ---
 
@@ -284,18 +259,11 @@ The `--` subcommand mode invokes `run_browser4_cli` which calls `std::env::curre
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
-<<<<<<<< HEAD:coworker/tasks/main/3done/2026/0805/loop-monitoring-usability-issues.md
-- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
-- **Notes:**
-[AI review unavailable — defaulted to DEFER]
-========
 - [x] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
-- **Notes:**
-[AI suggested: DUPLICATE] The underlying mechanism (`run_browser4_cli` via `--` mode at line 12283) already uses `std::env::current_exe()` and would work correctly if `parse_raw_args` handled `--` properly. The `--shell` workaround is only necessary because Issue 2's `--` bug blocks the natural subcommand mode. The secondary suggestion (splitting on `&&`/`;`) is a separate feature request, not a bug fix.
->>>>>>>> 84e2b0c4d (feat(snapshot): add textcontent extraction field and polish CLI UX):coworker/tasks/main/1ready/20260709-223327-loop-monitoring.issues.md
+- **Notes:** Duplicate of Issue 2. `run_browser4_cli` via `--` mode already uses `std::env::current_exe()` and works correctly now that `parse_raw_args` handles `--` properly. The `--shell` workaround is only necessary because Issue 2's `--` bug blocked the natural subcommand mode. Fixed 2026-08-04 (via Issue 2 fix).
 
 ---
 
@@ -333,16 +301,11 @@ The help system prioritizes option enumeration over task-mode examples. The `loo
 
 - [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
-- **Notes:**
-<<<<<<<< HEAD:coworker/tasks/main/3done/2026/0805/loop-monitoring-usability-issues.md
-[AI review unavailable — defaulted to DEFER]
-========
-[AI suggested: ACCEPT] The `loop` command has three distinct task modes (plain text, `--shell`, `--`) plus lifecycle management (pause/resume/stop/history) — examples would significantly reduce the learning curve. The examples in the issue's suggested improvement are accurate and well-chosen. This is a documentation-only change; implement alongside the `--` fix (Issue 2) so examples using `-- batch "goto..." snapshot status` actually work.
->>>>>>>> 84e2b0c4d (feat(snapshot): add textcontent extraction field and polish CLI UX):coworker/tasks/main/1ready/20260709-223327-loop-monitoring.issues.md
+- **Notes:** Fixed by adding extensive examples in `--help` output (help.rs:694-742, 1922-2009): plain-text mode, --shell mode, CLI subcommand mode, batch mode, lifecycle operations (pause/resume/stop), and --list/--history. Covers all three task modes plus management operations. Fixed 2026-08-04.
 
 ---
 
