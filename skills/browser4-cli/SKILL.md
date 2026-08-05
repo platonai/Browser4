@@ -126,7 +126,7 @@ Tab commands scope to a session — all operations affect the session targeted v
 - **Machine-readable output:** Use `--json` either before or after the command: `browser4-cli --json tab-list` or `browser4-cli tab-list --json`. Output is a JSON envelope: `{"command":"tab-list","output":{"count":N,"tabs":[{"index":0,"guid":"...","url":"...","title":"..."}]},"status":"ok"}`. The `tabs` array and `count` are nested inside `output`.
 - **Session scoping:** Prefix tab commands with `-s <session-id>` to target a non-default session. The `list` command shows all tracked sessions and their IDs.
 - **Last-tab behavior:** Chrome requires at least one open tab. Closing the last tab silently creates a replacement `about:blank` — `tab-list` will still show 1 tab afterward.
-- **Tab insert position:** New tabs are inserted by Chrome (not Browser4). The position depends on Chrome's native behavior — typically after the active tab. Use `tab-list` to verify.
+- **Tab insert position:** New tabs are inserted by Chrome (not Browser4). The position depends on Chrome's native behavior, which varies by version and platform — tabs may appear at index 0 (before the active tab), at the end, or after the active tab. On Windows with headless CDP, Chrome typically inserts new tabs at index 0. Always run `tab-list` after `tab-new` to confirm the actual tab layout before switching.
 - **No auto-snapshot:** `tab-list` and `tab-close` do NOT trigger automatic snapshots. After `tab-select`, run `snapshot` explicitly to get fresh element refs for the new active tab.
 - **Re-snapshot after switches:** `tab-select` changes the active page context. Capture a fresh snapshot before interacting with page elements in the new tab.
 - **Extension sessions:** When closing tabs on extension-attached sessions, the backend may report an error even though the tab was successfully closed (Chrome's `chrome.tabs.remove` callback can fire an error after the tab is already gone). The CLI verifies that the tab was actually removed and treats the operation as successful in this case. Extension sessions may also show "Stale" in `list` output after all tabs are closed — the session can be reconnected with `attach --extension`.
@@ -145,7 +145,10 @@ browser4-cli tab-list --json
 
 # Open a tab and switch to it
 browser4-cli tab-new https://httpbin.org/get
-# Output: Switched to tab 1 (https://httpbin.org/get)
+# Output:
+#   Created tab with GUID: AB12CD34 (https://httpbin.org/get)
+#   Switched to tab 1 (https://httpbin.org/get)
+# (The new tab's index depends on Chrome's insertion behavior — run tab-list to confirm.)
 
 # Close by GUID (survives reordering)
 browser4-cli tab-close --guid 2AAA0C47D288D3943BA85D31AA8D084C

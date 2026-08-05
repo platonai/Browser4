@@ -1302,6 +1302,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated snapshot output (1-based, default: 1)" },
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
+                OptionDef { name: "brief", short: Some("b"), is_bool: true, description: "Output only page URL and title (skip the accessibility tree). Useful for quick 'am I on the right page?' checks without the full snapshot output." },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_snapshot".to_string(),
@@ -1324,6 +1325,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(true) = get_bool(args, "raw") { p["raw"] = json!(true); }
                 if let Some(true) = get_bool(args, "stdout") { p["stdout"] = json!(true); }
                 if let Some(true) = get_bool(args, "auto-diff") { p["auto-diff"] = json!(true); }
+                if let Some(true) = get_bool(args, "brief") { p["brief"] = json!(true); }
                 // Pagination flags (CLI-side, not sent to server)
                 if let Some(true) = get_bool(args, "all") { p["all"] = json!(true); }
                 if let Some(pg) = get_opt_str(args, "page") { p["page"] = json!(pg); }

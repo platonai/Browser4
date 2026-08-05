@@ -87,12 +87,14 @@ class BrowserToolExecutor : AbstractToolExecutor() {
             }
 
             "listTabs" -> {
+                val frontGuid = (browser.frontDriver as? AbstractWebDriver)?.guid
                 browser.listDrivers().mapIndexed { i, driver ->
                     mapOf(
                         "index" to i.toString(),
                         "guid" to driver.guid,
                         "title" to driver.title(),
-                        "url" to driver.currentUrl()
+                        "url" to driver.currentUrl(),
+                        "active" to (driver.guid == frontGuid).toString()
                     )
                 }
             }

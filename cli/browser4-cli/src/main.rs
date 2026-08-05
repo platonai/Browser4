@@ -640,6 +640,7 @@ struct TabInfo {
     url: String,
     title: String,
     guid: Option<String>,
+    active: bool,
 }
 
 /// Normalize a tab GUID for display. Extension sessions use numeric Chrome tab
@@ -722,12 +723,17 @@ fn parse_tab_entry(value: &Value) -> Option<TabInfo> {
         .get("guid")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+    let active = obj
+        .get("active")
+        .and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| s == "true")))
+        .unwrap_or(false);
     // We need at least an index to track the tab.
     index.map(|idx| TabInfo {
         index: idx,
         url,
         title,
         guid,
+        active,
     })
 }
 
@@ -2274,6 +2280,7 @@ async fn handle_tab_list(
                 "guid": format_guid_display(t.guid.as_deref()),
                 "url": t.url,
                 "title": t.title,
+                "active": t.active,
             })
         })
         .collect();
@@ -2289,10 +2296,10 @@ async fn handle_tab_list(
         cli_println!("No tabs found.");
         return Ok(());
     } else {
-        // Human-readable table: Index | GUID | Title | URL
-        let idx_w = "Index".len().max(
-            tabs.last().map(|t| t.index.to_string().len()).unwrap_or(0),
-        );
+        // Human-readable table with active tab indicator.
+        // Account for ">" prefix on the active tab row.
+        let max_index_digits = tabs.last().map(|t| t.index.to_string().len()).unwrap_or(0);
+        let idx_w = "Index".len().max(max_index_digits + 1); // +1 for ">" prefix
         let guid_w = "GUID".len();
         let title_w = "Title".len().max(
             tabs.iter().map(|t| t.title.len()).max().unwrap_or(0).min(60),
@@ -2331,9 +2338,14 @@ async fn handle_tab_list(
             } else {
                 tab.url.clone()
             };
+            let index_display = if tab.active {
+                format!(">{}", tab.index)
+            } else {
+                format!(" {}", tab.index)
+            };
             cli_println!(
                 "  {:<idx_w$}  {:<guid_w$}  {:<title_w$}  {:<url_w$}",
-                tab.index, guid_display, title, url,
+                index_display, guid_display, title, url,
                 idx_w = idx_w,
                 guid_w = guid_w,
                 title_w = title_w,
@@ -2428,7 +2440,16 @@ async fn handle_tab_new(
             .get("url")
             .and_then(|v| v.as_str())
             .unwrap_or("about:blank");
-        cli_println!("Switched to tab {} ({})", new_index, url);
+        // Include GUID so users can correlate multiple tab-new calls
+        // without running tab-list (especially when Chrome inserts at index 0).
+        if new_tab.title.is_empty() {
+            cli_println!("Switched to tab {} [{}] ({})", new_index, guid_display, url);
+        } else {
+            cli_println!(
+                "Switched to tab {}: {} [{}] ({})",
+                new_index, new_tab.title, guid_display, url
+            );
+        }
         // In JSON mode, add the new tab's info to the envelope (cli_println!
         // is suppressed, so we must use json_field).
         json_field("tab", json!({
@@ -2523,7 +2544,12 @@ async fn handle_tab_select(
             }
         });
         if let Some(t) = target {
-            cli_println!("Switched to tab {} ({})", t.index, t.url);
+            let title_display = if t.title.is_empty() { "" } else { t.title.as_str() };
+            if title_display.is_empty() {
+                cli_println!("Switched to tab {} ({})", t.index, t.url);
+            } else {
+                cli_println!("Switched to tab {}: {} ({})", t.index, title_display, t.url);
+            }
             json_field("selected_tab", json!({
                 "index": t.index,
                 "url": t.url,
@@ -4192,6 +4218,66 @@ async fn handle_snapshot(
         .get("filename")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+    let brief = tool_params
+        .get("brief")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    // --brief: output only page URL and title, skip the accessibility tree.
+    // Useful for quick "am I on the right page?" checks without the full snapshot.
+    if brief {
+        let url = with_session(client, base_url, session_name, false, |session_id| {
+            let client = client.clone();
+            let base_url = base_url.to_string();
+            async move {
+                call_tool(&client, &base_url, "page_url", json!({ "sessionId": session_id })).await
+            }
+        })
+        .await?;
+        let title = with_session(client, base_url, session_name, false, |session_id| {
+            let client = client.clone();
+            let base_url = base_url.to_string();
+            async move {
+                call_tool(
+                    &client,
+                    &base_url,
+                    "page_title",
+                    json!({ "sessionId": session_id }),
+                )
+                .await
+            }
+        })
+        .await?;
+
+        let raw = tool_params
+            .get("raw")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+            || tool_params
+                .get("stdout")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+        if raw {
+            // Machine-friendly output: one line per field
+            println!("Page URL: {}", url);
+            println!("Page Title: {}", title);
+        } else if json_active() {
+            json_field("page_url", json!(url));
+            json_field("page_title", json!(title));
+        } else {
+            cli_println!("### Page Info");
+            cli_println!("- Page URL: {}", url);
+            cli_println!("- Page Title: {}", title);
+            if !json_active() {
+                eprintln!(
+                    "💡 Tip: Use `snapshot` (without --brief) for full accessibility tree with element refs."
+                );
+            }
+        }
+        return Ok(());
+    }
+
     // --viewport is now passed through directly to the server as the
     // "viewports" key (renamed in tool_params_fn).  The server's
     // ViewportSpec.parse() handles the flexible format natively.
@@ -4202,6 +4288,7 @@ async fn handle_snapshot(
             m.remove("raw");      // CLI-side flag, not a server parameter
             m.remove("stdout");   // CLI-side flag, not a server parameter
             m.remove("auto-diff");// CLI-side flag, not a server parameter
+            m.remove("brief");    // CLI-side flag, not a server parameter
             m.remove("page");      // CLI-side pagination, not a server parameter
             m.remove("page-size"); // CLI-side pagination, not a server parameter
             m.remove("all");       // CLI-side pagination, not a server parameter
