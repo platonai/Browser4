@@ -1,6 +1,6 @@
 package ai.platon.pulsar.agent.tool
 
-import ai.platon.browser4.boot.skill.SkillService
+import ai.platon.pulsar.boot.skill.SkillService
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import java.nio.file.Files

@@ -12,6 +12,11 @@
     <artifactId>browser4-browser</artifactId>
 
     <dependencies>
+        <!-- pulsar-browser: extracted core browser automation library -->
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-browser</artifactId>
+        </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-common</artifactId>

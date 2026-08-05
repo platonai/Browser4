@@ -1,7 +1,7 @@
 package ai.platon.pulsar.rest.api.service
 
-import ai.platon.browser4.boot.autoconfigure.Browser4AutoConfiguration
-import ai.platon.browser4.boot.autoconfigure.test.PulsarTestContextInitializer
+import ai.platon.pulsar.boot.autoconfigure.Browser4AutoConfiguration
+import ai.platon.pulsar.boot.autoconfigure.test.PulsarTestContextInitializer
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.external.ChatModelFactory

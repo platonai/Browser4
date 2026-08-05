@@ -1,6 +1,6 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
-import ai.platon.browser4.api.model.JsEvaluation
+import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.runBlocking

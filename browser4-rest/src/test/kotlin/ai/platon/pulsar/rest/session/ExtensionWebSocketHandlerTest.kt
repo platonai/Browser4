@@ -1,6 +1,6 @@
 package ai.platon.pulsar.rest.session
 
-import ai.platon.browser4.chrome.protocol.transport.ExtensionMessageSender
+import ai.platon.pulsar.chrome.protocol.transport.ExtensionMessageSender
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName

@@ -4,5 +4,5 @@ import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.ComponentScan
 
 @SpringBootApplication
-@ComponentScan("ai.platon.browser4.boot.autoconfigure")
+@ComponentScan("ai.platon.pulsar.boot.autoconfigure")
 class TestApplication

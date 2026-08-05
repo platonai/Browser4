@@ -1,6 +1,6 @@
 package ai.platon.pulsar.agent.tool
 
-import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
+import ai.platon.pulsar.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper

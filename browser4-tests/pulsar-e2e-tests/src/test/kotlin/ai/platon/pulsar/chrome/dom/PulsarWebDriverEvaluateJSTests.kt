@@ -2,11 +2,11 @@ package ai.platon.pulsar.chrome.dom
 
 import ai.platon.pulsar.FastWebDriverService
 import ai.platon.pulsar.WebDriverTestBase
-import ai.platon.browser4.api.AbstractWebDriver
-import ai.platon.browser4.api.model.JsEvaluation
+import ai.platon.pulsar.api.AbstractWebDriver
+import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.common.js.JsUtils
 import ai.platon.pulsar.common.printlnPro
-import ai.platon.browser4.api.WebDriver
+import ai.platon.pulsar.api.WebDriver
 import org.junit.jupiter.api.assertNull
 import kotlin.collections.get
 import kotlin.test.Test

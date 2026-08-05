@@ -1,15 +1,15 @@
 package ai.platon.pulsar
 
-import ai.platon.browser4.boot.autoconfigure.Browser4AutoConfiguration
-import ai.platon.browser4.chrome.dom.CDPSnapshotService
-import ai.platon.browser4.chrome.dom.util.DomDebug
-import ai.platon.browser4.api.BrowserId
-import ai.platon.browser4.api.model.BrowserSettings
-import ai.platon.browser4.api.scripting.SimpleScriptConfuser
-import ai.platon.browser4.api.manage.BrowserFactory
-import ai.platon.browser4.api.model.MergedDOMTreeNode
-import ai.platon.browser4.api.model.PageTarget
-import ai.platon.browser4.api.model.SnapshotOptions
+import ai.platon.pulsar.boot.autoconfigure.Browser4AutoConfiguration
+import ai.platon.pulsar.chrome.dom.CDPSnapshotService
+import ai.platon.pulsar.chrome.dom.util.DomDebug
+import ai.platon.pulsar.api.BrowserId
+import ai.platon.pulsar.api.model.BrowserSettings
+import ai.platon.pulsar.api.scripting.SimpleScriptConfuser
+import ai.platon.pulsar.api.manage.BrowserFactory
+import ai.platon.pulsar.api.model.MergedDOMTreeNode
+import ai.platon.pulsar.api.model.PageTarget
+import ai.platon.pulsar.api.model.SnapshotOptions
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.core.api.Browser
 import ai.platon.pulsar.core.api.WebDriver

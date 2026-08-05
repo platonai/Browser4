@@ -2,7 +2,7 @@ package ai.platon.pulsar.chrome.dom
 
 import ai.platon.pulsar.FastWebDriverService
 import ai.platon.pulsar.WebDriverTestBase
-import ai.platon.browser4.api.WebDriver
+import ai.platon.pulsar.api.WebDriver
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
 import kotlin.test.Test

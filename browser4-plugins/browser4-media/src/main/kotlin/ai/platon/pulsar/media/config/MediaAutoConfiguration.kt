@@ -40,7 +40,7 @@ import java.util.concurrent.TimeUnit
  *
  * Creates the beans for video detection, downloading, and FFmpeg processing.
  * Implements [BrowseEventMount] and [ToolMount] so that
- * [ai.platon.browser4.boot.plugin.PluginManager] can automatically wire the
+ * [ai.platon.pulsar.boot.plugin.PluginManager] can automatically wire the
  * handlers and tools into the appropriate integration points.
  *
  * Enabled by default. Disable with `media.enabled=false`.

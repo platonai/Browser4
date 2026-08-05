@@ -1,7 +1,7 @@
 package ai.platon.pulsar.rest
 
-import ai.platon.browser4.boot.autoconfigure.Browser4AutoConfiguration
-import ai.platon.browser4.boot.plugin.PluginClasspathEnhancer
+import ai.platon.pulsar.boot.autoconfigure.Browser4AutoConfiguration
+import ai.platon.pulsar.boot.plugin.PluginClasspathEnhancer
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Import

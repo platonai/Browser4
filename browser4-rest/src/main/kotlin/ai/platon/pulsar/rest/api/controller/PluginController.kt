@@ -1,7 +1,7 @@
 package ai.platon.pulsar.rest.api.controller
 
-import ai.platon.browser4.boot.plugin.PluginInfo
-import ai.platon.browser4.boot.plugin.PluginService
+import ai.platon.pulsar.boot.plugin.PluginInfo
+import ai.platon.pulsar.boot.plugin.PluginService
 import ai.platon.pulsar.common.getLogger
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity

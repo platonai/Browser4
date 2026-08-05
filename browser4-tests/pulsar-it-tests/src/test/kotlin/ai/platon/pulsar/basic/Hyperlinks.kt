@@ -1,6 +1,6 @@
 package ai.platon.pulsar.basic
 
-import ai.platon.browser4.common.B4Constants.VAR_IS_SCRAPE
+import ai.platon.pulsar.common.B4Constants.VAR_IS_SCRAPE
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.urls.DegenerateUrl
 import ai.platon.pulsar.common.urls.UrlAware

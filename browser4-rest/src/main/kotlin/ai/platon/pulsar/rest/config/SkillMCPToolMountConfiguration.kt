@@ -1,6 +1,6 @@
 package ai.platon.pulsar.rest.config
 
-import ai.platon.browser4.boot.skill.SkillService
+import ai.platon.pulsar.boot.skill.SkillService
 import ai.platon.pulsar.agent.tool.SkillMCPToolExecutor
 import ai.platon.pulsar.agentic.tools.ToolMount
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
@@ -9,7 +9,7 @@ import org.springframework.context.annotation.Configuration
 
 /**
  * Registers [SkillMCPToolExecutor] via [ToolMount] so it is discovered by
- * [ai.platon.browser4.boot.plugin.PluginManager] and made available to
+ * [ai.platon.pulsar.boot.plugin.PluginManager] and made available to
  * both the MCP dispatcher and the LLM agent tool system.
  *
  * This is for skill *management* tools (install, uninstall, reload, list, info).
