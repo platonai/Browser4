@@ -218,7 +218,7 @@
     <logger name="ai.platon.pulsar.browser" level="WARN" additivity="false">
         <appender-ref ref="BROWSER"/>
     </logger>
-    <logger name="ai.platon.browser4.driver.chrome.impl" level="WARM" additivity="false">
+    <logger name="ai.platon.pulsar.driver.chrome.impl" level="WARM" additivity="false">
         <appender-ref ref="BROWSER"/>
     </logger>
 

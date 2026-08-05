@@ -20,7 +20,7 @@
     <logger name="ai.platon.pulsar" level="INFO"/>
     <logger name="ai.platon.pulsar.persist" level="INFO"/>
     <logger name="ai.platon.pulsar.browser" level="INFO"/>
-    <logger name="ai.platon.browser4.driver.chrome.impl" level="INFO"/>
+    <logger name="ai.platon.pulsar.driver.chrome.impl" level="INFO"/>
 
     <logger name="ai.platon.pulsar.skeleton.ai.agent" level="DEBUG"/>
 
