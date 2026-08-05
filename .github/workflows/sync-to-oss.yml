@@ -315,7 +315,7 @@ jobs:
             [[ -f "$asset" ]] || continue
             asset_name=$(basename "$asset")
 
-            # Symlink following GitHub URL layout:
+            # Primary symlink — GitHub URL layout:
             #   https://github.com/$GITHUB_REPO/releases/latest/download/$BinaryName
             # Symlink key and its target object key (relative to bucket root)
             symlink_key="releases/latest/download/${asset_name}"
@@ -342,6 +342,30 @@ jobs:
               ((created++)) || true
             else
               echo "::error::Failed to create symlink for $asset_name"
+              ((failed++)) || true
+            fi
+
+            # Backward-compat symlink at the legacy path (releases/download/latest/)
+            # — older install scripts used this transposed path.  Remove once all
+            # install scripts in the wild use the GitHub-compatible layout above.
+            legacy_symlink_key="releases/download/latest/${asset_name}"
+            ./ossutil rm "oss://${OSS_BUCKET}/${legacy_symlink_key}" \
+              -e "$OSS_ENDPOINT" \
+              --region "$OSS_REGION" \
+              -f 2>/dev/null || true
+
+            echo "Creating legacy symlink: ${legacy_symlink_key} → ${target_key}"
+            if ./ossutil api put-symlink \
+              --bucket "$OSS_BUCKET" \
+              --key "$legacy_symlink_key" \
+              --symlink-target "$target_key" \
+              --object-acl public-read \
+              -e "$OSS_ENDPOINT" \
+              --region "$OSS_REGION" \
+              --retry-times 3; then
+              ((created++)) || true
+            else
+              echo "::error::Failed to create legacy symlink for $asset_name"
               ((failed++)) || true
             fi
           done
