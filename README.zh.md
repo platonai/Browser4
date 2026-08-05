@@ -40,13 +40,17 @@
 
 💖 **Browser4：一个快速、智能、可扩展、适用于多种场景的智能体浏览器** 💖
 
+## 🌟 简介
+
+💖 **Browser4 — 面向 AI Agent 的新一代智能浏览器引擎，连接网页、数据与自动化任务。** 💖
+
 ### ✨ 核心能力
 
-* 🤖 **Agent Browser** — 面向 AI 智能体的浏览器自动化 CLI。
-* ⚙️ **Machine Learning Agent** — 能把复杂页面转换为 Excel / 结构化数据，且不消耗 LLM token。
-* ⚡ **Extreme Performance** — 完全协程安全；单机每天可处理 10 万 ~ 20 万次复杂页面访问。
-* 🧬 **Data Extraction** — 融合 LLM、ML、X-SQL 与选择器，从复杂网页中提取干净数据。
-* 📦 **And More** — 支持 swarm 抓取、crawl、batch、loop、有状态会话、页面存储、扩展、插件等能力。
+* 🤖 **Agent Browser** — 为 AI Agent 提供自主浏览、网页操作和自动化执行能力。
+* 🧠 **ML 智能提取** — 通过机器学习理解网页结构，无需消耗 LLM Token，即可从复杂页面提取结构化数据。
+* ⚡ **高性能架构** — 协程安全设计，支持单机每天 10 万～20 万复杂网页访问。
+* 🧬 **智能数据管线** — 融合 LLM、ML、X-SQL 与选择器，实现复杂网页的数据提取、清洗与经验复用。
+* 📦 **企业级自动化平台** — 支持大规模爬取、CDP 原生控制、批处理、有状态浏览、插件扩展等能力。
 
 ## 快速开始
 
@@ -639,7 +643,7 @@ export BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS=300
    # 或全局安装：
    cd cli/browser4-cli && cargo install --path .
    ```
-   > Windows 上可在命令前加 `chcp 65001 >nul &&`，以获得正确的 UTF-8 输出。  
+   > Windows 上可在命令前加 `chcp 65001 >nul &&`，以获得正确的 UTF-8 输出。
    > 完整平台说明请见 [Build from Source](docs/build-from-source.md)。
 
    **开发模式包装脚本（无需安装）：** 仓库根目录提供自动按需构建的包装脚本。可使用 `./b4w.ps1 <command>`（PowerShell）、`./b4w.sh <command>`（Git Bash / Linux / macOS）或 `./b4w.bat <command>`（CMD），参数与已安装的 `browser4-cli` 完全一致。
@@ -689,7 +693,7 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 
 Browser4 自带一个轻量级 **MockSite** 服务器，用于提供静态 HTML 测试页和演示页。可在仓库根目录启动：
 
-**Windows：** `./bin/test.ps1 mock-site -Dmock.site.port=18080`  
+**Windows：** `./bin/test.ps1 mock-site -Dmock.site.port=18080`
 **Linux/macOS：** `./bin/test.sh mock-site -Dmock.site.port=18080`
 
 关键演示页面位于 `http://localhost:18080/generated/`。完整页面列表、环境变量、Python 回退方案和基于 Maven 的启动方式请见 [MockSite](docs/mocksite.md)。测试分类体系与标签系统请见 [Test Taxonomy](docs/TESTING.md)。
