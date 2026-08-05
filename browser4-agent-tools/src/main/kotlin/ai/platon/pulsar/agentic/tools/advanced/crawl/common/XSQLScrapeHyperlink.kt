@@ -1,6 +1,6 @@
 package ai.platon.pulsar.agentic.tools.advanced.crawl.common
 
-import ai.platon.browser4.common.B4Constants.VAR_IS_SCRAPE
+import ai.platon.pulsar.common.B4Constants.VAR_IS_SCRAPE
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
 import ai.platon.pulsar.agentic.tools.advanced.crawl.emitEvent

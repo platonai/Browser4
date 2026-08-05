@@ -4,7 +4,7 @@ import ai.platon.pulsar.agentic.inference.AgentMessageList
 import ai.platon.pulsar.agentic.model.ActionDescription
 import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.agentic.model.DetailedActResult
-import ai.platon.browser4.api.model.BrowserUseState
+import ai.platon.pulsar.api.model.BrowserUseState
 
 /**
  * A terminal response indicating whether the overall task is complete.

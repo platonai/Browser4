@@ -1,4 +1,4 @@
-package ai.platon.browser4.agentic.skills
+package ai.platon.pulsar.agentic.skills
 
 import ai.platon.pulsar.agentic.context.StaticAgenticContext
 import ai.platon.pulsar.agentic.event.AgenticEvents

@@ -1,6 +1,6 @@
 package ai.platon.pulsar.rest.mcp.service
 
-import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
+import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.GenericAgenticSession
 import ai.platon.pulsar.agentic.context.AgenticContexts
@@ -8,10 +8,10 @@ import ai.platon.pulsar.agentic.context.GenericAgenticContext
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.config.VolatileConfig
-import ai.platon.browser4.api.Browser
-import ai.platon.browser4.api.WebDriver
+import ai.platon.pulsar.api.Browser
+import ai.platon.pulsar.api.WebDriver
 import ai.platon.pulsar.skeleton.PulsarSettings
-import ai.platon.browser4.chrome.protocol.transport.ExtensionMessageSender
+import ai.platon.pulsar.chrome.protocol.transport.ExtensionMessageSender
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.*

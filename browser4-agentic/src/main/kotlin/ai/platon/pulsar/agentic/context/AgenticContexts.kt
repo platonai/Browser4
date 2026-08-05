@@ -1,13 +1,13 @@
 package ai.platon.pulsar.agentic.context
 
-import ai.platon.browser4.common.B4Constants.SWARM_SESSION_LABEL
+import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_LABEL
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.context.AgenticContexts.createSession
 import ai.platon.pulsar.agentic.context.AgenticContexts.getOrCreateSession
 import ai.platon.pulsar.agentic.context.AgenticContexts.shutdown
-import ai.platon.browser4.api.InteractSettings
-import ai.platon.browser4.api.model.DisplayMode
+import ai.platon.pulsar.api.InteractSettings
+import ai.platon.pulsar.api.model.DisplayMode
 import ai.platon.pulsar.common.Systems
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.CapabilityTypes

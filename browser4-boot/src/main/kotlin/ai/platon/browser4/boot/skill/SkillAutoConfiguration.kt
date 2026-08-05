@@ -1,4 +1,4 @@
-package ai.platon.browser4.boot.skill
+package ai.platon.pulsar.boot.skill
 
 import ai.platon.pulsar.agentic.common.AgentPaths
 import org.springframework.boot.autoconfigure.AutoConfiguration

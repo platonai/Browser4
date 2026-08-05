@@ -1,4 +1,4 @@
-package ai.platon.browser4.common
+package ai.platon.pulsar.common
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull

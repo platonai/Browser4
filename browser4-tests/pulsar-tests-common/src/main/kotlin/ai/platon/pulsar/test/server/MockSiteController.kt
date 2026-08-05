@@ -1,6 +1,6 @@
 package ai.platon.pulsar.test.server
 
-import ai.platon.browser4.common.B4ResourceLoader
+import ai.platon.pulsar.common.B4ResourceLoader
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RestController
 

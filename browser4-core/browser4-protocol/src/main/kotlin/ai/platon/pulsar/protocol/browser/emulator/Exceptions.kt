@@ -15,7 +15,7 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator
 
-import ai.platon.browser4.api.model.WebDriverException
+import ai.platon.pulsar.api.model.WebDriverException
 
 class NavigateTaskCancellationException : IllegalStateException {
     constructor() : super() {}

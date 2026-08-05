@@ -1,6 +1,6 @@
 package ai.platon.pulsar.skeleton.workflow.common
 
-import ai.platon.browser4.common.B4ResourceLoader
+import ai.platon.pulsar.common.B4ResourceLoader
 import ai.platon.pulsar.persist.metadata.MultiMetadata
 import ai.platon.pulsar.skeleton.workflow.common.MimeTypeResolver
 import org.apache.tika.Tika

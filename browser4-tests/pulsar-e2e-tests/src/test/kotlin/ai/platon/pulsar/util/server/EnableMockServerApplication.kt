@@ -1,12 +1,12 @@
 package ai.platon.pulsar.util.server
 
-import ai.platon.browser4.boot.autoconfigure.test.PulsarTestContextInitializer
+import ai.platon.pulsar.boot.autoconfigure.test.PulsarTestContextInitializer
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.test.context.ContextConfiguration
 
 @SpringBootApplication(
     scanBasePackages = [
-        "ai.platon.browser4.boot.autoconfigure",
+        "ai.platon.pulsar.boot.autoconfigure",
         "ai.platon.pulsar.test.server"
     ]
 )

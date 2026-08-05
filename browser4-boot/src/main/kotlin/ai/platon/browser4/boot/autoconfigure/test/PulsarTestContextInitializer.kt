@@ -1,6 +1,6 @@
-package ai.platon.browser4.boot.autoconfigure.test
+package ai.platon.pulsar.boot.autoconfigure.test
 
-import ai.platon.browser4.api.model.BrowserSettings
+import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.common.Systems
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.browser.BrowserType

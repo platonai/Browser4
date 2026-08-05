@@ -1,6 +1,6 @@
 package ai.platon.pulsar.skeleton.workflow.common.collect
 
-import ai.platon.browser4.common.B4ResourceLoader
+import ai.platon.pulsar.common.B4ResourceLoader
 import ai.platon.pulsar.common.LinkExtractors
 import ai.platon.pulsar.common.Priority13
 import ai.platon.pulsar.common.collect.*

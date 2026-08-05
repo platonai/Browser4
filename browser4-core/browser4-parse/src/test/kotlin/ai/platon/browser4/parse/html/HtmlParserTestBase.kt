@@ -1,4 +1,4 @@
-package ai.platon.browser4.parse.html
+package ai.platon.pulsar.parse.html
 
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.config.ImmutableConfig

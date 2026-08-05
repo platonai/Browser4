@@ -1,6 +1,6 @@
 package ai.platon.pulsar.protocol.browser.driver
 
-import ai.platon.browser4.api.BrowserId
+import ai.platon.pulsar.api.BrowserId
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName

@@ -1,6 +1,6 @@
 package ai.platon.pulsar
 
-import ai.platon.browser4.boot.autoconfigure.Browser4AutoConfiguration
+import ai.platon.pulsar.boot.autoconfigure.Browser4AutoConfiguration
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.getLogger

@@ -1,6 +1,6 @@
 package ai.platon.pulsar.rest.api.controller
 
-import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
+import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.api.entities.SessionResponse

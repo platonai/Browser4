@@ -40,7 +40,7 @@ import java.util.concurrent.TimeUnit
  *
  * Creates the beans for page content extraction and PPTX generation.
  * Implements [BrowseEventMount] and [ToolMount] so that
- * [ai.platon.browser4.boot.plugin.PluginManager] can automatically wire the
+ * [ai.platon.pulsar.boot.plugin.PluginManager] can automatically wire the
  * handlers and tools into the appropriate integration points.
  *
  * Enabled by default. Disable with `pptx.enabled=false`.

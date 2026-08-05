@@ -1,6 +1,6 @@
 package ai.platon.pulsar.basic.session
 
-import ai.platon.browser4.chrome.PulsarWebDriver
+import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.agentic.GenericAgenticSession
 import ai.platon.pulsar.basic.TestBase
 import ai.platon.pulsar.common.LinkExtractors

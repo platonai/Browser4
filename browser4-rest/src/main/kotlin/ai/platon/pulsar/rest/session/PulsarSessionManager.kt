@@ -1,17 +1,17 @@
 package ai.platon.pulsar.rest.session
 
-import ai.platon.browser4.chrome.PulsarBrowser
-import ai.platon.browser4.chrome.protocol.transport.ExtensionChromeService
-import ai.platon.browser4.chrome.protocol.transport.ExtensionMessageSender
-import ai.platon.browser4.common.B4Constants.BROWSER_PROFILE_MODE
-import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
-import ai.platon.browser4.common.B4Constants.PROFILE_MODE_CAPABILITY
-import ai.platon.browser4.common.B4Constants.SESSION_ID_CAPABILITY
-import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
+import ai.platon.pulsar.chrome.PulsarBrowser
+import ai.platon.pulsar.chrome.protocol.transport.ExtensionChromeService
+import ai.platon.pulsar.chrome.protocol.transport.ExtensionMessageSender
+import ai.platon.pulsar.common.B4Constants.BROWSER_PROFILE_MODE
+import ai.platon.pulsar.common.B4Constants.DEFAULT_SESSION_ID
+import ai.platon.pulsar.common.B4Constants.PROFILE_MODE_CAPABILITY
+import ai.platon.pulsar.common.B4Constants.SESSION_ID_CAPABILITY
+import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.context.AbstractAgenticContext
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.agentic.context.AgenticContexts
-import ai.platon.browser4.api.model.BrowserSettings
+import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_MODE
@@ -384,7 +384,7 @@ class PulsarSessionManager(
 
         // Wrap it as a PulsarBrowser so the session can use it.
         val browser = PulsarBrowser(
-            id = ai.platon.browser4.api.BrowserId.RANDOM_TEMP,
+            id = ai.platon.pulsar.api.BrowserId.RANDOM_TEMP,
             chrome = extChrome,
             settings = BrowserSettings(),
             launcher = null

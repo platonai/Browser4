@@ -1,4 +1,4 @@
-package ai.platon.browser4.protocol.crowd
+package ai.platon.pulsar.protocol.crowd
 
 import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.skeleton.workflow.protocol.ForwardingResponse

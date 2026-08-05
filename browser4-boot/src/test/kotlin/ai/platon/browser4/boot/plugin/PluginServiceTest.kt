@@ -1,4 +1,4 @@
-package ai.platon.browser4.boot.plugin
+package ai.platon.pulsar.boot.plugin
 
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test

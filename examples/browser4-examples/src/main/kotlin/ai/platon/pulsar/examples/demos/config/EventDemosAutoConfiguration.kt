@@ -12,7 +12,7 @@ import org.springframework.context.annotation.Lazy
 
 /**
  * Spring Boot auto-configuration that exposes the demo event handlers
- * as [PluginMount] beans so [ai.platon.browser4.boot.plugin.PluginManager]
+ * as [PluginMount] beans so [ai.platon.pulsar.boot.plugin.PluginManager]
  * can discover and wire them into the global event bus.
  *
  * ## How it works

@@ -15,14 +15,14 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.impl
 
-import ai.platon.browser4.api.model.BrowserErrorPageException
+import ai.platon.pulsar.api.model.BrowserErrorPageException
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.BrowserErrorCode
 import ai.platon.pulsar.common.config.CapabilityTypes.PARSE_SUPPORT_ALL_CHARSETS
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.event.AbstractEventEmitter
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
-import ai.platon.browser4.api.WebDriver
+import ai.platon.pulsar.api.WebDriver
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.persist.RetryScope
 import ai.platon.pulsar.persist.WebPage

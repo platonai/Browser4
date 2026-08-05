@@ -1,1 +1,1 @@
-package ai.platon.browser4.common;
+package ai.platon.pulsar.common;

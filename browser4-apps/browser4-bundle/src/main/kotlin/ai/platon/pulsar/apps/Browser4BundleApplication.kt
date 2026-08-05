@@ -1,7 +1,7 @@
 package ai.platon.pulsar.apps
 
-import ai.platon.browser4.boot.autoconfigure.PulsarContextInitializer
-import ai.platon.browser4.boot.plugin.PluginClasspathEnhancer
+import ai.platon.pulsar.boot.autoconfigure.PulsarContextInitializer
+import ai.platon.pulsar.boot.plugin.PluginClasspathEnhancer
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.rest.ApiApplication

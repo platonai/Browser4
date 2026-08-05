@@ -1,4 +1,4 @@
-package ai.platon.browser4.boot.autoconfigure
+package ai.platon.pulsar.boot.autoconfigure
 
 import ai.platon.pulsar.common.Systems
 import org.springframework.context.ApplicationContextInitializer

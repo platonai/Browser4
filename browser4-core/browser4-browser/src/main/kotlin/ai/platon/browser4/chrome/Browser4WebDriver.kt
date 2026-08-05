@@ -1,25 +1,24 @@
-package ai.platon.browser4.chrome
+package ai.platon.pulsar.chrome
 
-import ai.platon.browser4.api.BrowserProtocol
-import ai.platon.browser4.api.model.BrowserTab
+import ai.platon.pulsar.api.BrowserProtocol
+import ai.platon.pulsar.api.model.BrowserTab
 
 /**
  * Browser4-specific extension of [PulsarWebDriver].
  *
  * This class is the extension point for all browser4-specific features, bug fixes,
  * and new requirements that go beyond the core functionality provided by
- * `pulsar-browser`'s [ai.platon.pulsar.chrome.PulsarWebDriver].
+ * [ai.platon.pulsar.chrome.PulsarWebDriver] from the `pulsar-browser` library.
  *
  * ## Relationship to pulsar-browser
  *
- * `pulsar-browser` was extracted from `browser4-browser` as a standalone library
- * to simplify this repository and reduce build time.  It provides the core
- * browser-automation primitives in the `ai.platon.pulsar.*` package namespace.
+ * `pulsar-browser:4.11.2` was extracted from `browser4-browser` as a standalone
+ * library to simplify this repository and reduce build time.  All types previously
+ * in `ai.platon.browser4.*` now live in `ai.platon.pulsar.*` within that library.
  *
- * This class currently extends the local [PulsarWebDriver] (in
- * `ai.platon.browser4.chrome`).  Once the type migration from
- * `ai.platon.browser4.*` to `ai.platon.pulsar.*` is complete, it will directly
- * extend [ai.platon.pulsar.chrome.PulsarWebDriver].
+ * This class extends [PulsarWebDriver] directly — it is the **only** production
+ * source file remaining in the `browser4-browser` module.  Everything else is
+ * provided by the `pulsar-browser` dependency.
  *
  * ## Extension guide
  *

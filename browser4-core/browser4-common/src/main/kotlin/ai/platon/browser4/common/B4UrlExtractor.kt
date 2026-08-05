@@ -1,4 +1,4 @@
-package ai.platon.browser4.common
+package ai.platon.pulsar.common
 
 import java.util.regex.Pattern
 

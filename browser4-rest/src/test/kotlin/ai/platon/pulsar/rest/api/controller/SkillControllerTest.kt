@@ -1,6 +1,6 @@
 package ai.platon.pulsar.rest.api.controller
 
-import ai.platon.browser4.boot.skill.SkillService
+import ai.platon.pulsar.boot.skill.SkillService
 import ai.platon.pulsar.agentic.skills.SkillInstaller
 import ai.platon.pulsar.agentic.skills.SkillRegistry
 import org.junit.jupiter.api.Assertions.*

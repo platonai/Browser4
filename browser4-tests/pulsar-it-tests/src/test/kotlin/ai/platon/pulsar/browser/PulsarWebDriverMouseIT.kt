@@ -1,6 +1,6 @@
 package ai.platon.pulsar.browser
 
-import ai.platon.browser4.chrome.PulsarWebDriver
+import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.WebDriverTestBase
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.DisplayName
@@ -14,7 +14,7 @@ import kotlin.test.*
  * replaced the untrusted DOM event dispatch (dispatchDomClick).
  *
  * Test page: interactive-1.html — provides input fields, buttons, toggle, and
- * JavaScript instrumentation observable via [ai.platon.browser4.api.WebDriver.evaluate].
+ * JavaScript instrumentation observable via [ai.platon.pulsar.api.WebDriver.evaluate].
  */
 class PulsarWebDriverMouseIT : WebDriverTestBase() {
 

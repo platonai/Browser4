@@ -1,4 +1,4 @@
-package ai.platon.browser4.boot.plugin
+package ai.platon.pulsar.boot.plugin
 
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.ToolMount
