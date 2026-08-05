@@ -321,6 +321,15 @@ jobs:
             symlink_key="releases/latest/download/${asset_name}"
             target_key="releases/download/${TAG_NAME}/${asset_name}"
 
+            # Delete any existing symlink first — ossutil api put-symlink
+            # silently returns success without updating the target of an
+            # existing symlink, so we must remove the old one before
+            # creating the new one.
+            ./ossutil rm "oss://${OSS_BUCKET}/${symlink_key}" \
+              -e "$OSS_ENDPOINT" \
+              --region "$OSS_REGION" \
+              -f 2>/dev/null || true
+
             echo "Creating symlink: ${symlink_key} → ${target_key}"
             if ./ossutil api put-symlink \
               --bucket "$OSS_BUCKET" \
