@@ -1488,8 +1488,25 @@ if ($finalUpgradeOk) {
         $finalVersionResult = Invoke-CliCommand -Arguments @('--version')
         $finalVersion = if ($finalVersionResult.ExitCode -eq 0) { $finalVersionResult.Output.Trim() } else { 'unknown' }
         Write-Info "browser4-cli is now at: $finalVersion"
-        Write-StepResult -Step 'Final upgrade' -Passed $true `
-            -Detail "Installed: $finalVersion"
+
+        # When a specific version was requested, verify the installed
+        # version matches.  The CLI outputs "browser4-cli 4.12.0"
+        # (no "v" prefix), while $Version uses "v4.12.0" GitHub-tag
+        # format.  Strip the "v" before comparing so both forms work.
+        $versionMatches = $true
+        if ($Version) {
+            $expectedVersion = $Version -replace '^v', ''
+            $versionMatches = $finalVersion -match [regex]::Escape($expectedVersion)
+            if (-not $versionMatches) {
+                Write-WarningMsg "VERSION MISMATCH: expected $Version but installed $finalVersion"
+                Write-WarningMsg 'The distribution channel may still be serving an older release.'
+                Write-WarningMsg 'Verify that the release has been published to all channels (GitHub, npm, OSS CDN).'
+                $finalUpgradeOk = $false
+            }
+        }
+
+        Write-StepResult -Step 'Final upgrade' -Passed $versionMatches `
+            -Detail "Installed: $finalVersion$(if (-not $versionMatches) { " (expected: $Version)" } else { '' })"
     } else {
         Write-StepResult -Step 'Final upgrade' -Passed $false `
             -Detail 'Install script completed but browser4-cli not found on PATH'

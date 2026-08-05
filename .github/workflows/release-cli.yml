@@ -707,16 +707,59 @@ jobs:
 
           echo "Release notes updated"
 
-      - name: Trigger OSS Sync
-        id: trigger_oss
+      - name: Sync to Aliyun OSS CDN
+        id: oss_sync
         if: success()
         shell: bash
+        timeout-minutes: 15
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.latest.outputs.tag }}
         run: |
+          set -euo pipefail
+
+          # Trigger the OSS sync workflow so it picks up the newly uploaded
+          # CLI binaries and updates the latest symlinks.
+          echo "Triggering sync-to-oss.yml for tag ${TAG_NAME}"
           gh workflow run sync-to-oss.yml \
             --repo "${{ github.repository }}" \
-            -f tag_name="${{ steps.latest.outputs.tag }}"
+            -f tag_name="$TAG_NAME"
+
+          # Wait for GitHub to create the run record.
+          sleep 3
+
+          # Find the most recent run of sync-to-oss.yml.
+          RUN_ID=""
+          for i in $(seq 1 20); do
+            RUN_ID=$(gh run list --workflow=sync-to-oss.yml \
+              --repo "${{ github.repository }}" \
+              --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || echo "")
+            if [ -n "$RUN_ID" ]; then
+              break
+            fi
+            echo "Waiting for run to appear (attempt $i/20)..."
+            sleep 3
+          done
+
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::Could not find sync-to-oss.yml workflow run"
+            exit 1
+          fi
+
+          echo "Waiting for sync-to-oss run ${RUN_ID} to complete..."
+          gh run watch "$RUN_ID" --repo "${{ github.repository }}" --exit-status && WATCH_OK=true || WATCH_OK=false
+
+          CONCLUSION=$(gh run view "$RUN_ID" --repo "${{ github.repository }}" --json conclusion -q '.conclusion')
+          echo "sync-to-oss run ${RUN_ID} completed with conclusion: ${CONCLUSION}"
+          echo "Run URL: https://github.com/${{ github.repository }}/actions/runs/${RUN_ID}"
+
+          if [ "$CONCLUSION" != "success" ]; then
+            echo "::error::OSS sync workflow failed — CDN may still serve an older release."
+            echo "::error::Verify the run at https://github.com/${{ github.repository }}/actions/runs/${RUN_ID} and re-trigger if needed."
+            exit 1
+          fi
+
+          echo "✅ Aliyun OSS CDN updated to ${TAG_NAME}"
 
       - name: GitHub Release Summary
         if: always()
@@ -730,6 +773,6 @@ jobs:
             echo "- **Release URL**: ${{ steps.latest.outputs.url }}"
             echo "- **Platform Binaries**: 7 uploaded"
             echo "- **Notes Updated**: ${{ steps.update_release_notes.outcome || 'skipped' }}"
-            echo "- **OSS Sync**: ${{ steps.trigger_oss.outcome || 'triggered' }}"
+            echo "- **OSS Sync**: ${{ steps.oss_sync.outcome || 'triggered' }}"
             echo "- **Status**: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"
