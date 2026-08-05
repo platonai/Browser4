@@ -252,7 +252,7 @@ class PulsarBrowser(
         val uniqueID = chromeTab.id
         val devTools = createDevTools(chromeTab, toolsConfig)
         val browserProtocol = BrowserProtocol.create(devTools)
-        val driver = PulsarWebDriver(uniqueID, chromeTab, browserProtocol, this)
+        val driver = Browser4WebDriver(uniqueID, chromeTab, browserProtocol, this)
         mutableDrivers[chromeTab.id] = driver
 
         if (recovered) {
