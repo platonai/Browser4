@@ -49,6 +49,10 @@ pub fn public_command_name(name: &str) -> &str {
         "plugin-info" => "plugin info",
         "plugin-install" => "plugin install",
         "plugin-remove" => "plugin remove",
+        "config-list" => "config list",
+        "config-get" => "config get",
+        "config-set" => "config set",
+        "config-delete" => "config delete",
         _ => name,
     }
 }
@@ -58,20 +62,30 @@ pub fn public_command_name(name: &str) -> &str {
 pub const CATEGORY_TITLES: &[(&str, &str)] = &[
     ("core", "Core"),
     ("navigation", "Navigation"),
+    ("snapshot", "HTML Snapshot (htmlsnapshot)"),
     ("keyboard", "Keyboard"),
     ("mouse", "Mouse"),
     ("export", "Capture"),
     ("tabs", "Tabs"),
     ("storage", "Storage"),
     ("devtools", "DevTools"),
-    ("snapshot", "HTML Snapshot (htmlsnapshot)"),
     ("agent", "Agent"),
-    ("act", "Act"),
     ("swarm", "Swarm"),
-    ("install", "Install"),
+    ("act", "Act"),
     ("browsers", "Browser sessions"),
+    ("config", "Config"),
+    ("install", "Install"),
     ("skills", "Skills"),
     ("plugins", "Plugins"),
+];
+
+/// Top 5 most common commands for the Quick Start section in help output.
+const QUICK_START_COMMANDS: &[(&str, &str)] = &[
+    ("  goto <url>",               "Navigate to a page (auto-starts server)"),
+    ("  snapshot -v 0 --stdout",   "Capture page structure with element refs"),
+    ("  click <ref>",              "Click an element by its snapshot ref"),
+    ("  fill <ref> \"<text>\"",     "Type text into an input field"),
+    ("  htmlsnapshot get text <css>", "Extract page content via CSS selector"),
 ];
 
 /// Short aliases for category-based help filtering.
@@ -93,6 +107,8 @@ const CATEGORY_ALIASES: &[(&str, &str)] = &[
     ("plugin", "plugins"),
     ("swarm", "swarm"),
     ("crawl", "swarm"),
+    ("cfg", "config"),
+    ("settings", "config"),
 ];
 
 /// Resolve a category alias to its canonical category name, or return the
@@ -129,6 +145,19 @@ pub fn generate_help() -> String {
         format!("browser4-cli {} — Control a Browser4 server from the command line", VERSION),
         format!("Usage: browser4-cli [-s <session>] <command> [args] [options]"),
     ];
+
+    // Quick Start — the 5 most common commands for new users
+    lines.push("\n╔══ Quick Start ═══════════════════════════════════════════════════════".to_string());
+    lines.push("║  These are the commands you'll use most often:".to_string());
+    lines.push("║".to_string());
+    lines.push("║    goto <url>         Navigate to a page (auto-starts server & session)".to_string());
+    lines.push("║    snapshot [-v <N>]  Capture accessibility tree with element refs".to_string());
+    lines.push("║    click <ref>        Click an element by its ref (e5) or CSS selector".to_string());
+    lines.push("║    fill <ref> \"<txt>\"  Fill a form field (--submit to press Enter)".to_string());
+    lines.push("║    htmlsnapshot       Capture static HTML for content extraction".to_string());
+    lines.push("║".to_string());
+    lines.push("║  Learn more: browser4-cli --help <command>  or  --help-json for AI/scripts".to_string());
+    lines.push("╚══════════════════════════════════════════════════════════════════════════".to_string());
 
     // Common workflows — compact pipe-style
     lines.push("\n── Common workflows ─────────────────────────────────────────────────".to_string());
@@ -1581,8 +1610,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    to keep output manageable: -v 0 (top), -v 1 (next), -v 0-2 (first three), -v all (entire page)."
+            "    to keep output manageable: -v 0 (current screen), -v 1 (one below), -v 0-2 (three screens),"
                 .to_string(),
+        );
+        lines.push(
+            "    -v all (entire page).".to_string(),
         );
         lines.push(
             "  - --viewport accepts single indices (3), comma-separated lists (0,2,4), ranges (1-3),"
@@ -1629,11 +1661,13 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Viewports (page chunks):".to_string());
         lines.push("  A viewport is one screen-height chunk of the page (~viewport height px).".to_string());
+        lines.push("  Indices are scroll-relative: -v 0 is the screen currently visible, -v 1 the one".to_string());
+        lines.push("  below it, and -v -1 the one above. After a fresh navigation -v 0 is the top of the page.".to_string());
         lines.push("  Long pages are split into multiple viewports. -v N captures chunk N (0-indexed).".to_string());
         lines.push("  The snapshot filters the accessibility tree by Y-range — the page is not scrolled.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  # Read the page viewport by viewport (start from the top)".to_string());
+        lines.push("  # Read the page viewport by viewport (0 = current screen)".to_string());
         lines.push("  browser4-cli snapshot -v 0".to_string());
         lines.push(String::new());
         lines.push("  # Capture a range of viewports".to_string());
@@ -2175,9 +2209,39 @@ pub fn generate_help_entry(cmd: &CommandDef) -> String {
         args_text = format!("{} [--sql <query>] [--seed-file <file>] [--wait]", args_text.trim_end());
     }
 
-    let prefix = format!("  {} {}", public_command_name(cmd.name), args_text);
+    let public_name = public_command_name(cmd.name);
+    // Mark high-frequency commands with a ★ so first-time users can
+    // identify the most useful commands at a glance.
+    let marker = if is_high_frequency_command(cmd.name) { "★ " } else { "  " };
+    let prefix = format!("{}{} {}", marker, public_name, args_text);
     let prefix = prefix.trim_end();
-    format_with_gap(prefix, cmd.description, 30)
+    format_with_gap(prefix, cmd.description, 32)
+}
+
+/// Commands that appear in the Quick Start section or are among the most
+/// commonly used. Marked with `★` in category listings for scannability.
+fn is_high_frequency_command(name: &str) -> bool {
+    matches!(
+        name,
+        "goto"
+        | "open"
+        | "snapshot"
+        | "snapshot-grep"
+        | "click"
+        | "fill"
+        | "type"
+        | "press"
+        | "eval"
+        | "htmlsnapshot-get"
+        | "htmlsnapshot-get-all"
+        | "htmlsnapshot-query"
+        | "extract"
+        | "tab-list"
+        | "tab-new"
+        | "tab-select"
+        | "screenshot"
+        | "scroll"
+    )
 }
 
 /// Word-wrap prose text so no output line exceeds `max_width`.

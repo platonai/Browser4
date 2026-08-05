@@ -226,7 +226,7 @@ function Print-Usage {
     Write-Host "    --silent                    Suppress agent output"
     Write-Host "    --skip-version-check        Skip browser4-cli version check"
     Write-Host "    --timeout <minutes>         Kill each scenario task after N minutes (default: no timeout)"
-    Write-Host "    --agent <name>              Use a specific agent CLI (claude, kimi, or opencode)"
+    Write-Host "    --agent <name>              Use a specific agent CLI (claude, kimi, opencode, or codex)"
     Write-Host "  resume      Resume from the last failed module (-rf)"
     Write-Host "  main    Run all Browser4 main tests (fast, rest, it, e2e)"
     Write-Host ""
@@ -254,7 +254,7 @@ function Print-Usage {
     Write-Host "  test.ps1 rws sc amazon              # Run a specific scenario task"
     Write-Host "  test.ps1 rws sc amazon hn           # Run multiple scenarios"
     Write-Host "  test.ps1 rws scenarios --list       # List available scenarios"
-    Write-Host "  test.ps1 rws dir tasks/real-world/generic  # Run all .md tasks in a directory"
+    Write-Host "  test.ps1 rws dir real-world/generic  # Run all .md tasks in a directory"
     Write-Host "  test.ps1 rws sc amazon --timeout 30 # Run with 30-minute per-task timeout"
     Write-Host "  test.ps1 rws sc amazon --production # Run against installed CLI"
     Write-Host "  test.ps1 rws task tasks/real-world/generic/amazon.md  # Run a single task file"
@@ -262,7 +262,7 @@ function Print-Usage {
     Write-Host "  test.ps1 rws dir --files             # List all .md task files"
     Write-Host "  test.ps1 rws dir --absolute          # List files with absolute paths"
     Write-Host "  test.ps1 rws dir --metadata          # List files with size and date"
-    Write-Host "  test.ps1 rws dir --tree tasks/real-world  # Tree view of a specific dir"
+    Write-Host "  test.ps1 rws dir --tree real-world  # Tree view of a specific dir"
     Write-Host "  test.ps1 rws dir -t mock-site              # Short form of --tree"
     Write-Host "  test.ps1 rws dir -f -m                     # Short forms for --files --metadata"
     Write-Host "  test.ps1 rws dir --interactive             # Interactive directory picker"
@@ -581,6 +581,22 @@ To use a different port:
 
     if ($script:DryRun) {
         Write-CommandBanner -Label '[DRY RUN] Executing in rest-tests:' -Subtitle "  $mvnwScript $($mvnArgs -join ' ')"
+    }
+
+    # Pre-flight: install parent POM and dependency BOM locally.
+    # On a clean checkout, the browser4-dependencies SNAPSHOT POM is not in
+    # Maven Central, so mvn install it first to avoid "Non-resolvable import POM"
+    # failures when the mock-site module resolves its BOM.
+    if (-not $script:DryRun) {
+        $preflightArgs = @(
+            'install',
+            '-pl', 'browser4-dependencies',
+            '-am',
+            '-DskipTests',
+            '-q'
+        )
+        Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @preflightArgs } `
+            -Label 'InstallDependencyBOM' -PreExecPath $repoRoot
     }
 
     Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @mvnArgs } -Label 'MockSiteBoot' -PreExecPath $mockSiteModuleDir
@@ -1463,18 +1479,8 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
         $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
         try {
-            # Build agent CLI arguments — suppress all terminal output during refine
-            $agentArgs = @()
-            switch ($agent) {
-                'claude' {
-                    $agentArgs += '--dangerously-skip-permissions'
-                    $agentArgs += '--silent'
-                    $agentArgs += @('-p', $prompt)
-                }
-                'kimi'   { $agentArgs += @('-p', $prompt) }
-                'opencode' { $agentArgs += @('run', $prompt) }
-                default  { $agentArgs += @('-p', $prompt) }
-            }
+            # Build agent CLI arguments — single source of truth for per-backend args
+            $agentArgs = Get-ScenarioAgentArgs -Agent $agent -Prompt $prompt -Silent
 
             # Use System.Diagnostics.Process to fully suppress console output.
             # Direct invocation (&) or Start-Process both leak terminal writes
@@ -2303,13 +2309,13 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host '  --silent                  Suppress agent output'
         Write-Host '  --skip-version-check      Skip browser4-cli version check'
         Write-Host '  --timeout <minutes>       Kill each scenario task after N minutes'
-        Write-Host '  --agent <name>            Use a specific agent CLI (claude, kimi, opencode)'
+        Write-Host '  --agent <name>            Use a specific agent CLI (claude, kimi, opencode, or codex)'
         Write-Host ''
         Write-Host 'Examples:'
         Write-Host '  test.ps1 rws sc amazon                    # Run a specific scenario'
         Write-Host '  test.ps1 rws sc amazon hn                 # Run multiple scenarios'
         Write-Host '  test.ps1 rws scenarios --list             # List discovered tasks'
-        Write-Host '  test.ps1 rws dir tasks/real-world/generic # Run all .md tasks in a directory'
+        Write-Host '  test.ps1 rws dir real-world/generic # Run all .md tasks in a directory'
         Write-Host '  test.ps1 rws task tasks/amazon.md         # Run a single task file'
         Write-Host '  test.ps1 rws sc amazon --production       # Run against installed CLI'
         Write-Host '  test.ps1 rws dir --list                    # List available scenario directories'
@@ -2317,7 +2323,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host '  test.ps1 rws dir --files                   # List all .md task files'
         Write-Host '  test.ps1 rws dir --absolute                # List files with absolute paths'
         Write-Host '  test.ps1 rws dir --metadata                # List files with size and date'
-        Write-Host '  test.ps1 rws dir --tree tasks/real-world   # Tree view of a specific directory'
+        Write-Host '  test.ps1 rws dir --tree real-world   # Tree view of a specific directory'
         Write-Host '  test.ps1 rws dir -t mock-site               # Short form of --tree'
         Write-Host '  test.ps1 rws dir -f -m                      # Short forms for --files --metadata'
         Write-Host '  test.ps1 rws dir --interactive              # Interactive directory picker'
@@ -2538,24 +2544,15 @@ $currentContent
 Return ONLY the refined Markdown. Do not include any preamble, commentary, or code fences around your output.
 "@
 
-            # Detect agent
-            $agent = if (Get-Command 'claude' -ErrorAction SilentlyContinue) { 'claude' }
-                     elseif (Get-Command 'kimi' -ErrorAction SilentlyContinue) { 'kimi' }
-                     elseif (Get-Command 'opencode' -ErrorAction SilentlyContinue) { 'opencode' }
-                     else { 'claude' }
+            # Detect agent via shared function
+            $agent = Get-ScenarioAgent
 
             Write-Host "Refining with $agent ..." -ForegroundColor Cyan
             if ($addGuidance) { Write-Host "  Guidance: $addGuidance" -ForegroundColor DarkGray }
 
             try {
-                # Build agent args
-                $agentArgs = @()
-                switch ($agent) {
-                    'claude'   { $agentArgs += '--dangerously-skip-permissions'; $agentArgs += '--silent'; $agentArgs += @('-p', $refinePrompt) }
-                    'kimi'     { $agentArgs += @('-p', $refinePrompt) }
-                    'opencode' { $agentArgs += @('run', $refinePrompt) }
-                    default    { $agentArgs += @('-p', $refinePrompt) }
-                }
+                # Build agent args via shared function
+                $agentArgs = Get-ScenarioAgentArgs -Agent $agent -Prompt $refinePrompt -Silent
 
                 $psi = [System.Diagnostics.ProcessStartInfo]::new()
                 $psi.FileName = $agent
@@ -2696,14 +2693,26 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
             }
             Write-Host ''
             Write-Host 'Usage: test.ps1 rws dir <relative-or-absolute-path>' -ForegroundColor Cyan
-            Write-Host '  test.ps1 rws dir tasks/real-world/generic' -ForegroundColor Cyan
-            Write-Host '  test.ps1 rws dir tasks/real-world/browser4' -ForegroundColor Cyan
-            Write-Host '  test.ps1 rws dir tasks/mock-site' -ForegroundColor Cyan
+            Write-Host '  test.ps1 rws dir real-world/generic' -ForegroundColor Cyan
+            Write-Host '  test.ps1 rws dir real-world/browser4' -ForegroundColor Cyan
+            Write-Host '  test.ps1 rws dir mock-site' -ForegroundColor Cyan
+            Write-Host '  test.ps1 rws dir mock-site/decision-tree' -ForegroundColor Cyan
             Write-Host ''
             exit 0
         }
         if (-not [System.IO.Path]::IsPathRooted($taskDir)) {
-            $taskDir = Join-Path $repoRoot $taskDir
+            # Relative paths are resolved against the tasks directory
+            # (browser4-tests/real-world-scenarios/tasks/), not the repo root.
+            # This matches the --list output which shows paths relative to tasks/.
+            $tasksBase = Join-Path $repoRoot 'browser4-tests' 'real-world-scenarios' 'tasks'
+            $candidate = Join-Path $tasksBase $taskDir
+            if (Test-Path -LiteralPath $candidate -PathType Container) {
+                $taskDir = $candidate
+            } else {
+                # Fall back: try as a full path from repo root (e.g.
+                # "browser4-tests/real-world-scenarios/tasks/mock-site")
+                $taskDir = Join-Path $repoRoot $taskDir
+            }
         }
         $taskDir = [System.IO.Path]::GetFullPath($taskDir)
         $modeLabel = "real-world scenario dir: $taskDir"

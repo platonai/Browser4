@@ -86,7 +86,7 @@ param(
     # TIMEOUT (exit code 124).  Set to 0 to disable the timeout.
     [int] $TimeoutMinutes = 60,
 
-    # Override the agent CLI to use (claude, kimi, or opencode).
+    # Override the agent CLI to use (claude, kimi, opencode, or codex).
     # When empty, auto-detects. Forwarded to run-task.ps1.
     [string] $Agent = '',
 
@@ -214,7 +214,7 @@ function Write-Section {
 # Pre-flight: check that an agent CLI (claude, kimi, or opencode) and run-task.ps1 are available
 # ═══════════════════════════════════════════════════════════════════════════════
 
-$knownAgents = @('claude', 'kimi', 'opencode')
+$knownAgents = @('claude', 'kimi', 'opencode', 'codex')
 $agentAvailable = $false
 if ($Agent) {
     $agentAvailable = $null -ne (Get-Command $Agent -ErrorAction SilentlyContinue)
@@ -231,7 +231,7 @@ if ($Agent) {
     }
 }
 if (-not $agentAvailable) {
-    Write-Host 'WARNING: no agent CLI (claude, kimi, or opencode) found on PATH.' -ForegroundColor Yellow
+    Write-Host 'WARNING: no agent CLI (claude, kimi, opencode, or codex) found on PATH.' -ForegroundColor Yellow
     Write-Host 'Each task invokes an agent CLI.  Without one, every task will fail.'
     Write-Host ''
 }

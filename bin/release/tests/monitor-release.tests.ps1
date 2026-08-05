@@ -212,7 +212,7 @@ function Get-FunctionsFromScript {
 Write-Host "Source : $MonitorScriptPath" -ForegroundColor DarkGray
 
 $funcText = Get-FunctionsFromScript -ScriptPath $MonitorScriptPath `
-    -FunctionNames @('Extract-MinimalErrors', 'New-CoworkerFailureTask')
+    -FunctionNames @('ConvertTo-LogLines', 'Parse-GitHubLogLine', 'Extract-MinimalErrors', 'New-CoworkerFailureTask')
 
 Invoke-Expression $funcText
 
@@ -226,7 +226,7 @@ Write-Host "━━━ Extract-MinimalErrors: empty / no-match ━━━" -Foregr
 # Empty input
 $result = Extract-MinimalErrors -LogLines @()
 Assert-NotNull -Label 'EME empty: returns non-null' -Value $result
-Assert-ContainsString -Label 'EME empty: fallback message' -Haystack $result -Needle 'No specific error patterns matched'
+Assert-ContainsString -Label 'EME empty: fallback message' -Haystack $result -Needle 'No log output to analyze'
 
 # No error patterns in input
 $cleanLogs = @(
@@ -239,7 +239,7 @@ $cleanLogs = @(
 )
 $result = Extract-MinimalErrors -LogLines $cleanLogs
 Assert-NotNull -Label 'EME no-match: returns non-null' -Value $result
-Assert-ContainsString -Label 'EME no-match: shows fallback' -Haystack $result -Needle 'No specific error patterns matched'
+Assert-ContainsString -Label 'EME no-match: shows fallback' -Haystack $result -Needle 'No specific error patterns or test failures matched'
 Assert-ContainsString -Label 'EME no-match: includes last 40 lines' -Haystack $result -Needle 'BUILD SUCCESSFUL'
 
 Write-Host "━━━ Extract-MinimalErrors: single error patterns ━━━" -ForegroundColor Cyan
@@ -448,8 +448,8 @@ try {
         -RepoRoot $tempRepoRoot
 
     $content = Get-Content -Path $taskPath -Raw -Encoding UTF8
-    # Full content = template (~300 chars) + truncated errors (≤4000) = ≤4300
-    Assert-Returns -Label 'NCFT trunc: content ≤ 5000 chars' -Actual ($content.Length -le 5000) -Expected $true
+    # Full content = enhanced template (~1200 chars) + truncated errors (≤4000) = ≤5200; add headroom for CI sections
+    Assert-Returns -Label 'NCFT trunc: content ≤ 8000 chars' -Actual ($content.Length -le 8000) -Expected $true
     Assert-ContainsString -Label 'NCFT trunc: has truncation note' -Haystack $content -Needle 'truncated'
 
     Remove-Item $taskPath -Force -ErrorAction SilentlyContinue
@@ -457,7 +457,7 @@ try {
     Write-Host "━━━ New-CoworkerFailureTask: directory auto-creation ━━━" -ForegroundColor Cyan
 
     # Delete the task directories to verify auto-creation
-    $taskDir = Join-Path $tempRepoRoot 'coworker\tasks\main\0draft'
+    $taskDir = Join-Path $tempRepoRoot 'coworker\tasks\main\1ready'
     if (Test-Path $taskDir) {
         Remove-Item $taskDir -Recurse -Force
     }

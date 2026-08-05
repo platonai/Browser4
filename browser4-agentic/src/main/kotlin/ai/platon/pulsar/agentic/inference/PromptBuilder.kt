@@ -11,6 +11,7 @@ import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.agentic.model.ExecutionContext
 import ai.platon.pulsar.agentic.prompts.buildMainSystemPromptV1
 import ai.platon.pulsar.agentic.prompts.buildToolUseSections
+import ai.platon.pulsar.agentic.tools.specs.ToolSpecFormat
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecification
 import ai.platon.pulsar.common.KStrings
 import ai.platon.pulsar.common.Strings
@@ -301,9 +302,9 @@ Return an array of matching elements
         }
     }
 
-    fun buildOperatorSystemPrompt(): String {
+    fun buildOperatorSystemPrompt(includeToolList: Boolean = true): String {
         return """
-${buildMainSystemPromptV1()}
+${buildMainSystemPromptV1(ToolSpecFormat.KOTLIN, includeToolList)}
         """.trimIndent()
     }
 

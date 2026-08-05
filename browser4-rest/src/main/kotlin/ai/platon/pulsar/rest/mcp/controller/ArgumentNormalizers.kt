@@ -48,7 +48,7 @@ class DefaultArgumentNormalizer : ArgumentNormalizer {
                 }
             }
         }
-        
+
         return args
     }
     

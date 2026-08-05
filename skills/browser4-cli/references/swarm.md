@@ -103,7 +103,9 @@ browser4-cli swarm query --sql @query.sql --seed-file ./urls.txt --refresh --wai
 
 Core X-SQL pattern: `SELECT <fn>(dom, <selector>) FROM DOM_LOAD_AND_SELECT(@url, '<scope>');`
 
-Common extraction functions: `DOM_BASE_URI`, `DOM_FIRST_TEXT`, `DOM_ALL_TEXTS`, `DOM_FIRST_HREF`, `DOM_ALL_HREFS`, `DOM_FIRST_SRC`, `DOM_FIRST_SLIM_HTML`, `DOM_ALL_SLIM_HTML`, `DOM_FIRST_ATTR`. Full reference: [x-sql.md](x-sql.md).
+Common extraction functions: `DOM_BASE_URI`, `DOM_FIRST_TEXT`, `DOM_ALL_TEXTS`, `DOM_FIRST_HREF`, `DOM_ALL_HREFS`, `DOM_FIRST_SRC`, `DOM_ABS_SRC`, `DOM_FIRST_SLIM_HTML`, `DOM_ALL_SLIM_HTML`, `DOM_FIRST_ATTR`. Full reference: [x-sql.md](x-sql.md).
+
+> **Tip:** `DOM_FIRST_SRC` and `DOM_FIRST_ATTR(..., 'src')` return **relative** URLs (e.g. `/images/photo.jpg`). Use `DOM_ABS_SRC(DOM)` to get the resolved **absolute** URL (e.g. `https://example.com/images/photo.jpg`). For image extraction, prefer `DOM_ABS_SRC` to avoid manual URL resolution.
 
 > **Tip:** X-SQL result rows do **not** automatically include the source URL — they only contain the columns you explicitly select. To make results self-contained, always include the source URL as a column:
 > ```sql
@@ -140,7 +142,7 @@ browser4-cli swarm list --clear   # remove all tracked swarm tasks
 
 > **Note:** `swarm list` queries the backend for live status of each tracked task on every invocation. It shows a status summary (N total, X completed, Y queued, Z failed) followed by the task table. The STATUS column uses task-oriented labels: `queued` (waiting for worker), `processing`, `completed`, or `failed (<reason>)`. The COMMAND column distinguishes `swarm-submit` from `swarm-query`. Use `--clear` to clean up stale entries between sessions.
 
-> **Tip:** `swarm create` warns if stale tasks from prior sessions are still tracked, since old completed tasks can interfere with the worker pool. Use `swarm create --clear-stale` to clear and recreate in one step, or `swarm list --clear` to remove stale entries manually.
+> **Tip:** `swarm create` warns if stale tasks from prior sessions are still tracked, since old completed tasks can interfere with the worker pool. In interactive mode (TTY), it prompts `Clear them now? [Y/n]` — press Enter or type `y` to clear. Use `swarm create --clear-stale` for non-interactive/scripted use, or `swarm list --clear` to remove stale entries manually.
 
 ### 6. Close the Swarm Session
 
@@ -148,7 +150,7 @@ browser4-cli swarm list --clear   # remove all tracked swarm tasks
 browser4-cli swarm close   # equivalent to close when swarm session is active
 ```
 
-Also accessible via: `close`, `close-all`, or `kill-all`.
+Also accessible via: `close`, `close-all`, or `kill-all`. The swarm session is included in `close-all` enumeration — if `close-all` reports "0 session(s)" but swarm tasks are still tracked, the swarm session was already closed.
 
 ## Task Lifecycle States
 

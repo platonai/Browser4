@@ -20,6 +20,7 @@
 
 mod args;
 mod commands;
+mod config;
 mod daemon;
 mod help;
 mod http;
@@ -45,6 +46,10 @@ use args::{
     parse_command_string, parse_global_flags, parse_raw_args, GlobalFlags,
 };
 use commands::{commands_map, is_element_reference};
+use config::{
+    config_delete_value, config_set_value, config_value, read_config, write_config,
+    VALID_CONFIG_KEYS,
+};
 use daemon::{
     ensure_chrome_available, ensure_server_running, init_root_search_start_dir_from_startup,
     install_browser4_runtime, is_local_port_open, read_current_tag, resolve_base_url,
@@ -72,7 +77,8 @@ use state::{
     clear_all_state, clear_state, epoch_millis_to_display, format_async_task_list,
     format_timestamp_display, read_async_tasks, read_state,
     resolve_default_state_dir, resolve_ref, summarize_async_tasks, track_async_task,
-    update_async_task_status, write_async_tasks, write_state, CliState, MousePosition, Table,
+    update_async_task_status, write_async_tasks, write_state, CliState, MousePosition,
+    SessionKind, Table,
 };
 
 const VERSION: &str = env!("BROWSER4_CLI_VERSION");
@@ -757,6 +763,7 @@ async fn create_session(
     // for what is actually a fresh Browser4-CDP browser).
     new_state.is_attached = false;
     new_state.attach_type = None;
+    new_state.kind = SessionKind::Browser4Launched;
     new_state.cdp_endpoint = None;
     new_state.browser_channel = None;
     new_state.created_at = Some(Utc::now().to_rfc3339());
@@ -1049,7 +1056,7 @@ async fn get_or_create_navigation_session(
         // don't reuse it — create a new regular Browser4 session instead.
         // Save the attached session's state under the session ID as a
         // named session so it can still be targeted with -s <sessionId>.
-        if force_new_session && state.is_attached {
+        if force_new_session && !state.kind.owns_browser() {
             // Persist the attached session under its own session ID
             // so it can be listed and targeted with -s <sessionId>.
             let mut attached_state = state.clone();
@@ -1077,7 +1084,7 @@ async fn get_or_create_navigation_session(
         } else {
             existing_id
         }
-    } else if state.is_attached {
+    } else if !state.kind.owns_browser() {
         // For attached sessions (CDP or extension), never fall through to
         // create_session — that would launch a NEW browser instance instead
         // of using the attached one.  Verify health directly and reuse the
@@ -1120,10 +1127,9 @@ async fn get_or_create_navigation_session(
                 );
                 new_id
             } else {
-                let attach_cmd = if state.attach_type.as_deref() == Some("extension") {
-                    "attach --extension"
-                } else {
-                    "attach --cdp"
+                let attach_cmd = match state.kind {
+                    SessionKind::ExtensionAttached => "attach --extension",
+                    _ => "attach --cdp",
                 };
                 let mut msg = format!(
                     "Attached session {} is no longer healthy. \
@@ -1133,7 +1139,7 @@ async fn get_or_create_navigation_session(
                     attached_id, attach_cmd
                 );
                 // Add chrome:// page hint for extension sessions
-                if state.attach_type.as_deref() == Some("extension") {
+                if state.kind == SessionKind::ExtensionAttached {
                     msg.push_str(
                         "\n\nNote: Navigating to chrome:// internal pages \
                          (chrome://version, chrome://settings, etc.) may \
@@ -1502,6 +1508,7 @@ async fn handle_attach(
         state.last_mouse_position = None;
         state.is_attached = true;
         state.attach_type = Some("extension".to_string());
+        state.kind = SessionKind::ExtensionAttached;
         state.browser_channel = channel.clone();
         state.created_at = Some(Utc::now().to_rfc3339());
         state.last_accessed_at = Some(Utc::now().to_rfc3339());
@@ -1663,6 +1670,7 @@ async fn handle_attach(
     state.last_mouse_position = None;
     state.is_attached = true;
     state.attach_type = Some("cdp".to_string());
+    state.kind = SessionKind::CdpAttached;
     state.cdp_endpoint = Some(cdp_endpoint.clone());
     state.created_at = Some(Utc::now().to_rfc3339());
     state.last_accessed_at = Some(Utc::now().to_rfc3339());
@@ -2202,7 +2210,7 @@ async fn handle_close(
         return Ok(());
     };
     json_field("session_id", json!(&session_id));
-    let is_attached = state.is_attached;
+    let owns_browser = state.kind.owns_browser();
     // Ignore errors — session might already be closed
     let _ = call_tool(
         client,
@@ -2212,14 +2220,20 @@ async fn handle_close(
     )
     .await;
     clear_state(None, session_name);
-    if is_attached {
-        if state.attach_type.as_deref() == Some("extension") {
-            cli_println!("Disconnected from Browser4 Chrome Extension. Your browser tabs and the extension remain active. Re-attach with `attach --extension`.");
-        } else {
-            cli_println!("Disconnected from attached browser. The browser remains running.");
-        }
-    } else {
+    if owns_browser {
         cli_println!("Session closed. Browser terminated.");
+    } else {
+        match state.kind {
+            SessionKind::ExtensionAttached => {
+                cli_println!("Disconnected from Browser4 Chrome Extension. Your browser tabs and the extension remain active. Re-attach with `attach --extension`.");
+            }
+            SessionKind::CdpAttached => {
+                cli_println!("Disconnected from attached browser. The browser remains running.");
+            }
+            _ => {
+                cli_println!("Disconnected from session. The browser remains running.");
+            }
+        }
     }
     json_field("closed", json!(true));
     Ok(())
@@ -2737,7 +2751,23 @@ async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String>
 
     // Report the locally-tracked count instead of the server's count, which may
     // include internal sessions that the user never sees in `list` output.
-    cli_println!("Closed {} session(s)", local_count);
+    if local_count > 0 {
+        cli_println!("Closed {} session(s)", local_count);
+    } else {
+        // Check if swarm tasks are still tracked — the swarm session may have
+        // already been closed.
+        let tasks = read_async_tasks(None);
+        let swarm_task_count = tasks
+            .tasks
+            .iter()
+            .filter(|t| t.command == "swarm-submit" || t.command == "swarm-query")
+            .count();
+        if swarm_task_count > 0 {
+            cli_println!("Closed 0 session(s) — any active swarm session was likely already closed. {} swarm task(s) are still tracked. Use `swarm list --clear` to remove them.", swarm_task_count);
+        } else {
+            cli_println!("Closed 0 session(s)");
+        }
+    }
     if !close_summary.errors.is_empty() {
         eprintln!("close-all warnings: {}", close_summary.errors.join(" | "));
     }
@@ -2793,6 +2823,110 @@ async fn handle_session_default(tool_params: &Value) -> Result<(), String> {
     cli_println!("Subsequent commands will target this session without needing -s.");
     json_field("session_name", json!(name));
     json_field("session_id", json!(named_id));
+    Ok(())
+}
+
+/// Extract a value from a JSON map as a trimmed string, handling string,
+/// number, and boolean types (coerces numbers and booleans to their string
+/// representation).
+fn get_value_as_string(map: &Value, key: &str) -> Option<String> {
+    map.get(key).and_then(|v| match v {
+        Value::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+        }
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    })
+}
+
+async fn handle_config_list() -> Result<(), String> {
+    let config = read_config();
+    cli_println!("{:<10} {}", "KEY", "VALUE");
+    cli_println!("----------  -----");
+    let keys = VALID_CONFIG_KEYS;
+    let mut any_set = false;
+    for key in keys {
+        if let Some(val) = config_value(&config, key) {
+            cli_println!("{:<10}  {}", key, val);
+            json_field(key, json!(val));
+            any_set = true;
+        } else {
+            cli_println!("{:<10}  (default)", key);
+        }
+    }
+    if !any_set {
+        cli_println!("No configuration values are set. Use 'browser4-cli config set <key> <value>' to set a value.");
+    }
+    Ok(())
+}
+
+async fn handle_config_get(tool_params: &Value) -> Result<(), String> {
+    let key = tool_params
+        .get("key")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "A config key is required: config get <key>".to_string())?;
+
+    if !VALID_CONFIG_KEYS.contains(&key) {
+        let valid = VALID_CONFIG_KEYS
+            .iter()
+            .map(|k| format!("'{}'", k))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "Unknown config key '{}'. Valid keys are: {}",
+            key, valid
+        ));
+    }
+
+    let config = read_config();
+    match config_value(&config, key) {
+        Some(val) => {
+            cli_println!("{}", val);
+            json_field(key, json!(val));
+        }
+        None => {
+            cli_println!("(not set)");
+        }
+    }
+    Ok(())
+}
+
+async fn handle_config_set(tool_params: &Value) -> Result<(), String> {
+    let key = get_value_as_string(tool_params, "key")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "A config key is required: config set <key> <value>".to_string())?;
+
+    let value = get_value_as_string(tool_params, "value")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "A value is required: config set <key> <value>".to_string())?;
+
+    let mut config = read_config();
+    config_set_value(&mut config, &key, &value)?;
+    write_config(&config).map_err(|e| format!("Failed to write config: {}", e))?;
+
+    cli_println!("Set '{}' = '{}'", key, value);
+    json_field(&key, json!(value));
+    Ok(())
+}
+
+async fn handle_config_delete(tool_params: &Value) -> Result<(), String> {
+    let key = tool_params
+        .get("key")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "A config key is required: config delete <key>".to_string())?;
+
+    let mut config = read_config();
+    config_delete_value(&mut config, key)?;
+    write_config(&config).map_err(|e| format!("Failed to write config: {}", e))?;
+
+    cli_println!("Removed '{}' (reset to default)", key);
+    json_field(key, json!(null));
     Ok(())
 }
 
@@ -3133,22 +3267,23 @@ fn log_shutdown_result(action: &str, result: &ShutdownResult) {
 
 /// Format a session's browser connection type for the `list` command table.
 fn connection_label(state: &CliState) -> String {
-    match state.attach_type.as_deref() {
-        Some("cdp") => {
+    match state.kind {
+        SessionKind::CdpAttached => {
             if let Some(ref endpoint) = state.cdp_endpoint {
                 format!("CDP: {endpoint}")
             } else {
                 "CDP".to_string()
             }
         }
-        Some("extension") => {
+        SessionKind::ExtensionAttached => {
             if let Some(ref channel) = state.browser_channel {
                 format!("Extension ({channel})")
             } else {
                 "Extension".to_string()
             }
         }
-        _ => "Browser4".to_string(),
+        SessionKind::Swarm => "Swarm".to_string(),
+        SessionKind::Browser4Launched => "Browser4".to_string(),
     }
 }
 
@@ -3436,7 +3571,7 @@ async fn find_reusable_persisted_session_id(
         Err(error) if is_backend_unreachable_error(&error) => {
             // For attached sessions, don't invalidate on backend unreachable —
             // the attached browser/extension may still be alive.
-            if !state.is_attached {
+            if state.kind.owns_browser() {
                 invalidate_session(state, base_url, session_name);
             }
             return Ok(None);
@@ -3451,7 +3586,7 @@ async fn find_reusable_persisted_session_id(
     // For attached sessions (CDP or extension), the list_sessions status may
     // not reflect actual health — verify directly via check_session_ready
     // before giving up.
-    if state.is_attached {
+    if !state.kind.owns_browser() {
         let ready_params = json!({ "sessionId": &session_id });
         if let Ok(ready_result) =
             call_tool(client, base_url, "check_session_ready", ready_params).await
@@ -4132,16 +4267,21 @@ async fn handle_snapshot(
         .filter(|s| !s.is_empty());
     let header = if let Some(vp) = viewports {
         format!(
-            "# Snapshot viewport(s): {}\n\
+            "# Page URL: {}\n\
+             # Snapshot viewport(s): {}\n\
              # This file contains the accessibility tree for the requested viewport(s) only.\n\
+             # /url fields may be relative — resolve against the Page URL above.\n\
              # Use `browser4-cli snapshot grep <pattern>` to search the full in-memory tree.\n\
              # Use `browser4-cli snapshot -v all` to capture all viewports.\n",
-            vp
+            url, vp
         )
     } else {
         format!(
-            "# Snapshot — current viewport (use -v N for other viewports, -v all for full page).\n\
-             # Use `browser4-cli snapshot grep <pattern>` to search the tree.\n"
+            "# Page URL: {}\n\
+             # Snapshot — current viewport (use -v N for other viewports, -v all for full page).\n\
+             # /url fields may be relative — resolve against the Page URL above.\n\
+             # Use `browser4-cli snapshot grep <pattern>` to search the tree.\n",
+            url
         )
     };
     let snap_with_header = format!("{}\n{}", header, snap);
@@ -4189,8 +4329,19 @@ async fn handle_snapshot(
     let snap_lines = snap.lines().count();
 
     // Pagination: prefer server-side metadata when available; fall back to
-    // local pagination otherwise.
+    // local pagination otherwise. For snapshot --stdout on content-rich pages
+    // (60KB+ accessibility trees), use a smaller default page size so users
+    // get a manageable view and can paginate forward with --page N.
     let (page, page_size, show_all) = parse_page_opts(tool_params);
+    // Snapshot --stdout without explicit pagination: reduce default from 2000
+    // to 100 lines/page to avoid dumping 2000+ lines of accessibility tree.
+    let user_set_page = tool_params.get("page").is_some();
+    let user_set_page_size = tool_params.get("page-size").is_some();
+    let effective_page_size = if raw && !user_set_page && !user_set_page_size && !show_all {
+        100usize
+    } else {
+        page_size
+    };
 
     if raw {
         if let Some(ref pm) = server_pagination {
@@ -4206,10 +4357,18 @@ async fn handle_snapshot(
                 );
             }
         } else if !skip_pagination(show_all) {
-            let (page_text, meta) = paginate_output(snap, page, page_size);
+            let (page_text, meta) = paginate_output(snap, page, effective_page_size);
             println!("{}", page_text);
             if meta.is_truncated && !json_active() {
                 eprintln!("{}", format_pagination_footer(&meta));
+            }
+            // For large snapshots (>20KB or >500 lines), suggest tools that
+            // are better suited than scrolling through raw tree text.
+            if (snap_len > 20 * 1024 || snap_lines > 500) && !json_active() {
+                eprintln!(
+                    "💡 Large snapshot ({} KB, {} lines). Use `snapshot grep <pattern>` to find specific elements, or `--page N` / `--all` to control output.",
+                    snap_kb, snap_lines
+                );
             }
         } else {
             println!("{}", snap);
@@ -4228,6 +4387,22 @@ async fn handle_snapshot(
             eprintln!(
                 "ℹ️  Element refs (e.g. e5, e36) are valid only until the next browser \
                  interaction. Re-run snapshot before reusing refs."
+            );
+            eprintln!(
+                "ℹ️  /url fields may be relative (e.g. /url: news, /url: newest). \
+                 Use the page URL to resolve them: {url}",
+            );
+        }
+        // Large snapshot hint: when output is big and not already filtered,
+        // suggest ways to narrow the output.
+        if !json_active() && snap_len > 10_240 && !has_filter {
+            eprintln!(
+                "\n💡 Tip: Snapshot is large ({} KB, {} lines). To focus the output:\n\
+                   --viewport, -v <N>       Capture a specific viewport (-v 0 = current, -v 1 = next below)\n\
+                   -s, --selector <CSS>     Scope to a CSS selector\n\
+                   -i, --interactive        Only show interactive elements\n\
+                   snapshot grep <pat>      Search for specific text patterns",
+                snap_kb, snap_lines
             );
         }
     } else {
@@ -4800,16 +4975,33 @@ async fn handle_tool_command_with_options(
         // When eval returns empty or null, the page context may have changed
         // (e.g. after htmlsnapshot capture or other commands that interact
         // with the browser). Give the user a diagnostic hint.
+        //
+        // Distinguish between:
+        //   - JS null → the expression evaluated but the result is null
+        //     (element not found, property doesn't exist, etc.)
+        //   - Empty/undefined → could be JS returning undefined/"" or a
+        //     stale page context where the evaluation silently fails.
         let expression = tool_params
             .get("expression")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if result.is_empty() || result == "null" {
+        if result == "null" {
             if !json_active() {
                 cli_println!(
-                    "💡 Tip: Eval returned empty/null. The page context may be stale.\n\
-                       Try re-navigating with: goto <url>\n\
+                    "💡 Expression returned null.\n\
+                       The queried element or property may not exist on this page.\n\
+                       Try verifying: eval \"document.querySelector('<your-selector>') !== null\"\n\
                        Or check the current page: eval \"window.location.href\""
+                );
+            }
+        } else if result.is_empty() {
+            if !json_active() {
+                cli_println!(
+                    "💡 Expression returned empty/undefined.\n\
+                       This could mean:\n\
+                       - The page context is stale (try: goto <url>)\n\
+                       - The JS expression returned undefined or \"\"\n\
+                       Check current page: eval \"window.location.href\""
                 );
                 // If the expression looked like it should produce output (e.g.
                 // `document.title`), offer a specific suggestion.
@@ -5615,14 +5807,24 @@ async fn handle_html_snapshot_get(
     }
 
     // Validate selector - reject element references
-    let selector = tool_params
+    let raw_selector = tool_params
         .get("selector")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    // Expand semantic keywords (article, readable, content, main-text) to
+    // combined CSS selectors targeting common article containers, so users
+    // don't need to guess CSS selectors for content extraction.
+    let selector = commands::expand_semantic_selector(raw_selector).unwrap_or(raw_selector);
     if is_element_reference(selector) {
         return Err(format!(
             "Element references ('{selector}') are not supported in htmlsnapshot get. Use a CSS selector instead."
         ));
+    }
+
+    // Clone tool_params with the expanded selector (in case a semantic keyword was used)
+    let mut effective_params = tool_params.clone();
+    if selector != raw_selector {
+        effective_params["selector"] = json!(selector);
     }
 
     // Validate attr field requires a name
@@ -5646,7 +5848,7 @@ async fn handle_html_snapshot_get(
         let client = client.clone();
         let base_url = base_url.to_string();
         let tool_name = tool_name.to_string();
-        let mut params = tool_params.clone();
+        let mut params = effective_params.clone();
         params["sessionId"] = json!(session_id);
         async move { call_tool_with_result(&client, &base_url, &tool_name, params).await }
     })
@@ -6002,7 +6204,7 @@ async fn handle_html_snapshot_query(
     let format = tool_params
         .get("format")
         .and_then(|v| v.as_str())
-        .unwrap_or("json")
+        .unwrap_or("table")
         .to_ascii_lowercase();
 
     // Validate --format value
@@ -8876,6 +9078,7 @@ async fn handle_swarm_create(
     state.session_name = session_name.map(|s| s.to_string());
     state.session_id = Some(session_id.clone());
     state.base_url = base_url.to_string();
+    state.kind = SessionKind::Swarm;
     state.created_at = Some(Utc::now().to_rfc3339());
     state.last_accessed_at = Some(Utc::now().to_rfc3339());
     write_state(&state, None, session_name).map_err(|e| e.to_string())?;
@@ -8905,20 +9108,66 @@ async fn handle_swarm_create(
             cli_println!("Cleared {} stale swarm task(s) from prior sessions.", removed);
             json_field("cleared_stale_tasks", json!(removed));
         } else {
-            cli_println!(
-                "Note: {} swarm task(s) from prior sessions are still tracked.",
-                swarm_tasks.len()
-            );
-            cli_println!(
-                "  If new jobs get stuck in \"Created\" status, run `swarm list --clear` to remove stale entries,"
-            );
-            cli_println!(
-                "  then recreate the swarm session before resubmitting."
-            );
-            cli_println!(
-                "  Or use `swarm create --clear-stale` to clear and recreate in one step."
-            );
-            json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+            // Offer an interactive prompt to clear stale tasks,
+            // eliminating the multi-step "abort, clear, recreate" flow.
+            let is_interactive = std::io::stdin().is_terminal();
+            if is_interactive {
+                eprintln!();
+                eprintln!("{} swarm task(s) from prior sessions are still tracked.", swarm_tasks.len());
+                eprintln!("Stale tasks can block the worker pool, causing new jobs to stay \"Created\".");
+                eprintln!();
+                eprintln!("Clear them now? [Y/n]");
+
+                let mut input = String::new();
+                match std::io::stdin().read_line(&mut input) {
+                    Ok(_) => {
+                        let trimmed = input.trim().to_lowercase();
+                        if trimmed.is_empty() || trimmed == "y" || trimmed == "yes" {
+                            let mut list = existing;
+                            let before = list.tasks.len();
+                            list.tasks
+                                .retain(|t| t.command != "swarm-submit" && t.command != "swarm-query");
+                            let removed = before - list.tasks.len();
+                            write_async_tasks(&list, None).map_err(|e| e.to_string())?;
+                            cli_println!("Cleared {} stale swarm task(s).", removed);
+                            json_field("cleared_stale_tasks", json!(removed));
+                        } else {
+                            cli_println!(
+                                "Keeping {} tracked task(s). Use `swarm list --clear` to remove later, or `swarm create --clear-stale` next time.",
+                                swarm_tasks.len()
+                            );
+                            json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+                        }
+                    }
+                    Err(_) => {
+                        // Can't read stdin — keep tasks and show guidance.
+                        cli_println!(
+                            "Note: {} swarm task(s) from prior sessions are still tracked.",
+                            swarm_tasks.len()
+                        );
+                        cli_println!(
+                            "  Run `swarm list --clear` to remove stale entries, or `swarm create --clear-stale` to clear and recreate in one step."
+                        );
+                        json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+                    }
+                }
+            } else {
+                // Non-interactive (pipe, CI, script): show the warning but don't block.
+                cli_println!(
+                    "Note: {} swarm task(s) from prior sessions are still tracked.",
+                    swarm_tasks.len()
+                );
+                cli_println!(
+                    "  If new jobs get stuck in \"Created\" status, run `swarm list --clear` to remove stale entries,"
+                );
+                cli_println!(
+                    "  then recreate the swarm session before resubmitting."
+                );
+                cli_println!(
+                    "  Or use `swarm create --clear-stale` to clear and recreate in one step."
+                );
+                json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+            }
         }
     }
 
@@ -8934,7 +9183,20 @@ async fn handle_swarm_close(
     let state = read_state(None, session_name);
     let Some(session_id) = get_session_id_for_close(&state).map(str::to_string) else {
         clear_state(None, session_name);
-        eprintln!("{}", no_active_session_message());
+        // Distinguish "session already closed" from "no session ever existed"
+        // so users don't see the misleading "Session required" after a
+        // successful-but-slow close.
+        let existing = read_async_tasks(None);
+        let has_swarm_tasks = existing
+            .tasks
+            .iter()
+            .any(|t| t.command == "swarm-submit" || t.command == "swarm-query");
+        if has_swarm_tasks {
+            let count = existing.tasks.iter().filter(|t| t.command == "swarm-submit" || t.command == "swarm-query").count();
+            eprintln!("No active swarm session — it may have already been closed. {} tracked task(s) retained for history. Use `swarm list --clear` to remove.", count);
+        } else {
+            eprintln!("No active swarm session. Use `swarm create` to start one.");
+        }
         json_field("session_id", json!(null));
         json_field("closed", json!(false));
         return Ok(());
@@ -11198,13 +11460,45 @@ async fn run_browser4_cli(tokens: &[String]) -> Result<String, String> {
     let exe = std::env::current_exe()
         .map_err(|e| format!("Cannot determine CLI path: {}", e))?;
 
-    let tokens = tokens.to_vec();
+    let mut tokens = tokens.to_vec();
+
+    // Extract -s / --session flags from the token stream and pass them
+    // as BROWSER4_CLI_SESSION so parse_global_flags picks them up in the
+    // spawned process.  These are global flags that parse_global_flags only
+    // recognises before the first positional argument; when the loop
+    // subcommand spawns a nested browser4-cli the tokens come from
+    // task_tokens (everything after --), so -s appears *after* the command
+    // name and would be silently dropped.
+    let mut env_session: Option<String> = None;
+    let mut filtered = Vec::with_capacity(tokens.len());
+    let mut i = 0;
+    while i < tokens.len() {
+        let arg = &tokens[i];
+        if arg == "-s" || arg == "--session" {
+            if i + 1 < tokens.len() && !tokens[i + 1].starts_with('-') {
+                env_session = Some(tokens[i + 1].clone());
+                i += 1; // skip the value too
+            }
+        } else if arg.starts_with("-s=") {
+            env_session = Some(arg["-s=".len()..].to_string());
+        } else if arg.starts_with("--session=") {
+            env_session = Some(arg["--session=".len()..].to_string());
+        } else {
+            filtered.push(arg.clone());
+        }
+        i += 1;
+    }
+    tokens = filtered;
+
     let output = tokio::task::spawn_blocking(move || {
-        std::process::Command::new(&exe)
-            .args(&tokens)
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.args(&tokens)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output()
+            .stderr(std::process::Stdio::piped());
+        if let Some(ref session) = env_session {
+            cmd.env("BROWSER4_CLI_SESSION", session);
+        }
+        cmd.output()
     })
     .await
     .map_err(|e| format!("Subprocess spawn failed: {}", e))?
@@ -13693,15 +13987,18 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
     // Version comparison: use the live server version if available; fall back
     // to the installed bundle only when the server is unreachable.
     if let Some(ref server_ver) = server_version {
-        if server_ver != VERSION {
-            cli_println!(
+        // Strip leading 'v' and trailing '-SNAPSHOT' so dev builds
+        // (e.g. "4.12.2" vs "4.12.2-SNAPSHOT") don't produce a
+        // false-positive version mismatch warning on every command.
+        if normalize_version(server_ver) != normalize_version(VERSION) {
+            eprintln!(
                 "⚠  Version mismatch: CLI is {} but running backend is {}.",
                 VERSION, server_ver
             );
-            cli_println!(
+            eprintln!(
                 "   The CLI and backend were built from different versions of the source tree."
             );
-            cli_println!(
+            eprintln!(
                 "   Rebuild both to match:  mvn install -pl browser4-rest -am && cargo build --manifest-path cli/browser4-cli/Cargo.toml"
             );
             json_field("version_mismatch", json!(true));
@@ -13713,16 +14010,16 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
         if let Some(ref metadata) =
             daemon::read_installed_browser4_runtime_metadata()
         {
-            let installed_ver = metadata.tag.trim().trim_start_matches('v');
-            if installed_ver != VERSION.trim() {
-                cli_println!(
+            let installed_ver = metadata.tag.trim();
+            if normalize_version(installed_ver) != normalize_version(VERSION) {
+                eprintln!(
                     "⚠  Version mismatch: CLI is {} but installed backend is {}.",
                     VERSION, metadata.tag
                 );
-                cli_println!(
+                eprintln!(
                     "   The backend is not running, so the installed bundle version is shown."
                 );
-                cli_println!(
+                eprintln!(
                     "   Start the backend to compare against the live server version."
                 );
                 json_field("version_mismatch", json!(true));
@@ -14442,6 +14739,11 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "close-all"
         && command != "kill-all"
         && command != "session-default"
+        && command != "config"
+        && command != "config-list"
+        && command != "config-get"
+        && command != "config-set"
+        && command != "config-delete"
         && command != "list"
         && command != "install"
         && command != "uninstall"
@@ -14643,6 +14945,7 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         "snapshot" => format!("snapshot-{}", sub),
         "skills" => format!("skills-{}", sub),
         "plugin" => format!("plugin-{}", sub),
+        "config" => format!("config-{}", sub),
         _ => return None,
     };
     let mut rewritten = vec![rewritten_command];
@@ -16016,6 +16319,18 @@ async fn run(
         }
         "session-default" => {
             handle_session_default(&tool_params).await?;
+        }
+        "config" | "config-list" => {
+            handle_config_list().await?;
+        }
+        "config-get" => {
+            handle_config_get(&tool_params).await?;
+        }
+        "config-set" => {
+            handle_config_set(&tool_params).await?;
+        }
+        "config-delete" => {
+            handle_config_delete(&tool_params).await?;
         }
         "list" => {
             let verbose = tool_params
@@ -21669,9 +21984,7 @@ mod tests {
         let old_state = CliState {
             session_id: Some("7fd8ffae-519b-4713-adfa-5b296a3249b9".to_string()),
             base_url: "http://localhost:8182".to_string(),
-            is_attached: true,
-            attach_type: Some("extension".to_string()),
-            cdp_endpoint: None,
+            kind: SessionKind::ExtensionAttached,
             browser_channel: Some("chrome".to_string()),
             ..Default::default()
         };
@@ -21682,8 +21995,7 @@ mod tests {
         new_state.base_url = "http://localhost:8182".to_string();
         new_state.active_selector = None;
         new_state.last_mouse_position = None;
-        new_state.is_attached = false;
-        new_state.attach_type = None;
+        new_state.kind = SessionKind::Browser4Launched;
         new_state.cdp_endpoint = None;
         new_state.browser_channel = None;
         new_state.created_at = Some("2026-07-25T00:00:00Z".to_string());
@@ -21693,6 +22005,8 @@ mod tests {
         // Read back and verify.
         let read = read_state(Some(dir), None);
         assert_eq!(read.session_id.as_deref(), Some("new-browser4-session-id"));
+        assert_eq!(read.kind, SessionKind::Browser4Launched,
+            "kind must be Browser4Launched for a new Browser4-managed session");
         assert!(!read.is_attached, "is_attached must be false for a new Browser4-managed session");
         assert_eq!(read.attach_type, None, "attach_type must be None — not 'extension' or 'cdp'");
         assert_eq!(read.cdp_endpoint, None);
@@ -21709,8 +22023,7 @@ mod tests {
         let old_state = CliState {
             session_id: Some("cdp-session-1".to_string()),
             base_url: "http://localhost:8182".to_string(),
-            is_attached: true,
-            attach_type: Some("cdp".to_string()),
+            kind: SessionKind::CdpAttached,
             cdp_endpoint: Some("http://localhost:9222".to_string()),
             browser_channel: None,
             ..Default::default()
@@ -21718,22 +22031,21 @@ mod tests {
 
         let mut new_state = old_state.clone();
         new_state.session_id = Some("new-browser4-session-id".to_string());
-        new_state.is_attached = false;
-        new_state.attach_type = None;
+        new_state.kind = SessionKind::Browser4Launched;
         new_state.cdp_endpoint = None;
         new_state.browser_channel = None;
         write_state(&new_state, Some(dir), None).unwrap();
 
         let read = read_state(Some(dir), None);
+        assert_eq!(read.kind, SessionKind::Browser4Launched);
         assert!(!read.is_attached);
         assert_eq!(read.attach_type, None);
         assert_eq!(read.cdp_endpoint, None);
     }
 
-    /// invalidate_session (as used in with_session recovery) keeps attachment
-    /// flags so the caller can decide whether to reconnect or create a new
-    /// session.  This test guards the distinction between invalidation and
-    /// creation.
+    /// invalidate_session (as used in with_session recovery) keeps session kind
+    /// so the caller can decide whether to reconnect or create a new session.
+    /// This test guards the distinction between invalidation and creation.
     #[test]
     fn invalidate_session_preserves_attachment_flags() {
         let tmp = test_temp_dir();
@@ -21742,16 +22054,15 @@ mod tests {
         let old_state = CliState {
             session_id: Some("ext-session".to_string()),
             base_url: "http://localhost:8182".to_string(),
-            is_attached: true,
-            attach_type: Some("extension".to_string()),
+            kind: SessionKind::ExtensionAttached,
             browser_channel: Some("chrome".to_string()),
             ..Default::default()
         };
 
         write_state(&old_state, Some(dir), None).unwrap();
 
-        // Simulate invalidate_session: clear session_id but keep attachment
-        // flags so the caller can reconnect.
+        // Simulate invalidate_session: clear session_id but keep kind
+        // so the caller can reconnect.
         let mut invalidated = old_state.clone();
         invalidated.session_id = None;
         invalidated.active_selector = None;
@@ -21760,6 +22071,8 @@ mod tests {
 
         let read = read_state(Some(dir), None);
         assert!(read.session_id.is_none(), "invalidate_session clears session_id");
+        assert_eq!(read.kind, SessionKind::ExtensionAttached,
+            "invalidate_session preserves kind for potential reconnect");
         assert!(read.is_attached, "invalidate_session preserves is_attached");
         assert_eq!(read.attach_type.as_deref(), Some("extension"),
             "invalidate_session preserves attach_type for potential reconnect");

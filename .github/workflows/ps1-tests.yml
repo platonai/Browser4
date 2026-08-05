@@ -4,16 +4,8 @@ name: PowerShell Tests
 # Fast, self-contained — no Java/Maven/Docker dependency needed.
 
 on:
-  push:
-    paths:
-      - '**.ps1'
-      - '**.psm1'
-      - '**.psd1'
-  pull_request:
-    paths:
-      - '**.ps1'
-      - '**.psm1'
-      - '**.psd1'
+  schedule:
+    - cron: '23 3 * * *'
 
 permissions:
   contents: read

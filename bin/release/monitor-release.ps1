@@ -59,13 +59,98 @@ $ErrorActionPreference = "Stop"
 
 <#
 .SYNOPSIS
-    Extract minimal, deduplicated error messages from log output.
-    Token-efficient: keeps only lines near error indicators, deduplicates
-    near-duplicate blocks, and caps at a reasonable size.
+    Normalize raw log output (string or array) into a clean string[].
+    gh run view --log-failed returns a single string; other paths return
+    arrays. This ensures consistent line-by-line iteration downstream.
+#>
+function ConvertTo-LogLines {
+    param([object]$RawLogs)
+    if ($null -eq $RawLogs) { return @() }
+    if ($RawLogs -is [string]) {
+        return @($RawLogs -split '\r?\n')
+    }
+    if ($RawLogs -is [System.Collections.IEnumerable]) {
+        $result = [System.Collections.Generic.List[string]]::new()
+        foreach ($item in $RawLogs) {
+            if ($item -is [string]) {
+                $sub = [string[]]($item -split '\r?\n')
+                $result.AddRange($sub)
+            } else {
+                $result.Add([string]$item)
+            }
+        }
+        return [string[]]$result.ToArray()
+    }
+    return @([string]$RawLogs)
+}
+
+<#
+.SYNOPSIS
+    Parse a GitHub Actions log line in tab-separated format:
+        job_name<TAB>step_name<TAB>timestamp<TAB>message
+    Returns a hashtable with Job, Step, Timestamp, Message keys,
+    or $null if the line doesn't match.
+#>
+function Parse-GitHubLogLine {
+    param([string]$Line)
+
+    if ($Line -notmatch "`t") { return $null }
+
+    $parts = $Line -split "`t"
+    if ($parts.Count -lt 3) { return $null }
+
+    return @{
+        Job       = $parts[0]
+        Step      = $parts[1]
+        Timestamp = $parts[2]
+        Message   = if ($parts.Count -gt 3) { ($parts[3..($parts.Count - 1)] -join "`t") } else { '' }
+    }
+}
+
+<#
+.SYNOPSIS
+    Extract structured, deduplicated error diagnostics from log output.
+    Produces a report with:
+      1. "Failing Tests" — specific test names, deduplicated
+      2. "Error Details" — contextual error blocks with GH Actions structure parsed
+
+    Token-efficient: caps blocks at 50 and deduplicates with SHA-256 hashing.
 #>
 function Extract-MinimalErrors {
-    param([string[]]$LogLines, [string]$RunId = '')
+    param(
+        [object]$LogLines,
+        [string]$RunId = ''
+    )
 
+    $lines = ConvertTo-LogLines -RawLogs $LogLines
+    if ($lines.Count -eq 0) {
+        return "(No log output to analyze.)"
+    }
+
+    # ── Pass 1: Extract specific failing test names ──────────────────────
+    $testFailures = [System.Collections.Generic.List[string]]::new()
+    $seenTests    = @{}
+
+    # Rust test: "test test_e2e_session_lifecycle ... FAILED"
+    # Kotlin:    "Tests failed: 3, passed: 100"
+    # Go:        "--- FAIL: TestName"
+    # Generic:   "test_e2e_foo => FAILED"
+    foreach ($ln in $lines) {
+        if ($ln -match 'test\s+(\S+)\s+\.\.\.\s+FAILED') {
+            $tn = $Matches[1]
+            if (-not $seenTests.ContainsKey($tn)) { $seenTests[$tn] = $true; $testFailures.Add($tn) }
+        }
+        if ($ln -match '(test_e2e_\S+)\s.*=>\s*FAILED') {
+            $tn = $Matches[1]
+            if (-not $seenTests.ContainsKey($tn)) { $seenTests[$tn] = $true; $testFailures.Add($tn) }
+        }
+        if ($ln -match '---\s+FAIL:\s+(\S+)') {
+            $tn = $Matches[1]
+            if (-not $seenTests.ContainsKey($tn)) { $seenTests[$tn] = $true; $testFailures.Add($tn) }
+        }
+    }
+
+    # ── Pass 2: Extract error blocks with context ────────────────────────
     $errorPatterns = @(
         'error:', 'Error:', 'ERROR:',
         '\[ERROR\]', '\[error\]',
@@ -87,21 +172,20 @@ function Extract-MinimalErrors {
         'timeout', 'Timeout', 'TIMEOUT',
         'command not found', 'No such file',
         'NoClassDefFoundError', 'ClassNotFoundException',
-        'error[E', 'error: [E',          # Rust compiler errors
+        'error[E', 'error: [E',
         'Aborting due to',
         'Could not compile',
         'Failed to compile',
         'Tests failed',
-        'test failed',
         'test result: FAILED'
     )
 
     $seen = @{}
-    $errors = [System.Collections.Generic.List[string]]::new()
+    $errorBlocks = [System.Collections.Generic.List[string]]::new()
     $prevWasSeparator = $false
 
-    for ($i = 0; $i -lt $LogLines.Count; $i++) {
-        $line = $LogLines[$i]
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $line = $lines[$i]
         $matched = $false
         foreach ($pat in $errorPatterns) {
             if ($line -match [regex]::Escape($pat)) {
@@ -111,15 +195,24 @@ function Extract-MinimalErrors {
         }
 
         if ($matched) {
-            # Capture context: up to 2 lines before, the match, up to 2 lines after
             $ctxBefore = 2
-            $ctxAfter  = 2
+            $ctxAfter  = 3
             $start = [Math]::Max(0, $i - $ctxBefore)
-            $end   = [Math]::Min($LogLines.Count - 1, $i + $ctxAfter)
+            $end   = [Math]::Min($lines.Count - 1, $i + $ctxAfter)
 
-            $block = ($LogLines[$start..$end] -join "`n").Trim()
+            # Render block: for GH-format lines, strip the timestamp and show [Job/Step] prefix
+            $blockLines = foreach ($j in $start..$end) {
+                $ln = $lines[$j]
+                $p = Parse-GitHubLogLine -Line $ln
+                if ($p -and $p.Message -and $p.Message.Trim().Length -gt 0) {
+                    "[$($p.Job) / $($p.Step)] $($p.Message)"
+                } else {
+                    $ln
+                }
+            }
+            $block = ($blockLines -join "`n").Trim()
+            if ($block.Length -lt 5) { continue }
 
-            # Deduplicate using a simple hash of the block
             $hash = [System.BitConverter]::ToString(
                 [System.Security.Cryptography.SHA256]::Create().ComputeHash(
                     [System.Text.Encoding]::UTF8.GetBytes($block)
@@ -128,45 +221,173 @@ function Extract-MinimalErrors {
 
             if (-not $seen.ContainsKey($hash)) {
                 $seen[$hash] = $true
-                if (-not $prevWasSeparator -and $errors.Count -gt 0) {
-                    $errors.Add("")
+                if (-not $prevWasSeparator -and $errorBlocks.Count -gt 0) {
+                    $errorBlocks.Add("")
                 }
-                $errors.Add("══ block $($seen.Count) ══")
-                $errors.Add($block)
+                $errorBlocks.Add("══ block $($seen.Count) ══")
+                $errorBlocks.Add($block)
                 $prevWasSeparator = $false
 
-                # Token safety: ~50 blocks max (≈200-300 lines)
                 if ($seen.Count -ge 50) {
-                    $errors.Add("")
-                    $truncationMsg = "... (truncated at 50 blocks for token efficiency"
+                    $errorBlocks.Add("")
+                    $truncMsg = "... (truncated at 50 blocks for token efficiency"
                     if ($RunId) {
-                        $truncationMsg += " — run `gh run view $RunId --log-failed` for full logs)"
+                        $truncMsg += " — run `gh run view $RunId --log-failed` for full logs)"
                     } else {
-                        $truncationMsg += " — use `gh run view --log-failed` for full logs)"
+                        $truncMsg += " — use `gh run view --log-failed` for full logs)"
                     }
-                    $errors.Add($truncationMsg)
+                    $errorBlocks.Add($truncMsg)
                     break
                 }
             }
         }
     }
 
-    if ($errors.Count -eq 0) {
-        # No patterns matched — return last 40 lines as fallback
-        # Select-Object returns Object[]; iterate with ForEach-Object to get strings
-        $tail = [System.Collections.Generic.List[string]]::new()
-        $LogLines | Select-Object -Last 40 | ForEach-Object { $tail.Add([string]$_) }
-        $errors.Add("(No specific error patterns matched — last 40 log lines)")
-        $errors.AddRange($tail)
+    # ── Build output ──
+    $output = [System.Collections.Generic.List[string]]::new()
+
+    if ($testFailures.Count -gt 0) {
+        $output.Add("## Failing Tests")
+        $output.Add("")
+        foreach ($t in $testFailures) {
+            $output.Add("- $t")
+        }
+        $output.Add("")
     }
 
-    return $errors -join "`n"
+    if ($errorBlocks.Count -gt 0) {
+        $output.Add("## Error Details")
+        $output.Add("")
+        $output.AddRange($errorBlocks)
+    }
+
+    if ($testFailures.Count -eq 0 -and $errorBlocks.Count -eq 0) {
+        $output.Add("(No specific error patterns or test failures matched — last 40 log lines)")
+        $tail = $lines | Select-Object -Last 40
+        foreach ($t in $tail) { $output.Add([string]$t) }
+    }
+
+    return $output -join "`n"
 }
 
 <#
 .SYNOPSIS
-    Create a coworker task file in 0draft/ for a workflow failure.
-    Returns the path to the created .md file.
+    Fetch structured job objects for a workflow run.
+    Returns an array of job objects (with name, databaseId, conclusion), or $null.
+#>
+function Get-WorkflowJobs {
+    param([string]$RunId)
+
+    try {
+        $json = gh run view $RunId --json jobs 2>&1
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $data = $json | ConvertFrom-Json
+        return $data.jobs
+    } catch {
+        return $null
+    }
+}
+
+<#
+.SYNOPSIS
+    Fetch the log for a single job by database ID.
+#>
+function Get-JobLogs {
+    param([string]$RunId, [string]$JobId)
+
+    try {
+        $logs = gh run view $RunId --job $JobId --log 2>&1
+        if ($LASTEXITCODE -ne 0) { return $null }
+        return $logs
+    } catch {
+        return $null
+    }
+}
+
+<#
+.SYNOPSIS
+    Cross-reference failing test names against recent workflow failures
+    to flag potential flaky tests. Returns an array of test names that
+    also appear in other recent failure logs.
+#>
+function Find-PotentialFlakyTests {
+    param(
+        [string[]]$FailingTests,
+        [string]$WorkflowName,
+        [int]$LookbackRuns = 5
+    )
+
+    if ($FailingTests.Count -eq 0) { return @() }
+
+    $flaky = [System.Collections.Generic.List[string]]::new()
+    try {
+        $recentRuns = gh run list --workflow "$WorkflowName" --limit ($LookbackRuns + 1) `
+            --json databaseId,conclusion 2>$null | ConvertFrom-Json
+
+        if (-not $recentRuns) { return @() }
+
+        foreach ($run in $recentRuns) {
+            if ($run.conclusion -ne 'failure') { continue }
+            $recentLogs = gh run view $run.databaseId --log-failed 2>&1
+            if (-not $recentLogs) { continue }
+            $recentText = if ($recentLogs -is [array]) { $recentLogs -join "`n" } else { [string]$recentLogs }
+
+            foreach ($test in $FailingTests) {
+                if ($recentText -match [regex]::Escape($test)) {
+                    if ($test -notin $flaky) { $flaky.Add($test) }
+                }
+            }
+        }
+    } catch {
+        # Best-effort; flaky detection is non-critical
+    }
+
+    return $flaky.ToArray()
+}
+
+<#
+.SYNOPSIS
+    Retrieve the commit range summary for a release tag.
+    Falls back to merge-base if no previous tag exists.
+    Returns a string or empty string on failure.
+#>
+function Get-ReleaseChangelog {
+    param([string]$Tag, [string]$RepoRoot)
+
+    try {
+        Push-Location $RepoRoot
+
+        # Find the previous tag (the one before $Tag, sorted by version)
+        $prevTag = (git tag --sort=-v:refname 2>$null | Select-Object -Skip 1 | Select-Object -First 1)
+        if (-not $prevTag) {
+            $prevTag = (git merge-base origin/main HEAD 2>$null)
+        }
+
+        if ($prevTag) {
+            $log = git log --oneline "$prevTag..$Tag" -- . 2>&1
+            if ($log -and $LASTEXITCODE -eq 0) {
+                Pop-Location
+                return "Commits since ${prevTag}:`n$log"
+            }
+        }
+
+        Pop-Location
+    } catch {
+        # Best-effort
+    }
+
+    return ''
+}
+
+<#
+.SYNOPSIS
+    Create a coworker task file in 1ready/ for a workflow failure.
+    The task is designed to be immediately actionable by the AI coworker:
+    it includes failing test names, error diagnostics, flaky-test flags,
+    release changelog, and domain-specific investigation hints.
+
+    Writing to 1ready/ (not 0draft/) means the task is queued for
+    execution — no manual "assign" step needed.
 #>
 function New-CoworkerFailureTask {
     param(
@@ -174,10 +395,16 @@ function New-CoworkerFailureTask {
         [string]$Tag,
         [string]$RunId,
         [string]$Errors,
-        [string]$RepoRoot
+        [string[]]$FailingTests,
+        [string[]]$FlakyTests,
+        [string]$Changelog,
+        [string]$RepoRoot,
+        [hashtable]$FailedJobs = @{}
     )
 
-    $taskDir = Join-Path $RepoRoot "coworker\tasks\main\0draft"
+    # Write directly to 1ready/ so the task is immediately executable.
+    # The old code wrote to 0draft/, which required a manual "coworker assign" step.
+    $taskDir = Join-Path $RepoRoot "coworker\tasks\main\1ready"
     if (-not (Test-Path $taskDir)) {
         New-Item -ItemType Directory -Path $taskDir -Force | Out-Null
     }
@@ -190,35 +417,132 @@ function New-CoworkerFailureTask {
 
     $taskPath = Join-Path $taskDir "$safeName.md"
 
-    # Cap error body at 4000 chars for token efficiency
+    # ── Build failing-test summary ──
+    $testSection = ''
+    if ($FailingTests -and $FailingTests.Count -gt 0) {
+        $testSection = "`n## Failing Tests`n`n"
+        foreach ($t in $FailingTests) {
+            $flakyMark = if ($FlakyTests -and $t -in $FlakyTests) { ' ⚠️ (also fails in other recent runs — may be flaky)' } else { '' }
+            $testSection += "- $t$flakyMark`n"
+        }
+    }
+
+    # ── Build failed-jobs summary ──
+    $jobsSection = ''
+    if ($FailedJobs -and $FailedJobs.Count -gt 0) {
+        $jobsSection = "`n## Failed Jobs`n`n"
+        foreach ($kv in $FailedJobs.GetEnumerator()) {
+            $jobsSection += "- **$($kv.Key)** (job ID: $($kv.Value))`n"
+        }
+    }
+
+    # ── Build changelog section ──
+    $changelogSection = ''
+    if ($Changelog) {
+        $changelogSection = "`n## Release Changelog`n`n``````text`n$Changelog`n``````"
+    }
+
+    # ── Build domain-specific investigation hints ──
+    $hintSection = ''
+    if ($FailingTests -and ($FailingTests -match 'e2e')) {
+        $hintSection = @'
+
+## Investigation Hints (E2E test failures)
+
+- E2E tests live in `cli/browser4-cli/tests/e2e/scenarios/`
+- Test registration is in `cli/browser4-cli/tests/e2e/scenarios/mod.rs`
+- The fixture HTTP server is in the Rust test harness
+- These tests run against a real Browser4 backend; backend changes can break them
+- Check if fixture server port resolution, HTML fixtures, or state verification changed
+- Key files (per CLAUDE.md): `PulsarWebDriver.kt`, `MCPToolController.kt`, `commands.rs`, `main.rs`
+- Run locally: `cd cli/browser4-cli && cargo test --test e2e -- --nocapture`
+'@
+    } elseif ($FailingTests -and (($FailingTests -match 'Snapshot') -or ($FailingTests -match 'Pulsar'))) {
+        $hintSection = @'
+
+## Investigation Hints (Kotlin/backend test failures)
+
+- Backend tests: `mvn test -pl browser4-rest -am`
+- Browser driver tests: check `browser4-core/browser4-browser/`
+- Key files: `PulsarWebDriver.kt`, `MCPToolControllerTest.kt`, `ArgumentNormalizersTest.kt`
+- Snapshot tests may need AX accessible name checks — see recent commits for patterns
+'@
+    }
+
+    # ── Cap error body at 4000 chars ──
     $errorBody = if ($Errors.Length -gt 4000) {
-        $Errors.Substring(0, 4000) + "`n`n... (truncated — full logs: gh run view $RunId --log-failed)"
+        $Errors.Substring(0, 4000) + "`n`n... (truncated — run `gh run view $RunId --log-failed` for full logs)"
     } else {
         $Errors
     }
 
-    $taskContent = @"
+    # ── Determine the GitHub repo path for the run URL ──
+    $repoSlug = ''
+    try {
+        $remoteUrl = git -C $RepoRoot remote get-url origin 2>$null
+        if ($remoteUrl -match 'github\.com[:/](.+?)(\.git)?$') {
+            $repoSlug = $Matches[1].TrimEnd('.git')
+        }
+    } catch { }
+
+    $runUrl = if ($repoSlug) {
+        "https://github.com/$repoSlug/actions/runs/$RunId"
+    } else {
+        "(run: gh run view $RunId --web)"
+    }
+
+    $taskContent = @'
 Title: Fix $WorkflowName failure for tag $Tag
-Description: The $WorkflowName run $RunId (tag $Tag) has failed. Minimal error messages extracted from failed job logs below. Please reproduce and fix the root cause.
-Prompt: The $WorkflowName run $RunId for tag $Tag failed.
+Description: The $WorkflowName workflow run $RunId (tag $Tag) failed. Investigate the root cause, apply a fix, verify with tests, and commit.
+Prompt: The workflow `$WorkflowName` (run $RunId) for tag `$Tag` failed in CI.
+
+## Context
+
+- **Workflow:** $WorkflowName
+- **Tag:** $Tag
+- **Run ID:** $RunId
+- **Run URL:** $runUrl
+
+$testSection$jobsSection$changelogSection
 
 ## Reproduce
+
 ```bash
+# View all failed logs
 gh run view $RunId --log-failed
+
+# View the run in browser
 gh run view $RunId --web
 ```
 
-## Errors
+## Error Diagnostics
 
 $errorBody
-
+$hintSection
 ## Instructions
-1. Examine the error messages above to understand what failed
-2. Reproduce the failure by checking the relevant code paths
-3. Fix the root cause — do not just silence the error
-4. Verify the fix: build succeeds and relevant tests pass
-5. Commit with a conventional-commit message
-"@
+
+1. **Categorize the failure:** Is it a test assertion change, a real regression, or an
+   infrastructure/flake issue? Check the release changelog above to see what code changed.
+2. **If tests need updating** (assertion format changed, output text changed):
+   - Update the test assertions to match the new expected output
+   - Check `cli/browser4-cli/tests/e2e/scenarios/` for Rust E2E tests
+   - Look at the recent commits for patterns in how test assertions are structured
+3. **If it is a real regression:**
+   - Identify the root cause from the error diagnostics
+   - Trace the code path using the repository structure
+   - Apply the minimal fix
+4. **If it is a flaky test** (same test fails sporadically across runs):
+   - Do NOT delete or skip the test
+   - Add retry logic or fix the race condition
+   - Check CLAUDE.md "Known CDP pitfalls" for common causes
+5. **Verify:** Run the relevant test suite locally or examine the CI output for
+   the specific test that failed. Make sure your change would resolve it.
+6. **Commit:** Use a conventional-commit message, e.g.:
+   ``fix(test): update test assertions for changed CLI output``
+'@
+
+    # Expand variables in the single-quoted template
+    $taskContent = $ExecutionContext.InvokeCommand.ExpandString($taskContent)
 
     Set-Content -Path $taskPath -Value $taskContent -Encoding UTF8
     Write-Host "  Coworker task created: $taskPath" -ForegroundColor Green
@@ -229,7 +553,16 @@ $errorBody
 <#
 .SYNOPSIS
     When a workflow fails, extract errors from failed job logs, create a
-    coworker task, and dispatch it via b4w.ps1 coworker fix.
+    coworker task in 1ready/, and dispatch it via b4w.ps1 coworker fix.
+
+    Enhanced pipeline (5 stages):
+    1. Fetch structured job info to identify exactly which jobs failed.
+    2. Collect per-job logs (more granular than --log-failed) or fall back
+       to --log-failed if per-job fetch isn't available.
+    3. Parse logs to extract specific failing test names and error blocks.
+    4. Cross-reference with recent runs to flag potential flaky tests.
+    5. Collect release changelog (commits since previous tag).
+    6. Build a comprehensive task with investigation hints and dispatch.
 #>
 function Invoke-WorkflowFailureHandler {
     param(
@@ -245,38 +578,130 @@ function Invoke-WorkflowFailureHandler {
 
     Write-Host ""
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Yellow
-    Write-Host "  Workflow FAILED — extracting errors for coworker" -ForegroundColor Yellow
+    Write-Host "  Workflow FAILED — diagnosing for coworker" -ForegroundColor Yellow
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Yellow
 
-    # 1. Fetch failed job logs
-    Write-Host "`nFetching failed job logs (gh run view $RunId --log-failed) ..." -ForegroundColor DarkGray
-    $rawLogs = gh run view $RunId --log-failed 2>&1
-    $logExit = $LASTEXITCODE
+    # ── 1. Fetch structured job info ──────────────────────────────────────
+    Write-Host "`n[1/5] Fetching job structure (gh run view $RunId --json jobs) ..." -ForegroundColor DarkGray
+    $jobs = Get-WorkflowJobs -RunId $RunId
+    $failedJobs = @{}
+    if ($jobs) {
+        foreach ($j in $jobs) {
+            if ($j.conclusion -eq 'failure' -or $j.conclusion -eq 'cancelled') {
+                $failedJobs[$j.name] = $j.databaseId
+            }
+        }
+        Write-Host "  Found $($failedJobs.Count) failed job(s):" -ForegroundColor DarkGray
+        foreach ($kv in $failedJobs.GetEnumerator()) {
+            Write-Host "    - $($kv.Key) (job ID: $($kv.Value))" -ForegroundColor DarkGray
+        }
+    } else {
+        Write-Host "  Could not parse job structure; will fall back to --log-failed." -ForegroundColor Yellow
+    }
 
-    if ($logExit -ne 0 -or (-not $rawLogs) -or ($rawLogs -is [string] -and [string]::IsNullOrWhiteSpace($rawLogs))) {
-        Write-Host "  Could not fetch failed logs (exit code: $logExit)." -ForegroundColor Yellow
-        Write-Host "  Trying job summary fallback..." -ForegroundColor DarkGray
-        $rawLogs = gh run view $RunId --json jobs 2>&1
-        if (-not $rawLogs) {
-            Write-Host "  No log data available. Coworker task will contain the workflow metadata only." -ForegroundColor Yellow
-            $rawLogs = @("(No failed logs available — use `gh run view $RunId --web` to inspect the run)")
+    # ── 2. Collect all log output ────────────────────────────────────────
+    Write-Host "`n[2/5] Collecting failed-job logs..." -ForegroundColor DarkGray
+    $allLogs = [System.Collections.Generic.List[string]]::new()
+
+    if ($failedJobs.Count -gt 0) {
+        # Per-job logs: scoped to one job, avoids interleaving noise
+        foreach ($kv in $failedJobs.GetEnumerator()) {
+            $jobLogs = Get-JobLogs -RunId $RunId -JobId $kv.Value
+            if ($jobLogs) {
+                $allLogs.Add("=== Job: $($kv.Key) (ID: $($kv.Value)) ===")
+                $allLogs.AddRange($(ConvertTo-LogLines -RawLogs $jobLogs))
+                Write-Host "  Collected logs for: $($kv.Key)" -ForegroundColor DarkGray
+            } else {
+                Write-Host "  Warning: Could not fetch logs for job '$($kv.Key)'" -ForegroundColor Yellow
+            }
         }
     }
 
-    # 2. Extract minimal errors (token-efficient)
-    Write-Host "Extracting minimal error messages..." -ForegroundColor DarkGray
-    $errors = Extract-MinimalErrors -LogLines $rawLogs
-    Write-Host "  Extracted ~$(([regex]::Matches($errors, '══ block')).Count) distinct error block(s)" -ForegroundColor DarkGray
+    if ($allLogs.Count -eq 0) {
+        # Fall back to --log-failed (all failed jobs combined)
+        Write-Host "  Falling back to gh run view $RunId --log-failed ..." -ForegroundColor DarkGray
+        $rawLogs = gh run view $RunId --log-failed 2>&1
+        $logExit = $LASTEXITCODE
 
-    # 3. Create coworker task
-    $taskPath = New-CoworkerFailureTask -WorkflowName $WorkflowName -Tag $Tag -RunId $RunId -Errors $errors -RepoRoot $RepoRoot
+        if ($logExit -ne 0 -or (-not $rawLogs) -or ($rawLogs -is [string] -and [string]::IsNullOrWhiteSpace($rawLogs))) {
+            Write-Host "  Could not fetch failed logs (exit code: $logExit)." -ForegroundColor Yellow
+            Write-Host "  Coworker task will contain metadata only." -ForegroundColor Yellow
+            $allLogs.Add("(No failed logs available — use `gh run view $RunId --web` to inspect the run)")
+        } else {
+            $allLogs.AddRange($(ConvertTo-LogLines -RawLogs $rawLogs))
+        }
+    }
+
+    Write-Host "  Total log lines collected: $($allLogs.Count)" -ForegroundColor DarkGray
+
+    # ── 3. Extract structured error diagnostics ──────────────────────────
+    Write-Host "`n[3/5] Extracting error diagnostics..." -ForegroundColor DarkGray
+    $errors = Extract-MinimalErrors -LogLines $allLogs -RunId $RunId
+
+    # Re-extract failing test names from the line collection (already deduped
+    # inside Extract-MinimalErrors but we need the array for flaky-check)
+    $failingTests = [System.Collections.Generic.List[string]]::new()
+    $seenFt = @{}
+    foreach ($ln in $allLogs) {
+        if ($ln -match 'test\s+(\S+)\s+\.\.\.\s+FAILED') {
+            $tn = $Matches[1]
+            if (-not $seenFt.ContainsKey($tn)) { $seenFt[$tn] = $true; $failingTests.Add($tn) }
+        }
+        if ($ln -match '(test_e2e_\S+)\s.*=>\s*FAILED') {
+            $tn = $Matches[1]
+            if (-not $seenFt.ContainsKey($tn)) { $seenFt[$tn] = $true; $failingTests.Add($tn) }
+        }
+    }
+    $testCount = $failingTests.Count
+    $blockCount = ([regex]::Matches($errors, '══ block')).Count
+    Write-Host "  Found $testCount failing test(s), $blockCount distinct error block(s)" -ForegroundColor DarkGray
+
+    # ── 4. Check for flaky tests ────────────────────────────────────────
+    Write-Host "`n[4/5] Checking for potential flaky tests (cross-reference with recent runs) ..." -ForegroundColor DarkGray
+    $flakyTests = @()
+    if ($failingTests.Count -gt 0) {
+        $flakyTests = Find-PotentialFlakyTests -FailingTests $failingTests.ToArray() -WorkflowName $WorkflowName
+        if ($flakyTests.Count -gt 0) {
+            Write-Host "  ⚠️  $($flakyTests.Count) test(s) also failed in other recent runs (possible flakes):" -ForegroundColor Yellow
+            foreach ($ft in $flakyTests) {
+                Write-Host "    - $ft" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "  No flaky-test pattern detected (failures appear to be new)." -ForegroundColor DarkGray
+        }
+    } else {
+        Write-Host "  No test names to check." -ForegroundColor DarkGray
+    }
+
+    # ── 5. Collect release changelog ────────────────────────────────────
+    Write-Host "`n[5/5] Collecting release changelog ..." -ForegroundColor DarkGray
+    $changelog = Get-ReleaseChangelog -Tag $Tag -RepoRoot $RepoRoot
+    if ($changelog) {
+        $commitCount = ([regex]::Matches($changelog, "`n")).Count
+        Write-Host "  Changelog collected ($commitCount commits)." -ForegroundColor DarkGray
+    } else {
+        Write-Host "  No changelog available (could not determine previous tag)." -ForegroundColor DarkGray
+    }
+
+    # ── 6. Create comprehensive coworker task ────────────────────────────
+    Write-Host "`nCreating coworker task..." -ForegroundColor Cyan
+    $taskPath = New-CoworkerFailureTask `
+        -WorkflowName $WorkflowName `
+        -Tag $Tag `
+        -RunId $RunId `
+        -Errors $errors `
+        -FailingTests $failingTests.ToArray() `
+        -FlakyTests $flakyTests `
+        -Changelog $changelog `
+        -RepoRoot $RepoRoot `
+        -FailedJobs $failedJobs
 
     if (-not $taskPath -or -not (Test-Path $taskPath)) {
         Write-Host "  ERROR: Failed to create coworker task file." -ForegroundColor Red
         return
     }
 
-    # 4. Dispatch to coworker fix
+    # ── 7. Dispatch to coworker fix ──────────────────────────────────────
     $b4wScript = Join-Path $RepoRoot "b4w.ps1"
     if (Test-Path $b4wScript) {
         Write-Host "`nDispatching to coworker: b4w.ps1 coworker fix -Path '$taskPath'" -ForegroundColor Cyan

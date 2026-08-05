@@ -114,7 +114,7 @@ data class ExtractResult(
     val data: JsonNode
 ) {
     override fun toString(): String {
-        return "success: $success message: $message data: ${data}"
+        return if (success) data.toString() else "Extract failed: $message"
     }
 }
 

@@ -3,8 +3,12 @@ package ai.platon.pulsar.agentic.inference.action
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.AgenticEvents
 import ai.platon.pulsar.agentic.inference.AgentMessageList
+import ai.platon.pulsar.agentic.inference.ToolExposeMode
+import ai.platon.pulsar.agentic.inference.collapseToLegacyString
+import ai.platon.pulsar.agentic.inference.toChatMessages
 import ai.platon.pulsar.agentic.model.ActionDescription
 import ai.platon.pulsar.agentic.model.ExecutionContext
+import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.ExperimentalApi
 import ai.platon.pulsar.common.brief
@@ -15,11 +19,17 @@ import ai.platon.pulsar.external.BrowserChatModel
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
+import dev.langchain4j.data.image.Image
+import dev.langchain4j.data.message.ImageContent
+import dev.langchain4j.data.message.UserMessage
+import dev.langchain4j.model.chat.request.ChatRequest
+import dev.langchain4j.model.chat.response.ChatResponse
 import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicBoolean
 
 open class ContextToAction(
-    val conf: ImmutableConfig
+    val conf: ImmutableConfig,
+    private val toolManager: AgentToolManager? = null,
 ) {
     private val logger = getLogger(this)
 
@@ -28,6 +38,26 @@ open class ContextToAction(
     val chatModel: BrowserChatModel get() = ChatModelFactory.getOrCreate(conf)
 
     val tta = TextToAction(conf)
+
+    /** How tools are exposed to the LLM (config-driven). */
+    val toolExposeMode: ToolExposeMode = ToolExposeMode.from(conf)
+
+    /** Lazy tool-calling loop — engaged only in TOOL_CALLING mode. */
+    private val toolCallLoop by lazy {
+        if (toolManager == null || !toolExposeMode.nativeToolCalling) {
+            null
+        } else {
+            val specs = toolManager.getLangChain4jToolSpecifications()
+            val registry = toolManager.getLangChain4jToolRegistry()
+            ai.platon.pulsar.agentic.inference.chat.AgentToolCallLoop(
+                model = chatModel,
+                toolSpecifications = specs,
+                coordinator = ai.platon.pulsar.agentic.tools.langchain4j.ToolExecutionCoordinator(
+                    toolManager, registry
+                ),
+            )
+        }
+    }
 
     /**
      * Tracks whether the configured chat model supports vision (image) input.
@@ -88,6 +118,22 @@ open class ContextToAction(
 
     @ExperimentalApi
     open suspend fun generateResponseRaw(messages: AgentMessageList, screenshotB64: String? = null): ModelResponse {
+        return if (toolExposeMode == ToolExposeMode.TEXT) {
+            generateResponseRawLegacy(messages, screenshotB64)
+        } else {
+            generateResponseRawWithLangChain4j(messages, screenshotB64)
+        }
+    }
+
+    /**
+     * Legacy TEXT-mode path — byte-identical to the original implementation.
+     * Collapses system/user messages to two plain strings and calls
+     * [BrowserChatModel.call].
+     */
+    private suspend fun generateResponseRawLegacy(
+        messages: AgentMessageList,
+        screenshotB64: String? = null,
+    ): ModelResponse {
         val systemMessage = messages.systemMessages().joinToString("\n")
         val userMessage = messages.userMessages().joinToString("\n")
 
@@ -101,7 +147,6 @@ open class ContextToAction(
                     b64Image = screenshotB64,
                     mediaType = "image/jpeg", category = category
                 ).also {
-                    // Success — model definitely supports vision
                     if (!visionCapabilityResolved) {
                         visionCapabilityResolved = true
                         logger.info("Model supports vision input (image-bearing call succeeded)")
@@ -116,7 +161,6 @@ open class ContextToAction(
                     )
                     modelSupportsVision.set(false)
                     visionCapabilityResolved = true
-                    // Retry without the screenshot
                     chatModel.call(systemMessage, userMessage, category = category)
                 } else {
                     throw e
@@ -127,6 +171,131 @@ open class ContextToAction(
         }
 
         return response
+    }
+
+    /**
+     * Structured path (CHAT or TOOL_CALLING mode).
+     *
+     * CHAT: Converts [AgentMessageList] → [ChatMessage]s, optionally
+     * attaches screenshot, calls [BrowserChatModel.langChainChat].
+     *
+     * TOOL_CALLING: Same, but engages [AgentToolCallLoop] for native
+     * multi-turn function calling.
+     */
+    private suspend fun generateResponseRawWithLangChain4j(
+        messages: AgentMessageList,
+        screenshotB64: String? = null,
+    ): ModelResponse {
+        var chatMessages = messages.toChatMessages()
+
+        // Attach screenshot to the last user message (vision)
+        if (screenshotB64 != null && modelSupportsVision.get()) {
+            chatMessages = attachScreenshot(chatMessages, screenshotB64)
+        }
+
+        // TOOL_CALLING mode: use the tool-calling loop
+        val loop = toolCallLoop
+        if (loop != null) {
+            return try {
+                loop.generate(chatMessages)
+            } catch (e: Exception) {
+                if (screenshotB64 != null && isImageNotSupportedError(e)) {
+                    logger.warn(
+                        "Model does not support image input; retrying without screenshot."
+                    )
+                    modelSupportsVision.set(false)
+                    visionCapabilityResolved = true
+                    loop.generate(messages.toChatMessages())
+                } else {
+                    throw e
+                }
+            }
+        }
+
+        // CHAT mode: simple langChainChat without tool specifications
+        val request = ChatRequest.builder()
+            .messages(chatMessages)
+            .build()
+
+        val response: ChatResponse = try {
+            chatModel.langChainChat(request, "cta")
+        } catch (e: Exception) {
+            if (screenshotB64 != null && isImageNotSupportedError(e)) {
+                logger.warn(
+                    "Model does not support image input; retrying without screenshot."
+                )
+                modelSupportsVision.set(false)
+                visionCapabilityResolved = true
+                val textOnly = messages.toChatMessages()
+                chatModel.langChainChat(
+                    ChatRequest.builder().messages(textOnly).build(), "cta"
+                )
+            } else {
+                throw e
+            }
+        }
+
+        return chatResponseToModelResponse(response)
+    }
+
+    /**
+     * Attach a base64 screenshot to the last [UserMessage] as [ImageContent].
+     */
+    private fun attachScreenshot(
+        messages: List<dev.langchain4j.data.message.ChatMessage>,
+        screenshotB64: String,
+    ): List<dev.langchain4j.data.message.ChatMessage> {
+        val result = messages.toMutableList()
+        val lastUserIdx = result.indices.lastOrNull {
+            result[it] is UserMessage
+        }
+        if (lastUserIdx != null) {
+            val userMsg = result[lastUserIdx] as UserMessage
+            val builder = UserMessage.Builder()
+            userMsg.contents().forEach { builder.addContent(it) }
+            builder.addContent(
+                ImageContent(
+                    Image.builder()
+                        .base64Data(screenshotB64)
+                        .mimeType("image/jpeg")
+                        .build()
+                )
+            )
+            if (userMsg.name() != null) builder.name(userMsg.name())
+            result[lastUserIdx] = builder.build()
+        } else {
+            result.add(
+                UserMessage.builder()
+                    .addContent(
+                        ImageContent(
+                            Image.builder()
+                                .base64Data(screenshotB64)
+                                .mimeType("image/jpeg")
+                                .build()
+                        )
+                    )
+                    .build()
+            )
+        }
+        return result
+    }
+
+    /**
+     * Map a LangChain4j [ChatResponse] to the external [ModelResponse] type
+     * that downstream code expects.
+     */
+    private fun chatResponseToModelResponse(response: ChatResponse): ModelResponse {
+        val content = response.aiMessage().text() ?: ""
+        val lc4jUsage = response.tokenUsage()
+        return ModelResponse(
+            content = content,
+            state = ResponseState.STOP,
+            tokenUsage = ai.platon.pulsar.external.TokenUsage(
+                inputTokenCount = lc4jUsage?.inputTokenCount() ?: 0,
+                outputTokenCount = lc4jUsage?.outputTokenCount() ?: 0,
+                totalTokenCount = lc4jUsage?.totalTokenCount() ?: 0,
+            ),
+        )
     }
 
     /**

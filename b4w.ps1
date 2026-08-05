@@ -6,7 +6,7 @@
 .DESCRIPTION
     b4w (browser4-cli wrapper) is a development-only launcher that builds and
     runs the browser4-cli Rust binary directly from the current codebase.  It
-    also bundles extra dev-tool subcommands (coworker, test, build) that are
+    also bundles extra dev-tool subcommands (coworker, sc, test, build) that are
     not part of the published browser4-cli release.
 
     This script is not shipped to end users — it lives in the repo root and
@@ -129,9 +129,59 @@ if ($RemainingArgs -and ($RemainingArgs[0] -eq '--' -or $RemainingArgs[0] -eq '-
 
 # ── Subcommand: coworker ──────────────────────────────────────────────────
 # Delegates to coworker/coworker.ps1, forwarding all remaining arguments.
+# Special cases:
+#   coworker start   — run coworker/start.ps1 sched in the background
+#   coworker stop    — stop the background scheduler
+#   coworker restart — stop and restart the background scheduler
 if ($CliArgs -and $CliArgs[0] -eq 'coworker') {
-    $CoworkerScript = Join-Path $ScriptDir 'coworker\coworker.ps1'
     $CoworkerArgs = if ($CliArgs.Count -gt 1) { ,$CliArgs[1..($CliArgs.Count - 1)] } else { @() }
+    $CoworkerPidFile = Join-Path $ScriptDir '.coworker\scheduler.pid'
+
+    # ── coworker start ───────────────────────────────────────────────────
+    if ($CoworkerArgs -and $CoworkerArgs[0] -eq 'start') {
+        $StartScript = Join-Path $ScriptDir 'coworker\start.ps1'
+        & $StartScript sched -Background -PidFile $CoworkerPidFile
+        exit $LASTEXITCODE
+    }
+
+    # ── coworker stop ────────────────────────────────────────────────────
+    if ($CoworkerArgs -and $CoworkerArgs[0] -eq 'stop') {
+        if (-not (Test-Path $CoworkerPidFile)) {
+            Write-Host 'No running Coworker scheduler found.' -ForegroundColor Yellow
+            exit 0
+        }
+        $pid = Get-Content $CoworkerPidFile -Raw
+        $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+        if ($proc) {
+            Write-Host "Stopping Coworker scheduler (PID $pid)..." -ForegroundColor Cyan
+            $proc.Kill()
+            Write-Host 'Coworker scheduler stopped.' -ForegroundColor Green
+        } else {
+            Write-Host "Coworker scheduler (PID $pid) is no longer running." -ForegroundColor Yellow
+        }
+        Remove-Item $CoworkerPidFile -Force -ErrorAction SilentlyContinue
+        exit 0
+    }
+
+    # ── coworker restart ─────────────────────────────────────────────────
+    if ($CoworkerArgs -and $CoworkerArgs[0] -eq 'restart') {
+        # Stop if running
+        if (Test-Path $CoworkerPidFile) {
+            $pid = Get-Content $CoworkerPidFile -Raw
+            $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+            if ($proc) {
+                Write-Host "Stopping Coworker scheduler (PID $pid)..." -ForegroundColor Cyan
+                $proc.Kill()
+            }
+            Remove-Item $CoworkerPidFile -Force -ErrorAction SilentlyContinue
+        }
+        # Start fresh
+        $StartScript = Join-Path $ScriptDir 'coworker\start.ps1'
+        & $StartScript sched -Background -PidFile $CoworkerPidFile
+        exit $LASTEXITCODE
+    }
+
+    $CoworkerScript = Join-Path $ScriptDir 'coworker\coworker.ps1'
     if ($CoworkerArgs) {
         $CoworkerCommand = $CoworkerArgs[0]
         $CoworkerRemaining = @()
@@ -141,6 +191,22 @@ if ($CliArgs -and $CliArgs[0] -eq 'coworker') {
         & $CoworkerScript -Command $CoworkerCommand -Remaining $CoworkerRemaining
     } else {
         & $CoworkerScript
+    }
+    exit $LASTEXITCODE
+}
+
+# ── Subcommand: sc ─────────────────────────────────────────────────────────
+# Shortcut for the real-world scenario interactive picker.
+# `b4w sc`          → test.ps1 rws sc --interactive (launch picker)
+# `b4w sc <args>`   → test.ps1 rws sc <args>        (passthrough)
+if ($CliArgs -and $CliArgs[0] -eq 'sc') {
+    $TestScript = Join-Path $ScriptDir 'bin\test.ps1'
+    $ScArgs = if ($CliArgs.Count -gt 1) { @($CliArgs[1..($CliArgs.Count - 1)]) } else { @() }
+    if ($ScArgs) {
+        & $TestScript rws sc @ScArgs
+    } else {
+        # No args → launch the interactive scenario picker
+        & $TestScript rws sc --interactive
     }
     exit $LASTEXITCODE
 }
@@ -177,7 +243,7 @@ b4w — browser4-cli wrapper with additional development tools.
 
 b4w is a development-only launcher that builds and runs browser4-cli
 directly from the current codebase.  It also bundles extra dev-tool
-subcommands (coworker, test, build) that are not part of the published
+subcommands (coworker, sc, test, build) that are not part of the published
 browser4-cli release.
 
 Usage: b4w [command] [options]
@@ -185,6 +251,7 @@ Usage: b4w [command] [options]
 Commands:
   cli [args]       Run browser4-cli (default — can be omitted)
   coworker <cmd>   Manage Coworker tasks (delegates to coworker/coworker.ps1)
+  sc [args]        Real-world scenario picker (delegates to bin/test.ps1 rws sc)
   test [args]      Run tests (delegates to bin/test.ps1)
   build [args]     Build the project (delegates to bin/build.ps1)
   b4w install [-WithLaunchers]  Install b4w as a global command (adds to PATH)
@@ -193,10 +260,11 @@ Commands:
 Pass -WithLaunchers to b4w install to also create shortcut launchers so
 you can type subcommands directly:
   b4w-coworker       → b4w coworker
+  b4w-sc             → b4w sc
   b4w-coworker-fix   → b4w coworker fix
   b4w-test           → b4w test
   b4w-build          → b4w build
-  (and all coworker sub-subcommands: b4w-coworker-draft, -review, etc.)
+  (and all coworker & sc sub-subcommands: b4w-coworker-draft, b4w-sc-add, etc.)
 
 Examples:
   # cli (default — "cli" keyword is optional)
@@ -209,7 +277,12 @@ Examples:
 
   # subcommands
   b4w coworker list                     list Coworker tasks
+  b4w coworker start                    start the Coworker scheduler (background)
+  b4w coworker stop                     stop the background scheduler
+  b4w coworker restart                  restart the background scheduler
   b4w test --e2e                        run E2E tests
+  b4w sc                                interactive scenario picker
+  b4w sc add my-test https://example.com  create a new scenario
   b4w build                             build browser4-cli
   b4w b4w install                       install b4w globally (one-time setup)
   b4w b4w install -WithLaunchers         install with shortcut launchers
@@ -235,10 +308,11 @@ parameter binder.
 # When b4w install -WithLaunchers runs, it creates global wrapper scripts so
 # subcommands can be invoked directly from the shell without typing "b4w" first:
 #   b4w-coworker              → b4w coworker
+#   b4w-sc                    → b4w sc
 #   b4w-coworker-fix          → b4w coworker fix
 #   b4w-test                  → b4w test
 #   b4w-build                 → b4w build
-#   etc.
+#   (and all sc/coworker sub-subcommands: b4w-sc-add, b4w-coworker-draft, etc.)
 #
 # Each entry maps the launcher script name (without extension) to the
 # b4w argument string it delegates to.
@@ -255,6 +329,9 @@ $LauncherSubcommands = @(
     @{ Name = 'b4w-coworker-push';     Args = 'coworker push' },
     @{ Name = 'b4w-coworker-fix';      Args = 'coworker fix' },
     @{ Name = 'b4w-coworker-review';   Args = 'coworker review' },
+    @{ Name = 'b4w-coworker-start';    Args = 'coworker start' },
+    @{ Name = 'b4w-sc';              Args = 'sc' },
+    @{ Name = 'b4w-sc-add';         Args = 'sc add' },
     @{ Name = 'b4w-test';              Args = 'test' },
     @{ Name = 'b4w-build';             Args = 'build' }
 )
@@ -637,10 +714,11 @@ Subcommands:
 
 With -WithLaunchers, subcommand shortcut launchers are created so you can type:
   b4w-coworker       → b4w coworker
+  b4w-sc             → b4w sc
   b4w-coworker-fix   → b4w coworker fix
   b4w-test           → b4w test
   b4w-build          → b4w build
-  (and all coworker sub-subcommands)
+  (and all coworker & sc sub-subcommands: b4w-coworker-draft, b4w-sc-add, etc.)
 
 Examples:
   ./b4w.ps1 b4w install                 install b4w globally

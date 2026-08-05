@@ -195,7 +195,7 @@ function Get-FunctionsFromScript {
 Write-Host "Source : $MonitorScriptPath" -ForegroundColor DarkGray
 
 $funcText = Get-FunctionsFromScript -ScriptPath $MonitorScriptPath `
-    -FunctionNames @('Extract-MinimalErrors', 'New-CoworkerFailureTask', 'Invoke-WorkflowFailureHandler')
+    -FunctionNames @('ConvertTo-LogLines', 'Parse-GitHubLogLine', 'Extract-MinimalErrors', 'New-CoworkerFailureTask', 'Invoke-WorkflowFailureHandler')
 
 # Verify we got non-empty text back (functions contain blank lines so split on \n\n isn't 1:1)
 Assert-NotNull -Label 'Functions: extracted text non-null' -Value $funcText

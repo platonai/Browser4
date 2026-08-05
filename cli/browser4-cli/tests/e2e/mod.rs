@@ -2027,8 +2027,8 @@ impl E2ETestResources {
                     }
                 }
                 assert!(
-                    startup_result.stderr.contains("Browser4 startup log:"),
-                    "Expected startup diagnostics to include the Browser4 startup log path.{}\nstdout:>>>\n\n{}\n<<<\nstderr:>>>\n{}\n<<<\n",
+                    startup_result.stderr.contains("Server ready"),
+                    "Expected startup diagnostics to include 'Server ready' message.{}\nstdout:>>>\n\n{}\n<<<\nstderr:>>>\n{}\n<<<\n",
                     startup_log_hint,
                     startup_result.stdout,
                     startup_result.stderr,
@@ -2136,12 +2136,32 @@ fn run_cli_process(ctx: &E2ECtx, args: &[&str]) -> CliRunResult {
 }
 
 fn extract_browser4_startup_log_path(stderr: &str) -> Option<&str> {
-    stderr.lines().find_map(|line| {
-        line.trim()
-            .strip_prefix("Browser4 startup log:")
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
-    })
+    // Check the legacy format (cold start success) and the failure format.
+    for prefix in &["Browser4 startup log:", "Startup log:"] {
+        if let Some(path) = stderr.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix(*prefix)
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+        }) {
+            return Some(path);
+        }
+    }
+    // Also try the new failure format: "📄 Browser4 startup log\n  Path: ..."
+    let mut lines = stderr.lines();
+    while let Some(line) = lines.next() {
+        if line.contains("📄 Browser4 startup log") {
+            if let Some(next_line) = lines.next() {
+                if let Some(path) = next_line.trim().strip_prefix("Path:") {
+                    let trimmed = path.trim();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 fn format_browser4_startup_log_hint(stderr: &str) -> String {
@@ -4588,6 +4608,10 @@ fn run_named_scenario(
 
     std::io::stdout().flush().expect("stdout flush failed");
     resources.ctx.clear_step_timings();
+    // Save and restore browser4_base_url so that mock-server scenarios which
+    // temporarily point it at a MockBrowser4Server don't leak a stale URL into
+    // subsequent real-backend scenarios that consult external_service + base_url.
+    let saved_browser4_base_url = resources.ctx.browser4_base_url.clone();
     let total_started_at = Instant::now();
     let mut harness_steps = Vec::new();
     if fail_fast {
@@ -4614,6 +4638,7 @@ fn run_named_scenario(
         steps.extend(cleanup_steps);
         let report = TimingReport::new(name, total_started_at.elapsed(), steps);
         println!("ok ({})", format_duration(report.total));
+        resources.ctx.browser4_base_url = saved_browser4_base_url;
         return ScenarioOutcome {
             report,
             failures: Vec::new(),
@@ -4658,6 +4683,11 @@ fn run_named_scenario(
     };
     let report = TimingReport::new(name, total_started_at.elapsed(), steps);
     let mut failures = Vec::new();
+
+    // Restore the original browser4_base_url so that mock-server scenarios
+    // which temporarily pointed it at a MockBrowser4Server don't leak a
+    // stale URL into subsequent real-backend scenarios.
+    resources.ctx.browser4_base_url = saved_browser4_base_url;
 
     match result {
         Ok(()) => {

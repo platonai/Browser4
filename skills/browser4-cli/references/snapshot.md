@@ -12,7 +12,7 @@ The `snapshot` command captures the page's **accessibility tree** (AX tree) — 
 
 ```bash
 browser4-cli goto "https://example.com"
-browser4-cli snapshot -v 0              # capture accessibility tree (viewport 0 = top)
+browser4-cli snapshot -v 0              # capture accessibility tree (viewport 0 = current visible screen)
 browser4-cli click <ref>                # interact using refs from the snapshot
 browser4-cli snapshot -v 0 --auto-diff  # see what changed vs previous snapshot
 ```
@@ -64,7 +64,7 @@ browser4-cli snapshot grep [OPTIONS] <pattern>                             # sea
 
 | Option | Description |
 |---|---|
-| `--viewport N`, `-v N` | Capture viewport N (0 = top of page). Paginates long pages into fixed-height chunks. |
+| `--viewport N`, `-v N` | Capture viewport N (0 = current visible screen; negative = above). Paginates long pages into fixed-height chunks. |
 | `--stdout` | Print snapshot to stdout instead of saving to file. |
 | `--auto-diff` | Diff against the previous snapshot — shows added/removed/changed elements. |
 | `--interactive`, `-i` | Interactive mode — strips generic `<div>` containers for cleaner output. |
@@ -74,17 +74,17 @@ browser4-cli snapshot grep [OPTIONS] <pattern>                             # sea
 
 ## Viewport Pagination
 
-Long pages are split into fixed-height **viewports** (roughly one screen each). Viewport 0 starts at the top of the page. Use `-v 0` for the top portion, `-v 1` for the next section, etc.
+Long pages are split into fixed-height **viewports** (roughly one screen each). Viewport indices are scroll-relative: `-v 0` captures the screen currently visible in the browser, `-v 1` the screen below it, and `-v -1` the screen above. Right after a fresh navigation the page is at the top, so `-v 0` is the top of the page in the common workflow.
 
 ```bash
-browser4-cli snapshot -v 0     # top of page — usually what you need first
-browser4-cli snapshot -v 1     # scroll down one viewport
-browser4-cli snapshot -v 2     # scroll down another viewport
+browser4-cli snapshot -v 0     # current visible screen (top of page right after load)
+browser4-cli snapshot -v 1     # one screen below the current position
+browser4-cli snapshot -v -1    # one screen above the current position
 ```
 
-> **Tip:** Most interactions are with elements near the top of the page. Start with `-v 0` and only paginate further if the element you need isn't visible.
+> **Tip:** Most interactions are with elements near the top of the page. Start with `-v 0` right after loading and only paginate further if the element you need isn't visible.
 
-Without `--viewport`, the snapshot captures the full page in a single file — this can be very large on long pages. Always prefer `-v 0` unless you need elements further down.
+Without `--viewport`, the snapshot captures the full page in a single file — this can be very large on long pages. Prefer `-v 0` for what's visible; use `-v 1`, `-v 2`, ... or scroll the page for elements further down.
 
 ## Auto-Diff
 
