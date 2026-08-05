@@ -201,6 +201,19 @@ class PulsarSessionManager(
                 return markSessionActive(session)
             }
 
+            // Extension-attached sessions without an active WebSocket are
+            // always inactive — the health check on the agentic session
+            // alone is not meaningful (a mock session with no browser/driver
+            // still reports isActive=true).
+            if (session.kind == SessionKind.EXTENSION_ATTACHED) {
+                markSessionInactive(session)
+                logger.info(
+                    "Extension session {} is disconnected — keeping as inactive. Re-run attach --extension to reconnect.",
+                    sessionId
+                )
+                return session
+            }
+
             // All other non-owned sessions: check health, report status, but
             // never recreate.  The user must re-attach manually.
             if (checkHealthyBlocking(session).isOK) {
@@ -209,7 +222,6 @@ class PulsarSessionManager(
 
             markSessionInactive(session)
             val reconnectHint = when (session.kind) {
-                SessionKind.EXTENSION_ATTACHED -> "Re-run attach --extension to reconnect."
                 SessionKind.CDP_ATTACHED -> "Re-run attach --cdp to reconnect."
                 else -> ""
             }
