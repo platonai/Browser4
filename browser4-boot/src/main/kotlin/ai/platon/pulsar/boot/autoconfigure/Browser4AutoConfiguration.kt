@@ -2,7 +2,7 @@ package ai.platon.pulsar.boot.autoconfigure
 
 import ai.platon.pulsar.api.manage.BasicBrowserManager
 import ai.platon.pulsar.api.model.BrowserSettings
-import ai.platon.browser4.boot.plugin.BrowserPluginAutoConfiguration
+import ai.platon.pulsar.boot.plugin.BrowserPluginAutoConfiguration
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.proxy.ProxyLoader

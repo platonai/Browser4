@@ -1,7 +1,7 @@
-package ai.platon.browser4.chrome.protocol
+package ai.platon.pulsar.chrome.protocol
 
-import ai.platon.browser4.api.BrowserProtocol
-import ai.platon.browser4.api.model.NodeRef
+import ai.platon.pulsar.api.BrowserProtocol
+import ai.platon.pulsar.api.model.NodeRef
 import ai.platon.cdt.kt.protocol.types.dom.BoxModel
 import ai.platon.cdt.kt.protocol.types.page.LayoutMetrics
 import ai.platon.pulsar.common.math.geometric.PointD
@@ -57,8 +57,8 @@ class EmulationHandlerTest {
             mouse.click(100.0, 200.0, clickCount = 1, delayMillis = 0)
 
             inOrder.verify(bp).dispatchMouseMoved(eq(100.0), eq(200.0), any(), anyOrNull())
-            inOrder.verify(bp).dispatchMousePressed(eq(100.0), eq(200.0), eq(1), eq(null), eq(1), anyOrNull())
-            inOrder.verify(bp).dispatchMouseReleased(eq(100.0), eq(200.0), eq(1), eq(null), eq(0), anyOrNull())
+            inOrder.verify(bp).dispatchMousePressed(eq(100.0), eq(200.0), eq(1), eq(null), eq(1))
+            inOrder.verify(bp).dispatchMouseReleased(eq(100.0), eq(200.0), eq(1), eq(null), eq(0))
         }
 
         @Test
@@ -69,11 +69,11 @@ class EmulationHandlerTest {
 
             // First click: clickCount=1
             inOrder.verify(bp).dispatchMouseMoved(eq(100.0), eq(200.0), any(), anyOrNull())
-            inOrder.verify(bp).dispatchMousePressed(eq(100.0), eq(200.0), eq(1), eq(null), eq(1), anyOrNull())
-            inOrder.verify(bp).dispatchMouseReleased(eq(100.0), eq(200.0), eq(1), eq(null), eq(0), anyOrNull())
+            inOrder.verify(bp).dispatchMousePressed(eq(100.0), eq(200.0), eq(1), eq(null), eq(1))
+            inOrder.verify(bp).dispatchMouseReleased(eq(100.0), eq(200.0), eq(1), eq(null), eq(0))
             // Second click: clickCount=2
-            inOrder.verify(bp).dispatchMousePressed(eq(100.0), eq(200.0), eq(2), eq(null), eq(1), anyOrNull())
-            inOrder.verify(bp).dispatchMouseReleased(eq(100.0), eq(200.0), eq(2), eq(null), eq(0), anyOrNull())
+            inOrder.verify(bp).dispatchMousePressed(eq(100.0), eq(200.0), eq(2), eq(null), eq(1))
+            inOrder.verify(bp).dispatchMouseReleased(eq(100.0), eq(200.0), eq(2), eq(null), eq(0))
         }
 
         @Test
@@ -85,8 +85,8 @@ class EmulationHandlerTest {
             // moveTo(x, y) inside click() is called without modifiers
             verify(bp).dispatchMouseMoved(eq(50.0), eq(75.0), any(), anyOrNull())
             // down/up receive the modifier bitmask
-            verify(bp).dispatchMousePressed(eq(50.0), eq(75.0), any(), eq(altMask), any(), anyOrNull())
-            verify(bp).dispatchMouseReleased(eq(50.0), eq(75.0), any(), eq(altMask), any(), anyOrNull())
+            verify(bp).dispatchMousePressed(eq(50.0), eq(75.0), any(), eq(altMask), any())
+            verify(bp).dispatchMouseReleased(eq(50.0), eq(75.0), any(), eq(altMask), any())
         }
 
         @Test
@@ -100,8 +100,8 @@ class EmulationHandlerTest {
 
             val inOrder = inOrder(bp)
             inOrder.verify(bp).dispatchMouseMoved(eq(500.0), eq(600.0), any(), eq(null))
-            inOrder.verify(bp).dispatchMousePressed(eq(500.0), eq(600.0), any(), eq(null), any(), anyOrNull())
-            inOrder.verify(bp).dispatchMouseReleased(eq(500.0), eq(600.0), any(), eq(null), any(), anyOrNull())
+            inOrder.verify(bp).dispatchMousePressed(eq(500.0), eq(600.0), any(), eq(null), any())
+            inOrder.verify(bp).dispatchMouseReleased(eq(500.0), eq(600.0), any(), eq(null), any())
         }
     }
 
@@ -190,7 +190,7 @@ class EmulationHandlerTest {
             reset(bp)
 
             mouse.down(100.0, 200.0)
-            verify(bp).dispatchMousePressed(any(), any(), any(), eq(null), eq(1), anyOrNull())
+            verify(bp).dispatchMousePressed(any(), any(), any(), eq(null), eq(1))
         }
 
         @Test
@@ -199,11 +199,11 @@ class EmulationHandlerTest {
             val buttonsCaptor = argumentCaptor<Int>()
 
             mouse.down(100.0, 200.0)
-            verify(bp).dispatchMousePressed(any(), any(), any(), eq(null), buttonsCaptor.capture(), anyOrNull())
+            verify(bp).dispatchMousePressed(any(), any(), any(), eq(null), buttonsCaptor.capture())
             assertEquals(1, buttonsCaptor.lastValue)
 
             mouse.up(100.0, 200.0)
-            verify(bp).dispatchMouseReleased(any(), any(), any(), eq(null), buttonsCaptor.capture(), anyOrNull())
+            verify(bp).dispatchMouseReleased(any(), any(), any(), eq(null), buttonsCaptor.capture())
             assertEquals(0, buttonsCaptor.lastValue)
         }
 
@@ -213,11 +213,11 @@ class EmulationHandlerTest {
             val buttonsCaptor = argumentCaptor<Int>()
 
             mouse.down(100.0, 200.0)
-            verify(bp).dispatchMousePressed(any(), any(), any(), eq(null), buttonsCaptor.capture(), anyOrNull())
+            verify(bp).dispatchMousePressed(any(), any(), any(), eq(null), buttonsCaptor.capture())
             assertEquals(1, buttonsCaptor.firstValue)
 
             mouse.down(150.0, 250.0)
-            verify(bp, times(2)).dispatchMousePressed(any(), any(), any(), eq(null), buttonsCaptor.capture(), anyOrNull())
+            verify(bp, times(2)).dispatchMousePressed(any(), any(), any(), eq(null), buttonsCaptor.capture())
             // buttonsState should still be 1 (OR with 1 = 1)
             assertEquals(1, buttonsCaptor.secondValue)
         }
@@ -231,7 +231,7 @@ class EmulationHandlerTest {
 
             // After the click, buttonsState should be 0 (up() clears it)
             // Verify by doing another down and checking the released state
-            verify(bp, atLeastOnce()).dispatchMouseReleased(any(), any(), any(), eq(null), buttonsCaptor.capture(), anyOrNull())
+            verify(bp, atLeastOnce()).dispatchMouseReleased(any(), any(), any(), eq(null), buttonsCaptor.capture())
             assertEquals(0, buttonsCaptor.lastValue)
         }
 
@@ -311,7 +311,7 @@ class EmulationHandlerTest {
             verify(bp).onDragIntercepted(any())
             // Cleanup always happens in finally block
             verify(bp).setInterceptDrags(false)
-            verify(bp, atLeastOnce()).dispatchMouseReleased(any(), any(), any(), anyOrNull(), any(), anyOrNull())
+            verify(bp, atLeastOnce()).dispatchMouseReleased(any(), any(), any(), anyOrNull(), any())
         }
     }
 
@@ -586,57 +586,6 @@ class EmulationHandlerTest {
 
             // Should not throw — boundingBox returns null, getInteractPoint falls back to quad center
             emulationHandler.click(node, 1, position = "center", delayMillis = 0)
-        }
-    }
-
-    // =========================================================================
-    // normalizeKeyStringForPress — already tested in KeyboardKeyStringNormalizationTest
-    // but adding corner cases not covered there
-    // =========================================================================
-
-    @Nested
-    @DisplayName("normalizeKeyStringForPress corner cases")
-    inner class NormalizeKeyStringCornerCases {
-
-        @Test
-        @DisplayName("digit characters remain unchanged")
-        fun digitsUnchanged() {
-            assertEquals("1", normalizeKeyStringForPress("1"))
-            assertEquals("9", normalizeKeyStringForPress("9"))
-        }
-
-        @Test
-        @DisplayName("lowercase letters remain unchanged")
-        fun lowercaseLettersUnchanged() {
-            assertEquals("a", normalizeKeyStringForPress("a"))
-            assertEquals("z", normalizeKeyStringForPress("z"))
-        }
-
-        @Test
-        @DisplayName("all shifted punctuation characters expand correctly")
-        fun allShiftedPunctuationExpands() {
-            // Based on SHIFTED_CHARACTER_BASE_KEYS map
-            assertEquals("Shift+`", normalizeKeyStringForPress("~"))
-            assertEquals("Shift+1", normalizeKeyStringForPress("!"))
-            assertEquals("Shift+2", normalizeKeyStringForPress("@"))
-            assertEquals("Shift+3", normalizeKeyStringForPress("#"))
-            assertEquals("Shift+4", normalizeKeyStringForPress("$"))
-            assertEquals("Shift+5", normalizeKeyStringForPress("%"))
-            assertEquals("Shift+6", normalizeKeyStringForPress("^"))
-            assertEquals("Shift+7", normalizeKeyStringForPress("&"))
-            assertEquals("Shift+8", normalizeKeyStringForPress("*"))
-            assertEquals("Shift+9", normalizeKeyStringForPress("("))
-            assertEquals("Shift+0", normalizeKeyStringForPress(")"))
-            assertEquals("Shift+-", normalizeKeyStringForPress("_"))
-            assertEquals("Shift+=", normalizeKeyStringForPress("+"))
-            assertEquals("Shift+[", normalizeKeyStringForPress("{"))
-            assertEquals("Shift+]", normalizeKeyStringForPress("}"))
-            assertEquals("Shift+\\", normalizeKeyStringForPress("|"))
-            assertEquals("Shift+;", normalizeKeyStringForPress(":"))
-            assertEquals("Shift+'", normalizeKeyStringForPress("\""))
-            assertEquals("Shift+,", normalizeKeyStringForPress("<"))
-            assertEquals("Shift+.", normalizeKeyStringForPress(">"))
-            assertEquals("Shift+/", normalizeKeyStringForPress("?"))
         }
     }
 }

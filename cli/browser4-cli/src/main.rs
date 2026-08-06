@@ -72,7 +72,8 @@ use state::{
     clear_all_state, clear_state, epoch_millis_to_display, format_async_task_list,
     format_timestamp_display, read_async_tasks, read_state,
     resolve_default_state_dir, resolve_ref, summarize_async_tasks, track_async_task,
-    update_async_task_status, write_async_tasks, write_state, CliState, MousePosition, Table,
+    update_async_task_status, write_async_tasks, write_state, CliState, MousePosition,
+    SessionKind, Table,
 };
 
 const VERSION: &str = env!("BROWSER4_CLI_VERSION");
@@ -22080,11 +22081,12 @@ mod tests {
         let tmp = test_temp_dir();
         let dir = tmp.path();
 
+        // Use kind as the source of truth — write_state syncs is_attached
+        // and attach_type from kind for backward compatibility.
         let old_state = CliState {
             session_id: Some("ext-session".to_string()),
             base_url: "http://localhost:8182".to_string(),
-            is_attached: true,
-            attach_type: Some("extension".to_string()),
+            kind: SessionKind::ExtensionAttached,
             browser_channel: Some("chrome".to_string()),
             ..Default::default()
         };

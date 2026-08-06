@@ -1,7 +1,7 @@
-package ai.platon.browser4.boot.plugin
+package ai.platon.pulsar.boot.plugin
 
-import ai.platon.browser4.api.manage.BasicBrowserManager
-import ai.platon.browser4.api.model.BrowserSettings
+import ai.platon.pulsar.api.manage.BasicBrowserManager
+import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.browser.privacy.PrivacyContextMonitor
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.proxy.ProxyPoolManager

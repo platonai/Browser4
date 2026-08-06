@@ -1,4 +1,4 @@
-package ai.platon.browser4.api.snapshot
+package ai.platon.pulsar.api.snapshot
 
 /**
  * Converts scroll-relative viewport indices into document Y-axis intervals.

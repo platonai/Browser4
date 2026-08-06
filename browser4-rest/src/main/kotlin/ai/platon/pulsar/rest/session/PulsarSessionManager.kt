@@ -1,17 +1,17 @@
 package ai.platon.pulsar.rest.session
 
-import ai.platon.browser4.chrome.PulsarBrowser
-import ai.platon.browser4.chrome.protocol.transport.ExtensionChromeService
-import ai.platon.browser4.chrome.protocol.transport.ExtensionMessageSender
-import ai.platon.browser4.common.B4Constants.BROWSER_PROFILE_MODE
-import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
-import ai.platon.browser4.common.B4Constants.PROFILE_MODE_CAPABILITY
-import ai.platon.browser4.common.B4Constants.SESSION_ID_CAPABILITY
-import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
+import ai.platon.pulsar.chrome.PulsarBrowser
+import ai.platon.pulsar.chrome.protocol.transport.ExtensionChromeService
+import ai.platon.pulsar.chrome.protocol.transport.ExtensionMessageSender
+import ai.platon.pulsar.common.B4Constants.BROWSER_PROFILE_MODE
+import ai.platon.pulsar.common.B4Constants.DEFAULT_SESSION_ID
+import ai.platon.pulsar.common.B4Constants.PROFILE_MODE_CAPABILITY
+import ai.platon.pulsar.common.B4Constants.SESSION_ID_CAPABILITY
+import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.context.AbstractAgenticContext
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.agentic.context.AgenticContexts
-import ai.platon.browser4.api.model.BrowserSettings
+import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_MODE
@@ -190,26 +190,31 @@ class PulsarSessionManager(
         capabilities: Map<String, String?>,
         session: ManagedSession,
     ): ManagedSession {
+        // Extension-attached or CDP-attached sessions that still have a
+        // connected WebSocket or active browser are healthy — return as-is
+        // regardless of the kind field.
+        if (extensionBrowsers.containsKey(sessionId)) {
+            return markSessionActive(session)
+        }
+
         // Sessions that do NOT own their browser must never be recreated by
         // Browser4 — that would launch a new browser instance, severing the
-        // link to the user's existing browser.  The kind enum drives this
-        // decision explicitly rather than relying on extension-specific map
-        // lookups.
+        // link to the user's existing browser.
         if (!session.kind.ownsBrowser) {
-            // Extension-attached session whose WebSocket is still connected.
-            if (session.kind == SessionKind.EXTENSION_ATTACHED && extensionBrowsers.containsKey(sessionId)) {
+            // All non-owned sessions without a connected browser: check
+            // health, but never recreate.  The user must re-attach manually.
+            if (checkHealthyBlocking(session).isOK) {
                 return markSessionActive(session)
             }
 
-            // All other non-owned sessions: check health, report status, but
-            // never recreate.  The user must re-attach manually.
-            // Extension-attached sessions without a connected WebSocket are
-            // always inactive — the health check is misleading because the
-            // internal AgenticSession may appear healthy even without a
-            // usable extension link.
-            if (session.kind != SessionKind.EXTENSION_ATTACHED && checkHealthyBlocking(session).isOK) {
-                return markSessionActive(session)
-            }
+            markSessionInactive(session)
+            logger.info(
+                "Non-owned session {} is unhealthy — keeping as inactive " +
+                "(will not recreate). Re-attach to reconnect.",
+                sessionId
+            )
+            return session
+        }
 
         // Extension-attached session whose WebSocket has disconnected.
         // Do NOT fall through to recreateUnhealthySession — that would
@@ -396,7 +401,7 @@ class PulsarSessionManager(
 
         // Wrap it as a PulsarBrowser so the session can use it.
         val browser = PulsarBrowser(
-            id = ai.platon.browser4.api.BrowserId.RANDOM_TEMP,
+            id = ai.platon.pulsar.api.BrowserId.RANDOM_TEMP,
             chrome = extChrome,
             settings = BrowserSettings(),
             launcher = null
