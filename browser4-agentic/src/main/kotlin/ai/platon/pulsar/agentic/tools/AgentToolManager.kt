@@ -72,8 +72,6 @@ class AgentToolManager constructor(
         listOf(
             BrowserTabToolExecutor(),
             BrowserToolExecutor(),
-            FileSystemToolExecutor(),
-            ShellToolExecutor(),
             AgentToolExecutor(),
             system,
             skills

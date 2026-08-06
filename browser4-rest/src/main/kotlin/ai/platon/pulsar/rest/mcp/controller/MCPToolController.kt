@@ -783,6 +783,12 @@ class MCPToolController(
 
         // Resolve the receiver: for executors that require a WebDriver (e.g., pptx),
         // extract the session ID and get the session's driver.
+        // For executors whose receiverClass is PulsarSessionManager (e.g.
+        // HTMLSnapshotToolExecutor), look up the ManagedSession using the
+        // controller's sessionManager and pass it as the receiver.  This
+        // avoids the JVM-global CustomToolRegistry singleton holding a stale
+        // executor whose injected sessionManager belongs to a different Spring
+        // context (e.g. the mock EC server's context).
         val receiver: Any = if (executor.receiverClass == WebDriver::class) {
             val sessionId = args["sessionId"]?.toString()
                 ?: request.arguments?.get("sessionId")?.toString()
@@ -798,6 +804,14 @@ class MCPToolController(
                 } else {
                     Any()
                 }
+            } else {
+                Any()
+            }
+        } else if (executor.receiverClass == PulsarSessionManager::class) {
+            val sessionId = args["sessionId"]?.toString()
+                ?: request.arguments?.get("sessionId")?.toString()
+            if (sessionId != null) {
+                sessionManager.getSession(sessionId) ?: Any()
             } else {
                 Any()
             }
@@ -1900,6 +1914,90 @@ internal fun inspectDocument(
     }.toString()
 }
 
+/**
+ * Build a page structure fallback for detail pages where no repeating patterns
+ * exist. Finds the most meaningful content container (main, article, #id, or
+ * body) and returns its direct children as suggested selectors with text
+ * samples — a lightweight alternative to `inspect` for singleton pages.
+ *
+ * @param document The parsed HTML document
+ * @param originalSelector The user's selector (or :root)
+ * @param maxDepth How many levels of children to include
+ * @return JSON array of structure entries, or null if the document is empty
+ */
+internal fun buildPageStructureFallback(
+    document: FeaturedDocument,
+    originalSelector: String,
+    maxDepth: Int
+): ArrayNode? {
+    // Find the best content container: try semantic elements first, then
+    // the first element with an id, then fall back to body.
+    val contentSelectors = listOf(
+        "main", "article", "[role=main]", "#content", "#main", ".content",
+        ".main", ".post-content", ".entry-content", ".article-content", ".product",
+        "#product-page", ".product-detail", ".product-page"
+    )
+    var container: org.jsoup.nodes.Element? = null
+    for (sel in contentSelectors) {
+        val match = document.selectFirst(sel)
+        if (match != null && match.childrenSize() > 0) {
+            container = match
+            break
+        }
+    }
+    // Fall back to the first element with an id that has children
+    if (container == null) {
+        container = document.select("[id]").firstOrNull { it.childrenSize() > 0 }
+    }
+    // Last resort: body
+    if (container == null) {
+        container = document.body
+    }
+    if (container == null || container.childrenSize() == 0) {
+        return null
+    }
+
+    val entries = pulsarObjectMapper().createArrayNode()
+    val containerRef = buildElementRef(container)
+
+    // Collect direct children (up to maxDepth * 10 — generous for detail pages)
+    val children = container.children().take(maxDepth * 10)
+    for (child in children) {
+        val childEl = child as? org.jsoup.nodes.Element ?: continue
+        // Skip script/style/noscript/comment nodes
+        if (childEl.tagName().lowercase() in setOf("script", "style", "noscript", "meta", "link")) continue
+
+        val entry = pulsarObjectMapper().createObjectNode()
+        val ref = buildElementRef(childEl)
+        entry.put("ref", ref)
+
+        val tagName = childEl.tagName().lowercase()
+        entry.put("tag", tagName)
+
+        val id = childEl.id()
+        if (id.isNotBlank()) entry.put("id", id)
+
+        val cls = childEl.className().trim().takeIf { it.isNotBlank() }
+        if (cls != null) entry.put("class", cls)
+
+        val text = truncateText(childEl.text().trim())
+        if (text.isNotBlank()) entry.put("text", text)
+
+        // Include child count for context
+        val kids = childEl.childrenSize()
+        if (kids > 0) entry.put("childCount", kids)
+
+        // Count matching elements (a non-repeating selector can still be useful)
+        try {
+            val similarCount = document.select(tagName).size
+            if (similarCount > 0) entry.put("occurrencesInPage", similarCount)
+        } catch (_: Exception) { }
+
+        entries.add(entry)
+    }
+
+    return if (entries.size() > 0) entries else null
+}
 // =========================================================================
 // Element serialization utilities (Section 8 format)
 // =========================================================================

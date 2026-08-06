@@ -174,7 +174,7 @@ test "latest mode uses GitHub latest/download pattern" bash -c "
 "
 
 test "latest mode uses OSS download/latest pattern" bash -c "
-    bash '$INSTALL_SCRIPT' --locate 2>&1 | grep -q 'oss-cn-beijing.*releases/download/latest/'
+    bash '$INSTALL_SCRIPT' --locate 2>&1 | grep -q 'oss-cn-beijing.*releases/latest/download/'
 "
 
 test "versioned mode uses tag-based URLs" bash -c "
@@ -185,8 +185,8 @@ test "GitHub URL NOT using broken OSS pattern" bash -c "
     ! bash '$INSTALL_SCRIPT' --locate 2>&1 | grep 'github.com' | grep -q 'releases/download/latest'
 "
 
-test "OSS URL NOT using broken GitHub pattern" bash -c "
-    ! bash '$INSTALL_SCRIPT' --locate 2>&1 | grep 'oss-cn-beijing' | grep -q 'releases/latest/download'
+test "OSS URL NOT using broken download/latest pattern" bash -c "
+    ! bash '$INSTALL_SCRIPT' --locate 2>&1 | grep 'oss-cn-beijing' | grep -q 'releases/download/latest'
 "
 
 echo ""

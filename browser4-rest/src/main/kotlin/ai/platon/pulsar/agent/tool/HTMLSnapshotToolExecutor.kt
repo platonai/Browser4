@@ -11,12 +11,14 @@ import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryIndexService
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.node.ArrayNode
+import ai.platon.pulsar.rest.session.ManagedSession
+import org.slf4j.LoggerFactory
 import kotlin.reflect.KClass
 
 /**
  * Tool executor that exposes DOM/HTML snapshot operations as MCP tools.
  *
- * Domain: `dom_snapshot`
+ * Domain: `html_snapshot`
  *
  * Supported methods:
  * - `capture(sessionId)` — Capture the current page as an HTML snapshot with metadata
@@ -31,6 +33,20 @@ class HTMLSnapshotToolExecutor(
     private val sessionManager: PulsarSessionManager,
     private val scrapeService: ScrapeService? = null,
 ) : AbstractToolExecutor() {
+
+    private val logger = LoggerFactory.getLogger(HTMLSnapshotToolExecutor::class.java)
+
+    /**
+     * Resolve the ManagedSession from either the receiver (passed by
+     * [dispatchToCustomExecutor] from the controller's sessionManager)
+     * or by looking it up via the injected sessionManager.
+     */
+    private fun resolveSession(args: Map<String, Any?>, receiver: Any): ManagedSession {
+        if (receiver is ManagedSession) return receiver
+        val sessionId = requireSessionId(args)
+        return sessionManager.getSession(sessionId)
+            ?: throw IllegalArgumentException("Session not found: $sessionId")
+    }
 
     override val domain: String = "html_snapshot"
     override val receiverClass: KClass<*> = PulsarSessionManager::class
@@ -127,13 +143,13 @@ class HTMLSnapshotToolExecutor(
         require(domain == this.domain) { "Unsupported domain: $domain" }
 
         return when (functionName) {
-            "capture" -> capture(args)
-            "scrape" -> scrape(args)
-            "scrape_all", "scrapeAll" -> scrapeAll(args)
-            "query" -> query(args)
-            "export" -> export(args)
-            "summary" -> summary(args)
-            "inspect" -> inspect(args)
+            "capture" -> capture(args, receiver)
+            "scrape" -> scrape(args, receiver)
+            "scrape_all", "scrapeAll" -> scrapeAll(args, receiver)
+            "query" -> query(args, receiver)
+            "export" -> export(args, receiver)
+            "summary" -> summary(args, receiver)
+            "inspect" -> inspect(args, receiver)
             else -> throw IllegalArgumentException("Unsupported html_snapshot method: $functionName")
         }
     }
@@ -142,10 +158,8 @@ class HTMLSnapshotToolExecutor(
     // Tool methods
     // =========================================================================
 
-    private suspend fun capture(args: Map<String, Any?>): String {
-        val sessionId = requireSessionId(args)
-        val managed = sessionManager.getSession(sessionId)
-            ?: throw IllegalArgumentException("Session not found: $sessionId")
+    private suspend fun capture(args: Map<String, Any?>, receiver: Any = Any()): String {
+        val managed = resolveSession(args, receiver)
 
         return managed.withLock {
             val pulsarSession = managed.agenticSession
@@ -199,8 +213,7 @@ class HTMLSnapshotToolExecutor(
         }
     }
 
-    private suspend fun scrape(args: Map<String, Any?>): String {
-        val sessionId = requireSessionId(args)
+    private suspend fun scrape(args: Map<String, Any?>, receiver: Any = Any()): String {
         val field = paramString(args, "field", "scrape")!!
         val selector = paramString(args, "selector", "scrape", required = false, default = ":root")?.ifEmpty { ":root" } ?: ":root"
         val attrName = paramString(args, "attrName", "scrape", required = false)
@@ -215,8 +228,7 @@ class HTMLSnapshotToolExecutor(
             throw IllegalArgumentException("Element references ('$selector') are not supported in htmlsnapshot get. Use a CSS selector instead.")
         }
 
-        val managed = sessionManager.getSession(sessionId)
-            ?: throw IllegalArgumentException("Session not found: $sessionId")
+        val managed = resolveSession(args, receiver)
 
         return managed.withLock {
             val pulsarSession = managed.agenticSession
@@ -233,8 +245,7 @@ class HTMLSnapshotToolExecutor(
         }
     }
 
-    private suspend fun scrapeAll(args: Map<String, Any?>): String {
-        val sessionId = requireSessionId(args)
+    private suspend fun scrapeAll(args: Map<String, Any?>, receiver: Any = Any()): String {
         val field = paramString(args, "field", "scrape_all")!!
         val selector = paramString(args, "selector", "scrape_all", required = false, default = ":root")?.ifEmpty { ":root" } ?: ":root"
         val attrName = paramString(args, "attrName", "scrape_all", required = false)
@@ -251,8 +262,7 @@ class HTMLSnapshotToolExecutor(
             throw IllegalArgumentException("Element references ('$selector') are not supported in htmlsnapshot get. Use a CSS selector instead.")
         }
 
-        val managed = sessionManager.getSession(sessionId)
-            ?: throw IllegalArgumentException("Session not found: $sessionId")
+        val managed = resolveSession(args, receiver)
 
         val results = managed.withLock {
             val pulsarSession = managed.agenticSession
@@ -281,7 +291,7 @@ class HTMLSnapshotToolExecutor(
             .writeValueAsString(resultList)
     }
 
-    private suspend fun query(args: Map<String, Any?>): String {
+    private suspend fun query(args: Map<String, Any?>, receiver: Any = Any()): String {
         val scrapeService = this.scrapeService
             ?: throw IllegalArgumentException("ScrapeService is not available")
 
@@ -301,9 +311,7 @@ class HTMLSnapshotToolExecutor(
 
         val url = paramString(args, "url", "query", required = false)?.takeIf { it.isNotBlank() }
             ?: run {
-                val sessionId = requireSessionId(args)
-                val managed = sessionManager.getSession(sessionId)
-                    ?: throw IllegalArgumentException("Session not found: $sessionId")
+                val managed = resolveSession(args, receiver)
                 val pulsarSession = managed.agenticSession
                 pulsarSession.normalize(managed.driver.currentUrl()).urlString
             }
@@ -315,11 +323,9 @@ class HTMLSnapshotToolExecutor(
             .writeValueAsString(response)
     }
 
-    private suspend fun export(args: Map<String, Any?>): String {
-        val sessionId = requireSessionId(args)
+    private suspend fun export(args: Map<String, Any?>, receiver: Any = Any()): String {
         val clean = paramBool(args, "clean", "export", required = false, default = false) ?: false
-        val managed = sessionManager.getSession(sessionId)
-            ?: throw IllegalArgumentException("Session not found: $sessionId")
+        val managed = resolveSession(args, receiver)
 
         return managed.withLock {
             val pulsarSession = managed.agenticSession
@@ -398,10 +404,8 @@ class HTMLSnapshotToolExecutor(
         )
     }
 
-    private suspend fun summary(args: Map<String, Any?>): String {
-        val sessionId = requireSessionId(args)
-        val managed = sessionManager.getSession(sessionId)
-            ?: throw IllegalArgumentException("Session not found: $sessionId")
+    private suspend fun summary(args: Map<String, Any?>, receiver: Any = Any()): String {
+        val managed = resolveSession(args, receiver)
 
         return managed.withLock {
             val pulsarSession = managed.agenticSession
@@ -415,10 +419,8 @@ class HTMLSnapshotToolExecutor(
         }
     }
 
-    private suspend fun inspect(args: Map<String, Any?>): String {
-        val sessionId = requireSessionId(args)
-        val managed = sessionManager.getSession(sessionId)
-            ?: throw IllegalArgumentException("Session not found: $sessionId")
+    private suspend fun inspect(args: Map<String, Any?>, receiver: Any = Any()): String {
+        val managed = resolveSession(args, receiver)
 
         return managed.withLock {
             val pulsarSession = managed.agenticSession

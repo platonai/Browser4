@@ -31,7 +31,8 @@ class ScrapeService(
 ) {
     private val logger = LoggerFactory.getLogger(ScrapeService::class.java)
 
-    private val session get() = sessionManager.getOrCreateSession(SWARM_SESSION_ID).agenticSession
+    // Use the swarm session for distributed scraping.
+    private val session get() = sessionManager.ensureSwarmSession().agenticSession
 
     /**
      * The response cache, the key is the id, the value is the response
@@ -58,20 +59,62 @@ class ScrapeService(
         try {
             val response = executeQueryOnce(request)
 
-            // Auto-recovery: if the scrape session was recreated (417), the
-            // WebDB cache is empty.  Try to pre-load the target page and
-            // re-execute the query so the X-SQL UDF can find the data.
-            if (response.statusCode == ResourceStatus.SC_EXPECTATION_FAILED) {
-                val extractedUrl = extractUrlFromSql(request.sql)
-                if (extractedUrl != null) {
-                    logger.info("X-SQL scrape session closed (417). Pre-loading '{}' and retrying.", extractedUrl)
+            // Pre-load the target page BEFORE the first query attempt to warm
+            // the session's WebDB cache.  Without this, the first
+            // DOM_LOAD_AND_SELECT call may find an empty cache and return 417.
+            // Uses a simple load_and_select query to warm the cache via the
+            // hyperlink mechanism (which launches a browser if needed), rather
+            // than session.load() which may fail if no browser is running yet.
+            val extractedUrl = extractUrlFromSql(request.sql)
+            if (extractedUrl != null) {
+                try {
+                    val preloadSql = "select dom_base_uri(dom) as _url from load_and_select('$extractedUrl', ':root')"
+                    executeQueryOnce(ScrapeRequest(preloadSql), session)
+                    logger.debug("X-SQL: pre-loaded '{}' before first query attempt", extractedUrl)
+                } catch (e: Exception) {
+                    logger.warn("X-SQL: pre-load of '{}' before first attempt failed: {}",
+                        extractedUrl, e.message)
+                }
+            }
+
+            for (attempt in 0..maxRetries) {
+                // Capture a stable session reference for this attempt so that
+                // the hyperlink and the submit call use the SAME session
+                // instance.  The `session` property getter may return a
+                // different instance each time (e.g. when resolveHealthySession
+                // recreates an unhealthy session), which would cause the
+                // hyperlink to reference a stale session while submit() targets
+                // the fresh one — or vice versa.
+                val currentSession = session
+                val response = executeQueryOnce(request, currentSession)
+
+                if (response.statusCode != ResourceStatus.SC_EXPECTATION_FAILED) {
+                    return response
+                }
+
+                lastResponse = response
+
+                // Auto-recovery: if the scrape session was recreated (417), the
+                // WebDB cache is empty.  Pre-load the target page and retry with
+                // exponential backoff so the X-SQL UDF can find the data.
+                if (extractedUrl == null) {
+                    logger.warn("X-SQL scrape session closed (417) but URL could not be extracted from SQL; cannot retry.")
+                    return response
+                }
+
+                if (attempt < maxRetries) {
+                    val delayMs = baseDelayMs * (1L shl attempt) // 500, 1000, 2000
+                    logger.info(
+                        "X-SQL scrape session closed (417), attempt {}/{}. Pre-loading '{}' and retrying in {}ms...",
+                        attempt + 1, maxRetries, extractedUrl, delayMs
+                    )
                     try {
-                        runBlocking { session.load(extractedUrl, "-refresh") }
-                        val retryResponse = executeQueryOnce(request)
-                        if (retryResponse.statusCode != ResourceStatus.SC_EXPECTATION_FAILED) {
-                            logger.info("X-SQL retry succeeded for '{}'", extractedUrl)
-                            return retryResponse
-                        }
+                        Thread.sleep(delayMs)
+                        // Re-fetch the session on retry — if the old one was
+                        // recreated, we want the fresh instance for the pre-load.
+                        val retrySession = session
+                        val preloadSql = "select dom_base_uri(dom) as _url from load_and_select('$extractedUrl', ':root')"
+                        executeQueryOnce(ScrapeRequest(preloadSql), retrySession)
                     } catch (e: Exception) {
                         logger.warn("X-SQL pre-load retry failed: {}", e.message)
                     }
@@ -101,9 +144,11 @@ class ScrapeService(
      */
     private fun extractUrlFromSql(sql: String): String? {
         val regex = Regex(
-            """(?:load_and_select|LOAD_AND_SELECT)\s*\(\s*'(https?://[^']+)'\s*,""",
+            """(?:load_and_select|LOAD_AND_SELECT)\s*\(\s*'(https?://[^'\s]+)(?:\s[^']*)?'\s*,""",
             RegexOption.IGNORE_CASE
         )
+        // Group 1 captures the URL (stops at first space or closing quote).
+        // The optional second group (?:\s[^']*)? matches X-SQL flags like "-i 10d".
         return regex.find(sql)?.groupValues?.getOrNull(1)
     }
 

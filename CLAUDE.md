@@ -74,4 +74,4 @@ mvn test -pl browser4-rest -am -Dtest=MCPToolControllerTest
 
 ## Development conventions
 
-- **Worktrees:** Disabled. Work directly in the current checkout. Use branches as needed, but do not create git worktrees (no EnterWorktree).
+- **Worktrees:** Enabled. Use `EnterWorktree` to create isolated git worktrees for parallel or experimental work. Worktrees are created under `.claude/worktrees/`.

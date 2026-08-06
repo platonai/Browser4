@@ -409,10 +409,19 @@ fn build_fake_tar_gz_bundle(tag: &str, dir_name: &str, java_name: &str) -> (Vec<
         let mut tar_builder = tar::Builder::new(gz_encoder);
 
         fn add_tar_entry(builder: &mut tar::Builder<impl std::io::Write>, path: &str, data: &[u8]) {
+            add_tar_entry_with_mode(builder, path, data, 0o644);
+        }
+
+        fn add_tar_entry_with_mode(
+            builder: &mut tar::Builder<impl std::io::Write>,
+            path: &str,
+            data: &[u8],
+            mode: u32,
+        ) {
             let mut header = tar::Header::new_gnu();
             header.set_path(path).unwrap();
             header.set_size(data.len() as u64);
-            header.set_mode(0o644);
+            header.set_mode(mode);
             header.set_cksum();
             builder.append_data(&mut header, path, data).unwrap();
         }
@@ -422,10 +431,14 @@ fn build_fake_tar_gz_bundle(tag: &str, dir_name: &str, java_name: &str) -> (Vec<
             &format!("{dir_name}/lib/browser4-core.jar"),
             b"fake-jar-content",
         );
-        add_tar_entry(
+        // Java binary must have the execute bit set, otherwise
+        // install_dir_contains_runtime rejects it on Unix and the
+        // "already installed" fast-path never fires (test bug).
+        add_tar_entry_with_mode(
             &mut tar_builder,
             &format!("{dir_name}/runtime/bin/{java_name}"),
             b"fake-java-binary",
+            0o755,
         );
         add_tar_entry(
             &mut tar_builder,
@@ -1978,7 +1991,10 @@ impl E2ETestResources {
 
         let was_healthy_before = is_browser4_healthy_now(&self.ctx.browser4_base_url);
         let started_at = Instant::now();
-        let startup_result = run_cli_process_with_live_output(
+        // Use the retry path so that transient Chrome-launch failures don't
+        // abort the entire suite.  "failed to launch browser" is classified as a
+        // known transient retryable failure (is_transient_retryable_failure).
+        let startup_result = run_cli_process_with_retry(
             &self.ctx,
             &[
                 "open",
@@ -3110,7 +3126,22 @@ fn read_key_events(ctx: &mut E2ECtx) -> Vec<String> {
         ctx,
         "JSON.stringify((window.__browser4State || {}).keyEvents || [])",
     );
-    serde_json::from_str::<Vec<String>>(text.trim()).unwrap_or_default()
+    // The fixture stores structured objects {type: "down", key: "Shift", ...},
+    // not plain strings.  Parse as Vec<Value> and format each as "type:key".
+    let events: Vec<serde_json::Value> =
+        serde_json::from_str(text.trim()).unwrap_or_default();
+    events
+        .iter()
+        .filter_map(|ev| {
+            let ty = ev.get("type")?.as_str().unwrap_or("");
+            let key = ev.get("key")?.as_str().unwrap_or("");
+            if ty.is_empty() || key.is_empty() {
+                None
+            } else {
+                Some(format!("{ty}:{key}"))
+            }
+        })
+        .collect()
 }
 
 /// Read `window.__browser4State.lastWheel` directly via JSON.stringify.

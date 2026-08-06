@@ -4,6 +4,19 @@ import ai.platon.pulsar.agentic.common.AgentFileSystem
 import ai.platon.pulsar.agentic.model.ToolSpec
 import kotlin.reflect.KClass
 
+/**
+ * @deprecated Use [CodingToolExecutor] instead. It provides the same filesystem operations
+ *   (via `coding.read`, `coding.write`, `coding.append`, `coding.replace`, `coding.delete`,
+ *   `coding.copy`, `coding.move`, `coding.listDir`, `coding.stat`) plus additional capabilities
+ *   (`coding.glob`, `coding.grep`, `coding.readLines`, `coding.mkdir`, `coding.diff`,
+ *   `coding.changeSummary`, `coding.languages`, `coding.workspaceRoot`) in one unified executor.
+ *   This class is no longer registered by default.
+ */
+@Deprecated(
+    message = "Use CodingToolExecutor instead (e.g. coding.read / coding.write / coding.append / coding.replace / coding.delete / coding.copy / coding.move / coding.listDir / coding.stat)",
+    replaceWith = ReplaceWith("CodingToolExecutor", "ai.platon.pulsar.agentic.tools.builtin.CodingToolExecutor"),
+    level = DeprecationLevel.WARNING
+)
 class FileSystemToolExecutor : AbstractToolExecutor() {
 
     override val domain = "fs"

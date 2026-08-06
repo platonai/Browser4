@@ -190,14 +190,26 @@ class PulsarSessionManager(
         capabilities: Map<String, String?>,
         session: ManagedSession,
     ): ManagedSession {
-        // Extension-attached sessions use an external browser (Chrome with the
-        // Browser4 extension installed).  They must never be recreated by
-        // Browser4 — the extension owns the browser lifecycle.  Recreating would
-        // launch a new Chrome instance, severing the link to the user's existing
-        // browser and its extension state.
-        if (extensionBrowsers.containsKey(sessionId)) {
-            return markSessionActive(session)
-        }
+        // Sessions that do NOT own their browser must never be recreated by
+        // Browser4 — that would launch a new browser instance, severing the
+        // link to the user's existing browser.  The kind enum drives this
+        // decision explicitly rather than relying on extension-specific map
+        // lookups.
+        if (!session.kind.ownsBrowser) {
+            // Extension-attached session whose WebSocket is still connected.
+            if (session.kind == SessionKind.EXTENSION_ATTACHED && extensionBrowsers.containsKey(sessionId)) {
+                return markSessionActive(session)
+            }
+
+            // All other non-owned sessions: check health, report status, but
+            // never recreate.  The user must re-attach manually.
+            // Extension-attached sessions without a connected WebSocket are
+            // always inactive — the health check is misleading because the
+            // internal AgenticSession may appear healthy even without a
+            // usable extension link.
+            if (session.kind != SessionKind.EXTENSION_ATTACHED && checkHealthyBlocking(session).isOK) {
+                return markSessionActive(session)
+            }
 
         // Extension-attached session whose WebSocket has disconnected.
         // Do NOT fall through to recreateUnhealthySession — that would
@@ -662,7 +674,7 @@ class PulsarSessionManager(
                     existingSession.capabilities ?: mapOf(SESSION_ID_CAPABILITY to existingSession.sessionId)
                 )
                 resolveHealthySession(resolvedId, normalizedCapabilities, existingSession)
-            }
+            }.also { if (it == null) logger.warn("getSession: resolvedId={} not found in sessions (displayName path, input={})", resolvedId, sessionId) }
         } else if (sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true)) {
             getOrCreateSession(mapOf(SESSION_ID_CAPABILITY to DEFAULT_SESSION_ID))
         } else {
@@ -672,7 +684,7 @@ class PulsarSessionManager(
                     existingSession.capabilities ?: mapOf(SESSION_ID_CAPABILITY to existingSession.sessionId)
                 )
                 resolveHealthySession(sessionId, normalizedCapabilities, existingSession)
-            }
+            }.also { if (it == null) logger.warn("getSession: sessionId={} not found in sessions (direct path). known keys={}", sessionId, sessions.keys().toList().take(10)) }
         }
         session?.lastAccessedAt = System.currentTimeMillis()
         return session

@@ -30,7 +30,16 @@ import kotlin.reflect.KClass
  * ```
  *
  * @author Browser4 Team
+ * @deprecated Use [CodingToolExecutor] instead. It provides the same shell functionality
+ *   (via `coding.shell`, `coding.shellOutput`, `coding.shellStatus`, `coding.shellList`,
+ *   `coding.shellSetEnv`, `coding.toolsDetect`, `coding.projectType`) plus full filesystem
+ *   access in one unified executor. This class is no longer registered by default.
  */
+@Deprecated(
+    message = "Use CodingToolExecutor instead (e.g. coding.shell / coding.shellOutput / coding.shellStatus / coding.shellList)",
+    replaceWith = ReplaceWith("CodingToolExecutor", "ai.platon.pulsar.agentic.tools.builtin.CodingToolExecutor"),
+    level = DeprecationLevel.WARNING
+)
 class ShellToolExecutor : AbstractToolExecutor() {
 
     override val domain = "shell"

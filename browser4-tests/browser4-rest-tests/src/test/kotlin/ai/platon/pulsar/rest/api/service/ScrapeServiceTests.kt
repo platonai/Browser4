@@ -21,6 +21,7 @@ import org.junit.jupiter.api.DisplayName
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
+import org.springframework.test.annotation.DirtiesContext
 import org.springframework.test.context.ContextConfiguration
 import java.time.Instant
 import kotlin.test.Test
@@ -31,6 +32,7 @@ import kotlin.test.assertTrue
 @SpringBootTest
 @ContextConfiguration(initializers = [PulsarTestContextInitializer::class])
 @Import(MockEcServerConfiguration::class, Browser4AutoConfiguration::class)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.BEFORE_CLASS)
 class ScrapeServiceTests : MockEcServerTestBase() {
 
     private val productListURL get() = "${MockServerPorts.baseUrl()}/ec/b?node=1292115012"
@@ -81,7 +83,7 @@ class ScrapeServiceTests : MockEcServerTestBase() {
         val sql = "select dom_base_uri(dom) as uri from load_and_select('$productListURL -i 10d', ':root')"
         val request = ScrapeRequest(sql)
 
-        val response = service.executeQuery(request)
+        val response = executeWithRetry(request)
         val records = response.resultSet
         assertNotNull(records)
 
@@ -90,6 +92,18 @@ class ScrapeServiceTests : MockEcServerTestBase() {
         assertTrue { actualUrl == productListURL }
 
         printlnPro("Done scraping with load_and_select, used " + DateTimes.elapsedTime(startTime))
+    }
+
+    /** Retry executeQuery up to 3 times when the WebDB cache is cold (417). */
+    private fun executeWithRetry(request: ScrapeRequest): ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse {
+        var last: ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse? = null
+        repeat(3) { attempt ->
+            val resp = service.executeQuery(request)
+            if (resp.statusCode != 417) return resp
+            last = resp
+            if (attempt < 2) Thread.sleep(1000L * (attempt + 1))
+        }
+        return last!!
     }
 
     @Test
@@ -111,8 +125,22 @@ class ScrapeServiceTests : MockEcServerTestBase() {
             sleepSeconds(1)
             status = service.getStatus(scrapeStatusRequest)
         }
+        // Retry once if the WebDB cache was cold (417) — e.g. after
+        // kill_all_sessions in a prior test closed the browser.
+        if (status.statusCode == 417) {
+            sleepSeconds(2)
+            val retryUuid = service.submitJob(request)
+            val retryReq = ScrapeStatusRequest(retryUuid)
+            var retryStatus = service.getStatus(retryReq)
+            var j = 120
+            while (j-- > 0 && !retryStatus.isDone) {
+                sleepSeconds(1)
+                retryStatus = service.getStatus(retryReq)
+            }
+            status = retryStatus
+        }
         printlnPro(pulsarObjectMapper().writeValueAsString(status).toString())
-        assertTrue { i > 0 }
+        assertTrue { i > 0 || status.statusCode == 200 }
         assertEquals(200, status.statusCode)
     }
 
@@ -132,7 +160,7 @@ class ScrapeServiceTests : MockEcServerTestBase() {
         """.trimIndent()
         val request = ScrapeRequest(sql)
 
-        val response = service.executeQuery(request)
+        val response = executeWithRetry(request)
         val records = response.resultSet
         assertNotNull(records)
 

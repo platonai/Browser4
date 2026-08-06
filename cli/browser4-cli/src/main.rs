@@ -4804,12 +4804,42 @@ async fn handle_tool_command_with_options(
             .get("expression")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if result.is_empty() || result == "null" {
+        if result == "null" {
             if !json_active() {
-                cli_println!(
-                    "💡 Tip: Eval returned empty/null. The page context may be stale.\n\
-                       Try re-navigating with: goto <url>\n\
-                       Or check the current page: eval \"window.location.href\""
+                // When --ref is present and the expression doesn't look like an
+                // arrow function, the null is likely from the wrong expression form.
+                // The backend passes the element as the argument to the expression,
+                // so the expression MUST be `element => element.property`.
+                let has_ref = tool_params.get("ref").and_then(|v| v.as_str()).map_or(false, |r| !r.is_empty());
+                let is_arrow_fn = expression.contains("=>");
+                if has_ref && !is_arrow_fn {
+                    eprintln!(
+                        "💡 Expression returned null.\n\
+                           When using --ref, the expression must be an arrow function that receives the element:\n\
+                             eval \"element => element.textContent\" --ref e5\n\
+                           You wrote: eval \"{}\" --ref …\n\
+                           Did you mean: eval \"element => element.{}\" --ref …?",
+                        expression,
+                        expression
+                    );
+                } else {
+                    eprintln!(
+                        "💡 Expression returned null.\n\
+                           The queried element or property may not exist on this page.\n\
+                           Try verifying: eval \"document.querySelector('<your-selector>') !== null\"\n\
+                           Or check the current page: eval \"window.location.href\""
+                    );
+                }
+            }
+        } else if result.is_empty() {
+            if !json_active() {
+                eprintln!(
+                    "💡 Expression returned empty/undefined.\n\
+                       This could mean:\n\
+                       - The page context is stale (try: goto <url>)\n\
+                       - The JS expression returned undefined or \"\"\n\
+                       Check current page: eval \"window.location.href\""
+
                 );
                 // If the expression looked like it should produce output (e.g.
                 // `document.title`), offer a specific suggestion.
@@ -4817,7 +4847,7 @@ async fn handle_tool_command_with_options(
                     || expression.contains("document.body")
                     || expression.contains("document.querySelector")
                 {
-                    cli_println!(
+                    eprintln!(
                         "   `{}` returned empty — the page may have changed\n\
                            since your last navigation. Run `goto` first to restore the page context.",
                         expression
