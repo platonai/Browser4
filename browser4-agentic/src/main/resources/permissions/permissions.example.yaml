@@ -1,0 +1,74 @@
+# Browser4 Permission System — Example Configuration
+#
+# Copy to ~/.browser4/permissions.yaml or <agent-base-dir>/permissions.yaml
+# to activate.  The manager is disabled by default and must be explicitly enabled
+# via AgentToolManager.installPermissionPolicy() or by setting
+# BROWSER4_PERMISSIONS_FILE=<path-to-this-file>.
+
+# ── Single-policy shape ────────────────────────────────────────────────
+
+version: 1
+name: default
+default_mode: allow           # fallback when no rule matches (allow | ask | deny)
+
+rules:
+  # Block force-push to main/master
+  - id: no-force-push
+    domain: coding
+    method: shell
+    mode: deny
+    pattern: "git push*--force*main*"
+    resource: command
+    pattern_type: glob
+    reason: "Force-push to main is prohibited"
+
+  # Require confirmation for navigation
+  - id: navigate-ask
+    domain: tab
+    method: "open|navigate"
+    mode: ask
+    reason: "Navigation requires user confirmation"
+
+  # Require confirmation for JavaScript evaluation
+  - id: eval-ask
+    domain: tab
+    method: "eval|evaluateValue|evaluateValueDetail"
+    mode: ask
+    reason: "JavaScript evaluation requires user confirmation"
+
+  # Block rm -rf outside workspace
+  - id: no-rm-root
+    domain: coding
+    method: shell
+    mode: deny
+    pattern: "rm -rf /*"
+    resource: command
+    pattern_type: glob
+    reason: "Deleting root filesystem is permanently blocked"
+
+# ── Named-policies shape (alternative) ──────────────────────────────────
+#
+# version: 1
+# policies:
+#   - name: code-analysis
+#     applies_to: ["*analysis*", "*researcher*"]
+#     default_mode: allow
+#     rules:
+#       - id: analysis.readonly
+#         domain: coding
+#         method: "write|append|replace|delete|mkdir|copy|move"
+#         mode: deny
+#         reason: "Code-analysis agents are read-only"
+#
+#   - name: dev-agent
+#     applies_to: ["*dev*"]
+#     default_mode: allow
+#     rules:
+#       - id: dev.no-force-push
+#         domain: coding
+#         method: shell
+#         mode: deny
+#         pattern: "git push --force*"
+#         resource: command
+#         pattern_type: glob
+#         reason: "Force-push is blocked"

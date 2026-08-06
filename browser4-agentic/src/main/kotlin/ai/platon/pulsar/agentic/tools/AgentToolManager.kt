@@ -5,6 +5,10 @@ import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.common.AgentFileSystem
 import ai.platon.pulsar.agentic.common.AgentShell
 import ai.platon.pulsar.agentic.model.*
+import ai.platon.pulsar.agentic.permission.PermissionAskHandler
+import ai.platon.pulsar.agentic.permission.PermissionManager
+import ai.platon.pulsar.agentic.permission.PermissionPolicy
+import ai.platon.pulsar.agentic.permission.PermissionRuleLoader
 import ai.platon.pulsar.agentic.skills.SkillContext
 import ai.platon.pulsar.agentic.skills.SkillRegistry
 import ai.platon.pulsar.agentic.skills.tools.SkillToolExecutor
@@ -33,6 +37,33 @@ class AgentToolManager constructor(
     val fs: AgentFileSystem = AgentFileSystem(baseDir)
     val shell: AgentShell = AgentShell(baseDir)
     val system: SystemToolExecutor = SystemToolExecutor(this)
+
+    // ---- Permission System ----
+    // Disabled by default — existing behaviour is unchanged until a policy is installed.
+
+    @Volatile
+    var permissionManager: PermissionManager = PermissionManager.disabled(
+        agentId = agent.uuid.toString(),
+        sessionId = agent.session.id.toString(),
+    )
+
+    fun installPermissionPolicy(policy: PermissionPolicy, askHandler: PermissionAskHandler? = null) {
+        permissionManager = PermissionManager.create(
+            policy = policy,
+            agentId = agent.uuid.toString(),
+            sessionId = agent.session.id.toString(),
+            askHandler = askHandler,
+        )
+    }
+
+    fun installPermissionPolicyFile(path: Path, askHandler: PermissionAskHandler? = null) {
+        val policy = PermissionRuleLoader.loadPolicyFile(path)
+        if (policy != null) {
+            installPermissionPolicy(policy, askHandler)
+        } else {
+            logger.warn("Failed to load permission policy from: $path — keeping current policy")
+        }
+    }
 
     val skillContext: SkillContext by lazy {
         SkillContext(
@@ -201,6 +232,11 @@ class AgentToolManager constructor(
         val normalized = normalizeToolCall(tc)
         var topDomain = normalized.domain.split(".").first()
         topDomain = domainAlias.getOrDefault(topDomain, topDomain)
+
+        if (permissionManager.isEnabled) {
+            permissionManager.check(normalized, topDomain)
+        }
+
         val evaluate = when (topDomain) {
             "tab" -> executor.callFunctionOn(normalized, driver)
             "browser" -> executor.callFunctionOn(normalized, driver.browser)
