@@ -53,7 +53,9 @@ $REPO_OWNER = 'platonai'
 $REPO_NAME  = 'web-miner'
 $GITHUB_API_LATEST = "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/latest"
 
-$InstallRoot = Join-Path $env:USERPROFILE '.scent\webminer'
+$HomeDir = if ($IsWindows) { $env:USERPROFILE } else { $env:HOME }
+if (-not $HomeDir) { throw 'Cannot determine home directory: neither USERPROFILE nor HOME is set.' }
+$InstallRoot = Join-Path $HomeDir '.scent\webminer'
 $InstallLib  = Join-Path $InstallRoot 'lib'
 $InstallJar  = Join-Path $InstallLib 'scent-miner.jar'
 $VersionFile = Join-Path $InstallRoot 'version.txt'
@@ -462,7 +464,7 @@ function Invoke-RunExample {
 
     $ArchiveUrl  = 'https://web-miner.oss-cn-beijing.aliyuncs.com/test/amazon.com.7z'
     $ArchiveName = 'amazon.com.7z'
-    $ExtractDir  = Join-Path $env:USERPROFILE '.scent\test-data'
+    $ExtractDir  = Join-Path $HomeDir '.scent\test-data'
     $DataDir     = Join-Path $ExtractDir 'amazon.com'    # archive contains this subdirectory
     $ArchivePath = Join-Path $env:TEMP $ArchiveName
 

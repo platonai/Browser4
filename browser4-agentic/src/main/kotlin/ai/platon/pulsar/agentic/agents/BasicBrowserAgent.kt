@@ -40,7 +40,7 @@ open class BasicBrowserAgent(
     private val _baseDir: Path = AgentPaths.resolveTimedDirectory(_startTime).resolve(_uuid.toString())
     private val _logDir = getAgentLogDir()
 
-    internal val cta by lazy { ContextToAction(session.sessionConfig) }
+    internal val cta by lazy { ContextToAction(session.sessionConfig, agentToolManager) }
     protected val inference by lazy { InferenceEngine(this) }
     protected val snapshotService get() = inference.snapshotService
     protected val promptBuilder = PromptBuilder()

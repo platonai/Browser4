@@ -53,10 +53,17 @@ pub struct BatchArgs {
 pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
     let mut flags = GlobalFlags::default();
 
-    // Default session name from environment variable
+    // Default session name and server URL from environment variables
     if let Ok(env_session) = std::env::var("BROWSER4_CLI_SESSION") {
         if !env_session.is_empty() {
             flags.session_name = Some(env_session);
+        }
+    }
+    if flags.server_url.is_none() {
+        if let Ok(env_server) = std::env::var("BROWSER4_CLI_SERVER") {
+            if !env_server.is_empty() {
+                flags.server_url = Some(env_server);
+            }
         }
     }
 
@@ -95,10 +102,16 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
             flags.help_json = true;
         } else if arg.starts_with("--timeout=") {
             flags.timeout_secs = arg["--timeout=".len()..].parse().ok();
+            if let Some(secs) = flags.timeout_secs {
+                crate::http::set_global_timeout_override(secs);
+            }
         } else if arg == "--timeout" {
             if i + 1 < argv.len() {
                 i += 1;
                 flags.timeout_secs = argv[i].parse().ok();
+                if let Some(secs) = flags.timeout_secs {
+                    crate::http::set_global_timeout_override(secs);
+                }
             }
         } else if arg.starts_with("--server=") {
             flags.server_url = Some(arg["--server=".len()..].to_string());
@@ -196,6 +209,14 @@ pub fn parse_raw_args(
     while i < raw_args.len() {
         let arg = &raw_args[i];
         if let Some(rest) = arg.strip_prefix("--") {
+            // POSIX end-of-options marker: bare `--` stops option parsing
+            // and treats all remaining tokens as positional arguments.
+            if rest.is_empty() {
+                for j in i + 1..raw_args.len() {
+                    positional.push(json!(&raw_args[j]));
+                }
+                break;
+            }
             if let Some(eq) = rest.find('=') {
                 // --key=value
                 let key = rest[..eq].to_string();
@@ -246,9 +267,18 @@ pub fn parse_raw_args(
                     // Check if this is a boolean option — if so, don't consume
                     // the next argument as a value.
                     let is_bool = bool_opts.map_or(false, |b| b.contains(long));
-                    // Look ahead: if the next argument does NOT start with `-`,
-                    // treat it as this option's value rather than a positional.
-                    if !is_bool && i + 1 < raw_args.len() && !raw_args[i + 1].starts_with('-') {
+                    // Look ahead: a non-boolean option consumes the next argument as its
+                    // value. Single-dash tokens that look like numbers are values too
+                    // (e.g. `snapshot -v -1` for a negative, scroll-relative viewport),
+                    // while `--`-prefixed tokens and other single-dash flags are not
+                    // consumed (e.g. `-d -i` keeps `-i` as a flag).
+                    let next_is_numeric_value = raw_args
+                        .get(i + 1)
+                        .map_or(false, |n| looks_like_negative_value(n));
+                    if !is_bool
+                        && i + 1 < raw_args.len()
+                        && (!raw_args[i + 1].starts_with('-') || next_is_numeric_value)
+                    {
                         let val = &raw_args[i + 1];
                         let value = match val.as_str() {
                             "true" => Value::Bool(true),
@@ -273,6 +303,22 @@ pub fn parse_raw_args(
     }
     result.insert("_".to_string(), Value::Array(positional));
     result
+}
+
+/// True when a token that starts with `-` is a value rather than a flag:
+/// a negative number (`-1`, `-3.5`), a negative viewport range (`-1-3`),
+/// or a negative comma list (`-1,2`). Other single-dash tokens (e.g. `-i`)
+/// are treated as flags.
+fn looks_like_negative_value(token: &str) -> bool {
+    if !token.starts_with('-') || token.starts_with("--") || token.len() < 2 {
+        return false;
+    }
+    let rest = &token[1..];
+    !rest.is_empty()
+        && rest.chars().any(|c| c.is_ascii_digit())
+        && rest
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '-' || c == '.' || c == ',')
 }
 
 /// Build a flat argument map from parsed raw args for use in command dispatch.
@@ -683,6 +729,53 @@ mod tests {
         let pos = map["_"].as_array().unwrap();
         assert_eq!(pos.len(), 2);
         assert_eq!(pos[1].as_str(), Some("search"));
+    }
+
+    #[test]
+    fn test_parse_raw_args_short_option_consumes_negative_numeric_value() {
+        // `snapshot -v -1` — the negative, scroll-relative viewport index must be
+        // consumed as -v's value, not treated as a boolean flag.
+        let short_to_long: HashMap<String, String> =
+            [("v".to_string(), "viewport".to_string())].into_iter().collect();
+        let bool_opts: HashSet<String> = HashSet::new();
+
+        let raw = vec!["snapshot".to_string(), "-v".to_string(), "-1".to_string()];
+        let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
+        assert_eq!(map.get("viewport"), Some(&json!("-1")));
+        // No positional leftovers except the command name.
+        let pos = map["_"].as_array().unwrap();
+        assert_eq!(pos.len(), 1);
+        assert_eq!(pos[0].as_str(), Some("snapshot"));
+    }
+
+    #[test]
+    fn test_parse_raw_args_short_option_consumes_negative_range_and_list() {
+        let short_to_long: HashMap<String, String> =
+            [("v".to_string(), "viewport".to_string())].into_iter().collect();
+        let bool_opts: HashSet<String> = HashSet::new();
+
+        for spec in ["-1-3", "-1,2", "-3.5"] {
+            let raw = vec!["snapshot".to_string(), "-v".to_string(), spec.to_string()];
+            let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
+            assert_eq!(map.get("viewport"), Some(&json!(spec)), "spec {spec} should be consumed as value");
+        }
+    }
+
+    #[test]
+    fn test_parse_raw_args_short_option_does_not_consume_non_numeric_dash_token() {
+        // `-d -i` — `-i` is not a value for the non-boolean -d option; both stay flags.
+        let short_to_long: HashMap<String, String> = [
+            ("d".to_string(), "depth".to_string()),
+            ("i".to_string(), "interactive".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let bool_opts: HashSet<String> = ["interactive".to_string()].into_iter().collect();
+
+        let raw = vec!["snapshot".to_string(), "-d".to_string(), "-i".to_string()];
+        let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
+        assert_eq!(map.get("depth"), Some(&json!(true)));
+        assert_eq!(map.get("interactive"), Some(&json!(true)));
     }
 
     #[test]

@@ -44,6 +44,37 @@ class EcommerceController(
         return ResponseEntity.ok().contentType(MediaType.TEXT_HTML).body(html)
     }
 
+    /**
+     * Sitemap listing all available product URLs on the mock e-commerce site.
+     * Useful for crawl/swarm test scenarios that need to discover URLs without
+     * guessing product IDs.  Returns an XML sitemap compatible with standard
+     * sitemap protocol.
+     */
+    @GetMapping("/sitemap.xml", produces = [MediaType.APPLICATION_XML_VALUE])
+    @ResponseBody
+    fun sitemap(request: HttpServletRequest): ResponseEntity<String> {
+        val baseUrl = "${request.scheme}://${request.serverName}:${request.serverPort}"
+        val products = catalogService.allProducts().sortedBy { it.id }
+        val categories = catalogService.allCategories().sortedBy { it.id }
+
+        val xml = buildString {
+            appendLine("""<?xml version="1.0" encoding="UTF-8"?>""")
+            appendLine("""<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">""")
+            // Home page
+            appendLine("""  <url><loc>$baseUrl/ec/</loc></url>""")
+            // Product pages
+            for (p in products) {
+                appendLine("""  <url><loc>$baseUrl/ec/dp/${p.id}</loc></url>""")
+            }
+            // Category pages
+            for (c in categories) {
+                appendLine("""  <url><loc>$baseUrl/ec/b?node=${c.id}</loc></url>""")
+            }
+            appendLine("""</urlset>""")
+        }
+        return ResponseEntity.ok().contentType(MediaType.APPLICATION_XML).body(xml)
+    }
+
     @GetMapping("/dp/{productId}")
     @ResponseBody
     fun product(@PathVariable productId: String): ResponseEntity<String> {

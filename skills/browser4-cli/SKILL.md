@@ -10,13 +10,30 @@ tier: decision
 
 Browser automation CLI for AI agents — Chrome/Chromium via CDP with accessibility-tree snapshots.
 
+### Invocation
+
+The docs use `browser4-cli` as the generic command name. From within the Browser4
+source tree use one of the following:
+
+| Shell | Command | Notes |
+|-------|---------|-------|
+| PowerShell (Windows) | `./b4w.ps1 <command>` | Primary dev wrapper; builds from source if needed |
+| Git Bash (Windows) | `./b4w.sh <command>` | Quotes args automatically for pwsh safety |
+| Git Bash (alt) | `pwsh ./b4w.ps1 <command>` | Direct PowerShell invocation |
+| Linux / macOS | `./b4w.sh <command>` | Same script works cross-platform |
+| Any (installed) | `browser4-cli <command>` | After `browser4-cli install` |
+
+> **Important:** The `$(./b4w.ps1) <command>` syntax shown in some task
+> instructions does **not** work in bash — `$(…)` is command substitution, not
+> invocation.  Use `pwsh ./b4w.ps1 <command>` or `./b4w.sh <command>` instead.
+
 ## 1. Core Loop
 
 Every browser4-cli session follows this pattern.
 
 ```
 1. NAVIGATE    browser4-cli goto <url>              # auto-opens/reconnects session
-2. SNAPSHOT    browser4-cli snapshot -v 0           # capture accessibility tree (viewport 0 = top)
+2. SNAPSHOT    browser4-cli snapshot -v 0           # capture accessibility tree (viewport 0 = current visible screen)
 3. INTERACT    browser4-cli click <ref>             # use refs from the snapshot
               browser4-cli fill <ref> <value>
               browser4-cli press Enter
@@ -56,6 +73,8 @@ After commands that modify browser state, browser4-cli saves an **accessibility-
 ```
 
 Each interactive element has a **ref** (`e5`, `e12`) — the element's Chrome DevTools Protocol backend node ID, prefixed with `e` (so `e12345` refers to backend node 12345). Use them to target elements in `click`, `fill`, `type`, `get attr`, etc.
+
+> **Note:** `/url` fields may be **relative** (e.g. `/url: news`, `/url: from?site=example.com`). The snapshot output includes the page URL at the top for resolution. For absolute URLs, use `htmlsnapshot get all attr "a[href]" href` which returns full URLs after redirect resolution.
 
 ### Ref Lifecycle
 
@@ -107,7 +126,7 @@ Tab commands scope to a session — all operations affect the session targeted v
 - **Machine-readable output:** Use `--json` either before or after the command: `browser4-cli --json tab-list` or `browser4-cli tab-list --json`. Output is a JSON envelope: `{"command":"tab-list","output":{"count":N,"tabs":[{"index":0,"guid":"...","url":"...","title":"..."}]},"status":"ok"}`. The `tabs` array and `count` are nested inside `output`.
 - **Session scoping:** Prefix tab commands with `-s <session-id>` to target a non-default session. The `list` command shows all tracked sessions and their IDs.
 - **Last-tab behavior:** Chrome requires at least one open tab. Closing the last tab silently creates a replacement `about:blank` — `tab-list` will still show 1 tab afterward.
-- **Tab insert position:** New tabs are inserted by Chrome (not Browser4). The position depends on Chrome's native behavior — typically after the active tab. Use `tab-list` to verify.
+- **Tab insert position:** New tabs are inserted by Chrome (not Browser4). The position depends on Chrome's native behavior, which varies by version and platform — tabs may appear at index 0 (before the active tab), at the end, or after the active tab. On Windows with headless CDP, Chrome typically inserts new tabs at index 0. Always run `tab-list` after `tab-new` to confirm the actual tab layout before switching.
 - **No auto-snapshot:** `tab-list` and `tab-close` do NOT trigger automatic snapshots. After `tab-select`, run `snapshot` explicitly to get fresh element refs for the new active tab.
 - **Re-snapshot after switches:** `tab-select` changes the active page context. Capture a fresh snapshot before interacting with page elements in the new tab.
 - **Extension sessions:** When closing tabs on extension-attached sessions, the backend may report an error even though the tab was successfully closed (Chrome's `chrome.tabs.remove` callback can fire an error after the tab is already gone). The CLI verifies that the tab was actually removed and treats the operation as successful in this case. Extension sessions may also show "Stale" in `list` output after all tabs are closed — the session can be reconnected with `attach --extension`.
@@ -126,7 +145,10 @@ browser4-cli tab-list --json
 
 # Open a tab and switch to it
 browser4-cli tab-new https://httpbin.org/get
-# Output: Switched to tab 1 (https://httpbin.org/get)
+# Output:
+#   Created tab with GUID: AB12CD34 (https://httpbin.org/get)
+#   Switched to tab 1 (https://httpbin.org/get)
+# (The new tab's index depends on Chrome's insertion behavior — run tab-list to confirm.)
 
 # Close by GUID (survives reordering)
 browser4-cli tab-close --guid 2AAA0C47D288D3943BA85D31AA8D084C
@@ -142,11 +164,11 @@ browser4-cli -s ext-session tab-select 0
 | Command family | Purpose | When to use | Full reference |
 |---------------|---------|-------------|----------------|
 | `goto`, `open`, `close`, `reload` | Navigation & session management | Every session starts here | — |
-| `snapshot` | Capture accessibility tree with refs | Before/after interactions | [htmlsnapshot.md](references/htmlsnapshot.md) |
+| `snapshot` | Capture accessibility tree (AXTree) with element refs | **Page structure & interaction** — find elements to click, fill, etc. Use `snapshot` when you need refs (e5, e36) to interact with. | [htmlsnapshot.md](references/htmlsnapshot.md) |
 | `snapshot grep` | Search snapshot content with regex | Find elements by text or pattern | — |
 | `click`, `dblclick`, `drag`, `hover`, `fill`, `type`, `press`, `select`, `check`, `generate-locator` | Page interaction | Form filling, button clicks, mouse actions, navigation | — |
 | `dialog-accept`, `dialog-dismiss` | Native JS dialog handling | After clicking buttons that trigger alert/confirm/prompt | — |
-| `htmlsnapshot get`, `get all` | Extract text/html/attr via CSS selectors | Single-field data extraction | [htmlsnapshot.md](references/htmlsnapshot.md) |
+| `htmlsnapshot get`, `get all` | Extract text/html/attr via CSS selectors from stored HTML | **Page content & text extraction** — get article text, headings, attributes. Use `htmlsnapshot` when you need to read or extract page content. | [htmlsnapshot.md](references/htmlsnapshot.md) |
 | `htmlsnapshot query` | X-SQL queries for structured extraction | Multi-field, filtered, sorted data | [x-sql.md](references/x-sql.md) |
 | `eval` | Execute JavaScript in the page | Live DOM access, complex transforms | — |
 | `extract`, `summarize`, `agent run` | AI-powered extraction | Natural language extraction (needs LLM key) | [agent.md](references/agent.md) |
@@ -179,14 +201,32 @@ Set `BROWSER4_SKILLS_DIR` to override the skills directory location. Skill files
 
 ### 4a. Choosing an Extraction Method
 
+> **📋 snapshot vs htmlsnapshot — the essential distinction:**
+>
+> | | `snapshot` | `htmlsnapshot` |
+> |---|---|---|
+> | **What it captures** | Accessibility tree (AXTree) — semantic roles, names, refs | Raw HTML DOM — full text content |
+> | **Primary use** | **Interaction** — get element refs for click, fill, type | **Extraction** — get article text, data, attributes |
+> | **Output** | YAML tree with `[ref=e5]` handles | Text/HTML/JSON via CSS selectors |
+> | **Key commands** | `snapshot`, `snapshot grep`, `click <ref>` | `htmlsnapshot get`, `query`, `inspect` |
+> | **When to use** | "I need to click a button" or "find an input field" | "I need to read the article text" or "extract prices" |
+>
+> **Rule of thumb:** If you want to **interact** with elements → `snapshot`. If you want to **read content** → `htmlsnapshot`.
+
+> **⚠️ Important:** `htmlsnapshot` captures the **initial server-rendered HTML** at page load. Content added or modified by JavaScript after load (form submission results, dynamic updates, SPA route changes) **will not be reflected** in the stored snapshot. For pages where you have interacted (clicked, filled forms, submitted) or where JS modifies the DOM, use `eval` for live-DOM access. See [§5 Critical Warnings](#5-critical-warnings) for more.
+
 ```
 Need to extract data from a page?
-├─ Need to interact first (click, fill, scroll)? → snapshot + refs, then extract
+├─ Need to interact first (click, fill, scroll)?
+│  → snapshot + refs, then eval for extraction (htmlsnapshot may be stale)
+├─ Page has JS-updated content (after interaction, form submit, SPA)?
+│  → eval --json for live DOM (use --stdin or --file on Windows)
 ├─ Static page, one field? → htmlsnapshot get text "<selector>"
 ├─ Static page, one field, ALL matches? → htmlsnapshot get all text "<selector>"
+├─ Don't know the right CSS selector? → htmlsnapshot get text article  (auto-discovers content)
 ├─ Static page, multiple correlated fields (title+price+url per item)?
 │  → htmlsnapshot query with X-SQL DOM_LOAD_AND_SELECT
-├─ Dynamic/complex JS logic needed? → eval --json (use --stdin or --file on Windows)
+├─ Dynamic/complex JS logic needed? → eval --json
 ├─ Natural language ("find the product price")? → extract (needs LLM key)
 └─ High volume, many pages? → crawl or swarm with --sql
 ```
@@ -244,6 +284,65 @@ Have HTML files and want structured data — without tokens?
 
 See **[scent-miner/SKILL.md](../scent-miner/SKILL.md)** for the full reference.
 
+### 4e. X-SQL Quickstart Template
+
+X-SQL lets you extract correlated fields (e.g., title + price + URL) from a
+list page using a scoped CSS selector and standard SQL.  Copy this template,
+swap the selectors and column names, and you have a working query:
+
+```sql
+SELECT
+  DOM_TEXT(DOM, 'h2')    AS title,
+  DOM_TEXT(DOM, '.price') AS price,
+  DOM_BASE_URI(DOM)       AS url
+FROM
+  DOM_LOAD_AND_SELECT(@url, '.product-card')
+```
+
+**Save to a file** (avoids shell quoting issues):
+```bash
+# 1. Write the query (copy and customize)
+cat > query.sql << 'XSQL'
+SELECT
+  DOM_TEXT(DOM, 'h2')    AS title,
+  DOM_TEXT(DOM, '.price') AS price,
+  DOM_BASE_URI(DOM)       AS url
+FROM
+  DOM_LOAD_AND_SELECT(@url, '.product-card')
+XSQL
+
+# 2. Discover the right CSS selector to replace .product-card:
+browser4-cli htmlsnapshot inspect --selector-base64 <base64-of-selector>
+
+# 3. Run it
+browser4-cli htmlsnapshot query "https://example.com/products" --sql @query.sql
+```
+
+**Critical syntax rules** (H2 SQL engine — violating these produces opaque errors):
+
+| Rule | Correct | Wrong |
+|------|---------|-------|
+| CSS selectors use **single** quotes (SQL string literals) | `'h2'`, `'.price'` | `"h2"` (SQL identifier) |
+| `@url` placeholder is **unquoted** | `@url` | `'@url'` (literal string) |
+| FROM source is always `DOM_LOAD_AND_SELECT` | `DOM_LOAD_AND_SELECT(@url, '...')` | Any other table name |
+| No CTEs (`WITH`), no `JOIN`, no subqueries | Simple `SELECT … FROM …` | `WITH t AS (…) SELECT …` |
+
+**Discover selectors** before writing the query:
+```bash
+browser4-cli htmlsnapshot inspect                    # interactive: lists all elements with CSS classes/ids
+browser4-cli htmlsnapshot summary                    # statistical summary of selectors on the page
+browser4-cli htmlsnapshot get text ".price" --all    # quick test: does this selector match elements?
+```
+
+**Common mistakes and solutions:**
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| `Column "h2" not found` | Double quotes around CSS selector → treated as SQL column name | Use single quotes: `'h2'` |
+| `Table "..." not found` | Wrong FROM source or quoted `@url` | Use `DOM_LOAD_AND_SELECT(@url, 'selector')` |
+| Empty result set | Selector doesn't match any elements | Run `htmlsnapshot inspect` to find valid selectors |
+| `Syntax error in SQL statement` | `--sql` value contains shell-escaped characters | Use `--sql @query.sql` instead of inline SQL |
+
 ## 5. Critical Warnings
 
 > **Warning:** Refs are effectively single-use. Re-snapshot after any interaction before using refs again, and always do so after `goto`, `reload`, and tab switches. On reactive pages, even form commands can leave earlier refs stale. Never store refs across navigations or assume a pre-interaction ref is still valid.
@@ -258,7 +357,9 @@ See **[scent-miner/SKILL.md](../scent-miner/SKILL.md)** for the full reference.
 
 > **Note:** Output pagination defaults — `get html`, `get all html`, and `grep` paginate at 2K lines. `get text` and `get all text` are not paginated by default. Use `--all` to disable pagination, or `--page N` for subsequent pages.
 
-> **Note:** Interactive mode (`snapshot -i`) strips generic `<div>` containers. Many e-commerce product cards use generic divs, not semantic elements. Prefer `--viewport 0` or `htmlsnapshot` for shopping/search pages.
+> **Warning:** Interactive mode (`snapshot -i`) strips generic `<div>` containers. Many e-commerce product cards use generic divs, not semantic elements. Prefer `--viewport 0` or `htmlsnapshot` for shopping/search pages.
+
+> **Warning:** `htmlsnapshot` captures the **initial page HTML**, not the live DOM. After interactions (form fills, clicks, submissions) or on pages where JavaScript updates the DOM (SPA route changes, dynamic content), the snapshot will be **stale** — it won't reflect the current page state. For JS-updated pages, use `eval` for live-DOM access instead. The `htmlsnapshot inspect` command also reads from the stored initial HTML, not the live DOM.
 
 ## 6. Quick Patterns
 

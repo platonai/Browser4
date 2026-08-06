@@ -1,6 +1,6 @@
 package ai.platon.pulsar.examples.sites.tools
 
-import ai.platon.browser4.common.B4ResourceLoader
+import ai.platon.pulsar.common.B4ResourceLoader
 import ai.platon.pulsar.agentic.context.AgenticContexts
 import ai.platon.pulsar.common.NetUtil
 import ai.platon.pulsar.common.getLogger

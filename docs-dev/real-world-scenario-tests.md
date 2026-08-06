@@ -4,7 +4,7 @@
 
 ## Overview
 
-The Browser4 real-world scenario test system uses an **LLM agent** (Claude Code or Kimi Code) to simultaneously complete browser automation tasks AND evaluate browser4-cli's usability. Unlike traditional assertion-based E2E tests, each scenario produces a structured evaluation covering documentation gaps, discoverability problems, UX friction, and reliability issues — from a first-time user's perspective.
+The Browser4 real-world scenario test system uses an **LLM agent** (Claude Code, Kimi Code, OpenCode, or Codex CLI) to simultaneously complete browser automation tasks AND evaluate browser4-cli's usability. Unlike traditional assertion-based E2E tests, each scenario produces a structured evaluation covering documentation gaps, discoverability problems, UX friction, and reliability issues — from a first-time user's perspective.
 
 ```
 Task File (.md/.txt)  →  PowerShell Runner  →  LLM Agent  →  browser4-cli  →  Real Websites
@@ -96,7 +96,7 @@ Every task is prefixed with `$generalPrompt` (~450 lines of instructions) that t
 
 ### 3. Agent Invocation
 
-The runner invokes `claude` or `kimi` (auto-detected, `claude` preferred) with `--dangerously-skip-permissions` for unattended runs. Output streams to console in real-time AND is captured to `target/<timestamp>-<scenario>.raw.md`.
+The runner invokes `claude`, `kimi`, `opencode`, or `codex` (auto-detected, `claude` preferred). Each backend uses its own autonomous flag: `--dangerously-skip-permissions` (claude), auto-approve via `-p` (kimi), or `--dangerously-bypass-approvals-and-sandbox` (codex). Output streams to console in real-time AND is captured to `target/<timestamp>-<scenario>.raw.md`.
 
 ### 4. Post-Processing
 
@@ -263,7 +263,7 @@ Runs all ~46 scenarios with resilience features:
 
 ### Prerequisites
 
-- **Agent CLI**: `claude` (Claude Code) or `kimi` (Kimi Code) on PATH
+- **Agent CLI**: `claude` (Claude Code), `kimi` (Kimi Code), `opencode` (OpenCode), or `codex` (Codex CLI) on PATH
 - **Java runtime**: for the backend in dev mode
 - **Active LLM subscription**: scenarios consume API credits/tokens
 - **MockSite**: `./bin/test.ps1 mock-site` for mock-site category tasks

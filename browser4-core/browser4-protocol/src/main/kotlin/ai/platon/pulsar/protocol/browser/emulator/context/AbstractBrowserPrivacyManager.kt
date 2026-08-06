@@ -1,6 +1,6 @@
 package ai.platon.pulsar.protocol.browser.emulator.context
 
-import ai.platon.browser4.api.BrowserManager
+import ai.platon.pulsar.api.BrowserManager
 import ai.platon.pulsar.browser.privacy.AbstractPrivacyManager
 import ai.platon.pulsar.browser.privacy.PrivacyManager
 import ai.platon.pulsar.common.config.ImmutableConfig

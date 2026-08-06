@@ -23,7 +23,7 @@ Site crawling and Markdown conversion plugin for [Browser4](https://github.com/p
 <dependency>
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4-markdown</artifactId>
-    <version>4.12.0-rc.1</version>
+    <version>4.12.3-SNAPSHOT</version>
 </dependency>
 ```
 
@@ -119,17 +119,30 @@ Each link: `{href, text, resolvedUrl, isInternal}`
 
 ```
 browser4-markdown/
-├── config/
-│   ├── MarkdownConfig.kt              — Configuration properties (markdown.*)
-│   └── MarkdownAutoConfiguration.kt   — Spring Boot auto-configuration & bean wiring
-├── integration/
-│   └── MarkdownBrowseEventHandler.kt  — Hooks into onDocumentSteady for auto-crawl
-├── service/
-│   ├── MarkdownConverter.kt           — CDP JS evaluation for DOM → Markdown
-│   ├── MarkdownUtils.kt               — URL validation, filename, path safety helpers
-│   └── SiteCrawler.kt                 — BFS crawl orchestration with link discovery
-└── tools/
-    └── MarkdownToolExecutor.kt        — LLM agent tool definitions (markdown.*)
+├── pom.xml
+├── README.md
+└── src/
+    ├── main/
+    │   ├── kotlin/ai/platon/pulsar/markdown/
+    │   │   ├── config/
+    │   │   │   ├── MarkdownConfig.kt              — Configuration properties (markdown.*)
+    │   │   │   └── MarkdownAutoConfiguration.kt   — Spring Boot auto-configuration & bean wiring
+    │   │   ├── integration/
+    │   │   │   └── MarkdownBrowseEventHandler.kt  — Hooks into onDocumentSteady for auto-crawl
+    │   │   ├── service/
+    │   │   │   ├── MarkdownConverter.kt           — CDP JS evaluation for DOM → Markdown
+    │   │   │   ├── MarkdownUtils.kt               — URL validation, filename, path safety helpers
+    │   │   │   └── SiteCrawler.kt                 — BFS crawl orchestration with link discovery
+    │   │   └── tools/
+    │   │       └── MarkdownToolExecutor.kt        — LLM agent tool definitions (markdown.*)
+    │   └── resources/
+    │       └── META-INF/
+    │           ├── browser4-plugin.json           — Plugin manifest + auto-configuration discovery
+    │           └── spring/
+    │               └── org.springframework.boot.autoconfigure.AutoConfiguration.imports
+    └── test/
+        └── kotlin/ai/platon/pulsar/markdown/service/
+            └── MarkdownConverterTest.kt           — Unit tests for Markdown conversion
 ```
 
 ### How it works

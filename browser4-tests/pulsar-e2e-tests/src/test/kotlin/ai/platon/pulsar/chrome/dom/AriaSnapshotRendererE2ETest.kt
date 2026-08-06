@@ -1,11 +1,11 @@
 package ai.platon.pulsar.chrome.dom
 
-import ai.platon.browser4.chrome.PulsarWebDriver
+import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.WebDriverTestBase
-import ai.platon.browser4.api.BrowserProtocol
-import ai.platon.browser4.api.model.PageTarget
-import ai.platon.browser4.api.model.SnapshotOptions
-import ai.platon.browser4.chrome.dom.CDPSnapshotService
+import ai.platon.pulsar.api.BrowserProtocol
+import ai.platon.pulsar.api.model.PageTarget
+import ai.platon.pulsar.api.model.SnapshotOptions
+import ai.platon.pulsar.chrome.dom.CDPSnapshotService
 import kotlinx.coroutines.delay
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName

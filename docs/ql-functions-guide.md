@@ -899,6 +899,12 @@ SELECT DOM_FIRST_HREF(DOM, 'article') AS first_article_link FROM DOM_LOAD('...')
 SELECT DOM_NTH_HREF(DOM, 'nav', 5) AS fifth_nav_link FROM DOM_LOAD('...');
 ```
 
+> **Note on DOM_*_HREF with scoped DOM:** `DOM_FIRST_HREF`, `DOM_ALL_HREFS`,
+> and `DOM_NTH_HREF` resolve relative URLs to absolute URLs. When used inside
+> `DOM_LOAD_AND_SELECT` (scoped DOM), the base URL context may not be available,
+> and these functions may return empty for relative links. In such cases, use
+> `DOM_FIRST_ATTR(DOM, 'selector', 'href')` to extract the raw `href` value.
+
 ### 3.7 Node Labels
 
 ```sql

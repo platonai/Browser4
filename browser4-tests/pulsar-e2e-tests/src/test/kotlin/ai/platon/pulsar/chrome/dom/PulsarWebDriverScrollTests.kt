@@ -2,7 +2,7 @@ package ai.platon.pulsar.chrome.dom
 
 import ai.platon.pulsar.FastWebDriverService
 import ai.platon.pulsar.WebDriverTestBase
-import ai.platon.browser4.api.WebDriver
+import ai.platon.pulsar.api.WebDriver
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope

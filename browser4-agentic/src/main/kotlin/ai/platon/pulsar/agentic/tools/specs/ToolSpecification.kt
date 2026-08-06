@@ -71,6 +71,13 @@ system.help(domain: String, method: String): String        // get help for a too
     val MAY_NAVIGATE_ACTIONS = setOf("navigate", "click", "reload", "goBack", "goForward")
 
     /**
+     * The set of domain names that already have their tool specs hardcoded in
+     * [TOOL_CALL_SPECIFICATION].  Used by [ToolCallSpecificationRenderer] to decide
+     * which dynamically-registered domain specs are supplementary vs. duplicates.
+     */
+    val BUILTIN_DOMAINS_IN_SPEC: Set<String> = setOf("tab", "browser", "fs", "agent", "system")
+
+    /**
      * Domains whose actions directly interact with the browser page and may change its visual state.
      * Used to decide whether screenshots and DOM snapshots are necessary, and whether
      * page-state diff comparisons are meaningful for no-op detection.

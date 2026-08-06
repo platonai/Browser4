@@ -609,7 +609,7 @@ function Invoke-WorkflowFailureHandler {
             $jobLogs = Get-JobLogs -RunId $RunId -JobId $kv.Value
             if ($jobLogs) {
                 $allLogs.Add("=== Job: $($kv.Key) (ID: $($kv.Value)) ===")
-                $allLogs.AddRange($(ConvertTo-LogLines -RawLogs $jobLogs))
+                $allLogs.AddRange((ConvertTo-LogLines -RawLogs $jobLogs))
                 Write-Host "  Collected logs for: $($kv.Key)" -ForegroundColor DarkGray
             } else {
                 Write-Host "  Warning: Could not fetch logs for job '$($kv.Key)'" -ForegroundColor Yellow
@@ -628,7 +628,7 @@ function Invoke-WorkflowFailureHandler {
             Write-Host "  Coworker task will contain metadata only." -ForegroundColor Yellow
             $allLogs.Add("(No failed logs available — use `gh run view $RunId --web` to inspect the run)")
         } else {
-            $allLogs.AddRange($(ConvertTo-LogLines -RawLogs $rawLogs))
+            $allLogs.AddRange((ConvertTo-LogLines -RawLogs $rawLogs))
         }
     }
 

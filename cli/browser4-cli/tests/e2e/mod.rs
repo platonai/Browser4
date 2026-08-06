@@ -2043,8 +2043,8 @@ impl E2ETestResources {
                     }
                 }
                 assert!(
-                    startup_result.stderr.contains("Browser4 startup log:"),
-                    "Expected startup diagnostics to include the Browser4 startup log path.{}\nstdout:>>>\n\n{}\n<<<\nstderr:>>>\n{}\n<<<\n",
+                    startup_result.stderr.contains("Server ready"),
+                    "Expected startup diagnostics to include 'Server ready' message.{}\nstdout:>>>\n\n{}\n<<<\nstderr:>>>\n{}\n<<<\n",
                     startup_log_hint,
                     startup_result.stdout,
                     startup_result.stderr,
@@ -2152,12 +2152,32 @@ fn run_cli_process(ctx: &E2ECtx, args: &[&str]) -> CliRunResult {
 }
 
 fn extract_browser4_startup_log_path(stderr: &str) -> Option<&str> {
-    stderr.lines().find_map(|line| {
-        line.trim()
-            .strip_prefix("Browser4 startup log:")
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
-    })
+    // Check the legacy format (cold start success) and the failure format.
+    for prefix in &["Browser4 startup log:", "Startup log:"] {
+        if let Some(path) = stderr.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix(*prefix)
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+        }) {
+            return Some(path);
+        }
+    }
+    // Also try the new failure format: "📄 Browser4 startup log\n  Path: ..."
+    let mut lines = stderr.lines();
+    while let Some(line) = lines.next() {
+        if line.contains("📄 Browser4 startup log") {
+            if let Some(next_line) = lines.next() {
+                if let Some(path) = next_line.trim().strip_prefix("Path:") {
+                    let trimmed = path.trim();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 fn format_browser4_startup_log_hint(stderr: &str) -> String {

@@ -4,14 +4,18 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.common.AgentFileSystem
 import ai.platon.pulsar.agentic.common.AgentShell
+import ai.platon.pulsar.agentic.common.CodingAgentFileSystem
+import ai.platon.pulsar.agentic.common.CodingAgentShell
 import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.skills.SkillContext
 import ai.platon.pulsar.agentic.skills.SkillRegistry
 import ai.platon.pulsar.agentic.skills.tools.SkillToolExecutor
 import ai.platon.pulsar.agentic.skills.tools.SkillToolTarget
 import ai.platon.pulsar.agentic.tools.builtin.*
+import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
+import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationRenderer
 import ai.platon.pulsar.common.getLogger
-import ai.platon.browser4.api.WebDriver
+import ai.platon.pulsar.api.WebDriver
 import kotlinx.coroutines.delay
 import java.nio.file.Path
 import kotlin.time.Duration.Companion.milliseconds
@@ -32,6 +36,18 @@ class AgentToolManager constructor(
     val driver: WebDriver get() = session.getOrCreateBoundDriver()
     val fs: AgentFileSystem = AgentFileSystem(baseDir)
     val shell: AgentShell = AgentShell(baseDir)
+
+    /** Enhanced coding shell for dev tools (git, cargo, mvn, npm, etc.) */
+    val codingShell: CodingAgentShell = CodingAgentShell(baseDir)
+    /** Enhanced coding file system for full filesystem access */
+    val codingFs: CodingAgentFileSystem = CodingAgentFileSystem(baseDir)
+    /** Composite target for the coding domain */
+    val codingTarget: CodingToolExecutor.Target by lazy {
+        CodingToolExecutor.Target(codingShell, codingFs)
+    }
+    /** CLI tool executor for browser4-cli integration */
+    val cliExecutor: CliToolExecutor = CliToolExecutor()
+
     val system: SystemToolExecutor = SystemToolExecutor(this)
 
     val skillContext: SkillContext by lazy {
@@ -66,6 +82,14 @@ class AgentToolManager constructor(
 
         "captcha" to "captcha",
         "Captcha" to "captcha",
+
+        "coding" to "coding",
+        "Coding" to "coding",
+        "dev" to "coding",
+
+        "cli" to "cli",
+        "Cli" to "cli",
+        "browser4-cli" to "cli",
     )
 
     private val _concreteExecutors: MutableMap<String, ToolExecutor> by lazy {
@@ -73,6 +97,8 @@ class AgentToolManager constructor(
             BrowserTabToolExecutor(),
             BrowserToolExecutor(),
             AgentToolExecutor(),
+            CodingToolExecutor(),
+            cliExecutor,
             system,
             skills
         ).associateBy { it.domain }.toMutableMap()
@@ -83,6 +109,20 @@ class AgentToolManager constructor(
     val registeredExecutors: Map<String, ToolExecutor> get() = executor.toolExecutors
 
     val customTargets: Map<String, Any> get() = _customTargets
+
+    init {
+        // Register coding and cli tool specs so they appear in the LLM prompt.
+        // The ToolCallSpecificationRenderer merges these dynamically-registered
+        // specs alongside the hardcoded ToolSpecification.TOOL_CALL_SPECIFICATION.
+        ToolCallSpecificationRenderer.registerBuiltinDomainSpecs(
+            "coding",
+            CodingToolExecutor().getToolSpecs().values.toList()
+        )
+        ToolCallSpecificationRenderer.registerBuiltinDomainSpecs(
+            "cli",
+            cliExecutor.getToolSpecs().values.toList()
+        )
+    }
 
     /**
      * Register a custom target object for a specific domain.
@@ -174,6 +214,35 @@ class AgentToolManager constructor(
     }
 
     /**
+     * Returns all exposed [ToolSpec]s as a flat list (built-in + custom registry).
+     */
+    fun getAllExposedToolSpecs(): List<ToolSpec> {
+        return registeredExecutors.values.flatMap { it.getToolSpecs().values } +
+            CustomToolRegistry.instance.getAllToolCallSpecifications()
+    }
+
+    /**
+     * Returns LangChain4j [ToolSpecification]s for native tool calling.
+     *
+     * @see ToolCallSpecificationRenderer.collectAllToolSpecs
+     */
+    fun getLangChain4jToolSpecifications(): List<dev.langchain4j.agent.tool.ToolSpecification> {
+        return ToolCallSpecificationRenderer.collectAllToolSpecs().let {
+            ToolSpecificationConverter.toToolSpecifications(it)
+        }
+    }
+
+    /**
+     * Returns a reverse registry mapping LC4j tool names → [ToolSpec]
+     * for decoding [ToolExecutionRequest]s.
+     */
+    fun getLangChain4jToolRegistry(): Map<String, ToolSpec> {
+        return ToolCallSpecificationRenderer.collectAllToolSpecs().let {
+            ToolSpecificationConverter.toRegistry(it)
+        }
+    }
+
+    /**
      * Returns the tool specification for a specific domain and method, or null if not found.
      *
      * @param domain The tool domain (e.g. "tab", "fs").
@@ -205,6 +274,8 @@ class AgentToolManager constructor(
             "fs" -> executor.callFunctionOn(normalized, fs)
             "shell" -> executor.callFunctionOn(normalized, shell)
             "agent" -> executor.callFunctionOn(normalized, agent)
+            "coding" -> executor.callFunctionOn(normalized, codingTarget)
+            "cli" -> executor.callFunctionOn(normalized, codingShell)
             "command" -> {
                 // TODO: the commandTarget is ai.platon.pulsar.agentic.tools.advanced.CommandRunner, consider make it built-in
                 //      and is registered in browser4-rest module

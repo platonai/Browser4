@@ -20,7 +20,9 @@ data class ManagedSession(
     val agenticSession: AgenticSession,
     val capabilities: Map<String, String?>?,
     var url: String? = null,
-    var status: String = "active", // active, paused, stopped
+    var status: String = "active", // active, paused, stopped, disconnected, unhealthy
+    /** Explicit session kind — drives ownership and lifecycle decisions. */
+    val kind: SessionKind = SessionKind.BROWSER4_LAUNCHED,
     val createdAt: Long = System.currentTimeMillis(),
     var lastAccessedAt: Long = System.currentTimeMillis(),
 ) {
@@ -28,6 +30,9 @@ data class ManagedSession(
 
     val driver get() = agenticSession.getOrCreateBoundDriver()
     val agent: PerceptiveAgent get() = agenticSession.companionAgent
+
+    /** Convenience: does this session own its browser lifecycle? */
+    val ownsBrowser: Boolean get() = kind.ownsBrowser
 
     suspend inline fun <R> withLock(block: ManagedSession.() -> R): R {
         return mutex.withLock(null) {

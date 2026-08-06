@@ -136,6 +136,27 @@ Browser4 uses a single VERSION file as the source of truth across all modules.
 Replaces the previous `version.sh`, `version.ps1`, `bump-version.ps1`,
 `bump-version-patch.ps1`, `update-versions.sh`, and `sync-version.js` scripts.
 
+### `env-manage.ps1`, `env-manage.sh`
+
+Environment variable manager for all Browser4 configuration variables.
+Both scripts share the same interface; use the `.ps1` version on Windows (PowerShell)
+and the `.sh` version on Linux/macOS/Git Bash.
+
+**Usage:**
+```bash
+./bin/env-manage.sh show              # Show all vars (secrets masked)
+./bin/env-manage.sh show --reveal     # Show with secrets UNMASKED
+./bin/env-manage.sh show --detailed   # Show with descriptions and defaults
+./bin/env-manage.sh show BROWSER4_CLI # Show vars matching a prefix
+./bin/env-manage.sh get <VAR>         # Print raw value of a single var
+./bin/env-manage.sh set <VAR> <VALUE> # Set an env var in this shell
+./bin/env-manage.sh unset <VAR>       # Unset an env var in this shell
+./bin/env-manage.sh export            # Print export commands (safe — secrets masked)
+./bin/env-manage.sh list              # List all known Browser4 env var names
+```
+
+Covers categories: CLI (runtime, download, build, timeouts), backend (CDP, Chrome, proxy, auto-attach), observability (OpenTelemetry), LLM, CAPTCHA, test, example, proxy, and generic settings.
+
 ### `seeds.txt`
 
 A text file containing seed URLs for testing or crawling.
@@ -150,13 +171,16 @@ Build scripts with extended functionality.
 
 - **`build.ps1`**: Full build pipeline — Maven + Spring Boot fat JAR + Cargo. Builds the entire project including the CLI, then copies `Browser4.jar` to `target/`.
 - **`spring-boot.ps1`**: Build then launch Browser4 via `mvnw spring-boot:run`. Convenient for development hot-reload workflows.
+- **`build.tests.ps1`**: Unit tests for `build.ps1` (Pester-based).
 
 ### `ci/`
 
 CI/CD helper scripts for triggering and managing CI workflows.
 
-- **`trigger-ci-action.ps1`**: Create and push a CI pre-release tag (`vX.Y.Z-ci.N`) to trigger the CI workflow. Auto-increments the pre-release number.
+- **`trigger-ci.ps1`**: Create and push a CI pre-release tag (`vX.Y.Z-ci.N`) to trigger the CI workflow. Auto-increments the pre-release number. Branch-aware — creates tags from the current branch context.
 - **`ci-tags-rm.ps1`**: Remove CI release tags.
+- **`monitor-ci.ps1`**: Monitor CI workflow runs with a 5-stage diagnostic pipeline. Tracks run status, extracts errors, and reports failures.
+- **`tests/monitor-ci.tests.ps1`**: Unit tests for `monitor-ci.ps1`.
 
 ### `common/`
 
@@ -233,10 +257,11 @@ Code quality check scripts.
 
 Release management scripts. See also [release/README.md](release/README.md) for the full release workflow.
 
-- **`trigger-release-action.ps1`**: Interactive script to create and push a release tag (`vX.Y.Z`). Validates the version in `VERSION`, shows changelog since the previous tag, and pushes to the specified remote.
-- **`trigger-cli-release-action.ps1`**: Trigger the `browser4-cli` release workflow. Supports tag mode (creates `v{version}-cli` tag) and dispatch mode (`gh workflow run`), plus dry-run tagging.
+- **`trigger-release.ps1`**: Interactive script to create and push a release tag (`vX.Y.Z`). Validates the version in `VERSION`, shows changelog since the previous tag, and pushes to the specified remote.
 - **`check-publish-status.ps1`**: Check whether the current project version and CLI version have been fully published to GitHub and npm.
 - **`download-release-assets.ps1`**: Download all assets from a GitHub release (defaults to latest, supports specific tags via `-Tag`).
+- **`monitor-release.ps1`**: Monitor release workflow runs with diagnostic pipeline for release-specific failures.
+- **`tests/monitor-release.tests.ps1`**: Unit tests for `monitor-release.ps1`.
 
 > **Note:** Version bumping is handled by the root-level [`version.mjs`](#versionmjs). Deprecated scripts (`bump-version.ps1`, `bump-version-patch.ps1`, `update-versions.sh`) have been consolidated into `version.mjs`.
 
@@ -247,12 +272,13 @@ Test infrastructure and Docker verification scripts.
 - **`test-create-runtime-bundle.ps1`**: Build the `browser4-bundle` Maven module with `-Passet-bundle` to create a runtime distribution bundle.
 - **`test-docker-local.ps1`**: Build and smoke-test the Browser4 Docker image locally, mirroring the CI `build-core-and-docker` job. Runs Maven build, Docker build, health check, and JAR inspection.
 - **`test.ps1.tests.ps1`**: Unit tests for the root `test.ps1` test runner (Pester-based).
+- **`b4w.tests.ps1`**: Unit tests for the `b4w.ps1` launcher script (Pester-based).
 
 ### `browser4-tests/tests-production/`
 
 Production acceptance and stress tests for the globally-installed `browser4-cli`.
 All tests use the globally-installed CLI by default (override with `$env:BROWSER4_CLI_BIN`).
-These scripts are self-contained and portable — they never depend on git, the repo root, or local build outputs. See also [tests-production/README.md](../../browser4-tests/tests-production/README.md).
+These scripts are self-contained and portable — they never depend on git, the repo root, or local build outputs. See also [tests-production/README.md](../browser4-tests/tests-production/README.md).
 
 **Test Runner:**
 - **`run-tests.ps1`**, **`run-tests.sh`**: Discover and run test scripts. Supports categories (`smoke`, `agent`, `swarm`, `stress`, `all`) or individual tests. `run-tests.sh` is a bash wrapper that auto-detects locale and invokes `run-tests.ps1` via `pwsh`. On failure, attempts AI-powered log analysis via `claude` or `copilot` if available.
@@ -296,6 +322,7 @@ Utility scripts for development and system maintenance.
 - **`kill-browser4-processes.ps1`**: Kill Browser4 Java server processes. Supports `-ListOnly` for inspection without termination.
 - **`list-browser4-processes.ps1`**: List all running Browser4 Java processes.
 - **`list-browsers.ps1`**: List all browser processes launched by Browser4.
+- **`watch-logs.ps1`**: Live log dashboard for monitoring Browser4 server and browser output in real time.
 
 **Dependencies & Setup:**
 - **`install-depends.ps1` / `install-depends.sh`**: Install system dependencies (Chrome, Maven Wrapper, etc.).

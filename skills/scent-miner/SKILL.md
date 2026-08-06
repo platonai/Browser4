@@ -180,6 +180,12 @@ files can be opened in Excel for sorting, filtering, or further analysis.
   count from the data. This usually works better than guessing a number.
 - **Input files** — only `*.html` and `*.htm` files are processed. Other files
   in the directory are ignored.
+- **Minimum document count** — WebMiner works best with at least 10–20 HTML files.
+  With very small corpora (fewer than 5 files), the encoder may silently skip files
+  that lack sufficient text content, and the views stage may crash with an
+  "empty sheet" error because clustering produces too few groups for meaningful
+  reports. If you see "Encoded 1 document(s)" from 3 input files or an
+  IllegalArgumentException during the views stage, try with more input documents.
 - **Resume interrupted runs** — if a pipeline stops partway through, use
   `--resume` to continue from the last completed stage instead of starting over.
 - **Offline only** — WebMiner works with pre-downloaded HTML files. Use a

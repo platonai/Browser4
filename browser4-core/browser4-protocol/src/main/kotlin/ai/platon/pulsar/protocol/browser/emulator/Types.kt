@@ -15,11 +15,11 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator
 
-import ai.platon.browser4.api.InteractSettings
-import ai.platon.browser4.api.model.BrowserSettings
+import ai.platon.pulsar.api.InteractSettings
+import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.common.FlowState
 import ai.platon.pulsar.common.HttpHeaders
-import ai.platon.browser4.api.WebDriver
+import ai.platon.pulsar.api.WebDriver
 import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.PageDatum
 import ai.platon.pulsar.persist.ProtocolStatus

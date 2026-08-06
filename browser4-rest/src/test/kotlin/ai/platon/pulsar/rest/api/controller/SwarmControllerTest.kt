@@ -1,8 +1,8 @@
 package ai.platon.pulsar.rest.api.controller
 
-import ai.platon.browser4.common.B4Constants.PROFILE_MODE_CAPABILITY
-import ai.platon.browser4.common.B4Constants.SESSION_ID_CAPABILITY
-import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
+import ai.platon.pulsar.common.B4Constants.PROFILE_MODE_CAPABILITY
+import ai.platon.pulsar.common.B4Constants.SESSION_ID_CAPABILITY
+import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse

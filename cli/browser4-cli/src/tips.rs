@@ -27,7 +27,7 @@ const TIPS_SNAPSHOT: &[Tip] = &[
         text: "Use `snapshot --auto-diff` after interactions to see only what changed — the fastest way to verify actions",
     },
     Tip {
-        text: "Use `snapshot -v 0` for viewport 0 (top of page) — avoids large snapshots exceeding context limits",
+        text: "Use `snapshot -v 0` for the current visible screen — avoids large snapshots exceeding context limits",
     },
     Tip {
         text: "Use `snapshot grep <pattern>` to search a saved snapshot without re-reading the entire file",
@@ -108,7 +108,7 @@ const TIPS_INTERACTION: &[Tip] = &[
 
 const TIPS_NAVIGATION: &[Tip] = &[
     Tip {
-        text: "After navigation, capture with `snapshot -v 0` to get the top viewport with element refs",
+        text: "After navigation, capture with `snapshot -v 0` to get the current viewport with element refs",
     },
     Tip {
         text: "Use load options in the URL: `goto \"url -expires 1d -refresh\"` for caching control",

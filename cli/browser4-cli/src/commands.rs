@@ -170,6 +170,30 @@ pub fn is_element_reference(value: &str) -> bool {
         || trimmed.starts_with("backend:")
 }
 
+/// Semantic keywords for htmlsnapshot get that auto-discover the main content area
+/// without requiring the user to guess CSS selectors.
+///
+/// Maps user-friendly keywords (e.g., "article", "readable") to combined CSS
+/// selectors that target common article/content container patterns across
+/// different site structures (HTML5 semantic tags, ARIA roles, common class names).
+const SEMANTIC_SELECTORS: &[(&str, &str)] = &[
+    ("article", "article, main, [role=\"main\"], .post-content, .entry-content, .article-content, .post-body, .content, #content, #main, #article, .post, .entry, .single-post"),
+    ("readable", "article, main, [role=\"main\"], .post-content, .entry-content, .article-content, .post-body, .content, #content, #main, #article, .post, .entry, .single-post"),
+    ("content", "article, main, [role=\"main\"], .post-content, .entry-content, .article-content, .post-body, .content, #content, #main, #article, .post, .entry, .single-post"),
+    ("main-text", "article, main, [role=\"main\"], .post-content, .entry-content, .article-content, .post-body, .content, #content, #main, #article, .post, .entry, .single-post"),
+];
+
+/// Expand a semantic keyword selector to a combined CSS selector.
+/// Returns `Some(expanded_selector)` if the input is a known semantic keyword,
+/// or `None` if it should be treated as a regular CSS selector.
+pub fn expand_semantic_selector(selector: &str) -> Option<&'static str> {
+    let trimmed = selector.trim().to_lowercase();
+    SEMANTIC_SELECTORS
+        .iter()
+        .find(|(keyword, _)| *keyword == trimmed)
+        .map(|(_, expanded)| *expanded)
+}
+
 /// Returns true if the value is a bare CSS selector (e.g. "#id", ".class", "[attr]")
 /// that does not already have a known prefix (`css:`, `backend:`, `xpath:`, `text=`).
 /// These selectors need a `css:` prefix so the backend can distinguish them from
@@ -1273,11 +1297,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "selector", description: "Scope snapshot to a CSS selector (use --selector; -s is reserved for --session globally). Note: root-to-leaf ancestor elements outside the matched scope are included for tree-path context.", is_bool: false, short: None },
                 OptionDef { name: "raw", description: "Strip page info and return only snapshot content (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print snapshot content to stdout instead of saving to file", is_bool: true, short: None },
-                OptionDef { name: "viewport", description: "Capture specific screen-height page chunks (viewports). Each chunk = one screen height (~viewport height px). Formats: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7). Example: -v 1-3 captures the 2nd through 4th screen-heights.", is_bool: false, short: Some("v") },
+                OptionDef { name: "viewport", description: "Capture specific screen-height page chunks (viewports). Each chunk = one screen height (~viewport height px). Indices are scroll-relative: 0 = current visible screen, 1 = one below, -1 = one above. Formats: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7). Example: -v 1-3 captures the 2nd through 4th screen-heights.", is_bool: false, short: Some("v") },
                 OptionDef { name: "auto-diff", description: "Diff against the previous snapshot — show only what changed since the last capture. Note: after page navigation (goto/open), all elements appear as changed because the entire DOM is new.", is_bool: true, short: None },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated snapshot output (1-based, default: 1)" },
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
+                OptionDef { name: "brief", short: Some("b"), is_bool: true, description: "Output only page URL and title (skip the accessibility tree). Useful for quick 'am I on the right page?' checks without the full snapshot output." },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_snapshot".to_string(),
@@ -1300,6 +1325,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(true) = get_bool(args, "raw") { p["raw"] = json!(true); }
                 if let Some(true) = get_bool(args, "stdout") { p["stdout"] = json!(true); }
                 if let Some(true) = get_bool(args, "auto-diff") { p["auto-diff"] = json!(true); }
+                if let Some(true) = get_bool(args, "brief") { p["brief"] = json!(true); }
                 // Pagination flags (CLI-side, not sent to server)
                 if let Some(true) = get_bool(args, "all") { p["all"] = json!(true); }
                 if let Some(pg) = get_opt_str(args, "page") { p["page"] = json!(pg); }
@@ -1949,7 +1975,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "filename", description: "File name or path to save the screenshot to. Bare filenames are saved to the snapshot directory; paths (containing / or \\) are resolved relative to the current directory.", is_bool: false, short: None },
                 OptionDef { name: "full-page", description: "When true, takes a screenshot of the full scrollable page", is_bool: true, short: None },
-                OptionDef { name: "viewport", description: "Capture a specific viewport by index (0 = top). Same semantics as snapshot -v.", is_bool: false, short: Some("v") },
+                OptionDef { name: "viewport", description: "Capture a specific viewport by index (0 = current visible screen). Same semantics as snapshot -v.", is_bool: false, short: Some("v") },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_take_screenshot".to_string(),
@@ -2749,6 +2775,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let mut load_opts = Vec::new();
                 if let Some(v) = get_opt_str(args, "out-link-selector") {
                     load_opts.push(format!("-outLink \"{}\"", v));
+                    // Store in tool_params so main.rs can check for it in the
+                    // warning about "no --out-link-selector".
+                    p["out-link-selector"] = json!(v);
                 }
                 if let Some(v) = get_opt_str(args, "out-link-pattern") {
                     load_opts.push(format!("-outLinkPattern \"{}\"", v));
@@ -2923,12 +2952,12 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-get",
-            description: "Extract elements from the HTML snapshot stored in Browser4's page storage (text, html, attr). Supports batch mode for multi-step workflows.",
+            description: "Extract elements from the HTML snapshot stored in Browser4's page storage (text, textcontent, html, attr). Supports batch mode for multi-step workflows.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: true,
             args: &[
-                ArgDef { name: "field", description: "What to extract: text, html, or attr", optional: false },
+                ArgDef { name: "field", description: "What to extract: text, textcontent, html, or attr. text returns visible text (may be truncated by CSS overflow); textcontent returns the full text content", optional: false },
                 ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
                 ArgDef { name: "name", description: "Attribute name (required for attr field)", optional: true },
             ],
@@ -2954,7 +2983,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[
-                ArgDef { name: "field", description: "What to extract: text, html, or attr", optional: false },
+                ArgDef { name: "field", description: "What to extract: text, textcontent, html, or attr. text returns visible text (may be truncated by CSS overflow); textcontent returns the full text content", optional: false },
                 ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
                 ArgDef { name: "name", description: "Attribute name (required for attr field)", optional: true },
             ],
@@ -3023,7 +3052,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 },
                 OptionDef {
                     name: "format",
-                    description: "Output format: json, csv, or table (default: json)",
+                    description: "Output format: json, csv, or table (default: table)",
                     is_bool: false,
                     short: None,
                 },
@@ -3303,7 +3332,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "max", description: "Max matching elements to analyze (default: 20)", is_bool: false, short: None },
-                OptionDef { name: "depth", description: "Max descendant depth for selector suggestions (default: 5)", is_bool: false, short: None },
+                OptionDef { name: "depth", description: "Max descendant depth for selector suggestions (default: 5). If the DOM under the selector is shallower than --depth, the actual DOM depth is used and output is identical for higher depth values.", is_bool: false, short: None },
                 OptionDef { name: "stdin", description: "Read the CSS selector from stdin instead of an inline argument (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "selector-base64", description: "Base64-encoded CSS selector (avoids shell quoting issues on Windows)", is_bool: false, short: None },
             ],
@@ -3453,6 +3482,100 @@ pub fn all_commands() -> Vec<CommandDef> {
                 params
             },
         },
+        // ---- Config ----
+        CommandDef {
+            name: "config",
+            description: "List all CLI configuration values",
+            category: Category::Config,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "config-list",
+            description: "List all CLI configuration values",
+            category: Category::Config,
+            hidden: true,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "config-get",
+            description: "Get a CLI configuration value",
+            category: Category::Config,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef {
+                    name: "key",
+                    optional: false,
+                    description: "The config key to get (server, timeout, proxy, session)",
+                },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
+                json!({ "key": key })
+            },
+        },
+        CommandDef {
+            name: "config-set",
+            description: "Set a CLI configuration value",
+            category: Category::Config,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef {
+                    name: "key",
+                    optional: false,
+                    description: "The config key to set (server, timeout, proxy, session)",
+                },
+                ArgDef {
+                    name: "value",
+                    optional: false,
+                    description: "The value to set",
+                },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
+                let value = get_string_value(args, "value").unwrap_or_default();
+                json!({ "key": key, "value": value })
+            },
+        },
+        CommandDef {
+            name: "config-delete",
+            description: "Remove a CLI configuration value, resetting it to default",
+            category: Category::Config,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef {
+                    name: "key",
+                    optional: false,
+                    description: "The config key to delete (server, timeout, proxy, session)",
+                },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
+                json!({ "key": key })
+            },
+        },
     ]
 }
 
@@ -3542,6 +3665,11 @@ mod tests {
             "plugin-install",
             "plugin-remove",
             "act",
+            "config",
+            "config-list",
+            "config-get",
+            "config-set",
+            "config-delete",
             "experience-save",
             "experience-query",
             "experience-list",
@@ -5431,6 +5559,24 @@ mod tests {
             Some("1-3"),
             "viewport range should be passed through"
         );
+    }
+
+    #[test]
+    fn test_snapshot_viewport_single_values_passed_through() {
+        // Scroll-relative semantics: -v 0 (current screen), -v 1 (one below),
+        // -v -1 (one above) — each must pass through to the server unchanged.
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        for viewport in ["0", "1", "-1"] {
+            let mut args = HashMap::new();
+            args.insert("viewport".to_string(), json!(viewport));
+            let params = (cmd.tool_params_fn)(&args);
+            assert_eq!(
+                params.get("viewports").and_then(|v| v.as_str()),
+                Some(viewport),
+                "snapshot -v {viewport} should pass viewports through as a string"
+            );
+        }
     }
 
     // ---- screenshot viewport tests ----

@@ -20,6 +20,11 @@ const SNAPSHOT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_SNAPSHOT_TIMEOUT_SECS";
 const AGENT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_AGENT_TIMEOUT_SECS";
 const ACT_REQUEST_TIMEOUT_SECS: u64 = 60;
 const ACT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_ACT_TIMEOUT_SECS";
+/// Env var set by the CLI when the user passes `--timeout <seconds>`.
+/// This overrides per-tool defaults so that the global timeout flag
+/// affects all tool calls, including those made by command handlers
+/// that bypass the `call_tool_with_timeout_override` path.
+const GLOBAL_TIMEOUT_OVERRIDE_ENV: &str = "BROWSER4_CLI_GLOBAL_TIMEOUT_SECS";
 
 fn timeout_secs_from_env(env_key: &str, default_secs: u64) -> u64 {
     std::env::var(env_key)
@@ -27,6 +32,24 @@ fn timeout_secs_from_env(env_key: &str, default_secs: u64) -> u64 {
         .and_then(|value| value.trim().parse::<u64>().ok())
         .filter(|secs| *secs > 0)
         .unwrap_or(default_secs)
+}
+
+/// Read the global `--timeout` override, if set by the CLI argument parser.
+/// Returns [None] when no override is active, so callers fall back to defaults.
+pub fn global_timeout_override() -> Option<u64> {
+    std::env::var(GLOBAL_TIMEOUT_OVERRIDE_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|s| *s > 0)
+}
+
+/// Set the global timeout override. Called by the CLI argument parser when
+/// the user passes `--timeout <seconds>`. This function is intentionally
+/// infallible — a parse failure just means it won't be set.
+pub fn set_global_timeout_override(secs: u64) {
+    if secs > 0 {
+        std::env::set_var(GLOBAL_TIMEOUT_OVERRIDE_ENV, secs.to_string());
+    }
 }
 
 fn default_request_timeout() -> std::time::Duration {
@@ -330,6 +353,15 @@ pub async fn call_tool_with_result(
 /// timeout error before the HTTP layer gives up.
 fn effective_timeout(tool: &str, args: &Value) -> std::time::Duration {
     let base = timeout_for_tool(tool);
+    // Apply the global --timeout override as a floor: if the user specified
+    // --timeout 120, tools with shorter defaults (e.g. 60 s for snapshots)
+    // are bumped up, while tools with longer defaults (e.g. 600 s for crawl)
+    // keep their higher timeout.
+    let base = if let Some(global) = global_timeout_override() {
+        base.max(std::time::Duration::from_secs(global))
+    } else {
+        base
+    };
     if !is_wait_tool(tool) {
         return base;
     }
@@ -1584,5 +1616,32 @@ mod tests {
             build_endpoint_url("http://127.0.0.1:8080", "/api/swarm/swarm-task-1/result"),
             "http://127.0.0.1:8080/api/swarm/swarm-task-1/result"
         );
+    }
+
+    #[test]
+    fn test_global_timeout_override_env_var() {
+        // Issue 10: --timeout flag should affect all tool calls via env var.
+        let _lock = TIMEOUT_ENV_MUTEX.lock().unwrap();
+
+        // No override → uses per-tool default (60 s for snapshots)
+        std::env::remove_var(GLOBAL_TIMEOUT_OVERRIDE_ENV);
+        assert_eq!(global_timeout_override(), None);
+        let t = effective_timeout("html_snapshot_capture", &json!({}));
+        assert_eq!(t.as_secs(), 60);
+
+        // --timeout 120 → snapshot should be bumped from 60 to 120
+        std::env::set_var(GLOBAL_TIMEOUT_OVERRIDE_ENV, "120");
+        assert_eq!(global_timeout_override(), Some(120));
+        let t = effective_timeout("html_snapshot_capture", &json!({}));
+        assert_eq!(t.as_secs(), 120);
+
+        // --timeout 30 → browser_navigate (120s default) keeps its higher timeout
+        std::env::set_var(GLOBAL_TIMEOUT_OVERRIDE_ENV, "30");
+        assert_eq!(global_timeout_override(), Some(30));
+        let t = effective_timeout("browser_navigate", &json!({}));
+        assert_eq!(t.as_secs(), 120);
+
+        // Cleanup
+        std::env::remove_var(GLOBAL_TIMEOUT_OVERRIDE_ENV);
     }
 }

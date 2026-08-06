@@ -47,7 +47,7 @@ import org.springframework.context.annotation.Lazy
  * - Page category sniffer
  *
  * Implements [BrowseEventMount], [ToolMount], and [PageSnifferMount] so that
- * [ai.platon.browser4.boot.plugin.PluginManager] can automatically wire the
+ * [ai.platon.pulsar.boot.plugin.PluginManager] can automatically wire the
  * handlers and tools into the appropriate integration points.
  */
 @AutoConfiguration

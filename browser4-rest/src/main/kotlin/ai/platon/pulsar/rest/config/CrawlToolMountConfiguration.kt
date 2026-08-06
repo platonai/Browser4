@@ -9,7 +9,7 @@ import org.springframework.context.annotation.Configuration
 
 /**
  * Registers [CrawlToolExecutor] via [ToolMount] so it is discovered by
- * [ai.platon.browser4.boot.plugin.PluginManager] and made available to
+ * [ai.platon.pulsar.boot.plugin.PluginManager] and made available to
  * both the MCP dispatcher and the LLM agent tool system.
  */
 @Configuration

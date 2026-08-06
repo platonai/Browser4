@@ -72,7 +72,7 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("attrName", "String", null),
             ),
             returnType = "String",
-            description = "Extract text, html, or an attribute value from a single element matching a CSS selector."
+            description = "Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector."
         )
 
         toolSpec["scrape_all"] = ToolSpec(
@@ -87,7 +87,7 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("limit", "Int", "-1"),
             ),
             returnType = "String",
-            description = "Extract text, html, or attribute values from ALL elements matching a CSS selector."
+            description = "Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector."
         )
 
         toolSpec["query"] = ToolSpec(
@@ -218,8 +218,8 @@ class HTMLSnapshotToolExecutor(
         val selector = paramString(args, "selector", "scrape", required = false, default = ":root")?.ifEmpty { ":root" } ?: ":root"
         val attrName = paramString(args, "attrName", "scrape", required = false)
 
-        if (field !in setOf("text", "html", "attr")) {
-            throw IllegalArgumentException("Unknown field '$field'. Use text, html, or attr.")
+        if (field !in setOf("text", "textcontent", "html", "attr")) {
+            throw IllegalArgumentException("Unknown field '$field'. Use text, textcontent, html, or attr.")
         }
         if (field == "attr" && attrName.isNullOrBlank()) {
             throw IllegalArgumentException("The 'attr' field requires an attribute name.")
@@ -238,6 +238,7 @@ class HTMLSnapshotToolExecutor(
 
             when (field) {
                 "text" -> document.selectFirstOrNull(selector)?.text() ?: ""
+                "textcontent" -> document.selectFirstOrNull(selector)?.text() ?: ""
                 "html" -> document.selectFirstOrNull(selector)?.html() ?: ""
                 "attr" -> document.selectFirstOrNull(selector)?.attr(attrName!!) ?: ""
                 else -> ""
@@ -252,8 +253,8 @@ class HTMLSnapshotToolExecutor(
         val offset = paramInt(args, "offset", "scrape_all", required = false, default = 0) ?: 0
         val limit = paramInt(args, "limit", "scrape_all", required = false, default = -1) ?: -1
 
-        if (field !in setOf("text", "html", "attr")) {
-            throw IllegalArgumentException("Unknown field '$field'. Use text, html, or attr.")
+        if (field !in setOf("text", "textcontent", "html", "attr")) {
+            throw IllegalArgumentException("Unknown field '$field'. Use text, textcontent, html, or attr.")
         }
         if (field == "attr" && attrName.isNullOrBlank()) {
             throw IllegalArgumentException("The 'attr' field requires an attribute name.")
@@ -277,6 +278,7 @@ class HTMLSnapshotToolExecutor(
             limited.map { element ->
                 when (field) {
                     "text" -> element.text()
+                    "textcontent" -> element.text()
                     "html" -> element.html()
                     "attr" -> element.attr(attrName!!)
                     else -> ""

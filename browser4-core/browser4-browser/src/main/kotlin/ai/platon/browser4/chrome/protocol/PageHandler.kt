@@ -4,6 +4,7 @@ import ai.platon.browser4.chrome.IsolatedWorldManager
 import ai.platon.browser4.chrome.dom.CDPSnapshotService
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.browser4.api.snapshot.ViewportSpec
+import ai.platon.browser4.api.snapshot.ViewportRanges
 import ai.platon.browser4.chrome.protocol.util.CheckableElementJs
 import ai.platon.browser4.chrome.protocol.util.withNodeObjectId
 import ai.platon.browser4.chrome.util.ChromeDriverException
@@ -102,12 +103,10 @@ class PageHandler constructor(
         val scrollY = scrollState.y
         // Viewport indices are scroll-relative: index 0 = current visible area,
         // index 1 = one viewport below current, index -1 = one viewport above.
-        // Merge contiguous viewport ranges into Y-axis ranges and build a combined NanoTree
-        val nanoTrees = mergeViewportRanges(sortedIndices).map { (startIdx, endIdx) ->
-            val startY = (scrollY + startIdx * viewportHeight).coerceAtLeast(0.0)
-            val endY = scrollY + (endIdx + 1) * viewportHeight
-            serializableTree.toNanoTreeInRange(startY, endY)
-        }
+        // Convert them to clamped document Y-axis ranges (the page is not scrolled)
+        // and build a combined NanoTree per disjoint range.
+        val nanoTrees = ViewportRanges.computeYAxisRanges(scrollY, viewportHeight, sortedIndices)
+            .map { (startY, endY) -> serializableTree.toNanoTreeInRange(startY, endY) }
 
         // Build options with the viewport spec so header/footer show the correct viewport
         val viewportSpec = sortedIndices.joinToString(",")
@@ -153,39 +152,14 @@ class PageHandler constructor(
             val sortedIndices = viewportIndices.distinct().sorted()
             val scrollY = scrollState.y
             // Viewport indices are scroll-relative: index 0 = current visible area.
-            val nanoTrees = mergeViewportRanges(sortedIndices).map { (startIdx, endIdx) ->
-                val startY = (scrollY + startIdx * viewportHeight).coerceAtLeast(0.0)
-                val endY = scrollY + (endIdx + 1) * viewportHeight
-                serializableTree.toNanoTreeInRange(startY, endY)
-            }
+            val nanoTrees = ViewportRanges.computeYAxisRanges(scrollY, viewportHeight, sortedIndices)
+                .map { (startY, endY) -> serializableTree.toNanoTreeInRange(startY, endY) }
             nanoTrees.joinToString("\n---\n") { NanoAriaSnapshotRenderer.render(it, resolvedOptions) }
         } else {
             buState.domState.renderedAriaSnapshot(resolvedOptions)
         }
 
         return buildViewportHeader(buState, resolvedOptions) + snapContent + buildViewportFooter(buState, resolvedOptions)
-    }
-
-    /**
-     * Merge contiguous 0-based viewport indices into (start, end) pairs for efficient range queries.
-     * E.g., [0, 1, 2, 4, 6, 7] → [(0, 2), (4, 4), (6, 7)]
-     */
-    private fun mergeViewportRanges(sortedIndices: List<Int>): List<Pair<Int, Int>> {
-        if (sortedIndices.isEmpty()) return emptyList()
-        val result = mutableListOf<Pair<Int, Int>>()
-        var start = sortedIndices[0]
-        var end = start
-        for (i in 1 until sortedIndices.size) {
-            if (sortedIndices[i] == end + 1) {
-                end = sortedIndices[i]
-            } else {
-                result.add(start to end)
-                start = sortedIndices[i]
-                end = start
-            }
-        }
-        result.add(start to end)
-        return result
     }
 
     /**
