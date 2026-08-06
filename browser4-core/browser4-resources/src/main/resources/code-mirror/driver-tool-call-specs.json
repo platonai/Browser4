@@ -600,12 +600,18 @@
     "defaultValue" : "1",
     "expression" : "count: Int = 1",
     "cliOptions" : "--count=<Int>, default=1"
+  }, {
+    "name" : "button",
+    "type" : "String?",
+    "defaultValue" : "null",
+    "expression" : "button: String? = null",
+    "cliOptions" : "--button=<String?>, default=null"
   } ],
   "returnType" : "Unit",
   "description" : "Focus on an element with [selector] and click it.",
   "help" : "Focus on an element with [selector] and click it.\n\nIf there's no element matching `selector`, nothing to do.\n\n```kotlin driver.click(\"button[type='submit']\") ```\n\nelements, the first will be focused.",
-  "expression" : "tab.click(Arg(name=selector, type=String, defaultValue=), Arg(name=count, type=Int, defaultValue=1))",
-  "cli" : "browser4-cli tab click --selector=<String>, default= --count=<Int>, default=1"
+  "expression" : "tab.click(Arg(name=selector, type=String, defaultValue=), Arg(name=count, type=Int, defaultValue=1), Arg(name=button, type=String?, defaultValue=null))",
+  "cli" : "browser4-cli tab click --selector=<String>, default= --count=<Int>, default=1 --button=<String?>, default=null"
 }, {
   "domain" : "tab",
   "method" : "click",

@@ -548,7 +548,7 @@
                     <reuseForks>true</reuseForks>
                     <!-- Enable byte-buddy-agent. ${jacocoArgLine} is injected by the
                          quality-gate profile's prepare-agent; empty otherwise. -->
-                    <argLine>${jacocoArgLine} -XX:+EnableDynamicAgentLoading</argLine>
+                    <argLine>${jacocoArgLine} -XX:+EnableDynamicAgentLoading -Djdk.net.URLClassPath.disableClassPathURLCheck=true</argLine>
                     <useModulePath>false</useModulePath>
                 </configuration>
             </plugin>
