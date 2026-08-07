@@ -549,6 +549,9 @@
                     <!-- Enable byte-buddy-agent. ${jacocoArgLine} is injected by the
                          quality-gate profile's prepare-agent; empty otherwise. -->
                     <argLine>${jacocoArgLine} -XX:+EnableDynamicAgentLoading -Djdk.net.URLClassPath.disableClassPathURLCheck=true</argLine>
+                    <systemPropertyVariables>
+                        <jdk.net.URLClassPath.disableClassPathURLCheck>true</jdk.net.URLClassPath.disableClassPathURLCheck>
+                    </systemPropertyVariables>
                     <useModulePath>false</useModulePath>
                 </configuration>
             </plugin>

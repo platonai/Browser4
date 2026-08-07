@@ -78,7 +78,7 @@ class CodingAgentFileSystem(
         )
     }
 
-    private val canonicalRoot: Path = workspaceRoot.toRealPath()
+    private val canonicalRoot: Path by lazy { workspaceRoot.toRealPath() }
 
     /** File change tracker for reverting */
     private data class FileSnapshot(
