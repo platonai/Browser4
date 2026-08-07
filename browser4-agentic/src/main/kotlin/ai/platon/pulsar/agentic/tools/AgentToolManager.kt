@@ -135,7 +135,7 @@ class AgentToolManager constructor(
         val oldTarget = _customTargets[domain]
         _customTargets[domain] = target
         if (oldTarget != target) {
-            logger.info("✓ Registered custom target for domain: {}", domain)
+            logger.info("+ Registered custom target for domain: {}", domain)
         }
     }
 
@@ -148,7 +148,7 @@ class AgentToolManager constructor(
     fun unregisterCustomTarget(domain: String): Boolean {
         val removed = _customTargets.remove(domain)
         if (removed != null) {
-            logger.info("✓ Unregistered custom target for domain: {}", domain)
+            logger.info("+ Unregistered custom target for domain: {}", domain)
             return true
         }
         return false
@@ -163,14 +163,14 @@ class AgentToolManager constructor(
         val oldExecutor = _concreteExecutors[domain]
         _concreteExecutors[domain] = executor
         if (oldExecutor != executor) {
-            logger.info("✓ Registered custom tool executor for domain: {}", domain)
+            logger.info("+ Registered custom tool executor for domain: {}", domain)
         }
     }
 
     fun unregisterCustomToolExecutor(domain: String): Boolean {
         val removed = _concreteExecutors.remove(domain)
         if (removed != null) {
-            logger.info("✓ Unregistered custom tool executor for domain: {}", domain)
+            logger.info("+ Unregistered custom tool executor for domain: {}", domain)
             return true
         }
         return false
@@ -335,10 +335,10 @@ class AgentToolManager constructor(
     private fun onDidSwitchTab(evaluate: TcEvaluate) {
         val switchedDriver = evaluate.value as? WebDriver
         if (switchedDriver == null) {
-            logger.warn("⚠️ switchTab did not return a WebDriver; falling back to boundBrowser")
+            logger.warn("! switchTab did not return a WebDriver; falling back to boundBrowser")
             val fallback = session.boundBrowser?.frontDriver
             if (fallback == null) {
-                logger.warn("⚠️ No driver is in front after switchTab")
+                logger.warn("! No driver is in front after switchTab")
                 return
             }
             session.bindDriver(fallback)
@@ -347,7 +347,7 @@ class AgentToolManager constructor(
 
         val oldBoundDriver = session.boundDriver
         if (switchedDriver == oldBoundDriver) {
-            logger.warn("⚠️ The bound driver does not change after switchTab")
+            logger.warn("! The bound driver does not change after switchTab")
         }
 
         session.bindDriver(switchedDriver)
@@ -378,7 +378,7 @@ class AgentToolManager constructor(
 
         val newFront = remainingDrivers.firstOrNull()
         if (newFront == null) {
-            logger.warn("⚠️ All tabs closed — no driver to rebind after closeTab")
+            logger.warn("! All tabs closed — no driver to rebind after closeTab")
             session.unbindDriver(oldBoundDriver)
             return
         }
