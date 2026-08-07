@@ -12771,6 +12771,42 @@ fn list_available_plugin_tools(tools: &[&str]) -> String {
     }
 }
 
+/// Detect whether the running binary is inside an npm global install directory
+/// (`…/node_modules/browser4-cli/bin/…`).  Returns the npm prefix directory
+/// (the directory that contains `node_modules`) when the structure matches.
+///
+/// On Windows the npm prefix is where wrapper scripts (`.ps1`, `.cmd`) live.
+fn detect_npm_install(exe_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let bin_dir = exe_path.parent()?;
+    if !bin_dir
+        .file_name()
+        .map(|n| n.eq_ignore_ascii_case("bin"))
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let pkg_dir = bin_dir.parent()?;
+    if !pkg_dir
+        .file_name()
+        .map(|n| n.eq_ignore_ascii_case("browser4-cli"))
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let nm_dir = pkg_dir.parent()?;
+    if !nm_dir
+        .file_name()
+        .map(|n| n.eq_ignore_ascii_case("node_modules"))
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    // npm prefix is the parent of node_modules.
+    // Windows: C:\Users\…\AppData\Roaming\npm  (wrappers live here)
+    // Unix:    /usr/local/lib  or  ~/.npm-global  (wrappers in ../bin/)
+    Some(nm_dir.parent()?.to_path_buf())
+}
+
 /// Returns true when npm's output indicates browser4-cli was not installed
 /// via npm, as opposed to a genuine uninstall failure.
 fn npm_not_installed_message(msg: &str) -> bool {
@@ -12927,10 +12963,44 @@ fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
             ));
         }
 
+        // If running from an npm global install, also clean up the npm
+        // wrapper scripts (.ps1, .cmd) in the npm prefix directory, and
+        // retry `npm uninstall -g` now that the binary is no longer locked.
+        let npm_prefix = detect_npm_install(exe_path);
+        let mut npm_cleanup_lines = String::new();
+        let mut npm_uninstall_line = String::new();
+        let is_npm = npm_prefix.is_some();
+        if let Some(ref prefix) = npm_prefix {
+            let escaped_prefix = prefix.display().to_string().replace('\'', "''");
+            // Wrapper scripts that npm creates in the global bin directory.
+            // Remove .ps1 / .cmd / extensionless wrappers so stale links
+            // don't shadow a future install.
+            const NPM_WRAPPER_NAMES: &[&str] = &[
+                "browser4-cli.ps1",
+                "browser4-cli.cmd",
+                "b4.ps1",
+                "b4.cmd",
+                "browser4-cli",
+                "b4",
+            ];
+            for name in NPM_WRAPPER_NAMES {
+                npm_cleanup_lines.push_str(&format!(
+                    "$w = Join-Path '{escaped_prefix}' '{name}'\n\
+                     if (Test-Path -LiteralPath $w) {{\n\
+                         Remove-Item -Force -LiteralPath $w -ErrorAction SilentlyContinue\n\
+                     }}\n"
+                ));
+            }
+            // Also retry npm uninstall (package metadata cleanup) — this
+            // works now because the locked binary has been freed.
+            npm_uninstall_line =
+                "npm uninstall -g browser4-cli 2>$null\n".to_string();
+        }
+
         // Retry loop (up to 30 s, 500 ms intervals) for the main binary so
         // the script is resilient to the parent process taking a moment to
-        // flush stdout / release the file handle.  Companion links are
-        // cleaned up afterwards; then the script removes itself.
+        // flush stdout / release the file handle.  Companion links and npm
+        // wrappers are cleaned up afterwards; then the script removes itself.
         let ps_script = format!(
             "$target = '{escaped}'\n\
              if (Test-Path -LiteralPath $target) {{\n\
@@ -12945,6 +13015,8 @@ fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
                  }}\n\
              }}\n\
              {companion_lines}\
+             {npm_uninstall_line}\
+             {npm_cleanup_lines}\
              Remove-Item -Force -LiteralPath $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue\n"
         );
 
@@ -12971,7 +13043,15 @@ fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
             .spawn()
         {
             Ok(_) => {
-                cli_println!("  Binary and companion links scheduled for removal after exit.");
+                if is_npm {
+                    cli_println!(
+                        "  Binary, npm wrappers, and package metadata scheduled for removal after exit."
+                    );
+                } else {
+                    cli_println!(
+                        "  Binary and companion links scheduled for removal after exit."
+                    );
+                }
                 true
             }
             Err(e) => {
@@ -13279,9 +13359,13 @@ async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
     json_field("cache_dir", json!(&cache_dir_str));
     json_field("dry_run", json!(dry_run));
 
-    if !npm_removed && !cargo_removed && npm_error.is_none() && cargo_error.is_none() {
-        cli_println!();
-        cli_println!("ℹ  browser4-cli was not found in npm or cargo global installs.");
+    if !npm_removed && !cargo_removed {
+        // Only print "not found" when both package managers reported no
+        // error — a genuine "not installed" rather than a failure.
+        if npm_error.is_none() && cargo_error.is_none() {
+            cli_println!();
+            cli_println!("ℹ  browser4-cli was not found in npm or cargo global installs.");
+        }
 
         if dry_run {
             // Locate the running binary and report what would happen.
@@ -13295,6 +13379,8 @@ async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
                         "   This is a development build inside a Browser4 repo — remove it from"
                     );
                     cli_println!("   your PATH or delete it manually after leaving the repo.");
+                } else if detect_npm_install(&exe_path).is_some() {
+                    cli_println!("   🔍 Would attempt to remove the binary and npm wrappers.");
                 } else {
                     cli_println!("   🔍 Would attempt to remove the binary.");
                 }
