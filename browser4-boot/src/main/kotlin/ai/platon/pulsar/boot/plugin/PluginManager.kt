@@ -98,9 +98,9 @@ class PluginManager(
                 if (pageHandlers != null) {
                     try {
                         mount.configureLoadHandlers(pageHandlers.loadEventHandlers)
-                        logger.info("  ✓ Configured load event handlers")
+                        logger.info("  + Configured load event handlers")
                     } catch (e: Exception) {
-                        logger.warn("  ⚠ Failed to configure load event handlers: {}", e.message)
+                        logger.warn("  ! Failed to configure load event handlers: {}", e.message)
                     }
                 } else {
                     logger.debug("  - Skipping LoadEventMount: pageEventHandlers not yet available")
@@ -111,9 +111,9 @@ class PluginManager(
                 if (pageHandlers != null) {
                     try {
                         mount.configureBrowseHandlers(pageHandlers.browseEventHandlers)
-                        logger.info("  ✓ Configured browse event handlers")
+                        logger.info("  + Configured browse event handlers")
                     } catch (e: Exception) {
-                        logger.warn("  ⚠ Failed to configure browse event handlers: {}", e.message)
+                        logger.warn("  ! Failed to configure browse event handlers: {}", e.message)
                     }
                 } else {
                     logger.debug("  - Skipping BrowseEventMount: pageEventHandlers not yet available")
@@ -124,9 +124,9 @@ class PluginManager(
                 if (pageHandlers != null) {
                     try {
                         mount.configureCrawlHandlers(pageHandlers.crawlEventHandlers)
-                        logger.info("  ✓ Configured crawl event handlers")
+                        logger.info("  + Configured crawl event handlers")
                     } catch (e: Exception) {
-                        logger.warn("  ⚠ Failed to configure crawl event handlers: {}", e.message)
+                        logger.warn("  ! Failed to configure crawl event handlers: {}", e.message)
                     }
                 } else {
                     logger.debug("  - Skipping CrawlEventMount: pageEventHandlers not yet available")
@@ -150,12 +150,12 @@ class PluginManager(
             try {
                 if (!CustomToolRegistry.instance.contains(executor.domain)) {
                     CustomToolRegistry.instance.register(executor)
-                    logger.info("  ✓ Registered tool executor for domain '{}'", executor.domain)
+                    logger.info("  + Registered tool executor for domain '{}'", executor.domain)
                 } else {
                     logger.info("  - Tool executor already registered for domain '{}'", executor.domain)
                 }
             } catch (e: Exception) {
-                logger.warn("  ⚠ Failed to register tool executor for domain '{}': {}",
+                logger.warn("  ! Failed to register tool executor for domain '{}': {}",
                     executor.domain, e.message)
             }
         }
@@ -166,10 +166,10 @@ class PluginManager(
             val responseHandler = applicationContext.getBean(BrowserResponseHandler::class.java)
             mount.getPageSniffers().forEach { sniffer ->
                 responseHandler.pageCategorySniffer.addLast(sniffer)
-                logger.info("  ✓ Registered page category sniffer: {}", sniffer.javaClass.simpleName)
+                logger.info("  + Registered page category sniffer: {}", sniffer.javaClass.simpleName)
             }
         } catch (e: Exception) {
-            logger.warn("  ⚠ Failed to register page sniffers: {}", e.message)
+            logger.warn("  ! Failed to register page sniffers: {}", e.message)
         }
     }
 }

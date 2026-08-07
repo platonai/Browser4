@@ -94,7 +94,7 @@ class PluginService(
         // Read the manifest to validate this is a real plugin JAR
         val manifest = readManifest(source)
             ?: throw IllegalArgumentException(
-                "Not a valid Browser4 plugin: ${source.fileName} — " +
+                "Not a valid Browser4 plugin: ${source.fileName} -- " +
                     "missing META-INF/browser4-plugin.json"
             )
 
@@ -111,11 +111,11 @@ class PluginService(
         }
 
         Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING)
-        logger.info("Plugin installed: {} v{} → {}", manifest.name, manifest.version, target.fileName)
+        logger.info("Plugin installed: {} v{} -> {}", manifest.name, manifest.version, target.fileName)
 
         val installed = toPluginInfo(target)
         logger.info(
-            "  {} ({} bytes) — restart the application to activate",
+            "  {} ({} bytes) -- restart the application to activate",
             installed.fileName,
             installed.fileSize
         )

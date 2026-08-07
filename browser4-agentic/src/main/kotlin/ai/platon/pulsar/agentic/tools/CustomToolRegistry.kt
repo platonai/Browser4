@@ -83,7 +83,7 @@ class CustomToolRegistry private constructor() {
             toolSpec.computeIfAbsent(domain) { mutableListOf() }.addAll(specs)
         }
 
-        logger.info("✓ Registered custom tool executor for domain: {}", domain)
+        logger.info("+ Registered custom tool executor for domain: {}", domain)
     }
 
     /**
@@ -108,7 +108,7 @@ class CustomToolRegistry private constructor() {
         val removed = executors.remove(domain)
         toolSpec.remove(domain)
         if (removed != null) {
-            logger.info("✓ Unregistered custom tool executor for domain: {}", domain)
+            logger.info("+ Unregistered custom tool executor for domain: {}", domain)
             return true
         }
         return false
@@ -172,7 +172,7 @@ class CustomToolRegistry private constructor() {
     fun clear() {
         executors.clear()
         toolSpec.clear()
-        logger.info("✓ Cleared all custom tool executors")
+        logger.info("+ Cleared all custom tool executors")
     }
 
     /**
