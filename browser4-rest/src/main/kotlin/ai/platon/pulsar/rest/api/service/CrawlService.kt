@@ -18,8 +18,9 @@ import com.fasterxml.jackson.annotation.JsonCreator
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.github.benmanes.caffeine.cache.Cache
 import com.github.benmanes.caffeine.cache.Caffeine
-import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
+import org.springframework.boot.context.event.ApplicationReadyEvent
+import org.springframework.context.event.EventListener
 import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
@@ -98,7 +99,7 @@ class CrawlService(
         objectMapper = pulsarObjectMapper()
     )
 
-    @PostConstruct
+    @EventListener(ApplicationReadyEvent::class)
     fun restoreFromDisk() {
         val now = System.currentTimeMillis()
         val ttlMillis = taskTtlMinutes * 60_000L

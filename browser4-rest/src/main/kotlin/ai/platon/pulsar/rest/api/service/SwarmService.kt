@@ -14,8 +14,9 @@ import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
 import com.github.benmanes.caffeine.cache.Cache
 import com.github.benmanes.caffeine.cache.Caffeine
-import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
+import org.springframework.boot.context.event.ApplicationReadyEvent
+import org.springframework.context.event.EventListener
 import kotlinx.coroutines.*
 import org.apache.commons.collections4.MultiMapUtils
 import org.slf4j.LoggerFactory
@@ -115,7 +116,7 @@ class SwarmService(
         cleanupScope.cancel()
     }
 
-    @PostConstruct
+    @EventListener(ApplicationReadyEvent::class)
     fun restoreFromDisk() {
         val now = Instant.now()
         val ttlCutoff = now.minusSeconds(taskTtlMinutes * 60L)
