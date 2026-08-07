@@ -220,6 +220,7 @@
                 </property>
             </activation>
             <modules>
+                <module>browser4-tests/pulsar-it-tests</module>
                 <module>browser4-tests/pulsar-e2e-tests</module>
             </modules>
             <properties>
