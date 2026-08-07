@@ -1,3 +1,3 @@
-ai.platon.browser4.boot.plugin.BrowserPluginAutoConfiguration
-ai.platon.browser4.boot.plugin.PluginAutoConfiguration
-ai.platon.browser4.boot.skill.SkillAutoConfiguration
+ai.platon.pulsar.boot.plugin.BrowserPluginAutoConfiguration
+ai.platon.pulsar.boot.plugin.PluginAutoConfiguration
+ai.platon.pulsar.boot.skill.SkillAutoConfiguration
