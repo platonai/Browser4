@@ -577,20 +577,21 @@ function checkPomVersionConsistency(expectedVersion) {
 // ---------------------------------------------------------------------------
 
 function cmdRelease() {
-  const snapshotVersion = readBackendVersion();
+  const versionFileContent = readBackendVersion();
+  const isSnapshot = versionFileContent.endsWith("-SNAPSHOT");
+  const version = stripSnapshot(versionFileContent);
+  const snapshotVersion = isSnapshot ? versionFileContent : version + "-SNAPSHOT";
 
-  if (!snapshotVersion.endsWith("-SNAPSHOT")) {
-    console.error(`ERROR: VERSION file contains "${snapshotVersion}" which is not a SNAPSHOT version.`);
-    console.error("Is this version already released?");
-    process.exit(1);
+  if (isSnapshot) {
+    console.log(`Converting from SNAPSHOT to release: ${snapshotVersion} -> ${version}`);
+
+    // Write release version to VERSION file
+    writeFileSync(join(REPO_ROOT, "VERSION"), version + "\n");
+    console.log(`  Updated VERSION: ${snapshotVersion} -> ${version}`);
+  } else {
+    console.log(`VERSION file already contains release version: ${version}`);
+    console.log("Proceeding with file updates to ensure consistency (idempotent)...");
   }
-
-  const version = stripSnapshot(snapshotVersion);
-  console.log(`Converting from SNAPSHOT to release: ${snapshotVersion} -> ${version}`);
-
-  // Write release version to VERSION file
-  writeFileSync(join(REPO_ROOT, "VERSION"), version + "\n");
-  console.log(`  Updated VERSION: ${snapshotVersion} -> ${version}`);
 
   // Replace in pom.xml, README.md, README.zh.md, llm-config.md
   const filePatterns = ["pom.xml", "llm-config.md", "README.md", "README.zh.md"];
