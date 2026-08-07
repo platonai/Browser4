@@ -170,30 +170,6 @@ pub fn is_element_reference(value: &str) -> bool {
         || trimmed.starts_with("backend:")
 }
 
-/// Semantic keywords for htmlsnapshot get that auto-discover the main content area
-/// without requiring the user to guess CSS selectors.
-///
-/// Maps user-friendly keywords (e.g., "article", "readable") to combined CSS
-/// selectors that target common article/content container patterns across
-/// different site structures (HTML5 semantic tags, ARIA roles, common class names).
-const SEMANTIC_SELECTORS: &[(&str, &str)] = &[
-    ("article", "article, main, [role=\"main\"], .post-content, .entry-content, .article-content, .post-body, .content, #content, #main, #article, .post, .entry, .single-post"),
-    ("readable", "article, main, [role=\"main\"], .post-content, .entry-content, .article-content, .post-body, .content, #content, #main, #article, .post, .entry, .single-post"),
-    ("content", "article, main, [role=\"main\"], .post-content, .entry-content, .article-content, .post-body, .content, #content, #main, #article, .post, .entry, .single-post"),
-    ("main-text", "article, main, [role=\"main\"], .post-content, .entry-content, .article-content, .post-body, .content, #content, #main, #article, .post, .entry, .single-post"),
-];
-
-/// Expand a semantic keyword selector to a combined CSS selector.
-/// Returns `Some(expanded_selector)` if the input is a known semantic keyword,
-/// or `None` if it should be treated as a regular CSS selector.
-pub fn expand_semantic_selector(selector: &str) -> Option<&'static str> {
-    let trimmed = selector.trim().to_lowercase();
-    SEMANTIC_SELECTORS
-        .iter()
-        .find(|(keyword, _)| *keyword == trimmed)
-        .map(|(_, expanded)| *expanded)
-}
-
 /// Returns true if the value is a bare CSS selector (e.g. "#id", ".class", "[attr]")
 /// that does not already have a known prefix (`css:`, `backend:`, `xpath:`, `text=`).
 /// These selectors need a `css:` prefix so the backend can distinguish them from

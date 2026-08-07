@@ -43,11 +43,6 @@ impl SessionEntry {
         self.state.kind
     }
 
-    /// Whether this session owns its browser.
-    pub fn owns_browser(&self) -> bool {
-        self.kind().owns_browser()
-    }
-
     /// Human-readable connection label for table display.
     pub fn connection_label(&self) -> String {
         match self.state.kind {
