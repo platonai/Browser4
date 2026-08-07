@@ -2,6 +2,7 @@ package ai.platon.pulsar.chrome
 
 import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.api.model.BrowserTab
+import ai.platon.pulsar.api.model.WebDriverException
 
 /**
  * Browser4-specific extension of [PulsarWebDriver].
@@ -57,4 +58,46 @@ open class Browser4WebDriver(
     // (which delegates to BrowserProtocol via RobustRPC) for any low-level
     // CDP integration.
     // ---------------------------------------------------------------------------
+
+    /**
+     * Click on an element identified by [selector] with optional [button] and [count].
+     *
+     * Extends [PulsarWebDriver.click] with a [button] parameter for right-click,
+     * middle-click, and other mouse buttons.  When [button] is `null` or `"left"`,
+     * this delegates directly to the parent implementation for standard left-click
+     * behaviour (focus → scroll-into-view → click at computed point).
+     *
+     * For non-left buttons the element is focused and scrolled into view before
+     * dispatching [mouseDown] / [mouseUp] at the element's clickable point, matching
+     * the parent's pre-click sequence without duplicating its internals.
+     *
+     * @param selector A CSS selector or "backend:nodeId" locator for the target element.
+     * @param count Number of consecutive clicks (1 = single, 2 = double, etc.).
+     * @param button Mouse button name: `"left"`, `"right"`, `"middle"`, `"back"`, or `"forward"`.
+     *        Defaults to `"left"` when `null`.
+     * @throws WebDriverException if the element cannot be found or interacted with.
+     */
+    @Throws(WebDriverException::class)
+    suspend fun click(selector: String, count: Int = 1, button: String? = null) {
+        if (button == null || button == "left") {
+            click(selector, count)
+            return
+        }
+
+        // Pre-click sequence: focus and scroll into view so the element is
+        // interactable, matching what the parent click() does internally.
+        page.focusOnSelector(selector)
+        page.scrollIntoViewIfNeeded(selector)
+
+        // Resolve the element's clickable point after scroll.
+        val point = clickablePoint(selector)
+            ?: throw WebDriverException("Element not found or not clickable: $selector")
+
+        // Move to the element, then dispatch press + release with the
+        // requested button.  mouseDown/mouseUp accept button names directly
+        // ("right", "middle", etc.).
+        mouseMove(point.x, point.y)
+        mouseDown(button, count)
+        mouseUp(button, count)
+    }
 }

@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.pulsar.agentic.model.ToolSpec
@@ -751,17 +752,27 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     (driver as PulsarWebDriver).autoDismissDialogs = true
                 }
                 try {
+                val button = args["button"]?.toString()
                 when {
                     args.containsKey("selector") && args.containsKey("count") && !args.containsKey("modifier") -> {
-                        validateArgs(args, allowed("selector", "count", "autoDismissDialogs"), setOf("selector", "count"), functionName)
-                        driver.click(
-                            selector = paramString(args, "selector", functionName)!!,
-                            count = paramInt(args, "count", functionName)!!,
-                        )
+                        validateArgs(args, allowed("selector", "count", "button", "autoDismissDialogs"), setOf("selector", "count"), functionName)
+                        val b4Driver = driver as? Browser4WebDriver
+                        if (b4Driver != null) {
+                            b4Driver.click(
+                                selector = paramString(args, "selector", functionName)!!,
+                                count = paramInt(args, "count", functionName)!!,
+                                button = button,
+                            )
+                        } else {
+                            driver.click(
+                                selector = paramString(args, "selector", functionName)!!,
+                                count = paramInt(args, "count", functionName)!!,
+                            )
+                        }
                     }
 
                     args.containsKey("selector") && args.containsKey("modifier") && !args.containsKey("count") -> {
-                        validateArgs(args, allowed("selector", "modifier", "autoDismissDialogs"), setOf("selector", "modifier"), functionName)
+                        validateArgs(args, allowed("selector", "modifier", "button", "autoDismissDialogs"), setOf("selector", "modifier"), functionName)
                         driver.click(
                             selector = paramString(args, "selector", functionName)!!,
                             modifier = paramString(args, "modifier", functionName)!!
@@ -769,11 +780,19 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     }
 
                     args.containsKey("selector") && !args.containsKey("count") && !args.containsKey("modifier") -> {
-                        validateArgs(args, allowed("selector", "autoDismissDialogs"), setOf("selector"), functionName)
-                        driver.click(selector = paramString(args, "selector", functionName)!!)
+                        validateArgs(args, allowed("selector", "button", "autoDismissDialogs"), setOf("selector"), functionName)
+                        val b4Driver = driver as? Browser4WebDriver
+                        if (b4Driver != null && button != null) {
+                            b4Driver.click(
+                                selector = paramString(args, "selector", functionName)!!,
+                                button = button,
+                            )
+                        } else {
+                            driver.click(selector = paramString(args, "selector", functionName)!!)
+                        }
                     }
 
-                    else -> throw IllegalArgumentException("click requires 'selector' plus optionally 'count' or 'modifier'")
+                    else -> throw IllegalArgumentException("click requires 'selector' plus optionally 'count', 'modifier', or 'button'")
                 }
                 } finally {
                     if (wasAutoDismiss) {
