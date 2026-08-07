@@ -223,9 +223,14 @@ class PulsarWebDriverTests : WebDriverTestBase() {
     fun testPageSourceReturnsViAttributes() = runWebDriverTestAndCompute(interactiveUrl, browser) { driver ->
         val pageSource = driver.pageSource() ?: ""
 
-        // Verify vi attributes exist in the captured HTML
-        // Format: vi="x y w h" (space-separated, rounded to 1 decimal)
-        val viRegex = Regex("""\bvi="\d+(?:\.\d+)? \d+(?:\.\d+)? \d+(?:\.\d+)? \d+(?:\.\d+)?"""")
+        // Verify vi attributes exist in the captured HTML.
+        // ViBox supports three formats (auto-detected):
+        // - Base-36 comma-separated (default): vi="3g,cp,5k,1f"
+        // - Compact decimal comma-separated: vi="0,0,1920,1080"
+        // - Legacy space-separated decimal: vi="123.5 456.7 200.3 50.8"
+        val viRegex = Regex(
+            """\bvi="([0-9a-z]+,[0-9a-z]+,[0-9a-z]+,[0-9a-z]+|\d+(?:\.\d+)?\s+\d+(?:\.\d+)?\s+\d+(?:\.\d+)?\s+\d+(?:\.\d+)?)""""
+        )
         val viMatches = viRegex.findAll(pageSource).toList()
 
         assertTrue(
@@ -233,11 +238,16 @@ class PulsarWebDriverTests : WebDriverTestBase() {
             "pageSource() should return HTML with vi attributes, got none | ${pageSource.take(500)}"
         )
 
-        // The vi value should contain 4 space-separated numbers (x y w h)
+        // The vi value should contain 4 values separated by comma or space (x y w h)
         val firstVi = viMatches.first().value
-        val parts = firstVi.substringAfter("vi=\"").substringBefore("\"").split(" ")
+        val viValue = firstVi.substringAfter("vi=\"").substringBefore("\"")
+        val parts = if (',' in viValue) viValue.split(",") else viValue.split(" ")
         assertEquals(4, parts.size, "vi attribute should contain 4 values (x y w h): $firstVi")
-        parts.forEach { assertTrue(it.toDoubleOrNull() != null, "vi value should be numeric: '$it' in $firstVi") }
+        parts.forEach {
+            // Base-36 values contain [0-9a-z]; decimal values are purely numeric
+            val isValid = it.all { c -> c in '0'..'9' || c in 'a'..'z' }
+            assertTrue(isValid, "vi value should be numeric or base-36: '$it' in $firstVi")
+        }
     }
 
     @Test
@@ -245,8 +255,14 @@ class PulsarWebDriverTests : WebDriverTestBase() {
     fun testOuterHTMLReturnsViAttributes() = runWebDriverTestAndCompute(interactiveUrl, browser) { driver ->
         val html = driver.outerHTML() ?: ""
 
-        // outerHTML(":root") should include vi attributes just like pageSource
-        val viRegex = Regex("""\bvi="\d+(?:\.\d+)? \d+(?:\.\d+)? \d+(?:\.\d+)? \d+(?:\.\d+)?"""")
+        // outerHTML(":root") should include vi attributes just like pageSource.
+        // ViBox supports three formats (auto-detected):
+        // - Base-36 comma-separated (default): vi="3g,cp,5k,1f"
+        // - Compact decimal comma-separated: vi="0,0,1920,1080"
+        // - Legacy space-separated decimal: vi="123.5 456.7 200.3 50.8"
+        val viRegex = Regex(
+            """\bvi="([0-9a-z]+,[0-9a-z]+,[0-9a-z]+,[0-9a-z]+|\d+(?:\.\d+)?\s+\d+(?:\.\d+)?\s+\d+(?:\.\d+)?\s+\d+(?:\.\d+)?)""""
+        )
         val viMatches = viRegex.findAll(html).toList()
 
         assertTrue(
