@@ -7,6 +7,7 @@ import org.springframework.beans.factory.InitializingBean
 import org.springframework.boot.SpringApplication
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.ConfigurableApplicationContext
+import org.springframework.context.annotation.Lazy
 
 /**
  * Test configuration that automatically starts and stops the mock EC server for tests.
@@ -14,8 +15,13 @@ import org.springframework.context.ConfigurableApplicationContext
  * The mock server binds to a random OS-assigned port (port 0). The actual port is
  * communicated to test code via the `mock.server.port` system property, which can be
  * read through [ai.platon.pulsar.test.server.MockServerPorts].
+ *
+ * Must be eagerly initialized (@Lazy(false)) even when spring.main.lazy-initialization
+ * is true — the [InitializingBean.afterPropertiesSet] lifecycle callback that starts the
+ * server would otherwise be deferred until first access, too late for @BeforeEach.
  */
 @TestConfiguration
+@Lazy(false)
 class MockEcServerConfiguration : InitializingBean, DisposableBean {
 
     private val log = LoggerFactory.getLogger(javaClass)
