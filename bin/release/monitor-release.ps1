@@ -65,9 +65,9 @@ $ErrorActionPreference = "Stop"
 #>
 function ConvertTo-LogLines {
     param([object]$RawLogs)
-    if ($null -eq $RawLogs) { return @() }
+    if ($null -eq $RawLogs) { return [string[]]@() }
     if ($RawLogs -is [string]) {
-        return @($RawLogs -split '\r?\n')
+        return [string[]]($RawLogs -split '\r?\n')
     }
     if ($RawLogs -is [System.Collections.IEnumerable]) {
         $result = [System.Collections.Generic.List[string]]::new()
@@ -81,7 +81,7 @@ function ConvertTo-LogLines {
         }
         return [string[]]$result.ToArray()
     }
-    return @([string]$RawLogs)
+    return [string[]]@([string]$RawLogs)
 }
 
 <#
