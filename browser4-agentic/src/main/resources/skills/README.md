@@ -61,15 +61,6 @@ Guide for creating advanced MCP (Model Context Protocol) servers that enable LLM
 - API coverage vs. workflow tool design
 - Evaluation-driven quality assurance
 
-### [X-SQL Web Query](./x-sql/SKILL.md)
-Query the web with SQL — load pages, select DOM elements with CSS selectors, and extract structured data into tables and charts.
-
-**Key Features:**
-- Declarative SQL syntax for web scraping
-- CSS selector-based DOM traversal
-- Structured data extraction (text, HTML, attributes, links, images, numbers)
-- Table and chart output formats
-
 ### [Weather](./weather/SKILL.md)
 Fetch current weather conditions and a 7-day forecast for a named location.
 
@@ -100,7 +91,7 @@ Create `skills/my-skill/SKILL.md` with this template:
 
 - **Skill ID**: `my-skill`
 - **Name**: My Skill Name
-- **Version**: 4.12.x
+- **Version**: 4.13.x
 - **Author**: Your Name
 - **Tags**: `tag1`, `tag2`
 
