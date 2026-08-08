@@ -4109,7 +4109,10 @@ fn start_mock_swarm_session(ctx: &mut E2ECtx) -> MockBrowser4Server {
         "Expected swarm session creation output in:\n{}",
         swarm_create_result.stdout
     );
-    assert_eq!(read_persisted_session_id(&ctx.state_dir), "SWARM");
+    assert_eq!(
+        read_persisted_session_id_for_session(&ctx.state_dir, Some("SWARM")),
+        "SWARM"
+    );
 
     mock_server
 }
