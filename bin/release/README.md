@@ -9,7 +9,7 @@ PowerShell scripts require `pwsh` unless noted otherwise.
 
 - **Node.js 18+** — required for `version.mjs` (the unified version tool).
 - **PowerShell 7+** (`pwsh`) — required for all `.ps1` scripts.
-- **GitHub CLI** (`gh`) — required for `check-publish-status.ps1`, `trigger-release-action.ps1`, `trigger-cli-release-action.ps1`, and `download-release-assets.ps1`.
+- **GitHub CLI** (`gh`) — required for `check-publish-status.ps1`, `trigger-release.ps1`, `monitor-release.ps1`, and `download-release-assets.ps1`.
 - **Git** — all scripts operate from the repository root.
 
 ## Scripts
@@ -83,34 +83,41 @@ fully published.
 .\check-publish-status.ps1
 ```
 
-### `trigger-release-action.ps1`
+### `trigger-release.ps1`
 
 Triggers the main Browser4 release workflow (`release.yml`) on GitHub Actions.
 
-- **Version guard**: Before triggering, checks that the current version is exactly
-  the next patch after the last GitHub release. If it is, proceeds automatically.
-  If not (e.g. minor/major bump, or version skip), warns and asks for confirmation.
-- Creates and pushes a `v{version}` tag (e.g. `v4.11.0`), which triggers
+- **Prerelease checks**: Delegates to `version.mjs prerelease-check` to verify
+  version consistency across all files (VERSION, pom.xml, Cargo.toml, package.json)
+  and confirm the current version is the next patch after the last GitHub release.
+  Warns and asks for confirmation if issues are found.
+- Creates and pushes a `v{version}` tag (e.g. `v4.13.0`), which triggers
   the release workflow via the `on.push.tags` trigger.
+- Shows changes since the previous release tag for release notes.
+- Supports `-remote` and `-message` parameters for custom remote and annotated tag messages.
 
 ```
-.\trigger-release-action.ps1
+.\bin\release\trigger-release.ps1
+.\bin\release\trigger-release.ps1 -message "Hotfix for login crash"
 ```
 
-### `trigger-cli-release-action.ps1`
+### `monitor-release.ps1`
 
-Triggers the `browser4-cli` release workflow (`release-cli.yml`) on GitHub Actions.
+Triggers a release and monitors the workflow until completion.
 
-Two modes:
-- **Tag mode** (default): creates and pushes a `v{version}-cli` tag.
-- **Dispatch mode** (`-Dispatch`): uses `gh workflow run` to trigger the workflow directly.
-
-Supports `-DryRun`, `-SkipBinaryBuild`, and custom version overrides.
+- Calls `trigger-release.ps1` to create and push the release tag (interactive —
+  you will be prompted for confirmations, just as with `trigger-release.ps1` directly).
+- Captures the tag name and locates the triggered Release workflow run.
+- Streams the workflow logs in real time.
+- Reports the final conclusion (success/failure) and exits with the same code.
+- Supports `-NoWatch` for non-interactive terminals (polls via `gh run list`/`gh run view`).
+- On workflow failure, auto-extracts diagnostic information (failing tests,
+  error blocks) for quick triage.
 
 ```
-.\trigger-cli-release-action.ps1
-.\trigger-cli-release-action.ps1 -Dispatch
-.\trigger-cli-release-action.ps1 -DryRun
+.\bin\release\monitor-release.ps1
+.\bin\release\monitor-release.ps1 -message "Hotfix for login crash"
+.\bin\release\monitor-release.ps1 -NoWatch -PollIntervalSeconds 10
 ```
 
 ### `download-release-assets.ps1`
@@ -122,7 +129,7 @@ Downloads all assets from a GitHub release for `platonai/Browser4`.
 
 ```
 .\download-release-assets.ps1
-.\download-release-assets.ps1 -Tag v4.11.0 -OutputDir ./downloads
+.\download-release-assets.ps1 -Tag v4.13.0 -OutputDir ./downloads
 ```
 
 ### `update-versions.sh` → `version.mjs release`
@@ -137,11 +144,24 @@ Replaces `X.Y.Z-SNAPSHOT` with `X.Y.Z` in `pom.xml`, `README.md`,
 node bin/version.mjs release
 ```
 
+## Tests
+
+The `tests/` subdirectory contains PowerShell test scripts runnable with Pester:
+
+- `monitor-release.tests.ps1` — Unit tests for `monitor-release.ps1` helper functions
+  (`ConvertTo-LogLines`, `Parse-GitHubLogLine`, `Extract-MinimalErrors`).
+
+Run with:
+
+```powershell
+Invoke-Pester .\bin\release\tests\monitor-release.tests.ps1
+```
+
 ## Typical Release Workflow
 
 1. Ensure all tests pass.
 2. Run `check-publish-status.ps1` to verify the current version is published.
 3. Run `node bin/version.mjs bump <major|minor|patch>` to bump the version and commit.
-4. Run `trigger-release-action.ps1` to push the tag and start the CI release build.
+4. Run `.\bin\release\trigger-release.ps1` to push the tag and start the CI release build.
 5. Wait for CI to build and publish to GitHub Releases.
 6. Run `node bin/version.mjs bump patch` to bump the version for the next bug-fix cycle.
