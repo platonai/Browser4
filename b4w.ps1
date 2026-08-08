@@ -202,14 +202,14 @@ if ($CliArgs -and $CliArgs[0] -eq 'coworker') {
             Write-Host 'No running Coworker scheduler found.' -ForegroundColor Yellow
             exit 0
         }
-        $pid = Get-Content $CoworkerPidFile -Raw
-        $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+        $savedPid = Get-Content $CoworkerPidFile -Raw
+        $proc = Get-Process -Id $savedPid -ErrorAction SilentlyContinue
         if ($proc) {
-            Write-Host "Stopping Coworker scheduler (PID $pid)..." -ForegroundColor Cyan
+            Write-Host "Stopping Coworker scheduler (PID $savedPid)..." -ForegroundColor Cyan
             $proc.Kill()
             Write-Host 'Coworker scheduler stopped.' -ForegroundColor Green
         } else {
-            Write-Host "Coworker scheduler (PID $pid) is no longer running." -ForegroundColor Yellow
+            Write-Host "Coworker scheduler (PID $savedPid) is no longer running." -ForegroundColor Yellow
         }
         Remove-Item $CoworkerPidFile -Force -ErrorAction SilentlyContinue
         exit 0

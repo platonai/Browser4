@@ -110,7 +110,13 @@ open class XSQLHyperlink(
         // which varies across Map implementations and causes inconsistent CSV
         // headers, JSON field order, and table columns.
         val metaData = rs.metaData
-        val sqlColumnOrder = (1..metaData.columnCount).map { metaData.getColumnName(it) }
+        // Use lowercase column labels so they match the keys produced by
+        // ResultSetUtils.getTextEntitiesFromResultSet (which lowercases
+        // via ResultSetMetaData.getColumnName + toLowerCase).  Without
+        // this the reorder pass produces duplicate columns: the original-
+        // case lookup returns null, and the "append extras" loop re-adds
+        // the lowercased key — giving each column twice.
+        val sqlColumnOrder = (1..metaData.columnCount).map { metaData.getColumnLabel(it).lowercase() }
 
         val rawResultSet = ResultSetUtils.getTextEntitiesFromResultSet(rs)
 

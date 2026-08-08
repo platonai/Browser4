@@ -14,10 +14,16 @@ import org.springframework.context.annotation.Import
 open class RestAPITestBase : IntegrationTestBase() {
 
     companion object {
-        val urls = mapOf(
-            "productListPage" to TestUrls.MOCK_PRODUCT_LIST_URL,
-            "productDetailPage" to TestUrls.MOCK_PRODUCT_DETAIL_URL
-        )
+        // Lazy — the mock server port is only known after the Spring context
+        // starts MockEcServerConfiguration, which runs after class loading.
+        // Eager evaluation would call MockServerPorts.baseUrl() too early
+        // and throw "Mock server port not found".
+        val urls: Map<String, String> by lazy {
+            mapOf(
+                "productListPage" to TestUrls.MOCK_PRODUCT_LIST_URL,
+                "productDetailPage" to TestUrls.MOCK_PRODUCT_DETAIL_URL
+            )
+        }
 
         @JvmStatic
         @BeforeAll

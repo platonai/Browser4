@@ -872,8 +872,27 @@ function Invoke-CopilotAnalysis {
         }
         Write-Host "`n🤖 Running AI analysis with $analyzer ..." -ForegroundColor Magenta
         try {
-            $result = & $analyzer -p $fullPrompt 2>&1
-            $analysisText = ($result | Out-String).Trim()
+            # Write the prompt to a temp file and pipe it via stdin instead of
+            # passing it as a CLI argument.  This avoids "Argument list too long"
+            # (E2BIG) on Linux when the combined log content + analysis prompt
+            # exceeds the OS execve() argv limit.  Pattern follows the coworker
+            # agent.ps1 Start-AgentProcess stdin-redirect path.
+            $promptFile = [System.IO.Path]::GetTempFileName()
+            $stdOutFile = [System.IO.Path]::GetTempFileName()
+            $stdErrFile = [System.IO.Path]::GetTempFileName()
+            try {
+                Set-Content -Path $promptFile -Value $fullPrompt -Encoding UTF8 -NoNewline
+                $null = Start-Process -FilePath $analyzer -ArgumentList '-p' `
+                    -RedirectStandardInput $promptFile `
+                    -RedirectStandardOutput $stdOutFile `
+                    -RedirectStandardError $stdErrFile `
+                    -NoNewWindow -Wait
+                $stdOut = if (Test-Path $stdOutFile) { Get-Content -Path $stdOutFile -Raw -Encoding UTF8 } else { '' }
+                $stdErr = if (Test-Path $stdErrFile) { Get-Content -Path $stdErrFile -Raw -Encoding UTF8 } else { '' }
+                $analysisText = (@($stdOut, $stdErr) -join "`n").Trim()
+            } finally {
+                Remove-Item $promptFile, $stdOutFile, $stdErrFile -ErrorAction SilentlyContinue
+            }
         } catch {
             Write-Warning "Invoke-CopilotAnalysis: $analyzer invocation failed: $($_.Exception.Message)"
             $analysisText = $null

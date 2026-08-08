@@ -253,6 +253,18 @@ class CommandRunnerTest : MockEcServerTestBase() {
 
         assertNull(result.pageSummary)
         assertNotNull(result.xsqlResultSet)
+
+        // Verify no duplicate columns caused by H2 case-normalization mismatch.
+        // Each row should have each column exactly once (no "TITLE": null AND "title": "value").
+        result.xsqlResultSet?.forEachIndexed { idx, row ->
+            val keys = row.keys.toList()
+            val keysLower = keys.map { it.lowercase() }.toSet()
+            assertEquals(
+                keys.size, keysLower.size,
+                "Row $idx has duplicate columns (case-insensitive): $keys. " +
+                "Each column should appear exactly once."
+            )
+        }
     }
 
     @Test

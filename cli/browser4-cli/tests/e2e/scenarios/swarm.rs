@@ -21,7 +21,7 @@ pub(super) fn test_swarm_submission_commands_live(ctx: &mut E2ECtx) {
         swarm_create_result.stdout
     );
 
-    let session_id = read_persisted_session_id(&ctx.state_dir);
+    let session_id = read_persisted_session_id_for_session(&ctx.state_dir, Some("SWARM"));
     assert!(
         !session_id.trim().is_empty(),
         "Expected swarm create to persist a non-empty session id"

@@ -909,7 +909,13 @@ class CrawlService(
             // ordering in CSV/JSON/table output.  Without this, column order
             // depends on Map iteration order which varies across implementations.
             val metaData = copied.metaData
-            val sqlColumnOrder = (1..metaData.columnCount).map { metaData.getColumnName(it) }
+            // Use lowercase column labels so they match the keys produced by
+            // ResultSetUtils.getTextEntitiesFromResultSet (which lowercases
+            // via ResultSetMetaData.getColumnName + toLowerCase).  Without
+            // this the reorder pass produces duplicate columns: the original-
+            // case lookup returns null, and the "append extras" loop re-adds
+            // the lowercased key — giving each column twice.
+            val sqlColumnOrder = (1..metaData.columnCount).map { metaData.getColumnLabel(it).lowercase() }
 
             val rawRows = ResultSetUtils.getTextEntitiesFromResultSet(copied)
             // Reorder each row to match the SQL SELECT column order so that

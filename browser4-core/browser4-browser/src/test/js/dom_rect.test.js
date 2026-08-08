@@ -20,21 +20,21 @@ beforeEach(() => {
 });
 
 describe('formatRect', () => {
-    test('formats coordinates as compact base-36 integers (default)', () => {
+    test('formats coordinates as space-separated integers (default)', () => {
         const result = __pulsar_utils__.formatRect(10.56, 20.34, 100.78, 200.12);
-        // left=20→"k", top=11→"b", width=101→"2t", height=200→"5k"
-        expect(result).toBe('k,b,2t,5k');
+        // left=Math.round(20.34)=20, top=Math.round(10.56)=11,
+        // width=Math.round(100.78)=101, height=Math.round(200.12)=200
+        expect(result).toBe('20 11 101 200');
     });
 
-    test('formats coordinates as space-separated integers when VI_COMPRESSION=none', () => {
+    test('formats coordinates as compact base-36 integers when VI_COMPRESSION=base36', () => {
         var config = window.__pulsar_CONFIGS || __pulsar_DEFAULT_CONFIGS;
         var saved = config.VI_COMPRESSION;
-        config.VI_COMPRESSION = 'none';
+        config.VI_COMPRESSION = 'base36';
         try {
             const result = __pulsar_utils__.formatRect(10.56, 20.34, 100.78, 200.12);
-            // left=Math.round(20.34)=20, top=Math.round(10.56)=11,
-            // width=Math.round(100.78)=101, height=Math.round(200.12)=200
-            expect(result).toBe('20 11 101 200');
+            // left=20→"k", top=11→"b", width=101→"2t", height=200→"5k"
+            expect(result).toBe('k,b,2t,5k');
         } finally {
             config.VI_COMPRESSION = saved;
         }
@@ -47,22 +47,22 @@ describe('formatRect', () => {
 });
 
 describe('formatDOMRect', () => {
-    test('formats DOMRect as compact base-36 integers (default)', () => {
+    test('formats DOMRect as space-separated integers (default)', () => {
         const rect = new DOMRect(10.56, 20.34, 100.78, 200.12);
         const result = __pulsar_utils__.formatDOMRect(rect);
-        // left=11→"b", top=20→"k", width=101→"2t", height=200→"5k"
-        expect(result).toBe('b,k,2t,5k');
+        // left=11, top=20, width=101, height=200
+        expect(result).toBe('11 20 101 200');
     });
 
-    test('formats DOMRect as space-separated integers when VI_COMPRESSION=none', () => {
+    test('formats DOMRect as compact base-36 integers when VI_COMPRESSION=base36', () => {
         var config = window.__pulsar_CONFIGS || __pulsar_DEFAULT_CONFIGS;
         var saved = config.VI_COMPRESSION;
-        config.VI_COMPRESSION = 'none';
+        config.VI_COMPRESSION = 'base36';
         try {
             const rect = new DOMRect(10.56, 20.34, 100.78, 200.12);
             const result = __pulsar_utils__.formatDOMRect(rect);
-            // left=11, top=20, width=101, height=200
-            expect(result).toBe('11 20 101 200');
+            // left=11→"b", top=20→"k", width=101→"2t", height=200→"5k"
+            expect(result).toBe('b,k,2t,5k');
         } finally {
             config.VI_COMPRESSION = saved;
         }

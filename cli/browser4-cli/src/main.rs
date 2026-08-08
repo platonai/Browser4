@@ -9036,13 +9036,18 @@ async fn handle_swarm_create(
         ));
     };
 
-    let mut state = read_state(None, session_name);
-    state.session_name = session_name.map(|s| s.to_string());
+    // The swarm session lives in its own named slot ("SWARM") so it never
+    // overwrites the default interactive-browser session.  If the user
+    // provided `-s <name>` we honour that; otherwise we use "SWARM".
+    let effective_name = session_name.or(Some("SWARM"));
+
+    let mut state = read_state(None, effective_name);
+    state.session_name = effective_name.map(|s| s.to_string());
     state.session_id = Some(session_id.clone());
     state.base_url = base_url.to_string();
     state.created_at = Some(Utc::now().to_rfc3339());
     state.last_accessed_at = Some(Utc::now().to_rfc3339());
-    write_state(&state, None, session_name).map_err(|e| e.to_string())?;
+    write_state(&state, None, effective_name).map_err(|e| e.to_string())?;
 
     // Check for stale swarm tasks from prior sessions.
     // Old completed tasks in the task store can block the worker pool
@@ -9138,9 +9143,12 @@ async fn handle_swarm_close(
     base_url: &str,
     session_name: Option<&str>,
 ) -> Result<(), String> {
-    let state = read_state(None, session_name);
+    // Default to the "SWARM" named session so we match the slot used by
+    // handle_swarm_create when no explicit `-s` was provided.
+    let effective_name = session_name.or(Some("SWARM"));
+    let state = read_state(None, effective_name);
     let Some(session_id) = get_session_id_for_close(&state).map(str::to_string) else {
-        clear_state(None, session_name);
+        clear_state(None, effective_name);
         eprintln!("{}", no_active_session_message());
         json_field("session_id", json!(null));
         json_field("closed", json!(false));
@@ -9164,7 +9172,7 @@ async fn handle_swarm_close(
         json!({ "sessionId": session_id }),
     )
     .await;
-    clear_state(None, session_name);
+    clear_state(None, effective_name);
 
     json_field("closed", json!(true));
     if swarm_task_count > 0 {
@@ -14025,8 +14033,12 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
 
     // Version comparison: use the live server version if available; fall back
     // to the installed bundle only when the server is unreachable.
+    // Both sides are normalized so that "4.13.0" and "4.13.0-SNAPSHOT" (dev
+    // mode) are treated as matching — the SNAPSHOT suffix only means the
+    // backend was built from a mutable source tree, not that the versions
+    // actually differ.
     if let Some(ref server_ver) = server_version {
-        if server_ver != VERSION {
+        if normalize_version(server_ver) != normalize_version(VERSION) {
             cli_println!(
                 "⚠  Version mismatch: CLI is {} but running backend is {}.",
                 VERSION, server_ver
@@ -14047,7 +14059,7 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
             daemon::read_installed_browser4_runtime_metadata()
         {
             let installed_ver = metadata.tag.trim().trim_start_matches('v');
-            if installed_ver != VERSION.trim() {
+            if normalize_version(installed_ver) != normalize_version(VERSION.trim()) {
                 cli_println!(
                     "⚠  Version mismatch: CLI is {} but installed backend is {}.",
                     VERSION, metadata.tag
@@ -14208,6 +14220,13 @@ async fn handle_doctor(client: &Client, base_url: &str, args: &HashMap<String, V
                     if !vars.is_empty() {
                         let names: Vec<&str> = vars.iter().filter_map(|v| v.as_str()).collect();
                         cli_println!("  Configured keys: {}", names.join(", "));
+                    }
+                }
+                if let Some(detected) = llm_info.get("detectedVia").and_then(|v| v.as_str()) {
+                    match detected {
+                        "config_file" => cli_println!("  Source: configuration file (~/.browser4/config/)"),
+                        "env_or_property" => {} // already shown via Configured keys above
+                        _ => {}
                     }
                 }
             } else if let Some(message) = llm_info.get("message").and_then(|v| v.as_str()) {
