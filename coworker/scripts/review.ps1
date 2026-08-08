@@ -599,6 +599,11 @@ function Move-IssuesFile {
     }
 
     Move-Item -Path $FilePath -Destination $destPath -Force
+
+    # Record the state transition in the task registry (best-effort)
+    $toState = if ($Discard) { 'done/discard' } else { 'done' }
+    Register-CoworkerTaskMove -FilePath $destPath -Pipeline 'main' -ToState $toState -Reason 'review-discarded'
+
     return $destPath
 }
 
@@ -643,6 +648,10 @@ function Move-IssuesFileToReady {
 
         Move-Item -Path $FilePath -Destination $destPath -Force
         Write-ConsoleLine -Message "Moved to 1ready → $destPath" -ForegroundColor Green
+
+        # Record the state transition in the task registry (best-effort)
+        Register-CoworkerTaskMove -FilePath $destPath -Pipeline 'main' -ToState '1ready' -Reason 'review-completed'
+
         return $destPath
     } catch {
         Write-ConsoleLine -Message "Move to 1ready failed: $_" -ForegroundColor Red
@@ -1263,6 +1272,10 @@ function Start-ReviewSession {
 
                     Move-Item -Path $ParsedFile.FilePath -Destination $destPath -Force
                     Write-ConsoleLine -Message "Marked done → $destPath" -ForegroundColor Green
+
+                    # Record the state transition in the task registry (best-effort)
+                    Register-CoworkerTaskMove -FilePath $destPath -Pipeline 'main' -ToState '1ready' -Reason 'review-completed'
+
                     return 'done'
                 } catch {
                     Write-ConsoleLine -Message "Mark done failed: $_" -ForegroundColor Red
