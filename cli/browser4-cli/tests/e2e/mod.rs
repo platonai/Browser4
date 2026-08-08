@@ -13,8 +13,10 @@
 //!
 //! ```bash
 //! cargo test --test e2e -- --nocapture
-//! cargo test --test e2e -- --nocapture --enable-batch-scenario
+//! cargo test --test e2e -- --nocapture --enable-all
 //! cargo test --test e2e -- --nocapture --batch-only
+//! cargo test --test e2e -- --nocapture --level=SMOKE
+//! cargo test --test e2e -- --nocapture --level=EXTENDED --enable-all
 //! cargo test --test e2e -- --nocapture --scenario=*open*
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_*
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_swarm_*
@@ -30,9 +32,9 @@
 //!
 //! The `--failed` selector reruns scenario names stored by the previous run in
 //! `%TEMP%/browser4/browser4-cli/e2e/last-failed-scenarios.json`.
-//! By default, the full e2e run skips batch-command scenarios; pass
-//! `--enable-batch-scenario` to include them, or `--batch-only` to run only
-//! batch-command scenarios.
+//! By default, the full e2e run skips scenarios marked `exclude_by_default`
+//! (batch-command and install/upgrade scenarios); pass `--enable-all` to
+//! include them, or `--batch-only` to run only excluded-by-default scenarios.
 //!
 //! The Browser4 service is resolved in this order:
 //! 1. `BROWSER4_E2E_SERVICE_URL` environment variable – connect to an already-running
@@ -4762,15 +4764,17 @@ struct RunOptions {
     list_only: bool,
     list_groups: bool,
     batch_only: bool,
-    enable_batch_scenario: bool,
-    enable_install_scenario: bool,
+    /// Include scenarios that are excluded by default (batch, install, etc.).
+    /// Replaces the old --enable-batch-scenario / --enable-install-scenario flags.
+    enable_all: bool,
     force_remote_bundle: bool,
     /// When non-empty, only scenarios matching at least one of these group
     /// names are selected.  An empty Vec means no group filter is applied.
     groups: Vec<String>,
     /// Maximum scenario level to run.  Defaults to `Basic` so the suite
     /// finishes faster.  Pass `--level=EXTENDED` (or `--level=all`) to
-    /// include longer-running / edge-case tests.
+    /// include longer-running / edge-case tests.  Pass `--level=SMOKE`
+    /// for a sub-15-second critical-path gate.
     max_level: scenarios::ScenarioLevel,
     /// Suppress per-test timing output; only show pass/fail summary.
     quiet: bool,
@@ -4865,8 +4869,7 @@ fn parse_run_options() -> RunOptions {
     let mut list_only = false;
     let mut list_groups = false;
     let mut batch_only = false;
-    let mut enable_batch_scenario = false;
-    let mut enable_install_scenario = false;
+    let mut enable_all = false;
     let mut force_remote_bundle = false;
     let mut quiet = false;
     let mut verbose = false;
@@ -4910,15 +4913,9 @@ fn parse_run_options() -> RunOptions {
             continue;
         }
 
-        // --enable-batch-scenario / -b
-        if match_bool_flag(&arg, "enable-batch-scenario", "-b") {
-            enable_batch_scenario = true;
-            continue;
-        }
-
-        // --enable-install-scenario / -i
-        if match_bool_flag(&arg, "enable-install-scenario", "-i") {
-            enable_install_scenario = true;
+        // --enable-all / -a
+        if match_bool_flag(&arg, "enable-all", "-a") {
+            enable_all = true;
             continue;
         }
 
@@ -4943,7 +4940,7 @@ fn parse_run_options() -> RunOptions {
         // --level / -L
         if let Some(value) = match_value_flag_start(&arg, "level", "-L") {
             let val = if value.is_empty() { args.next().unwrap_or_else(|| {
-                panic!("Missing value for --level. Use --level=<BASIC|EXTENDED|ALL> or --level <BASIC|EXTENDED|all>")
+                panic!("Missing value for --level. Use --level=<SMOKE|BASIC|EXTENDED|ALL> or --level <SMOKE|BASIC|EXTENDED|all>")
             })} else { value };
             max_level = scenarios::ScenarioLevel::from_arg(&val).unwrap_or_else(|error| {
                 panic!("{error}");
@@ -5034,8 +5031,7 @@ fn parse_run_options() -> RunOptions {
         list_only,
         list_groups,
         batch_only,
-        enable_batch_scenario,
-        enable_install_scenario,
+        enable_all,
         force_remote_bundle,
         groups,
         max_level,
@@ -5044,30 +5040,23 @@ fn parse_run_options() -> RunOptions {
     }
 }
 
-fn select_batch_scenarios(
+/// Filter scenarios that are excluded by default (batch, install, etc.).
+fn select_excluded_by_default(
     selected_scenarios: Vec<scenarios::ScenarioDef>,
 ) -> Vec<scenarios::ScenarioDef> {
     selected_scenarios
         .into_iter()
-        .filter(|scenario| scenario.is_batch_command_scenario())
+        .filter(|scenario| scenario.exclude_by_default)
         .collect()
 }
 
-fn exclude_batch_scenarios(
+/// Remove scenarios that are excluded by default from the selected set.
+fn exclude_by_default_scenarios(
     selected_scenarios: Vec<scenarios::ScenarioDef>,
 ) -> Vec<scenarios::ScenarioDef> {
     selected_scenarios
         .into_iter()
-        .filter(|scenario| !scenario.is_batch_command_scenario())
-        .collect()
-}
-
-fn exclude_install_scenarios(
-    selected_scenarios: Vec<scenarios::ScenarioDef>,
-) -> Vec<scenarios::ScenarioDef> {
-    selected_scenarios
-        .into_iter()
-        .filter(|scenario| !scenario.is_install_scenario())
+        .filter(|scenario| !scenario.exclude_by_default)
         .collect()
 }
 
@@ -5245,13 +5234,13 @@ fn main() {
     };
 
     if run_options.batch_only {
-        selected_scenarios = select_batch_scenarios(selected_scenarios);
+        selected_scenarios = select_excluded_by_default(selected_scenarios);
         assert!(
             !selected_scenarios.is_empty(),
-            "No batch scenarios are registered. Available scenarios: {available_names}"
+            "No excluded-by-default scenarios are registered. Available scenarios: {available_names}"
         );
         println!(
-            "selected {} batch scenario(s) via --batch-only: {}",
+            "selected {} excluded-by-default scenario(s) via --batch-only: {}",
             selected_scenarios.len(),
             selected_scenarios
                 .iter()
@@ -5261,40 +5250,19 @@ fn main() {
         );
     } else if !has_explicit_scenario_filter
         && run_options.groups.is_empty()
-        && !run_options.enable_batch_scenario
+        && !run_options.enable_all
     {
-        let batch_scenarios = selected_scenarios
+        let excluded = selected_scenarios
             .iter()
             .copied()
-            .filter(|scenario| scenario.is_batch_command_scenario())
+            .filter(|scenario| scenario.exclude_by_default)
             .collect::<Vec<_>>();
-        selected_scenarios = exclude_batch_scenarios(selected_scenarios);
+        selected_scenarios = exclude_by_default_scenarios(selected_scenarios);
 
-        if !batch_scenarios.is_empty() {
+        if !excluded.is_empty() {
             println!(
-                "default e2e run skips {} batch scenario(s); pass --enable-batch-scenario or --batch-only to include them",
-                batch_scenarios.len()
-            );
-        }
-    }
-
-    // Install / upgrade scenarios are disabled by default (they download and
-    // extract archives).  Use --enable-install-scenario to include them.
-    if !has_explicit_scenario_filter
-        && run_options.groups.is_empty()
-        && !run_options.enable_install_scenario
-    {
-        let install_scenarios = selected_scenarios
-            .iter()
-            .copied()
-            .filter(|scenario| scenario.is_install_scenario())
-            .collect::<Vec<_>>();
-        selected_scenarios = exclude_install_scenarios(selected_scenarios);
-
-        if !install_scenarios.is_empty() {
-            println!(
-                "default e2e run skips {} install/upgrade scenario(s); pass --enable-install-scenario to include them",
-                install_scenarios.len()
+                "default e2e run skips {} scenario(s) excluded by default; pass --enable-all to include them",
+                excluded.len()
             );
         }
     }
@@ -5441,7 +5409,7 @@ fn main() {
 
         if run_coverage {
             let report = run_named_test(COVERAGE_TEST_NAME, || {
-                verify_e2e_command_coverage(run_options.enable_batch_scenario)
+                verify_e2e_command_coverage(run_options.enable_all)
             });
             timings.push(report);
         }
@@ -5569,11 +5537,54 @@ fn main() {
             }
             if !run_options.quiet {
                 println!("per-test timing:");
-                for report in timings {
+                for report in &timings {
                     println!("  {}: {}", report.name, format_duration(report.total));
                     print_timing_steps(&report.steps);
                 }
             }
+            // Tier-duration check: warn when a Smoke or Basic scenario exceeds
+            // its author-declared estimate by more than 2×.  This catches
+            // mis-tiered tests before they silently slow down every CI run.
+            if !run_options.quiet {
+                let mut tier_warnings: Vec<String> = Vec::new();
+                for planned_run in &planned_runs {
+                    let scenario = planned_run.scenario;
+                    let Some(estimate_ms) = scenario.estimated_duration_ms else {
+                        continue;
+                    };
+                    // Only check Smoke and Basic — Extended is explicitly for
+                    // longer-running tests.
+                    if scenario.level > scenarios::ScenarioLevel::Basic {
+                        continue;
+                    }
+                    let report = timings.iter().find(|t| t.name == planned_run.display_name());
+                    let Some(report) = report else { continue };
+                    let actual_ms = report.total.as_millis() as u64;
+                    let threshold_ms = estimate_ms.saturating_mul(2);
+                    if actual_ms > threshold_ms {
+                        tier_warnings.push(format!(
+                            "  {} ({}): declared {} ms, actual {} ms — exceeds 2× threshold ({} ms). Consider promoting to {}.",
+                            scenario.name,
+                            scenario.level,
+                            estimate_ms,
+                            actual_ms,
+                            threshold_ms,
+                            if scenario.level == scenarios::ScenarioLevel::Smoke { "BASIC" } else { "EXTENDED" }
+                        ));
+                    }
+                }
+                if !tier_warnings.is_empty() {
+                    eprintln!(
+                        "\n⚠ tier-duration check: {} scenario(s) exceeded their declared estimate by >2×:",
+                        tier_warnings.len()
+                    );
+                    for warning in &tier_warnings {
+                        eprintln!("{warning}");
+                    }
+                    eprintln!("");
+                }
+            }
+
             if !scenario_failures.is_empty() {
                 println!("failure summary (grouped by scenario):");
                 let mut global_index = 0usize;

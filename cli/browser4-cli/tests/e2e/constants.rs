@@ -68,12 +68,13 @@ Scenario selection:
   --failed                          Rerun scenarios that failed in the previous run
   --group=<name>, -g                Run only scenarios in the specified group
                                     (repeatable; e.g. --group=open --group=eval)
-  --level=<BASIC|EXTENDED|ALL>, -L  Max scenario level (default: BASIC)
+  --level=<SMOKE|BASIC|EXTENDED|ALL>, -L  Max scenario level (default: BASIC)
+                                    SMOKE: critical-path only, sub-15-second gate
 
 Scenario inclusion (disabled by default):
-  --enable-batch-scenario, -b       Include batch-command scenarios
-  --enable-install-scenario, -i     Include install/upgrade scenarios
-  --batch-only                      Run only batch-command scenarios
+  --enable-all, -a                  Include scenarios excluded by default
+                                    (batch-command, install/upgrade, etc.)
+  --batch-only                      Run only excluded-by-default scenarios
 
 Output control:
   --list, -l                        List all scenario names (dry run)

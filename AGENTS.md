@@ -86,11 +86,10 @@ Maven profile switches in root `pom.xml`: `-DrunITs=true`, `-DrunE2ETests=true`,
 cargo test --test e2e -- --help           # All options
 --scenario <pattern>                      # Glob filter
 --group <name>                            # Group filter (repeatable)
---level BASIC|EXTENDED|ALL                # Test depth
+--level SMOKE|BASIC|EXTENDED|ALL          # Test depth
 --fail-fast / --failed                    # Stop early / rerun failures
 --list / --list-groups                    # Discover without running
---enable-install-scenario                 # Opt into install tests
---enable-batch-scenario                   # Opt into batch tests
+--enable-all                              # Opt into excluded-by-default tests
 --force-rebuild-bundle                    # Force local Maven + runtime rebuild
 --force-remote-bundle                     # Download pre-built bundle instead
 ```
@@ -174,7 +173,7 @@ Category `Category::Snapshot`:
 
 After changing `cli/browser4-cli/src/daemon.rs`, run install-scenario e2e tests:
 ```bash
-cargo test --test e2e -- --nocapture --level ALL --enable-install-scenario --scenario '*install*'
+cargo test --test e2e -- --nocapture --level EXTENDED --enable-all --scenario '*install*'
 ```
 
 ## PowerShell Cross-Platform Compatibility

@@ -18,16 +18,12 @@ on:
         default: 'ALL'
         type: choice
         options:
+          - SMOKE
           - BASIC
           - EXTENDED
           - ALL
-      enable_batch_scenario:
-        description: 'Include batch-command scenarios'
-        required: false
-        default: true
-        type: boolean
-      enable_install_scenario:
-        description: 'Include install/upgrade scenarios'
+      enable_all:
+        description: 'Include scenarios excluded by default (batch, install, etc.)'
         required: false
         default: true
         type: boolean
@@ -145,12 +141,8 @@ jobs:
           LEVEL="${{ inputs.level || 'All' }}"
           FLAGS="$FLAGS --level=$LEVEL"
 
-          if [ "${{ inputs.enable_batch_scenario || 'true' }}" = "true" ]; then
-            FLAGS="$FLAGS --enable-batch-scenario"
-          fi
-
-          if [ "${{ inputs.enable_install_scenario || 'true' }}" = "true" ]; then
-            FLAGS="$FLAGS --enable-install-scenario"
+          if [ "${{ inputs.enable_all || 'true' }}" = "true" ]; then
+            FLAGS="$FLAGS --enable-all"
           fi
 
           if [ -n "${{ inputs.scenario }}" ]; then
