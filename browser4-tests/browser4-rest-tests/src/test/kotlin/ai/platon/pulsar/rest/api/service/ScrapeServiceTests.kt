@@ -170,6 +170,21 @@ class ScrapeServiceTests : MockEcServerTestBase() {
         val actualUrl = records[0]["url"].toString()
         assertTrue("URL not expected \nExpected: $productDetailURL\nActual: $actualUrl") { actualUrl == productDetailURL }
 
+        // Verify no duplicate columns caused by H2 case-normalization mismatch.
+        // Before the fix, each row had both an uppercase-null and lowercase-value
+        // key (e.g. "URL": null AND "url": "<value>") because the column-order
+        // list used ResultSetMetaData.getColumnName (uppercase) while the row
+        // keys from ResultSetUtils are lowercased.
+        for ((idx, row) in records.withIndex()) {
+            val keys = row.keys.toList()
+            val keysLower = keys.map { it.lowercase() }.toSet()
+            assertEquals(
+                keys.size, keysLower.size,
+                "Row $idx has duplicate columns (case-insensitive): $keys. " +
+                "Each column should appear exactly once."
+            )
+        }
+
         printlnPro("Done scraping with load_and_select, used " + DateTimes.elapsedTime(startTime))
     }
 }

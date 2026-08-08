@@ -4863,8 +4863,10 @@ async fn wait_for_server_ready(
                 let elapsed = Instant::now().duration_since(start).as_secs();
                 // Show the initial startup phase — at this point the JVM and
                 // Spring Boot are loading; the TCP port isn't open yet.
+                // \r returns to column 0; \x1b[K clears to end of line so that
+                // the previous (longer) frame doesn't leave trailing characters.
                 eprint!(
-                    "\r  {} Starting server... ({}s) — JVM loading, waiting for TCP port...",
+                    "\r\x1b[K  {} Starting server... ({}s) — JVM loading, waiting for TCP port...",
                     SPINNER[frame % SPINNER.len()],
                     elapsed
                 );
@@ -4901,8 +4903,9 @@ async fn wait_for_server_ready(
             let remaining = timeout.as_secs().saturating_sub(elapsed);
             // Include the stage-level progress so users can see what phase
             // the server is in (JVM, Spring Boot, MCP tools, browser init).
+            // \r returns to column 0; \x1b[K clears to end of line.
             eprint!(
-                "\r  {} Starting server... ({}s elapsed, ~{}s remaining) — {}",
+                "\r\x1b[K  {} Starting server... ({}s elapsed, ~{}s remaining) — {}",
                 SPINNER[spinner_frame % SPINNER.len()],
                 elapsed,
                 remaining,

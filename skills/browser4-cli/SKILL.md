@@ -217,6 +217,20 @@ Set `BROWSER4_SKILLS_DIR` to override the skills directory location. Skill files
 >
 > **Rule of thumb:** If you want to **interact** with elements → `snapshot`. If you want to **read content** → `htmlsnapshot`.
 
+> **⚠️ htmlsnapshot capture requirements — which commands need a prior capture:**
+>
+> | Command | Needs prior `htmlsnapshot` capture? | Notes |
+> |---------|-------------------------------------|-------|
+> | `htmlsnapshot` (capture) | — (this IS the capture) | Stores the page's initial HTML for later extraction |
+> | `htmlsnapshot get` / `get all` | **Yes** — requires stored snapshot | Extracts text/html/attr via CSS selectors from the stored HTML |
+> | `htmlsnapshot inspect` | **Yes** — requires stored snapshot | Iterates CSS selectors from the stored HTML; returns "No HTML snapshot found" if missing |
+> | `htmlsnapshot summary` | **Yes** — requires stored snapshot | Statistical summary of selectors on the stored page |
+> | `htmlsnapshot grep` | **Yes** — requires stored snapshot | Regex search over the stored HTML |
+> | `htmlsnapshot export` | **Yes** — requires stored snapshot | Exports the stored HTML to a file |
+> | `htmlsnapshot query` | **No** — fetches independently | Uses `DOM_LOAD_AND_SELECT(@url, ...)` which re-fetches the page, bypassing the stored snapshot entirely |
+>
+> **If you get "No HTML snapshot found" or a timeout:** either run `htmlsnapshot` first to capture, or use `htmlsnapshot query` with `@url` for independent fetching.
+
 > **⚠️ Important:** `htmlsnapshot` captures the **initial server-rendered HTML** at page load. Content added or modified by JavaScript after load (form submission results, dynamic updates, SPA route changes) **will not be reflected** in the stored snapshot. For pages where you have interacted (clicked, filled forms, submitted) or where JS modifies the DOM, use `eval` for live-DOM access. See [§5 Critical Warnings](#5-critical-warnings) for more.
 
 ```
@@ -296,9 +310,9 @@ swap the selectors and column names, and you have a working query:
 
 ```sql
 SELECT
-  DOM_TEXT(DOM, 'h2')    AS title,
-  DOM_TEXT(DOM, '.price') AS price,
-  DOM_BASE_URI(DOM)       AS url
+  DOM_FIRST_TEXT(DOM, 'h2')    AS title,
+  DOM_FIRST_TEXT(DOM, '.price') AS price,
+  DOM_BASE_URI(DOM)            AS url
 FROM
   DOM_LOAD_AND_SELECT(@url, '.product-card')
 ```
@@ -308,9 +322,9 @@ FROM
 # 1. Write the query (copy and customize)
 cat > query.sql << 'XSQL'
 SELECT
-  DOM_TEXT(DOM, 'h2')    AS title,
-  DOM_TEXT(DOM, '.price') AS price,
-  DOM_BASE_URI(DOM)       AS url
+  DOM_FIRST_TEXT(DOM, 'h2')    AS title,
+  DOM_FIRST_TEXT(DOM, '.price') AS price,
+  DOM_BASE_URI(DOM)            AS url
 FROM
   DOM_LOAD_AND_SELECT(@url, '.product-card')
 XSQL

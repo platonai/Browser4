@@ -325,7 +325,12 @@ fn looks_like_negative_value(token: &str) -> bool {
 ///
 /// Positional arguments are mapped to their named positions as defined in
 /// `arg_names` (starting from index 1 since index 0 is the command name).
-/// Returns an error string if too many positional arguments are supplied.
+///
+/// When there are more positional arguments than named slots (e.g. `loop --
+/// subcommand --flag value` after the POSIX `--` end-of-options marker), the
+/// excess positionals are joined into the last named argument so that
+/// pass-through subcommands work correctly.  A command that declares zero
+/// positional slots still rejects unexpected positionals.
 pub fn build_command_args(
     raw: &HashMap<String, Value>,
     arg_names: &[&str],
@@ -341,17 +346,21 @@ pub fn build_command_args(
         _ => vec![],
     };
 
-    if positional.len() > arg_names.len() {
+    if positional.len() > arg_names.len() && arg_names.is_empty() {
         return Err(format!(
-            "error: too many arguments: expected {}, received {}",
-            arg_names.len(),
-            positional.len()
+            "error: unexpected positional arguments (this command accepts none): {:?}",
+            &positional
         ));
     }
 
     for (i, name) in arg_names.iter().enumerate() {
         if i < positional.len() {
-            if let Ok(n) = positional[i].parse::<i64>() {
+            // When the last named slot must absorb trailing positionals
+            // (e.g. `loop -- -s price-watch eval …`), join them with
+            // spaces so the subcommand handler can re-parse them.
+            if i == arg_names.len() - 1 && positional.len() > arg_names.len() {
+                result.insert(name.to_string(), json!(positional[i..].join(" ")));
+            } else if let Ok(n) = positional[i].parse::<i64>() {
                 result.insert(name.to_string(), json!(n));
             } else if let Ok(n) = positional[i].parse::<f64>() {
                 result.insert(name.to_string(), json!(n));
@@ -779,12 +788,24 @@ mod tests {
     }
 
     #[test]
-    fn test_build_command_args_too_many() {
+    fn test_build_command_args_joins_extra_positionals_into_last_arg() {
+        // When positional args outnumber named slots (e.g. `loop -- subcmd arg1
+        // arg2`), the excess are space-joined into the last named argument so
+        // pass-through subcommands work.
         let mut raw = HashMap::new();
         raw.insert("_".to_string(), json!(["cmd", "a", "b", "c"]));
-        let result = build_command_args(&raw, &["x"]);
+        let result = build_command_args(&raw, &["x"]).unwrap();
+        assert_eq!(result.get("x"), Some(&json!("a b c")));
+    }
+
+    #[test]
+    fn test_build_command_args_rejects_positionals_when_no_slots() {
+        // A command that declares zero positional slots rejects any positionals.
+        let mut raw = HashMap::new();
+        raw.insert("_".to_string(), json!(["cmd", "a"]));
+        let result = build_command_args(&raw, &[]);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("too many arguments"));
+        assert!(result.unwrap_err().contains("unexpected positional arguments"));
     }
 
     #[test]

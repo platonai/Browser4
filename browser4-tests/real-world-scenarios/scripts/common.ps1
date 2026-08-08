@@ -682,12 +682,12 @@ $(if ($browser4cliMode -eq 'production') {
 
 Every browser4-cli command in this session MUST be invoked as:
 
-`$($cliInvocation) <command>`
+$cliInvocation <command>
 
 For example:
-  `$($cliInvocation) goto "https://example.com"`
-  `$($cliInvocation) snapshot -i`
-  `$($cliInvocation) click e5`
+  $cliInvocation goto "https://example.com"
+  $cliInvocation snapshot -i
+  $cliInvocation click e5
 
 Do NOT use a plain `browser4-cli` command unless the invocation above fails after a genuine attempt.  Using the wrong invocation will test a stale installed binary instead of the local source code, invalidating the evaluation.
 
