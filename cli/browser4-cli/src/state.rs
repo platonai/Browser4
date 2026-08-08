@@ -43,6 +43,7 @@ pub enum SessionKind {
 
 impl SessionKind {
     /// Whether this kind of session owns its browser lifecycle.
+    #[allow(dead_code)]
     pub fn owns_browser(self) -> bool {
         matches!(self, SessionKind::Browser4Launched | SessionKind::Swarm)
     }
