@@ -58,11 +58,23 @@ $OSS_BASE_URL = 'https://web-miner.oss-cn-beijing.aliyuncs.com'
 $OSS_LATEST_JSON = "$OSS_BASE_URL/releases/latest-release.json"
 $OSS_LATEST_DOWNLOAD = "$OSS_BASE_URL/releases/latest/download"
 
-$InstallRoot = Join-Path $env:USERPROFILE '.scent\webminer'
+# Cross-platform home directory: USERPROFILE on Windows, HOME on Linux/macOS
+$HomeDir = if ($IsWindows) { $env:USERPROFILE } else { $env:HOME }
+if (-not $HomeDir) { throw 'Cannot determine home directory: neither USERPROFILE nor HOME is set.' }
+$InstallRoot = Join-Path $HomeDir '.scent\webminer'
 $InstallLib  = Join-Path $InstallRoot 'lib'
 $InstallJar  = Join-Path $InstallLib 'scent-miner.jar'
 $VersionFile = Join-Path $InstallRoot 'version.txt'
 $ChecksumFile = Join-Path $InstallRoot 'checksum.sha256'
+
+# Cross-platform temp directory
+$TempDir = if ($IsWindows -or $env:TEMP) { $env:TEMP } elseif ($env:TMPDIR) { $env:TMPDIR } else { '/tmp' }
+if (-not $TempDir) { $TempDir = '/tmp' }
+
+# Platform-aware binary names
+$JavaExeName = if ($IsWindows) { 'java.exe' } else { 'java' }
+$SevenZipName = if ($IsWindows) { '7z.exe' } else { '7z' }
+$CurlExeName = if ($IsWindows) { 'curl.exe' } else { 'curl' }
 
 # Management subcommands
 $ManagementCommands = @('install', 'update', 'version', 'uninstall', 'run-example')
@@ -145,7 +157,7 @@ function Find-Java17 {
     param([string] $ExplicitHome)
 
     if ($ExplicitHome) {
-        $javaExe = Join-Path $ExplicitHome 'bin\java.exe'
+        $javaExe = Join-Path $ExplicitHome "bin\$JavaExeName"
         if (Test-Path $javaExe) { return $ExplicitHome }
         throw "JAVA_HOME not found at: $ExplicitHome"
     }
@@ -153,7 +165,7 @@ function Find-Java17 {
     # 1. JAVA_HOME env var
     $envJavaHome = $env:JAVA_HOME
     if ($envJavaHome) {
-        $javaExe = Join-Path $envJavaHome 'bin\java.exe'
+        $javaExe = Join-Path $envJavaHome "bin\$JavaExeName"
         if (Test-Path $javaExe) {
             $ver = & $javaExe -version 2>&1 | Select-Object -First 1
             if ($ver -match 'version "(\d+)' -and [int]$Matches[1] -ge 17) {
@@ -162,18 +174,27 @@ function Find-Java17 {
         }
     }
 
-    # 2. Common Windows install locations
-    $candidates = @(
-        'D:\Program Files\OpenLogic\jdk-17.0.14.7-hotspot',
-        'C:\Program Files\OpenLogic\jdk-17.0.14.7-hotspot',
-        'D:\Program Files\Java\jdk-17',
-        'C:\Program Files\Java\jdk-17',
-        'D:\Program Files\Eclipse Adoptium\jdk-17.0.14.7-hotspot',
-        'C:\Program Files\Eclipse Adoptium\jdk-17.0.14.7-hotspot'
-    )
+    # 2. Common install locations
+    $candidates = if ($IsWindows) {
+        @(
+            'D:\Program Files\OpenLogic\jdk-17.0.14.7-hotspot',
+            'C:\Program Files\OpenLogic\jdk-17.0.14.7-hotspot',
+            'D:\Program Files\Java\jdk-17',
+            'C:\Program Files\Java\jdk-17',
+            'D:\Program Files\Eclipse Adoptium\jdk-17.0.14.7-hotspot',
+            'C:\Program Files\Eclipse Adoptium\jdk-17.0.14.7-hotspot'
+        )
+    } else {
+        @(
+            '/usr/lib/jvm/java-17-openjdk',
+            '/usr/lib/jvm/java-17-openjdk-amd64',
+            '/usr/lib/jvm/jdk-17',
+            '/usr/local/lib/jvm/jdk-17'
+        )
+    }
 
     foreach ($candidate in $candidates) {
-        $javaExe = Join-Path $candidate 'bin\java.exe'
+        $javaExe = Join-Path $candidate "bin\$JavaExeName"
         if (Test-Path $javaExe) { return $candidate }
     }
 
@@ -271,7 +292,7 @@ function Invoke-WebMiner {
     $prevOutputEncoding = [Console]::OutputEncoding
     [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-    $javaExe = Join-Path $Java17Home 'bin\java.exe'
+    $javaExe = Join-Path $Java17Home "bin\$JavaExeName"
     try {
         & $javaExe @javaArgs
     } finally {
@@ -444,7 +465,7 @@ function Install-WebMiner {
     $sizeMB = if ($jarSize) { "{0:N1}" -f ($jarSize / 1MB) } else { '?' }
     Write-Host "[WebMiner] Downloading scent-miner.jar ($sizeMB MB) ..." -ForegroundColor DarkGray
 
-    $tempJar = Join-Path $env:TEMP 'scent-miner-download.jar'
+    $tempJar = Join-Path $TempDir 'scent-miner-download.jar'
     try {
         if (Test-Path $tempJar) { Remove-Item $tempJar -Force }
 
@@ -546,17 +567,33 @@ function Install-WebMiner {
 function Find-7Zip {
 <#
 .SYNOPSIS
-    Locates 7z.exe on PATH or in common install locations.
+    Locates 7-Zip on PATH or in common install locations.
 #>
-    $onPath = Get-Command 7z.exe -ErrorAction SilentlyContinue
+    # Try primary binary name first
+    $onPath = Get-Command $SevenZipName -ErrorAction SilentlyContinue
     if ($onPath) { return $onPath.Source }
 
-    $candidates = @(
-        'C:\Program Files\7-Zip\7z.exe',
-        'D:\Program Files\7-Zip\7z.exe',
-        "${env:ProgramFiles}\7-Zip\7z.exe",
-        "${env:ProgramFiles(x86)}\7-Zip\7z.exe"
-    )
+    # On Linux, some distros use '7zz' instead of '7z'
+    if (-not $IsWindows) {
+        $onPath = Get-Command '7zz' -ErrorAction SilentlyContinue
+        if ($onPath) { return $onPath.Source }
+    }
+
+    $candidates = if ($IsWindows) {
+        @(
+            'C:\Program Files\7-Zip\7z.exe',
+            'D:\Program Files\7-Zip\7z.exe',
+            "${env:ProgramFiles}\7-Zip\7z.exe",
+            "${env:ProgramFiles(x86)}\7-Zip\7z.exe"
+        )
+    } else {
+        @(
+            '/usr/bin/7z',
+            '/usr/bin/7zz',
+            '/usr/local/bin/7z',
+            '/usr/local/bin/7zz'
+        )
+    }
 
     foreach ($candidate in $candidates) {
         if ($candidate -and (Test-Path $candidate)) {
@@ -565,8 +602,8 @@ function Find-7Zip {
     }
 
     Write-Error @"
-7-Zip (7z.exe) not found.
-Install from https://www.7-zip.org/ or ensure 7z.exe is on PATH.
+7-Zip not found.
+Install from https://www.7-zip.org/ or ensure 7z is on PATH.
 "@
     exit 1
 }
@@ -582,9 +619,9 @@ function Invoke-RunExample {
 
     $ArchiveUrl  = 'https://web-miner.oss-cn-beijing.aliyuncs.com/test/amazon.com.7z'
     $ArchiveName = 'amazon.com.7z'
-    $ExtractDir  = Join-Path $env:USERPROFILE '.scent\test-data'
+    $ExtractDir  = Join-Path $HomeDir '.scent\test-data'
     $DataDir     = Join-Path $ExtractDir 'amazon.com'    # archive contains this subdirectory
-    $ArchivePath = Join-Path $env:TEMP $ArchiveName
+    $ArchivePath = Join-Path $TempDir $ArchiveName
 
     # --- Already extracted? Skip download ---
     if ((Test-Path $DataDir) -and (Get-ChildItem -Recurse -File $DataDir -ErrorAction SilentlyContinue | Where-Object { $_.Extension -match '\.html?$' } | Select-Object -First 1)) {
@@ -603,11 +640,11 @@ function Invoke-RunExample {
                 Invoke-WebRequest -Uri $ArchiveUrl -OutFile $ArchivePath -UseBasicParsing
             }
             catch {
-                # Fallback: try curl.exe
-                $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+                # Fallback: try curl
+                $curl = Get-Command $CurlExeName -ErrorAction SilentlyContinue
                 if ($curl) {
-                    Write-Host "[WebMiner] Invoke-WebRequest failed, trying curl.exe ..." -ForegroundColor Yellow
-                    & curl.exe -L -o $ArchivePath $ArchiveUrl
+                    Write-Host "[WebMiner] Invoke-WebRequest failed, trying curl ..." -ForegroundColor Yellow
+                    & $CurlExeName -L -o $ArchivePath $ArchiveUrl
                     if ($LASTEXITCODE -ne 0) {
                         Write-Error "Download failed (curl exit code: $LASTEXITCODE)"
                         exit 1
