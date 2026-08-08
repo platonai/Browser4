@@ -13,6 +13,7 @@ A collection of single-page HTML applications with progressively complex interac
 | `interactive-2.html` | Info collection, summary button, range slider font sizing, CSS hover cards |
 | `interactive-3.html` | IntersectionObserver animations, volume range, toggle box with fade transitions |
 | `interactive-4.html` | Dark mode toggle, HTML5 drag-and-drop sortable list |
+| `interactive-5.html` | Advanced interaction playground with hover cards, drag-and-drop reordering, double-click actions, browser dialogs, and interaction log |
 | `interactive-screens.html` | Multi-section page with input echo, calculator, toggle, email validation, contact form |
 | `interactive-dynamic.html` | Dynamically generated interactive content |
 
@@ -50,6 +51,18 @@ Simulated e-commerce pages (product listing, detail, category) with lazy-loading
 | `data/products.json` | Sample product data fixture |
 | `prompt.md` | The original prompt used to generate these mock pages |
 
+### `crawl/`
+Mock e-commerce site with a multi-level link structure for crawl depth and link-following tests.
+
+| Path | Purpose |
+|------|---------|
+| `index.html` | Crawl Test Hub — product grid, category navigation, and search toolbar |
+| `product/1.html`–`11.html` | Product detail pages with titles, prices, and descriptions |
+| `category/electronics.html` | Electronics category listing page |
+| `category/accessories.html` | Accessories category listing page |
+| `category/clearance.html` | Clearance category listing page |
+| `depth3/8.html`–`12.html` | Depth-3 target pages for multi-level crawl depth testing |
+
 ### `tta/` (Test Training Area)
 Self-contained HTML test environment that mirrors natural-language actions used in `SessionInstructionsExample`.
 
@@ -73,4 +86,4 @@ For IntersectionObserver-dependent pages, prefer HTTP serving to avoid browser s
 
 ## Version
 
-Current for Browser4 4.12.x.
+Current for Browser4 4.13.x.
