@@ -65,7 +65,7 @@ function loadScript(filename) {
             ATTR_TEXT_NODE_VI: 'tv',
             ATTR_DEBUG: '_d',
             debug: 0,
-            VI_COMPRESSION: 'base36',
+            VI_COMPRESSION: 'none',
         };
     }
 
@@ -124,7 +124,7 @@ function ensureConfig() {
         ATTR_TEXT_NODE_VI: 'tv',
         ATTR_DEBUG: '_d',
         debug: 0,
-        VI_COMPRESSION: 'base36',
+        VI_COMPRESSION: 'none',
     };
     return window.__pulsar_CONFIGS;
 }

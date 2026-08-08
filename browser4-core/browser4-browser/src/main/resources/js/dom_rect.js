@@ -11,10 +11,10 @@
  * Format rectangle from individual coordinates.
  *
  * Compression mode is controlled by the VI_COMPRESSION config option:
- * - "base36" (default): comma-separated base-36 integers, ~56% smaller
- *   Example: "3g,cp,5k,1f" = left:124, top:457, width:200, height:51
- * - "none": space-separated decimals (legacy format)
+ * - "none" (default): space-separated decimals
  *   Example: "124 457 201 51"
+ * - "base36": comma-separated base-36 integers, ~56% smaller
+ *   Example: "3g,cp,5k,1f" = left:124, top:457, width:200, height:51
  *
  * Output order: left,top,width,height (matches DOMRect / formatDOMRect).
  *
@@ -30,7 +30,7 @@ __pulsar_utils__.formatRect = function(top, left, width, height) {
     }
 
     var config = this.getConfig ? this.getConfig() : __pulsar_DEFAULT_CONFIGS;
-    var compression = config.VI_COMPRESSION || 'base36';
+    var compression = config.VI_COMPRESSION || 'none';
 
     if (compression === 'base36') {
         return ''
@@ -52,10 +52,10 @@ __pulsar_utils__.formatRect = function(top, left, width, height) {
  * Format a DOMRect object.
  *
  * Compression mode is controlled by the VI_COMPRESSION config option:
- * - "base36" (default): comma-separated base-36 integers, ~56% smaller
- *   Example: "3g,cp,5k,1f" = left:124, top:457, width:200, height:51
- * - "none": space-separated decimals (legacy format)
+ * - "none" (default): space-separated decimals
  *   Example: "124 457 201 51"
+ * - "base36": comma-separated base-36 integers, ~56% smaller
+ *   Example: "3g,cp,5k,1f" = left:124, top:457, width:200, height:51
  *
  * Output order: left,top,width,height.
  *
@@ -68,7 +68,7 @@ __pulsar_utils__.formatDOMRect = function(rect) {
     }
 
     var config = this.getConfig ? this.getConfig() : __pulsar_DEFAULT_CONFIGS;
-    var compression = config.VI_COMPRESSION || 'base36';
+    var compression = config.VI_COMPRESSION || 'none';
 
     if (compression === 'base36') {
         return ''
