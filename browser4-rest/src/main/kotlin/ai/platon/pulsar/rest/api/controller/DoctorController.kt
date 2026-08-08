@@ -1,5 +1,7 @@
 package ai.platon.pulsar.rest.api.controller
 
+import ai.platon.pulsar.agentic.context.AgenticContext
+import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import com.codahale.metrics.*
 import org.slf4j.LoggerFactory
@@ -14,6 +16,7 @@ import java.io.RandomAccessFile
 @CrossOrigin
 @RequestMapping("api/doctor")
 class DoctorController(
+    private val agenticContext: AgenticContext,
 ) {
     @Value("\${logging.dir:logs}")
     lateinit var loggingDir: String
@@ -137,7 +140,21 @@ class DoctorController(
         val foundEnvVars = envKeyNames.filter { System.getenv(it) != null }
         val foundProperties = propertyKeyNames.filter { System.getProperty(it) != null }
 
-        val configured = foundEnvVars.isNotEmpty() || foundProperties.isNotEmpty()
+        // Primary check: use ChatModelFactory which reads from the Pulsar SDK's
+        // ImmutableConfig (loaded from ~/.browser4/config/conf-enabled/). This is
+        // the same check used by Browser4StandaloneApplication at startup.
+        val factoryConfigured = try {
+            ChatModelFactory.isModelConfigured(agenticContext.configuration, verbose = false)
+        } catch (e: Exception) {
+            logger.warn("ChatModelFactory.isModelConfigured threw: {}", e.message)
+            null
+        }
+
+        val configured = when {
+            factoryConfigured == true -> true
+            foundEnvVars.isNotEmpty() || foundProperties.isNotEmpty() -> true
+            else -> false
+        }
 
         val message = if (configured) {
             null
@@ -150,6 +167,11 @@ class DoctorController(
         return ResponseEntity.ok(
             mapOf(
                 "configured" to configured,
+                "detectedVia" to when {
+                    factoryConfigured == true -> "config_file"
+                    foundEnvVars.isNotEmpty() || foundProperties.isNotEmpty() -> "env_or_property"
+                    else -> null
+                },
                 "foundEnvVars" to foundEnvVars,
                 "foundProperties" to foundProperties,
                 "keyPrefixes" to listOf("OPENROUTER", "DEEPSEEK", "VOLCENGINE", "OPENAI"),

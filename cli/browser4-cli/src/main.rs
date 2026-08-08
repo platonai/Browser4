@@ -14222,6 +14222,13 @@ async fn handle_doctor(client: &Client, base_url: &str, args: &HashMap<String, V
                         cli_println!("  Configured keys: {}", names.join(", "));
                     }
                 }
+                if let Some(detected) = llm_info.get("detectedVia").and_then(|v| v.as_str()) {
+                    match detected {
+                        "config_file" => cli_println!("  Source: configuration file (~/.browser4/config/)"),
+                        "env_or_property" => {} // already shown via Configured keys above
+                        _ => {}
+                    }
+                }
             } else if let Some(message) = llm_info.get("message").and_then(|v| v.as_str()) {
                 for line in message.lines() {
                     cli_println!("  {}", line);
