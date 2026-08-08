@@ -32,6 +32,12 @@ object TestUrls {
     val MOCK_REAL_ESTATE_URL get() = "$MOCK_HTML_SNAPSHOT_BASE/real-estate"
     val MOCK_FORM_PAGE_URL get() = "${MockServerPorts.baseUrl()}/assets/test-pages/form-page.html"
 
+    // Crawl fixture site — static pages served at /generated/crawl/** (see
+    // pulsar-tests-common/src/main/resources/static/generated/crawl/)
+    val MOCK_CRAWL_BASE get() = "${MockServerPorts.baseUrl()}/generated/crawl"
+    val MOCK_CRAWL_HUB_URL get() = "$MOCK_CRAWL_BASE/index.html"
+    val MOCK_CRAWL_PRODUCT_DETAIL_URL get() = "$MOCK_CRAWL_BASE/product/1.html"
+
     var urlGroups = mutableMapOf<String, Array<String>>()
 
     init {
