@@ -17,9 +17,9 @@
  *   node bin/version.mjs bump <part>       Bump major/minor/patch, update pom.xml, commit
  *   node bin/version.mjs bump <part> --dry-run     Show what would change
  *   node bin/version.mjs bump <part> --skip-precheck  Skip publish-status check
- *   node bin/version.mjs auto              Bump to next patch if changes detected
- *   node bin/version.mjs auto --dry-run    Show what would change without applying
- *   node bin/version.mjs auto --commit     Apply and commit+push
+ *   node bin/version.mjs auto              Show bump plan (dry-run by default)
+ *   node bin/version.mjs auto --dry-run    Same as default (explicit dry-run)
+ *   node bin/version.mjs auto --commit     Apply bump, commit, and push
  *
  *   # Full sync (VERSION → pom.xml, Cargo.toml, package.json, Cargo.lock, <tag>)
  *   node bin/version.mjs sync              Sync VERSION to all dependent files
@@ -953,8 +953,10 @@ function getBaseBranch() {
 // ---------------------------------------------------------------------------
 
 async function cmdAuto(args) {
-  const dryRun = args.includes("--dry-run");
+  // Default is dry-run.  --commit applies the bump, commits, and pushes.
   const commit = args.includes("--commit");
+  // --dry-run is kept as an explicit no-op alias for the default.
+  const dryRun = args.includes("--dry-run");
 
   // ---- Verify we're not on main/master ----
   let currentBranch;
@@ -1085,9 +1087,13 @@ async function cmdAuto(args) {
   // PHASE 3 — Act
   // ================================================================
 
-  if (dryRun) {
+  if (!commit) {
+    // Default (or explicit --dry-run): show plan only, no changes.
     console.log("══════════════════════════════════════════════");
     console.log("  DRY-RUN — No changes have been made.");
+    if (!dryRun) {
+      console.log("  Add --commit to apply the bump, commit, and push.");
+    }
     console.log("══════════════════════════════════════════════");
     console.log("");
     return;
@@ -1167,18 +1173,16 @@ async function cmdAuto(args) {
   // ---- Summary ----
   console.log(`\nAuto-bump complete: ${snapshotVersion} -> ${nextSnapshot}`);
 
-  // ---- Commit (optional) ----
-  if (commit) {
-    const msg = `Auto-bump version to ${nextSnapshot}`;
-    try {
-      execSync("git add .", { cwd: REPO_ROOT, stdio: "inherit" });
-      execSync(`git commit -m "${msg}"`, { cwd: REPO_ROOT, stdio: "inherit" });
-      execSync("git push", { cwd: REPO_ROOT, stdio: "inherit" });
-      console.log("Changes committed and pushed to remote.");
-    } catch (e) {
-      console.error("Git operation failed:", e.message);
-      process.exit(1);
-    }
+  // ---- Commit & push ----
+  const msg = `Auto-bump version to ${nextSnapshot}`;
+  try {
+    execSync("git add .", { cwd: REPO_ROOT, stdio: "inherit" });
+    execSync(`git commit -m "${msg}"`, { cwd: REPO_ROOT, stdio: "inherit" });
+    execSync("git push", { cwd: REPO_ROOT, stdio: "inherit" });
+    console.log("Changes committed and pushed to remote.");
+  } catch (e) {
+    console.error("Git operation failed:", e.message);
+    process.exit(1);
   }
 }
 
@@ -1399,9 +1403,9 @@ function printUsage() {
   console.log("    bump <part>       Bump major/minor/patch, update pom.xml, commit");
   console.log("    bump <part> --dry-run    Show what would change without applying");
   console.log("    bump <part> --skip-precheck  Skip publish-status verification");
-  console.log("    auto              Bump to next patch if changes detected");
-  console.log("    auto --dry-run    Show what would change without applying");
-  console.log("    auto --commit     Apply changes and commit+push");
+  console.log("    auto              Show bump plan (dry-run by default)");
+  console.log("    auto --dry-run    Same as default (explicit dry-run)");
+  console.log("    auto --commit     Apply bump, commit, and push");
   console.log("");
   console.log("  Full sync (VERSION → pom.xml, Cargo.toml, package.json, Cargo.lock, <tag>)");
   console.log("    sync              Sync VERSION to all dependent files");
