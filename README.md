@@ -67,7 +67,18 @@ Choosing the right tool for your task:
 
 ### How to Interact with a Page
 
-Use `snapshot -i --boxes` to see clickable/typeable elements with refs like `e15`, then `click <ref>`, `fill <ref> "<text>"`, `type`/`press`, `select`, `hover`/`drag`/`scroll`, and `wait` to drive the page. Chain multiple steps efficiently with `batch`.
+Use `snapshot -i --boxes` to see clickable/typeable elements with refs like `e15`, then `click <ref>`, `fill <ref> "<text>"`, `type`/`press`, `select`, `hover`/`drag`/`scroll`, and `wait` to drive the page. All interaction commands accept CSS selectors too. Chain multiple steps efficiently with `batch`.
+
+Typical interactive flow:
+
+```bash
+browser4-cli goto https://example.com/login
+browser4-cli snapshot -i --boxes
+browser4-cli fill e3 "user@example.com"
+browser4-cli fill e4 "secret" --submit
+browser4-cli wait --load networkidle
+browser4-cli snapshot -i
+```
 
 ### How to Extract Data
 
