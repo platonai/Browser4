@@ -67,23 +67,7 @@ Choosing the right tool for your task:
 
 ### How to Interact with a Page
 
-```
-Need to interact with a page?
-├─ Need to open or recover a browser session? → open [url] or goto <url>
-├─ Need to see what is clickable/typeable right now? → snapshot -i --boxes
-├─ Need to click a button, link, checkbox, or menu item? → click <ref>
-├─ Need to fill a form field and replace existing text? → fill <ref> "<text>"
-├─ Need to type naturally into the current field or send Enter/Tab? → type / press
-├─ Need to choose from a dropdown? → select <ref> <value>
-├─ Need to hover, drag, scroll, or use the mouse directly? → hover / drag / scroll / mouse*
-├─ Need to wait for the page to settle before the next step?
-│  ├─ Element appears? → wait <ref|selector>
-│  ├─ Text appears? → wait --text "..."
-│  ├─ URL changes? → wait --url "**/target"
-│  └─ Loading/network finishes? → wait --load networkidle
-├─ Need to verify what changed after the action? → snapshot, get, or eval
-└─ Need to repeat many UI steps efficiently? → batch "goto ..." "click ..." "fill ..."
-```
+Use `snapshot -i --boxes` to see clickable/typeable elements with refs like `e15`, then `click <ref>`, `fill <ref> "<text>"`, `type`/`press`, `select`, `hover`/`drag`/`scroll`, and `wait` to drive the page. All interaction commands accept CSS selectors too. Chain multiple steps efficiently with `batch`.
 
 Typical interactive flow:
 
