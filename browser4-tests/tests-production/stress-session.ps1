@@ -88,12 +88,10 @@ function Invoke-Cli {
     Write-Host "       [$(Get-Date -Format 'HH:mm:ss')] cli $desc ..." -ForegroundColor DarkGray
     $sw = [Diagnostics.Stopwatch]::StartNew()
 
-    # Per-command timeout.  open / goto involve server startup or page
-    # loads; other commands complete quickly.
+    # Per-command timeout — every action must finish within 30 s.
     $cmdName = $args[0]
-    $timeoutSecs = if ($cmdName -in @('open', 'goto')) { 300 }
-                   elseif ($cmdName -in @('install', 'upgrade')) { 900 }
-                   else { 120 }
+    $timeoutSecs = if ($cmdName -in @('install', 'upgrade')) { 900 }
+                   else { 30 }
 
     # Resolve the actual executable — on Windows the CLI may be a .cmd
     # shim; we want the native .exe so we can launch it via Start-Process.
