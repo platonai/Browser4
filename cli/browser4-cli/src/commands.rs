@@ -170,8 +170,6 @@ pub fn is_element_reference(value: &str) -> bool {
         || trimmed.starts_with("backend:")
 }
 
-/// Semantic keywords for htmlsnapshot get that auto-discover the main content area
-/// without requiring the user to guess CSS selectors.
 /// Returns true if the value is a bare CSS selector (e.g. "#id", ".class", "[attr]")
 /// that does not already have a known prefix (`css:`, `backend:`, `xpath:`, `text=`).
 /// These selectors need a `css:` prefix so the backend can distinguish them from

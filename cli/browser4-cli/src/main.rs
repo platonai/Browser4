@@ -75,6 +75,8 @@ use state::{
     update_async_task_status, write_async_tasks, write_state, CliState, MousePosition,
     Table,
 };
+#[cfg(test)]
+use state::SessionKind;
 
 const VERSION: &str = env!("BROWSER4_CLI_VERSION");
 const TEST_TEMPORARY_PROFILE_ENV: &str = "BROWSER4_CLI_TEST_TEMPORARY_PROFILE";
