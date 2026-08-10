@@ -65,7 +65,7 @@ class Browser4StandaloneApplication(
                 "LLM is configured, you can use LLM commands."
             } else {
                 "LLM is not configured, you can only use non-LLM commands. X-SQL is still available. " +
-                        "It is highly recommended to set OPENROUTER_API_KEY or other LLM keys to enable LLM features."
+                        "It is highly recommended to set OPENROUTER_API_KEY, ORCAROUTER_API_KEY or other LLM keys to enable LLM features."
             }
         } catch (e: Exception) {
             logger.warn("Failed to check LLM configuration", e)

@@ -55,6 +55,7 @@ class AgentToolExecutor : AbstractToolExecutor() {
             ?: System.getenv("LLM_API_KEY")
             ?: System.getenv("DEEPSEEK_API_KEY")
             ?: System.getenv("OPENROUTER_API_KEY")
+            ?: System.getenv("ORCAROUTER_API_KEY")
             ?: System.getenv("VOLCENGINE_API_KEY")
             ?: System.getenv("OPENAI_API_KEY")
 
@@ -68,6 +69,7 @@ class AgentToolExecutor : AbstractToolExecutor() {
             "LLM API key is not configured. To use extract/summarize/agent commands, set one of:\n" +
             "  - Environment variable: DEEPSEEK_API_KEY=sk-...\n" +
             "  - Environment variable: OPENROUTER_API_KEY=...\n" +
+            "  - Environment variable: ORCAROUTER_API_KEY=...\n" +
             "  - Environment variable: VOLCENGINE_API_KEY=...\n" +
             "  - Environment variable: OPENAI_API_KEY=sk-...\n" +
             "  - Or set LLM_PROVIDER, LLM_NAME, LLM_API_KEY system properties\n" +

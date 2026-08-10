@@ -28,6 +28,24 @@ openrouter.base.url=https://openrouter.ai/api/v1/  # optional
 
 OpenRouter gives access to many models through one API. `model.name` defaults to a reasonable choice; override it to use any model available on OpenRouter (e.g. `bytedance-seed/seed-2.0-lite`).
 
+### OrcaRouter
+
+[OrcaRouter](https://www.orcarouter.ai) is an OpenAI-compatible routing gateway: a single key reaches many models (including free models) behind one endpoint. Browser4 registers it as a named provider at startup, so `ORCAROUTER_API_KEY` is recognized like any other LLM key.
+
+```properties
+orcarouter.api.key=sk-orca-...
+orcarouter.model.name=orcarouter/auto
+orcarouter.base.url=https://api.orcarouter.ai/v1  # optional
+```
+
+| Env var                 | Property                | Default |
+|-------------------------|-------------------------|---|
+| `ORCAROUTER_API_KEY`    | `orcarouter.api.key`    | — |
+| `ORCAROUTER_MODEL_NAME` | `orcarouter.model.name` | `orcarouter/auto` |
+| `ORCAROUTER_BASE_URL`   | `orcarouter.base.url`   | `https://api.orcarouter.ai/v1` |
+
+`orcarouter/auto` smart-routes to a suitable model; override `model.name` to pin a specific model (e.g. `orcarouter/fusion`).
+
 ### DeepSeek
 
 ```properties

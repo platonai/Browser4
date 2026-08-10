@@ -140,7 +140,7 @@ logger.info("Task {} finished in {} ms", taskId, cost)  // placeholders, never c
 - Default port: **8182**
 - Config files: `application.properties` → `application-*.properties` → `application-private.properties` (git-ignored, secrets here or env vars)
 - Key properties: `openrouter.api.key`, `browser.profile.mode` (DEFAULT|SYSTEM_DEFAULT|SEQUENTIAL|TEMPORARY), `browser.display.mode` (GUI|HEADLESS|SUPERVISED)
-- LLM providers configured via env vars: `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, `VOLCENGINE_API_KEY`, `OPENAI_API_KEY`
+- LLM providers configured via env vars: `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, `ORCAROUTER_API_KEY`, `VOLCENGINE_API_KEY`, `OPENAI_API_KEY`
 
 ## Development Patterns
 

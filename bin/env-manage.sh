@@ -68,6 +68,7 @@ KNOWN_VARS=(
   "LLM_API_KEY|llm||Generic LLM API key (fallback for all providers)|1"
   "OPENAI_API_KEY|llm||OpenAI API key|1"
   "OPENROUTER_API_KEY|llm||OpenRouter API key|1"
+  "ORCAROUTER_API_KEY|llm||OrcaRouter API key (OpenAI-compatible routing gateway)|1"
   "DEEPSEEK_API_KEY|llm||DeepSeek API key|1"
   "VOLCENGINE_API_KEY|llm||Volcengine (ByteDance) API key|1"
 

@@ -69,6 +69,7 @@ $KnownVars = @(
     @{Name='LLM_API_KEY';                              Category='llm';           Default='';   Desc='Generic LLM API key (fallback for all providers)'; Sensitive=$true}
     @{Name='OPENAI_API_KEY';                           Category='llm';           Default='';   Desc='OpenAI API key'; Sensitive=$true}
     @{Name='OPENROUTER_API_KEY';                       Category='llm';           Default='';   Desc='OpenRouter API key'; Sensitive=$true}
+    @{Name='ORCAROUTER_API_KEY';                       Category='llm';           Default='';   Desc='OrcaRouter API key (OpenAI-compatible routing gateway)'; Sensitive=$true}
     @{Name='DEEPSEEK_API_KEY';                         Category='llm';           Default='';   Desc='DeepSeek API key'; Sensitive=$true}
     @{Name='VOLCENGINE_API_KEY';                       Category='llm';           Default='';   Desc='Volcengine (ByteDance) API key'; Sensitive=$true}
 

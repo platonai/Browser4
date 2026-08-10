@@ -235,6 +235,7 @@ AI-powered commands such as `extract`, `summarize`, `chat`, `agent run`, and X-S
 |---|---|
 | DeepSeek | `DEEPSEEK_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL_NAME`, `OPENROUTER_BASE_URL` |
+| OrcaRouter | `ORCAROUTER_API_KEY`, `ORCAROUTER_MODEL_NAME`, `ORCAROUTER_BASE_URL` |
 | Volcengine | `VOLCENGINE_API_KEY`, `VOLCENGINE_MODEL_NAME`, `VOLCENGINE_BASE_URL` |
 | OpenAI-compatible | `OPENAI_API_KEY`, `OPENAI_MODEL_NAME`, `OPENAI_BASE_URL` |
 | Aliyun Qwen | `OPENAI_API_KEY`, `OPENAI_MODEL_NAME`, `OPENAI_BASE_URL` |
