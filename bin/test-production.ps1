@@ -74,12 +74,23 @@
 
     Default: empty (use latest stable release).
 
+.PARAMETER Run
+    Run the acceptance test with default settings (latest stable release,
+    auto-generated working directory, no stress suite).  Without -Run or any
+    other parameter the script shows this help message and exits — a safe
+    default so that accidentally invoking the script with no arguments
+    doesn't start a long-running test.
+
 .PARAMETER Help
     Show this help message.
 
 .EXAMPLE
     .\test-production.ps1
     (shows help — no arguments = safe default)
+
+.EXAMPLE
+    .\test-production.ps1 -Run
+    (run with all defaults: latest stable, temp working dir, no stress)
 
 .EXAMPLE
     .\test-production.ps1 -Stress
@@ -99,6 +110,7 @@ param(
     [switch] $Stress,
     [int] $MultiScenariosIterations = 1,
     [switch] $RemoveWorkingDir,
+    [switch] $Run,
     [switch] $Help
 )
 
