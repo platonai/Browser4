@@ -146,7 +146,7 @@ if ($BuildCli) {
 # Default for unlisted scenarios: 600 s (10 min).
 $ScenarioTimeoutDefault    = 600    # 10 min — sufficient for agent / swarm scenarios
 $ScenarioTimeoutOverrides  = @{
-    'stress-session.ps1'      = 1800   # 30 min — 3 iterations × ~8 min each + overhead
+    'stress-session.ps1'      = 3600   # 60 min — 3 iterations × ~12-15 min each + overhead
     'stress-swarm-agents.ps1' = 1800   # 30 min — swarm stress with cold-start
     'stress-install.ps1'      = 1800   # 30 min — install lifecycle exercises cold-start
 }
