@@ -30,6 +30,7 @@
  *   node bin/version.mjs cli show          Print CLI version (VERSION minus -SNAPSHOT)
  *   node bin/version.mjs cli sync          Sync VERSION to CLI-dependent files
  *   node bin/version.mjs cli sync --check  Check-only mode (CI, exit 1 if mismatch)
+ *   node bin/version.mjs cli sync --dry-run  Show what would change without applying
  *
  *   # Cross-cutting
  *   node bin/version.mjs check             Full version consistency check
@@ -85,13 +86,36 @@ function parseSemver(version) {
   };
 }
 
+/**
+ * Validate that a version string is a safe semver (X.Y.Z or X.Y.Z-prerelease).
+ * Rejects strings with shell metacharacters, whitespace, or unexpected content
+ * that could lead to command injection when interpolated into shell commands.
+ */
+function validateVersion(version) {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._+-]*$/.test(version)) {
+    console.error(
+      `ERROR: Version "${version}" contains unexpected characters. ` +
+      "Expected format: X.Y.Z or X.Y.Z-prerelease (alphanumeric, dots, hyphens, underscores, plus signs only)."
+    );
+    process.exit(1);
+  }
+  // Tighten further: must match semver shape
+  if (!/^\d+\.\d+\.\d+(-[a-zA-Z0-9._+-]+)?$/.test(version)) {
+    console.error(
+      `ERROR: Version "${version}" does not match expected semver format (X.Y.Z or X.Y.Z-prerelease).`
+    );
+    process.exit(1);
+  }
+  return version;
+}
+
 function readBackendVersion() {
   const path = join(REPO_ROOT, "VERSION");
   if (!existsSync(path)) {
     console.error("ERROR: VERSION file not found at", path);
     process.exit(1);
   }
-  return readFileSync(path, "utf-8").trim();
+  return validateVersion(readFileSync(path, "utf-8").trim());
 }
 
 function readCliVersion() {
@@ -249,9 +273,9 @@ function cmdShow(args) {
     const version = readBackendVersion();
     let hash = "", branch = "", date = "";
     try {
-      hash = execSync("git show-ref --head --hash=7 head", {
+      hash = execSync("git rev-parse --short=7 HEAD", {
         stdio: ["ignore", "pipe", "ignore"],
-      }).toString().trim().substring(0, 7);
+      }).toString().trim();
     } catch { /* ignore */ }
     try {
       branch = execSync("git rev-parse --abbrev-ref HEAD", {
@@ -279,6 +303,7 @@ function cmdCli(args) {
     console.log("  cli show          Print CLI version (VERSION minus -SNAPSHOT)");
     console.log("  cli sync          Sync VERSION → package.json, Cargo.toml, Cargo.lock");
     console.log("  cli sync --check  Check-only mode (exit 1 if anything is out of sync)");
+    console.log("  cli sync --dry-run  Show what would change without applying");
     process.exit(0);
   }
 
@@ -305,11 +330,18 @@ function cmdCli(args) {
 
 function cmdCliSync(args) {
   const checkOnly = args.includes("--check");
+  const dryRun = args.includes("--dry-run");
   const pkgName = "browser4-cli";
+
+  if (checkOnly && dryRun) {
+    console.error("ERROR: --check and --dry-run are mutually exclusive");
+    process.exit(1);
+  }
 
   // 1. Read the unified version (CLI = VERSION minus -SNAPSHOT)
   const version = readCliVersion();
   if (checkOnly) console.log(`VERSION (CLI): ${version}`);
+  if (dryRun) console.log(`VERSION (CLI): ${version}`);
 
   // 2. Compare against latest published npm version
   const publishedVersion = getLatestNpmVersion(pkgName);
@@ -336,6 +368,8 @@ function cmdCliSync(args) {
     if (checkOnly) {
       console.error(`MISMATCH: cli/package.json version is "${packageJson.version}", expected "${version}"`);
       process.exitCode = 1;
+    } else if (dryRun) {
+      console.log(`  [DRY-RUN] cli/package.json: ${packageJson.version} -> ${version}`);
     } else {
       const old = packageJson.version;
       packageJson.version = version;
@@ -362,6 +396,9 @@ function cmdCliSync(args) {
     if (checkOnly) {
       console.error(`MISMATCH: cli/browser4-cli/Cargo.toml version is "${cargoVersion}", expected "${version}"`);
       process.exitCode = 1;
+    } else if (dryRun) {
+      console.log(`  [DRY-RUN] cli/browser4-cli/Cargo.toml: ${cargoVersion} -> ${version}`);
+      cargoChanged = true;
     } else {
       cargoToml = cargoToml.replace(cargoVersionRegex, `version = "${version}"`);
       writeFileSync(cargoTomlPath, cargoToml);
@@ -373,8 +410,10 @@ function cmdCliSync(args) {
   }
 
   // 5. Update Cargo.lock (sync mode only, when Cargo.toml changed)
-  if (!checkOnly && cargoChanged) {
+  if (!checkOnly && !dryRun && cargoChanged) {
     updateCargoLock(cargoDir, cargoVersion, version);
+  } else if (dryRun && cargoChanged) {
+    console.log("  [DRY-RUN] Would update Cargo.lock");
   }
 
   // 6. Report
@@ -382,8 +421,11 @@ function cmdCliSync(args) {
     if (process.exitCode === 1) {
       console.error("\nVersion mismatch detected! Run 'node bin/version.mjs cli sync' to fix.");
     } else {
-      console.log(`\nAll versions in sync with VERSION: ${version}`);
+      console.log(`\nAll CLI files in sync with VERSION: ${version}`);
     }
+  } else if (dryRun) {
+    console.log(`\n========== DRY-RUN ==========`);
+    console.log("No changes were made.");
   } else {
     console.log(`\nVersion sync complete: ${pkgName}@${version}`);
   }
@@ -481,8 +523,8 @@ function cmdSync(args) {
       console.log("  [DRY-RUN] mvnw versions:set -DnewVersion=" + version + " -DprocessAllModules -DgenerateBackupPoms=false");
     }
   } else {
-    // --check: verify root pom.xml version matches VERSION
-    checkPomVersionConsistency(version);
+    // --check: verify all pom.xml files match VERSION
+    checkAllPomVersions(version);
   }
 
   // ── 2. Root pom.xml <tag> ───────────────────────────────────────────
@@ -521,10 +563,12 @@ function cmdSync(args) {
   }
 
   // ── 3. CLI files (package.json, Cargo.toml, Cargo.lock) ────────────
-  if (!dryRun) {
-    cmdCliSync(checkOnly ? ["--check"] : []);
+  if (checkOnly) {
+    cmdCliSync(["--check"]);
+  } else if (dryRun) {
+    cmdCliSync(["--dry-run"]);
   } else {
-    console.log("  [DRY-RUN] Would sync CLI files (package.json, Cargo.toml, Cargo.lock)");
+    cmdCliSync([]);
   }
 
   // ── Report ──────────────────────────────────────────────────────────
@@ -547,28 +591,34 @@ function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Check that root pom.xml <version> matches the expected version. */
-function checkPomVersionConsistency(expectedVersion) {
-  const pomPath = join(REPO_ROOT, "pom.xml");
-  if (!existsSync(pomPath)) {
-    checkItem("pom.xml", "error", "File not found");
+/** Read the project <version> from a pom.xml (skipping any <parent> block). */
+function readPomProjectVersion(pomPath) {
+  let content = readFileSync(pomPath, "utf-8");
+  const withoutParent = content.replace(/<parent>[\s\S]*?<\/parent>/g, "");
+  const match = withoutParent.match(/<version>([^<]+)<\/version>/);
+  return match ? match[1] : null;
+}
+
+/** Check that all pom.xml files match the expected version. */
+function checkAllPomVersions(expectedVersion) {
+  const pomFiles = findFiles(REPO_ROOT, "pom.xml", 8);
+  if (pomFiles.length === 0) {
+    checkItem("pom.xml", "error", "No pom.xml files found");
     process.exitCode = 1;
     return;
   }
-  let pomContent = readFileSync(pomPath, "utf-8");
-  const pomWithoutParent = pomContent.replace(/<parent>[\s\S]*?<\/parent>/m, "");
-  const pomVersionMatch = pomWithoutParent.match(/<version>([^<]+)<\/version>/);
-  if (pomVersionMatch) {
-    const pomVersion = pomVersionMatch[1];
-    if (pomVersion === expectedVersion) {
-      checkItem("pom.xml", "passed", pomVersion);
+  for (const pomPath of pomFiles) {
+    const relPath = relative(REPO_ROOT, pomPath);
+    const pomVersion = readPomProjectVersion(pomPath);
+    if (pomVersion === null) {
+      checkItem(relPath, "error", "Cannot parse <version>");
+      process.exitCode = 1;
+    } else if (pomVersion === expectedVersion) {
+      checkItem(relPath, "passed", pomVersion);
     } else {
-      checkItem("pom.xml", "failed", `${pomVersion} (expected ${expectedVersion})`);
+      checkItem(relPath, "failed", `${pomVersion} (expected ${expectedVersion})`);
       process.exitCode = 1;
     }
-  } else {
-    checkItem("pom.xml", "error", "Cannot parse <version>");
-    process.exitCode = 1;
   }
 }
 
@@ -618,7 +668,14 @@ function cmdRelease() {
 // Subcommand: bump
 // ---------------------------------------------------------------------------
 
-/** Prompt for confirmation on the terminal. Non-TTY returns true (auto-confirm). */
+/**
+ * Prompt for confirmation on the terminal.
+ *
+ * In non-TTY environments (CI pipelines, redirected stdin) we auto-confirm.
+ * This is intentional — CI workflows use --dry-run first to review, then call
+ * the non-interactive path.  Combined with validateVersion(), command injection
+ * via a malicious VERSION file is mitigated before reaching this point.
+ */
 async function confirm(prompt) {
   if (!process.stdin.isTTY) return true;
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -756,8 +813,21 @@ async function cmdBump(args) {
       });
     }
   } catch {
-    console.error("Maven versions:set command failed. Reverting VERSION file.");
+    console.error("Maven versions:set command failed. Reverting VERSION file and any modified pom.xml files.");
     writeFileSync(join(REPO_ROOT, "VERSION"), snapshotVersion + "\n");
+    // Revert all tracked pom.xml files that Maven may have partially modified.
+    // We do this in JS to stay cross-platform (avoids Unix-only shell syntax).
+    try {
+      const changed = execSync('git diff --name-only -- "pom.xml" "*/pom.xml"', {
+        cwd: REPO_ROOT, stdio: ["ignore", "pipe", "ignore"],
+      }).toString().trim();
+      if (changed) {
+        const files = changed.split("\n").filter(Boolean);
+        for (const f of files) {
+          execSync(`git checkout -- "${f}"`, { cwd: REPO_ROOT, stdio: "pipe" });
+        }
+      }
+    } catch { /* best-effort revert */ }
     process.exit(1);
   }
 
@@ -765,7 +835,9 @@ async function cmdBump(args) {
   const pomXmlPath = join(REPO_ROOT, "pom.xml");
   if (existsSync(pomXmlPath)) {
     let pomContent = readFileSync(pomXmlPath, "utf-8");
-    pomContent = pomContent.replace(`<tag>v${version}</tag>`, `<tag>v${nextVersion}</tag>`);
+    // Use regex for robust matching (handles whitespace variations in pom.xml)
+    const tagRegex = new RegExp(`<tag>\\s*${escapeRegex(`v${version}`)}\\s*</tag>`);
+    pomContent = pomContent.replace(tagRegex, `<tag>v${nextVersion}</tag>`);
     writeFileSync(pomXmlPath, pomContent);
   }
 
@@ -812,11 +884,18 @@ function getLatestReleaseTag() {
   } catch { /* fall through */ }
 
   // Fallback: latest stable semver tag (exclude -rc.N, -ci.N, etc.)
+  // Filter in JS rather than using grep/head, so the pipeline also works on
+  // Windows where execSync defaults to cmd.exe (which lacks those commands).
   try {
-    const tag = execSync("git tag --sort=-v:refname | grep -E '^v?[0-9]+\\.[0-9]+\\.[0-9]+$' | head -1", {
+    const raw = execSync("git tag --sort=-v:refname", {
       cwd: REPO_ROOT, stdio: ["ignore", "pipe", "ignore"],
     }).toString().trim();
-    if (tag) return tag;
+    const stableTag = raw
+      .split("\n")
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .find((t) => /^v?\d+\.\d+\.\d+$/.test(t));
+    if (stableTag) return stableTag;
   } catch { /* fall through */ }
 
   // Last resort: git describe
@@ -923,6 +1002,27 @@ async function cmdAuto(args) {
   const nextBackend = bumpSemverPart(lastReleaseBackend, "patch");
   const nextSnapshot = `${nextBackend}-SNAPSHOT`;
   const backendChanged = nextBackend !== localVersion;
+
+  // Guard against accidental downgrades when local version is already ahead
+  // of the computed next-patch-from-release (e.g. after a manual minor bump).
+  if (backendChanged) {
+    const localParsed = parseSemver(localVersion);
+    const nextParsed = parseSemver(nextBackend);
+    if (localParsed && nextParsed) {
+      const localIsAhead =
+        localParsed.major > nextParsed.major ||
+        (localParsed.major === nextParsed.major && localParsed.minor > nextParsed.minor) ||
+        (localParsed.major === nextParsed.major && localParsed.minor === nextParsed.minor && localParsed.patch > nextParsed.patch);
+      if (localIsAhead) {
+        console.error(
+          `ERROR: Auto-bump would downgrade from ${snapshotVersion} to ${nextSnapshot}. ` +
+          `The local version is already ahead of the next patch after ${lastReleaseTag || "last release"}. ` +
+          "Use 'node bin/version.mjs bump <major|minor|patch>' to bump manually."
+        );
+        process.exit(1);
+      }
+    }
+  }
 
   // Changes summary (commits + files since last tag, or vs base branch)
   const sinceRef = lastReleaseTag || getBaseBranch() || "HEAD~10";
@@ -1032,8 +1132,20 @@ async function cmdAuto(args) {
       });
     }
   } catch {
-    console.error("Maven versions:set failed. Reverting VERSION file.");
+    console.error("Maven versions:set failed. Reverting VERSION file and any modified pom.xml files.");
     writeFileSync(join(REPO_ROOT, "VERSION"), snapshotVersion + "\n");
+    // Revert all tracked pom.xml files that Maven may have partially modified.
+    try {
+      const changed = execSync('git diff --name-only -- "pom.xml" "*/pom.xml"', {
+        cwd: REPO_ROOT, stdio: ["ignore", "pipe", "ignore"],
+      }).toString().trim();
+      if (changed) {
+        const files = changed.split("\n").filter(Boolean);
+        for (const f of files) {
+          execSync(`git checkout -- "${f}"`, { cwd: REPO_ROOT, stdio: "pipe" });
+        }
+      }
+    } catch { /* best-effort revert */ }
     process.exit(1);
   }
 
@@ -1041,8 +1153,9 @@ async function cmdAuto(args) {
   const pomXmlPath = join(REPO_ROOT, "pom.xml");
   if (existsSync(pomXmlPath)) {
     let pomContent = readFileSync(pomXmlPath, "utf-8");
+    // Use regex for robust matching (handles whitespace variations in pom.xml)
     pomContent = pomContent.replace(
-      new RegExp(`<tag>v${localVersion.replace(/\./g, "\\.")}</tag>`),
+      new RegExp(`<tag>\\s*${escapeRegex(`v${localVersion}`)}\\s*</tag>`),
       `<tag>v${nextBackend}</tag>`
     );
     writeFileSync(pomXmlPath, pomContent);
@@ -1095,19 +1208,14 @@ function cmdCheck() {
   const pomPath = join(REPO_ROOT, "pom.xml");
   let pomVersion = "";
   if (existsSync(pomPath)) {
-    let pomContent = readFileSync(pomPath, "utf-8");
-    const pomWithoutParent = pomContent.replace(/<parent>[\s\S]*?<\/parent>/m, "");
-    const pomVersionMatch = pomWithoutParent.match(/<version>([^<]+)<\/version>/);
-    if (pomVersionMatch) {
-      pomVersion = pomVersionMatch[1];
-      if (pomVersion === versionFileVersion) {
-        checkItem("pom.xml", "passed", pomVersion);
-      } else {
-        checkItem("pom.xml", "failed", `${pomVersion} (expected ${versionFileVersion})`);
-        allPassed = false;
-      }
-    } else {
+    pomVersion = readPomProjectVersion(pomPath);
+    if (pomVersion === null) {
       checkItem("pom.xml", "error", "Cannot parse <version>");
+      allPassed = false;
+    } else if (pomVersion === versionFileVersion) {
+      checkItem("pom.xml", "passed", pomVersion);
+    } else {
+      checkItem("pom.xml", "failed", `${pomVersion} (expected ${versionFileVersion})`);
       allPassed = false;
     }
   } else {
@@ -1190,18 +1298,13 @@ function cmdPrereleaseCheck() {
   // Check pom.xml version
   const pomPath = join(REPO_ROOT, "pom.xml");
   if (existsSync(pomPath)) {
-    let pomContent = readFileSync(pomPath, "utf-8");
-    const pomWithoutParent = pomContent.replace(/<parent>[\s\S]*?<\/parent>/m, "");
-    const pomVersionMatch = pomWithoutParent.match(/<version>([^<]+)<\/version>/);
-    if (pomVersionMatch) {
-      const pomVersion = pomVersionMatch[1];
-      if (pomVersion !== versionFileVersion) {
-        result.consistent = false;
-        result.issues.push(`pom.xml: "${pomVersion}" (expected "${versionFileVersion}")`);
-      }
-    } else {
+    const pomVersion = readPomProjectVersion(pomPath);
+    if (pomVersion === null) {
       result.consistent = false;
       result.issues.push("pom.xml: cannot parse <version>");
+    } else if (pomVersion !== versionFileVersion) {
+      result.consistent = false;
+      result.issues.push(`pom.xml: "${pomVersion}" (expected "${versionFileVersion}")`);
     }
   } else {
     result.consistent = false;
@@ -1309,6 +1412,7 @@ function printUsage() {
   console.log("    cli show          Print CLI version (VERSION minus -SNAPSHOT)");
   console.log("    cli sync          Sync VERSION to CLI-dependent files");
   console.log("    cli sync --check  Check-only mode (exit 1 if out of sync)");
+  console.log("    cli sync --dry-run  Show what would change without applying");
   console.log("");
   console.log("  Cross-cutting");
   console.log("    check             Check version consistency across all files");
