@@ -1204,7 +1204,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "fn", description: "Wait until this JavaScript expression returns true", is_bool: false, short: None },
                 OptionDef { name: "timeout", description: "Maximum time to wait in milliseconds (default: 30000)", is_bool: false, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |args| {
                 if get_opt_str(args, "text").is_some() || get_opt_str(args, "fn").is_some() || get_opt_str(args, "load").is_some() {
                     "wait_for_function".to_string()
@@ -4919,6 +4919,37 @@ mod tests {
         assert!(option_names.contains(&"url"));
         assert!(option_names.contains(&"load"));
         assert!(option_names.contains(&"fn"));
+    }
+
+    #[test]
+    fn test_wait_no_args_uses_wait_for_selector_with_empty_selector() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "wait_for_selector");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["selector"], "");
+        assert_eq!(params["timeoutMillis"], 30000);
+    }
+
+    #[test]
+    fn test_wait_batch_supported_is_true() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        assert!(cmd.batch_supported);
+    }
+
+    #[test]
+    fn test_wait_timeout_non_numeric_falls_back_to_default() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        let mut args = HashMap::new();
+        args.insert("target".to_string(), json!("#el"));
+        args.insert("timeout".to_string(), json!("abc"));
+        let params = (cmd.tool_params_fn)(&args);
+        // Non-numeric timeout should fall back to the default 30000
+        assert_eq!(params["timeoutMillis"], 30000);
+        assert_eq!(params["selector"], "#el");
     }
 
     // -----------------------------------------------------------------------

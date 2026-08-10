@@ -5227,3 +5227,181 @@ pub(super) fn test_chat_commands(ctx: &mut E2ECtx) {
         snapshot.result_queries
     );
 }
+
+// ---------------------------------------------------------------------------
+// Wait command
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_e2e_wait_selector(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result.stdout.contains("Session opened: swarm-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    let result = run_command(ctx, &["wait", "#output"]);
+    assert_eq!(result.exit_code, 0, "expected wait selector to succeed");
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let wait_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "wait_for_selector")
+        .collect();
+    assert_eq!(wait_calls.len(), 1, "expected one wait_for_selector call");
+    assert_eq!(wait_calls[0].arguments["sessionId"], "swarm-session-1");
+    assert_eq!(wait_calls[0].arguments["selector"], "#output");
+    assert_eq!(wait_calls[0].arguments["timeoutMillis"], 30000);
+}
+
+pub(super) fn test_e2e_wait_millis(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result.stdout.contains("Session opened: swarm-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    let result = run_command(ctx, &["wait", "2000"]);
+    assert_eq!(result.exit_code, 0, "expected wait millis to succeed");
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let delay_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "delay")
+        .collect();
+    assert_eq!(delay_calls.len(), 1, "expected one delay call");
+    assert_eq!(delay_calls[0].arguments["sessionId"], "swarm-session-1");
+    assert_eq!(delay_calls[0].arguments["millis"], 2000);
+}
+
+pub(super) fn test_e2e_wait_text(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result.stdout.contains("Session opened: swarm-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    let result = run_command(ctx, &["wait", "--text", "Success"]);
+    assert_eq!(result.exit_code, 0, "expected wait text to succeed");
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let wait_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "wait_for_function")
+        .collect();
+    assert_eq!(wait_calls.len(), 1, "expected one wait_for_function call");
+    assert_eq!(wait_calls[0].arguments["sessionId"], "swarm-session-1");
+    let func = wait_calls[0].arguments["pageFunction"].as_str().unwrap();
+    assert!(func.contains("document.body.innerText.includes"), "expected innerText check");
+    assert!(func.contains("Success"), "expected the target text in the expression");
+    assert_eq!(wait_calls[0].arguments["timeoutMillis"], 30000);
+}
+
+pub(super) fn test_e2e_wait_url(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result.stdout.contains("Session opened: swarm-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    let result = run_command(ctx, &["wait", "--url", "**/dashboard"]);
+    assert_eq!(result.exit_code, 0, "expected wait url to succeed");
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let wait_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "wait_for_page")
+        .collect();
+    assert_eq!(wait_calls.len(), 1, "expected one wait_for_page call");
+    assert_eq!(wait_calls[0].arguments["sessionId"], "swarm-session-1");
+    assert_eq!(wait_calls[0].arguments["url"], "**/dashboard");
+    assert_eq!(wait_calls[0].arguments["timeoutMillis"], 30000);
+}
+
+pub(super) fn test_e2e_wait_load(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result.stdout.contains("Session opened: swarm-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    let result = run_command(ctx, &["wait", "--load", "domcontentloaded"]);
+    assert_eq!(result.exit_code, 0, "expected wait load to succeed");
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let wait_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "wait_for_function")
+        .collect();
+    assert_eq!(wait_calls.len(), 1, "expected one wait_for_function call");
+    assert_eq!(wait_calls[0].arguments["sessionId"], "swarm-session-1");
+    assert_eq!(
+        wait_calls[0].arguments["pageFunction"],
+        "document.readyState !== 'loading'"
+    );
+    assert_eq!(wait_calls[0].arguments["timeoutMillis"], 30000);
+}
+
+pub(super) fn test_e2e_wait_fn(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result.stdout.contains("Session opened: swarm-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    let result = run_command(ctx, &["wait", "--fn", "window.app.ready === true"]);
+    assert_eq!(result.exit_code, 0, "expected wait fn to succeed");
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let wait_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "wait_for_function")
+        .collect();
+    assert_eq!(wait_calls.len(), 1, "expected one wait_for_function call");
+    assert_eq!(wait_calls[0].arguments["sessionId"], "swarm-session-1");
+    assert_eq!(
+        wait_calls[0].arguments["pageFunction"],
+        "window.app.ready === true"
+    );
+    assert_eq!(wait_calls[0].arguments["timeoutMillis"], 30000);
+}
+
+// NOTE: Custom timeout (`--timeout <ms>`) for the wait command cannot be
+// tested via E2E because `--timeout` is always consumed as a global CLI flag
+// (see args.rs parse_global_flags). The unit tests in commands.rs cover the
+// custom-timeout logic via the tool_params_fn directly.
