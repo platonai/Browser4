@@ -1,0 +1,91 @@
+name: Production Acceptance Test (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      stress:
+        description: 'Run multi-scenario stress suite'
+        required: false
+        default: false
+        type: boolean
+      version:
+        description: 'Specific release version tag to test (e.g. v4.12.0-rc.1), leave blank for latest stable'
+        required: false
+        default: ''
+        type: string
+      platform:
+        description: 'Platform to test on'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - windows
+          - linux
+          - macos-arm64
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  production-test:
+    name: Production test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            run: ${{ inputs.platform == 'all' || inputs.platform == 'windows' }}
+          - name: Linux x64
+            os: ubuntu-latest
+            run: ${{ inputs.platform == 'all' || inputs.platform == 'linux' }}
+          - name: macOS ARM64
+            os: macos-14
+            run: ${{ inputs.platform == 'all' || inputs.platform == 'macos-arm64' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Run production acceptance test
+        shell: pwsh
+        timeout-minutes: 40
+        run: |
+          $args = @()
+          if ('${{ inputs.stress }}' -eq 'true') {
+            $args += '-Stress'
+          }
+          if ('${{ inputs.version }}' -ne '') {
+            $args += '-Version'
+            $args += '${{ inputs.version }}'
+          }
+          $args += '-RemoveWorkingDir'
+
+          Write-Host "Running: ./bin/test-production.ps1 $($args -join ' ')"
+          ./bin/test-production.ps1 @args
+
+      - name: Upload test artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: production-test-logs-${{ matrix.name }}
+          path: |
+            ${{ runner.temp }}/.browser4-acceptance/
+            ${{ runner.temp }}/b4cli-*.txt
+          retention-days: 7
+
+      - name: Test summary
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "::group::📊 Production Acceptance Test Summary"
+          Write-Host "Platform: ${{ matrix.name }}"
+          Write-Host "Stress: ${{ inputs.stress }}"
+          Write-Host "Version: ${{ inputs.version }}"
+          Write-Host "Status: ${{ job.status }}"
+          Write-Host "::endgroup::"
