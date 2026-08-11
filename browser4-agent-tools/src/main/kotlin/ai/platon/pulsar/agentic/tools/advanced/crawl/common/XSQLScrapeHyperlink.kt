@@ -86,6 +86,13 @@ open class XSQLHyperlink(
 
             if (page.protocolStatus.isSuccess) {
                 doExtract(page, document)
+            } else if (page.protocolStatus.isFailed) {
+                response.message = buildString {
+                    append("Page fetch failed with status ")
+                    append(page.protocolStatus.minorCode)
+                    append(". Re-fetch with -refresh or -ignoreFailure to retry. ")
+                    append("Example: swarm submit \"${page.url} -refresh\"")
+                }
             }
 
             response

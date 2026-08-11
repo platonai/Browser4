@@ -185,6 +185,12 @@ class Browser4AutoConfiguration {
         return PageParser(parserFactory = parserFactory, conf = conf)
     }
 
+    // Eagerly initialized — these three beans are on the critical path
+    // for every swarm/crawl/scrape operation.  With @Lazy on the class,
+    // they would be created as proxies whose init{} blocks don't run until
+    // the first method call, causing "Protocol not found (1600)" errors on
+    // the first request.  @Lazy(false) overrides the class-level default.
+    @Lazy(false)
     @Bean(name = ["browserEmulatorProtocol"], destroyMethod = "close")
     @ConditionalOnMissingBean(name = ["browserEmulatorProtocol"])
     fun browserEmulatorProtocol(
@@ -193,6 +199,7 @@ class Browser4AutoConfiguration {
         return BrowserEmulatorProtocol(browserFetcher)
     }
 
+    @Lazy(false)
     @Bean(name = ["protocolFactory"], destroyMethod = "close")
     @ConditionalOnMissingBean(name = ["protocolFactory"])
     fun protocolFactory(
@@ -201,6 +208,7 @@ class Browser4AutoConfiguration {
         return ProtocolFactory(listOf(browserEmulatorProtocol))
     }
 
+    @Lazy(false)
     @Bean(name = ["fetchComponent"], destroyMethod = "close")
     @ConditionalOnMissingBean(name = ["fetchComponent"])
     fun fetchComponent(

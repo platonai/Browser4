@@ -211,7 +211,7 @@ class CrawlService(
                     // for every seed after the first.  A single session avoids the
                     // deregistration/re-registration cycle entirely.
                     val sharedDepth0Session = if (request.depth == 0) {
-                        AgenticContexts.createSession()
+                        sessionManager.agenticContext.createSession()
                     } else {
                         null
                     }
@@ -479,7 +479,7 @@ class CrawlService(
             // Reuse the shared session if provided; otherwise create a private one.
             // Only private (owned) sessions are closed in the finally block.
             val ownsSession = sharedSession == null
-            val session: PulsarSession = sharedSession ?: AgenticContexts.createSession()
+            val session: PulsarSession = sharedSession ?: sessionManager.agenticContext.createSession()
 
             try {
                 val options = parseOptions(session, effectiveArgs)
@@ -567,7 +567,7 @@ class CrawlService(
     // ------------------------------------------------------------------
 
     private suspend fun crawlDepth1(taskId: String, request: CrawlRequest): List<CrawlPageResult> {
-        val session = AgenticContexts.createSession()
+        val session = sessionManager.agenticContext.createSession()
         val results = Collections.synchronizedList(mutableListOf<CrawlPageResult>())
         try {
             // Always add -refresh so the portal page is loaded with fresh content.
@@ -707,7 +707,7 @@ class CrawlService(
         // Use sequential browsers for continuous crawling (same as _5_ContinuousCrawler.kt)
         try { PulsarSettings.withSequentialBrowsers().maxOpenTabs(8) } catch (e: Exception) { /* optional config */ }
 
-        val session = AgenticContexts.createSession()
+        val session = sessionManager.agenticContext.createSession()
         val results = Collections.synchronizedList(mutableListOf<CrawlPageResult>())
         try {
             val effectiveArgs = buildEffectiveArgs(request.args)

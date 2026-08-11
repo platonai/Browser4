@@ -38,26 +38,41 @@ class TrivialContextDefaults(val context: PulsarContext) {
     val globalCacheFactory = GlobalCacheFactory(configuration)
 
     /**
-     * The default fetch component
+     * The default fetch component — prefers the Spring bean when available
+     * so that [ProtocolFactory] has the browser protocol registered.
+     * Falls back to an empty [BatchFetchComponent] only when no Spring
+     * context is active (e.g. unit tests).
      * */
-    val fetchComponent = BatchFetchComponent(webDb, configuration)
+    val fetchComponent by lazy {
+        context.getBeanOrNull(BatchFetchComponent::class)
+            ?: BatchFetchComponent(webDb, configuration)
+    }
 
     /**
      * The default parse component
      * */
-    val parseComponent: ParseComponent = ParseComponent(globalCacheFactory, configuration)
+    val parseComponent: ParseComponent by lazy {
+        context.getBeanOrNull(ParseComponent::class)
+            ?: ParseComponent(globalCacheFactory, configuration)
+    }
 
     /**
      * The default update component
      * */
-    val updateComponent = UpdateComponent(webDb, configuration)
+    val updateComponent by lazy {
+        context.getBeanOrNull(UpdateComponent::class)
+            ?: UpdateComponent(webDb, configuration)
+    }
 
     /**
      * The default load component
      * */
-    val loadComponent = LoadComponent(
-        webDb, globalCacheFactory, fetchComponent, parseComponent, updateComponent, configuration
-    )
+    val loadComponent by lazy {
+        context.getBeanOrNull(LoadComponent::class)
+            ?: LoadComponent(
+                webDb, globalCacheFactory, fetchComponent, parseComponent, updateComponent, configuration
+            )
+    }
 
     val browserFactory: BrowserFactory = PulsarBrowserFactory(configuration)
 
