@@ -4393,6 +4393,8 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "crawl-list",
         "crawl-result",
         "crawl-status",
+        // test_wait_*
+        "wait",
         // webdb commands
         "webdb-export",
         "webdb-normalize",
