@@ -73,8 +73,10 @@ use state::{
     format_timestamp_display, read_async_tasks, read_state,
     resolve_default_state_dir, resolve_ref, summarize_async_tasks, track_async_task,
     update_async_task_status, write_async_tasks, write_state, CliState, MousePosition,
-    SessionKind, Table,
+    Table,
 };
+#[cfg(test)]
+use state::SessionKind;
 
 const VERSION: &str = env!("BROWSER4_CLI_VERSION");
 const TEST_TEMPORARY_PROFILE_ENV: &str = "BROWSER4_CLI_TEST_TEMPORARY_PROFILE";
@@ -22105,7 +22107,7 @@ mod tests {
         let old_state = CliState {
             session_id: Some("ext-session".to_string()),
             base_url: "http://localhost:8182".to_string(),
-            kind: SessionKind::ExtensionAttached,
+            kind: crate::state::SessionKind::ExtensionAttached,
             browser_channel: Some("chrome".to_string()),
             ..Default::default()
         };

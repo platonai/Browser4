@@ -9,32 +9,53 @@ function Test-CoworkerPlaceholderFile {
     return $Item.Name -eq '.gitkeep'
 }
 
+# ── Memoization cache for Test-CoworkerDotPath ──────────────────────────
+# Keyed by directory path so all files in the same directory hit the cache
+# after the first lookup.  Uses a generic Dictionary for O(1) lookups.
+$script:DotPathCache = [System.Collections.Generic.Dictionary[string, bool]]::new()
+
 function Test-CoworkerDotPath {
+    <#
+    .SYNOPSIS
+        Check whether a file or directory lives under a dot-prefixed path segment.
+    .DESCRIPTION
+        Uses string-based path-segment inspection (no filesystem parent traversal)
+        with a per-directory memoization cache so repeated checks on files in the
+        same directory return instantly.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [System.IO.FileSystemInfo]$Item
     )
 
-    $currentItem = $Item
-    while ($null -ne $currentItem) {
-        if ($currentItem.Name.StartsWith('.')) {
-            return $true
-        }
-
-        if ($currentItem.PSObject.Properties.Match('Directory').Count -gt 0) {
-            $currentItem = $currentItem.Directory
-            continue
-        }
-
-        if ($currentItem.PSObject.Properties.Match('Parent').Count -gt 0) {
-            $currentItem = $currentItem.Parent
-            continue
-        }
-
-        $currentItem = $null
+    # Resolve the containing directory as the cache key
+    $dirPath = if ($Item.PSIsContainer) {
+        $Item.FullName
+    } else {
+        Split-Path -Parent $Item.FullName
     }
 
-    return $false
+    # Fast path: cache hit
+    $cached = $false
+    if ($script:DotPathCache.TryGetValue($dirPath, [ref]$cached)) {
+        return $cached
+    }
+
+    # String-based segment scan — walks only the path string, never the filesystem
+    $result = $false
+    $fullName = $Item.FullName
+    foreach ($segment in $fullName.Split(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )) {
+        if ($segment.Length -gt 0 -and $segment[0] -eq '.') {
+            $result = $true
+            break
+        }
+    }
+
+    $script:DotPathCache[$dirPath] = $result
+    return $result
 }
 
 function Test-CoworkerIgnoredFile {

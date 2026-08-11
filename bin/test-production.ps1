@@ -74,12 +74,23 @@
 
     Default: empty (use latest stable release).
 
+.PARAMETER Run
+    Run the acceptance test with default settings (latest stable release,
+    auto-generated working directory, no stress suite).  Without -Run or any
+    other parameter the script shows this help message and exits — a safe
+    default so that accidentally invoking the script with no arguments
+    doesn't start a long-running test.
+
 .PARAMETER Help
     Show this help message.
 
 .EXAMPLE
     .\test-production.ps1
     (shows help — no arguments = safe default)
+
+.EXAMPLE
+    .\test-production.ps1 -Run
+    (run with all defaults: latest stable, temp working dir, no stress)
 
 .EXAMPLE
     .\test-production.ps1 -Stress
@@ -99,6 +110,7 @@ param(
     [switch] $Stress,
     [int] $MultiScenariosIterations = 1,
     [switch] $RemoveWorkingDir,
+    [switch] $Run,
     [switch] $Help
 )
 
@@ -134,7 +146,7 @@ $RepoRoot = if (Test-Path (Join-Path $ScriptDir '..\pom.xml')) {
 if (-not $WorkingDir) {
     $acceptanceRoot = Join-Path ([System.IO.Path]::GetTempPath()) '.browser4-acceptance'
     $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $randomSuffix = -join ((48..57) + (97..102) | Get-Random -Count 4 | ForEach-Object { [char]$_ })
+    $randomSuffix = -join ((48..57) + (97..102) | Get-Random -Count 8 | ForEach-Object { [char]$_ })
     $WorkingDir = Join-Path $acceptanceRoot "$timestamp-$randomSuffix"
 }
 
@@ -347,13 +359,23 @@ function Invoke-CliCommandAsync {
     # commands exist on PATH (e.g. npm version + standalone binary).
     $exe = (Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
     if (-not $exe) { $exe = 'browser4-cli' }
+
+    # Use unique file names per invocation so overlapping async calls
+    # never clobber each other's output.
+    $outFile = Join-Path $TempDir "b4cli-async-$([System.IO.Path]::GetRandomFileName()).stdout.txt"
+    $errFile = Join-Path $TempDir "b4cli-async-$([System.IO.Path]::GetRandomFileName()).stderr.txt"
+
     $proc = Start-Process `
         -FilePath $exe `
         -ArgumentList $Arguments `
         -NoNewWindow `
         -PassThru `
-        -RedirectStandardOutput (Join-Path $TempDir 'b4cli-async-stdout.txt') `
-        -RedirectStandardError (Join-Path $TempDir 'b4cli-async-stderr.txt')
+        -RedirectStandardOutput $outFile `
+        -RedirectStandardError $errFile
+
+    # Attach output paths so Wait-ProcessAndCollect can find them.
+    $proc | Add-Member -NotePropertyName '_StdoutFile' -NotePropertyValue $outFile
+    $proc | Add-Member -NotePropertyName '_StderrFile' -NotePropertyValue $errFile
 
     return $proc
 }
@@ -367,9 +389,11 @@ function Wait-ProcessAndCollect {
         $Process.Kill($true) | Out-Null
         $Process.WaitForExit(5000) | Out-Null
     }
-    $stdout = Get-Content -Path (Join-Path $TempDir 'b4cli-async-stdout.txt') -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
-    $stderr = Get-Content -Path (Join-Path $TempDir 'b4cli-async-stderr.txt') -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
-    Remove-Item (Join-Path $TempDir 'b4cli-async-stdout.txt'), (Join-Path $TempDir 'b4cli-async-stderr.txt') -Force -ErrorAction SilentlyContinue
+    $outFile = $Process._StdoutFile
+    $errFile = $Process._StderrFile
+    $stdout = Get-Content -Path $outFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+    $stderr = Get-Content -Path $errFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+    Remove-Item $outFile, $errFile -Force -ErrorAction SilentlyContinue
 
     $combined = (@($stdout, $stderr) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "`n"
     return [PSCustomObject]@{
@@ -498,13 +522,15 @@ function Invoke-InstallFromRemoteScript {
 
             # Run the script AS-IS.  No variable-name patches, no workarounds.
             # If the published script is broken, the test MUST fail.
+            # $LASTEXITCODE is NOT set when invoking .ps1 scripts with & —
+            # use Start-Process to capture the actual exit code.
+            $psArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $installScript)
             if ($Version) {
                 Write-Info "Installing specific version: $Version"
-                & $installScript -Version $Version
-            } else {
-                & $installScript
+                $psArgs += @('-Version', $Version)
             }
-            $exitCode = $LASTEXITCODE
+            $installProc = Start-Process -FilePath 'powershell.exe' -ArgumentList $psArgs -Wait -NoNewWindow -PassThru
+            $exitCode = $installProc.ExitCode
         } else {
             Write-Info "URL: $InstallShUrl"
             $installScript = Join-Path $TempDir 'install-browser4-cli.sh'
@@ -674,10 +700,10 @@ if ($existingCli) {
     Write-Info "Found existing global browser4-cli: $existingPath"
     Write-Info 'Running browser4-cli uninstall …'
 
-    $result = Invoke-CliCommand -Arguments @('uninstall', '-y') -IgnoreExitCode
+    $result = Invoke-CliCommand -Arguments @('uninstall', '--yes') -IgnoreExitCode
     if ($result.Output -match 'too many arguments') {
-        Write-Info "uninstall -y not supported by this binary; retrying without -y …"
-        $result = Invoke-CliCommand -Arguments @('uninstall') -IgnoreExitCode
+        Write-Info "uninstall --yes not supported by this binary; retrying without --yes …"
+        $result = Invoke-CliCommand -Arguments @('uninstall') -TimeoutSeconds 30 -IgnoreExitCode
     }
     Write-Info "uninstall output: $($result.Output)"
 
@@ -695,7 +721,17 @@ if ($existingCli) {
         }
     }
 
-    Write-StepResult -Step 'Pre-clean' -Passed $true -Detail 'Removed existing global CLI'
+    # Verify the CLI is actually gone after uninstall.
+    # If it is still on PATH the uninstall is broken — a real user
+    # would have the same problem.
+    Update-SessionPath
+    $stillOnPath = Resolve-CliPath
+    if ($stillOnPath) {
+        Write-WarningMsg "CLI still on PATH after uninstall: $stillOnPath"
+        Write-StepResult -Step 'Pre-clean' -Passed $false -Detail "browser4-cli still present after uninstall: $stillOnPath"
+    } else {
+        Write-StepResult -Step 'Pre-clean' -Passed $true -Detail 'Removed existing global CLI'
+    }
 } else {
     Write-Info 'No existing global browser4-cli found — clean start'
     Write-StepResult -Step 'Pre-clean' -Passed $true -Detail 'No existing installation'
@@ -1140,10 +1176,13 @@ function Invoke-InstallationCycle {
             Write-Info "Bundle cached at: $bundleCached"
             Write-Info 'Stopping server before warm-start measurement …'
 
-            # Stop the server that cold-start launched
-            try { & 'browser4-cli' 'close-all' *>$null } catch {}
+            # Stop the server that cold-start launched.
+            # Use Invoke-CliCommand for consistent stdout/stderr capture
+            # and timeout handling (bare & would silently fail if PATH
+            # were stale).
+            $null = Invoke-CliCommand -Arguments @('close-all') -TimeoutSeconds 30 -IgnoreExitCode
             Start-Sleep -Seconds 2
-            try { & 'browser4-cli' 'kill-all' *>$null } catch {}
+            $null = Invoke-CliCommand -Arguments @('kill-all') -TimeoutSeconds 30 -IgnoreExitCode
             Start-Sleep -Seconds 3
 
             # Verify server is down before measuring warm start

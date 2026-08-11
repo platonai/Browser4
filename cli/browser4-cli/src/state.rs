@@ -42,11 +42,6 @@ pub enum SessionKind {
 }
 
 impl SessionKind {
-    /// Whether this kind of session owns its browser lifecycle.
-    pub fn owns_browser(self) -> bool {
-        matches!(self, SessionKind::Browser4Launched | SessionKind::Swarm)
-    }
-
     /// Derive the legacy `is_attached` flag from this kind.
     pub fn is_attached(self) -> bool {
         matches!(self, SessionKind::CdpAttached | SessionKind::ExtensionAttached)

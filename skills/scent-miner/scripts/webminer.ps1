@@ -53,6 +53,12 @@ $REPO_OWNER = 'platonai'
 $REPO_NAME  = 'web-miner'
 $GITHUB_API_LATEST = "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/latest"
 
+# OSS mirror (Alibaba Cloud) — fallback when GitHub is unavailable
+$OSS_BASE_URL = 'https://web-miner.oss-cn-beijing.aliyuncs.com'
+$OSS_LATEST_JSON = "$OSS_BASE_URL/releases/latest-release.json"
+$OSS_LATEST_DOWNLOAD = "$OSS_BASE_URL/releases/latest/download"
+
+# Cross-platform home directory: USERPROFILE on Windows, HOME on Linux/macOS
 $HomeDir = if ($IsWindows) { $env:USERPROFILE } else { $env:HOME }
 if (-not $HomeDir) { throw 'Cannot determine home directory: neither USERPROFILE nor HOME is set.' }
 $InstallRoot = Join-Path $HomeDir '.scent\webminer'
@@ -60,6 +66,15 @@ $InstallLib  = Join-Path $InstallRoot 'lib'
 $InstallJar  = Join-Path $InstallLib 'scent-miner.jar'
 $VersionFile = Join-Path $InstallRoot 'version.txt'
 $ChecksumFile = Join-Path $InstallRoot 'checksum.sha256'
+
+# Cross-platform temp directory
+$TempDir = if ($IsWindows -or $env:TEMP) { $env:TEMP } elseif ($env:TMPDIR) { $env:TMPDIR } else { '/tmp' }
+if (-not $TempDir) { $TempDir = '/tmp' }
+
+# Platform-aware binary names
+$JavaExeName = if ($IsWindows) { 'java.exe' } else { 'java' }
+$SevenZipName = if ($IsWindows) { '7z.exe' } else { '7z' }
+$CurlExeName = if ($IsWindows) { 'curl.exe' } else { 'curl' }
 
 # Management subcommands
 $ManagementCommands = @('install', 'update', 'version', 'uninstall', 'run-example')
@@ -105,7 +120,7 @@ if ($HelpRequested) {
 WebMiner — extract structured data from local HTML files.
 
 Management:
-  install   [version]    Download and install a release from GitHub
+  install   [version]    Download and install a release (GitHub → OSS mirror fallback)
   update                 Check for and install the latest release
   version                Show installed and latest available versions
   uninstall              Remove the installed release
@@ -142,7 +157,7 @@ function Find-Java17 {
     param([string] $ExplicitHome)
 
     if ($ExplicitHome) {
-        $javaExe = Join-Path $ExplicitHome 'bin\java.exe'
+        $javaExe = Join-Path $ExplicitHome "bin\$JavaExeName"
         if (Test-Path $javaExe) { return $ExplicitHome }
         throw "JAVA_HOME not found at: $ExplicitHome"
     }
@@ -150,7 +165,7 @@ function Find-Java17 {
     # 1. JAVA_HOME env var
     $envJavaHome = $env:JAVA_HOME
     if ($envJavaHome) {
-        $javaExe = Join-Path $envJavaHome 'bin\java.exe'
+        $javaExe = Join-Path $envJavaHome "bin\$JavaExeName"
         if (Test-Path $javaExe) {
             $ver = & $javaExe -version 2>&1 | Select-Object -First 1
             if ($ver -match 'version "(\d+)' -and [int]$Matches[1] -ge 17) {
@@ -159,18 +174,27 @@ function Find-Java17 {
         }
     }
 
-    # 2. Common Windows install locations
-    $candidates = @(
-        'D:\Program Files\OpenLogic\jdk-17.0.14.7-hotspot',
-        'C:\Program Files\OpenLogic\jdk-17.0.14.7-hotspot',
-        'D:\Program Files\Java\jdk-17',
-        'C:\Program Files\Java\jdk-17',
-        'D:\Program Files\Eclipse Adoptium\jdk-17.0.14.7-hotspot',
-        'C:\Program Files\Eclipse Adoptium\jdk-17.0.14.7-hotspot'
-    )
+    # 2. Common install locations
+    $candidates = if ($IsWindows) {
+        @(
+            'D:\Program Files\OpenLogic\jdk-17.0.14.7-hotspot',
+            'C:\Program Files\OpenLogic\jdk-17.0.14.7-hotspot',
+            'D:\Program Files\Java\jdk-17',
+            'C:\Program Files\Java\jdk-17',
+            'D:\Program Files\Eclipse Adoptium\jdk-17.0.14.7-hotspot',
+            'C:\Program Files\Eclipse Adoptium\jdk-17.0.14.7-hotspot'
+        )
+    } else {
+        @(
+            '/usr/lib/jvm/java-17-openjdk',
+            '/usr/lib/jvm/java-17-openjdk-amd64',
+            '/usr/lib/jvm/jdk-17',
+            '/usr/local/lib/jvm/jdk-17'
+        )
+    }
 
     foreach ($candidate in $candidates) {
-        $javaExe = Join-Path $candidate 'bin\java.exe'
+        $javaExe = Join-Path $candidate "bin\$JavaExeName"
         if (Test-Path $javaExe) { return $candidate }
     }
 
@@ -268,7 +292,7 @@ function Invoke-WebMiner {
     $prevOutputEncoding = [Console]::OutputEncoding
     [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-    $javaExe = Join-Path $Java17Home 'bin\java.exe'
+    $javaExe = Join-Path $Java17Home "bin\$JavaExeName"
     try {
         & $javaExe @javaArgs
     } finally {
@@ -291,6 +315,32 @@ function Get-InstalledVersion {
         return (Get-Content $VersionFile -Raw).Trim()
     }
     return $null
+}
+
+function Get-OssJarUrl {
+<#
+.SYNOPSIS
+    Returns the OSS mirror download URL for a given release tag.
+#>
+    param([string] $TagName)
+
+    if ($TagName -eq 'latest') {
+        return "$OSS_LATEST_DOWNLOAD/scent-miner.jar"
+    }
+    return "$OSS_BASE_URL/releases/download/$TagName/scent-miner.jar"
+}
+
+function Get-OssSha256Url {
+<#
+.SYNOPSIS
+    Returns the OSS mirror URL for the JAR's .sha256 checksum file.
+#>
+    param([string] $TagName)
+
+    if ($TagName -eq 'latest') {
+        return "$OSS_LATEST_DOWNLOAD/scent-miner.jar.sha256"
+    }
+    return "$OSS_BASE_URL/releases/download/$TagName/scent-miner.jar.sha256"
 }
 
 function Get-LatestRelease {
@@ -322,11 +372,52 @@ function Get-LatestRelease {
     }
     catch {
         if ($_.Exception.Response.StatusCode -eq 403) {
-            Write-Warning "GitHub API rate limit exceeded. Try again later or authenticate with:`n  gh auth token"
+            Write-Warning "GitHub API rate limit exceeded. Trying OSS mirror ..."
         }
         else {
             Write-Warning "Cannot reach GitHub API: $($_.Exception.Message)"
+            Write-Host '[WebMiner] Falling back to OSS mirror ...' -ForegroundColor DarkGray
         }
+    }
+
+    # Fallback: try OSS mirror
+    return Get-LatestReleaseFromOss
+}
+
+function Get-LatestReleaseFromOss {
+<#
+.SYNOPSIS
+    Fetches the latest release metadata from the Aliyun OSS mirror.
+    Returns the same hashtable shape as Get-LatestRelease, or $null on failure.
+#>
+    try {
+        Write-Host '[WebMiner] Querying OSS mirror ...' -ForegroundColor DarkGray
+        $meta = Invoke-RestMethod -Uri $OSS_LATEST_JSON -ErrorAction Stop
+
+        if (-not $meta -or -not $meta.tag) {
+            Write-Warning 'OSS mirror returned incomplete metadata.'
+            return $null
+        }
+
+        $jarAsset = $meta.assets | Where-Object { $_.name -eq 'scent-miner.jar' } | Select-Object -First 1
+        if (-not $jarAsset) {
+            Write-Warning "OSS release ($($meta.tag)) does not contain scent-miner.jar"
+            return $null
+        }
+
+        $ossJarUrl = Get-OssJarUrl -TagName $meta.tag
+
+        return @{
+            tagName      = $meta.tag
+            name         = $meta.tag
+            publishedAt  = $meta.published_at
+            jarUrl       = $ossJarUrl
+            jarSize      = $jarAsset.size
+            jarChecksum  = "sha256:$($jarAsset.sha256)"
+        }
+    }
+    catch {
+        Write-Warning "Cannot reach OSS mirror either: $($_.Exception.Message)"
         return $null
     }
 }
@@ -371,19 +462,52 @@ function Install-WebMiner {
     }
 
     # Download
-    $sizeMB = "{0:N1}" -f ($jarSize / 1MB)
+    $sizeMB = if ($jarSize) { "{0:N1}" -f ($jarSize / 1MB) } else { '?' }
     Write-Host "[WebMiner] Downloading scent-miner.jar ($sizeMB MB) ..." -ForegroundColor DarkGray
-    Write-Host "[WebMiner] From: $jarUrl" -ForegroundColor DarkGray
 
-    $tempJar = Join-Path $env:TEMP 'scent-miner-download.jar'
+    $tempJar = Join-Path $TempDir 'scent-miner-download.jar'
     try {
         if (Test-Path $tempJar) { Remove-Item $tempJar -Force }
 
-        Invoke-WebRequest -Uri $jarUrl -OutFile $tempJar -UseBasicParsing
+        # Try primary URL first, fall back to OSS mirror
+        $downloadUrl = $jarUrl
+        $downloaded = $false
+        $urlsToTry = @($jarUrl)
 
-        $downloadedSize = (Get-Item $tempJar).Length
-        if ($downloadedSize -eq 0) {
-            throw 'Downloaded file is empty.'
+        # Add OSS mirror as fallback if the primary URL is GitHub
+        $ossUrl = Get-OssJarUrl -TagName $tagName
+        if ($jarUrl -notmatch [regex]::Escape($OSS_BASE_URL)) {
+            $urlsToTry += $ossUrl
+        }
+
+        foreach ($url in $urlsToTry) {
+            try {
+                Write-Host "[WebMiner] From: $url" -ForegroundColor DarkGray
+                Invoke-WebRequest -Uri $url -OutFile $tempJar -UseBasicParsing
+
+                $downloadedSize = (Get-Item $tempJar).Length
+                if ($downloadedSize -eq 0) {
+                    if ($url -eq $urlsToTry[-1]) {
+                        throw 'Downloaded file is empty.'
+                    }
+                    Write-Warning "Download from mirror returned empty file, trying next ..."
+                    continue
+                }
+
+                $downloaded = $true
+                $downloadUrl = $url
+                break
+            }
+            catch {
+                if ($url -eq $urlsToTry[-1]) {
+                    throw
+                }
+                Write-Warning "Primary download failed, trying OSS mirror ..."
+            }
+        }
+
+        if (-not $downloaded) {
+            throw 'All download sources exhausted.'
         }
 
         Write-Host "[WebMiner] Downloaded $('{0:N1}' -f ($downloadedSize / 1MB)) MB" -ForegroundColor DarkGray
@@ -391,6 +515,21 @@ function Install-WebMiner {
         # Verify checksum
         $actualHash = (Get-FileHash -Path $tempJar -Algorithm SHA256).Hash.ToLower()
         $expectedHash = $jarChecksum -replace '^sha256:', ''
+
+        # If checksum is missing (e.g. OSS fallback), try to fetch it from OSS .sha256 file
+        if (-not $expectedHash) {
+            try {
+                $sha256Url = Get-OssSha256Url -TagName $tagName
+                $remoteHash = (Invoke-RestMethod -Uri $sha256Url -ErrorAction SilentlyContinue).Trim()
+                if ($remoteHash -match '^[0-9a-f]{64}$') {
+                    $expectedHash = $remoteHash
+                    Write-Host '[WebMiner] Fetched checksum from OSS mirror.' -ForegroundColor DarkGray
+                }
+            }
+            catch {
+                Write-Warning 'Cannot fetch checksum from mirror; skipping verification.'
+            }
+        }
         if ($expectedHash -and $actualHash -ne $expectedHash) {
             throw "Checksum mismatch!`n  Expected: $expectedHash`n  Actual:   $actualHash"
         }
@@ -428,17 +567,33 @@ function Install-WebMiner {
 function Find-7Zip {
 <#
 .SYNOPSIS
-    Locates 7z.exe on PATH or in common install locations.
+    Locates 7-Zip on PATH or in common install locations.
 #>
-    $onPath = Get-Command 7z.exe -ErrorAction SilentlyContinue
+    # Try primary binary name first
+    $onPath = Get-Command $SevenZipName -ErrorAction SilentlyContinue
     if ($onPath) { return $onPath.Source }
 
-    $candidates = @(
-        'C:\Program Files\7-Zip\7z.exe',
-        'D:\Program Files\7-Zip\7z.exe',
-        "${env:ProgramFiles}\7-Zip\7z.exe",
-        "${env:ProgramFiles(x86)}\7-Zip\7z.exe"
-    )
+    # On Linux, some distros use '7zz' instead of '7z'
+    if (-not $IsWindows) {
+        $onPath = Get-Command '7zz' -ErrorAction SilentlyContinue
+        if ($onPath) { return $onPath.Source }
+    }
+
+    $candidates = if ($IsWindows) {
+        @(
+            'C:\Program Files\7-Zip\7z.exe',
+            'D:\Program Files\7-Zip\7z.exe',
+            "${env:ProgramFiles}\7-Zip\7z.exe",
+            "${env:ProgramFiles(x86)}\7-Zip\7z.exe"
+        )
+    } else {
+        @(
+            '/usr/bin/7z',
+            '/usr/bin/7zz',
+            '/usr/local/bin/7z',
+            '/usr/local/bin/7zz'
+        )
+    }
 
     foreach ($candidate in $candidates) {
         if ($candidate -and (Test-Path $candidate)) {
@@ -447,8 +602,8 @@ function Find-7Zip {
     }
 
     Write-Error @"
-7-Zip (7z.exe) not found.
-Install from https://www.7-zip.org/ or ensure 7z.exe is on PATH.
+7-Zip not found.
+Install from https://www.7-zip.org/ or ensure 7z is on PATH.
 "@
     exit 1
 }
@@ -466,7 +621,7 @@ function Invoke-RunExample {
     $ArchiveName = 'amazon.com.7z'
     $ExtractDir  = Join-Path $HomeDir '.scent\test-data'
     $DataDir     = Join-Path $ExtractDir 'amazon.com'    # archive contains this subdirectory
-    $ArchivePath = Join-Path $env:TEMP $ArchiveName
+    $ArchivePath = Join-Path $TempDir $ArchiveName
 
     # --- Already extracted? Skip download ---
     if ((Test-Path $DataDir) -and (Get-ChildItem -Recurse -File $DataDir -ErrorAction SilentlyContinue | Where-Object { $_.Extension -match '\.html?$' } | Select-Object -First 1)) {
@@ -485,11 +640,11 @@ function Invoke-RunExample {
                 Invoke-WebRequest -Uri $ArchiveUrl -OutFile $ArchivePath -UseBasicParsing
             }
             catch {
-                # Fallback: try curl.exe
-                $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+                # Fallback: try curl
+                $curl = Get-Command $CurlExeName -ErrorAction SilentlyContinue
                 if ($curl) {
-                    Write-Host "[WebMiner] Invoke-WebRequest failed, trying curl.exe ..." -ForegroundColor Yellow
-                    & curl.exe -L -o $ArchivePath $ArchiveUrl
+                    Write-Host "[WebMiner] Invoke-WebRequest failed, trying curl ..." -ForegroundColor Yellow
+                    & $CurlExeName -L -o $ArchivePath $ArchiveUrl
                     if ($LASTEXITCODE -ne 0) {
                         Write-Error "Download failed (curl exit code: $LASTEXITCODE)"
                         exit 1
@@ -537,8 +692,26 @@ function Invoke-Install {
 
         Write-Host "[WebMiner] Installing specific version: $tagName" -ForegroundColor Cyan
         $releaseUrl = "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/tags/$tagName"
+        $release = $null
+
+        # Try GitHub API first
         try {
             $releaseInfo = Invoke-RestMethod -Uri $releaseUrl -ErrorAction Stop
+
+            $jarAsset = $releaseInfo.assets | Where-Object { $_.name -eq 'scent-miner.jar' } | Select-Object -First 1
+            if (-not $jarAsset) {
+                Write-Error "Release '$tagName' does not contain scent-miner.jar"
+                exit 1
+            }
+
+            $release = @{
+                tagName     = $releaseInfo.tag_name
+                name        = $releaseInfo.name
+                publishedAt = $releaseInfo.published_at
+                jarUrl      = $jarAsset.browser_download_url
+                jarSize     = $jarAsset.size
+                jarChecksum = $jarAsset.digest
+            }
         }
         catch {
             if ($_.Exception.Response.StatusCode -eq 404) {
@@ -546,30 +719,28 @@ function Invoke-Install {
                 Write-Host "`nAvailable releases: https://github.com/$REPO_OWNER/$REPO_NAME/releases" -ForegroundColor DarkGray
                 exit 1
             }
-            Write-Error "Cannot verify release '$tagName': $($_.Exception.Message)"
-            exit 1
-        }
 
-        $jarAsset = $releaseInfo.assets | Where-Object { $_.name -eq 'scent-miner.jar' } | Select-Object -First 1
-        if (-not $jarAsset) {
-            Write-Error "Release '$tagName' does not contain scent-miner.jar"
-            exit 1
-        }
+            # Network error — fall back to OSS mirror
+            Write-Warning "Cannot reach GitHub API: $($_.Exception.Message)"
+            Write-Host '[WebMiner] Falling back to OSS mirror ...' -ForegroundColor DarkGray
 
-        $release = @{
-            tagName     = $releaseInfo.tag_name
-            name        = $releaseInfo.name
-            publishedAt = $releaseInfo.published_at
-            jarUrl      = $jarAsset.browser_download_url
-            jarSize     = $jarAsset.size
-            jarChecksum = $jarAsset.digest
+            $ossJarUrl = Get-OssJarUrl -TagName $tagName
+            $release = @{
+                tagName     = $tagName
+                name        = $tagName
+                publishedAt = ''
+                jarUrl      = $ossJarUrl
+                jarSize     = 0
+                jarChecksum = ''
+            }
         }
     }
     else {
         $release = Get-LatestRelease
         if (-not $release) {
             Write-Error "Cannot find the latest release. Check your internet connection."
-            Write-Host "`nYou can also install a specific version:" -ForegroundColor DarkGray
+            Write-Host "`nReleases are fetched from GitHub and mirrored to Aliyun OSS." -ForegroundColor DarkGray
+            Write-Host "You can also install a specific version:" -ForegroundColor DarkGray
             Write-Host "  .\webminer.ps1 install v0.0.1" -ForegroundColor White
             exit 1
         }
@@ -636,7 +807,7 @@ function Invoke-Version {
         }
     }
     else {
-        Write-Host '  Latest    : (cannot reach GitHub)' -ForegroundColor DarkGray
+        Write-Host '  Latest    : (cannot reach GitHub or OSS mirror)' -ForegroundColor DarkGray
     }
     Write-Host ''
 }
@@ -683,7 +854,8 @@ Install the latest release:
   .\webminer.ps1 install
 
 Or download manually from:
-  https://github.com/platonai/web-miner/releases
+  GitHub : https://github.com/platonai/web-miner/releases
+  OSS    : $OSS_BASE_URL/releases/latest/download/scent-miner.jar
 "@
     exit 1
 }

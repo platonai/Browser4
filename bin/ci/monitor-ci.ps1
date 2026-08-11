@@ -119,6 +119,46 @@ function Extract-MinimalErrors {
         return "(No log output to analyze.)"
     }
 
+    # ── Helper: extract the message from a log line and strip ANSI escapes ──
+    function Get-CleanMessage {
+        param([string]$RawLine)
+        $parsed = Parse-GitHubLogLine -Line $RawLine
+        if ($parsed -and $parsed.Message) {
+            return ($parsed.Message -replace '\x1b\[[0-9;]*m', '').Trim()
+        }
+        return ($RawLine -replace '\x1b\[[0-9;]*m', '').Trim()
+    }
+
+    # ── Helper: test whether a cleaned message is shell script boilerplate ──
+    # These are structural shell / GHA workflow lines that happen to contain
+    # error-like words ("failed", "error") but are not themselves errors.
+    $boilerplatePatterns = @(
+        '^##\[(group|endgroup|debug|warning|notice)\]',   # GHA workflow commands
+        '^\s*if\s+\[',           # if [ condition ]
+        '^\s*if\s+\[\[',         # if [[ condition ]]
+        '^\s*then\b',            # then
+        '^\s*else\b',            # else
+        '^\s*elif\s',            # elif
+        '^\s*\bfi\b\s*$',        # fi
+        '^\s*\bdo\b\s*$',        # do
+        '^\s*\bdone\b\s*$',      # done
+        '^\s*\besac\b\s*$',      # esac
+        '^\s*echo\s',            # echo statements (reporting, not the error itself)
+        '^\s*printf\s',          # printf statements
+        '^\s*\w+=\S',            # variable assignments (VAR=value)
+        '^\s*export\s',          # export VAR=...
+        '^\s*\#\s'               # shell comments
+    )
+
+    function Test-IsBoilerplate {
+        param([string]$CleanMessage)
+        if ([string]::IsNullOrWhiteSpace($CleanMessage)) { return $true }
+        foreach ($bp in $boilerplatePatterns) {
+            if ($CleanMessage -match $bp) { return $true }
+        }
+        return $false
+    }
+
     # ── Pass 1: Extract specific failing test names ──────────────────────
     $testFailures = [System.Collections.Generic.List[string]]::new()
     $seenTests    = @{}
@@ -128,15 +168,17 @@ function Extract-MinimalErrors {
     # Go:        "--- FAIL: TestName"
     # Generic:   "test_e2e_foo => FAILED"
     foreach ($ln in $lines) {
-        if ($ln -match 'test\s+(\S+)\s+\.\.\.\s+FAILED') {
+        $msg = Get-CleanMessage $ln
+
+        if ($msg -match 'test\s+(\S+)\s+\.\.\.\s+FAILED') {
             $tn = $Matches[1]
             if (-not $seenTests.ContainsKey($tn)) { $seenTests[$tn] = $true; $testFailures.Add($tn) }
         }
-        if ($ln -match '(test_e2e_\S+)\s.*=>\s*FAILED') {
+        if ($msg -match '(test_e2e_\S+)\s.*=>\s*FAILED') {
             $tn = $Matches[1]
             if (-not $seenTests.ContainsKey($tn)) { $seenTests[$tn] = $true; $testFailures.Add($tn) }
         }
-        if ($ln -match '---\s+FAIL:\s+(\S+)') {
+        if ($msg -match '---\s+FAIL:\s+(\S+)') {
             $tn = $Matches[1]
             if (-not $seenTests.ContainsKey($tn)) { $seenTests[$tn] = $true; $testFailures.Add($tn) }
         }
@@ -178,9 +220,16 @@ function Extract-MinimalErrors {
 
     for ($i = 0; $i -lt $lines.Count; $i++) {
         $line = $lines[$i]
+        $msg = Get-CleanMessage $line
+
+        # Skip shell boilerplate: lines that contain error-indicator words
+        # but are really just workflow script code (if/fi/echo/##[group]/…).
+        if (Test-IsBoilerplate $msg) { continue }
+
+        # Match error patterns against the cleaned message (not the raw line).
         $matched = $false
         foreach ($pat in $errorPatterns) {
-            if ($line -match [regex]::Escape($pat)) {
+            if ($msg -match [regex]::Escape($pat)) {
                 $matched = $true
                 break
             }

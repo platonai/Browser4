@@ -40,6 +40,15 @@ jobs:
         with:
           java_version: ${{ env.JAVA_VERSION }}
 
+      - name: Run WebMiner PowerShell Tests
+        id: webminer-tests
+        if: success()
+        shell: bash
+        run: |
+          echo "::group::🧪 WebMiner PowerShell Tests"
+          pwsh -NoProfile -ExecutionPolicy Bypass -File skills/scent-miner/scripts/tests/webminer.tests.ps1
+          echo "::endgroup::"
+
       - name: Verify Dependencies
         id: deps
         if: success()

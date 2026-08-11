@@ -88,12 +88,12 @@ function Invoke-Cli {
     Write-Host "       [$(Get-Date -Format 'HH:mm:ss')] cli $desc ..." -ForegroundColor DarkGray
     $sw = [Diagnostics.Stopwatch]::StartNew()
 
-    # Per-command timeout.  open / goto involve server startup or page
-    # loads; other commands complete quickly.
+    # Per-command timeout.  open / goto wait for page load (≤ 2 min);
+    # everything else must finish within 30 s.
     $cmdName = $args[0]
-    $timeoutSecs = if ($cmdName -in @('open', 'goto')) { 300 }
+    $timeoutSecs = if ($cmdName -in @('open', 'goto')) { 120 }
                    elseif ($cmdName -in @('install', 'upgrade')) { 900 }
-                   else { 120 }
+                   else { 30 }
 
     # Resolve the actual executable — on Windows the CLI may be a .cmd
     # shim; we want the native .exe so we can launch it via Start-Process.
@@ -280,13 +280,21 @@ function Invoke-Cli {
 # -------------------------------------------------------------------
 filter join-output { ($_ -join ' ') }
 
-# Return only session data rows (exclude header, separator, blank lines).
+# Return only session data rows (exclude header, separator, blank lines,
+# footer text, and empty-state messages).  Session rows are the pipe-delimited
+# table lines that contain a session ID (UUID).  Non-row lines include:
+#   (default) = unnamed session auto-created by goto/open without -s <name>.
+#   No active browser sessions.
 filter session-data-rows {
     $_ | Where-Object {
         $_ -match '\S' -and
         $_ -notmatch '^\s*-+\s*' -and
         $_ -notmatch '^Name\b' -and
-        $_ -notmatch '^Note:'
+        $_ -notmatch '^Note:' -and
+        $_ -notmatch 'No active browser sessions' -and
+        # Table data rows contain pipe separators and a UUID-like session ID;
+        # footer lines like "(default) = …" do not.
+        $_ -match '\|'
     }
 }
 

@@ -1344,6 +1344,165 @@ class MCPToolControllerTest {
     }
 
     // =====================================================================
+    // Wait / delay tool dispatch tests
+    // =====================================================================
+
+    @Test
+    fun `test wait_for_selector dispatches to tab waitForSelector`() = runBlocking {
+        mockTool("tab", "waitForSelector")
+
+        val request = MCPToolCallRequest(
+            tool = "wait_for_selector",
+            arguments = mapOf("sessionId" to sessionId, "selector" to "#output", "timeoutMillis" to 5000)
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("waitForSelector", toolCall.method)
+        assertTrue(!toolCall.arguments.containsKey("sessionId"))
+        assertEquals("#output", toolCall.arguments["selector"])
+        assertEquals(5000, toolCall.arguments["timeoutMillis"])
+    }
+
+    @Test
+    fun `test wait_for_function dispatches to tab waitForFunction`() = runBlocking {
+        mockTool("tab", "waitForFunction")
+
+        val request = MCPToolCallRequest(
+            tool = "wait_for_function",
+            arguments = mapOf(
+                "sessionId" to sessionId,
+                "pageFunction" to "document.readyState === 'complete'",
+                "timeoutMillis" to 30000
+            )
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("waitForFunction", toolCall.method)
+        assertTrue(!toolCall.arguments.containsKey("sessionId"))
+        assertEquals("document.readyState === 'complete'", toolCall.arguments["pageFunction"])
+        assertEquals(30000, toolCall.arguments["timeoutMillis"])
+    }
+
+    @Test
+    fun `test wait_for_page dispatches to tab waitForPage`() = runBlocking {
+        mockTool("tab", "waitForPage")
+
+        val request = MCPToolCallRequest(
+            tool = "wait_for_page",
+            arguments = mapOf(
+                "sessionId" to sessionId,
+                "url" to "**/dashboard",
+                "timeoutMillis" to 15000
+            )
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("waitForPage", toolCall.method)
+        assertTrue(!toolCall.arguments.containsKey("sessionId"))
+        assertEquals("**/dashboard", toolCall.arguments["url"])
+        assertEquals(15000, toolCall.arguments["timeoutMillis"])
+    }
+
+    @Test
+    fun `test delay dispatches to tab delay`() = runBlocking {
+        mockTool("tab", "delay")
+
+        val request = MCPToolCallRequest(
+            tool = "delay",
+            arguments = mapOf("sessionId" to sessionId, "millis" to 2000)
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("delay", toolCall.method)
+        assertTrue(!toolCall.arguments.containsKey("sessionId"))
+        assertEquals(2000, toolCall.arguments["millis"])
+    }
+
+    @Test
+    fun `test wait_for_selector with snake_case arguments normalizes to camelCase`() = runBlocking {
+        mockTool("tab", "waitForSelector")
+
+        val request = MCPToolCallRequest(
+            tool = "wait_for_selector",
+            arguments = mapOf(
+                "sessionId" to sessionId,
+                "selector" to "#el",
+                "timeout_millis" to 10000  // snake_case — should be normalized
+            )
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("waitForSelector", toolCall.method)
+        assertTrue(!toolCall.arguments.containsKey("sessionId"))
+        assertTrue(!toolCall.arguments.containsKey("timeout_millis"))
+        assertEquals(10000, toolCall.arguments["timeoutMillis"])
+    }
+
+    @Test
+    fun `test wait_for_selector with ref normalizes to selector`() = runBlocking {
+        mockTool("tab", "waitForSelector")
+
+        val request = MCPToolCallRequest(
+            tool = "wait_for_selector",
+            arguments = mapOf("sessionId" to sessionId, "ref" to "e1")
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("waitForSelector", toolCall.method)
+        assertTrue(!toolCall.arguments.containsKey("sessionId"))
+        assertTrue(!toolCall.arguments.containsKey("ref"))
+        assertEquals("e1", toolCall.arguments["selector"])
+    }
+
+    // =====================================================================
     // snakeToCamelCase tests
     // =====================================================================
 

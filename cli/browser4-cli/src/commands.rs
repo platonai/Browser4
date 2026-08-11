@@ -170,30 +170,6 @@ pub fn is_element_reference(value: &str) -> bool {
         || trimmed.starts_with("backend:")
 }
 
-/// Semantic keywords for htmlsnapshot get that auto-discover the main content area
-/// without requiring the user to guess CSS selectors.
-///
-/// Maps user-friendly keywords (e.g., "article", "readable") to combined CSS
-/// selectors that target common article/content container patterns across
-/// different site structures (HTML5 semantic tags, ARIA roles, common class names).
-const SEMANTIC_SELECTORS: &[(&str, &str)] = &[
-    ("article", "article, main, [role=\"main\"], .post-content, .entry-content, .article-content, .post-body, .content, #content, #main, #article, .post, .entry, .single-post"),
-    ("readable", "article, main, [role=\"main\"], .post-content, .entry-content, .article-content, .post-body, .content, #content, #main, #article, .post, .entry, .single-post"),
-    ("content", "article, main, [role=\"main\"], .post-content, .entry-content, .article-content, .post-body, .content, #content, #main, #article, .post, .entry, .single-post"),
-    ("main-text", "article, main, [role=\"main\"], .post-content, .entry-content, .article-content, .post-body, .content, #content, #main, #article, .post, .entry, .single-post"),
-];
-
-/// Expand a semantic keyword selector to a combined CSS selector.
-/// Returns `Some(expanded_selector)` if the input is a known semantic keyword,
-/// or `None` if it should be treated as a regular CSS selector.
-pub fn expand_semantic_selector(selector: &str) -> Option<&'static str> {
-    let trimmed = selector.trim().to_lowercase();
-    SEMANTIC_SELECTORS
-        .iter()
-        .find(|(keyword, _)| *keyword == trimmed)
-        .map(|(_, expanded)| *expanded)
-}
-
 /// Returns true if the value is a bare CSS selector (e.g. "#id", ".class", "[attr]")
 /// that does not already have a known prefix (`css:`, `backend:`, `xpath:`, `text=`).
 /// These selectors need a `css:` prefix so the backend can distinguish them from
@@ -1204,7 +1180,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "fn", description: "Wait until this JavaScript expression returns true", is_bool: false, short: None },
                 OptionDef { name: "timeout", description: "Maximum time to wait in milliseconds (default: 30000)", is_bool: false, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |args| {
                 if get_opt_str(args, "text").is_some() || get_opt_str(args, "fn").is_some() || get_opt_str(args, "load").is_some() {
                     "wait_for_function".to_string()
@@ -4919,6 +4895,37 @@ mod tests {
         assert!(option_names.contains(&"url"));
         assert!(option_names.contains(&"load"));
         assert!(option_names.contains(&"fn"));
+    }
+
+    #[test]
+    fn test_wait_no_args_uses_wait_for_selector_with_empty_selector() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "wait_for_selector");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["selector"], "");
+        assert_eq!(params["timeoutMillis"], 30000);
+    }
+
+    #[test]
+    fn test_wait_batch_supported_is_true() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        assert!(cmd.batch_supported);
+    }
+
+    #[test]
+    fn test_wait_timeout_non_numeric_falls_back_to_default() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        let mut args = HashMap::new();
+        args.insert("target".to_string(), json!("#el"));
+        args.insert("timeout".to_string(), json!("abc"));
+        let params = (cmd.tool_params_fn)(&args);
+        // Non-numeric timeout should fall back to the default 30000
+        assert_eq!(params["timeoutMillis"], 30000);
+        assert_eq!(params["selector"], "#el");
     }
 
     // -----------------------------------------------------------------------

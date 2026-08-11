@@ -347,7 +347,14 @@ filter session-data-rows {
         $_ -notmatch '^\s*(warning|error)\b' -and
         $_ -notmatch '^\s*-->' -and
         $_ -notmatch '^\s*[|]' -and
-        $_ -notmatch '^\s*=\s*(note|help):'
+        $_ -notmatch '^\s*=\s*(note|help):' -and
+        # Exclude non-row lines from `browser4-cli list` output:
+        #   (default) = unnamed session auto-created by goto/open ...
+        #   No active browser sessions.
+        $_ -notmatch 'No active browser sessions' -and
+        # Table data rows contain pipe separators and a UUID-like session ID;
+        # footer lines like "(default) = …" do not.
+        $_ -match '\|'
     }
 }
 

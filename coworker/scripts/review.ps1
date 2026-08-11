@@ -102,8 +102,22 @@ function Find-IssuesFiles {
     $seen = [System.Collections.Generic.HashSet[string]]::new()
     foreach ($dir in $searchDirs) {
         if (-not (Test-Path -LiteralPath $dir)) { continue }
-        $found = Get-ChildItem -Path $dir -Recurse -File -ErrorAction SilentlyContinue |
-            Where-Object { -not (Test-CoworkerIgnoredFile -Item $_) } |
+
+        # Pre-check: if the search root itself has no dot-prefixed ancestors,
+        # every file under it is clean — skip the expensive per-file
+        # Test-CoworkerIgnoredFile filter and rely only on the name/prefix
+        # checks below.  A .gitkeep would never match '*.issues.md' anyway.
+        $searchDirItem = Get-Item -LiteralPath $dir -Force
+        $searchRootIsClean = -not (Test-CoworkerDotPath -Item $searchDirItem)
+
+        $found = Get-ChildItem -Path $dir -Recurse -File -ErrorAction SilentlyContinue
+
+        if (-not $searchRootIsClean) {
+            # Only filter for dot-paths when the search root isn't provably clean
+            $found = $found | Where-Object { -not (Test-CoworkerIgnoredFile -Item $_) }
+        }
+
+        $found = $found |
             Where-Object { $_.Name -like '*.issues.md' } |
             Where-Object {
                 # Exclude files under review/done/ and review/done/discard/
@@ -133,6 +147,27 @@ function Find-IssuesFiles {
     # Sort by filename descending (newest first — filenames start with timestamp)
     $sorted = @($results | Sort-Object { (Split-Path -Leaf $_) } -Descending)
     return $sorted
+}
+
+function Format-FileSize {
+    <#
+    .SYNOPSIS
+        Format a byte count as a human-readable file size string.
+    .PARAMETER Bytes
+        File size in bytes.
+    .OUTPUTS
+        String like "12.5 KB", "1.2 MB", or "834 B".
+    #>
+    param([long]$Bytes)
+    if ($Bytes -ge 1MB) {
+        return "$([math]::Round($Bytes / 1MB, 1)) MB"
+    }
+    elseif ($Bytes -ge 1KB) {
+        return "$([math]::Round($Bytes / 1KB, 1)) KB"
+    }
+    else {
+        return "$Bytes B"
+    }
 }
 
 function Resolve-IssuesFile {
@@ -1671,7 +1706,12 @@ function Normalize-Decision {
 function Show-FilePicker {
     <#
     .SYNOPSIS
-        Display an interactive file list and let the user choose one.
+        Display an interactive file list with arrow-key navigation and let the user choose one.
+    .DESCRIPTION
+        Renders a scrollable file list where the user can move a highlight cursor
+        with Up/Down arrow keys, press Enter to select, or type a number for
+        direct selection.  Shows file size, issue counts, and source directory
+        for each entry.
     .OUTPUTS
         Selected file path, or $null.
     #>
@@ -1683,66 +1723,192 @@ function Show-FilePicker {
         return $null
     }
 
-    Clear-ScreenSafe
-    Write-Host ''
-    Write-Host '══════ Review Queue ══════' -ForegroundColor Cyan
-    Write-Host ''
-
-    # Group files by directory type (draft vs review)
+    # ── Pre-compute metadata for every file ──────────────────────────────────
     $dirs = Get-IssuesDirectories
     $draftNormalized = (Resolve-Path -LiteralPath $dirs.Draft -ErrorAction SilentlyContinue).Path
     $reviewNormalized = (Resolve-Path -LiteralPath $dirs.Review -ErrorAction SilentlyContinue).Path
 
-    for ($i = 0; $i -lt $Files.Count; $i++) {
-        $f = $Files[$i]
-        $dirLabel = ''
-        $dirColor = 'DarkGray'
+    $fileEntries = foreach ($f in $Files) {
+        $entry = @{
+            Path      = $f
+            Name      = Split-Path -Leaf $f
+            DirLabel  = ''
+            DirColor  = 'DarkGray'
+            Total     = 0
+            Reviewed  = 0
+        }
         $fileNormalized = (Resolve-Path -LiteralPath $f).Path
         if ($fileNormalized.StartsWith($draftNormalized, [StringComparison]::OrdinalIgnoreCase)) {
-            $dirLabel = '[draft]'
-            $dirColor = 'Gray'
+            $entry.DirLabel = '[draft]'
+            $entry.DirColor = 'Gray'
         } elseif ($fileNormalized.StartsWith($reviewNormalized, [StringComparison]::OrdinalIgnoreCase)) {
-            $dirLabel = '[review]'
-            $dirColor = 'Yellow'
+            $entry.DirLabel = '[review]'
+            $entry.DirColor = 'Yellow'
         }
-        $name = Split-Path -Leaf $f
-        # Quick parse for issue count
-        $total = 0
-        $reviewed = 0
+
+        # File size
+        try { $entry.Size = (Get-Item -LiteralPath $f).Length } catch { $entry.Size = 0 }
+
+        # Quick parse for issue count and reviewed count
         try {
             $quick = Get-Content -LiteralPath $f -TotalCount 30 -Encoding UTF8 -ErrorAction SilentlyContinue | Out-String
             if ($quick -match '## Issues Found \((\d+) issue') {
-                $total = [int]$Matches[1]
+                $entry.Total = [int]$Matches[1]
             }
-            # Count [x] checkboxes
             $reviewedMatches = [regex]::Matches($quick, '- \[x\] \*\*')
-            $reviewed = $reviewedMatches.Count
+            $entry.Reviewed = $reviewedMatches.Count
         } catch { }
 
-        $numStr = "$i".PadLeft(2)
-        Write-Host "  [$numStr] " -NoNewline -ForegroundColor Cyan
-        Write-Host $dirLabel -NoNewline -ForegroundColor $dirColor
-        Write-Host " $name" -NoNewline -ForegroundColor White
-        if ($total -gt 0) {
-            Write-Host "  ($reviewed/$total reviewed)" -NoNewline -ForegroundColor DarkGray
-        }
+        [PSCustomObject]$entry
+    }
+
+    $selectedIdx = 0
+
+    # ── Render helper ─────────────────────────────────────────────────────────
+    function Render-FileList {
+        Clear-ScreenSafe
         Write-Host ''
+        Write-Host '══════ Review Queue ══════' -ForegroundColor Cyan
+        Write-Host ''
+
+        for ($i = 0; $i -lt $fileEntries.Count; $i++) {
+            $e = $fileEntries[$i]
+            $isSelected = ($i -eq $selectedIdx)
+            $sizeStr = Format-FileSize -Bytes $e.Size
+
+            $cursor = if ($isSelected) { '▶' } else { ' ' }
+            $cursorColor = if ($isSelected) { 'Cyan' } else { 'DarkGray' }
+
+            $numStr = "$i".PadLeft(2)
+            Write-Host "$cursor [$numStr] " -NoNewline -ForegroundColor $cursorColor
+            Write-Host $e.DirLabel -NoNewline -ForegroundColor $e.DirColor
+            Write-Host " $($e.Name)" -NoNewline -ForegroundColor $(if ($isSelected) { 'Yellow' } else { 'White' })
+
+            # Build metadata trailer
+            $metaParts = [System.Collections.Generic.List[string]]::new()
+            if ($e.Total -gt 0) {
+                [void]$metaParts.Add("$($e.Reviewed)/$($e.Total) reviewed")
+            }
+            [void]$metaParts.Add($sizeStr)
+            $metaText = $metaParts -join '  ·  '
+
+            if ($metaText) {
+                Write-Host "  $metaText" -ForegroundColor DarkGray
+            } else {
+                Write-Host ''
+            }
+        }
+
+        Write-Host ''
+        Write-Host '══════════════════════════' -ForegroundColor DarkGray
+        Write-Host "  ↑/↓ select  ·  Enter open  ·  number jump  ·  q quit  ·  $($fileEntries.Count) file(s)" -ForegroundColor DarkGray
     }
 
-    Write-Host ''
-    Write-Host '══════════════════════════' -ForegroundColor DarkGray
-    Write-Host '  Enter number (0-$($Files.Count - 1)), or [q] to quit' -ForegroundColor DarkGray
+    Render-FileList
 
-    $choice = Read-Host 'File'
-    if ($choice -eq 'q') { return $null }
+    # ── Interactive key loop ──────────────────────────────────────────────────
+    $inputBuffer = ''
 
-    $idx = 0
-    if ([int]::TryParse($choice, [ref]$idx) -and $idx -ge 0 -and $idx -lt $Files.Count) {
-        return $Files[$idx]
+    # Helper: redraw just the prompt line (avoids full-screen flicker while typing)
+    function Update-PromptLine {
+        $W = Get-TerminalWidth
+        if ($inputBuffer) {
+            $hint = "  Type number then Enter to jump  ·  $inputBuffer`_"
+            # Pad/truncate to terminal width
+            if ($hint.Length -gt $W) { $hint = $hint.Substring(0, $W - 2) + '…' }
+            # Move to the prompt line (one line above the cursor, which sits below
+            # the prompt after the initial Render-FileList or a previous newline)
+            $top = [Math]::Max(0, [Console]::CursorTop - 1)
+            [Console]::SetCursorPosition(0, $top)
+            Write-Host $hint.PadRight($W) -NoNewline -ForegroundColor Cyan
+            # Restore cursor to the line below the prompt so the next call
+            # also computes the correct $top
+            Write-Host ''
+        } else {
+            $hint = "  ↑/↓ select  ·  Enter open  ·  number jump  ·  q quit  ·  $($fileEntries.Count) file(s)"
+            if ($hint.Length -gt $W) { $hint = $hint.Substring(0, $W - 2) + '…' }
+            $top = [Math]::Max(0, [Console]::CursorTop - 1)
+            [Console]::SetCursorPosition(0, $top)
+            Write-Host $hint.PadRight($W) -NoNewline -ForegroundColor DarkGray
+            Write-Host ''
+        }
     }
 
-    Write-ConsoleLine -Message "Invalid selection." -ForegroundColor Red
-    return $null
+    while ($true) {
+        $key = $null
+        try { $key = [Console]::ReadKey($true) } catch { return $null }
+
+        switch ($key.Key) {
+            ([ConsoleKey]::UpArrow) {
+                $inputBuffer = ''
+                if ($selectedIdx -gt 0) {
+                    $selectedIdx--
+                    Render-FileList
+                } else { Update-PromptLine }
+            }
+            ([ConsoleKey]::DownArrow) {
+                $inputBuffer = ''
+                if ($selectedIdx -lt $fileEntries.Count - 1) {
+                    $selectedIdx++
+                    Render-FileList
+                } else { Update-PromptLine }
+            }
+            ([ConsoleKey]::Home) {
+                $inputBuffer = ''
+                if ($selectedIdx -ne 0) {
+                    $selectedIdx = 0
+                    Render-FileList
+                } else { Update-PromptLine }
+            }
+            ([ConsoleKey]::End) {
+                $inputBuffer = ''
+                $last = $fileEntries.Count - 1
+                if ($selectedIdx -ne $last) {
+                    $selectedIdx = $last
+                    Render-FileList
+                } else { Update-PromptLine }
+            }
+            ([ConsoleKey]::Enter) {
+                if ($inputBuffer) {
+                    $num = 0
+                    if ([int]::TryParse($inputBuffer, [ref]$num) -and
+                        $num -ge 0 -and $num -lt $fileEntries.Count) {
+                        return $fileEntries[$num].Path
+                    }
+                    # Invalid number — clear buffer and stay
+                    $inputBuffer = ''
+                    Update-PromptLine
+                } else {
+                    # No buffer — select the highlighted entry
+                    return $fileEntries[$selectedIdx].Path
+                }
+            }
+            ([ConsoleKey]::Backspace) {
+                if ($inputBuffer.Length -gt 0) {
+                    $inputBuffer = $inputBuffer.Substring(0, $inputBuffer.Length - 1)
+                    Update-PromptLine
+                }
+            }
+            ([ConsoleKey]::Q) {
+                return $null
+            }
+            ([ConsoleKey]::Escape) {
+                if ($inputBuffer) {
+                    $inputBuffer = ''
+                    Update-PromptLine
+                } else {
+                    return $null
+                }
+            }
+            default {
+                $char = $key.KeyChar
+                if ($char -ge '0' -and $char -le '9') {
+                    $inputBuffer += $char
+                    Update-PromptLine
+                }
+            }
+        }
+    }
 }
 
 # ── Inline (non-interactive) review ─────────────────────────────────────────────
@@ -1919,7 +2085,9 @@ function Invoke-Review {
             } else {
                 '        '
             }
-            Write-ConsoleLine -Message "  $dirLabel $f" -ForegroundColor DarkGray
+            $sizeStr = ''
+            try { $sizeStr = Format-FileSize -Bytes (Get-Item -LiteralPath $f).Length } catch { $sizeStr = '?' }
+            Write-ConsoleLine -Message "  $dirLabel $sizeStr  $f" -ForegroundColor DarkGray
         }
         return
     }
