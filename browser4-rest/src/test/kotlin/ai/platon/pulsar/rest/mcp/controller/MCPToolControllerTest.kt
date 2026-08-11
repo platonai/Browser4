@@ -1348,7 +1348,7 @@ class MCPToolControllerTest {
     // =====================================================================
 
     @Test
-    fun `test wait_for_selector dispatches to tab.waitForSelector`() = runBlocking {
+    fun `test wait_for_selector dispatches to tab waitForSelector`() = runBlocking {
         mockTool("tab", "waitForSelector")
 
         val request = MCPToolCallRequest(
@@ -1372,7 +1372,7 @@ class MCPToolControllerTest {
     }
 
     @Test
-    fun `test wait_for_function dispatches to tab.waitForFunction`() = runBlocking {
+    fun `test wait_for_function dispatches to tab waitForFunction`() = runBlocking {
         mockTool("tab", "waitForFunction")
 
         val request = MCPToolCallRequest(
@@ -1400,7 +1400,7 @@ class MCPToolControllerTest {
     }
 
     @Test
-    fun `test wait_for_page dispatches to tab.waitForPage`() = runBlocking {
+    fun `test wait_for_page dispatches to tab waitForPage`() = runBlocking {
         mockTool("tab", "waitForPage")
 
         val request = MCPToolCallRequest(
@@ -1428,7 +1428,7 @@ class MCPToolControllerTest {
     }
 
     @Test
-    fun `test delay dispatches to tab.delay`() = runBlocking {
+    fun `test delay dispatches to tab delay`() = runBlocking {
         mockTool("tab", "delay")
 
         val request = MCPToolCallRequest(
