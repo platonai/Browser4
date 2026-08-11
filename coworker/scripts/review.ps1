@@ -1816,16 +1816,21 @@ function Show-FilePicker {
             $hint = "  Type number then Enter to jump  ·  $inputBuffer`_"
             # Pad/truncate to terminal width
             if ($hint.Length -gt $W) { $hint = $hint.Substring(0, $W - 2) + '…' }
-            # Move to bottom line and overwrite
+            # Move to the prompt line (one line above the cursor, which sits below
+            # the prompt after the initial Render-FileList or a previous newline)
             $top = [Math]::Max(0, [Console]::CursorTop - 1)
             [Console]::SetCursorPosition(0, $top)
             Write-Host $hint.PadRight($W) -NoNewline -ForegroundColor Cyan
+            # Restore cursor to the line below the prompt so the next call
+            # also computes the correct $top
+            Write-Host ''
         } else {
             $hint = "  ↑/↓ select  ·  Enter open  ·  number jump  ·  q quit  ·  $($fileEntries.Count) file(s)"
             if ($hint.Length -gt $W) { $hint = $hint.Substring(0, $W - 2) + '…' }
             $top = [Math]::Max(0, [Console]::CursorTop - 1)
             [Console]::SetCursorPosition(0, $top)
             Write-Host $hint.PadRight($W) -NoNewline -ForegroundColor DarkGray
+            Write-Host ''
         }
     }
 
