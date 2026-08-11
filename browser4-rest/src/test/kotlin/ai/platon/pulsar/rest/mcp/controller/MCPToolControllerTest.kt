@@ -1368,7 +1368,7 @@ class MCPToolControllerTest {
         assertEquals("waitForSelector", toolCall.method)
         assertTrue(!toolCall.arguments.containsKey("sessionId"))
         assertEquals("#output", toolCall.arguments["selector"])
-        assertEquals(5000L, toolCall.arguments["timeoutMillis"])
+        assertEquals(5000, toolCall.arguments["timeoutMillis"])
     }
 
     @Test
@@ -1396,7 +1396,7 @@ class MCPToolControllerTest {
         assertEquals("waitForFunction", toolCall.method)
         assertTrue(!toolCall.arguments.containsKey("sessionId"))
         assertEquals("document.readyState === 'complete'", toolCall.arguments["pageFunction"])
-        assertEquals(30000L, toolCall.arguments["timeoutMillis"])
+        assertEquals(30000, toolCall.arguments["timeoutMillis"])
     }
 
     @Test
@@ -1424,7 +1424,7 @@ class MCPToolControllerTest {
         assertEquals("waitForPage", toolCall.method)
         assertTrue(!toolCall.arguments.containsKey("sessionId"))
         assertEquals("**/dashboard", toolCall.arguments["url"])
-        assertEquals(15000L, toolCall.arguments["timeoutMillis"])
+        assertEquals(15000, toolCall.arguments["timeoutMillis"])
     }
 
     @Test
@@ -1447,7 +1447,7 @@ class MCPToolControllerTest {
         assertEquals("tab", toolCall.domain)
         assertEquals("delay", toolCall.method)
         assertTrue(!toolCall.arguments.containsKey("sessionId"))
-        assertEquals(2000L, toolCall.arguments["millis"])
+        assertEquals(2000, toolCall.arguments["millis"])
     }
 
     @Test
@@ -1475,7 +1475,7 @@ class MCPToolControllerTest {
         assertEquals("waitForSelector", toolCall.method)
         assertTrue(!toolCall.arguments.containsKey("sessionId"))
         assertTrue(!toolCall.arguments.containsKey("timeout_millis"))
-        assertEquals(10000L, toolCall.arguments["timeoutMillis"])
+        assertEquals(10000, toolCall.arguments["timeoutMillis"])
     }
 
     @Test
