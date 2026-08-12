@@ -3,6 +3,7 @@ package ai.platon.pulsar.chrome
 import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.api.model.BrowserTab
 import ai.platon.pulsar.api.model.WebDriverException
+import kotlinx.coroutines.delay
 
 /**
  * Browser4-specific extension of [PulsarWebDriver].
@@ -99,5 +100,131 @@ open class Browser4WebDriver(
         mouseMove(point.x, point.y)
         mouseDown(button, count)
         mouseUp(button, count)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Keyboard fixes — the upstream pulsar-browser:4.11.2 Keyboard / PulsarWebDriver
+    // lack the fixes from c9e32e070 (PR #564).  These overrides bridge the gap
+    // until a new pulsar-browser release incorporates them upstream.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Type text into the element identified by [selector] with correct Unicode
+     * surrogate-pair handling.
+     *
+     * The upstream [PulsarWebDriver.type] delegates to `Keyboard.type()` which
+     * walks the string with `charAt()`, splitting surrogate pairs (emoji, CJK
+     * supplementary ideographs) into invalid halves that cause CDP
+     * `Input.insertText` to fail.  This method walks by code point via
+     * [String.codePointAt] and inserts each complete code point in a single
+     * CDP call.
+     *
+     * For ASCII-only text this is functionally identical to the parent
+     * implementation; callers that know their text is BMP-safe may prefer
+     * to delegate directly.
+     */
+    @Throws(WebDriverException::class)
+    suspend fun typeSafe(text: String, selector: String) {
+        // Focus + cursor-to-end sequence matching PulsarWebDriver.type(_, selector)
+        page.focusOnSelector(selector)
+        evaluate("""
+            (function(){
+                var el = document.querySelector('${selector.replace("'", "\\'")}');
+                if (!el) return;
+                if (typeof el.focus === 'function') { el.focus(); }
+                if (typeof el.setSelectionRange === 'function') {
+                    el.setSelectionRange(99999, 99999);
+                }
+            })()
+        """.trimIndent())
+
+        // Type code point by code point — avoids the charAt() surrogate-splitting
+        // bug in the upstream Keyboard.type().
+        var i = 0
+        while (i < text.length) {
+            val codePoint = text.codePointAt(i)
+            val charCount = Character.charCount(codePoint)
+            val charString = text.substring(i, i + charCount)
+
+            if (Character.isISOControl(codePoint)) {
+                press(charString)
+            } else {
+                browserProtocol.insertText(charString)
+            }
+
+            if (charCount > 1) {
+                // Supplementary character — give the browser a little more time
+                delay(randomDelayMillis("type") * 2)
+            } else {
+                delay(randomDelayMillis("type"))
+            }
+            i += charCount
+        }
+    }
+
+    /**
+     * Press a [key] on the element identified by [selector], with conditional
+     * cursor positioning so that navigation-key chains (e.g. Home → Delete)
+     * are not broken by an eager `setSelectionRange(99999, 99999)`.
+     *
+     * The upstream [PulsarWebDriver.press] unconditionally calls
+     * `setSelectionRange(99999, 99999)` after focusing, which resets the
+     * cursor to the end.  For printable single-character keys this is correct
+     * (it ensures the typed character appends rather than prepends).  For
+     * navigation keys (Home, End, ArrowLeft, Delete, …) it destroys the
+     * expected cursor state and makes chained operations fail.
+     */
+    @Throws(WebDriverException::class)
+    suspend fun pressSafe(key: String, selector: String) {
+        page.focusOnSelector(selector)
+
+        // Position cursor at end ONLY for single printable characters.
+        // Navigation / control keys must preserve the current cursor position
+        // so that chains like Home→Delete work as expected.
+        if (key.length == 1 && !Character.isISOControl(key[0])) {
+            evaluate("""
+                (function(){
+                    var el = document.querySelector('${selector.replace("'", "\\'")}');
+                    if (!el) return;
+                    if (typeof el.setSelectionRange === 'function') {
+                        el.setSelectionRange(99999, 99999);
+                    }
+                })()
+            """.trimIndent())
+        }
+
+        press(key)
+    }
+
+    /**
+     * Fill the element identified by [selector] with [text], respecting the
+     * HTML `maxlength` attribute so that programmatic assignments do not
+     * silently exceed the element's constraint.
+     *
+     * The upstream [PulsarWebDriver.fill] JavaScript fallback directly assigns
+     * `this.value = text` without checking [HTMLInputElement.maxLength].
+     * Browsers enforce `maxlength` for user input but not for programmatic
+     * `value` assignment, so a long string can silently overflow.
+     */
+    @Throws(WebDriverException::class)
+    suspend fun fillSafe(selector: String, text: String) {
+        evaluate("""
+            (function(){
+                var el = document.querySelector('${selector.replace("'", "\\'")}');
+                if (!el) return;
+                if (typeof el.focus === 'function') { el.focus(); }
+                var val = '${
+                    text.replace("\\", "\\\\")
+                        .replace("'", "\\'")
+                        .replace("\n", "\\n")
+                        .replace("\r", "\\r")
+                }';
+                var maxLen = el.maxLength;
+                if (maxLen > 0 && val.length > maxLen) { val = val.substring(0, maxLen); }
+                el.value = val;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            })()
+        """.trimIndent())
     }
 }

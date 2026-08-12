@@ -590,10 +590,14 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 when {
                     args.containsKey("selector") && args.containsKey("key") -> {
                         validateArgs(args, allowed("selector", "key"), setOf("selector", "key"), functionName)
-                        driver.press(
-                            paramString(args, "key", functionName)!!,
-                            paramString(args, "selector", functionName)!!
-                        )
+                        val key = paramString(args, "key", functionName)!!
+                        val selector = paramString(args, "selector", functionName)!!
+                        val b4Driver = driver as? Browser4WebDriver
+                        if (b4Driver != null) {
+                            b4Driver.pressSafe(key, selector)
+                        } else {
+                            driver.press(key, selector)
+                        }
                     }
 
                     args.containsKey("key") -> {
@@ -613,10 +617,18 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                         val selector = paramString(args, "selector", functionName)!!
                         val timeoutMillis = paramLong(args, "timeoutMillis", functionName, required = false)
                         val typeBlock: suspend () -> Unit = {
-                            driver.type(
-                                paramString(args, "text", functionName)!!,
-                                selector
-                            )
+                            val b4Driver = driver as? Browser4WebDriver
+                            if (b4Driver != null) {
+                                b4Driver.typeSafe(
+                                    paramString(args, "text", functionName)!!,
+                                    selector
+                                )
+                            } else {
+                                driver.type(
+                                    paramString(args, "text", functionName)!!,
+                                    selector
+                                )
+                            }
                             if (args["submit"] == true) {
                                 // Target the filled element for the same reason as fill
                                 // above: JS-heavy pages may shift focus after type.
@@ -692,7 +704,12 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 val selector = paramString(args, "selector", functionName)!!
                 val timeoutMillis = paramLong(args, "timeoutMillis", functionName, required = false)
                 val fillBlock: suspend () -> Unit = {
-                    driver.fill(selector, paramString(args, "text", functionName)!!)
+                    val b4Driver = driver as? Browser4WebDriver
+                    if (b4Driver != null) {
+                        b4Driver.fillSafe(selector, paramString(args, "text", functionName)!!)
+                    } else {
+                        driver.fill(selector, paramString(args, "text", functionName)!!)
+                    }
                     if (args["submit"] == true) {
                         // Dispatch Enter on the target element so CDP key events land
                         // on the correct input even when JS-heavy pages (e.g. Google
