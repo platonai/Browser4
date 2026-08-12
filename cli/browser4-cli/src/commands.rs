@@ -298,6 +298,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "headed", description: "Run browser in headed (GUI) mode. Default is headless.", is_bool: true, short: None },
                 OptionDef { name: "headless", description: "Run browser in headless mode (this is the default)", is_bool: true, short: None },
+                OptionDef { name: "fresh", description: "Close the current session and start a new one instead of reconnecting", is_bool: true, short: None },
                 OptionDef { name: "profile", description: "Path to browser profile directory", is_bool: false, short: None },
                 OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, sequential, default)", is_bool: false, short: None },
                 OptionDef { name: "interact-level", description: "Interaction level for the new session (for example FASTEST, FAST, DEFAULT)", is_bool: false, short: None },
@@ -316,12 +317,19 @@ pub fn all_commands() -> Vec<CommandDef> {
                 // Default to headless mode for privacy and resource efficiency.
                 // --headed explicitly opts into a visible browser window.
                 // --headless takes priority over --headed when both are passed.
+                //
+                // `headed` is only set when a flag is explicitly passed, so
+                // the session-reconnect path can detect (and warn about) a
+                // display-mode flag that is ignored because an existing
+                // session is reused.  `build_open_session_capabilities`
+                // defaults to headless when the key is absent.
                 if let Some(true) = get_bool(args, "headless") {
                     params["headed"] = json!(false);
                 } else if let Some(true) = get_bool(args, "headed") {
                     params["headed"] = json!(true);
-                } else {
-                    params["headed"] = json!(false);
+                }
+                if let Some(true) = get_bool(args, "fresh") {
+                    params["fresh"] = json!(true);
                 }
                 if let Some(pf) = get_opt_str(args, "profile") {
                     params["profilePath"] = json!(pf);
@@ -4076,7 +4084,23 @@ mod tests {
 
         let params = (cmd.tool_params_fn)(&args);
 
-        assert_eq!(params["headed"], false);
+        // No display-mode flag was passed, so `headed` must be absent —
+        // its presence signals an explicit flag to the reconnect path.
+        // `build_open_session_capabilities` defaults to headless when absent.
+        assert!(params.get("headed").is_none());
+    }
+
+    #[test]
+    fn test_open_params_with_fresh() {
+        let map = commands_map();
+        let cmd = map.get("open").unwrap();
+        let mut args = HashMap::new();
+        args.insert("fresh".to_string(), json!(true));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert_eq!(params["fresh"], true);
+        assert!(params.get("headed").is_none());
     }
 
     #[test]

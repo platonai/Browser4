@@ -663,10 +663,10 @@ You are evaluating the usability, discoverability, and reliability of browser4-c
 
 Before performing any browser interaction:
 
-0. Verify your working directory is the repository root: `$($RepoRootPath)`. If `pwd` is anything other than this directory, navigate there immediately with `cd "$RepoRootPath"`. All browser4-cli commands use `$($cliInvocation)` which works from the repo root — stay in this directory for all commands.
+0. Verify your working directory is the repository root: ``$RepoRootPath``. If ``pwd`` is anything other than this directory, navigate there immediately with ``cd "$RepoRootPath"``. All browser4-cli commands use ``$cliInvocation`` which works from the repo root — stay in this directory for all commands.
     **IMPORTANT — Temporary files:** Create ALL temporary, intermediate, and scratch files (scripts, data dumps, HTML snapshots, JSON exports, markdown drafts, log files, etc.) inside `./.test-sessions/` (not the repo root). Before creating any file, ensure the directory exists with `mkdir -p .test-sessions`. Do NOT pollute the repository root with temporary files — every generated file that is not a permanent project asset belongs under `.test-sessions/`.
-1. Run `$($helpCmd)`.
-2. Read `$($skillPath)` completely.
+1. Run ``$helpCmd``.
+2. Read ``$skillPath`` completely.
 3. Learn the available commands, workflows, and conventions directly from the documentation.
 4. Do not assume any prior knowledge of browser4-cli.
 

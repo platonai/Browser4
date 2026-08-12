@@ -285,6 +285,10 @@ Write-Host '━━━ $generalPrompt (Dev Mode) ━━━' -ForegroundColor Yell
     Assert-NotContains 'should NOT contain browser4-cli help' $generalPrompt 'browser4-cli help'
     Assert-NotContains 'should NOT contain browser4.io' $generalPrompt 'browser4.io'
 
+    Write-TestGroup 'invocation anti-pattern guard (dev)'
+    Assert-NotContains 'should NOT contain $(./b4w.ps1) anti-pattern' $generalPrompt '$(./b4w.ps1)'
+    Assert-NotContains 'should NOT contain unexpanded $(' $generalPrompt '$('
+
     Write-TestGroup 'first-time user language'
     Assert-Contains 'mentions first-time user' $generalPrompt 'first-time user'
     Assert-Contains 'mentions new user' $generalPrompt 'new user'
@@ -307,6 +311,10 @@ Write-Host '━━━ $generalPrompt (Production Mode) ━━━' -ForegroundCol
     Assert-Contains 'contains browser4.io' $generalPrompt 'browser4.io'
     Assert-NotContains 'should NOT contain ./b4w.ps1 help' $generalPrompt './b4w.ps1 help'
     Assert-NotContains 'should NOT contain skills/browser4-cli/SKILL.md' $generalPrompt 'skills/browser4-cli/SKILL.md'
+
+    Write-TestGroup 'invocation anti-pattern guard (production)'
+    Assert-NotContains 'should NOT contain $(./b4w.ps1) anti-pattern' $generalPrompt '$(./b4w.ps1)'
+    Assert-NotContains 'should NOT contain unexpanded $(' $generalPrompt '$('
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

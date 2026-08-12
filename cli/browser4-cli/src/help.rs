@@ -1097,11 +1097,19 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    The command shows \"Using existing session\" and the current page URL when reconnecting."
+            "    The command shows \"Using existing session\", the current page URL, and the number of open tabs when reconnecting."
                 .to_string(),
         );
         lines.push(
             "  - If the saved session is missing or stale, `open` creates a new browser session."
+                .to_string(),
+        );
+        lines.push(
+            "  - When reconnecting, `--headless`/`--headed` are ignored (the display mode is set when the session is created); a warning is printed on stderr."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use `--fresh` to close the current session and start a new one instead of reconnecting, so tabs, cookies, and location state from a prior run are not inherited."
                 .to_string(),
         );
         lines.push(
@@ -1117,6 +1125,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli open https://browser4.io                      # headless (default)".to_string());
         lines.push("  browser4-cli open --headed https://browser4.io              # visible browser window".to_string());
         lines.push("  browser4-cli open --headless https://browser4.io            # explicit headless".to_string());
+        lines.push("  browser4-cli open --fresh --headless https://browser4.io    # new session, not a reconnect".to_string());
     }
 
     if cmd.name == "install" {

@@ -369,10 +369,13 @@ pub fn write_state(
                 .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
                 .is_ok()
             {
+                // This branch only matches PermissionDenied, so use a stable
+                // English reason instead of the raw OS error string — on a
+                // localized OS (e.g. Chinese Windows) the OS text would
+                // otherwise produce a mixed-language message.
                 eprintln!(
-                    "browser4-cli: warning: cannot write CLI state to {} ({})",
+                    "browser4-cli: warning: cannot write CLI state to {} (permission denied)",
                     dir.display(),
-                    e
                 );
                 eprintln!(
                     "browser4-cli: warning: using {} instead — set BROWSER4_CLI_STATE_DIR \

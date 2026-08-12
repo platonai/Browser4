@@ -126,7 +126,7 @@ browser4-cli goto https://other-page.com             # stays headless (or headed
 
 > **⚠️ Important — `goto` on first invocation:** When `goto` is the very first command (no prior `open`), it auto-opens a new session using the **backend's configured default** display mode — which is typically GUI on desktop machines. To guarantee headless mode, **always start with `open --headless`** before using `goto`.
 
-> **Note — reconnecting to an existing session:** The `--headless`/`--headed` flags only take effect when creating a new session. When `open` reconnects to an already-running session, the display mode is already set and the flags are ignored. To change the mode of an existing session, close it first (`close`), then `open --headless` to create a new one.
+> **Note — reconnecting to an existing session:** The `--headless`/`--headed` flags only take effect when creating a new session. When `open` reconnects to an already-running session, the display mode is already set and the flags are ignored — the CLI prints a warning on stderr and the reconnect message shows the tab count so inherited state is visible. To change the mode of an existing session, close it first (`close`), then `open --headless` to create a new one. To discard a stale session's tabs/cookies/location entirely and start clean, use `open --fresh` (closes the current session, then opens a new one).
 
 ### Sessions
 

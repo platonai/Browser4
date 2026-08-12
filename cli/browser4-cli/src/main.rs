@@ -1077,7 +1077,7 @@ async fn get_or_create_navigation_session(
 
     let reusable_session_id =
         find_reusable_persisted_session_id(client, base_url, &state, session_name).await?;
-    let reused_existing_session = reusable_session_id.is_some();
+    let mut reused_existing_session = reusable_session_id.is_some();
     let session_id = if let Some(existing_id) = reusable_session_id {
         // When force_new_session is set (e.g., `open` command), if the
         // existing session is an attached session (CDP or extension),
@@ -1108,6 +1108,34 @@ async fn get_or_create_navigation_session(
                 "{}",
                 format_session_opened_message(session_name, &new_id)
             );
+            reused_existing_session = false;
+            new_id
+        } else if tool_params.get("fresh").and_then(Value::as_bool) == Some(true) {
+            // `--fresh` explicitly overrides session reuse: close the
+            // existing session so its tabs, cookies, and location state
+            // don't leak into the new one.  (Attached sessions are handled
+            // by the branch above — closing them would kill the user's
+            // real browser window.)
+            cli_println!(
+                "Closing existing session {} — starting fresh (--fresh).",
+                existing_id
+            );
+            let _ = call_tool(
+                client,
+                base_url,
+                "close_session",
+                json!({ "sessionId": existing_id }),
+            )
+            .await;
+            invalidate_session(&state, base_url, session_name);
+            let capabilities = build_open_session_capabilities(tool_params);
+            let new_id =
+                create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
+            cli_println!(
+                "{}",
+                format_session_opened_message(session_name, &new_id)
+            );
+            reused_existing_session = false;
             new_id
         } else {
             existing_id
@@ -1235,6 +1263,17 @@ async fn get_or_create_navigation_session(
 
     // When reconnecting to an existing session, inform the user what page is active
     if reused_existing_session {
+        // A `headed` key in the params means the user passed --headless/--headed
+        // explicitly, but the display mode was fixed when the session was
+        // created — surface that the flag is being ignored instead of silently
+        // reconnecting with different settings than requested.
+        if let Some(headed) = tool_params.get("headed").and_then(Value::as_bool) {
+            let flag = if headed { "--headed" } else { "--headless" };
+            eprintln!(
+                "browser4-cli: warning: {flag} ignored: reconnecting to existing session \
+                 (close it first or use `open --fresh` to start a new one)"
+            );
+        }
         if let Ok(url_result) = call_tool(
             client,
             base_url,
@@ -1246,7 +1285,32 @@ async fn get_or_create_navigation_session(
                     Some(name) => format!("{} ({})", name, session_id),
                     None => "DEFAULT".to_string(),
                 };
-                cli_println!("Using existing session {} (current page: {}).", label, url_result);
+                // Count the tabs inherited from the prior run so the user can
+                // see at a glance that unrelated state came along with the
+                // reconnect.
+                let tab_count = call_tool(
+                    client,
+                    base_url,
+                    "browser_tabs",
+                    json!({ "sessionId": session_id, "action": "list" }),
+                )
+                .await
+                .map(|tabs| parse_tab_list(&tabs).len())
+                .unwrap_or(0);
+                let tab_note = if tab_count > 1 {
+                    format!("; {tab_count} tabs")
+                } else {
+                    String::new()
+                };
+                cli_println!(
+                    "Using existing session {} (current page: {}{}).",
+                    label,
+                    url_result,
+                    tab_note
+                );
+                if tab_count > 1 {
+                    json_field("tabs", json!(tab_count));
+                }
             }
         }
     }
