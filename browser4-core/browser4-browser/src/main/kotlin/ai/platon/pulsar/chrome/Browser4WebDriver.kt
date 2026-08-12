@@ -3,6 +3,7 @@ package ai.platon.pulsar.chrome
 import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.api.model.BrowserTab
 import ai.platon.pulsar.api.model.WebDriverException
+import ai.platon.pulsar.chrome.protocol.Keyboard
 import kotlinx.coroutines.delay
 
 /**
@@ -104,9 +105,14 @@ open class Browser4WebDriver(
             return
         }
 
-        // Pre-click sequence: focus and scroll into view so the element is
-        // interactable, matching what the parent click() does internally.
-        page.focusOnSelector(selector)
+        // Scroll the element into view so it is interactable.  Right-click and
+        // other non-left buttons do not require the element to be focusable
+        // (e.g. <div> elements without tabindex), so focus is best-effort.
+        try {
+            page.focusOnSelector(selector)
+        } catch (e: Exception) {
+            // Element is not focusable — that's fine for non-left clicks.
+        }
         page.scrollIntoViewIfNeeded(selector)
 
         // Resolve the element's clickable point after scroll.
@@ -126,6 +132,66 @@ open class Browser4WebDriver(
     // lack the fixes from c9e32e070 (PR #564).  These overrides bridge the gap
     // until a new pulsar-browser release incorporates them upstream.
     // ---------------------------------------------------------------------------
+
+    /**
+     * Shared [Keyboard] instance for this driver.
+     *
+     * The upstream [PulsarWebDriver.keyDown] / [keyUp] dispatch stateless JS
+     * [KeyboardEvent]s, and the upstream [PulsarWebDriver.press] reads the
+     * modifier state from a *private* Keyboard instance that keyDown never
+     * touches.  Keeping one [Keyboard] for keyDown/keyUp/press here makes
+     * `Keyboard.pressedModifiers` track held modifiers so that sequences like
+     * `keyDown("Control")` → `press("a")` produce DOM events with
+     * `ctrlKey: true`.
+     */
+    private val keyboard: Keyboard by lazy { Keyboard(browserProtocol) }
+
+    /**
+     * Dispatch a keyDown for [key] through the stateful [Keyboard.down]
+     * path so held modifiers (Control, Alt, Meta, Shift) are tracked and
+     * applied to subsequent [press] calls.
+     */
+    override suspend fun keyDown(key: String) {
+        keyboard.down(key)
+    }
+
+    /**
+     * Dispatch a keyUp for [key] through the stateful [Keyboard.up] path,
+     * matching [keyDown] so released modifiers are cleared again.
+     */
+    override suspend fun keyUp(key: String) {
+        keyboard.up(key)
+    }
+
+    /**
+     * Press [key], optionally on the element identified by [selector], using
+     * the shared [keyboard] so that modifiers held via [keyDown] are applied.
+     *
+     * When [selector] is provided the element is focused first, and the
+     * cursor is moved to the end ONLY for single printable characters —
+     * navigation keys (Home, End, ArrowLeft, Delete, …) preserve the current
+     * cursor position so chains like Home→Delete work as expected.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun press(key: String, selector: String?) {
+        if (selector != null) {
+            page.focusOnSelector(selector)
+
+            if (key.length == 1 && !Character.isISOControl(key[0])) {
+                evaluate("""
+                    (function(){
+                        var el = document.querySelector('${selector.replace("'", "\\'")}');
+                        if (!el) return;
+                        if (typeof el.setSelectionRange === 'function') {
+                            el.setSelectionRange(99999, 99999);
+                        }
+                    })()
+                """.trimIndent())
+            }
+        }
+
+        keyboard.press(key, randomDelayMillis("press"))
+    }
 
     /**
      * Type text into the element identified by [selector] with correct Unicode
@@ -177,37 +243,13 @@ open class Browser4WebDriver(
     }
 
     /**
-     * Press a [key] on the element identified by [selector], with conditional
-     * cursor positioning so that navigation-key chains (e.g. Home → Delete)
-     * are not broken by an eager `setSelectionRange(99999, 99999)`.
-     *
-     * The upstream [PulsarWebDriver.press] unconditionally calls
-     * `setSelectionRange(99999, 99999)` after focusing, which resets the
-     * cursor to the end.  For printable single-character keys this is correct
-     * (it ensures the typed character appends rather than prepends).  For
-     * navigation keys (Home, End, ArrowLeft, Delete, …) it destroys the
-     * expected cursor state and makes chained operations fail.
+     * Press a [key] on the element identified by [selector] — an alias of
+     * [press] kept for backward compatibility with the original
+     * Browser4WebDriver extension surface.
      */
     @Throws(WebDriverException::class)
     suspend fun pressSafe(key: String, selector: String) {
-        page.focusOnSelector(selector)
-
-        // Position cursor at end ONLY for single printable characters.
-        // Navigation / control keys must preserve the current cursor position
-        // so that chains like Home→Delete work as expected.
-        if (key.length == 1 && !Character.isISOControl(key[0])) {
-            evaluate("""
-                (function(){
-                    var el = document.querySelector('${selector.replace("'", "\\'")}');
-                    if (!el) return;
-                    if (typeof el.setSelectionRange === 'function') {
-                        el.setSelectionRange(99999, 99999);
-                    }
-                })()
-            """.trimIndent())
-        }
-
-        press(key)
+        press(key, selector)
     }
 
     /**
@@ -226,7 +268,6 @@ open class Browser4WebDriver(
             (function(){
                 var el = document.querySelector('${selector.replace("'", "\\'")}');
                 if (!el) return;
-                if (typeof el.focus === 'function') { el.focus(); }
                 var val = '${
                     text.replace("\\", "\\\\")
                         .replace("'", "\\'")
@@ -235,7 +276,16 @@ open class Browser4WebDriver(
                 }';
                 var maxLen = el.maxLength;
                 if (maxLen > 0 && val.length > maxLen) { val = val.substring(0, maxLen); }
-                el.value = val;
+                // For number / range inputs use valueAsNumber to avoid string-coercion
+                // edge cases that can leave the value empty.
+                if (el.type === 'number' || el.type === 'range') {
+                    var numVal = parseFloat(val);
+                    if (!isNaN(numVal)) { el.valueAsNumber = numVal; }
+                    else { el.value = val; }
+                } else {
+                    el.value = val;
+                }
+                if (typeof el.focus === 'function') { el.focus(); }
                 el.dispatchEvent(new Event('input', { bubbles: true }));
                 el.dispatchEvent(new Event('change', { bubbles: true }));
             })()

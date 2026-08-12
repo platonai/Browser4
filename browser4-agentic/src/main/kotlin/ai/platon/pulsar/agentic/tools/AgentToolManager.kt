@@ -318,7 +318,7 @@ class AgentToolManager constructor(
 
         val method = tc.method
         when (method) {
-            "switchTab" -> onDidSwitchTab(evaluate)
+            "switchTab" -> onDidSwitchTab(tc, evaluate)
             "closeTab" -> onDidCloseTab()
             "navigate" -> onDidNavigate(driver, tc, evaluate)
         }
@@ -329,28 +329,52 @@ class AgentToolManager constructor(
     /**
      * Handle switching to a new tab by binding the target driver to the session.
      *
-     * Uses the driver returned by [BrowserToolExecutor.switchTab] (via [evaluate.value])
-     * as the primary source of truth — no need to re-derive it from [session.boundBrowser].
+     * The driver returned by [BrowserToolExecutor.switchTab] is wrapped into a
+     * description map by [AbstractToolExecutor.callFunctionOn] (WebDriver is not
+     * a serializable scalar), so [evaluate.value] can never be a WebDriver.
+     * Resolve the target driver from the tool-call arguments (`tabId` or
+     * `index`) against [session.boundBrowser] instead; fall back to the
+     * browser's front driver when neither can be resolved.
      */
-    private fun onDidSwitchTab(evaluate: TcEvaluate) {
+    private suspend fun onDidSwitchTab(tc: ToolCall, evaluate: TcEvaluate) {
         val switchedDriver = evaluate.value as? WebDriver
-        if (switchedDriver == null) {
-            logger.warn("! switchTab did not return a WebDriver; falling back to boundBrowser")
-            val fallback = session.boundBrowser?.frontDriver
-            if (fallback == null) {
-                logger.warn("! No driver is in front after switchTab")
-                return
-            }
-            session.bindDriver(fallback)
+        if (switchedDriver != null) {
+            session.bindDriver(switchedDriver)
             return
         }
 
-        val oldBoundDriver = session.boundDriver
-        if (switchedDriver == oldBoundDriver) {
-            logger.warn("! The bound driver does not change after switchTab")
+        val browser = session.boundBrowser
+        if (browser == null) {
+            logger.warn("! switchTab did not return a WebDriver and no browser is bound")
+            return
         }
 
-        session.bindDriver(switchedDriver)
+        // Resolve from tabId (GUID) or index — the same arguments that
+        // BrowserToolExecutor.resolveTabDriver uses.
+        val tabId = tc.arguments["tabId"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+        val index = (tc.arguments["index"] as? Number)?.toInt()
+            ?: tc.arguments["index"]?.toString()?.trim()
+                ?.takeIf { it.isNotEmpty() }?.toIntOrNull()
+        val resolved = when {
+            tabId != null -> browser.drivers[tabId]
+            index != null -> browser.listDrivers().filterIsInstance<WebDriver>().getOrNull(index)
+            else -> null
+        }
+        if (resolved != null) {
+            session.bindDriver(resolved)
+            return
+        }
+
+        // Last resort: bind whatever the browser reports as front.  Note that
+        // bringToFront() may not have committed the switch yet, so this can
+        // still bind the previous tab — log it for diagnosis.
+        logger.warn("! switchTab resolved no driver (tabId={}, index={}); falling back to frontDriver", tabId, index)
+        val fallback = browser.frontDriver
+        if (fallback == null) {
+            logger.warn("! No driver is in front after switchTab")
+            return
+        }
+        session.bindDriver(fallback)
     }
 
     /**

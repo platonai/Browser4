@@ -754,32 +754,32 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                         // fill that respects HTMLInputElement.maxLength
                         b4Driver.fillSafe(selector, text)
                     } else {
-                        // Fallback: delegate to standard driver for short text,
-                        // inline maxlength-aware JS for longer strings
-                        if (text.length > 5) {
-                            val pulsarDriver = driver as? PulsarWebDriver
-                            if (pulsarDriver != null) {
-                                pulsarDriver.evaluate("""
-                                    (function(){
-                                        var el = document.querySelector('${selector.replace("'", "\\'")}');
-                                        if (!el) return;
-                                        if (typeof el.focus === 'function') { el.focus(); }
-                                        var val = '${
-                                            text.replace("\\", "\\\\")
-                                                .replace("'", "\\'")
-                                                .replace("\n", "\\n")
-                                                .replace("\r", "\\r")
-                                        }';
-                                        var maxLen = el.maxLength;
-                                        if (maxLen > 0 && val.length > maxLen) { val = val.substring(0, maxLen); }
-                                        el.value = val;
-                                        el.dispatchEvent(new Event('input', { bubbles: true }));
-                                        el.dispatchEvent(new Event('change', { bubbles: true }));
-                                    })()
-                                """.trimIndent())
-                            } else {
-                                driver.fill(selector, text)
-                            }
+                        // Fallback: inline maxlength-aware JS for all text lengths,
+                        // with number/range input handling.  The upstream
+                        // PulsarWebDriver.fill() is known to fail on constrained
+                        // inputs (e.g. <input type=number>).
+                        val jsPrefix = "var el=document.querySelector('${selector.replace("'", "\\'")}');if(!el)return;"
+                        val jsVal = "var val='${
+                            text.replace("\\", "\\\\")
+                                .replace("'", "\\'")
+                                .replace("\n", "\\n")
+                                .replace("\r", "\\r")
+                        }';"
+                        if (driver is PulsarWebDriver) {
+                            driver.evaluate("""
+                                (function(){$jsPrefix$jsVal
+                                var maxLen=el.maxLength;
+                                if(maxLen>0&&val.length>maxLen)val=val.substring(0,maxLen);
+                                if(el.type==='number'||el.type==='range'){
+                                    var numVal=parseFloat(val);
+                                    if(!isNaN(numVal))el.valueAsNumber=numVal;
+                                    else el.value=val;
+                                }else{el.value=val;}
+                                if(typeof el.focus==='function')el.focus();
+                                el.dispatchEvent(new Event('input',{bubbles:true}));
+                                el.dispatchEvent(new Event('change',{bubbles:true}));
+                                })()
+                            """.trimIndent())
                         } else {
                             driver.fill(selector, text)
                         }
@@ -988,6 +988,10 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
             "keydown", "keyDown" -> {
                 validateArgs(args, allowed("key"), setOf("key"), functionName)
+                // Browser4WebDriver.keyDown routes through the stateful
+                // Keyboard.down() CDP path, which tracks held modifiers so
+                // that sequences like keyDown("Control") → press("a")
+                // produce DOM events with ctrlKey: true.
                 driver.keyDown(paramString(args, "key", functionName)!!)
             }
 

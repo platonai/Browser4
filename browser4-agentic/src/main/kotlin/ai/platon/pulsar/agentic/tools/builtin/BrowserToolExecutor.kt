@@ -68,6 +68,11 @@ class BrowserToolExecutor : AbstractToolExecutor() {
             "switchTab" -> {
                 val driver = resolveTabDriver(browser, args, functionName, allowCurrentTab = false)
                 driver.bringToFront()
+                // Target.activateTarget may return before the browser has fully
+                // committed the tab switch.  A short delay gives the rendering
+                // pipeline time to settle so that a subsequent evaluate/call
+                // targets the correct page.
+                kotlinx.coroutines.delay(200)
                 logger.info("""👀 Switched to tab {}""", driver.guid)
                 driver
             }

@@ -14936,7 +14936,7 @@ fn validate_required_args(cmd_def: &commands::CommandDef, parsed: &HashMap<Strin
     for arg in cmd_def.args {
         if !arg.optional {
             let has_value = match parsed.get(arg.name) {
-                Some(Value::String(s)) => !s.is_empty(),
+                Some(Value::String(_)) => true, // empty string "" is a valid explicit value
                 Some(Value::Number(_)) => true,
                 Some(Value::Bool(_)) => true,
                 Some(Value::Array(arr)) => !arr.is_empty(),
@@ -18471,7 +18471,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_required_args_fails_when_required_empty_string() {
+    fn validate_required_args_accepts_empty_string_as_valid_value() {
         let cmd_def = commands::CommandDef {
             name: "test-cmd",
             description: "",
@@ -18485,8 +18485,12 @@ mod tests {
             tool_params_fn: |_| json!({}),
         };
         let mut parsed = HashMap::new();
-        parsed.insert("url".to_string(), json!("")); // empty string
-        let err = validate_required_args(&cmd_def, &parsed).unwrap_err();
+        parsed.insert("url".to_string(), json!("")); // empty string is valid
+        // Should NOT error — explicitly providing "" is a valid value.
+        validate_required_args(&cmd_def, &parsed).expect("empty string should be accepted");
+        // But truly missing args should still fail.
+        let empty = HashMap::new();
+        let err = validate_required_args(&cmd_def, &empty).unwrap_err();
         assert!(err.contains("Missing required argument"));
     }
 
