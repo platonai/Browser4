@@ -15,12 +15,16 @@
     isolated per release line.
 
 .DESCRIPTION
-    1. Detects the current git branch.
-    2. If the branch matches X.Y.x (e.g. 4.12.x), uses X.Y as the version prefix
-       and searches for existing tags like vX.Y.*-ci.* — scoped to that branch.
-    3. Increments only the pre-release counter (ci.N), leaving the patch alone:
-       v4.12.5-ci.3 → v4.12.5-ci.4.
-    4. On non-version branches (main, develop, feature/*), falls back to the
+    1. Verifies the local VERSION equals the latest GitHub release patch + 1,
+       aborting with a confirmation prompt if it does not.
+    2. Detects the current git branch.
+    3. If the branch matches X.Y.x (e.g. 4.12.x), uses X.Y as the version prefix
+       and the patch from the current VERSION file, then searches for existing
+       tags like vX.Y.<patch>-ci.* — scoped to that branch.
+    4. Increments only the pre-release counter (ci.N); the patch tracks the
+       current VERSION file: v4.12.5-ci.3 → v4.12.5-ci.4 (same patch), or
+       v4.12.5-ci.3 → v4.12.6-ci.1 after a version bump.
+    5. On non-version branches (main, develop, feature/*), falls back to the
        VERSION file for the base version and bumps the pre-release counter as
        before.
 
@@ -46,6 +50,43 @@ param(
 
 $repoRoot = (git rev-parse --show-toplevel 2>$null)
 Set-Location $repoRoot
+
+# ═══════════════════════════════════════════════════════════════════
+# 0. Verify local version is the latest GitHub release patch + 1
+# ═══════════════════════════════════════════════════════════════════
+
+# Resolve the latest stable GitHub release tag (gh CLI first, then git tags).
+$latestRelease = $null
+try {
+    $ghTags = @(gh release list --limit 100 --json tagName 2>$null | ConvertFrom-Json | ForEach-Object { $_.tagName })
+    $latestRelease = $ghTags | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } | Select-Object -First 1
+} catch { }
+
+if (-not $latestRelease) {
+    $latestRelease = @(git tag --sort=-v:refname 2>$null |
+        Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
+        Select-Object -First 1) -join ''
+}
+
+$localSnapshot = Get-Content "$repoRoot\VERSION" -TotalCount 1
+$localVersion = ($localSnapshot -replace '-SNAPSHOT', '').Trim()
+
+if ($latestRelease -and $latestRelease -match '^v?(\d+)\.(\d+)\.(\d+)$') {
+    $expectedVersion = "$($matches[1]).$($matches[2]).$([int]$matches[3] + 1)"
+    if ($localVersion -ne $expectedVersion) {
+        Write-Warning "Local VERSION '$localVersion' is not latest release '$latestRelease' patch + 1 (expected '$expectedVersion')."
+        try { $answer = Read-Host "Continue anyway? [y/N]" } catch { $answer = '' }
+        if ($answer -notmatch '^[Yy]$') {
+            Write-Error "Aborted: local VERSION '$localVersion' does not equal latest release '$latestRelease' patch + 1 ('$expectedVersion')."
+            exit 1
+        }
+        Write-Host "Continuing despite version mismatch (user confirmed)."
+    } else {
+        Write-Host "Local VERSION '$localVersion' matches latest release '$latestRelease' patch + 1."
+    }
+} else {
+    Write-Warning "Could not determine the latest stable release (got '$latestRelease'); skipping the patch+1 check."
+}
 
 # ═══════════════════════════════════════════════════════════════════
 # 1. Determine version prefix from current branch
@@ -97,30 +138,44 @@ if ($tags.Count -eq 0) {
 # ═══════════════════════════════════════════════════════════════════
 
 if ($branchBased) {
-    # ── Branch-based: bump pre-release counter only (patch stays the same) ──
-    # Sort by (patch * 100000 + ciNumber) descending -> highest wins
-    $latestTag = $tags | Sort-Object {
-        if ($_ -match "^v${escapedPrefix}\.(\d+)-$([regex]::Escape($PreReleaseVersion))\.(\d+)$") {
-            return [int]$matches[1] * 100000 + [int]$matches[2]
-        }
-        return 0
-    } -Descending | Select-Object -First 1
+    # ── Branch-based: base the tag on the CURRENT version's patch (read from
+    #    the VERSION file) and bump only the pre-release counter (ci.N). This
+    #    keeps the tag tracking version bumps (e.g. VERSION 4.13.3-SNAPSHOT →
+    #    v4.13.3-ci.1) instead of freezing at the patch that was current when
+    #    the first CI tag was seeded (the old behavior pinned every tag to
+    #    v4.13.0-ci.N regardless of later version bumps). ──
+    $SNAPSHOT_VERSION = Get-Content "$repoRoot\VERSION" -TotalCount 1
+    $currentVersion = $SNAPSHOT_VERSION -replace "-SNAPSHOT", ""
+    $currentParts = $currentVersion -split "\."
+    $currentPatch = if ($currentParts.Count -ge 3) { [int]$currentParts[2] } else { 0 }
 
-    Write-Host "Latest tag for $majorMinor.x: $latestTag"
+    $escapedCurrent = [regex]::Escape("v$majorMinor.$currentPatch")
+    $exactPattern = "^${escapedCurrent}-$([regex]::Escape($PreReleaseVersion))\.(\d+)$"
+    $matchingTags = @($tags | Where-Object { $_ -match $exactPattern })
 
-    if ($latestTag -match "^v${escapedPrefix}\.(\d+)-$([regex]::Escape($PreReleaseVersion))\.(\d+)$") {
-        $patch = [int]$matches[1]
-        $ciNumber = [int]$matches[2]
-        $newCiNumber = $ciNumber + 1
-        $newTag = "v$majorMinor.$patch-$PreReleaseVersion.$newCiNumber"
-        git tag $newTag
-        git push $remote $newTag
-        Write-Host "Created new tag '$newTag' (ci $ciNumber -> $newCiNumber, patch $patch unchanged) and pushed to '$remote'."
-        Write-Output $newTag
+    if ($matchingTags.Count -eq 0) {
+        $newTag = "v$majorMinor.$currentPatch-$PreReleaseVersion.1"
+        Write-Host "No existing tags for v$majorMinor.$currentPatch-$PreReleaseVersion.*. Creating new tag: $newTag"
     } else {
-        Write-Error "Latest tag $latestTag does not match expected pattern."
-        exit 1
+        $latestTag = $matchingTags | Sort-Object {
+            if ($_ -match $exactPattern) { return [int]$matches[1] }
+            return 0
+        } -Descending | Select-Object -First 1
+        Write-Host "Latest tag for v$majorMinor.$currentPatch-$PreReleaseVersion.*: $latestTag"
+        if ($latestTag -match $exactPattern) {
+            $ciNumber = [int]$matches[1]
+            $newCiNumber = $ciNumber + 1
+            $newTag = "v$majorMinor.$currentPatch-$PreReleaseVersion.$newCiNumber"
+        } else {
+            Write-Error "Latest tag $latestTag does not match expected pattern."
+            exit 1
+        }
     }
+
+    git tag $newTag
+    git push $remote $newTag
+    Write-Host "Created new tag '$newTag' and pushed it to remote '$remote'."
+    Write-Output $newTag
 } else {
     # ── VERSION-file-based: bump pre-release counter (legacy behavior) ──
     $escapedVersion = [regex]::Escape($version)
