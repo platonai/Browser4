@@ -2,6 +2,7 @@ package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.agentic.model.ToolCall
+import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -98,6 +99,44 @@ class BrowserTabToolExecutorTest {
             )
 
             verify(driver).keyUp("Control")
+        }
+    }
+
+    @Test
+    fun `fill fallback JS respects input constraints`() {
+        runBlocking {
+            // The mock must be a PulsarWebDriver so the executor's
+            // `driver is PulsarWebDriver` check routes to the inline JS path.
+            // Inside that branch the executor smart-casts to PulsarWebDriver,
+            // whose evaluate(String) overload is the one invoked — capture
+            // the expression via a stub answer on that overload (Mockito
+            // handles the suspend continuation argument).
+            val driver = Mockito.mock(PulsarWebDriver::class.java)
+            val captured = java.util.concurrent.atomic.AtomicReference<String>()
+            Mockito.doAnswer { inv ->
+                captured.set(inv.getArgument(0))
+                null
+            }.`when`(driver).evaluate(Mockito.anyString())
+
+            executor.callFunctionOn(
+                ToolCall(
+                    "tab", "fill",
+                    mutableMapOf<String, Any?>("selector" to "#number-target", "text" to "42")
+                ),
+                driver
+            )
+
+            val js = captured.get()
+            assertTrue(js != null, "fill must dispatch the inline JS via driver.evaluate")
+            // read-only/disabled inputs keep their value (user input blocked)
+            assertTrue(js.contains("el.disabled||el.readOnly"), "JS must skip disabled/readonly: $js")
+            // number/range inputs set valueAsNumber instead of string coercion
+            assertTrue(js.contains("valueAsNumber"), "JS must use valueAsNumber: $js")
+            // contenteditable elements get textContent instead of value
+            assertTrue(js.contains("isContentEditable"), "JS must handle contenteditable: $js")
+            assertTrue(js.contains("el.textContent=val"), "JS must set textContent: $js")
+            // maxlength guard still present
+            assertTrue(js.contains("maxLength"), "JS must guard maxlength: $js")
         }
     }
 

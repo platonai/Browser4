@@ -754,11 +754,13 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                         // fill that respects HTMLInputElement.maxLength
                         b4Driver.fillSafe(selector, text)
                     } else {
-                        // Fallback: inline maxlength-aware JS for all text lengths,
-                        // with number/range input handling.  The upstream
+                        // Fallback: inline constraint-aware JS (same semantics as
+                        // Browser4WebDriver.fillSafe — readonly/disabled skip,
+                        // maxlength guard, number/range via valueAsNumber,
+                        // contenteditable via textContent).  The upstream
                         // PulsarWebDriver.fill() is known to fail on constrained
                         // inputs (e.g. <input type=number>).
-                        val jsPrefix = "var el=document.querySelector('${selector.replace("'", "\\'")}');if(!el)return;"
+                        val jsPrefix = "var el=document.querySelector('${selector.replace("'", "\\'")}');if(!el)return;if(el.disabled||el.readOnly)return;"
                         val jsVal = "var val='${
                             text.replace("\\", "\\\\")
                                 .replace("'", "\\'")
@@ -770,7 +772,8 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                                 (function(){$jsPrefix$jsVal
                                 var maxLen=el.maxLength;
                                 if(maxLen>0&&val.length>maxLen)val=val.substring(0,maxLen);
-                                if(el.type==='number'||el.type==='range'){
+                                if(el.isContentEditable){el.textContent=val;}
+                                else if(el.type==='number'||el.type==='range'){
                                     var numVal=parseFloat(val);
                                     if(!isNaN(numVal))el.valueAsNumber=numVal;
                                     else el.value=val;

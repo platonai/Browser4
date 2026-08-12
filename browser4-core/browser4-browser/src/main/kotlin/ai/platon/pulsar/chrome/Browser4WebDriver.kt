@@ -254,13 +254,17 @@ open class Browser4WebDriver(
 
     /**
      * Fill the element identified by [selector] with [text], respecting the
-     * HTML `maxlength` attribute so that programmatic assignments do not
-     * silently exceed the element's constraint.
+     * element's user-input constraints:
      *
-     * The upstream [PulsarWebDriver.fill] JavaScript fallback directly assigns
-     * `this.value = text` without checking [HTMLInputElement.maxLength].
-     * Browsers enforce `maxlength` for user input but not for programmatic
-     * `value` assignment, so a long string can silently overflow.
+     * - `readonly` and `disabled` elements keep their current value (user
+     *   input is blocked, and a programmatic assignment would silently
+     *   bypass that constraint).
+     * - `maxlength` is honored so a long string cannot silently overflow
+     *   (browsers enforce it for user input but not for programmatic
+     *   `value` assignment).
+     * - number / range inputs use `valueAsNumber` to avoid string-coercion
+     *   edge cases that can leave the value empty.
+     * - contenteditable elements get their text content replaced.
      */
     @Throws(WebDriverException::class)
     suspend fun fillSafe(selector: String, text: String) {
@@ -268,6 +272,7 @@ open class Browser4WebDriver(
             (function(){
                 var el = document.querySelector('${selector.replace("'", "\\'")}');
                 if (!el) return;
+                if (el.disabled || el.readOnly) { return; }
                 var val = '${
                     text.replace("\\", "\\\\")
                         .replace("'", "\\'")
@@ -276,9 +281,9 @@ open class Browser4WebDriver(
                 }';
                 var maxLen = el.maxLength;
                 if (maxLen > 0 && val.length > maxLen) { val = val.substring(0, maxLen); }
-                // For number / range inputs use valueAsNumber to avoid string-coercion
-                // edge cases that can leave the value empty.
-                if (el.type === 'number' || el.type === 'range') {
+                if (el.isContentEditable) {
+                    el.textContent = val;
+                } else if (el.type === 'number' || el.type === 'range') {
                     var numVal = parseFloat(val);
                     if (!isNaN(numVal)) { el.valueAsNumber = numVal; }
                     else { el.value = val; }
