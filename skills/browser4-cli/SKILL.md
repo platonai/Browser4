@@ -105,6 +105,12 @@ The `list` command displays a "Next open" column showing what happens when `goto
 - **Reuse** — reconnects to the existing browser window (session is active on the backend).
 - **Refresh** — opens a fresh window (session is stale or missing).
 
+Session state is stored in `~/.browser4` by default. When that directory is not
+writable (e.g. sandboxed shells), the CLI automatically falls back to
+`./.browser4-cli-state` (workspace-relative) and prints a warning — set
+`BROWSER4_CLI_STATE_DIR` to an explicit writable path to silence it.
+`BROWSER4_RUNTIME_DIR` likewise overrides the runtime bundle location.
+
 ### Tab Management
 
 Tab commands scope to a session — all operations affect the session targeted via `-s <session>` (or the DEFAULT session when `-s` is omitted).

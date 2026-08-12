@@ -238,6 +238,22 @@ pub fn generate_help() -> String {
         30,
     ));
 
+    // Environment variables
+    lines.push(
+        "\n── Environment variables ─────────────────────────────────────────────"
+            .to_string(),
+    );
+    lines.push(format_with_gap(
+        "  BROWSER4_CLI_STATE_DIR=<dir>",
+        "override CLI session state directory (default: ~/.browser4); falls back to ./.browser4-cli-state when unwritable",
+        30,
+    ));
+    lines.push(format_with_gap(
+        "  BROWSER4_RUNTIME_DIR=<dir>",
+        "override Browser4 runtime data directory (JRE, JARs, launchers)",
+        30,
+    ));
+
     lines.push(String::new());
     lines.push(
         "Run `browser4-cli help <command>` or `<command> --help` for detailed options and examples."
@@ -384,11 +400,24 @@ pub fn generate_help_json(sub_command: Option<&str>) -> String {
         "--help-json": {"type": "bool", "description": "Emit this JSON help and exit"},
     });
 
+    // Environment variables
+    let environment_variables = serde_json::json!({
+        "BROWSER4_CLI_STATE_DIR": {
+            "type": "string",
+            "description": "Override CLI session state directory (default: ~/.browser4); falls back to ./.browser4-cli-state when unwritable"
+        },
+        "BROWSER4_RUNTIME_DIR": {
+            "type": "string",
+            "description": "Override Browser4 runtime data directory (JRE, JARs, launchers)"
+        },
+    });
+
     let output = serde_json::json!({
         "cli": "browser4-cli",
         "version": VERSION,
         "usage": "browser4-cli [-s <session>] <command> [args] [options]",
         "global_options": global_options,
+        "environment_variables": environment_variables,
         "categories": categories_json,
         "category_aliases": {
             "nav": "navigation",
@@ -2763,6 +2792,9 @@ mod tests {
         assert!(help.contains("-q, --quiet"));
         assert!(help.contains("suppress normal output"));
         assert!(help.contains("--help-json"));
+        assert!(help.contains("Environment variables"));
+        assert!(help.contains("BROWSER4_CLI_STATE_DIR"));
+        assert!(help.contains("BROWSER4_RUNTIME_DIR"));
     }
 
     #[test]
@@ -3381,6 +3413,9 @@ mod tests {
         assert!(json.contains("\"version\""));
         assert!(json.contains("\"usage\""));
         assert!(json.contains("\"global_options\""));
+        assert!(json.contains("\"environment_variables\""));
+        assert!(json.contains("\"BROWSER4_CLI_STATE_DIR\""));
+        assert!(json.contains("\"BROWSER4_RUNTIME_DIR\""));
         assert!(json.contains("\"categories\""));
         assert!(json.contains("\"category_aliases\""));
         // Should contain some well-known commands

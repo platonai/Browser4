@@ -11,6 +11,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MousePosition {
@@ -159,6 +160,15 @@ impl Default for CliState {
 
 /// Resolve the default state directory, honouring `BROWSER4_CLI_STATE_DIR`.
 pub fn resolve_default_state_dir() -> PathBuf {
+    if let Some(override_dir) = user_state_dir_override() {
+        return override_dir;
+    }
+    default_home_state_dir()
+}
+
+/// `Some(path)` when `BROWSER4_CLI_STATE_DIR` is set to an accepted value
+/// (non-empty and not starting with '-').
+fn user_state_dir_override() -> Option<PathBuf> {
     if let Ok(override_dir) = std::env::var("BROWSER4_CLI_STATE_DIR") {
         let trimmed = override_dir.trim().to_string();
         if !trimmed.is_empty() {
@@ -172,16 +182,52 @@ pub fn resolve_default_state_dir() -> PathBuf {
                     Using default state directory (~/.browser4) instead.",
                     trimmed
                 );
-            } else {
-                return PathBuf::from(&trimmed)
-                    .canonicalize()
-                    .unwrap_or(PathBuf::from(trimmed));
+                return None;
             }
+            return Some(
+                PathBuf::from(&trimmed)
+                    .canonicalize()
+                    .unwrap_or_else(|_| PathBuf::from(&trimmed)),
+            );
         }
     }
+    None
+}
+
+/// The implicit default state directory (`~/.browser4`).
+fn default_home_state_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".browser4")
+}
+
+/// True when `state_dir` resolves to the implicit `~/.browser4` (no accepted
+/// `BROWSER4_CLI_STATE_DIR` override). Handles both `None` (caller asked for
+/// the default) and `Some(p)` equal to the default (e.g. `SessionRegistry`
+/// pins the dir at startup).
+fn is_implicit_default_dir(state_dir: Option<&Path>) -> bool {
+    if user_state_dir_override().is_some() {
+        return false;
+    }
+    match state_dir {
+        None => true,
+        Some(p) => p == default_home_state_dir(),
+    }
+}
+
+/// Name of the workspace-relative fallback directory used when the default
+/// state directory (`~/.browser4`) is not writable.
+const FALLBACK_STATE_DIR_NAME: &str = ".browser4-cli-state";
+
+/// Once-per-process guard so the fallback warning prints at most once within
+/// a single command invocation.
+static FALLBACK_WARNING_PRINTED: AtomicBool = AtomicBool::new(false);
+
+/// Workspace-relative fallback directory: `./.browser4-cli-state`.
+fn fallback_state_dir() -> PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(FALLBACK_STATE_DIR_NAME)
 }
 
 /// Resolve the directory for Browser4 runtime data (JRE, JARs, launchers).
@@ -244,20 +290,41 @@ fn state_file(state_dir: &Path, session_name: Option<&str>) -> PathBuf {
 /// Read the persisted CLI state from disk, falling back to defaults.
 /// Auto-migrates old state files that lack the `kind` field by inferring it
 /// from the legacy `is_attached` / `attach_type` fields.
+///
+/// When the implicit default directory (`~/.browser4`) is not readable (e.g.
+/// after a fallback write landed in `./.browser4-cli-state`), the fallback
+/// directory is checked so sessions survive across invocations.
 pub fn read_state(state_dir: Option<&Path>, session_name: Option<&str>) -> CliState {
     let dir = state_dir
         .map(|p| p.to_path_buf())
         .unwrap_or_else(resolve_default_state_dir);
-    let path = state_file(&dir, session_name);
-    match fs::read_to_string(&path) {
-        Ok(raw) => {
-            let mut state: CliState =
-                serde_json::from_str::<CliState>(&raw).unwrap_or_default();
-            migrate_legacy_kind(&mut state);
-            state
-        }
-        Err(_) => CliState::default(),
+
+    let try_read = |d: &Path| -> Option<CliState> {
+        let path = state_file(d, session_name);
+        fs::read_to_string(&path).ok().map(|raw| parse_state(&raw))
+    };
+
+    if let Some(state) = try_read(&dir) {
+        return state;
     }
+
+    // If we used the implicit default dir and the file wasn't found, also
+    // check the fallback directory so sessions created after a fallback write
+    // are found on the next invocation.
+    if is_implicit_default_dir(state_dir) {
+        if let Some(state) = try_read(&fallback_state_dir()) {
+            return state;
+        }
+    }
+
+    CliState::default()
+}
+
+/// Parse and migrate a raw state JSON string.
+fn parse_state(raw: &str) -> CliState {
+    let mut state: CliState = serde_json::from_str::<CliState>(raw).unwrap_or_default();
+    migrate_legacy_kind(&mut state);
+    state
 }
 
 /// If the state was loaded from an old file that lacks the `kind` field,
@@ -277,6 +344,11 @@ fn migrate_legacy_kind(state: &mut CliState) {
 /// Write the CLI state to disk, creating the directory if necessary.
 /// Syncs the legacy `is_attached` / `attach_type` fields from `kind` so
 /// old CLI versions can still read the state file.
+///
+/// When the implicit default directory (`~/.browser4`) is not writable (e.g.
+/// under a file sandbox), the write automatically falls back to a workspace-
+/// relative directory (`./.browser4-cli-state`) and prints a one-time warning
+/// suggesting `BROWSER4_CLI_STATE_DIR`.
 pub fn write_state(
     state: &CliState,
     state_dir: Option<&Path>,
@@ -286,7 +358,42 @@ pub fn write_state(
         .map(|p| p.to_path_buf())
         .unwrap_or_else(resolve_default_state_dir);
 
-    let path = state_file(&dir, session_name);
+    match write_state_to_dir(state, &dir, session_name) {
+        Ok(()) => Ok(()),
+        Err(e)
+            if e.kind() == std::io::ErrorKind::PermissionDenied
+                && is_implicit_default_dir(state_dir) =>
+        {
+            let fallback = fallback_state_dir();
+            if FALLBACK_WARNING_PRINTED
+                .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                eprintln!(
+                    "browser4-cli: warning: cannot write CLI state to {} ({})",
+                    dir.display(),
+                    e
+                );
+                eprintln!(
+                    "browser4-cli: warning: using {} instead — set BROWSER4_CLI_STATE_DIR \
+                    to a writable location to silence this warning",
+                    fallback.display()
+                );
+            }
+            write_state_to_dir(state, &fallback, session_name)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Core write logic — operates on an explicit directory so the fallback
+/// path in [`write_state`] can reuse it without duplicating logic.
+fn write_state_to_dir(
+    state: &CliState,
+    dir: &Path,
+    session_name: Option<&str>,
+) -> std::io::Result<()> {
+    let path = state_file(dir, session_name);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -383,6 +490,7 @@ fn loop_state_file(state_dir: &Path, name: Option<&str>) -> PathBuf {
 }
 
 /// Read the persisted loop state, if any.
+/// When the implicit default dir is used, also checks the fallback directory.
 pub fn read_loop_state(state_dir: Option<&Path>, name: Option<&str>) -> Option<LoopState> {
     let dir = state_dir
         .map(|p| p.to_path_buf())
@@ -390,11 +498,17 @@ pub fn read_loop_state(state_dir: Option<&Path>, name: Option<&str>) -> Option<L
     let path = loop_state_file(&dir, name);
     match fs::read_to_string(&path) {
         Ok(raw) => serde_json::from_str::<LoopState>(&raw).ok(),
+        Err(_) if is_implicit_default_dir(state_dir) => {
+            let fallback_path = loop_state_file(&fallback_state_dir(), name);
+            fs::read_to_string(&fallback_path)
+                .ok()
+                .and_then(|raw| serde_json::from_str::<LoopState>(&raw).ok())
+        }
         Err(_) => None,
     }
 }
 
-/// Write the loop state to disk.
+/// Write the loop state to disk, with fallback on PermissionDenied.
 pub fn write_loop_state(
     state: &LoopState,
     state_dir: Option<&Path>,
@@ -403,8 +517,27 @@ pub fn write_loop_state(
     let dir = state_dir
         .map(|p| p.to_path_buf())
         .unwrap_or_else(resolve_default_state_dir);
-    fs::create_dir_all(&dir)?;
-    let path = loop_state_file(&dir, name);
+
+    match write_loop_state_to_dir(state, &dir, name) {
+        Ok(()) => Ok(()),
+        Err(e)
+            if e.kind() == std::io::ErrorKind::PermissionDenied
+                && is_implicit_default_dir(state_dir) =>
+        {
+            let fallback = fallback_state_dir();
+            write_loop_state_to_dir(state, &fallback, name)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn write_loop_state_to_dir(
+    state: &LoopState,
+    dir: &Path,
+    name: Option<&str>,
+) -> std::io::Result<()> {
+    fs::create_dir_all(dir)?;
+    let path = loop_state_file(dir, name);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -653,8 +786,22 @@ pub fn write_loop_history(
     let dir = state_dir
         .map(|p| p.to_path_buf())
         .unwrap_or_else(resolve_default_state_dir);
-    fs::create_dir_all(&dir)?;
-    let path = loop_history_path(&dir);
+
+    match write_loop_history_to_dir(entry, &dir) {
+        Ok(()) => Ok(()),
+        Err(e)
+            if e.kind() == std::io::ErrorKind::PermissionDenied
+                && is_implicit_default_dir(state_dir) =>
+        {
+            write_loop_history_to_dir(entry, &fallback_state_dir())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn write_loop_history_to_dir(entry: &LoopHistoryEntry, dir: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dir)?;
+    let path = loop_history_path(dir);
 
     // Read existing entries
     let mut entries: Vec<LoopHistoryEntry> = if path.exists() {
@@ -687,13 +834,23 @@ pub fn write_loop_history(
 }
 
 /// Read the loop completion history. Returns entries in chronological order
-/// (oldest first).
+/// (oldest first).  When the implicit default dir is used, also checks the
+/// fallback directory.
 pub fn read_loop_history(state_dir: Option<&Path>) -> Vec<LoopHistoryEntry> {
     let dir = state_dir
         .map(|p| p.to_path_buf())
         .unwrap_or_else(resolve_default_state_dir);
     let path = loop_history_path(&dir);
-    match fs::read_to_string(&path) {
+    let entries = parse_loop_history_file(&path);
+    if entries.is_empty() && is_implicit_default_dir(state_dir) {
+        parse_loop_history_file(&loop_history_path(&fallback_state_dir()))
+    } else {
+        entries
+    }
+}
+
+fn parse_loop_history_file(path: &Path) -> Vec<LoopHistoryEntry> {
+    match fs::read_to_string(path) {
         Ok(raw) => raw
             .lines()
             .filter(|l| !l.trim().is_empty())
@@ -748,22 +905,45 @@ fn async_tasks_path(state_dir: Option<&std::path::Path>) -> std::path::PathBuf {
 }
 
 /// Load the persisted async task list.
+/// When the implicit default dir is used, also checks the fallback directory.
 pub fn read_async_tasks(state_dir: Option<&std::path::Path>) -> AsyncTaskList {
     let path = async_tasks_path(state_dir);
     match std::fs::read_to_string(&path) {
         Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+        Err(_) if is_implicit_default_dir(state_dir) => {
+            let fallback_path = fallback_state_dir().join(ASYNC_TASKS_FILE);
+            std::fs::read_to_string(&fallback_path)
+                .ok()
+                .and_then(|c| serde_json::from_str(&c).ok())
+                .unwrap_or_default()
+        }
         Err(_) => AsyncTaskList::default(),
     }
 }
 
-/// Save an async task list to disk.
+/// Save an async task list to disk, with fallback on PermissionDenied.
 pub fn write_async_tasks(list: &AsyncTaskList, state_dir: Option<&std::path::Path>) -> std::io::Result<()> {
     let path = async_tasks_path(state_dir);
+
+    match write_async_tasks_to_path(list, &path) {
+        Ok(()) => Ok(()),
+        Err(e)
+            if e.kind() == std::io::ErrorKind::PermissionDenied
+                && is_implicit_default_dir(state_dir) =>
+        {
+            let fallback_path = fallback_state_dir().join(ASYNC_TASKS_FILE);
+            write_async_tasks_to_path(list, &fallback_path)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn write_async_tasks_to_path(list: &AsyncTaskList, path: &Path) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let content = serde_json::to_string_pretty(list)?;
-    std::fs::write(&path, content)
+    std::fs::write(path, content)
 }
 
 /// Add a task to the tracked list and persist.
