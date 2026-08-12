@@ -13,9 +13,19 @@ Use this skill when you need to:
 
 ## How to Use This Skill
 
+### Browser Launch Mode (Headless by Default)
+
+**Always open the browser in headless mode** unless the user explicitly asks to see the browser window. Headless mode is faster, uses fewer resources, and avoids cluttering the user's desktop.
+
+- **Default:** Use `browser4-cli open --headless <url>` to start a session (the `browser.navigate` MCP tool does not control display mode)
+- **Headed mode only when:**
+  - The user says "show me the browser", "I want to watch", "open visibly", "headed", or "debug visually"
+  - The user needs to perform a manual interaction they haven't automated
+- **Do NOT default to headed mode** — it wastes resources and opens unnecessary windows
+
 ### Step 1: Navigate and Identify the Form
 
-1. **Navigate to the page** containing the form
+1. **Navigate to the page** containing the form using `browser4-cli open --headless <url>` (or `browser4-cli goto <url>` if a headless session is already open)
 2. **Wait for the form to load** completely
 3. **Identify form fields** using CSS selectors or field names
 4. **Note the field types**: text inputs, checkboxes, radio buttons, dropdowns, etc.
@@ -149,7 +159,7 @@ browser.fill("input[type='date']", "2024-12-31")
 **Steps**:
 ```
 1. Navigate to contact page
-browser.navigate("https://example.com/contact")
+browser4-cli open --headless "https://example.com/contact"
 
 2. Wait for form to load
 browser.wait_for_element("form#contact-form")
@@ -184,7 +194,7 @@ browser.wait_for_element(".success-message")
 **Steps**:
 ```
 1. Navigate and wait
-browser.navigate("https://example.com/register")
+browser4-cli open --headless "https://example.com/register"
 browser.wait_for_element("form#registration")
 
 2. Fill text fields
@@ -218,7 +228,7 @@ browser.wait_for_element(".welcome-message")
 **Steps**:
 ```
 Step 1: Personal Info
-browser.navigate("https://example.com/checkout")
+browser4-cli open --headless "https://example.com/checkout"
 browser.fill("input[name='first_name']", "John")
 browser.fill("input[name='last_name']", "Doe")
 browser.fill("input[name='email']", "john@example.com")
@@ -415,7 +425,7 @@ Some dropdowns load options dynamically:
 
 The following Browser4 tools are commonly used with this skill:
 
-- `browser.navigate(url)` - Navigate to form page
+- `browser.navigate(url)` - Navigate to form page (display mode controlled by session, not by this tool — use `browser4-cli open --headless <url>` to ensure headless mode)
 - `browser.fill(selector, value)` - Fill text fields
 - `browser.type(value, selector)` - Type into fields (triggers events)
 - `browser.click(selector)` - Click buttons, checkboxes, radio buttons

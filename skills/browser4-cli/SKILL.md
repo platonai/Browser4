@@ -31,10 +31,13 @@ source tree use one of the following:
 
 > **⚡ First-run latency:** The Browser4 backend (Spring Boot + JVM) takes ~10s to start on first launch. Subsequent commands are instant — the server stays alive between invocations. The spinner shows stage-level progress (JVM → Spring Boot → MCP tools) so you can see what's happening.
 
+> **🖥️ Headless mode is the default for AI agents:** Always open browsers in **headless mode** (`--headless`) unless the user **explicitly** asks to see the browser window (e.g., "show me the browser", "open visibly", "I want to watch", or "headed"). Headless mode is faster, uses fewer resources, and avoids unnecessary GUI windows. Use `--headed` **only** when the user specifically requests a visible browser. See the Display Mode section below (§2 Key Concepts) for details.
+
 Every browser4-cli session follows this pattern.
 
 ```
-1. NAVIGATE    browser4-cli goto <url>              # auto-opens/reconnects session
+1. OPEN        browser4-cli open --headless <url>   # headless by default for AI agents
+              browser4-cli goto <url>               # or goto to navigate within existing session
 2. SNAPSHOT    browser4-cli snapshot -v 0           # capture accessibility tree (viewport 0 = current visible screen)
 3. INTERACT    browser4-cli click <ref>             # use refs from the snapshot
               browser4-cli fill <ref> <value>
@@ -46,7 +49,7 @@ Every browser4-cli session follows this pattern.
 ### Copy-Paste Template
 
 ```bash
-browser4-cli goto "https://example.com"
+browser4-cli open --headless "https://example.com"  # headless by default for AI agents
 browser4-cli snapshot -v 0 --stdout       # read the page; note refs
 browser4-cli fill <ref> "<value>"         # interact
 browser4-cli press Enter
@@ -96,6 +99,34 @@ Interaction commands capture an automatic snapshot after execution. Pass `--no-s
 - **`--show-tip` / `-tip`** — show a relevant, rotating tip on stderr after each successful command. Tips are suppressed by default; use this flag to enable them.
 - **`--json`** — single-line JSON envelope on stdout for commands that support structured output. This is the clean machine-readable mode for commands such as `tab-list`, `htmlsnapshot get`, `htmlsnapshot query`, and `eval`. **Exception:** `snapshot` remains YAML-focused and warns on stderr instead of returning JSON snapshot data.
 - **`--quiet` / `-q`** — suppress all normal output; only errors appear on stderr.
+
+### Display Mode (Headless vs Headed)
+
+Browser4 can launch Chrome in two display modes:
+
+| Mode | Flag | Window | Use case |
+|------|------|--------|----------|
+| **Headless** | `--headless` | No GUI window | **Default for AI agents** — scraping, automation, CI/CD, server environments |
+| **Headed** | `--headed` | Visible browser window | Debugging, user demonstration, interactive development |
+
+**Rule for AI agents: always use `--headless` by default.** Headless mode is faster, uses fewer resources, and avoids cluttering the user's desktop with browser windows. The only reason to use `--headed` is when the user **explicitly** requests a visible browser — look for phrases like "show me the browser", "I want to see", "open visibly", "headed", "watch what happens", or "debug visually".
+
+Set the display mode with the `open` command when starting a **new** session. The `goto` command does **not** accept `--headless`/`--headed` directly — it inherits the session's existing display mode:
+
+```bash
+browser4-cli open --headless https://example.com     # headless (preferred default)
+browser4-cli open --headed https://example.com       # headed (only when user asks)
+```
+
+Once a session is open, use `goto` for subsequent navigations (the display mode persists):
+
+```bash
+browser4-cli goto https://other-page.com             # stays headless (or headed) as set by open
+```
+
+> **⚠️ Important — `goto` on first invocation:** When `goto` is the very first command (no prior `open`), it auto-opens a new session using the **backend's configured default** display mode — which is typically GUI on desktop machines. To guarantee headless mode, **always start with `open --headless`** before using `goto`.
+
+> **Note — reconnecting to an existing session:** The `--headless`/`--headed` flags only take effect when creating a new session. When `open` reconnects to an already-running session, the display mode is already set and the flags are ignored. To change the mode of an existing session, close it first (`close`), then `open --headless` to create a new one.
 
 ### Sessions
 
@@ -266,7 +297,7 @@ Need to process multiple pages?
 ├─ Need parallel execution (high throughput)? → swarm create → swarm query --seed-file ...
 ├─ Repeated monitoring (check every hour)? → loop -- eval "..." -i 3600
 └─ Just a few URLs in a shell script?
-   → for url in ...; do browser4-cli goto "$url"; ... done  (add wait between iterations)
+   → browser4-cli open --headless (once) then use goto for each URL; add wait between iterations
 ```
 
 ### 4c. Query Granularity: get vs get all vs query
@@ -292,7 +323,7 @@ Have HTML files and want structured data — without tokens?
 │  Same encode → cluster → views pipeline, distributed across machines
 │  → Scales to 100K+ pages/day
 └─ Need to acquire pages first?
-   ├─ Single pages: browser4-cli goto → htmlsnapshot → htmlsnapshot export
+   ├─ Single pages: browser4-cli open --headless → htmlsnapshot → htmlsnapshot export
    ├─ Bulk download: browser4-cli crawl --seed-file urls.txt --depth 0
    └─ High throughput: browser4-cli swarm create → swarm query --seed-file ...
        Then feed the HTML directory to WebMiner
@@ -415,7 +446,7 @@ browser4-cli htmlsnapshot get text ".price" --all    # quick test: does this sel
 ### Interactive Form Fill
 
 ```bash
-browser4-cli goto "https://example.com/login"
+browser4-cli open --headless "https://example.com/login"
 browser4-cli snapshot -v 0
 browser4-cli fill <email-ref> "user@example.com"
 browser4-cli fill <password-ref> "password"
@@ -427,7 +458,7 @@ browser4-cli snapshot -v 0 --auto-diff
 ### Find Elements by Text (snapshot grep)
 
 ```bash
-browser4-cli goto "https://example.com"
+browser4-cli open --headless "https://example.com"
 browser4-cli snapshot -v 0                        # capture snapshot first
 browser4-cli snapshot grep "See also"             # search for text in the full AX tree
 browser4-cli snapshot grep -i "price|rating"      # case-insensitive regex alternation
@@ -497,7 +528,7 @@ browser4-cli get text "#contactForm > button.primary"  # verify with the generat
 ### Static Data Extraction (Single Field)
 
 ```bash
-browser4-cli goto "https://example.com/product/42"
+browser4-cli open --headless "https://example.com/product/42"
 browser4-cli htmlsnapshot                           # capture static HTML snapshot
 browser4-cli htmlsnapshot get text ".product-title"
 browser4-cli htmlsnapshot get attr ".product-image" src
