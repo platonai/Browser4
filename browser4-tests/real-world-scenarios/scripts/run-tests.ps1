@@ -51,7 +51,7 @@ what would run, or name one or more tasks to run a subset.
     Stop after the first failing task.
 
 .NOTES
-Each task invokes an agent CLI (claude or kimi), requires an active LLM subscription,
+Each task invokes an agent CLI (claude, kimi, opencode, codex, or dsh), requires an active LLM subscription,
 and may take several minutes.  Run them selectively during development.
 #>
 
@@ -86,7 +86,7 @@ param(
     # TIMEOUT (exit code 124).  Set to 0 to disable the timeout.
     [int] $TimeoutMinutes = 60,
 
-    # Override the agent CLI to use (claude, kimi, opencode, or codex).
+    # Override the agent CLI to use (claude, kimi, opencode, codex, or dsh).
     # When empty, auto-detects. Forwarded to run-task.ps1.
     [string] $Agent = '',
 
@@ -211,10 +211,10 @@ function Write-Section {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Pre-flight: check that an agent CLI (claude, kimi, or opencode) and run-task.ps1 are available
+# Pre-flight: check that an agent CLI (claude, kimi, opencode, codex, or dsh) and run-task.ps1 are available
 # ═══════════════════════════════════════════════════════════════════════════════
 
-$knownAgents = @('claude', 'kimi', 'opencode', 'codex')
+$knownAgents = @('claude', 'kimi', 'opencode', 'codex', 'dsh')
 $agentAvailable = $false
 if ($Agent) {
     $agentAvailable = $null -ne (Get-Command $Agent -ErrorAction SilentlyContinue)
@@ -231,7 +231,7 @@ if ($Agent) {
     }
 }
 if (-not $agentAvailable) {
-    Write-Host 'WARNING: no agent CLI (claude, kimi, opencode, or codex) found on PATH.' -ForegroundColor Yellow
+    Write-Host 'WARNING: no agent CLI (claude, kimi, opencode, codex, or dsh) found on PATH.' -ForegroundColor Yellow
     Write-Host 'Each task invokes an agent CLI.  Without one, every task will fail.'
     Write-Host ''
 }

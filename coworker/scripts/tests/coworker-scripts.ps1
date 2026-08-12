@@ -717,10 +717,11 @@ if (Get-Command New-AgentArguments -ErrorAction SilentlyContinue) {
 }
 
 if (Get-Command Get-AgentBackend -ErrorAction SilentlyContinue) {
-    # Save/restore: config.ps1 (dot-sourced via agent.ps1) sets $CLAUDE/$KIMI/$CODEX.
+    # Save/restore: config.ps1 (dot-sourced via agent.ps1) sets $CLAUDE/$KIMI/$CODEX/$DSH.
     $savedClaude = $CLAUDE
     $savedKimi = $KIMI
     $savedCodex = $CODEX
+    $savedDsh = $DSH
     try {
         $CLAUDE = @('claude'); $KIMI = @('kimi')
         Assert-Equal -Label 'Get-AgentBackend: claude wins over kimi' `
@@ -734,7 +735,11 @@ if (Get-Command Get-AgentBackend -ErrorAction SilentlyContinue) {
         Assert-Equal -Label 'Get-AgentBackend: codex when no claude/kimi' `
             -Actual (Get-AgentBackend) -Expected 'codex'
 
-        $CLAUDE = $null; $KIMI = $null; $CODEX = $null
+        $CLAUDE = $null; $KIMI = $null; $CODEX = $null; $DSH = @('dsh')
+        Assert-Equal -Label 'Get-AgentBackend: dsh when no claude/kimi/codex' `
+            -Actual (Get-AgentBackend) -Expected 'dsh'
+
+        $CLAUDE = $null; $KIMI = $null; $CODEX = $null; $DSH = $null
         Assert-Equal -Label 'Get-AgentBackend: copilot fallback' `
             -Actual (Get-AgentBackend) -Expected 'copilot'
     }
@@ -742,6 +747,7 @@ if (Get-Command Get-AgentBackend -ErrorAction SilentlyContinue) {
         $CLAUDE = $savedClaude
         $KIMI = $savedKimi
         $CODEX = $savedCodex
+        $DSH = $savedDsh
     }
 }
 
