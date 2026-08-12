@@ -12,10 +12,20 @@ Use this skill when you need to:
 
 ## How to Use This Skill
 
+### Browser Launch Mode (Headless by Default)
+
+**Always open the browser in headless mode** unless the user explicitly asks to see the browser window. Headless mode is faster, uses fewer resources, and avoids cluttering the user's desktop.
+
+- **Default:** Use `--headless` flag when opening the browser (e.g., `browser4-cli open --headless <url>`)
+- **Headed mode only when:**
+  - The user says "show me the browser", "I want to watch", "open visibly", "headed", or "debug visually"
+  - The user needs to perform a manual interaction they haven't automated
+- **Do NOT default to headed mode** — it wastes resources and opens unnecessary windows
+
 ### Step 1: Navigate to the Target Page
 
 First, navigate to the web page you want to scrape:
-- Use the `browser.navigate` tool with the target URL
+- Use the `browser.navigate` tool with the target URL (or `browser4-cli open --headless <url>`)
 - Wait for the page to fully load before proceeding
 
 ### Step 2: Identify Target Elements

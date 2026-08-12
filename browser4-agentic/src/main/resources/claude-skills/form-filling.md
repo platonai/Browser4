@@ -13,9 +13,19 @@ Use this skill when you need to:
 
 ## How to Use This Skill
 
+### Browser Launch Mode (Headless by Default)
+
+**Always open the browser in headless mode** unless the user explicitly asks to see the browser window. Headless mode is faster, uses fewer resources, and avoids cluttering the user's desktop.
+
+- **Default:** Use `--headless` flag when opening the browser (e.g., `browser4-cli open --headless <url>`)
+- **Headed mode only when:**
+  - The user says "show me the browser", "I want to watch", "open visibly", "headed", or "debug visually"
+  - The user needs to perform a manual interaction they haven't automated
+- **Do NOT default to headed mode** — it wastes resources and opens unnecessary windows
+
 ### Step 1: Navigate and Identify the Form
 
-1. **Navigate to the page** containing the form
+1. **Navigate to the page** containing the form (use `browser4-cli open --headless <url>` by default)
 2. **Wait for the form to load** completely
 3. **Identify form fields** using CSS selectors or field names
 4. **Note the field types**: text inputs, checkboxes, radio buttons, dropdowns, etc.
