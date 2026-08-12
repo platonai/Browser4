@@ -7580,10 +7580,14 @@ fn strip_html_scripts_and_styles(html: &str) -> String {
     while i < len {
         // Check for <script or <style tag (case-insensitive)
         if bytes[i] == b'<' && i + 7 < len {
-            let tag_check = &lower[i..std::cmp::min(i + 8, lower.len())];
-            let (close_tag, tag_len) = if tag_check.starts_with("<script") {
+            // `i` points at an ASCII '<', so it is always a char boundary.
+            // Slice to the end (`starts_with` is prefix-safe) instead of a
+            // fixed 8-byte window, which panics when the window end falls
+            // inside a multi-byte char (e.g. CJK right after "<style"/"<script").
+            let rest = &lower[i..];
+            let (close_tag, tag_len) = if rest.starts_with("<script") {
                 ("</script>", 7usize)
-            } else if tag_check.starts_with("<style") {
+            } else if rest.starts_with("<style") {
                 ("</style>", 7usize)
             } else {
                 ("", 0)
@@ -19927,6 +19931,32 @@ mod tests {
         let opts = make_grep_opts("absent");
         let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_strip_html_scripts_and_styles_cjk_after_style_tag() {
+        // Regression: a CJK char immediately after `<style>` puts the 8-byte
+        // tag window's end inside a multi-byte char, which used to panic with
+        // "end byte index ... is not a char boundary".
+        let html = "<style>中文字体{}</style>正文内容";
+        let result = strip_html_scripts_and_styles(html);
+        assert!(result.contains("正文内容"));
+        assert!(!result.contains("中文字体"));
+    }
+
+    #[test]
+    fn test_strip_html_scripts_and_styles_cjk_after_script_tag() {
+        let html = "<script>alert('中文')</script>后文";
+        let result = strip_html_scripts_and_styles(html);
+        assert!(result.contains("后文"));
+        assert!(!result.contains("alert"));
+    }
+
+    #[test]
+    fn test_strip_html_scripts_and_styles_no_tags_unchanged() {
+        let html = "纯文本，无标签 <b>加粗</b>";
+        let result = strip_html_scripts_and_styles(html);
+        assert_eq!(result, html);
     }
 
     // -----------------------------------------------------------------------
