@@ -114,7 +114,7 @@ const TIPS_NAVIGATION: &[Tip] = &[
         text: "Use load options in the URL: `goto \"url -expires 1d -refresh\"` for caching control",
     },
     Tip {
-        text: "Use `--headed` flag to see the browser window — invaluable for debugging automation issues",
+        text: "Browsers open headless by default. Use `--headed` to see the browser window for debugging",
     },
     Tip {
         text: "Use named sessions (`-s <name>`) with `goto` to maintain separate browser state per task",

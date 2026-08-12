@@ -899,9 +899,9 @@ fn build_open_session_capabilities_with_test_mode(
         caps["profileMode"] = pm.clone();
     }
 
-    if let Some(h) = tool_params.get("headed") {
-        caps["headed"] = h.clone();
-    }
+    // Default to headless when no explicit headed/headless preference is given.
+    let headed = tool_params.get("headed").cloned().unwrap_or(json!(false));
+    caps["headed"] = headed;
 
     let persistent = tool_params
         .get("persistent")
@@ -17986,10 +17986,10 @@ mod tests {
     }
 
     #[test]
-    fn build_open_session_capabilities_without_headed_does_not_set_key() {
+    fn build_open_session_capabilities_defaults_to_headless() {
         let caps = build_open_session_capabilities_with_test_mode(&json!({}), false);
 
-        assert!(caps.get("headed").is_none());
+        assert_eq!(caps["headed"], json!(false));
     }
 
     #[test]

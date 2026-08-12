@@ -183,7 +183,10 @@ browser4-cli install
 ### 快速上手
 
 ```bash
-# 打开浏览器会话
+# 打开浏览器会话（默认无头模式，添加 --headed 可显示窗口）
+browser4-cli open https://browser4.io
+
+# 或者显式打开可视浏览器：
 browser4-cli open --headed https://browser4.io
 
 # 检查页面并获取元素 ref
@@ -268,7 +271,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 
 | 命令 | 说明 |
 |---|---|
-| `open [url]` | 打开浏览器会话，或重新连接已有会话。支持 `--headed`、`--headless`、`--profile <path>`、`--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`、`--interact-level <FASTEST\|FAST\|DEFAULT>`。 |
+| `open [url]` | 打开浏览器会话，或重新连接已有会话。**默认为无头模式。** 支持 `--headed`（可视窗口）、`--headless`、`--profile <path>`、`--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`、`--interact-level <FASTEST\|FAST\|DEFAULT>`。 |
 | `attach` | 通过 CDP 或 Browser4 扩展附加到现有浏览器。支持 `--cdp <url\|port\|channel>` 与远程 endpoint 选项。 |
 | `close` | 关闭当前活动浏览器会话。 |
 | `list` | 列出浏览器会话及其状态和下次打开行为。支持 `--all`。 |

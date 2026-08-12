@@ -1085,9 +1085,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli open https://browser4.io".to_string());
-        lines.push("  browser4-cli open --headed https://browser4.io".to_string());
-        lines.push("  browser4-cli open --headless https://browser4.io".to_string());
+        lines.push("  browser4-cli open https://browser4.io                      # headless (default)".to_string());
+        lines.push("  browser4-cli open --headed https://browser4.io              # visible browser window".to_string());
+        lines.push("  browser4-cli open --headless https://browser4.io            # explicit headless".to_string());
     }
 
     if cmd.name == "install" {
