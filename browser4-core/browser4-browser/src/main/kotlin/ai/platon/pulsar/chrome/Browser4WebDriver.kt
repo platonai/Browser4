@@ -125,18 +125,13 @@ open class Browser4WebDriver(
      */
     @Throws(WebDriverException::class)
     suspend fun typeSafe(text: String, selector: String) {
-        // Focus + cursor-to-end sequence matching PulsarWebDriver.type(_, selector)
+        // Focus the element without repositioning the cursor.
+        // The parent type(text, selector) always clicks the right edge +
+        // setSelectionRange(99999,99999), which breaks chained operations
+        // like ArrowLeft→type that rely on preserving cursor position.
+        // insertText() respects the existing cursor position, so text
+        // appends when cursor is at end and inserts when cursor was moved.
         page.focusOnSelector(selector)
-        evaluate("""
-            (function(){
-                var el = document.querySelector('${selector.replace("'", "\\'")}');
-                if (!el) return;
-                if (typeof el.focus === 'function') { el.focus(); }
-                if (typeof el.setSelectionRange === 'function') {
-                    el.setSelectionRange(99999, 99999);
-                }
-            })()
-        """.trimIndent())
 
         // Type code point by code point — avoids the charAt() surrogate-splitting
         // bug in the upstream Keyboard.type().
