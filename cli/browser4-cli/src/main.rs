@@ -444,6 +444,16 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
 fn require_session(session_name: Option<&str>) -> Result<CliState, String> {
     let state = read_state(None, session_name);
     if state.session_id.is_none() {
+        // When no explicit session name is given and the default slot is
+        // empty, check whether a SWARM session exists.  Commands like
+        // extract / summarize / agent run that follow `swarm create` should
+        // automatically target the active swarm session.
+        if session_name.is_none() {
+            let swarm_state = read_state(None, Some(SWARM_SESSION_ID));
+            if swarm_state.session_id.is_some() {
+                return Ok(swarm_state);
+            }
+        }
         return Err(no_active_session_message());
     }
     Ok(state)
