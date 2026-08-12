@@ -58,13 +58,37 @@ if ($script:configData.ContainsKey('KIMI')) {
 if ($script:configData.ContainsKey('CODEX')) {
     $CODEX = @($script:configData['CODEX'])
 }
+if ($script:configData.ContainsKey('DSH')) {
+    $DSH = @($script:configData['DSH'])
+}
 
 # ── Shared agent backend detection ───────────────────────────────────────────
 # Single source of truth for all worker scripts (agent.ps1, prompt-utils.ps1,
-# browser4-eval-prompt.ps1 dot-source this file). Priority: claude > kimi > codex > copilot.
+# browser4-eval-prompt.ps1 dot-source this file).
+#
+# Priority (highest to lowest):
+#   1. $env:BROWSER4_AGENT — global machine/user override
+#   2. Config arrays in config.psd1: CLAUDE > KIMI > CODEX > DSH
+#   3. Fallback: copilot
+#
+# Valid env var values: claude, kimi, codex, dsh, copilot
+
+$script:KnownAgentBackends = @('claude', 'kimi', 'codex', 'dsh', 'copilot')
+
 function Get-AgentBackend {
+    # ── $env:BROWSER4_AGENT takes precedence over everything ──────────────────
+    if ($env:BROWSER4_AGENT) {
+        $envAgent = $env:BROWSER4_AGENT.Trim()
+        if ($envAgent -in $script:KnownAgentBackends) {
+            return $envAgent
+        }
+        Write-Host "WARNING: BROWSER4_AGENT='$envAgent' is not a known agent backend." -ForegroundColor Yellow
+        Write-Host "  Known values: $($script:KnownAgentBackends -join ', ')" -ForegroundColor DarkGray
+    }
+
     if ($CLAUDE) { return 'claude' }
     if ($KIMI) { return 'kimi' }
     if ($CODEX) { return 'codex' }
+    if ($DSH) { return 'dsh' }
     return 'copilot'
 }

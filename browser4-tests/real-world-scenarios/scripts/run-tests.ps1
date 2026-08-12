@@ -51,7 +51,7 @@ what would run, or name one or more tasks to run a subset.
     Stop after the first failing task.
 
 .NOTES
-Each task invokes an agent CLI (claude or kimi), requires an active LLM subscription,
+Each task invokes an agent CLI (claude, kimi, opencode, codex, or dsh), requires an active LLM subscription,
 and may take several minutes.  Run them selectively during development.
 #>
 
@@ -86,8 +86,9 @@ param(
     # TIMEOUT (exit code 124).  Set to 0 to disable the timeout.
     [int] $TimeoutMinutes = 60,
 
-    # Override the agent CLI to use (claude, kimi, opencode, or codex).
-    # When empty, auto-detects. Forwarded to run-task.ps1.
+    # Override the agent CLI to use (claude, kimi, opencode, codex, or dsh).
+    # When empty, checks $env:BROWSER4_AGENT, then auto-detects from PATH.
+    # Forwarded to run-task.ps1.
     [string] $Agent = '',
 
     # Custom tasks directory. When set, overrides the default tasks/ directory.
@@ -211,28 +212,39 @@ function Write-Section {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Pre-flight: check that an agent CLI (claude, kimi, or opencode) and run-task.ps1 are available
+# Pre-flight: check that an agent CLI (claude, kimi, opencode, codex, or dsh) and run-task.ps1 are available
 # ═══════════════════════════════════════════════════════════════════════════════
 
-$knownAgents = @('claude', 'kimi', 'opencode', 'codex')
+$knownAgents = @('claude', 'kimi', 'opencode', 'codex', 'dsh')
 $agentAvailable = $false
+$resolvedAgent = ''
 if ($Agent) {
+    $resolvedAgent = $Agent
     $agentAvailable = $null -ne (Get-Command $Agent -ErrorAction SilentlyContinue)
     if (-not $agentAvailable) {
         Write-Host "ERROR: Specified agent '$Agent' not found on PATH." -ForegroundColor Red
+        exit 1
+    }
+} elseif ($env:BROWSER4_AGENT) {
+    $resolvedAgent = $env:BROWSER4_AGENT.Trim()
+    $agentAvailable = $null -ne (Get-Command $resolvedAgent -ErrorAction SilentlyContinue)
+    if (-not $agentAvailable) {
+        Write-Host "ERROR: BROWSER4_AGENT='$resolvedAgent' not found on PATH." -ForegroundColor Red
         exit 1
     }
 } else {
     foreach ($a in $knownAgents) {
         if ($null -ne (Get-Command $a -ErrorAction SilentlyContinue)) {
             $agentAvailable = $true
+            $resolvedAgent = $a
             break
         }
     }
 }
 if (-not $agentAvailable) {
-    Write-Host 'WARNING: no agent CLI (claude, kimi, opencode, or codex) found on PATH.' -ForegroundColor Yellow
+    Write-Host 'WARNING: no agent CLI (claude, kimi, opencode, codex, or dsh) found on PATH.' -ForegroundColor Yellow
     Write-Host 'Each task invokes an agent CLI.  Without one, every task will fail.'
+    Write-Host 'Set BROWSER4_AGENT to configure globally, or use -Agent to specify per-run.'
     Write-Host ''
 }
 

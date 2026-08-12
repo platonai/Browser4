@@ -442,6 +442,23 @@ Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundCo
     Assert-Equal 'codex silent: first arg is exec' 'exec' $script:CapturedArgs[0]
     Assert-True 'codex silent: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'codex silent')
 
+    Write-TestGroup 'dsh backend'
+    $testAgentCli = 'dsh'
+    $script:CapturedArgs = $null
+    Invoke-Agent -Prompt 'dsh test'
+    Assert-True 'dsh was invoked' ($null -ne $script:CapturedArgs)
+    Assert-NotContains 'dsh: no --dangerously-skip-permissions' ($script:CapturedArgs -join ' ') `
+        '--dangerously-skip-permissions'
+    Assert-Equal 'dsh: first arg is run' 'run' $script:CapturedArgs[0]
+    Assert-True 'dsh: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'dsh test')
+
+    Write-TestGroup 'dsh backend with -Silent flag'
+    $script:CapturedArgs = $null
+    Invoke-Agent -Prompt 'dsh silent' -Silent
+    Assert-NotContains 'dsh: --silent is never passed' ($script:CapturedArgs -join ' ') '--silent'
+    Assert-Equal 'dsh silent: first arg is run' 'run' $script:CapturedArgs[0]
+    Assert-True 'dsh silent: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'dsh silent')
+
     # Clean up the mocks so they do not leak.
     Remove-Item function:Start-NativeCommand -ErrorAction SilentlyContinue
     Remove-Item function:Get-ScenarioAgent -ErrorAction SilentlyContinue
@@ -452,7 +469,7 @@ Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundCo
 # ═══════════════════════════════════════════════════════════════════════════════
 
 Write-Host ''
-Write-Host '━━━ Get-ScenarioAgent: Backend Detection (opencode, codex) ━━━' -ForegroundColor Yellow
+Write-Host '━━━ Get-ScenarioAgent: Backend Detection (opencode, codex, dsh) ━━━' -ForegroundColor Yellow
 
 & {
     $browser4cliMode = 'dev'
@@ -481,16 +498,86 @@ Write-Host '━━━ Get-ScenarioAgent: Backend Detection (opencode, codex) ━
     $resolved = Get-ScenarioAgent
     Assert-Equal 'Returns codex when overridden' 'codex' $resolved
 
+    Write-TestGroup 'Overridden via $script:scenarioAgentCli returns dsh'
+    $script:scenarioAgentCli = 'dsh'
+    $resolved = Get-ScenarioAgent
+    Assert-Equal 'Returns dsh when overridden' 'dsh' $resolved
+
     # Reset override
     $script:scenarioAgentCli = $null
 
-    # Static analysis: verify codex is in the auto-detection list
+    # Static analysis: verify codex and dsh are in the auto-detection list
     $commonPath = Join-Path $PSScriptRoot 'common.ps1'
     $commonContent = Get-Content -LiteralPath $commonPath -Raw -Encoding UTF8
     Assert-True 'Auto-detection includes opencode' `
         ($commonContent -match 'Get-Command opencode.*return.*opencode')
     Assert-True 'Auto-detection includes codex' `
         ($commonContent -match 'Get-Command codex.*return.*codex')
+    Assert-True 'Auto-detection includes dsh' `
+        ($commonContent -match 'Get-Command dsh.*return.*dsh')
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 7c: Get-ScenarioAgent — $env:BROWSER4_AGENT override
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ Get-ScenarioAgent: BROWSER4_AGENT Env Var ━━━' -ForegroundColor Yellow
+
+& {
+    $browser4cliMode = 'dev'
+    . "$PSScriptRoot/common.ps1"
+
+    # Ensure no script-level override interferes
+    $script:scenarioAgentCli = $null
+
+    Write-TestGroup 'BROWSER4_AGENT=claude returns claude'
+    $orig = $env:BROWSER4_AGENT
+    try {
+        $env:BROWSER4_AGENT = 'claude'
+        $resolved = Get-ScenarioAgent
+        Assert-Equal 'Returns claude' 'claude' $resolved
+    } finally { $env:BROWSER4_AGENT = $orig }
+
+    Write-TestGroup 'BROWSER4_AGENT=kimi returns kimi'
+    try {
+        $env:BROWSER4_AGENT = 'kimi'
+        $resolved = Get-ScenarioAgent
+        Assert-Equal 'Returns kimi' 'kimi' $resolved
+    } finally { $env:BROWSER4_AGENT = $orig }
+
+    Write-TestGroup 'BROWSER4_AGENT=dsh returns dsh'
+    try {
+        $env:BROWSER4_AGENT = 'dsh'
+        $resolved = Get-ScenarioAgent
+        Assert-Equal 'Returns dsh' 'dsh' $resolved
+    } finally { $env:BROWSER4_AGENT = $orig }
+
+    Write-TestGroup 'BROWSER4_AGENT=unknown falls through to auto-detect'
+    try {
+        $env:BROWSER4_AGENT = 'nonexistent-agent'
+        $resolved = Get-ScenarioAgent
+        Assert-True 'Fallback returns something' ($null -ne $resolved)
+        Assert-True 'Not the unknown value' ($resolved -ne 'nonexistent-agent')
+    } finally { $env:BROWSER4_AGENT = $orig }
+
+    Write-TestGroup 'BROWSER4_AGENT with whitespace is trimmed'
+    try {
+        $env:BROWSER4_AGENT = '  dsh  '
+        $resolved = Get-ScenarioAgent
+        Assert-Equal 'Returns dsh after trim' 'dsh' $resolved
+    } finally { $env:BROWSER4_AGENT = $orig }
+
+    Write-TestGroup '$script:scenarioAgentCli still wins over BROWSER4_AGENT'
+    try {
+        $env:BROWSER4_AGENT = 'dsh'
+        $script:scenarioAgentCli = 'codex'
+        $resolved = Get-ScenarioAgent
+        Assert-Equal 'script override wins' 'codex' $resolved
+    } finally {
+        $env:BROWSER4_AGENT = $orig
+        $script:scenarioAgentCli = $null
+    }
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

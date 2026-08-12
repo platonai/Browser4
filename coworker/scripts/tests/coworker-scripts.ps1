@@ -717,10 +717,11 @@ if (Get-Command New-AgentArguments -ErrorAction SilentlyContinue) {
 }
 
 if (Get-Command Get-AgentBackend -ErrorAction SilentlyContinue) {
-    # Save/restore: config.ps1 (dot-sourced via agent.ps1) sets $CLAUDE/$KIMI/$CODEX.
+    # Save/restore: config.ps1 (dot-sourced via agent.ps1) sets $CLAUDE/$KIMI/$CODEX/$DSH.
     $savedClaude = $CLAUDE
     $savedKimi = $KIMI
     $savedCodex = $CODEX
+    $savedDsh = $DSH
     try {
         $CLAUDE = @('claude'); $KIMI = @('kimi')
         Assert-Equal -Label 'Get-AgentBackend: claude wins over kimi' `
@@ -734,7 +735,11 @@ if (Get-Command Get-AgentBackend -ErrorAction SilentlyContinue) {
         Assert-Equal -Label 'Get-AgentBackend: codex when no claude/kimi' `
             -Actual (Get-AgentBackend) -Expected 'codex'
 
-        $CLAUDE = $null; $KIMI = $null; $CODEX = $null
+        $CLAUDE = $null; $KIMI = $null; $CODEX = $null; $DSH = @('dsh')
+        Assert-Equal -Label 'Get-AgentBackend: dsh when no claude/kimi/codex' `
+            -Actual (Get-AgentBackend) -Expected 'dsh'
+
+        $CLAUDE = $null; $KIMI = $null; $CODEX = $null; $DSH = $null
         Assert-Equal -Label 'Get-AgentBackend: copilot fallback' `
             -Actual (Get-AgentBackend) -Expected 'copilot'
     }
@@ -742,6 +747,47 @@ if (Get-Command Get-AgentBackend -ErrorAction SilentlyContinue) {
         $CLAUDE = $savedClaude
         $KIMI = $savedKimi
         $CODEX = $savedCodex
+        $DSH = $savedDsh
+    }
+
+    # ── BROWSER4_AGENT env var tests ──────────────────────────────────────
+    $savedEnv = $env:BROWSER4_AGENT
+    try {
+        # Env var overrides config arrays
+        $CLAUDE = @('claude'); $env:BROWSER4_AGENT = 'dsh'
+        Assert-Equal -Label 'Get-AgentBackend: BROWSER4_AGENT wins over CLAUDE config' `
+            -Actual (Get-AgentBackend) -Expected 'dsh'
+
+        $CLAUDE = $null; $env:BROWSER4_AGENT = 'kimi'
+        Assert-Equal -Label 'Get-AgentBackend: BROWSER4_AGENT=kimi' `
+            -Actual (Get-AgentBackend) -Expected 'kimi'
+
+        $env:BROWSER4_AGENT = 'codex'
+        Assert-Equal -Label 'Get-AgentBackend: BROWSER4_AGENT=codex' `
+            -Actual (Get-AgentBackend) -Expected 'codex'
+
+        # Unknown env var falls through to config
+        $env:BROWSER4_AGENT = 'nonexistent'
+        $CLAUDE = @('claude'); $KIMI = $null; $CODEX = $null; $DSH = $null
+        Assert-Equal -Label 'Get-AgentBackend: unknown BROWSER4_AGENT falls through to CLAUDE' `
+            -Actual (Get-AgentBackend) -Expected 'claude'
+
+        # Whitespace trimming
+        $env:BROWSER4_AGENT = '  dsh  '; $CLAUDE = $null
+        Assert-Equal -Label 'Get-AgentBackend: BROWSER4_AGENT trimmed' `
+            -Actual (Get-AgentBackend) -Expected 'dsh'
+
+        # Empty env var falls through
+        $env:BROWSER4_AGENT = ''; $CLAUDE = @('claude')
+        Assert-Equal -Label 'Get-AgentBackend: empty BROWSER4_AGENT falls through' `
+            -Actual (Get-AgentBackend) -Expected 'claude'
+    }
+    finally {
+        $env:BROWSER4_AGENT = $savedEnv
+        $CLAUDE = $savedClaude
+        $KIMI = $savedKimi
+        $CODEX = $savedCodex
+        $DSH = $savedDsh
     }
 }
 

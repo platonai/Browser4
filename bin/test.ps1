@@ -227,7 +227,8 @@ function Print-Usage {
     Write-Host "    --silent                    Suppress agent output"
     Write-Host "    --skip-version-check        Skip browser4-cli version check"
     Write-Host "    --timeout <minutes>         Kill each scenario task after N minutes (default: no timeout)"
-    Write-Host "    --agent <name>              Use a specific agent CLI (claude, kimi, opencode, or codex)"
+    Write-Host "    --agent <name>              Use a specific agent CLI (claude, kimi, opencode, codex, or dsh)"
+    Write-Host "    BROWSER4_AGENT=<name>        Env var to set agent globally (same values as --agent)"
     Write-Host "  resume      Resume from the last failed module (-rf)"
     Write-Host "  main    Run all Browser4 main tests (fast, rest, it, e2e)"
     Write-Host ""
@@ -2328,7 +2329,8 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host '  --silent                  Suppress agent output'
         Write-Host '  --skip-version-check      Skip browser4-cli version check'
         Write-Host '  --timeout <minutes>       Kill each scenario task after N minutes'
-        Write-Host '  --agent <name>            Use a specific agent CLI (claude, kimi, opencode, or codex)'
+        Write-Host '  --agent <name>            Use a specific agent CLI (claude, kimi, opencode, codex, or dsh)'
+        Write-Host '  BROWSER4_AGENT=<name>     Env var to set agent globally (same values as --agent)'
         Write-Host ''
         Write-Host 'Examples:'
         Write-Host '  test.ps1 rws sc amazon                    # Run a specific scenario'

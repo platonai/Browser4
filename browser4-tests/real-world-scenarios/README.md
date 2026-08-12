@@ -14,9 +14,9 @@ documentation, and reliability from a first-time user's perspective.
 
 Each task file describes the scenario in plain markdown. `run-task.ps1` reads the
 file, combines it with the shared evaluation template (`common.ps1`), and invokes
-the configured agent CLI (`claude`, `kimi`, `opencode`, or `codex`, auto-detected
-in that order; force one by setting `$script:scenarioAgentCli` before calling
-`Invoke-Agent`).
+the configured agent CLI (`claude`, `kimi`, `opencode`, `codex`, or `dsh`, auto-detected
+in that order). Set `$env:BROWSER4_AGENT` globally or `$script:scenarioAgentCli`
+per-script to force a specific backend. The `-Agent` CLI parameter overrides both.
 
 ## Anatomy of a task file
 
