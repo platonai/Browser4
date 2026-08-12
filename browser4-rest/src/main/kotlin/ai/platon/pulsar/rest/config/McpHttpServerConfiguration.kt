@@ -84,11 +84,26 @@ class McpHttpServerConfiguration {
      * We use [ApplicationReadyEvent] rather than [jakarta.annotation.PostConstruct]
      * because the agent session may reference Spring-managed beans that aren't
      * fully available during post-construction.
+     *
+     * The server is obtained via the proxied [mcpHttpServer] bean method: Spring 7
+     * no longer resolves `@EventListener` method parameters as beans — the method
+     * always receives the published event as its argument.
+     *
+     * Start failures are logged, not rethrown: the MCP-over-HTTP transport is an
+     * optional add-on, and a busy port (e.g. several Spring test contexts sharing
+     * one JVM) must not prevent the application from starting.
      */
     @EventListener(ApplicationReadyEvent::class)
-    fun onApplicationReady(mcpHttpServer: McpHttpServer) {
+    fun onApplicationReady(event: ApplicationReadyEvent) {
         // Start after Spring Boot's own server has bound, avoiding port
         // conflicts and ensuring all session infrastructure is ready.
-        mcpHttpServer.start()
+        runCatching { mcpHttpServer().start() }
+            .onFailure { e ->
+                logger.warn(
+                    "MCP HTTP server did not start: {} — MCP-over-HTTP will be unavailable " +
+                        "(set mcp.http.port if the configured port is already in use)",
+                    e.message
+                )
+            }
     }
 }
