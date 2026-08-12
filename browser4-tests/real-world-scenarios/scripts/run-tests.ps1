@@ -87,7 +87,8 @@ param(
     [int] $TimeoutMinutes = 60,
 
     # Override the agent CLI to use (claude, kimi, opencode, codex, or dsh).
-    # When empty, auto-detects. Forwarded to run-task.ps1.
+    # When empty, checks $env:BROWSER4_AGENT, then auto-detects from PATH.
+    # Forwarded to run-task.ps1.
     [string] $Agent = '',
 
     # Custom tasks directory. When set, overrides the default tasks/ directory.
@@ -216,16 +217,26 @@ function Write-Section {
 
 $knownAgents = @('claude', 'kimi', 'opencode', 'codex', 'dsh')
 $agentAvailable = $false
+$resolvedAgent = ''
 if ($Agent) {
+    $resolvedAgent = $Agent
     $agentAvailable = $null -ne (Get-Command $Agent -ErrorAction SilentlyContinue)
     if (-not $agentAvailable) {
         Write-Host "ERROR: Specified agent '$Agent' not found on PATH." -ForegroundColor Red
+        exit 1
+    }
+} elseif ($env:BROWSER4_AGENT) {
+    $resolvedAgent = $env:BROWSER4_AGENT.Trim()
+    $agentAvailable = $null -ne (Get-Command $resolvedAgent -ErrorAction SilentlyContinue)
+    if (-not $agentAvailable) {
+        Write-Host "ERROR: BROWSER4_AGENT='$resolvedAgent' not found on PATH." -ForegroundColor Red
         exit 1
     }
 } else {
     foreach ($a in $knownAgents) {
         if ($null -ne (Get-Command $a -ErrorAction SilentlyContinue)) {
             $agentAvailable = $true
+            $resolvedAgent = $a
             break
         }
     }
@@ -233,6 +244,7 @@ if ($Agent) {
 if (-not $agentAvailable) {
     Write-Host 'WARNING: no agent CLI (claude, kimi, opencode, codex, or dsh) found on PATH.' -ForegroundColor Yellow
     Write-Host 'Each task invokes an agent CLI.  Without one, every task will fail.'
+    Write-Host 'Set BROWSER4_AGENT to configure globally, or use -Agent to specify per-run.'
     Write-Host ''
 }
 

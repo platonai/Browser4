@@ -56,12 +56,33 @@ const PROVIDER_DEFS = {
     baseArgs: ['copilot'],
     envVars: [],
   },
+  kimi: {
+    binary: 'kimi',
+    promptFlag: '-p',
+    promptPosition: 'flag',    // kimi -p "<prompt>"
+    baseArgs: [],
+    envVars: [],
+  },
+  codex: {
+    binary: 'codex',
+    promptFlag: 'exec',
+    promptPosition: 'last',    // codex exec <prompt>
+    baseArgs: ['--dangerously-bypass-approvals-and-sandbox', '--ephemeral'],
+    envVars: [],
+  },
   openai: {
     binary: 'openai',
     promptFlag: '-p',
     promptPosition: 'flag',    // openai -p "<prompt>" [args]
     baseArgs: [],
     envVars: ['OPENAI_API_KEY'],
+  },
+  dsh: {
+    binary: 'dsh',
+    promptFlag: 'run',
+    promptPosition: 'last',    // dsh run <prompt>
+    baseArgs: [],
+    envVars: [],
   },
   custom: {
     binary: 'claude',
@@ -110,6 +131,33 @@ function _parsePsd1Config(configPath) {
       const binary = args.length > 0 ? args[0] : 'claude';
       const baseArgs = args.slice(1);
       return { type: 'claude', binary, baseArgs };
+    }
+
+    // Check for active KIMI block (uncommented)
+    const kimiMatch = content.match(/^\s*KIMI\s*=\s*@\(([\s\S]*?)\)/m);
+    if (kimiMatch) {
+      const args = _parsePsd1Array(kimiMatch[1]);
+      const binary = args.length > 0 ? args[0] : 'kimi';
+      const baseArgs = args.slice(1);
+      return { type: 'kimi', binary, baseArgs };
+    }
+
+    // Check for active CODEX block (uncommented)
+    const codexMatch = content.match(/^\s*CODEX\s*=\s*@\(([\s\S]*?)\)/m);
+    if (codexMatch) {
+      const args = _parsePsd1Array(codexMatch[1]);
+      const binary = args.length > 0 ? args[0] : 'codex';
+      const baseArgs = args.slice(1);
+      return { type: 'codex', binary, baseArgs };
+    }
+
+    // Check for active DSH block (uncommented)
+    const dshMatch = content.match(/^\s*DSH\s*=\s*@\(([\s\S]*?)\)/m);
+    if (dshMatch) {
+      const args = _parsePsd1Array(dshMatch[1]);
+      const binary = args.length > 0 ? args[0] : 'dsh';
+      const baseArgs = args.slice(1);
+      return { type: 'dsh', binary, baseArgs };
     }
 
     // Check for active COPILOT block (uncommented)
@@ -223,7 +271,17 @@ function init(opts) {
     baseArgs = opts.baseArgs;
   }
 
-  // 4. Env var: LLM_PROVIDER
+  // 4. Env var: BROWSER4_AGENT (global agent setting, shared with PowerShell scripts)
+  if (!providerType && process.env.BROWSER4_AGENT) {
+    const envAgent = process.env.BROWSER4_AGENT.trim().toLowerCase();
+    if (PROVIDER_DEFS[envAgent]) {
+      providerType = envAgent;
+    } else {
+      console.error(`[llm] WARNING: BROWSER4_AGENT='${envAgent}' is not a known provider. Known: ${Object.keys(PROVIDER_DEFS).join(', ')}`);
+    }
+  }
+
+  // 5. Env var: LLM_PROVIDER
   if (!providerType && process.env.LLM_PROVIDER) {
     const envProv = process.env.LLM_PROVIDER.toLowerCase();
     if (PROVIDER_DEFS[envProv]) {
@@ -234,27 +292,28 @@ function init(opts) {
     }
   }
 
-  // 5. Env var: LLM_PATH (binary override)
+  // 6. Env var: LLM_PATH (binary override)
   if (!binary && process.env.LLM_PATH) {
     binary = process.env.LLM_PATH;
   }
 
-  // 6. Env var: LLM_ARGS (base args override)
+  // 7. Env var: LLM_ARGS (base args override)
   if (!baseArgs && process.env.LLM_ARGS) {
     baseArgs = process.env.LLM_ARGS.split(/\s+/).filter(Boolean);
   }
 
-  // 7. Env var: CLAUDE_PATH (legacy — backward compatibility)
+  // 8. Env var: CLAUDE_PATH (legacy — backward compatibility)
   if (!binary && process.env.CLAUDE_PATH && !providerType) {
     binary = process.env.CLAUDE_PATH;
     providerType = 'claude';
   }
 
-  // 8. config.psd1 file — only when no explicit provider/binary/args
+  // 9. config.psd1 file — only when no explicit provider/binary/args
   //    were set (i.e., use the shared config as defaults)
   const hasExplicitConfig = !!(opts.provider || opts.binary || opts.baseArgs ||
-                                process.env.LLM_PROVIDER || process.env.LLM_PATH ||
-                                process.env.LLM_ARGS || process.env.CLAUDE_PATH);
+                                process.env.BROWSER4_AGENT || process.env.LLM_PROVIDER ||
+                                process.env.LLM_PATH || process.env.LLM_ARGS ||
+                                process.env.CLAUDE_PATH);
   if (!hasExplicitConfig) {
     const configPath = _findConfigPath();
     const psd1Config = configPath ? _parsePsd1Config(configPath) : null;
@@ -266,7 +325,7 @@ function init(opts) {
     }
   }
 
-  // 9. Default fallback
+  // 10. Default fallback
   if (!providerType) providerType = 'claude';
 
   // Build provider config — use provider definition defaults for

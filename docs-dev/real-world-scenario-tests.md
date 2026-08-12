@@ -96,7 +96,7 @@ Every task is prefixed with `$generalPrompt` (~450 lines of instructions) that t
 
 ### 3. Agent Invocation
 
-The runner invokes `claude`, `kimi`, `opencode`, `codex`, or `dsh` (auto-detected, `claude` preferred). Each backend uses its own autonomous flag: `--dangerously-skip-permissions` (claude), auto-approve via `-p` (kimi), `run <prompt>` (opencode/dsh), or `--dangerously-bypass-approvals-and-sandbox` (codex). Output streams to console in real-time AND is captured to `target/<timestamp>-<scenario>.raw.md`.
+The runner invokes `claude`, `kimi`, `opencode`, `codex`, or `dsh` (resolved via `-Agent` > `$env:BROWSER4_AGENT` > auto-detect, `claude` preferred). Each backend uses its own autonomous flag: `--dangerously-skip-permissions` (claude), auto-approve via `-p` (kimi), `run <prompt>` (opencode/dsh), or `--dangerously-bypass-approvals-and-sandbox` (codex). Output streams to console in real-time AND is captured to `target/<timestamp>-<scenario>.raw.md`.
 
 ### 4. Post-Processing
 
@@ -264,6 +264,7 @@ Runs all ~46 scenarios with resilience features:
 ### Prerequisites
 
 - **Agent CLI**: `claude` (Claude Code), `kimi` (Kimi Code), `opencode` (OpenCode), `codex` (Codex CLI), or `dsh` (DeepSeek Harness) on PATH
+- **BROWSER4_AGENT**: Set this env var to configure the agent globally (e.g. `$env:BROWSER4_AGENT = 'dsh'`). Override per-invocation with `-Agent`.
 - **Java runtime**: for the backend in dev mode
 - **Active LLM subscription**: scenarios consume API credits/tokens
 - **MockSite**: `./bin/test.ps1 mock-site` for mock-site category tasks

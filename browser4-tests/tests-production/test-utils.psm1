@@ -814,7 +814,7 @@ function Write-PerTestSummary {
 <#
 .SYNOPSIS
     Invoke the best available AI CLI to analyse test failures.
-    Priority: `claude -p "..."` > `copilot -p "..."`.
+    Priority: BROWSER4_AGENT env var > `claude` > `copilot` > `dsh`.
     Log paths are collected from tracked failures automatically.
     Call during Finish-TestSession (which calls this automatically)
     or directly when you have custom log paths.
@@ -867,7 +867,7 @@ function Invoke-CopilotAnalysis {
     } else {
         $analyzer = Get-AiAnalyzer
         if (-not $analyzer) {
-            Write-Host '  ℹ No AI CLI found on PATH (checked: claude, copilot) — skipping analysis' -ForegroundColor DarkGray
+            Write-Host '  ℹ No AI CLI found on PATH (checked: claude, copilot, dsh) — skipping analysis' -ForegroundColor DarkGray
             return $null
         }
         Write-Host "`n🤖 Running AI analysis with $analyzer ..." -ForegroundColor Magenta

@@ -53,7 +53,8 @@ param(
     [int] $TimeoutMinutes = 60,
 
     # Override the agent CLI to use (claude, kimi, opencode, codex, or dsh).
-    # When empty, auto-detects with priority claude > kimi > opencode > codex > dsh.
+    # When empty, checks $env:BROWSER4_AGENT, then auto-detects from PATH.
+    # Priority: -Agent > $env:BROWSER4_AGENT > PATH auto-detect (claude > kimi > opencode > codex > dsh).
     [ValidateSet('', 'claude', 'kimi', 'opencode', 'codex', 'dsh')]
     [string] $Agent = ''
 )

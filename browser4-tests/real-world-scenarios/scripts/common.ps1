@@ -2475,21 +2475,41 @@ function Get-ScenarioAgentArgs {
 function Get-ScenarioAgent {
     <#
     .SYNOPSIS
-        Resolve which agent CLI (claude, kimi, opencode, or codex) scenario
+        Resolve which agent CLI (claude, kimi, opencode, codex, or dsh) scenario
         scripts should invoke.
     .DESCRIPTION
+        Priority (highest to lowest):
+          1. $script:scenarioAgentCli — explicit script-level override
+          2. $env:BROWSER4_AGENT — global machine/user override
+          3. Auto-detection from PATH: claude > kimi > opencode > codex > dsh
+          4. Fallback: 'claude'
+
         Callers may force a backend by setting $script:scenarioAgentCli = 'kimi'
         (or 'claude', 'opencode', 'codex', 'dsh') after dot-sourcing this module.
-        Otherwise auto-detects with priority claude > kimi > opencode > codex > dsh.
-        Falls back to 'claude' when none are on PATH so the invocation fails
-        with a clear command-not-found error.
+        Set BROWSER4_AGENT in the environment to configure globally.
     #>
+
+    # 1. Explicit script-level override
     if ($script:scenarioAgentCli) { return $script:scenarioAgentCli }
+
+    # 2. Global environment variable
+    if ($env:BROWSER4_AGENT) {
+        $envAgent = $env:BROWSER4_AGENT.Trim()
+        if ($envAgent -in @('claude', 'kimi', 'opencode', 'codex', 'dsh')) {
+            return $envAgent
+        }
+        Write-Host "WARNING: BROWSER4_AGENT='$envAgent' is not a known agent." -ForegroundColor Yellow
+        Write-Host "  Known values: claude, kimi, opencode, codex, dsh" -ForegroundColor DarkGray
+    }
+
+    # 3. Auto-detection from PATH
     if (Get-Command claude -ErrorAction SilentlyContinue) { return 'claude' }
     if (Get-Command kimi -ErrorAction SilentlyContinue) { return 'kimi' }
     if (Get-Command opencode -ErrorAction SilentlyContinue) { return 'opencode' }
     if (Get-Command codex -ErrorAction SilentlyContinue) { return 'codex' }
     if (Get-Command dsh -ErrorAction SilentlyContinue) { return 'dsh' }
+
+    # 4. Fallback
     return 'claude'
 }
 
