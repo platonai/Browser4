@@ -1,6 +1,8 @@
 package ai.platon.pulsar.skeleton.session
 
 import ai.platon.pulsar.api.Browser
+import ai.platon.pulsar.chrome.Browser4WebDriver
+import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.AppPaths.WEB_CACHE_DIR
 import ai.platon.pulsar.common.browser.BrowserProfileMode
@@ -208,9 +210,13 @@ abstract class AbstractPulsarSession(
     override fun createBoundDriver(): WebDriver {
         synchronized(context) {
             val mode = BrowserProfileMode.fromString(sessionConfig[BROWSER_CONTEXT_MODE])
-            val driver = context.browserManager.launch(mode).newDriver()
-            bindDriver(driver)
-            return driver
+            val driver = context.browserManager.launch(mode).newDriver() as PulsarWebDriver
+            // Swap in Browser4WebDriver so every session uses the extension
+            // point — enables typeSafe(), pressSafe(), fillSafe(), and
+            // click(button) regardless of session type.
+            val b4Driver = Browser4WebDriver.from(driver)
+            bindDriver(b4Driver)
+            return b4Driver
         }
     }
 

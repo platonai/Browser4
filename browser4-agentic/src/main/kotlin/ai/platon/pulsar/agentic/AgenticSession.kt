@@ -6,12 +6,8 @@ import ai.platon.pulsar.agentic.context.StaticAgenticContext
 import ai.platon.pulsar.agentic.context.sql.AbstractBrowser4SQLContext
 import ai.platon.pulsar.agentic.inference.SessionActExecutor
 import ai.platon.pulsar.agentic.model.ToolCallResult
-import ai.platon.pulsar.chrome.Browser4WebDriver
-import ai.platon.pulsar.chrome.PulsarBrowser
-import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.api.WebDriver
 import ai.platon.pulsar.ql.SessionConfig
 import ai.platon.pulsar.ql.h2.AbstractH2SQLSession
 import ai.platon.pulsar.ql.h2.H2SessionDelegate
@@ -38,33 +34,9 @@ abstract class AbstractAgenticSession(
     sessionConfig: VolatileConfig,
     id: Long = nextId()
 ) : AbstractPulsarSession(context, sessionConfig, id = id), AgenticSession {
-
-    /**
-     * Override to create a [Browser4WebDriver] instead of the plain
-     * [PulsarWebDriver] returned by [PulsarBrowser.newDriver].
-     *
-     * The upstream pulsar-browser:4.11.2 JAR hardcodes `PulsarWebDriver`
-     * in its factory methods.  We swap it out here so that every session
-     * uses our extension point — enabling browser4-specific fixes in
-     * [Browser4WebDriver] (surrogate-pair typing, conditional cursor
-     * positioning, maxlength-aware fill) and any future overrides.
-     */
-    override fun createBoundDriver(): WebDriver {
-        val driver = super.createBoundDriver() as PulsarWebDriver
-        val b4Driver = Browser4WebDriver(
-            uniqueID = driver.guid,
-            chromeTab = driver.chromeTab,
-            browserProtocol = driver.browserProtocol,
-            browser = driver.browser as PulsarBrowser,
-        )
-        // Replace the binding: unbind the plain PulsarWebDriver and
-        // bind the Browser4WebDriver instead.  Both share the same
-        // underlying BrowserProtocol + BrowserTab, so the swap is
-        // safe — no CDP connections are torn down.
-        unbindDriver(driver)
-        bindDriver(b4Driver)
-        return b4Driver
-    }
+    // createBoundDriver() is inherited from AbstractPulsarSession, which
+    // already swaps in Browser4WebDriver via Browser4WebDriver.from().
+    // No override needed here.
 }
 
 open class AbstractAgenticQLSession(

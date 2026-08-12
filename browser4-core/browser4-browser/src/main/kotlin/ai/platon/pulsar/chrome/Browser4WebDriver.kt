@@ -50,6 +50,25 @@ open class Browser4WebDriver(
     browser: PulsarBrowser
 ) : PulsarWebDriver(uniqueID, chromeTab, browserProtocol, browser) {
 
+    companion object {
+        /**
+         * Create a [Browser4WebDriver] from an existing [PulsarWebDriver],
+         * reusing its underlying CDP connection, tab, and browser.
+         *
+         * Both drivers share the same [BrowserProtocol], [BrowserTab], and
+         * [PulsarBrowser], so no CDP connections are torn down or duplicated.
+         * Callers should unbind the original driver and bind the returned
+         * instance.
+         */
+        fun from(driver: PulsarWebDriver): Browser4WebDriver =
+            Browser4WebDriver(
+                uniqueID = driver.guid,
+                chromeTab = driver.chromeTab,
+                browserProtocol = driver.browserProtocol,
+                browser = driver.browser as PulsarBrowser,
+            )
+    }
+
     // ---------------------------------------------------------------------------
     // Extension surface
     //
