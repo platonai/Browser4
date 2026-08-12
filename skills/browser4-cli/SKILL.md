@@ -31,7 +31,7 @@ source tree use one of the following:
 
 > **⚡ First-run latency:** The Browser4 backend (Spring Boot + JVM) takes ~10s to start on first launch. Subsequent commands are instant — the server stays alive between invocations. The spinner shows stage-level progress (JVM → Spring Boot → MCP tools) so you can see what's happening.
 
-> **🖥️ Headless mode is the default for AI agents:** Always open browsers in **headless mode** (`--headless`) unless the user **explicitly** asks to see the browser window (e.g., "show me the browser", "open visibly", "I want to watch", or "headed"). Headless mode is faster, uses fewer resources, and avoids unnecessary GUI windows. Use `--headed` **only** when the user specifically requests a visible browser. See §2 Display Mode for details.
+> **🖥️ Headless mode is the default for AI agents:** Always open browsers in **headless mode** (`--headless`) unless the user **explicitly** asks to see the browser window (e.g., "show me the browser", "open visibly", "I want to watch", or "headed"). Headless mode is faster, uses fewer resources, and avoids unnecessary GUI windows. Use `--headed` **only** when the user specifically requests a visible browser. See the Display Mode section below (§2 Key Concepts) for details.
 
 Every browser4-cli session follows this pattern.
 
@@ -111,7 +111,7 @@ Browser4 can launch Chrome in two display modes:
 
 **Rule for AI agents: always use `--headless` by default.** Headless mode is faster, uses fewer resources, and avoids cluttering the user's desktop with browser windows. The only reason to use `--headed` is when the user **explicitly** requests a visible browser — look for phrases like "show me the browser", "I want to see", "open visibly", "headed", "watch what happens", or "debug visually".
 
-Set the display mode with the `open` command when starting a session. The `goto` command inherits the session's existing display mode — it does not accept `--headless`/`--headed` directly:
+Set the display mode with the `open` command when starting a **new** session. The `goto` command does **not** accept `--headless`/`--headed` directly — it inherits the session's existing display mode:
 
 ```bash
 browser4-cli open --headless https://example.com     # headless (preferred default)
@@ -124,7 +124,9 @@ Once a session is open, use `goto` for subsequent navigations (the display mode 
 browser4-cli goto https://other-page.com             # stays headless (or headed) as set by open
 ```
 
-> **Note:** If neither `--headless` nor `--headed` is specified, the backend applies its configured default. To ensure predictable behavior, always pass one of the two flags explicitly.
+> **⚠️ Important — `goto` on first invocation:** When `goto` is the very first command (no prior `open`), it auto-opens a new session using the **backend's configured default** display mode — which is typically GUI on desktop machines. To guarantee headless mode, **always start with `open --headless`** before using `goto`.
+
+> **Note — reconnecting to an existing session:** The `--headless`/`--headed` flags only take effect when creating a new session. When `open` reconnects to an already-running session, the display mode is already set and the flags are ignored. To change the mode of an existing session, close it first (`close`), then `open --headless` to create a new one.
 
 ### Sessions
 

@@ -16,7 +16,7 @@ Use this skill when you need to:
 
 **Always open the browser in headless mode** unless the user explicitly asks to see the browser window. Headless mode is faster, uses fewer resources, and avoids cluttering the user's desktop.
 
-- **Default:** Use `--headless` flag when opening the browser (e.g., `browser4-cli open --headless <url>`)
+- **Default:** Use `browser4-cli open --headless <url>` to start a session (the `browser.navigate` MCP tool does not control display mode)
 - **Headed mode only when:**
   - The user says "show me the browser", "I want to watch", "open visibly", "headed", or "debug visually"
   - The user needs to perform a manual interaction they haven't automated
@@ -25,7 +25,8 @@ Use this skill when you need to:
 ### Step 1: Navigate to the Target Page
 
 First, navigate to the web page you want to scrape:
-- Use the `browser.navigate` tool with the target URL (or `browser4-cli open --headless <url>`)
+- Use `browser4-cli open --headless <url>` to start a headless session
+- If a session is already open, use `browser4-cli goto <url>` (display mode persists)
 - Wait for the page to fully load before proceeding
 
 ### Step 2: Identify Target Elements
@@ -272,7 +273,7 @@ For JSON-LD or microdata:
 
 The following Browser4 tools are commonly used with this skill:
 
-- `browser.navigate(url)` - Navigate to a web page
+- `browser.navigate(url)` - Navigate to a web page (display mode controlled by session, not by this tool — use `browser4-cli open --headless <url>` to ensure headless mode)
 - `browser.extract(selector, attributes)` - Extract data using CSS selectors
 - `browser.wait_for_element(selector, timeout)` - Wait for elements to appear
 - `browser.click(selector)` - Click elements (for pagination, expanding content)
