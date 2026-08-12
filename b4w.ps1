@@ -255,7 +255,8 @@ if ($CliArgs -and $CliArgs[0] -eq 'sc') {
     $TestScript = Join-Path $ScriptDir 'bin\test.ps1'
     $ScArgs = if ($CliArgs.Count -gt 1) { @($CliArgs[1..($CliArgs.Count - 1)]) } else { @() }
     if ($ScArgs) {
-        & $TestScript rws sc @ScArgs
+        $safeArgs = ($ScArgs | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ' '
+        Invoke-Expression "& '$TestScript' -- rws sc $safeArgs"
     } else {
         # No args → launch the interactive scenario picker
         & $TestScript rws sc --interactive
@@ -265,11 +266,17 @@ if ($CliArgs -and $CliArgs[0] -eq 'sc') {
 
 # ── Subcommand: test ──────────────────────────────────────────────────────
 # Delegates to bin/test.ps1, forwarding all remaining arguments.
+# Uses Invoke-Expression with "--" instead of splatting (@TestArgs) so that
+# PowerShell's parser consumes the "--" as an end-of-parameters marker.
+# This prevents short flags like -i (ambiguous between -InformationAction
+# and -InformationVariable) from triggering common-parameter binding in the
+# target script's CmdletBinding block.
 if ($CliArgs -and $CliArgs[0] -eq 'test') {
     $TestScript = Join-Path $ScriptDir 'bin\test.ps1'
     $TestArgs = if ($CliArgs.Count -gt 1) { ,$CliArgs[1..($CliArgs.Count - 1)] } else { @() }
     if ($TestArgs) {
-        & $TestScript @TestArgs
+        $safeArgs = ($TestArgs | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ' '
+        Invoke-Expression "& '$TestScript' -- $safeArgs"
     } else {
         & $TestScript
     }
@@ -282,7 +289,8 @@ if ($CliArgs -and $CliArgs[0] -eq 'build') {
     $BuildScript = Join-Path $ScriptDir 'bin\build.ps1'
     $BuildArgs = if ($CliArgs.Count -gt 1) { ,$CliArgs[1..($CliArgs.Count - 1)] } else { @() }
     if ($BuildArgs) {
-        & $BuildScript @BuildArgs
+        $safeArgs = ($BuildArgs | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ' '
+        Invoke-Expression "& '$BuildScript' -- $safeArgs"
     } else {
         & $BuildScript
     }
