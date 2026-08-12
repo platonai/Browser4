@@ -42,9 +42,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
-$ChecksDir = Join-Path $ScriptDir "..\checks"
-$ReportersDir = Join-Path $ScriptDir "..\reporters"
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
+$ChecksDir = Join-Path $ScriptDir "../checks"
+$ReportersDir = Join-Path $ScriptDir "../reporters"
 
 $results = @()
 $overallFailed = $false
@@ -129,3 +129,4 @@ else {
     Write-Host "✅ CI checks: ALL PASSED" -ForegroundColor Green
     exit 0
 }
+

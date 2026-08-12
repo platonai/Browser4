@@ -16,7 +16,7 @@ Path to write the Markdown file. If omitted, outputs to stdout.
 
 .EXAMPLE
 $r = & .\checks\check-coverage.ps1
-.\reporters\report-summary.ps1 -Results $r -OutputFile summary.md
+.\reporters/report-summary.ps1 -Results $r -OutputFile summary.md
 #>
 
 param(

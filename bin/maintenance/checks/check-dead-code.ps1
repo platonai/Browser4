@@ -26,7 +26,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "A7" -Name "Dead Code Detection"
 $repoRoot = Get-RepositoryRoot
@@ -58,7 +58,7 @@ foreach ($line in $unusedLines) {
 }
 
 # ── Rust clippy dead_code ──
-$cliDir = Join-Path $repoRoot "cli\browser4-cli"
+$cliDir = Join-Path $repoRoot "cli/browser4-cli"
 if (Test-Path (Join-Path $cliDir "Cargo.toml")) {
     $rustResult = Invoke-MaintenanceStep `
         -StepName "Cargo Clippy Dead Code" `
@@ -88,3 +88,4 @@ else {
 
 Set-MaintenanceResultSummary -Result $result
 $result
+

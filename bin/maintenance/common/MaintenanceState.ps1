@@ -58,7 +58,7 @@ function Get-MaintenanceStatePath {
         return $script:_StatePath
     }
     $repoRoot = Get-RepositoryRoot
-    $stateDir = Join-Path $repoRoot "bin\maintenance\state"
+    $stateDir = Join-Path $repoRoot "bin/maintenance/state"
 
     # Ensure the directory exists
     if (-not (Test-Path $stateDir)) {
@@ -516,3 +516,4 @@ function Get-MaintenanceStateSummary {
 }
 
 Write-MaintenanceLog -Level "DEBUG" -Component "MaintenanceState" -Message "Module loaded"
+

@@ -31,7 +31,7 @@ Standard maintenance result object.
 
 param(
     [int]$MaxAgeDays = 0,
-    [string[]]$Paths = @("coworker\tasks\.locks", "coworker\tasks\300logs"),
+    [string[]]$Paths = @("coworker/tasks/.locks", "coworker/tasks/300logs"),
     [switch]$Force,
     [switch]$DryRun
 )
@@ -40,7 +40,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "H3" -Name "Temp File Cleanup"
 $repoRoot = Get-RepositoryRoot

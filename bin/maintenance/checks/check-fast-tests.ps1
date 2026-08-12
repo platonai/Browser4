@@ -38,7 +38,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "A2" -Name "Fast Unit Tests"
 
@@ -74,3 +74,4 @@ else {
 
 Set-MaintenanceResultSummary -Result $result
 $result
+

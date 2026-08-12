@@ -25,7 +25,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "F1" -Name "Maven Dependency Convergence"
 $repoRoot = Get-RepositoryRoot
@@ -58,3 +58,4 @@ else {
 
 Set-MaintenanceResultSummary -Result $result
 $result
+
