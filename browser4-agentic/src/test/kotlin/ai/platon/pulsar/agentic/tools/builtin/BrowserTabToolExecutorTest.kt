@@ -71,6 +71,37 @@ class BrowserTabToolExecutorTest {
     }
 
     @Test
+    fun `keydown dispatches driver keyDown with the key`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+
+            executor.callFunctionOn(
+                ToolCall("tab", "keyDown", mutableMapOf<String, Any?>("key" to "Control")),
+                driver
+            )
+
+            // Browser4WebDriver overrides keyDown with the stateful
+            // Keyboard.down() path; the executor must route the modifier
+            // key through the driver rather than dispatching its own JS event.
+            verify(driver).keyDown("Control")
+        }
+    }
+
+    @Test
+    fun `keyup dispatches driver keyUp with the key`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+
+            executor.callFunctionOn(
+                ToolCall("tab", "keyUp", mutableMapOf<String, Any?>("key" to "Control")),
+                driver
+            )
+
+            verify(driver).keyUp("Control")
+        }
+    }
+
+    @Test
     fun `help advertises selector optional type and press`() {
         val typeHelp = executor.help("type")
         val pressHelp = executor.help("press")
