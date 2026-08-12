@@ -3,6 +3,7 @@ package ai.platon.pulsar.chrome
 import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.api.model.BrowserTab
 import ai.platon.pulsar.api.model.WebDriverException
+import ai.platon.pulsar.chrome.network.RobustRPC
 import ai.platon.pulsar.chrome.protocol.Keyboard
 import kotlinx.coroutines.delay
 
@@ -66,7 +67,7 @@ open class Browser4WebDriver(
                 uniqueID = driver.guid,
                 chromeTab = driver.chromeTab,
                 browserProtocol = driver.browserProtocol,
-                browser = driver.browser as PulsarBrowser,
+                browser = driver.browser,
             )
     }
 
@@ -81,6 +82,17 @@ open class Browser4WebDriver(
     // ---------------------------------------------------------------------------
 
     /**
+     * A [RobustRPC] instance for this driver.
+     *
+     * The upstream [PulsarWebDriver.rpc] is `private`, so overrides cannot reuse
+     * it.  This instance wraps the browser4-specific operations below so that
+     * they keep the same retry / health-check / CDT-agent-recovery guarantees
+     * as the rest of the driver (see [RobustRPC]).  Failure accounting is
+     * per-instance, so it is tracked independently from the parent's counters.
+     */
+    private val rpc = RobustRPC(this)
+
+    /**
      * Click on an element identified by [selector] with optional [button] and [count].
      *
      * Extends [PulsarWebDriver.click] with a [button] parameter for right-click,
@@ -92,7 +104,7 @@ open class Browser4WebDriver(
      * dispatching [mouseDown] / [mouseUp] at the element's clickable point, matching
      * the parent's pre-click sequence without duplicating its internals.
      *
-     * @param selector A CSS selector or "backend:nodeId" locator for the target element.
+     * @param selector A CSS selector, XPath, or "backend:nodeId" locator for the target element.
      * @param count Number of consecutive clicks (1 = single, 2 = double, etc.).
      * @param button Mouse button name: `"left"`, `"right"`, `"middle"`, `"back"`, or `"forward"`.
      *        Defaults to `"left"` when `null`.
@@ -105,26 +117,37 @@ open class Browser4WebDriver(
             return
         }
 
-        // Scroll the element into view so it is interactable.  Right-click and
-        // other non-left buttons do not require the element to be focusable
-        // (e.g. <div> elements without tabindex), so focus is best-effort.
+        // Match the parent click's dialog handling: drain any stale dialog before
+        // the operation (a leftover dialog blocks CDP health checks), and auto-accept
+        // any dialog the click opens (when autoDismissDialogs is enabled).
+        dialogHandler.dismissAllPending()
         try {
-            page.focusOnSelector(selector)
-        } catch (e: Exception) {
-            // Element is not focusable — that's fine for non-left clicks.
+            rpc.invokeOnElement(selector, "click", scrollIntoView = true) {
+                // Scroll the element into view so it is interactable.  Right-click and
+                // other non-left buttons do not require the element to be focusable
+                // (e.g. <div> elements without tabindex), so focus is best-effort.
+                try {
+                    page.focusOnSelector(selector)
+                } catch (e: Exception) {
+                    // Element is not focusable — that's fine for non-left clicks.
+                }
+
+                // Resolve the element's clickable point after scroll.
+                val point = clickablePoint(selector)
+                    ?: throw WebDriverException("Element not found or not clickable: $selector")
+
+                // Move to the element, then dispatch `count` press+release pairs with
+                // the requested button.  Each pair carries an incrementing detail
+                // (1..count) so a count of 2 produces a proper double-click sequence.
+                mouseMove(point.x, point.y)
+                repeat(count) { i ->
+                    mouseDown(button, i + 1)
+                    mouseUp(button, i + 1)
+                }
+            }
+        } finally {
+            dialogHandler.drainAutoDismiss()
         }
-        page.scrollIntoViewIfNeeded(selector)
-
-        // Resolve the element's clickable point after scroll.
-        val point = clickablePoint(selector)
-            ?: throw WebDriverException("Element not found or not clickable: $selector")
-
-        // Move to the element, then dispatch press + release with the
-        // requested button.  mouseDown/mouseUp accept button names directly
-        // ("right", "middle", etc.).
-        mouseMove(point.x, point.y)
-        mouseDown(button, count)
-        mouseUp(button, count)
     }
 
     // ---------------------------------------------------------------------------
@@ -152,7 +175,7 @@ open class Browser4WebDriver(
      * applied to subsequent [press] calls.
      */
     override suspend fun keyDown(key: String) {
-        keyboard.down(key)
+        rpc.invokeOnPage("keyDown") { keyboard.down(key) }
     }
 
     /**
@@ -160,7 +183,7 @@ open class Browser4WebDriver(
      * matching [keyDown] so released modifiers are cleared again.
      */
     override suspend fun keyUp(key: String) {
-        keyboard.up(key)
+        rpc.invokeOnPage("keyUp") { keyboard.up(key) }
     }
 
     /**
@@ -171,26 +194,46 @@ open class Browser4WebDriver(
      * cursor is moved to the end ONLY for single printable characters —
      * navigation keys (Home, End, ArrowLeft, Delete, …) preserve the current
      * cursor position so chains like Home→Delete work as expected.
+     *
+     * Mirrors the parent's Enter-key safety net: a CDP-dispatched `Enter` does
+     * not reliably trigger the browser's implicit form submission (HTML
+     * §4.10.2.2), so [trySubmitFormOnEnter] explicitly submits the nearest form.
      */
     @Throws(WebDriverException::class)
     override suspend fun press(key: String, selector: String?) {
-        if (selector != null) {
-            page.focusOnSelector(selector)
-
-            if (key.length == 1 && !Character.isISOControl(key[0])) {
-                evaluate("""
-                    (function(){
-                        var el = document.querySelector('${selector.replace("'", "\\'")}');
-                        if (!el) return;
-                        if (typeof el.setSelectionRange === 'function') {
-                            el.setSelectionRange(99999, 99999);
-                        }
-                    })()
-                """.trimIndent())
+        if (selector.isNullOrBlank()) {
+            rpc.invokeOnPage("press") {
+                keyboard.press(key, randomDelayMillis("press"))
+                if (key == "Enter") trySubmitFormOnEnter()
+                gap("press")
             }
+            return
         }
 
-        keyboard.press(key, randomDelayMillis("press"))
+        rpc.invokeOnElement(selector, "press", focus = true) {
+            if (key.length == 1 && !Character.isISOControl(key[0])) {
+                try {
+                    evaluate(
+                        """
+                        (function(){
+                            var el = document.querySelector('${selector.replace("\\", "\\\\").replace("'", "\\'")}');
+                            if (!el) return;
+                            if (typeof el.setSelectionRange === 'function') {
+                                el.setSelectionRange(99999, 99999);
+                            }
+                        })()
+                        """.trimIndent()
+                    )
+                } catch (_: Exception) {
+                    // Non-text elements (buttons, divs) don't support setSelectionRange.
+                    // Silently ignore — the press will still work for non-text targets.
+                }
+            }
+
+            keyboard.press(key, randomDelayMillis("press"))
+            if (key == "Enter") trySubmitFormOnEnter()
+            gap("press")
+        }
     }
 
     /**
@@ -216,29 +259,29 @@ open class Browser4WebDriver(
         // like ArrowLeft→type that rely on preserving cursor position.
         // insertText() respects the existing cursor position, so text
         // appends when cursor is at end and inserts when cursor was moved.
-        page.focusOnSelector(selector)
+        rpc.invokeOnElement(selector, "type", focus = true) {
+            // Type code point by code point — avoids the charAt() surrogate-splitting
+            // bug in the upstream Keyboard.type().
+            var i = 0
+            while (i < text.length) {
+                val codePoint = text.codePointAt(i)
+                val charCount = Character.charCount(codePoint)
+                val charString = text.substring(i, i + charCount)
 
-        // Type code point by code point — avoids the charAt() surrogate-splitting
-        // bug in the upstream Keyboard.type().
-        var i = 0
-        while (i < text.length) {
-            val codePoint = text.codePointAt(i)
-            val charCount = Character.charCount(codePoint)
-            val charString = text.substring(i, i + charCount)
+                if (Character.isISOControl(codePoint)) {
+                    press(charString)
+                } else {
+                    browserProtocol.insertText(charString)
+                }
 
-            if (Character.isISOControl(codePoint)) {
-                press(charString)
-            } else {
-                browserProtocol.insertText(charString)
+                if (charCount > 1) {
+                    // Supplementary character — give the browser a little more time
+                    delay(randomDelayMillis("type") * 2)
+                } else {
+                    delay(randomDelayMillis("type"))
+                }
+                i += charCount
             }
-
-            if (charCount > 1) {
-                // Supplementary character — give the browser a little more time
-                delay(randomDelayMillis("type") * 2)
-            } else {
-                delay(randomDelayMillis("type"))
-            }
-            i += charCount
         }
     }
 
@@ -265,20 +308,27 @@ open class Browser4WebDriver(
      * - number / range inputs use `valueAsNumber` to avoid string-coercion
      *   edge cases that can leave the value empty.
      * - contenteditable elements get their text content replaced.
+     *
+     * The element is resolved via [PulsarWebDriver.evaluateValue], which
+     * supports CSS selectors, XPath, and `backend:nodeId` / `e123` locators
+     * (unlike a raw `document.querySelector`), and evaluates with `this`
+     * bound to the target element.
      */
     @Throws(WebDriverException::class)
     suspend fun fillSafe(selector: String, text: String) {
-        evaluate("""
-            (function(){
-                var el = document.querySelector('${selector.replace("'", "\\'")}');
-                if (!el) return;
+        evaluateValue(
+            selector,
+            """
+            function() {
+                var el = this;
+                if (!el) { return; }
                 if (el.disabled || el.readOnly) { return; }
                 var val = '${
-                    text.replace("\\", "\\\\")
-                        .replace("'", "\\'")
-                        .replace("\n", "\\n")
-                        .replace("\r", "\\r")
-                }';
+                text.replace("\\", "\\\\")
+                    .replace("'", "\\'")
+                    .replace("\n", "\\n")
+                    .replace("\r", "\\r")
+            }';
                 var maxLen = el.maxLength;
                 if (maxLen > 0 && val.length > maxLen) { val = val.substring(0, maxLen); }
                 if (el.isContentEditable) {
@@ -293,7 +343,33 @@ open class Browser4WebDriver(
                 if (typeof el.focus === 'function') { el.focus(); }
                 el.dispatchEvent(new Event('input', { bubbles: true }));
                 el.dispatchEvent(new Event('change', { bubbles: true }));
-            })()
-        """.trimIndent())
+            }
+            """.trimIndent()
+        )
+    }
+
+    /**
+     * Re-implementation of the parent's private `trySubmitFormOnEnter()`.
+     *
+     * CDP `Input.dispatchKeyEvent` sends trusted keydown/keypress events, but
+     * Chromium does not reliably fire the implicit form submission default
+     * action (HTML spec §4.10.2.2) for synthesized input.  This method is a
+     * safety net: after a CDP `Enter` lands, it explicitly submits the nearest
+     * eligible form via `requestSubmit()` (with `submit()` fallback).
+     *
+     * Elements excluded (Enter does *not* implicitly submit for these):
+     * - `<textarea>` — Enter inserts a newline
+     * - `<input type="radio|checkbox|file|button|reset|submit|image|hidden">`
+     * - Any element not inside a `<form>`
+     */
+    private suspend fun trySubmitFormOnEnter() {
+        runCatching {
+            browserProtocol.evaluate(
+                expression = PulsarWebDriver.TRY_SUBMIT_FORM_ON_ENTER_JS,
+                returnByValue = true,
+            )
+        }.onFailure {
+            // Best-effort safety net — a failure here must not fail the press itself.
+        }
     }
 }
