@@ -1881,10 +1881,22 @@ function Start-NativeCommand {
     if ($isWindowsPlatform) {
         if (-not [System.IO.Path]::HasExtension($resolvedExe) -and
             -not $resolvedExe.Contains([System.IO.Path]::DirectorySeparatorChar)) {
+            # Try .cmd first (batch wrappers are common on Windows).
             $cmdCandidate = "$resolvedExe.cmd"
             $resolvedCmd = Get-Command $cmdCandidate -ErrorAction SilentlyContinue
             if ($resolvedCmd) {
                 $resolvedExe = $resolvedCmd.Source
+            } else {
+                # Try .ps1 fallback (PowerShell wrappers).  System.Diagnostics.Process
+                # cannot execute .ps1 directly with UseShellExecute=$false, so we
+                # wrap through pwsh.exe -NoProfile -File.
+                $ps1Candidate = "$resolvedExe.ps1"
+                $resolvedPs1 = Get-Command $ps1Candidate -ErrorAction SilentlyContinue
+                if ($resolvedPs1) {
+                    $ps1Path = $resolvedPs1.Source
+                    $ArgumentList = @('-NoProfile', '-File', $ps1Path) + $ArgumentList
+                    $resolvedExe = (Get-Command pwsh.exe -ErrorAction Stop).Source
+                }
             }
         }
     }
