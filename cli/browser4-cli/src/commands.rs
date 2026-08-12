@@ -1080,9 +1080,12 @@ pub fn all_commands() -> Vec<CommandDef> {
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_type".to_string(),
             tool_params_fn: |args| {
+                // get_string_value (not get_str): build_command_args stores
+                // numeric-looking positionals as JSON numbers, so `fill "#el" 42`
+                // would otherwise lose the text ("42" → Number → "" via get_str).
                 let mut p = json!({
                     "ref": get_str(args, "ref").unwrap_or_default(),
-                    "text": get_str(args, "text").unwrap_or_default(),
+                    "text": get_string_value(args, "text").unwrap_or_default(),
                 });
                 if let Some(submit) = get_bool(args, "submit") {
                     p["submit"] = json!(submit);
@@ -6491,6 +6494,34 @@ mod tests {
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["ref"], "#my-input");
         assert_eq!(params["text"], "hello world");
+    }
+
+    #[test]
+    fn test_fill_params_stringify_numeric_text() {
+        // build_command_args stores numeric-looking positionals as JSON
+        // numbers (e.g. `fill "#el" 42`), which get_str would read as an
+        // empty default.  The fill text must round-trip as the string "42".
+        let map = commands_map();
+        let cmd = map.get("fill").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("#number-input"));
+        args.insert("text".to_string(), json!(42));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["ref"], "#number-input");
+        assert_eq!(params["text"], "42");
+    }
+
+    #[test]
+    fn test_fill_params_stringify_float_numeric_text() {
+        let map = commands_map();
+        let cmd = map.get("fill").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("#number-input"));
+        args.insert("text".to_string(), json!(3.14));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["text"], "3.14");
     }
 
     #[test]

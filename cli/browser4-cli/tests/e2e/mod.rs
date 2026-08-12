@@ -3102,14 +3102,25 @@ fn key_event_count(state: &serde_json::Value) -> usize {
 // even when JS event handlers are delayed or dropped.
 
 /// Read an element's `.value` property directly from the DOM.
+///
+/// The CLI prints the literal `""` when an eval returns an empty string
+/// (to distinguish JS null/undefined from an empty result), so normalize
+/// that back to an empty string — otherwise `wait_for_dom_value_or_abort`
+/// can never observe a cleared field.
 fn read_dom_value(ctx: &mut E2ECtx, selector: &str) -> String {
-    eval_text(
+    let text = eval_text(
         ctx,
         &format!(
             "(document.querySelector('{}') || {{}}).value || ''",
             selector
         ),
-    )
+    );
+    let text = text.trim();
+    if text == "\"\"" {
+        String::new()
+    } else {
+        text.to_string()
+    }
 }
 
 /// Read `window.__browser4State.keyEvents` directly via JSON.stringify.

@@ -5,12 +5,20 @@ import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.api.AbstractBrowser
 import ai.platon.pulsar.api.AbstractWebDriver
+import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.api.WebDriver
+import ai.platon.pulsar.api.model.BrowserTab
+import ai.platon.pulsar.chrome.Browser4WebDriver
+import ai.platon.pulsar.chrome.PulsarBrowser
+import ai.platon.pulsar.chrome.PulsarWebDriver
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
 import io.mockk.verify
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -51,9 +59,20 @@ class AgentToolManagerTest {
     @Test
     @DisplayName("switchTab with tabId binds the driver resolved from the browser drivers map")
     fun switchTabByTabIdBindsResolvedDriver() = runBlocking {
-        val targetDriver: WebDriver = mockk(relaxed = true)
+        // The tab driver created by PulsarBrowser is a plain PulsarWebDriver;
+        // bindSwappedDriver must swap it to a Browser4WebDriver so the session
+        // bean registry (keyed by concrete class) replaces the bound driver
+        // instead of adding a second bean that boundDriver never sees.
+        val targetDriver = mockk<PulsarWebDriver>(relaxed = true)
         val staleFrontDriver: WebDriver = mockk(relaxed = true)
         val tabId = "161A46FDD7ACDCC0F040A913100D4517"
+        val chromeTab = mockk<BrowserTab>(relaxed = true)
+        val browserProtocol = mockk<BrowserProtocol>(relaxed = true)
+        val pulsarBrowser = mockk<PulsarBrowser>(relaxed = true)
+        every { targetDriver.guid } returns tabId
+        every { targetDriver.chromeTab } returns chromeTab
+        every { targetDriver.browserProtocol } returns browserProtocol
+        every { targetDriver.browser } returns pulsarBrowser
 
         // Executor-side resolution (BrowserToolExecutor.switchTab).
         val executorDriver = mockk<AbstractWebDriver>(relaxed = true)
@@ -67,8 +86,13 @@ class AgentToolManagerTest {
             ToolCall("browser", "switchTab", mutableMapOf<String, Any?>("tabId" to tabId))
         )
 
-        verify(exactly = 1) { session.bindDriver(targetDriver) }
-        verify(exactly = 0) { session.bindDriver(staleFrontDriver) }
+        // Exactly one bind, and it must be the swapped Browser4WebDriver
+        // wrapping the tabId-resolved driver — never the raw PulsarWebDriver
+        // (whose bean key would differ) and never the stale frontDriver.
+        val bound = slot<WebDriver>()
+        verify(exactly = 1) { session.bindDriver(capture(bound)) }
+        assertTrue(bound.captured is Browser4WebDriver, "Expected Browser4WebDriver, got ${bound.captured::class}")
+        assertEquals(tabId, bound.captured.guid)
     }
 
     @Test

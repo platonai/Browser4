@@ -16,6 +16,8 @@ import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationRenderer
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.api.WebDriver
+import ai.platon.pulsar.chrome.Browser4WebDriver
+import ai.platon.pulsar.chrome.PulsarWebDriver
 import kotlinx.coroutines.delay
 import java.nio.file.Path
 import kotlin.time.Duration.Companion.milliseconds
@@ -339,7 +341,7 @@ class AgentToolManager constructor(
     private suspend fun onDidSwitchTab(tc: ToolCall, evaluate: TcEvaluate) {
         val switchedDriver = evaluate.value as? WebDriver
         if (switchedDriver != null) {
-            session.bindDriver(switchedDriver)
+            bindSwappedDriver(switchedDriver)
             return
         }
 
@@ -361,7 +363,7 @@ class AgentToolManager constructor(
             else -> null
         }
         if (resolved != null) {
-            session.bindDriver(resolved)
+            bindSwappedDriver(resolved)
             return
         }
 
@@ -374,7 +376,30 @@ class AgentToolManager constructor(
             logger.warn("! No driver is in front after switchTab")
             return
         }
-        session.bindDriver(fallback)
+        bindSwappedDriver(fallback)
+    }
+
+    /**
+     * Bind [driver] to the session, swapping it to a [Browser4WebDriver] first
+     * when it is a plain [PulsarWebDriver].
+     *
+     * The session's bean registry keys beans by their concrete class name, and
+     * [session.boundDriver] returns the *first* bean assignable to WebDriver in
+     * insertion order.  Browser tabs created by PulsarBrowser are plain
+     * PulsarWebDriver instances, while the session's bound driver is a
+     * Browser4WebDriver.  Binding the raw tab driver would therefore add a
+     * second WebDriver bean that boundDriver never sees — the old driver keeps
+     * winning.  The Browser4WebDriver.from swap is a pure binding replacement
+     * (same chromeTab, BrowserProtocol, and browser), so the swapped driver
+     * replaces the existing bean and the session follows the switch.
+     */
+    private fun bindSwappedDriver(driver: WebDriver) {
+        val bound = when {
+            driver is Browser4WebDriver -> driver
+            driver is PulsarWebDriver -> Browser4WebDriver.from(driver)
+            else -> driver
+        }
+        session.bindDriver(bound)
     }
 
     /**
@@ -407,7 +432,7 @@ class AgentToolManager constructor(
             return
         }
 
-        session.bindDriver(newFront)
+        bindSwappedDriver(newFront)
         logger.info("👀 Session driver rebound after closeTab: {} -> {}",
             oldBoundDriver, newFront)
     }
