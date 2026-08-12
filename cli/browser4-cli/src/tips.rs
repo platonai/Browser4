@@ -351,6 +351,9 @@ const TIPS_GENERAL: &[Tip] = &[
     Tip {
         text: "Use `doctor` to diagnose Chrome, Java, and network issues when things aren't working",
     },
+    Tip {
+        text: "Set BROWSER4_CLI_STATE_DIR to a writable path in sandboxed environments — the CLI falls back to ./.browser4-cli-state when ~/.browser4 is not writable",
+    },
 ];
 
 // ---------------------------------------------------------------------------
