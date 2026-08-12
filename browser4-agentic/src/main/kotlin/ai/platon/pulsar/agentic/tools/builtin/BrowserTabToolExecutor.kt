@@ -606,7 +606,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                                 if (key.length == 1 && !Character.isISOControl(key[0])) {
                                     pulsarDriver.evaluate("""
                                         (function(){
-                                            var el = document.querySelector('${selector.replace("'", "\\'")}');
+                                            var el = document.querySelector('${Browser4WebDriver.escapeJsSelector(selector)}');
                                             if (!el) return;
                                             if (typeof el.setSelectionRange === 'function') {
                                                 el.setSelectionRange(99999, 99999);
@@ -650,23 +650,18 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                                 val pulsarDriver = driver as? PulsarWebDriver
                                 if (pulsarDriver != null) {
                                     pulsarDriver.page.focusOnSelector(selector)
-                                    var i = 0
-                                    while (i < text.length) {
-                                        val codePoint = text.codePointAt(i)
-                                        val charCount = Character.charCount(codePoint)
-                                        val charString = text.substring(i, i + charCount)
-                                        if (Character.isISOControl(codePoint)) {
+                                    for (charString in Browser4WebDriver.codePoints(text)) {
+                                        if (Character.isISOControl(charString.codePointAt(0))) {
                                             pulsarDriver.press(charString)
                                         } else {
                                             pulsarDriver.browserProtocol.insertText(charString)
                                         }
                                         val typeDelay = pulsarDriver.randomDelayMillis("type")
-                                        if (charCount > 1) {
+                                        if (charString.length > 1) {
                                             delay(typeDelay * 2)
                                         } else {
                                             delay(typeDelay)
                                         }
-                                        i += charCount
                                     }
                                 } else {
                                     driver.type(text, selector)
@@ -754,35 +749,13 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                         // fill that respects HTMLInputElement.maxLength
                         b4Driver.fillSafe(selector, text)
                     } else {
-                        // Fallback: inline constraint-aware JS (same semantics as
-                        // Browser4WebDriver.fillSafe — readonly/disabled skip,
-                        // maxlength guard, number/range via valueAsNumber,
-                        // contenteditable via textContent).  The upstream
-                        // PulsarWebDriver.fill() is known to fail on constrained
-                        // inputs (e.g. <input type=number>).
-                        val jsPrefix = "var el=document.querySelector('${selector.replace("'", "\\'")}');if(!el)return;if(el.disabled||el.readOnly)return;"
-                        val jsVal = "var val='${
-                            text.replace("\\", "\\\\")
-                                .replace("'", "\\'")
-                                .replace("\n", "\\n")
-                                .replace("\r", "\\r")
-                        }';"
+                        // Fallback: same constraint-aware fill as Browser4WebDriver.fillSafe,
+                        // via the shared fillValueJs helper.  evaluateValue resolves
+                        // CSS/XPath/backend locators and binds `this` to the element,
+                        // matching fillSafe exactly.  The upstream PulsarWebDriver.fill()
+                        // is known to fail on constrained inputs (e.g. <input type=number>).
                         if (driver is PulsarWebDriver) {
-                            driver.evaluate("""
-                                (function(){$jsPrefix$jsVal
-                                var maxLen=el.maxLength;
-                                if(maxLen>0&&val.length>maxLen)val=val.substring(0,maxLen);
-                                if(el.isContentEditable){el.textContent=val;}
-                                else if(el.type==='number'||el.type==='range'){
-                                    var numVal=parseFloat(val);
-                                    if(!isNaN(numVal))el.valueAsNumber=numVal;
-                                    else el.value=val;
-                                }else{el.value=val;}
-                                if(typeof el.focus==='function')el.focus();
-                                el.dispatchEvent(new Event('input',{bubbles:true}));
-                                el.dispatchEvent(new Event('change',{bubbles:true}));
-                                })()
-                            """.trimIndent())
+                            driver.evaluateValue(selector, Browser4WebDriver.fillValueJs(text))
                         } else {
                             driver.fill(selector, text)
                         }

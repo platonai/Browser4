@@ -69,6 +69,72 @@ open class Browser4WebDriver(
                 browserProtocol = driver.browserProtocol,
                 browser = driver.browser,
             )
+
+        /**
+         * Escape [text] for embedding as a single-quoted JavaScript string literal.
+         * Escapes backslash, single quote, newline, and carriage return.
+         */
+        fun escapeJsString(text: String): String =
+            text.replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+
+        /**
+         * Escape [selector] for embedding inside a single-quoted JavaScript string
+         * literal (e.g. `document.querySelector('<selector>')`).  Escapes backslash
+         * and single quote.
+         */
+        fun escapeJsSelector(selector: String): String =
+            selector.replace("\\", "\\\\").replace("'", "\\'")
+
+        /**
+         * Split [text] into complete Unicode code points, preserving surrogate pairs
+         * (emoji, CJK supplementary ideographs).  The upstream `Keyboard.type()` walks
+         * the string with `charAt()` (UTF-16 code units), which splits surrogate pairs
+         * into invalid halves.  Iterating the returned list inserts each complete code
+         * point in a single CDP `Input.insertText` call.
+         */
+        fun codePoints(text: String): List<String> {
+            val result = mutableListOf<String>()
+            var i = 0
+            while (i < text.length) {
+                val codePoint = text.codePointAt(i)
+                val charCount = Character.charCount(codePoint)
+                result.add(text.substring(i, i + charCount))
+                i += charCount
+            }
+            return result
+        }
+
+        /**
+         * The `function()` body used by [fillSafe] (and the executor's fallback) to
+         * set an element's value while honoring user-input constraints.  Evaluated
+         * with `this` bound to the target element (via `callFunctionOn`).
+         */
+        fun fillValueJs(text: String): String =
+            """
+            function() {
+                var el = this;
+                if (!el) { return; }
+                if (el.disabled || el.readOnly) { return; }
+                var val = '${escapeJsString(text)}';
+                var maxLen = el.maxLength;
+                if (maxLen > 0 && val.length > maxLen) { val = val.substring(0, maxLen); }
+                if (el.isContentEditable) {
+                    el.textContent = val;
+                } else if (el.type === 'number' || el.type === 'range') {
+                    var numVal = parseFloat(val);
+                    if (!isNaN(numVal)) { el.valueAsNumber = numVal; }
+                    else { el.value = val; }
+                } else {
+                    el.value = val;
+                }
+                if (typeof el.focus === 'function') { el.focus(); }
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            """.trimIndent()
     }
 
     // ---------------------------------------------------------------------------
@@ -216,7 +282,7 @@ open class Browser4WebDriver(
                     evaluate(
                         """
                         (function(){
-                            var el = document.querySelector('${selector.replace("\\", "\\\\").replace("'", "\\'")}');
+                            var el = document.querySelector('${escapeJsSelector(selector)}');
                             if (!el) return;
                             if (typeof el.setSelectionRange === 'function') {
                                 el.setSelectionRange(99999, 99999);
@@ -262,25 +328,19 @@ open class Browser4WebDriver(
         rpc.invokeOnElement(selector, "type", focus = true) {
             // Type code point by code point — avoids the charAt() surrogate-splitting
             // bug in the upstream Keyboard.type().
-            var i = 0
-            while (i < text.length) {
-                val codePoint = text.codePointAt(i)
-                val charCount = Character.charCount(codePoint)
-                val charString = text.substring(i, i + charCount)
-
-                if (Character.isISOControl(codePoint)) {
+            for (charString in codePoints(text)) {
+                if (Character.isISOControl(charString.codePointAt(0))) {
                     press(charString)
                 } else {
                     browserProtocol.insertText(charString)
                 }
 
-                if (charCount > 1) {
+                if (charString.length > 1) {
                     // Supplementary character — give the browser a little more time
                     delay(randomDelayMillis("type") * 2)
                 } else {
                     delay(randomDelayMillis("type"))
                 }
-                i += charCount
             }
         }
     }
@@ -316,36 +376,7 @@ open class Browser4WebDriver(
      */
     @Throws(WebDriverException::class)
     suspend fun fillSafe(selector: String, text: String) {
-        evaluateValue(
-            selector,
-            """
-            function() {
-                var el = this;
-                if (!el) { return; }
-                if (el.disabled || el.readOnly) { return; }
-                var val = '${
-                text.replace("\\", "\\\\")
-                    .replace("'", "\\'")
-                    .replace("\n", "\\n")
-                    .replace("\r", "\\r")
-            }';
-                var maxLen = el.maxLength;
-                if (maxLen > 0 && val.length > maxLen) { val = val.substring(0, maxLen); }
-                if (el.isContentEditable) {
-                    el.textContent = val;
-                } else if (el.type === 'number' || el.type === 'range') {
-                    var numVal = parseFloat(val);
-                    if (!isNaN(numVal)) { el.valueAsNumber = numVal; }
-                    else { el.value = val; }
-                } else {
-                    el.value = val;
-                }
-                if (typeof el.focus === 'function') { el.focus(); }
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-            """.trimIndent()
-        )
+        evaluateValue(selector, fillValueJs(text))
     }
 
     /**

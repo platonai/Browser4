@@ -2,6 +2,7 @@ package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.agentic.model.ToolCall
+import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.runBlocking
@@ -106,17 +107,17 @@ class BrowserTabToolExecutorTest {
     fun `fill fallback JS respects input constraints`() {
         runBlocking {
             // The mock must be a PulsarWebDriver so the executor's
-            // `driver is PulsarWebDriver` check routes to the inline JS path.
-            // Inside that branch the executor smart-casts to PulsarWebDriver,
-            // whose evaluate(String) overload is the one invoked — capture
-            // the expression via a stub answer on that overload (Mockito
-            // handles the suspend continuation argument).
+            // `driver is PulsarWebDriver` check routes to the fallback path.
+            // The fallback now reuses the shared Browser4WebDriver.fillValueJs
+            // helper via evaluateValue(selector, functionDeclaration) — capture
+            // the function declaration (2nd argument) and assert it matches the
+            // shared helper (constraint-aware, `this`-bound element).
             val driver = Mockito.mock(PulsarWebDriver::class.java)
             val captured = java.util.concurrent.atomic.AtomicReference<String>()
             Mockito.doAnswer { inv ->
-                captured.set(inv.getArgument(0))
+                captured.set(inv.getArgument(1))
                 null
-            }.`when`(driver).evaluate(Mockito.anyString())
+            }.`when`(driver).evaluateValue(Mockito.anyString(), Mockito.anyString())
 
             executor.callFunctionOn(
                 ToolCall(
@@ -127,14 +128,13 @@ class BrowserTabToolExecutorTest {
             )
 
             val js = captured.get()
-            assertTrue(js != null, "fill must dispatch the inline JS via driver.evaluate")
+            assertEquals(Browser4WebDriver.fillValueJs("42"), js)
             // read-only/disabled inputs keep their value (user input blocked)
-            assertTrue(js.contains("el.disabled||el.readOnly"), "JS must skip disabled/readonly: $js")
+            assertTrue(js.contains("el.disabled || el.readOnly"), "JS must skip disabled/readonly: $js")
             // number/range inputs set valueAsNumber instead of string coercion
             assertTrue(js.contains("valueAsNumber"), "JS must use valueAsNumber: $js")
             // contenteditable elements get textContent instead of value
             assertTrue(js.contains("isContentEditable"), "JS must handle contenteditable: $js")
-            assertTrue(js.contains("el.textContent=val"), "JS must set textContent: $js")
             // maxlength guard still present
             assertTrue(js.contains("maxLength"), "JS must guard maxlength: $js")
         }
