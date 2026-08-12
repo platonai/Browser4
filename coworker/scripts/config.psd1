@@ -35,6 +35,12 @@
     #     '--ephemeral'
     # )
 
+    # dsh run <prompt> runs non-interactively through a headless profile.
+    # No extra flags needed beyond `run`.
+    # DSH = @(
+    #     'dsh'
+    # )
+
     CLAUDE = @(
         'claude'
         '--dangerously-skip-permissions'

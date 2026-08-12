@@ -257,9 +257,10 @@ if (-not $script:State) {
 
 $scenarioAgentAvailable = $null -ne (Get-Command claude -ErrorAction SilentlyContinue) -or
     $null -ne (Get-Command kimi -ErrorAction SilentlyContinue) -or
-    $null -ne (Get-Command codex -ErrorAction SilentlyContinue)
+    $null -ne (Get-Command codex -ErrorAction SilentlyContinue) -or
+    $null -ne (Get-Command dsh -ErrorAction SilentlyContinue)
 if (-not $scenarioAgentAvailable) {
-    Write-Host 'ERROR: no agent CLI found on PATH. Install Claude Code, Kimi Code, or Codex CLI to run scenarios.' -ForegroundColor Red
+    Write-Host 'ERROR: no agent CLI found on PATH. Install Claude Code, Kimi Code, Codex CLI, or dsh to run scenarios.' -ForegroundColor Red
     exit 1
 }
 

@@ -14,7 +14,7 @@ documentation, and reliability from a first-time user's perspective.
 
 Each task file describes the scenario in plain markdown. `run-task.ps1` reads the
 file, combines it with the shared evaluation template (`common.ps1`), and invokes
-the configured agent CLI (`claude`, `kimi`, `opencode`, or `codex`, auto-detected
+the configured agent CLI (`claude`, `kimi`, `opencode`, `codex`, or `dsh`, auto-detected
 in that order; force one by setting `$script:scenarioAgentCli` before calling
 `Invoke-Agent`).
 
