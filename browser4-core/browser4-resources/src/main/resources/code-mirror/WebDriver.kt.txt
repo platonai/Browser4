@@ -991,7 +991,7 @@ interface WebDriver : Closeable {
      * */
     @Throws(WebDriverException::class)
     @MCP
-    suspend fun click(selector: String, count: Int = 1, button: String? = null)
+    suspend fun click(selector: String, count: Int = 1)
 
     /**
      * Focus on an element with [selector] and click it with [modifier] pressed. @mcp
