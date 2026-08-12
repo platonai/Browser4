@@ -30,7 +30,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "G1" -Name "Docker Build Integrity"
 $repoRoot = Get-RepositoryRoot
@@ -54,7 +54,7 @@ foreach ($df in $Dockerfiles) {
 
     # Dockerfile.fast requires a pre-built Browser4.jar — skip if missing
     if ($df -eq "Dockerfile.fast" -and -not $SkipBuild) {
-        $fastJar = Join-Path $repoRoot "browser4-apps\browser4-standalone\target\Browser4.jar"
+        $fastJar = Join-Path $repoRoot "browser4-apps/browser4-standalone/target/Browser4.jar"
         if (-not (Test-Path $fastJar)) {
             Add-MaintenanceResult -Result $result -Item $df -Status "skipped" `
                 -Message "Browser4.jar not built — run 'mvn package -pl browser4-apps/browser4-standalone -am -DskipTests' first"

@@ -36,7 +36,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "D2" -Name "SKILL Structure Compliance"
 $repoRoot = Get-RepositoryRoot
@@ -82,3 +82,4 @@ foreach ($file in $skillFiles) {
 
 Set-MaintenanceResultSummary -Result $result
 $result
+

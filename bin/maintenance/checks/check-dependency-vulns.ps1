@@ -25,7 +25,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "A5" -Name "Dependency Vulnerability Scan"
 $repoRoot = Get-RepositoryRoot
@@ -46,8 +46,8 @@ $owaspResult = Invoke-MaintenanceStep `
 
 # OWASP plugin returns non-zero if CVEs found, which is expected.
 # Try JSON report first (structured), fall back to HTML.
-$owaspJsonReport = Join-Path $repoRoot "target\dependency-check-report.json"
-$owaspHtmlReport = Join-Path $repoRoot "target\dependency-check-report.html"
+$owaspJsonReport = Join-Path $repoRoot "target/dependency-check-report.json"
+$owaspHtmlReport = Join-Path $repoRoot "target/dependency-check-report.html"
 $owaspCveSummary = ""
 $owaspStatus = "skipped"
 $owaspMessage = ""
@@ -95,7 +95,7 @@ if (-not $cargoAuditAvailable) {
 }
 
 if ($cargoAuditAvailable) {
-    $cliDir = Join-Path $repoRoot "cli\browser4-cli"
+    $cliDir = Join-Path $repoRoot "cli/browser4-cli"
     if (Test-Path (Join-Path $cliDir "Cargo.toml")) {
         $cargoAuditResult = Invoke-MaintenanceStep `
             -StepName "Cargo Audit" `

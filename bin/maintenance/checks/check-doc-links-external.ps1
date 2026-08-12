@@ -37,7 +37,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "C2" -Name "External Documentation Links"
 $repoRoot = Get-RepositoryRoot
@@ -107,3 +107,4 @@ $result.Details = "$checked URLs checked, $broken unreachable"
 
 Set-MaintenanceResultSummary -Result $result
 $result
+

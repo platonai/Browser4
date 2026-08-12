@@ -35,7 +35,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "C3" -Name "README Staleness Check"
 $repoRoot = Get-RepositoryRoot
@@ -118,3 +118,4 @@ foreach ($file in $readmeFiles) {
 
 Set-MaintenanceResultSummary -Result $result
 $result
+

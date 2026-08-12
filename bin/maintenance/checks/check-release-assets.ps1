@@ -31,7 +31,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "E3" -Name "Release Asset Validation"
 $repoRoot = Get-RepositoryRoot
@@ -39,9 +39,9 @@ $repoRoot = Get-RepositoryRoot
 # ── Find JAR ──
 if (-not $JarPath) {
     $candidates = @(
-        "target\Browser4.jar",
-        "browser4-apps\browser4-standalone\target\Browser4.jar",
-        "browser4-apps\browser4-bundle\target\Browser4.jar"
+        "target/Browser4.jar",
+        "browser4-apps/browser4-standalone/target/Browser4.jar",
+        "browser4-apps/browser4-bundle/target/Browser4.jar"
     )
     foreach ($c in $candidates) {
         $p = Join-Path $repoRoot $c
@@ -97,8 +97,8 @@ else {
 
 # ── CLI binary check ──
 $cliPaths = @(
-    "cli\browser4-cli\target\release\browser4-cli.exe",
-    "cli\browser4-cli\target\release\browser4-cli"
+    "cli/browser4-cli/target/release/browser4-cli.exe",
+    "cli/browser4-cli/target/release/browser4-cli"
 )
 foreach ($cp in $cliPaths) {
     $fullCp = Join-Path $repoRoot $cp
@@ -117,3 +117,4 @@ foreach ($cp in $cliPaths) {
 
 Set-MaintenanceResultSummary -Result $result
 $result
+

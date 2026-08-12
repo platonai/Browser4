@@ -17,7 +17,7 @@ If set, output only the summary line, not per-item details.
 
 .EXAMPLE
 $r = & .\checks\check-ps1-syntax.ps1
-.\reporters\report-console.ps1 -Results $r
+.\reporters/report-console.ps1 -Results $r
 #>
 
 param(

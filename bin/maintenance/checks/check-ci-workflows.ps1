@@ -21,15 +21,15 @@ Standard maintenance result object.
 #>
 
 param(
-    [string]$WorkflowDir = ".github\workflows",
-    [string]$ActionDir = ".github\actions"
+    [string]$WorkflowDir = ".github/workflows",
+    [string]$ActionDir = ".github/actions"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "G3" -Name "CI Workflow Validation"
 $repoRoot = Get-RepositoryRoot

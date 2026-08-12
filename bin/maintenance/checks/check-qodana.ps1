@@ -25,15 +25,15 @@ Standard maintenance result object.
 #>
 
 param(
-    [string]$CacheDir = "target\qodana-cache",
-    [string]$ReportDir = "target\qodana-report"
+    [string]$CacheDir = "target/qodana-cache",
+    [string]$ReportDir = "target/qodana-report"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "A3" -Name "Static Analysis (Qodana)"
 $repoRoot = Get-RepositoryRoot
@@ -57,7 +57,7 @@ if (-not (Test-Path $qodanaYaml)) {
 
 $cacheDirAbs = Resolve-MaintenancePath $CacheDir
 $reportDirAbs = Resolve-MaintenancePath $ReportDir
-$resultDirAbs = Join-Path $repoRoot "target\qodana"
+$resultDirAbs = Join-Path $repoRoot "target/qodana"
 
 # Clean up previous results
 if (Test-Path $resultDirAbs) {

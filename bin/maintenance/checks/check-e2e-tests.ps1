@@ -29,7 +29,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "B2" -Name "End-to-End Tests"
 $repoRoot = Get-RepositoryRoot
@@ -56,3 +56,4 @@ else {
 
 Set-MaintenanceResultSummary -Result $result
 $result
+

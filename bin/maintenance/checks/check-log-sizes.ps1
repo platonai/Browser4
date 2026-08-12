@@ -28,7 +28,7 @@ Standard maintenance result object.
 #>
 
 param(
-    [string[]]$LogDirs = @("logs", "coworker\tasks\300logs", "bin\maintenance\logs"),
+    [string[]]$LogDirs = @("logs", "coworker/tasks/300logs", "bin/maintenance/logs"),
     [int]$MaxTotalMB = 0,
     [int]$MaxFileMB = 0
 )
@@ -37,7 +37,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "H1" -Name "Log Directory Size Audit"
 $repoRoot = Get-RepositoryRoot
@@ -91,3 +91,4 @@ $result.Details = "Total across all log dirs: ${grandTotalMB} MB"
 
 Set-MaintenanceResultSummary -Result $result
 $result
+

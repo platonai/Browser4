@@ -31,48 +31,59 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "A1" -Name "Compilation Check"
 $repoRoot = Get-RepositoryRoot
 
 # ── Maven compilation ──
 $mvnCmd = if (Test-IsWindows) { ".\mvnw.cmd" } else { "./mvnw" }
+$mvnFullPath = Join-Path $repoRoot $mvnCmd
 
-$mavenResult = Invoke-MaintenanceStep `
-    -StepName "Maven Compile" `
-    -WorkingDirectory $repoRoot `
-    -TimeoutSeconds 900 `
-    -ScriptBlock {
-        & $mvnCmd compile -pl !browser4-tests -P "$MavenProfiles" -DskipTests -q 2>&1
-        $LASTEXITCODE
+if (Test-Path $mvnFullPath) {
+    $mavenResult = Invoke-MaintenanceStep `
+        -StepName "Maven Compile" `
+        -WorkingDirectory $repoRoot `
+        -TimeoutSeconds 900 `
+        -ScriptBlock {
+            & $mvnCmd compile -pl !browser4-tests -P "$MavenProfiles" -DskipTests -q 2>&1
+            $LASTEXITCODE
+        }
+
+    if ($mavenResult.ExitCode -eq 0) {
+        Add-MaintenanceResult -Result $result -Item "Maven (all-main-modules)" -Status "passed" -Message "Compiled in $($mavenResult.DurationMs)ms"
     }
-
-if ($mavenResult.ExitCode -eq 0) {
-    Add-MaintenanceResult -Result $result -Item "Maven (all-main-modules)" -Status "passed" -Message "Compiled in $($mavenResult.DurationMs)ms"
+    else {
+        Add-MaintenanceResult -Result $result -Item "Maven (all-main-modules)" -Status "failed" -Message "Exit code $($mavenResult.ExitCode)"
+    }
 }
 else {
-    Add-MaintenanceResult -Result $result -Item "Maven (all-main-modules)" -Status "failed" -Message "Exit code $($mavenResult.ExitCode)"
+    Add-MaintenanceResult -Result $result -Item "Maven (all-main-modules)" -Status "skipped" -Message "mvnw not found — is Java/Maven set up?"
 }
 
 # ── Cargo compilation ──
 if (-not $SkipCargo) {
-    $cliDir = Join-Path $repoRoot "cli\browser4-cli"
+    $cliDir = Join-Path $repoRoot "cli/browser4-cli"
     if (Test-Path (Join-Path $cliDir "Cargo.toml")) {
-        $cargoResult = Invoke-MaintenanceStep `
-            -StepName "Cargo Check" `
-            -WorkingDirectory $cliDir `
-            -TimeoutSeconds 300 `
-            -ScriptBlock {
-                cargo check 2>&1
-                $LASTEXITCODE
-            }
+        if (Get-Command cargo -ErrorAction SilentlyContinue) {
+            $cargoResult = Invoke-MaintenanceStep `
+                -StepName "Cargo Check" `
+                -WorkingDirectory $cliDir `
+                -TimeoutSeconds 300 `
+                -ScriptBlock {
+                    cargo check 2>&1
+                    $LASTEXITCODE
+                }
 
-        if ($cargoResult.ExitCode -eq 0) {
-            Add-MaintenanceResult -Result $result -Item "Cargo (browser4-cli)" -Status "passed" -Message "Checked in $($cargoResult.DurationMs)ms"
+            if ($cargoResult.ExitCode -eq 0) {
+                Add-MaintenanceResult -Result $result -Item "Cargo (browser4-cli)" -Status "passed" -Message "Checked in $($cargoResult.DurationMs)ms"
+            }
+            else {
+                Add-MaintenanceResult -Result $result -Item "Cargo (browser4-cli)" -Status "failed" -Message "Exit code $($cargoResult.ExitCode)"
+            }
         }
         else {
-            Add-MaintenanceResult -Result $result -Item "Cargo (browser4-cli)" -Status "failed" -Message "Exit code $($cargoResult.ExitCode)"
+            Add-MaintenanceResult -Result $result -Item "Cargo (browser4-cli)" -Status "skipped" -Message "cargo not found — is Rust set up?"
         }
     }
     else {
@@ -82,3 +93,4 @@ if (-not $SkipCargo) {
 
 Set-MaintenanceResultSummary -Result $result
 $result
+

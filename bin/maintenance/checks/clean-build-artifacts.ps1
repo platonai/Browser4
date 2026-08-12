@@ -38,7 +38,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "H2" -Name "Build Artifact Cleanup"
 $repoRoot = Get-RepositoryRoot
@@ -94,3 +94,4 @@ if (-not $actuallyDelete) {
 
 Set-MaintenanceResultSummary -Result $result
 $result
+

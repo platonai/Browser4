@@ -32,7 +32,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "B3" -Name "Test Tag Audit"
 $repoRoot = Get-RepositoryRoot
@@ -119,3 +119,4 @@ $result.ExitCode = if ($Strict -and $violationFiles -gt 0) { 1 } else { 0 }
 
 Set-MaintenanceResultSummary -Result $result
 $result
+

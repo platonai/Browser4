@@ -29,19 +29,19 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "A4" -Name "Code Coverage"
 $repoRoot = Get-RepositoryRoot
 
 if (-not $JacocoReportDir) {
-    $JacocoReportDir = Join-Path $repoRoot "target\site\jacoco-aggregate"
+    $JacocoReportDir = Join-Path $repoRoot "target/site/jacoco-aggregate"
 }
 
 $jacocoXml = Join-Path $JacocoReportDir "jacoco.xml"
 if (-not (Test-Path $jacocoXml)) {
     # Try individual module reports
-    $jacocoXml = Join-Path $repoRoot "target\site\jacoco\jacoco.xml"
+    $jacocoXml = Join-Path $repoRoot "target/site/jacoco/jacoco.xml"
 }
 
 if (-not (Test-Path $jacocoXml)) {

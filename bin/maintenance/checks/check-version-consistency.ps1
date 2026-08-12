@@ -20,14 +20,21 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "E1" -Name "Version Consistency"
 $repoRoot = Get-RepositoryRoot
 
-$versionScript = Join-Path $repoRoot "bin\version.mjs"
+$versionScript = Join-Path $repoRoot "bin/version.mjs"
 if (-not (Test-Path $versionScript)) {
     Add-MaintenanceResult -Result $result -Item "version.mjs" -Status "error" -Message "bin/version.mjs not found"
+    Set-MaintenanceResultSummary -Result $result
+    $result
+    return
+}
+
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    Add-MaintenanceResult -Result $result -Item "version.mjs check" -Status "skipped" -Message "Node.js not found — is it set up?"
     Set-MaintenanceResultSummary -Result $result
     $result
     return
@@ -52,3 +59,4 @@ if (Test-Path $versionPath) {
 
 Set-MaintenanceResultSummary -Result $result
 $result
+

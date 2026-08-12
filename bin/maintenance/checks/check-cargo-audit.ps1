@@ -18,14 +18,14 @@ Standard maintenance result object.
 #>
 
 param(
-    [string]$ManifestPath = "cli\browser4-cli\Cargo.toml"
+    [string]$ManifestPath = "cli/browser4-cli/Cargo.toml"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "F2" -Name "Cargo Audit"
 $repoRoot = Get-RepositoryRoot
@@ -35,6 +35,14 @@ if (-not (Test-Path (Join-Path $cliDir "Cargo.toml"))) {
     $result.Status = "skipped"
     $result.Details = "Cargo.toml not found"
     Add-MaintenanceResult -Result $result -Item "Cargo.toml" -Status "skipped" -Message "Not found at $cliDir"
+    $result
+    return
+}
+
+# Ensure cargo is available before trying cargo-audit
+if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+    Add-MaintenanceResult -Result $result -Item "cargo-audit" -Status "skipped" -Message "cargo not found — is Rust set up?"
+    Set-MaintenanceResultSummary -Result $result
     $result
     return
 }

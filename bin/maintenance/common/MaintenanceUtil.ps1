@@ -1,4 +1,4 @@
-﻿# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
 # - Use $IsWindows / $IsLinux / $IsMacOS for platform detection.
 # - Use "($IsWindows -or $env:OS -eq 'Windows_NT')" for PS 5.1 compat.
@@ -29,7 +29,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 # ── Dot-source shared encoding fix ──
-$UtilPath = Join-Path $PSScriptRoot "..\..\common\Util.ps1"
+$UtilPath = Join-Path $PSScriptRoot "../../common/Util.ps1"
 if (Test-Path $UtilPath) {
     . $UtilPath
     Fix-Encoding-UTF8
@@ -344,7 +344,7 @@ function Get-MaintenanceThreshold {
     # Load thresholds file if not already cached
     if ($null -eq $script:_Thresholds) {
         # Resolve path relative to this module file (common/)
-        $thresholdsPath = Join-Path $PSScriptRoot "..\thresholds\thresholds.psd1"
+        $thresholdsPath = Join-Path $PSScriptRoot "../thresholds/thresholds.psd1"
         if (Test-Path $thresholdsPath) {
             try {
                 $script:_Thresholds = Import-PowerShellDataFile -Path $thresholdsPath
@@ -466,7 +466,7 @@ function Get-MaintenanceLogDir {
     Returns the maintenance log directory, creating it if needed.
     #>
     $repoRoot = Get-RepositoryRoot
-    $logDir = Join-Path $repoRoot "bin\maintenance\logs"
+    $logDir = Join-Path $repoRoot "bin/maintenance/logs"
     if (-not (Test-Path $logDir)) {
         New-Item -ItemType Directory -Path $logDir -Force | Out-Null
     }
@@ -550,3 +550,4 @@ function Invoke-MaintenanceCheck {
 }
 
 Write-MaintenanceLog -Level "DEBUG" -Component "MaintenanceUtil" -Message "Module loaded"
+
