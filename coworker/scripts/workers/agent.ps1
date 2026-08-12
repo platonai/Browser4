@@ -60,7 +60,7 @@ function Get-AgentCommand {
     }
     $WorkingDirectory = Assert-AgentDirectory -Path $WorkingDirectory -ParameterName 'WorkingDirectory'
 
-    # Get-AgentBackend comes from config.ps1 (dot-sourced above): claude > kimi > codex > copilot.
+    # Get-AgentBackend comes from config.ps1 (dot-sourced above): claude > kimi > codex > dsh > copilot.
     $backend = Get-AgentBackend
 
     switch ($backend) {
@@ -92,6 +92,16 @@ function Get-AgentCommand {
                 throw 'CODEX must include at least an executable'
             }
             $command = $CODEX
+            break
+        }
+        'dsh' {
+            if ($DSH -is [string]) {
+                throw "DSH must be defined as a PowerShell array in $configPath"
+            }
+            if ($DSH.Count -lt 1) {
+                throw 'DSH must include at least an executable'
+            }
+            $command = $DSH
             break
         }
         default {
@@ -156,8 +166,12 @@ function Get-AgentPromptArgs {
         'codex' {
             if ($hasPrompt) { return @('exec', $Prompt) } else { return @('exec') }
         }
+        'dsh' {
+            # dsh run <task> runs non-interactively through a headless profile.
+            if ($hasPrompt) { return @('run', $Prompt) } else { return @('run') }
+        }
         default {
-            # claude, kimi, and unknown backends use -p <prompt>
+            # claude, kimi, opencode, and unknown backends use -p <prompt>
             if ($hasPrompt) { return @('-p', $Prompt) } else { return @('-p') }
         }
     }

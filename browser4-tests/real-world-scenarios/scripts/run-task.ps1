@@ -52,9 +52,9 @@ param(
     # (matching the Unix `timeout` convention).  Set to 0 to disable.
     [int] $TimeoutMinutes = 60,
 
-    # Override the agent CLI to use (claude, kimi, opencode, or codex).
-    # When empty, auto-detects with priority claude > kimi > opencode.
-    [ValidateSet('', 'claude', 'kimi', 'opencode', 'codex')]
+    # Override the agent CLI to use (claude, kimi, opencode, codex, or dsh).
+    # When empty, auto-detects with priority claude > kimi > opencode > codex > dsh.
+    [ValidateSet('', 'claude', 'kimi', 'opencode', 'codex', 'dsh')]
     [string] $Agent = ''
 )
 

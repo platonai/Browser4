@@ -2421,12 +2421,13 @@ function Get-ScenarioAgentArgs {
           kimi:     -p <prompt>
           opencode: run <prompt>
           codex:    exec --dangerously-bypass-approvals-and-sandbox --ephemeral <prompt>
+          dsh:      run <prompt>
 
         This is the single source of truth for agent CLI argument building.
         All scenario scripts and the test runner use this function instead of
         duplicating the backend switch block.
     .PARAMETER Agent
-        The agent backend name (claude, kimi, opencode, or codex).
+        The agent backend name (claude, kimi, opencode, codex, or dsh).
     .PARAMETER Prompt
         The task prompt text.
     .PARAMETER Silent
@@ -2460,6 +2461,10 @@ function Get-ScenarioAgentArgs {
             # --ephemeral = skip session persistence for clean exit
             return @('exec', '--dangerously-bypass-approvals-and-sandbox', '--ephemeral', $Prompt)
         }
+        'dsh' {
+            # dsh run <task> runs non-interactively through a headless profile.
+            return @('run', $Prompt)
+        }
         default {
             # Unknown agent — assume -p mode (claude-compatible)
             return @('-p', $Prompt)
@@ -2474,8 +2479,8 @@ function Get-ScenarioAgent {
         scripts should invoke.
     .DESCRIPTION
         Callers may force a backend by setting $script:scenarioAgentCli = 'kimi'
-        (or 'claude', 'opencode', 'codex') after dot-sourcing this module.
-        Otherwise auto-detects with priority claude > kimi > opencode > codex.
+        (or 'claude', 'opencode', 'codex', 'dsh') after dot-sourcing this module.
+        Otherwise auto-detects with priority claude > kimi > opencode > codex > dsh.
         Falls back to 'claude' when none are on PATH so the invocation fails
         with a clear command-not-found error.
     #>
@@ -2484,13 +2489,14 @@ function Get-ScenarioAgent {
     if (Get-Command kimi -ErrorAction SilentlyContinue) { return 'kimi' }
     if (Get-Command opencode -ErrorAction SilentlyContinue) { return 'opencode' }
     if (Get-Command codex -ErrorAction SilentlyContinue) { return 'codex' }
+    if (Get-Command dsh -ErrorAction SilentlyContinue) { return 'dsh' }
     return 'claude'
 }
 
 function Invoke-Agent {
     <#
     .SYNOPSIS
-        Invoke the configured agent CLI (claude, kimi, opencode, or codex) to run
+        Invoke the configured agent CLI (claude, kimi, opencode, codex, or dsh) to run
         a scenario and evaluate browser4-cli usability.
     .DESCRIPTION
         Runs the agent CLI resolved by Get-ScenarioAgent with the given prompt.
@@ -2507,6 +2513,7 @@ function Invoke-Agent {
           - kimi:   -p <prompt>; auto-approves tool calls via -p mode.
           - opencode: run <prompt>; no permission or --silent flags.
           - codex:  exec --dangerously-bypass-approvals-and-sandbox <prompt>.
+          - dsh:    run <prompt>; runs non-interactively through a headless profile.
     .PARAMETER Prompt
         The full prompt including the general evaluation instructions and
         task-specific instructions.
