@@ -44,7 +44,8 @@ $script:AiAnalyzer = $null  # resolved AI CLI: 'claude', 'copilot', or $null
 # Ordered list of known AI CLIs to probe, with their display names.
 $script:KnownAnalyzers = @(
     @{ Bin = 'claude';  Name = 'Claude'   },
-    @{ Bin = 'copilot'; Name = 'Copilot'  }
+    @{ Bin = 'copilot'; Name = 'Copilot'  },
+    @{ Bin = 'dsh';     Name = 'DSH'      }
 )
 
 # ============================================================================
@@ -77,6 +78,22 @@ function Get-AiAnalyzer {
     if (-not $ForceRefresh -and $null -ne $script:AiAnalyzer) {
         if ($script:AiAnalyzer -eq 'none') { return $null }
         return $script:AiAnalyzer
+    }
+
+    # ── $env:BROWSER4_AGENT takes highest priority ─────────────────────────
+    if ($env:BROWSER4_AGENT) {
+        $envAgent = $env:BROWSER4_AGENT.Trim()
+        if ($envAgent -in ($script:KnownAnalyzers | ForEach-Object { $_.Bin })) {
+            $cmd = Get-Command $envAgent -CommandType Application -ErrorAction SilentlyContinue
+            if ($null -ne $cmd) {
+                $script:AiAnalyzer = $envAgent
+                Write-Verbose "AI analyzer resolved via BROWSER4_AGENT: $envAgent"
+                return $envAgent
+            }
+            Write-Host "WARNING: BROWSER4_AGENT='$envAgent' not found on PATH." -ForegroundColor Yellow
+        } else {
+            Write-Host "WARNING: BROWSER4_AGENT='$envAgent' is not a known analyzer." -ForegroundColor Yellow
+        }
     }
 
     foreach ($entry in $script:KnownAnalyzers) {

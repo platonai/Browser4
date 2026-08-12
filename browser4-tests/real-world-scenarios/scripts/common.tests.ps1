@@ -518,6 +518,69 @@ Write-Host '━━━ Get-ScenarioAgent: Backend Detection (opencode, codex, dsh
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Test group 7c: Get-ScenarioAgent — $env:BROWSER4_AGENT override
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ Get-ScenarioAgent: BROWSER4_AGENT Env Var ━━━' -ForegroundColor Yellow
+
+& {
+    $browser4cliMode = 'dev'
+    . "$PSScriptRoot/common.ps1"
+
+    # Ensure no script-level override interferes
+    $script:scenarioAgentCli = $null
+
+    Write-TestGroup 'BROWSER4_AGENT=claude returns claude'
+    $orig = $env:BROWSER4_AGENT
+    try {
+        $env:BROWSER4_AGENT = 'claude'
+        $resolved = Get-ScenarioAgent
+        Assert-Equal 'Returns claude' 'claude' $resolved
+    } finally { $env:BROWSER4_AGENT = $orig }
+
+    Write-TestGroup 'BROWSER4_AGENT=kimi returns kimi'
+    try {
+        $env:BROWSER4_AGENT = 'kimi'
+        $resolved = Get-ScenarioAgent
+        Assert-Equal 'Returns kimi' 'kimi' $resolved
+    } finally { $env:BROWSER4_AGENT = $orig }
+
+    Write-TestGroup 'BROWSER4_AGENT=dsh returns dsh'
+    try {
+        $env:BROWSER4_AGENT = 'dsh'
+        $resolved = Get-ScenarioAgent
+        Assert-Equal 'Returns dsh' 'dsh' $resolved
+    } finally { $env:BROWSER4_AGENT = $orig }
+
+    Write-TestGroup 'BROWSER4_AGENT=unknown falls through to auto-detect'
+    try {
+        $env:BROWSER4_AGENT = 'nonexistent-agent'
+        $resolved = Get-ScenarioAgent
+        Assert-True 'Fallback returns something' ($null -ne $resolved)
+        Assert-True 'Not the unknown value' ($resolved -ne 'nonexistent-agent')
+    } finally { $env:BROWSER4_AGENT = $orig }
+
+    Write-TestGroup 'BROWSER4_AGENT with whitespace is trimmed'
+    try {
+        $env:BROWSER4_AGENT = '  dsh  '
+        $resolved = Get-ScenarioAgent
+        Assert-Equal 'Returns dsh after trim' 'dsh' $resolved
+    } finally { $env:BROWSER4_AGENT = $orig }
+
+    Write-TestGroup '$script:scenarioAgentCli still wins over BROWSER4_AGENT'
+    try {
+        $env:BROWSER4_AGENT = 'dsh'
+        $script:scenarioAgentCli = 'codex'
+        $resolved = Get-ScenarioAgent
+        Assert-Equal 'script override wins' 'codex' $resolved
+    } finally {
+        $env:BROWSER4_AGENT = $orig
+        $script:scenarioAgentCli = $null
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Test group 8: Invoke-Agent — error handling
 # ═══════════════════════════════════════════════════════════════════════════════
 

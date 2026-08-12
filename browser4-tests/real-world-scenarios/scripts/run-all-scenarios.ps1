@@ -255,13 +255,23 @@ if (-not $script:State) {
 # Pre-flight checks
 # ═══════════════════════════════════════════════════════════════════════════════
 
-$scenarioAgentAvailable = $null -ne (Get-Command claude -ErrorAction SilentlyContinue) -or
-    $null -ne (Get-Command kimi -ErrorAction SilentlyContinue) -or
-    $null -ne (Get-Command codex -ErrorAction SilentlyContinue) -or
-    $null -ne (Get-Command dsh -ErrorAction SilentlyContinue)
-if (-not $scenarioAgentAvailable) {
-    Write-Host 'ERROR: no agent CLI found on PATH. Install Claude Code, Kimi Code, Codex CLI, or dsh to run scenarios.' -ForegroundColor Red
-    exit 1
+# Check $env:BROWSER4_AGENT first, then fall back to PATH auto-detection.
+if ($env:BROWSER4_AGENT) {
+    $resolvedAgent = $env:BROWSER4_AGENT.Trim()
+    if ($null -eq (Get-Command $resolvedAgent -ErrorAction SilentlyContinue)) {
+        Write-Host "ERROR: BROWSER4_AGENT='$resolvedAgent' not found on PATH." -ForegroundColor Red
+        exit 1
+    }
+} else {
+    $scenarioAgentAvailable = $null -ne (Get-Command claude -ErrorAction SilentlyContinue) -or
+        $null -ne (Get-Command kimi -ErrorAction SilentlyContinue) -or
+        $null -ne (Get-Command codex -ErrorAction SilentlyContinue) -or
+        $null -ne (Get-Command dsh -ErrorAction SilentlyContinue)
+    if (-not $scenarioAgentAvailable) {
+        Write-Host 'ERROR: no agent CLI found on PATH. Install Claude Code, Kimi Code, Codex CLI, or dsh to run scenarios.' -ForegroundColor Red
+        Write-Host '  Set BROWSER4_AGENT to configure globally.' -ForegroundColor DarkGray
+        exit 1
+    }
 }
 
 if (-not (Test-Path -LiteralPath $script:RunnerMdPath -PathType Leaf)) {
