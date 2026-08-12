@@ -164,7 +164,10 @@ If you want the embedded agent-facing instructions, see [skills/browser4-cli/SKI
 ### Quick start
 
 ```bash
-# Open a browser session
+# Open a browser session (headless by default; add --headed to see the window)
+browser4-cli open https://browser4.io
+
+# Or explicitly open a visible browser:
 browser4-cli open --headed https://browser4.io
 
 # Inspect the page and get element refs
@@ -249,7 +252,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 
 | Command | Description |
 |---|---|
-| `open [url]` | Open a browser session or reconnect to an existing one. Supports `--headed`, `--headless`, `--profile <path>`, `--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`, `--interact-level <FASTEST\|FAST\|DEFAULT>`. |
+| `open [url]` | Open a browser session or reconnect to an existing one. **Headless by default.** Supports `--headed` (visible window), `--headless`, `--profile <path>`, `--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`, `--interact-level <FASTEST\|FAST\|DEFAULT>`. |
 | `attach` | Attach to an existing browser via CDP or the Browser4 extension. Supports `--cdp <url\|port\|channel>` and remote endpoint options. |
 | `close` | Close the active browser session. |
 | `list` | List browser sessions with their status and next-open behavior. Supports `--all`. |

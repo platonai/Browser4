@@ -296,8 +296,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "url", description: "The URL to navigate to", optional: true }],
             options: &[
-                OptionDef { name: "headed", description: "Run browser in headed mode", is_bool: true, short: None },
-                OptionDef { name: "headless", description: "Run browser in headless mode", is_bool: true, short: None },
+                OptionDef { name: "headed", description: "Run browser in headed (GUI) mode. Default is headless.", is_bool: true, short: None },
+                OptionDef { name: "headless", description: "Run browser in headless mode (this is the default)", is_bool: true, short: None },
                 OptionDef { name: "profile", description: "Path to browser profile directory", is_bool: false, short: None },
                 OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, sequential, default)", is_bool: false, short: None },
                 OptionDef { name: "interact-level", description: "Interaction level for the new session (for example FASTEST, FAST, DEFAULT)", is_bool: false, short: None },
@@ -313,11 +313,15 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |args| {
                 let url = get_opt_str(args, "url").unwrap_or("about:blank");
                 let mut params = json!({ "url": url });
+                // Default to headless mode for privacy and resource efficiency.
+                // --headed explicitly opts into a visible browser window.
                 // --headless takes priority over --headed when both are passed.
                 if let Some(true) = get_bool(args, "headless") {
                     params["headed"] = json!(false);
                 } else if let Some(true) = get_bool(args, "headed") {
                     params["headed"] = json!(true);
+                } else {
+                    params["headed"] = json!(false);
                 }
                 if let Some(pf) = get_opt_str(args, "profile") {
                     params["profilePath"] = json!(pf);
@@ -4065,14 +4069,14 @@ mod tests {
     }
 
     #[test]
-    fn test_open_params_without_headed_or_headless_does_not_set_key() {
+    fn test_open_params_defaults_to_headless() {
         let map = commands_map();
         let cmd = map.get("open").unwrap();
         let args = HashMap::new();
 
         let params = (cmd.tool_params_fn)(&args);
 
-        assert!(params.get("headed").is_none());
+        assert_eq!(params["headed"], false);
     }
 
     #[test]
