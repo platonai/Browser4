@@ -124,7 +124,7 @@ Once a session is open, use `goto` for subsequent navigations (the display mode 
 browser4-cli goto https://other-page.com             # stays headless (or headed) as set by open
 ```
 
-> **⚠️ Important — `goto` on first invocation:** When `goto` is the very first command (no prior `open`), it auto-opens a new session using the **backend's configured default** display mode — which is typically GUI on desktop machines. To guarantee headless mode, **always start with `open --headless`** before using `goto`.
+> **Note — `goto` on first invocation:** When `goto` is the very first command (no prior `open`), it auto-opens a new session using the **CLI's default display mode, which is headless**. The display mode is still fixed at session creation, so if you want a visible window, start with `open --headed` before using `goto`.
 
 > **Note — reconnecting to an existing session:** The `--headless`/`--headed` flags only take effect when creating a new session. When `open` reconnects to an already-running session, the display mode is already set and the flags are ignored — the CLI prints a warning on stderr and the reconnect message shows the tab count so inherited state is visible. To change the mode of an existing session, close it first (`close`), then `open --headless` to create a new one. To discard a stale session's tabs/cookies/location entirely and start clean, use `open --fresh` (closes the current session, then opens a new one).
 
@@ -204,7 +204,7 @@ browser4-cli -s ext-session tab-select 0
 | Command family | Purpose | When to use | Full reference |
 |---------------|---------|-------------|----------------|
 | `goto`, `open`, `close`, `reload` | Navigation & session management | Every session starts here | — |
-| `snapshot` | Capture accessibility tree (AXTree) with element refs | **Page structure & interaction** — find elements to click, fill, etc. Use `snapshot` when you need refs (e5, e36) to interact with. | [htmlsnapshot.md](references/htmlsnapshot.md) |
+| `snapshot` | Capture accessibility tree (AXTree) with element refs | **Page structure & interaction** — find elements to click, fill, etc. Use `snapshot` when you need refs (e5, e36) to interact with. | [snapshot.md](references/snapshot.md) |
 | `snapshot grep` | Search snapshot content with regex | Find elements by text or pattern | — |
 | `click`, `dblclick`, `drag`, `hover`, `fill`, `type`, `press`, `select`, `check`, `generate-locator` | Page interaction | Form filling, button clicks, mouse actions, navigation | — |
 | `dialog-accept`, `dialog-dismiss` | Native JS dialog handling | After clicking buttons that trigger alert/confirm/prompt | — |
@@ -335,7 +335,7 @@ Have HTML files and want structured data — without tokens?
 
 **Commercial tier (Apache Spark ML):** Distributed clustering for production workloads. Scales to 100K+ pages/day. Same pipeline, enterprise throughput.
 
-> **Install:** `.\webminer.ps1 install` (PowerShell) or download from [web-miner releases](https://github.com/platonai/web-miner/releases). Requires JDK 17+.
+> **Install:** `.\webminer.ps1 install` (PowerShell — the script ships with the [web-miner](https://github.com/platonai/web-miner) project, not this repo) or download from [web-miner releases](https://github.com/platonai/web-miner/releases). Requires JDK 17+.
 
 See **[scent-miner/SKILL.md](../scent-miner/SKILL.md)** for the full reference.
 
@@ -419,7 +419,7 @@ browser4-cli htmlsnapshot get text ".price" --all    # quick test: does this sel
 > | Mode | What it shows | Best for |
 > |------|--------------|----------|
 > | `snapshot` (default) | Full AX tree with all element refs | General exploration, first look at a page |
-> | `snapshot -v 0` | Full AX tree, no viewport trim | Pages with complex/long content where default viewport clipping hides elements |
+> | `snapshot -v 0` | Current visible screen (a single screen-height viewport chunk) | Long pages — read one chunk at a time to keep output small. Use `-v all` for the entire page |
 > | `snapshot -i` | **Interactive elements only:** buttons, links, inputs, selects, textareas. Strips generic `<div>`, `<span>`, and other non-interactive containers | Simple forms, login pages, sparse pages with clear interactive controls. Reduces noise when you only need clickable/fillable elements |
 > | `htmlsnapshot` | Static HTML (CSS selectors) | Content extraction (text, attributes), when you need CSS selectors instead of AX refs |
 >
@@ -650,10 +650,14 @@ See **[agent.md](references/agent.md)** for full details including LLM key confi
 
 Organized by task — follow the link that matches what you're trying to do:
 
+**Interact with pages (accessibility tree & element refs):**
+[snapshot.md](references/snapshot.md) — `snapshot`, `snapshot grep`, `-v` viewport paging, `--auto-diff`, `-i` interactive mode, element refs
+
 **Extract data from pages:**
 [htmlsnapshot.md](references/htmlsnapshot.md) — `get`, `get all`, `query`, `grep`, `summary`, `inspect`, `export`
 [x-sql.md](references/x-sql.md) — X-SQL function reference (DOM, STR, ARRAY namespaces)
-[htmlsnapshot-scenarios.md](references/htmlsnapshot-scenarios.md) — 16 end-to-end recipes (e-commerce, Amazon, SEO, CI, jobs, real estate)
+[x-sql-dom-functions.md](references/x-sql-dom-functions.md), [x-sql-dom-load-select.md](references/x-sql-dom-load-select.md), [x-sql-dom-select-functions.md](references/x-sql-dom-select-functions.md), [x-sql-string-functions.md](references/x-sql-string-functions.md), [x-sql-array-functions.md](references/x-sql-array-functions.md) — X-SQL namespace sub-references
+[htmlsnapshot-scenarios.md](references/htmlsnapshot-scenarios.md) — end-to-end recipes; focused variants: [advanced](references/htmlsnapshot-scenarios-advanced.md), [amazon](references/htmlsnapshot-scenarios-amazon.md), [audit](references/htmlsnapshot-scenarios-audit.md), [extraction](references/htmlsnapshot-scenarios-extraction.md)
 
 **Run at scale (multiple pages/URLs):**
 [crawl.md](references/crawl.md) — recursive crawling, seed-file bulk fetch, X-SQL extraction
@@ -680,6 +684,9 @@ Organized by task — follow the link that matches what you're trying to do:
 
 **Troubleshoot:**
 [shell-quoting.md](references/shell-quoting.md) — avoid shell-quoting breakage for complex JS/X-SQL on Windows / Git Bash
+
+**Developers:**
+[development.md](references/development.md) — build the CLI from source (Rust, Java 17+)
 
 ## Installation
 
