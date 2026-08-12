@@ -441,6 +441,18 @@ browser4-cli htmlsnapshot get text ".price" --all    # quick test: does this sel
 
 > **Warning:** `htmlsnapshot` captures the **initial page HTML**, not the live DOM. After interactions (form fills, clicks, submissions) or on pages where JavaScript updates the DOM (SPA route changes, dynamic content), the snapshot will be **stale** — it won't reflect the current page state. For JS-updated pages, use `eval` for live-DOM access instead. The `htmlsnapshot inspect` command also reads from the stored initial HTML, not the live DOM.
 
+> **Warning — backend startup fails in sandboxed/restricted environments:** The Browser4 backend (Spring Boot/JVM) writes its log files to a `logs/` directory inside the runtime bundle — `BROWSER4_RUNTIME_DIR` (default `%APPDATA%/browser4` on Windows, `~/.local/share/browser4` on Linux). In sandboxes that only allow writes to the workspace, this write is denied and the server never becomes ready: `goto`/`open` hang until the startup timeout with `FileNotFoundException … Access denied` (or `拒绝访问`) in the startup log.
+>
+> **Diagnose:** the failed command prints a startup-log path under `🧾 Details` — look for a `logs\*.log` (or `logs/*.log`) write failure there.
+>
+> **Fix:** point the runtime and state at writable locations before the first launch:
+> ```bash
+> # PowerShell
+> $env:BROWSER4_RUNTIME_DIR  = "D:\workspace\browser4-runtime"  # JRE/JARs + logs (~200 MB)
+> $env:BROWSER4_CLI_STATE_DIR = "D:\workspace\.browser4-state"  # session state
+> ```
+> `BROWSER4_RUNTIME_DIR` relocates the runtime (re-downloads the bundle if not already present); `BROWSER4_CLI_STATE_DIR` already auto-falls back to `./.browser4-cli-state` when `~/.browser4` is unwritable.
+
 ## 6. Quick Patterns
 
 ### Interactive Form Fill
