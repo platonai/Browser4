@@ -650,7 +650,12 @@ jobs:
         if: success() && needs.prepare.outputs.skip_docker_push != 'true' && needs.prepare.outputs.dry_run != 'true'
         shell: bash
         run: |
-          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ env.DOCKER_USERNAME }}" --password-stdin
+          # Login is retried alongside the push: a transient registry timeout
+          # in `docker login` (e.g. "context deadline exceeded" on the token
+          # endpoint) must not abort the step before the retry loop runs.
+          login() {
+            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ env.DOCKER_USERNAME }}" --password-stdin
+          }
 
           IS_PRERELEASE="${{ needs.prepare.outputs.is_prerelease }}"
           if [ "$IS_PRERELEASE" != "true" ]; then
@@ -667,7 +672,7 @@ jobs:
 
           max_retries=3
           for i in $(seq 1 $max_retries); do
-            if push_images; then
+            if login && push_images; then
               echo "✅ Successfully pushed images to Docker Hub"
               break
             else
@@ -685,7 +690,12 @@ jobs:
         if: success() && needs.prepare.outputs.skip_docker_push != 'true' && needs.prepare.outputs.dry_run != 'true'
         shell: bash
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          # Login is retried alongside the push: a transient registry timeout
+          # in `docker login` (e.g. "context deadline exceeded" on the ghcr.io
+          # token endpoint) must not abort the step before the retry loop runs.
+          login() {
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          }
 
           IS_PRERELEASE="${{ needs.prepare.outputs.is_prerelease }}"
           docker tag ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.version }} ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.version }}
@@ -703,7 +713,7 @@ jobs:
 
           max_retries=3
           for i in $(seq 1 $max_retries); do
-            if push_images; then
+            if login && push_images; then
               echo "✅ Successfully pushed images to GHCR"
               break
             else

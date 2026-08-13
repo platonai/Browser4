@@ -87,37 +87,52 @@ fully published.
 
 Triggers the main Browser4 release workflow (`release.yml`) on GitHub Actions.
 
+**Dry-run by default** — running it without `-Apply` only performs the read-only
+checks and previews the tag and release notes; it never creates or pushes anything.
+
 - **Prerelease checks**: Delegates to `version.mjs prerelease-check` to verify
   version consistency across all files (VERSION, pom.xml, Cargo.toml, package.json)
   and confirm the current version is the next patch after the last GitHub release.
-  Warns and asks for confirmation if issues are found.
+  Warns (and, in `-Apply` mode, asks for confirmation) if issues are found.
 - Creates and pushes a `v{version}` tag (e.g. `v4.13.0`), which triggers
   the release workflow via the `on.push.tags` trigger.
 - Shows changes since the previous release tag for release notes.
-- Supports `-remote` and `-message` parameters for custom remote and annotated tag messages.
+- **AI release notes**: if an agent (claude/codex/kimi/dsh/gh copilot) is
+  available, the commit list is sent to it to generate structured release notes,
+  used as the annotated tag message (unless `-message` is given). Use `-NoAgent`
+  to disable.
+- Supports `-remote`, `-message`, `-Apply`, `-DryRun`, and `-NoAgent`.
 
 ```
-.\bin\release\trigger-release.ps1
-.\bin\release\trigger-release.ps1 -message "Hotfix for login crash"
+.\bin\release\trigger-release.ps1                             # dry run (preview)
+.\bin\release\trigger-release.ps1 -Apply                      # actually create + push
+.\bin\release\trigger-release.ps1 -Apply -message "Hotfix for login crash"
+.\bin\release\trigger-release.ps1 -NoAgent                    # dry run, skip AI notes
 ```
 
 ### `monitor-release.ps1`
 
 Triggers a release and monitors the workflow until completion.
 
-- Calls `trigger-release.ps1` to create and push the release tag (interactive —
-  you will be prompted for confirmations, just as with `trigger-release.ps1` directly).
+**Dry-run by default** — running it without `-Apply` calls `trigger-release.ps1`
+in dry-run mode (preview only) and exits without monitoring. Pass `-Apply` to
+actually trigger and monitor.
+
+- Calls `trigger-release.ps1` to create and push the release tag (in `-Apply` mode
+  you will be prompted for confirmations, just as with `trigger-release.ps1 -Apply` directly).
 - Captures the tag name and locates the triggered Release workflow run.
 - Streams the workflow logs in real time.
 - Reports the final conclusion (success/failure) and exits with the same code.
 - Supports `-NoWatch` for non-interactive terminals (polls via `gh run list`/`gh run view`).
+- Supports `-Apply`, `-DryRun`, and `-NoAgent` (forwarded to `trigger-release.ps1`).
 - On workflow failure, auto-extracts diagnostic information (failing tests,
   error blocks) for quick triage.
 
 ```
-.\bin\release\monitor-release.ps1
-.\bin\release\monitor-release.ps1 -message "Hotfix for login crash"
-.\bin\release\monitor-release.ps1 -NoWatch -PollIntervalSeconds 10
+.\bin\release\monitor-release.ps1                             # dry run (preview)
+.\bin\release\monitor-release.ps1 -Apply                      # actually trigger + monitor
+.\bin\release\monitor-release.ps1 -Apply -message "Hotfix for login crash"
+.\bin\release\monitor-release.ps1 -Apply -NoWatch -PollIntervalSeconds 10
 ```
 
 ### `download-release-assets.ps1`
@@ -162,6 +177,6 @@ Invoke-Pester .\bin\release\tests\monitor-release.tests.ps1
 1. Ensure all tests pass.
 2. Run `check-publish-status.ps1` to verify the current version is published.
 3. Run `node bin/version.mjs bump <major|minor|patch>` to bump the version and commit.
-4. Run `.\bin\release\trigger-release.ps1` to push the tag and start the CI release build.
+4. Run `.\bin\release\trigger-release.ps1 -Apply` to push the tag and start the CI release build.
 5. Wait for CI to build and publish to GitHub Releases.
 6. Run `node bin/version.mjs bump patch` to bump the version for the next bug-fix cycle.

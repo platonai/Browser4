@@ -8,12 +8,64 @@
 # - Guard "chcp" and other Windows-only commands behind platform checks.
 # ═══════════════════════════════════════════════════════════════════
 
+<#
+.SYNOPSIS
+    Create and push a release tag for the current version. Dry-run by default.
+
+.DESCRIPTION
+    Reads the version from the VERSION file, runs prerelease consistency checks
+    (delegating to version.mjs), shows the changes since the previous release,
+    and creates + pushes a vX.Y.Z tag that triggers the release workflow.
+
+    By default the script runs in DRY RUN mode: it performs all read-only
+    checks, previews the tag and release notes, and exits without changing
+    anything. Pass -Apply to actually create and push the tag.
+
+    Release notes: when an AI agent is available (claude, codex, kimi, dsh, or
+    gh copilot — resolved via coworker/scripts/workers/agent.ps1), the commit
+    list since the previous tag is sent to the agent to produce structured
+    release notes. Those notes are used as the annotated tag message (unless
+    -message is given) and shown as a preview. Use -NoAgent to disable this and
+    fall back to the raw commit list.
+
+.PARAMETER remote
+    The git remote to push the tag to (default: "origin").
+
+.PARAMETER message
+    Explicit release message for the annotated tag. Takes precedence over
+    AI-generated release notes.
+
+.PARAMETER Apply
+    Actually create and push the tag. Without this flag the script runs in
+    dry-run mode (default).
+
+.PARAMETER DryRun
+    Explicit dry-run mode. This is the default; the flag exists for clarity and
+    for callers (e.g. monitor-release.ps1) that forward a verbatim flag.
+
+.PARAMETER NoAgent
+    Skip AI-generated release notes and use the raw commit list instead.
+
+.EXAMPLE
+    .\bin\release\trigger-release.ps1                       # dry run (preview only)
+    .\bin\release\trigger-release.ps1 -Apply                # actually create + push
+    .\bin\release\trigger-release.ps1 -Apply -message "Hotfix for login crash"
+    .\bin\release\trigger-release.ps1 -NoAgent              # dry run, skip AI notes
+#>
+
 param(
     [string]$remote = "origin",
-    [string]$message = ""
+    [string]$message = "",
+    [switch]$Apply,
+    [switch]$DryRun,
+    [switch]$NoAgent
 )
 
 $ErrorActionPreference = "Stop"
+
+# Dry run is the default. -Apply opts into real execution; -DryRun is an
+# explicit (redundant) confirmation of the default.
+$isDryRun = $DryRun -or -not $Apply
 
 $repoRoot = (git rev-parse --show-toplevel 2>$null)
 Set-Location $repoRoot
@@ -24,6 +76,14 @@ Set-Location $repoRoot
 Fix-Encoding-UTF8
 
 Write-Host "Working in: $repoRoot"
+
+if ($isDryRun) {
+    Write-Host ""
+    Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Yellow
+    Write-Host "  DRY RUN MODE — nothing will be created or pushed." -ForegroundColor Yellow
+    Write-Host "  Re-run with -Apply to actually create and push the tag." -ForegroundColor Yellow
+    Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Yellow
+}
 
 # Check if we're in a git repo
 if (!(Test-Path ".git")) {
@@ -40,10 +100,12 @@ Write-Host "Current branch: $branch"
 $status = git status --porcelain
 if ($status) {
     Write-Warning "Uncommitted changes detected"
-    $continue = Read-Host "Continue anyway? (y/n)"
-    if ($continue -ne 'y') {
-        Write-Host "Cancelled"
-        exit 0
+    if (-not $isDryRun) {
+        $continue = Read-Host "Continue anyway? (y/n)"
+        if ($continue -ne 'y') {
+            Write-Host "Cancelled"
+            exit 0
+        }
     }
 }
 
@@ -108,10 +170,12 @@ try {
         Write-Host "Raw output:"
         Write-Host $checkOutput
     }
-    $confirm = Read-Host "Continue anyway? (y/n)"
-    if ($confirm -ne 'y') {
-        Write-Host "Cancelled"
-        exit 0
+    if (-not $isDryRun) {
+        $confirm = Read-Host "Continue anyway? (y/n)"
+        if ($confirm -ne 'y') {
+            Write-Host "Cancelled"
+            exit 0
+        }
     }
     Write-Host "Proceeding despite parse failure..."
 }
@@ -153,10 +217,12 @@ if ($parseOk) {
             Write-Host ""
         }
 
-        $confirm = Read-Host "Continue anyway? (y/n)"
-        if ($confirm -ne 'y') {
-            Write-Host "Cancelled"
-            exit 0
+        if (-not $isDryRun) {
+            $confirm = Read-Host "Continue anyway? (y/n)"
+            if ($confirm -ne 'y') {
+                Write-Host "Cancelled"
+                exit 0
+            }
         }
         Write-Host "Proceeding despite version issues..."
     }
@@ -167,27 +233,31 @@ $newTag = "v$version"
 # Check if tag already exists
 $existingTag = git tag -l $newTag
 if ($existingTag) {
-    Write-Host "Tag '$newTag' already exists"
+    if ($isDryRun) {
+        Write-Warning "Tag '$newTag' already exists (would be overwritten with -Apply)."
+    } else {
+        Write-Host "Tag '$newTag' already exists"
 
-    $confirm = Read-Host "Do you want to overwrite it? (y/n)"
-    if ($confirm -ne 'y') {
-        Write-Host "Cancelled"
-        exit 0
-    }
-    try {
-        # Delete local tag
-        git tag -d $newTag
-        Write-Host "Deleted local tag: $newTag"
-
-        # Delete remote tag if it exists
-        $remoteTag = git ls-remote --tags $remote "refs/tags/$newTag" 2>$null
-        if ($remoteTag) {
-            git push $remote --delete $newTag
-            Write-Host "Deleted remote tag: $newTag"
+        $confirm = Read-Host "Do you want to overwrite it? (y/n)"
+        if ($confirm -ne 'y') {
+            Write-Host "Cancelled"
+            exit 0
         }
-    } catch {
-        Write-Error "Failed to delete existing tag: $_"
-        exit 1
+        try {
+            # Delete local tag
+            git tag -d $newTag
+            Write-Host "Deleted local tag: $newTag"
+
+            # Delete remote tag if it exists
+            $remoteTag = git ls-remote --tags $remote "refs/tags/$newTag" 2>$null
+            if ($remoteTag) {
+                git push $remote --delete $newTag
+                Write-Host "Deleted remote tag: $newTag"
+            }
+        } catch {
+            Write-Error "Failed to delete existing tag: $_"
+            exit 1
+        }
     }
 }
 
@@ -223,28 +293,190 @@ $prevTag = $tagCandidates |
         Select-Object -First 1 |
         ForEach-Object { $_.Tag }
 
+# Capture the raw change list (used for AI release notes and as the fallback)
+$changesText = ''
 if ($prevTag) {
     Write-Host "`nChanges since $prevTag :"
     $changes = git log --oneline --no-merges "$prevTag..HEAD"
     if ($changes) {
+        $changesText = ($changes | Out-String).Trim()
         $changes | ForEach-Object { Write-Host "  - $_" }
     } else {
         Write-Host "  No changes"
     }
 } else {
     Write-Host "`nRecent commits:"
-    git log --oneline --no-merges -5 | ForEach-Object { Write-Host "  • $_" }
+    $recentCommits = git log --oneline --no-merges -5
+    $changesText = ($recentCommits | Out-String).Trim()
+    $recentCommits | ForEach-Object { Write-Host "  • $_" }
 }
 
-# Prompt for tag message if not provided
-if ([string]::IsNullOrWhiteSpace($message)) {
+# ═══════════════════════════════════════════════════════════════════
+# AI agent helpers — generate release notes via an available agent.
+# Reuses coworker/scripts/workers/agent.ps1 (the canonical per-backend
+# invocation) when present, so claude/kimi/codex/dsh/copilot all work
+# with their correct CLI flags and Windows stdin handling.
+# ═══════════════════════════════════════════════════════════════════
+
+$script:ReleaseAgent = @{ Initialized = $false; Backend = ''; Executable = '' }
+
+function Initialize-ReleaseAgent {
+    if ($script:ReleaseAgent.Initialized) { return }
+    $script:ReleaseAgent.Initialized = $true
+
+    $agentScript = Join-Path $repoRoot 'coworker\scripts\workers\agent.ps1'
+    if (-not (Test-Path -LiteralPath $agentScript)) { return }
+
+    try {
+        . $agentScript
+        if (Get-Command Invoke-Agent -ErrorAction SilentlyContinue) {
+            $command = Get-AgentCommand -RepoRoot $repoRoot -WorkingDirectory $repoRoot
+            if ($command -and $command.Executable) {
+                $script:ReleaseAgent.Backend = [string]$command.Backend
+                $script:ReleaseAgent.Executable = [string]$command.Executable
+            }
+        }
+    } catch {
+        # Dot-sourcing failed — leave the agent state empty (no agent).
+    }
+}
+
+function Test-ReleaseAgentAvailable {
+    Initialize-ReleaseAgent
+    if (-not $script:ReleaseAgent.Executable) { return $false }
+    return ($null -ne (Get-Command $script:ReleaseAgent.Executable -ErrorAction SilentlyContinue))
+}
+
+function Invoke-ReleaseNotesAgent {
+    param(
+        [string]$Changes,
+        [string]$Version
+    )
+
+    if (-not (Test-ReleaseAgentAvailable)) { return $null }
+    if ([string]::IsNullOrWhiteSpace($Changes)) { return $null }
+
+    $prompt = @"
+Generate release notes for a software release.
+
+Repository: Browser4
+Version: $Version
+
+Analyze the commit list below and produce well-structured release notes
+as Markdown.
+
+Rules:
+- Start with a one-paragraph summary of the highlights of this release.
+- Then group changes into categories by conventional-commit type:
+  Features (feat), Fixes (fix), Performance (perf), Refactor (refactor),
+  Documentation (docs), Tests (test).
+- Skip pure chore/ci/style/revert commits unless user-visible.
+- One concise bullet per meaningful change; no commit hashes.
+- Omit empty categories.
+- Output ONLY the release notes Markdown body — no code fences, no
+  preamble such as "Here are the release notes".
+
+Commit list (most recent first):
+---
+$Changes
+---
+"@
+
+    try {
+        $notes = Invoke-Agent -Prompt $prompt -RepoRoot $repoRoot -WorkingDirectory $repoRoot -CaptureOutput -TimeoutSeconds 300
+        if ($notes -is [string] -and -not [string]::IsNullOrWhiteSpace($notes)) {
+            # Strip any stray leading/trailing code fences the agent may emit.
+            $cleaned = $notes -replace '^\s*```[a-zA-Z]*\s*', '' -replace '\s*```\s*$', ''
+            $cleaned = $cleaned.Trim()
+            if ($cleaned) { return $cleaned }
+        }
+    } catch {
+        Write-Warning "Agent release-notes generation failed: $($_.Exception.Message)"
+    }
+
+    return $null
+}
+
+# ── Generate release notes (agent if available, otherwise raw commits) ──
+$releaseNotes = ''
+$agentUsed = $false
+
+if (-not $NoAgent) {
     Write-Host ""
-    $message = Read-Host "Enter release message (optional, press Enter to skip)"
+    Write-Host "Checking for an AI agent to generate release notes..." -ForegroundColor DarkGray
+    if ($changesText) {
+        $releaseNotes = Invoke-ReleaseNotesAgent -Changes $changesText -Version $newTag
+        if ($releaseNotes) {
+            $agentUsed = $true
+            Write-Host "  Release notes generated with $($script:ReleaseAgent.Backend)." -ForegroundColor Green
+        }
+    }
+}
+
+if ($agentUsed) {
+    Write-Host ""
+    Write-Host "──────────────────────────────────────────────────────────" -ForegroundColor Cyan
+    Write-Host "  AI-generated release notes (preview)" -ForegroundColor Cyan
+    Write-Host "──────────────────────────────────────────────────────────" -ForegroundColor Cyan
+    Write-Host $releaseNotes
+    Write-Host "──────────────────────────────────────────────────────────" -ForegroundColor Cyan
+} else {
+    if ($NoAgent) {
+        Write-Host "  -NoAgent set — skipping AI release notes." -ForegroundColor DarkGray
+    } elseif (-not $changesText) {
+        Write-Host "  No changes to summarize — skipping AI release notes." -ForegroundColor DarkGray
+    } else {
+        Write-Host "  No AI agent available — falling back to the raw commit list." -ForegroundColor DarkGray
+    }
+    $releaseNotes = $changesText
+}
+
+# ── Resolve the effective tag message ──────────────────────────────────
+# Priority: explicit -message > AI-generated notes > (prompt / lightweight).
+$effectiveMessage = $message
+if ([string]::IsNullOrWhiteSpace($effectiveMessage) -and $agentUsed) {
+    $effectiveMessage = $releaseNotes
+}
+
+$tagType = if ([string]::IsNullOrWhiteSpace($effectiveMessage)) { "lightweight" } else { "annotated" }
+
+# ── DRY RUN: preview only ──────────────────────────────────────────────
+if ($isDryRun) {
+    Write-Host ""
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Yellow
+    Write-Host "  DRY RUN — nothing was created or pushed" -ForegroundColor Yellow
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Yellow
+    Write-Host "  Version:       $version"
+    Write-Host "  Tag:           $newTag"
+    Write-Host "  Tag type:      $tagType"
+    Write-Host "  Remote:        $remote"
+    if ($existingTag) {
+        Write-Host "  Note:          tag '$newTag' already exists (would be overwritten)" -ForegroundColor Yellow
+    }
+    if ($agentUsed) {
+        Write-Host "  Release notes: AI-generated ($($script:ReleaseAgent.Backend))" -ForegroundColor Green
+    } else {
+        Write-Host "  Release notes: raw commit list"
+    }
+    Write-Host ""
+    Write-Host "  Run with -Apply to actually create and push the tag." -ForegroundColor Cyan
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Yellow
+
+    # Emit the tag name so monitor-release.ps1 can report what would have
+    # been triggered (it detects dry-run separately and will not monitor).
+    Write-Output $newTag
+    exit 0
+}
+
+# ── APPLY: prompt for message if still missing, then create + push ──────
+if ([string]::IsNullOrWhiteSpace($effectiveMessage)) {
+    Write-Host ""
+    $effectiveMessage = Read-Host "Enter release message (optional, press Enter to skip)"
+    $tagType = if ([string]::IsNullOrWhiteSpace($effectiveMessage)) { "lightweight" } else { "annotated" }
 }
 
 # Confirm creation
 Write-Host ""
-$tagType = if ([string]::IsNullOrWhiteSpace($message)) { "lightweight" } else { "annotated" }
 $confirm = Read-Host "Create and push $tagType tag '$newTag'? (y/n)"
 if ($confirm -ne 'y') {
     Write-Host "Cancelled"
@@ -254,11 +486,11 @@ if ($confirm -ne 'y') {
 # Create and push tag
 try {
     # Create annotated tag if message provided, otherwise lightweight tag
-    if ([string]::IsNullOrWhiteSpace($message)) {
+    if ([string]::IsNullOrWhiteSpace($effectiveMessage)) {
         git tag $newTag
         Write-Host "Created lightweight tag: $newTag"
     } else {
-        git tag -a $newTag -m $message
+        git tag -a $newTag -m $effectiveMessage
         Write-Host "Created annotated tag: $newTag"
     }
 

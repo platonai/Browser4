@@ -219,6 +219,35 @@ Invoke-Expression $funcText
 Write-Host ''
 
 # ===================================================================
+# TESTS: ConvertTo-LogLines (type-stability regression)
+# ===================================================================
+Write-Host "━━━ ConvertTo-LogLines: returns typed string[] ━━━" -ForegroundColor Cyan
+
+# Regression: ConvertTo-LogLines must return string[] (never Object[] or a
+# scalar string). Invoke-WorkflowFailureHandler feeds its output straight into
+# List[string].AddRange(), whose generic AddRange(IEnumerable[string]) overload
+# cannot bind an Object[]/string — the exact crash this test guards against.
+$cll = [System.Collections.Generic.List[string]]::new()
+
+$cllMulti = ConvertTo-LogLines -RawLogs @('line1', 'line2', 'line3')
+Assert-Returns -Label 'CLL multi: returns string[]' -Actual ($cllMulti -is [string[]]) -Expected $true
+$cll.AddRange($cllMulti)
+Assert-Returns -Label 'CLL multi: AddRange accepts result' -Actual $cll.Count -Expected 3
+
+$cllSingle = ConvertTo-LogLines -RawLogs 'one line'
+Assert-Returns -Label 'CLL single: returns string[]' -Actual ($cllSingle -is [string[]]) -Expected $true
+$cll.AddRange($cllSingle)
+Assert-Returns -Label 'CLL single: AddRange accepts result' -Actual $cll.Count -Expected 4
+
+$cllNull = ConvertTo-LogLines -RawLogs $null
+Assert-Returns -Label 'CLL null: returns string[]' -Actual ($cllNull -is [string[]]) -Expected $true
+Assert-Returns -Label 'CLL null: empty' -Actual $cllNull.Count -Expected 0
+
+$cllEmbedded = ConvertTo-LogLines -RawLogs @("a`nb", 'c')
+Assert-Returns -Label 'CLL embedded newline: returns string[]' -Actual ($cllEmbedded -is [string[]]) -Expected $true
+Assert-Returns -Label 'CLL embedded newline: splits to 3 lines' -Actual $cllEmbedded.Count -Expected 3
+
+# ===================================================================
 # TESTS: Extract-MinimalErrors
 # ===================================================================
 Write-Host "━━━ Extract-MinimalErrors: empty / no-match ━━━" -ForegroundColor Cyan

@@ -19,6 +19,10 @@
     3. Streams the workflow logs in real time.
     4. Reports the final conclusion (success/failure) and exits with the same code.
 
+    By default this script runs in DRY RUN mode: it calls trigger-release.ps1 in
+    dry-run mode (preview only, no tag pushed, no workflow triggered) and exits
+    without monitoring. Pass -Apply to actually trigger and monitor the release.
+
     Requires: gh CLI authenticated with the repo, and pwsh (PowerShell Core).
 
 .PARAMETER remote
@@ -36,22 +40,41 @@
     Skip interactive `gh run watch` and poll with `gh run list` / `gh run view` instead.
     Useful on CI or non-interactive terminals.
 
+.PARAMETER Apply
+    Actually trigger the release and monitor the workflow. Without this flag the
+    script runs in dry-run mode (default) and only previews what would happen.
+
+.PARAMETER DryRun
+    Explicit dry-run mode. This is the default; the flag exists for clarity.
+
+.PARAMETER NoAgent
+    Passed through to trigger-release.ps1 to skip AI-generated release notes.
+
 .EXAMPLE
-    .\bin\release\monitor-release.ps1
+    .\bin\release\monitor-release.ps1                              # dry run (preview)
 
-    .\bin\release\monitor-release.ps1 -message "Hotfix for login crash"
+    .\bin\release\monitor-release.ps1 -Apply                       # trigger + monitor
 
-    .\bin\release\monitor-release.ps1 -NoWatch -PollIntervalSeconds 10
+    .\bin\release\monitor-release.ps1 -Apply -message "Hotfix for login crash"
+
+    .\bin\release\monitor-release.ps1 -Apply -NoWatch -PollIntervalSeconds 10
 #>
 
 param(
     [string]$remote = "origin",
     [string]$message = "",
     [int]$PollIntervalSeconds = 5,
-    [switch]$NoWatch
+    [switch]$NoWatch,
+    [switch]$Apply,
+    [switch]$DryRun,
+    [switch]$NoAgent
 )
 
 $ErrorActionPreference = "Stop"
+
+# Dry run is the default. -Apply opts into real execution; -DryRun is an
+# explicit (redundant) confirmation of the default.
+$isDryRun = $DryRun -or -not $Apply
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Shared helpers: workflow-failure → coworker task dispatch
@@ -62,12 +85,20 @@ $ErrorActionPreference = "Stop"
     Normalize raw log output (string or array) into a clean string[].
     gh run view --log-failed returns a single string; other paths return
     arrays. This ensures consistent line-by-line iteration downstream.
+
+.NOTES
+    Every return uses a unary comma (`,`) so PowerShell does NOT unroll the
+    array into individual pipeline objects. Without it the caller receives
+    Object[] (2+ lines) or a scalar string (1 line), and
+    List[string].AddRange(...) then throws:
+        Cannot convert argument "collection", with value "System.Object[]" ...
+    because the generic AddRange(IEnumerable[string]) overload cannot bind.
 #>
 function ConvertTo-LogLines {
     param([object]$RawLogs)
-    if ($null -eq $RawLogs) { return [string[]]@() }
+    if ($null -eq $RawLogs) { return ,[string[]]@() }
     if ($RawLogs -is [string]) {
-        return [string[]]($RawLogs -split '\r?\n')
+        return ,[string[]]($RawLogs -split '\r?\n')
     }
     if ($RawLogs -is [System.Collections.IEnumerable]) {
         $result = [System.Collections.Generic.List[string]]::new()
@@ -79,9 +110,9 @@ function ConvertTo-LogLines {
                 $result.Add([string]$item)
             }
         }
-        return [string[]]$result.ToArray()
+        return ,[string[]]$result.ToArray()
     }
-    return [string[]]@([string]$RawLogs)
+    return ,[string[]]@([string]$RawLogs)
 }
 
 <#
@@ -729,6 +760,13 @@ if (-not $repoRoot) {
 }
 Set-Location $repoRoot
 
+if ($isDryRun) {
+    Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Yellow
+    Write-Host "  DRY RUN MODE — no tag will be pushed, no workflow triggered." -ForegroundColor Yellow
+    Write-Host "  Re-run with -Apply to actually trigger and monitor the release." -ForegroundColor Yellow
+    Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Yellow
+}
+
 # ── 1. Trigger release ─────────────────────────────────────────────
 
 $triggerScript = Join-Path $repoRoot "bin\release\trigger-release.ps1"
@@ -741,10 +779,13 @@ Write-Host "━━━━━━━━━━━━━━━━━━━━━━�
 Write-Host "  Step 1/3: Triggering release via tag push" -ForegroundColor Cyan
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 
-# Build args for trigger-release.ps1 — passthrough of remote and message
+# Build args for trigger-release.ps1 — passthrough of remote, message,
+# dry-run state, and agent flag.
 $triggerArgs = @{}
 if ($remote)      { $triggerArgs['remote'] = $remote }
 if ($message)     { $triggerArgs['message'] = $message }
+if (-not $isDryRun) { $triggerArgs['Apply'] = $true }
+if ($NoAgent)     { $triggerArgs['NoAgent'] = $true }
 
 # Capture all output streams so we can extract the tag
 $tagOutput = & $triggerScript @triggerArgs 2>&1
@@ -758,6 +799,13 @@ $tag = $tagLines | Select-Object -Last 1
 if ($exitCode -ne 0 -or -not $tag) {
     Write-Error "trigger-release.ps1 failed (exit code: $exitCode). Output:`n$($tagOutput -join "`n")"
     exit 1
+}
+
+if ($isDryRun) {
+    Write-Host ""
+    Write-Host "DRY RUN — no workflow was triggered. Nothing to monitor." -ForegroundColor Yellow
+    Write-Host "Re-run with -Apply to actually trigger and monitor the release workflow." -ForegroundColor Yellow
+    exit 0
 }
 
 Write-Host "Tag pushed: $tag" -ForegroundColor Green

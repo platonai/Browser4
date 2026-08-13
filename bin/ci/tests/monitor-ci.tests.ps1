@@ -206,6 +206,23 @@ Invoke-Expression $funcText
 Write-Host ''
 
 # ===================================================================
+# TESTS: ConvertTo-LogLines (type-stability regression)
+# ===================================================================
+Write-Host "━━━ ConvertTo-LogLines: returns typed string[] ━━━" -ForegroundColor Cyan
+
+# Regression guard: must return string[] (not Object[]/scalar) so
+# List[string].AddRange() in Invoke-WorkflowFailureHandler does not throw.
+$cll = [System.Collections.Generic.List[string]]::new()
+$cllMulti = ConvertTo-LogLines -RawLogs @('line1', 'line2', 'line3')
+Assert-Returns -Label 'CLL multi: returns string[]' -Actual ($cllMulti -is [string[]]) -Expected $true
+$cll.AddRange($cllMulti)
+Assert-Returns -Label 'CLL multi: AddRange accepts result' -Actual $cll.Count -Expected 3
+$cllSingle = ConvertTo-LogLines -RawLogs 'one line'
+Assert-Returns -Label 'CLL single: returns string[]' -Actual ($cllSingle -is [string[]]) -Expected $true
+$cll.AddRange($cllSingle)
+Assert-Returns -Label 'CLL single: AddRange accepts result' -Actual $cll.Count -Expected 4
+
+# ===================================================================
 # TESTS: Verify functions are present and parse correctly
 # ===================================================================
 Write-Host "━━━ Functions: existence & identity ━━━" -ForegroundColor Cyan
