@@ -15,6 +15,8 @@ import ai.platon.pulsar.agentic.tools.builtin.*
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationRenderer
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.api.AbstractBrowser
+import ai.platon.pulsar.api.AbstractWebDriver
 import ai.platon.pulsar.api.WebDriver
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarWebDriver
@@ -272,7 +274,23 @@ class AgentToolManager constructor(
         topDomain = domainAlias.getOrDefault(topDomain, topDomain)
         val evaluate = when (topDomain) {
             "tab" -> executor.callFunctionOn(normalized, driver)
-            "browser" -> executor.callFunctionOn(normalized, driver.browser)
+            "browser" -> {
+                // A closeTab without index/tabId means "close the current tab".
+                // Resolve it against the session-bound driver: browser.frontDriver
+                // is not reliably maintained (it dangles after the previously
+                // active tab is destroyed and depends on the bringToFront CDP
+                // round-trip), so a stale frontDriver makes closeTab silently
+                // destroy nothing.  The bound driver is what every other tool
+                // operates on, so it defines "current" here.
+                val resolved = if (normalized.method == "closeTab" && !targetsSpecificTab(normalized.arguments)) {
+                    (driver as? AbstractWebDriver)?.let { current ->
+                        normalized.copy(
+                            arguments = (normalized.arguments + ("tabId" to current.guid)).toMutableMap()
+                        )
+                    } ?: normalized
+                } else normalized
+                executor.callFunctionOn(resolved, driver.browser)
+            }
             "fs" -> executor.callFunctionOn(normalized, fs)
             "shell" -> executor.callFunctionOn(normalized, shell)
             "agent" -> executor.callFunctionOn(normalized, agent)
@@ -415,8 +433,9 @@ class AgentToolManager constructor(
      * follow-up calls see the correct page.
      */
     private suspend fun onDidCloseTab() {
+        val browser = session.boundBrowser
         val oldBoundDriver = session.boundDriver ?: return
-        val remainingDrivers = session.boundBrowser?.listDrivers().orEmpty()
+        val remainingDrivers = browser?.listDrivers().orEmpty()
 
         // If the old bound driver is still present in the browser's driver list, the
         // tab was not actually destroyed (edge case or destroyDriver was a no-op).
@@ -432,9 +451,32 @@ class AgentToolManager constructor(
             return
         }
 
+        // destroyDriver never clears frontDriver, so it dangles whenever the front
+        // tab was the one closed.  Repair it to the new front so that listTabs'
+        // active flag and a targetless closeTab stay coherent.  The Browser
+        // interface only exposes frontDriver as a getter, hence the cast.
+        val abstractBrowser = browser as? AbstractBrowser
+        val oldGuid = (oldBoundDriver as? AbstractWebDriver)?.guid
+        if (abstractBrowser != null && oldGuid != null &&
+            (abstractBrowser.frontDriver as? AbstractWebDriver)?.guid == oldGuid
+        ) {
+            abstractBrowser.frontDriver = newFront
+        }
+
         bindSwappedDriver(newFront)
         logger.info("👀 Session driver rebound after closeTab: {} -> {}",
             oldBoundDriver, newFront)
+    }
+
+    /**
+     * True when [arguments] already targets a specific tab for closeTab,
+     * i.e. carries a non-empty `index` or `tabId`.
+     */
+    private fun targetsSpecificTab(arguments: Map<String, Any?>): Boolean {
+        val index = arguments["index"]
+        if (index is Number) return true
+        if (index is String && index.trim().isNotEmpty()) return true
+        return !arguments["tabId"]?.toString()?.trim().isNullOrEmpty()
     }
 
     /**

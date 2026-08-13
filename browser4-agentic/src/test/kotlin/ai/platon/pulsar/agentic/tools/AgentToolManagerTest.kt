@@ -122,4 +122,73 @@ class AgentToolManagerTest {
 
         verify(exactly = 1) { session.bindDriver(frontDriver) }
     }
+
+    @Test
+    @DisplayName("closeTab without target resolves the session-bound driver, not frontDriver")
+    fun closeTabWithoutTargetResolvesBoundDriver() = runBlocking {
+        // The session-bound driver defines "current tab": frontDriver may be
+        // stale (destroyDriver never clears it) and must not be trusted.
+        val bound = mockk<AbstractWebDriver>(relaxed = true)
+        every { bound.guid } returns "BOUND-GUID"
+        every { bound.browser } returns browser
+        every { session.getOrCreateBoundDriver() } returns bound
+
+        val staleFront: WebDriver = mockk(relaxed = true)
+        every { browser.frontDriver } returns staleFront
+
+        val executorDriver = mockk<AbstractWebDriver>(relaxed = true)
+        every { browser.findDriverByGUID("BOUND-GUID") } returns executorDriver
+
+        manager.execute(
+            ToolCall("browser", "closeTab", mutableMapOf<String, Any?>())
+        )
+
+        verify(exactly = 1) { browser.destroyDriver(executorDriver) }
+    }
+
+    @Test
+    @DisplayName("closeTab with explicit tabId does not override the target")
+    fun closeTabWithExplicitTabIdIsNotOverridden() = runBlocking {
+        val bound = mockk<AbstractWebDriver>(relaxed = true)
+        every { bound.guid } returns "BOUND-GUID"
+        every { bound.browser } returns browser
+        every { session.getOrCreateBoundDriver() } returns bound
+
+        val explicitDriver = mockk<AbstractWebDriver>(relaxed = true)
+        every { browser.findDriverByGUID("EXPLICIT-GUID") } returns explicitDriver
+
+        manager.execute(
+            ToolCall("browser", "closeTab", mutableMapOf<String, Any?>("tabId" to "EXPLICIT-GUID"))
+        )
+
+        verify(exactly = 1) { browser.destroyDriver(explicitDriver) }
+        verify(exactly = 0) { browser.findDriverByGUID("BOUND-GUID") }
+    }
+
+    @Test
+    @DisplayName("closeTab repairs frontDriver when it points at the destroyed tab")
+    fun closeTabRepairsDanglingFrontDriver() = runBlocking {
+        val bound = mockk<AbstractWebDriver>(relaxed = true)
+        every { bound.guid } returns "BOUND-GUID"
+        every { bound.browser } returns browser
+        every { session.getOrCreateBoundDriver() } returns bound
+
+        // The browser's frontDriver still references the destroyed bound tab.
+        val staleFront = mockk<AbstractWebDriver>(relaxed = true)
+        every { staleFront.guid } returns "BOUND-GUID"
+        every { browser.frontDriver } returns staleFront
+
+        val executorDriver = mockk<AbstractWebDriver>(relaxed = true)
+        every { browser.findDriverByGUID("BOUND-GUID") } returns executorDriver
+
+        val remainingDriver = mockk<AbstractWebDriver>(relaxed = true)
+        coEvery { browser.listDrivers() } returns listOf(remainingDriver)
+        every { session.boundDriver } returns bound
+
+        manager.execute(
+            ToolCall("browser", "closeTab", mutableMapOf<String, Any?>())
+        )
+
+        verify(exactly = 1) { browser.frontDriver = remainingDriver }
+    }
 }

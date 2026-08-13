@@ -2764,14 +2764,17 @@ async fn handle_tab_close(
         .map(String::from);
 
     let closed_tab_info = tabs_before.as_ref().and_then(|tabs| {
+        // No index, no guid → closing the current tab: the active one (the
+        // backend resolves the target from the session-bound driver), falling
+        // back to the first tab when none is marked active.
+        let current = tabs.iter().find(|t| t.active).map(|t| t.index).unwrap_or(0);
         tabs.iter().find(|t| {
             if let Some(idx) = index_opt {
                 t.index == idx
             } else if let Some(ref g) = guid_opt {
                 t.guid.as_deref() == Some(g.as_str())
             } else {
-                // No index, no guid → closing current tab (first tab)
-                t.index == 0
+                t.index == current
             }
         })
     });
