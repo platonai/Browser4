@@ -142,6 +142,33 @@ writable (e.g. sandboxed shells), the CLI automatically falls back to
 `BROWSER4_CLI_STATE_DIR` to an explicit writable path to silence it.
 `BROWSER4_RUNTIME_DIR` likewise overrides the runtime bundle location.
 
+### Configuration
+
+The `config` command manages persistent CLI defaults stored in
+`~/.browser4/config.json` (honours `BROWSER4_CLI_STATE_DIR`). These are global
+fallbacks — an explicit flag or environment variable always wins per invocation.
+
+| Key | Purpose | Overridden by |
+|-----|---------|---------------|
+| `server` | Default Browser4 server URL | `--server` / `BROWSER4_CLI_SERVER` |
+| `timeout` | Default HTTP timeout (seconds) | `--timeout` |
+| `proxy` | Default download proxy URL | `--proxy` |
+| `session` | Default session name | `-s` / `--session` / `BROWSER4_CLI_SESSION` |
+
+```bash
+browser4-cli config                              # List all values + config file path
+browser4-cli config list                         # Same as above
+browser4-cli config get server                   # Print one value ("(not set)" if unset)
+browser4-cli config set server http://localhost:8182
+browser4-cli config set timeout 45               # Positive integer seconds
+browser4-cli config delete session               # Reset a key to its default
+```
+
+Notes:
+- `config get` / `set` / `delete` use the spaced form (`config get server`), not `config-get server`.
+- `timeout` must be a positive integer; `0` and unknown keys are rejected with a non-zero exit.
+- `config set server` sets the persistent default; a later `--server` flag or `BROWSER4_CLI_SERVER` still overrides it for that invocation.
+
 ### Tab Management
 
 Tab commands scope to a session — all operations affect the session targeted via `-s <session>` (or the DEFAULT session when `-s` is omitted).
@@ -223,6 +250,7 @@ browser4-cli -s ext-session tab-select 0
 | `skill-list`, `skill-info`, `skill-install`, `skill-uninstall`, `skill-reload` | Backend skill management | Install/manage server-side skills | [skills.md](references/skills.md) |
 | `screenshot`, `scroll`, `wait`, `resize` | Visual capture & viewport control | Screenshots, viewport sizing, scroll control | — |
 | `tab-list`, `tab-new`, `tab-select`, `tab-close` | Tab management | Multi-tab workflows, session-scoped tab operations. See §Tab Management below. | — |
+| `config` | Persistent CLI defaults (server, timeout, proxy, session) | Set default server URL, timeout, proxy, or session name. See §Configuration. | — |
 
 ### Refreshing This Skill
 

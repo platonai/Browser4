@@ -4798,6 +4798,7 @@ pub fn resolve_base_url(override_url: Option<&str>, session_name: Option<&str>) 
     let state = read_state(None, session_name);
     let base = override_url
         .map(|s| s.to_string())
+        .or_else(|| crate::config::read_config().server.clone())
         .unwrap_or(state.base_url);
     base.trim_end_matches('/').to_string()
 }
@@ -6498,6 +6499,79 @@ mod tests {
 
         let read = read_installed_browser4_runtime_metadata();
         assert!(read.is_none());
+    }
+
+    // -------------------------------------------------------------------
+    // resolve_base_url config fallback tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_base_url_falls_back_to_config_server() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let _env = TestEnvGuard::lock(&tmp.path());
+
+        // No persisted state, but config has `server` set.
+        fs::write(
+            tmp.path().join("state").join("config.json"),
+            r#"{"server":"http://config:9000"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(resolve_base_url(None, None), "http://config:9000");
+    }
+
+    #[test]
+    fn test_resolve_base_url_config_server_beats_persisted_state() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let _env = TestEnvGuard::lock(&tmp.path());
+
+        fs::write(
+            tmp.path().join("state").join("config.json"),
+            r#"{"server":"http://config:9000"}"#,
+        )
+        .unwrap();
+        fs::write(
+            tmp.path().join("state").join("cli-state.json"),
+            r#"{"baseUrl":"http://state:9002"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(resolve_base_url(None, None), "http://config:9000");
+    }
+
+    #[test]
+    fn test_resolve_base_url_override_beats_config_server() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let _env = TestEnvGuard::lock(&tmp.path());
+
+        fs::write(
+            tmp.path().join("state").join("config.json"),
+            r#"{"server":"http://config:9000"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_base_url(Some("http://flag:9001"), None),
+            "http://flag:9001"
+        );
+    }
+
+    #[test]
+    fn test_resolve_base_url_uses_state_when_no_config() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let _env = TestEnvGuard::lock(&tmp.path());
+
+        fs::write(
+            tmp.path().join("state").join("cli-state.json"),
+            r#"{"baseUrl":"http://state:9002"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(resolve_base_url(None, None), "http://state:9002");
     }
 
     // -------------------------------------------------------------------

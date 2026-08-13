@@ -20,6 +20,7 @@
 
 mod args;
 mod commands;
+mod config;
 mod daemon;
 mod help;
 mod http;
@@ -75,8 +76,6 @@ use state::{
     update_async_task_status, write_async_tasks, write_state, CliState, MousePosition,
     Table,
 };
-#[cfg(test)]
-use state::SessionKind;
 
 const VERSION: &str = env!("BROWSER4_CLI_VERSION");
 const TEST_TEMPORARY_PROFILE_ENV: &str = "BROWSER4_CLI_TEST_TEMPORARY_PROFILE";
@@ -2938,6 +2937,84 @@ async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String>
     if !close_summary.errors.is_empty() {
         eprintln!("close-all warnings: {}", close_summary.errors.join(" | "));
     }
+    Ok(())
+}
+
+/// List all persisted CLI configuration values (`config` / `config-list`).
+fn handle_config_list() -> Result<(), String> {
+    let cfg = config::read_config();
+    let path = config::config_path();
+    cli_println!("Config file: {}", path.display());
+    for key in config::VALID_CONFIG_KEYS {
+        match config::config_value(&cfg, key) {
+            Some(value) => {
+                cli_println!("  {:<8} = {}", key, value);
+                json_field(key, json!(value));
+            }
+            None => {
+                cli_println!("  {:<8} = (not set)", key);
+                json_field(key, json!(null));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Get a single persisted CLI configuration value (`config-get`).
+fn handle_config_get(tool_params: &Value) -> Result<(), String> {
+    let key = tool_params
+        .get("key")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+    if !config::VALID_CONFIG_KEYS.contains(&key) {
+        return Err(config::config_unknown_key_error(key));
+    }
+    let cfg = config::read_config();
+    match config::config_value(&cfg, key) {
+        Some(value) => {
+            cli_println!("{}", value);
+            json_field(key, json!(value));
+        }
+        None => {
+            cli_println!("(not set)");
+            json_field(key, json!(null));
+        }
+    }
+    Ok(())
+}
+
+/// Set a persisted CLI configuration value (`config-set`).
+fn handle_config_set(tool_params: &Value) -> Result<(), String> {
+    let key = tool_params
+        .get("key")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+    let value = tool_params
+        .get("value")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let mut cfg = config::read_config();
+    config::config_set_value(&mut cfg, key, value)?;
+    config::write_config(&cfg).map_err(|e| format!("Failed to write config: {e}"))?;
+    cli_println!("Set '{}' = '{}'", key, value);
+    json_field(key, json!(value));
+    Ok(())
+}
+
+/// Remove a persisted CLI configuration value (`config-delete`).
+fn handle_config_delete(tool_params: &Value) -> Result<(), String> {
+    let key = tool_params
+        .get("key")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+    let mut cfg = config::read_config();
+    config::config_delete_value(&mut cfg, key)?;
+    config::write_config(&cfg).map_err(|e| format!("Failed to write config: {e}"))?;
+    cli_println!("Deleted '{}'", key);
+    json_field(key, json!(null));
     Ok(())
 }
 
@@ -14897,6 +14974,11 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "loop"
         && command != "snapshot-list"
         && command != "snapshot-clean"
+        && command != "config"
+        && command != "config-list"
+        && command != "config-get"
+        && command != "config-set"
+        && command != "config-delete"
 }
 
 /// Commands that require a web page to already be loaded in the browser.
@@ -15078,6 +15160,7 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         "snapshot" => format!("snapshot-{}", sub),
         "skills" => format!("skills-{}", sub),
         "plugin" => format!("plugin-{}", sub),
+        "config" => format!("config-{}", sub),
         _ => return None,
     };
     let mut rewritten = vec![rewritten_command];
@@ -15136,6 +15219,10 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "snapshot-clean" => Some("snapshot clean"),
         "webdb-export" => Some("webdb export"),
         "webdb-normalize" => Some("webdb normalize"),
+        "config-list" => Some("config list"),
+        "config-get" => Some("config get"),
+        "config-set" => Some("config set"),
+        "config-delete" => Some("config delete"),
         _ => None,
     }
 }
@@ -16049,12 +16136,41 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
     }
 }
 
+/// Apply persisted CLI config defaults for global flags the user did not
+/// override on the command line or via environment variables.
+///
+/// Precedence (highest first):
+///   server:  `--server` / `BROWSER4_CLI_SERVER`  >  config `server`  >  persisted state
+///   session: `-s` / `--session` / `BROWSER4_CLI_SESSION`  >  config `session`
+///   timeout: `--timeout`  >  config `timeout`
+///   proxy:   `--proxy`  >  config `proxy`
+///
+/// `server` is resolved in `resolve_base_url` (not here) so an explicit
+/// `--server` override keeps its persist-once semantics.
+fn apply_config_defaults(global: &mut GlobalFlags) {
+    let cfg = config::read_config();
+
+    if global.session_name.is_none() {
+        global.session_name = cfg.session.clone();
+    }
+    if global.proxy_url.is_none() {
+        global.proxy_url = cfg.proxy.clone();
+    }
+    if global.timeout_secs.is_none() {
+        if let Some(secs) = cfg.timeout.filter(|s| *s > 0) {
+            global.timeout_secs = Some(secs);
+            http::set_global_timeout_override(secs);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     init_root_search_start_dir_from_startup();
 
     let raw_args: Vec<String> = std::env::args().skip(1).collect();
-    let global = parse_global_flags(&raw_args);
+    let mut global = parse_global_flags(&raw_args);
+    apply_config_defaults(&mut global);
     let json_mode = global.json;
     let (command, effective_global, from_spaced_prefix) = normalize_command_invocation(&global);
 
@@ -16459,6 +16575,18 @@ async fn run(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             handle_list(&client, &base_url, verbose).await?;
+        }
+        "config" | "config-list" => {
+            handle_config_list()?;
+        }
+        "config-get" => {
+            handle_config_get(&tool_params)?;
+        }
+        "config-set" => {
+            handle_config_set(&tool_params)?;
+        }
+        "config-delete" => {
+            handle_config_delete(&tool_params)?;
         }
         "install" => {
             handle_install(&tool_params).await?;
@@ -18312,6 +18440,15 @@ mod tests {
     }
 
     #[test]
+    fn should_not_ensure_server_for_config_commands() {
+        assert!(!should_ensure_server_running("config"));
+        assert!(!should_ensure_server_running("config-list"));
+        assert!(!should_ensure_server_running("config-get"));
+        assert!(!should_ensure_server_running("config-set"));
+        assert!(!should_ensure_server_running("config-delete"));
+    }
+
+    #[test]
     fn should_ensure_server_for_open() {
         assert!(should_ensure_server_running("open"));
     }
@@ -18595,6 +18732,35 @@ mod tests {
     }
 
     #[test]
+    fn rewrite_prefixed_command_supports_config_subcommands() {
+        let rewritten = rewrite_prefixed_command(&[
+            "config".to_string(),
+            "set".to_string(),
+            "server".to_string(),
+            "http://localhost:9090".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "config-set");
+        assert_eq!(rewritten[1], "server");
+        assert_eq!(rewritten[2], "http://localhost:9090");
+
+        let rewritten = rewrite_prefixed_command(&[
+            "config".to_string(),
+            "get".to_string(),
+            "server".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "config-get");
+        assert_eq!(rewritten[1], "server");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_leaves_bare_config_unchanged() {
+        // Bare `config` (no subcommand) is a valid standalone command.
+        assert!(rewrite_prefixed_command(&["config".to_string()]).is_none());
+    }
+
+    #[test]
     fn rewrite_prefixed_command_rejects_legacy_co_prefix() {
         assert!(rewrite_prefixed_command(&["co".to_string(), "create".to_string(),]).is_none());
     }
@@ -18671,6 +18837,24 @@ mod tests {
             preferred_spaced_command_form("htmlsnapshot-get-all"),
             Some("htmlsnapshot get all")
         );
+        assert_eq!(
+            preferred_spaced_command_form("config-list"),
+            Some("config list")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("config-get"),
+            Some("config get")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("config-set"),
+            Some("config set")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("config-delete"),
+            Some("config delete")
+        );
+        // Bare `config` is a valid standalone command, not a spaced form.
+        assert_eq!(preferred_spaced_command_form("config"), None);
     }
 
     #[test]
