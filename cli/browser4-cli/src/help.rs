@@ -238,6 +238,22 @@ pub fn generate_help() -> String {
         30,
     ));
 
+    // Environment variables
+    lines.push(
+        "\n── Environment variables ─────────────────────────────────────────────"
+            .to_string(),
+    );
+    lines.push(format_with_gap(
+        "  BROWSER4_CLI_STATE_DIR=<dir>",
+        "override CLI session state directory (default: ~/.browser4); falls back to ./.browser4-cli-state when unwritable",
+        30,
+    ));
+    lines.push(format_with_gap(
+        "  BROWSER4_RUNTIME_DIR=<dir>",
+        "override Browser4 runtime data directory (JRE, JARs, launchers)",
+        30,
+    ));
+
     lines.push(String::new());
     lines.push(
         "Run `browser4-cli help <command>` or `<command> --help` for detailed options and examples."
@@ -384,11 +400,24 @@ pub fn generate_help_json(sub_command: Option<&str>) -> String {
         "--help-json": {"type": "bool", "description": "Emit this JSON help and exit"},
     });
 
+    // Environment variables
+    let environment_variables = serde_json::json!({
+        "BROWSER4_CLI_STATE_DIR": {
+            "type": "string",
+            "description": "Override CLI session state directory (default: ~/.browser4); falls back to ./.browser4-cli-state when unwritable"
+        },
+        "BROWSER4_RUNTIME_DIR": {
+            "type": "string",
+            "description": "Override Browser4 runtime data directory (JRE, JARs, launchers)"
+        },
+    });
+
     let output = serde_json::json!({
         "cli": "browser4-cli",
         "version": VERSION,
         "usage": "browser4-cli [-s <session>] <command> [args] [options]",
         "global_options": global_options,
+        "environment_variables": environment_variables,
         "categories": categories_json,
         "category_aliases": {
             "nav": "navigation",
@@ -1068,11 +1097,19 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    The command shows \"Using existing session\" and the current page URL when reconnecting."
+            "    The command shows \"Using existing session\", the current page URL, and the number of open tabs when reconnecting."
                 .to_string(),
         );
         lines.push(
             "  - If the saved session is missing or stale, `open` creates a new browser session."
+                .to_string(),
+        );
+        lines.push(
+            "  - When reconnecting, `--headless`/`--headed` are ignored (the display mode is set when the session is created); a warning is printed on stderr."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use `--fresh` to close the current session and start a new one instead of reconnecting, so tabs, cookies, and location state from a prior run are not inherited."
                 .to_string(),
         );
         lines.push(
@@ -1085,9 +1122,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli open https://browser4.io".to_string());
-        lines.push("  browser4-cli open --headed https://browser4.io".to_string());
-        lines.push("  browser4-cli open --headless https://browser4.io".to_string());
+        lines.push("  browser4-cli open https://browser4.io                      # headless (default)".to_string());
+        lines.push("  browser4-cli open --headed https://browser4.io              # visible browser window".to_string());
+        lines.push("  browser4-cli open --headless https://browser4.io            # explicit headless".to_string());
+        lines.push("  browser4-cli open --fresh --headless https://browser4.io    # new session, not a reconnect".to_string());
     }
 
     if cmd.name == "install" {
@@ -2763,6 +2801,9 @@ mod tests {
         assert!(help.contains("-q, --quiet"));
         assert!(help.contains("suppress normal output"));
         assert!(help.contains("--help-json"));
+        assert!(help.contains("Environment variables"));
+        assert!(help.contains("BROWSER4_CLI_STATE_DIR"));
+        assert!(help.contains("BROWSER4_RUNTIME_DIR"));
     }
 
     #[test]
@@ -3381,6 +3422,9 @@ mod tests {
         assert!(json.contains("\"version\""));
         assert!(json.contains("\"usage\""));
         assert!(json.contains("\"global_options\""));
+        assert!(json.contains("\"environment_variables\""));
+        assert!(json.contains("\"BROWSER4_CLI_STATE_DIR\""));
+        assert!(json.contains("\"BROWSER4_RUNTIME_DIR\""));
         assert!(json.contains("\"categories\""));
         assert!(json.contains("\"category_aliases\""));
         // Should contain some well-known commands

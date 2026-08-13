@@ -15,7 +15,11 @@ import ai.platon.pulsar.agentic.tools.builtin.*
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationRenderer
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.api.AbstractBrowser
+import ai.platon.pulsar.api.AbstractWebDriver
 import ai.platon.pulsar.api.WebDriver
+import ai.platon.pulsar.chrome.Browser4WebDriver
+import ai.platon.pulsar.chrome.PulsarWebDriver
 import kotlinx.coroutines.delay
 import java.nio.file.Path
 import kotlin.time.Duration.Companion.milliseconds
@@ -270,7 +274,23 @@ class AgentToolManager constructor(
         topDomain = domainAlias.getOrDefault(topDomain, topDomain)
         val evaluate = when (topDomain) {
             "tab" -> executor.callFunctionOn(normalized, driver)
-            "browser" -> executor.callFunctionOn(normalized, driver.browser)
+            "browser" -> {
+                // A closeTab without index/tabId means "close the current tab".
+                // Resolve it against the session-bound driver: browser.frontDriver
+                // is not reliably maintained (it dangles after the previously
+                // active tab is destroyed and depends on the bringToFront CDP
+                // round-trip), so a stale frontDriver makes closeTab silently
+                // destroy nothing.  The bound driver is what every other tool
+                // operates on, so it defines "current" here.
+                val resolved = if (normalized.method == "closeTab" && !targetsSpecificTab(normalized.arguments)) {
+                    (driver as? AbstractWebDriver)?.let { current ->
+                        normalized.copy(
+                            arguments = (normalized.arguments + ("tabId" to current.guid)).toMutableMap()
+                        )
+                    } ?: normalized
+                } else normalized
+                executor.callFunctionOn(resolved, driver.browser)
+            }
             "fs" -> executor.callFunctionOn(normalized, fs)
             "shell" -> executor.callFunctionOn(normalized, shell)
             "agent" -> executor.callFunctionOn(normalized, agent)
@@ -318,7 +338,7 @@ class AgentToolManager constructor(
 
         val method = tc.method
         when (method) {
-            "switchTab" -> onDidSwitchTab(evaluate)
+            "switchTab" -> onDidSwitchTab(tc, evaluate)
             "closeTab" -> onDidCloseTab()
             "navigate" -> onDidNavigate(driver, tc, evaluate)
         }
@@ -329,28 +349,75 @@ class AgentToolManager constructor(
     /**
      * Handle switching to a new tab by binding the target driver to the session.
      *
-     * Uses the driver returned by [BrowserToolExecutor.switchTab] (via [evaluate.value])
-     * as the primary source of truth — no need to re-derive it from [session.boundBrowser].
+     * The driver returned by [BrowserToolExecutor.switchTab] is wrapped into a
+     * description map by [AbstractToolExecutor.callFunctionOn] (WebDriver is not
+     * a serializable scalar), so [evaluate.value] can never be a WebDriver.
+     * Resolve the target driver from the tool-call arguments (`tabId` or
+     * `index`) against [session.boundBrowser] instead; fall back to the
+     * browser's front driver when neither can be resolved.
      */
-    private fun onDidSwitchTab(evaluate: TcEvaluate) {
+    private suspend fun onDidSwitchTab(tc: ToolCall, evaluate: TcEvaluate) {
         val switchedDriver = evaluate.value as? WebDriver
-        if (switchedDriver == null) {
-            logger.warn("! switchTab did not return a WebDriver; falling back to boundBrowser")
-            val fallback = session.boundBrowser?.frontDriver
-            if (fallback == null) {
-                logger.warn("! No driver is in front after switchTab")
-                return
-            }
-            session.bindDriver(fallback)
+        if (switchedDriver != null) {
+            bindSwappedDriver(switchedDriver)
             return
         }
 
-        val oldBoundDriver = session.boundDriver
-        if (switchedDriver == oldBoundDriver) {
-            logger.warn("! The bound driver does not change after switchTab")
+        val browser = session.boundBrowser
+        if (browser == null) {
+            logger.warn("! switchTab did not return a WebDriver and no browser is bound")
+            return
         }
 
-        session.bindDriver(switchedDriver)
+        // Resolve from tabId (GUID) or index — the same arguments that
+        // BrowserToolExecutor.resolveTabDriver uses.
+        val tabId = tc.arguments["tabId"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+        val index = (tc.arguments["index"] as? Number)?.toInt()
+            ?: tc.arguments["index"]?.toString()?.trim()
+                ?.takeIf { it.isNotEmpty() }?.toIntOrNull()
+        val resolved = when {
+            tabId != null -> browser.drivers[tabId]
+            index != null -> browser.listDrivers().filterIsInstance<WebDriver>().getOrNull(index)
+            else -> null
+        }
+        if (resolved != null) {
+            bindSwappedDriver(resolved)
+            return
+        }
+
+        // Last resort: bind whatever the browser reports as front.  Note that
+        // bringToFront() may not have committed the switch yet, so this can
+        // still bind the previous tab — log it for diagnosis.
+        logger.warn("! switchTab resolved no driver (tabId={}, index={}); falling back to frontDriver", tabId, index)
+        val fallback = browser.frontDriver
+        if (fallback == null) {
+            logger.warn("! No driver is in front after switchTab")
+            return
+        }
+        bindSwappedDriver(fallback)
+    }
+
+    /**
+     * Bind [driver] to the session, swapping it to a [Browser4WebDriver] first
+     * when it is a plain [PulsarWebDriver].
+     *
+     * The session's bean registry keys beans by their concrete class name, and
+     * [session.boundDriver] returns the *first* bean assignable to WebDriver in
+     * insertion order.  Browser tabs created by PulsarBrowser are plain
+     * PulsarWebDriver instances, while the session's bound driver is a
+     * Browser4WebDriver.  Binding the raw tab driver would therefore add a
+     * second WebDriver bean that boundDriver never sees — the old driver keeps
+     * winning.  The Browser4WebDriver.from swap is a pure binding replacement
+     * (same chromeTab, BrowserProtocol, and browser), so the swapped driver
+     * replaces the existing bean and the session follows the switch.
+     */
+    private fun bindSwappedDriver(driver: WebDriver) {
+        val bound = when {
+            driver is Browser4WebDriver -> driver
+            driver is PulsarWebDriver -> Browser4WebDriver.from(driver)
+            else -> driver
+        }
+        session.bindDriver(bound)
     }
 
     /**
@@ -366,8 +433,9 @@ class AgentToolManager constructor(
      * follow-up calls see the correct page.
      */
     private suspend fun onDidCloseTab() {
+        val browser = session.boundBrowser
         val oldBoundDriver = session.boundDriver ?: return
-        val remainingDrivers = session.boundBrowser?.listDrivers().orEmpty()
+        val remainingDrivers = browser?.listDrivers().orEmpty()
 
         // If the old bound driver is still present in the browser's driver list, the
         // tab was not actually destroyed (edge case or destroyDriver was a no-op).
@@ -383,9 +451,32 @@ class AgentToolManager constructor(
             return
         }
 
-        session.bindDriver(newFront)
+        // destroyDriver never clears frontDriver, so it dangles whenever the front
+        // tab was the one closed.  Repair it to the new front so that listTabs'
+        // active flag and a targetless closeTab stay coherent.  The Browser
+        // interface only exposes frontDriver as a getter, hence the cast.
+        val abstractBrowser = browser as? AbstractBrowser
+        val oldGuid = (oldBoundDriver as? AbstractWebDriver)?.guid
+        if (abstractBrowser != null && oldGuid != null &&
+            (abstractBrowser.frontDriver as? AbstractWebDriver)?.guid == oldGuid
+        ) {
+            abstractBrowser.frontDriver = newFront
+        }
+
+        bindSwappedDriver(newFront)
         logger.info("👀 Session driver rebound after closeTab: {} -> {}",
             oldBoundDriver, newFront)
+    }
+
+    /**
+     * True when [arguments] already targets a specific tab for closeTab,
+     * i.e. carries a non-empty `index` or `tabId`.
+     */
+    private fun targetsSpecificTab(arguments: Map<String, Any?>): Boolean {
+        val index = arguments["index"]
+        if (index is Number) return true
+        if (index is String && index.trim().isNotEmpty()) return true
+        return !arguments["tabId"]?.toString()?.trim().isNullOrEmpty()
     }
 
     /**

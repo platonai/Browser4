@@ -67,7 +67,23 @@ class BrowserToolExecutor : AbstractToolExecutor() {
         return when (functionName) {
             "switchTab" -> {
                 val driver = resolveTabDriver(browser, args, functionName, allowCurrentTab = false)
-                driver.bringToFront()
+                try {
+                    driver.bringToFront()
+                } catch (e: Exception) {
+                    // Page.bringToFront can fail (e.g. while the previously
+                    // front tab's window is still being torn down).  The switch
+                    // is still what the caller asked for, so record it on the
+                    // browser regardless of the CDP outcome.
+                    logger.warn("! bringToFront failed for tab {}; recording switch anyway", driver.guid, e)
+                }
+                // Set explicitly: upstream only sets frontDriver after the CDP
+                // round-trip succeeds, so a swallowed failure leaves it stale.
+                browser.frontDriver = driver
+                // The CDP activation may return before the browser has fully
+                // committed the tab switch.  A short delay gives the rendering
+                // pipeline time to settle so that a subsequent evaluate/call
+                // targets the correct page.
+                kotlinx.coroutines.delay(200)
                 logger.info("""👀 Switched to tab {}""", driver.guid)
                 driver
             }
@@ -124,7 +140,14 @@ class BrowserToolExecutor : AbstractToolExecutor() {
         }
 
         if (allowCurrentTab) {
-            return (browser.frontDriver as? AbstractWebDriver)
+            // frontDriver is not cleared by destroyDriver and is only updated
+            // after bringToFront's CDP round-trip, so it can dangle after the
+            // previously active tab was closed.  Destroying a dangling driver
+            // is a silent no-op that leaves every tab open; only accept the
+            // front driver when it is still a live driver of this browser.
+            val front = (browser.frontDriver as? AbstractWebDriver)
+                ?.takeIf { browser.drivers.containsKey(it.guid) }
+            return front
                 ?: browser.listDrivers().filterIsInstance<AbstractWebDriver>().firstOrNull()
                 ?: throw IllegalArgumentException("No browser tabs are currently open")
         }

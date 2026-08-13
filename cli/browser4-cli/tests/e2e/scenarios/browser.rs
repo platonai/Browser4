@@ -1389,7 +1389,12 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
     // We are currently on the interactive tab (first tab, front after close).
     // Switch to form tab first, then close it without args.
     let form_idx_after = extract_tab_index(&after_close_output, &form_url).to_string();
-    run_command(ctx, &["tab-select", &form_idx_after]);
+    let select_result = run_command(ctx, &["tab-select", &form_idx_after]);
+    assert_eq!(
+        select_result.exit_code, 0,
+        "Expected tab-select {form_idx_after} to succeed before no-arg tab-close:\nstdout: {}\nstderr: {}",
+        select_result.stdout, select_result.stderr
+    );
     run_command(ctx, &["tab-close"]); // closes current tab (form)
     let deadline2 = std::time::Instant::now() + std::time::Duration::from_millis(5_000);
     let mut remaining_output = String::new();

@@ -129,7 +129,9 @@ application-private.properties
 */**/py/dom/
 */**/human-private/
 .browser4-cli/
+.browser4-cli-state/
 */**/.browser4-cli/
+*/**/.browser4-cli-state/
 /**/dist/**
 
 browser4-cli-linux-arm64

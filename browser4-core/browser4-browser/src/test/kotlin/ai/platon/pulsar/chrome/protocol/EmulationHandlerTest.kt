@@ -3,6 +3,7 @@ package ai.platon.pulsar.chrome.protocol
 import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.api.model.NodeRef
 import ai.platon.cdt.kt.protocol.types.dom.BoxModel
+import ai.platon.cdt.kt.protocol.types.input.DispatchKeyEventType
 import ai.platon.cdt.kt.protocol.types.page.LayoutMetrics
 import ai.platon.pulsar.common.math.geometric.PointD
 import kotlinx.coroutines.runBlocking
@@ -504,6 +505,63 @@ class EmulationHandlerTest {
 
             verify(bp, atLeast(4)).dispatchKeyEvent(any(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull())
             verify(bp).insertText("!")
+        }
+    }
+
+    // =========================================================================
+    // Keyboard — modifier state across keyDown/press/keyUp
+    // =========================================================================
+
+    @Nested
+    @DisplayName("Keyboard modifier state")
+    inner class KeyboardModifiers {
+
+        @Test
+        @DisplayName("keyDown Control then press a dispatches keyDown for a with ctrl modifier")
+        fun keyDownControlThenPressCarriesCtrlModifier() = runBlocking {
+            // The stateful path used by Browser4WebDriver.keyDown: holding a
+            // modifier must populate Keyboard.pressedModifiers so that a
+            // subsequent press() carries the modifier bitmask (Control=2).
+            // The Control keyDown itself is dispatched as RAW_KEY_DOWN; the
+            // "a" keyDown arrives as KEY_DOWN, which is what we pin here.
+            keyboard.down("Control")
+            keyboard.press("a", delayMillis = 0)
+
+            verify(bp).dispatchKeyEvent(
+                eq(DispatchKeyEventType.KEY_DOWN),
+                eq(2),
+                anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(),
+                anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull()
+            )
+        }
+
+        @Test
+        @DisplayName("keyUp Control clears modifier for subsequent presses")
+        fun keyUpControlClearsModifier() = runBlocking {
+            keyboard.down("Control")
+            keyboard.up("Control")
+            keyboard.press("a", delayMillis = 0)
+
+            // After Control is released, "a" must carry no modifiers.
+            verify(bp).dispatchKeyEvent(
+                eq(DispatchKeyEventType.KEY_DOWN),
+                eq(0),
+                anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(),
+                anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull()
+            )
+        }
+
+        @Test
+        @DisplayName("press without prior keyDown dispatches no modifiers")
+        fun pressWithoutModifierState() = runBlocking {
+            keyboard.press("a", delayMillis = 0)
+
+            verify(bp).dispatchKeyEvent(
+                eq(DispatchKeyEventType.KEY_DOWN),
+                eq(0),
+                anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(),
+                anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull()
+            )
         }
     }
 

@@ -20,6 +20,7 @@
 
 mod args;
 mod commands;
+mod config;
 mod daemon;
 mod help;
 mod http;
@@ -75,8 +76,6 @@ use state::{
     update_async_task_status, write_async_tasks, write_state, CliState, MousePosition,
     Table,
 };
-#[cfg(test)]
-use state::SessionKind;
 
 const VERSION: &str = env!("BROWSER4_CLI_VERSION");
 const TEST_TEMPORARY_PROFILE_ENV: &str = "BROWSER4_CLI_TEST_TEMPORARY_PROFILE";
@@ -444,6 +443,16 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
 fn require_session(session_name: Option<&str>) -> Result<CliState, String> {
     let state = read_state(None, session_name);
     if state.session_id.is_none() {
+        // When no explicit session name is given and the default slot is
+        // empty, check whether a SWARM session exists.  Commands like
+        // extract / summarize / agent run that follow `swarm create` should
+        // automatically target the active swarm session.
+        if session_name.is_none() {
+            let swarm_state = read_state(None, Some(SWARM_SESSION_ID));
+            if swarm_state.session_id.is_some() {
+                return Ok(swarm_state);
+            }
+        }
         return Err(no_active_session_message());
     }
     Ok(state)
@@ -899,9 +908,9 @@ fn build_open_session_capabilities_with_test_mode(
         caps["profileMode"] = pm.clone();
     }
 
-    if let Some(h) = tool_params.get("headed") {
-        caps["headed"] = h.clone();
-    }
+    // Default to headless when no explicit headed/headless preference is given.
+    let headed = tool_params.get("headed").cloned().unwrap_or(json!(false));
+    caps["headed"] = headed;
 
     let persistent = tool_params
         .get("persistent")
@@ -1067,7 +1076,7 @@ async fn get_or_create_navigation_session(
 
     let reusable_session_id =
         find_reusable_persisted_session_id(client, base_url, &state, session_name).await?;
-    let reused_existing_session = reusable_session_id.is_some();
+    let mut reused_existing_session = reusable_session_id.is_some();
     let session_id = if let Some(existing_id) = reusable_session_id {
         // When force_new_session is set (e.g., `open` command), if the
         // existing session is an attached session (CDP or extension),
@@ -1098,6 +1107,34 @@ async fn get_or_create_navigation_session(
                 "{}",
                 format_session_opened_message(session_name, &new_id)
             );
+            reused_existing_session = false;
+            new_id
+        } else if tool_params.get("fresh").and_then(Value::as_bool) == Some(true) {
+            // `--fresh` explicitly overrides session reuse: close the
+            // existing session so its tabs, cookies, and location state
+            // don't leak into the new one.  (Attached sessions are handled
+            // by the branch above — closing them would kill the user's
+            // real browser window.)
+            cli_println!(
+                "Closing existing session {} — starting fresh (--fresh).",
+                existing_id
+            );
+            let _ = call_tool(
+                client,
+                base_url,
+                "close_session",
+                json!({ "sessionId": existing_id }),
+            )
+            .await;
+            invalidate_session(&state, base_url, session_name);
+            let capabilities = build_open_session_capabilities(tool_params);
+            let new_id =
+                create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
+            cli_println!(
+                "{}",
+                format_session_opened_message(session_name, &new_id)
+            );
+            reused_existing_session = false;
             new_id
         } else {
             existing_id
@@ -1225,6 +1262,17 @@ async fn get_or_create_navigation_session(
 
     // When reconnecting to an existing session, inform the user what page is active
     if reused_existing_session {
+        // A `headed` key in the params means the user passed --headless/--headed
+        // explicitly, but the display mode was fixed when the session was
+        // created — surface that the flag is being ignored instead of silently
+        // reconnecting with different settings than requested.
+        if let Some(headed) = tool_params.get("headed").and_then(Value::as_bool) {
+            let flag = if headed { "--headed" } else { "--headless" };
+            eprintln!(
+                "browser4-cli: warning: {flag} ignored: reconnecting to existing session \
+                 (close it first or use `open --fresh` to start a new one)"
+            );
+        }
         if let Ok(url_result) = call_tool(
             client,
             base_url,
@@ -1236,7 +1284,32 @@ async fn get_or_create_navigation_session(
                     Some(name) => format!("{} ({})", name, session_id),
                     None => "DEFAULT".to_string(),
                 };
-                cli_println!("Using existing session {} (current page: {}).", label, url_result);
+                // Count the tabs inherited from the prior run so the user can
+                // see at a glance that unrelated state came along with the
+                // reconnect.
+                let tab_count = call_tool(
+                    client,
+                    base_url,
+                    "browser_tabs",
+                    json!({ "sessionId": session_id, "action": "list" }),
+                )
+                .await
+                .map(|tabs| parse_tab_list(&tabs).len())
+                .unwrap_or(0);
+                let tab_note = if tab_count > 1 {
+                    format!("; {tab_count} tabs")
+                } else {
+                    String::new()
+                };
+                cli_println!(
+                    "Using existing session {} (current page: {}{}).",
+                    label,
+                    url_result,
+                    tab_note
+                );
+                if tab_count > 1 {
+                    json_field("tabs", json!(tab_count));
+                }
             }
         }
     }
@@ -2690,14 +2763,17 @@ async fn handle_tab_close(
         .map(String::from);
 
     let closed_tab_info = tabs_before.as_ref().and_then(|tabs| {
+        // No index, no guid → closing the current tab: the active one (the
+        // backend resolves the target from the session-bound driver), falling
+        // back to the first tab when none is marked active.
+        let current = tabs.iter().find(|t| t.active).map(|t| t.index).unwrap_or(0);
         tabs.iter().find(|t| {
             if let Some(idx) = index_opt {
                 t.index == idx
             } else if let Some(ref g) = guid_opt {
                 t.guid.as_deref() == Some(g.as_str())
             } else {
-                // No index, no guid → closing current tab (first tab)
-                t.index == 0
+                t.index == current
             }
         })
     });
@@ -2861,6 +2937,84 @@ async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String>
     if !close_summary.errors.is_empty() {
         eprintln!("close-all warnings: {}", close_summary.errors.join(" | "));
     }
+    Ok(())
+}
+
+/// List all persisted CLI configuration values (`config` / `config-list`).
+fn handle_config_list() -> Result<(), String> {
+    let cfg = config::read_config();
+    let path = config::config_path();
+    cli_println!("Config file: {}", path.display());
+    for key in config::VALID_CONFIG_KEYS {
+        match config::config_value(&cfg, key) {
+            Some(value) => {
+                cli_println!("  {:<8} = {}", key, value);
+                json_field(key, json!(value));
+            }
+            None => {
+                cli_println!("  {:<8} = (not set)", key);
+                json_field(key, json!(null));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Get a single persisted CLI configuration value (`config-get`).
+fn handle_config_get(tool_params: &Value) -> Result<(), String> {
+    let key = tool_params
+        .get("key")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+    if !config::VALID_CONFIG_KEYS.contains(&key) {
+        return Err(config::config_unknown_key_error(key));
+    }
+    let cfg = config::read_config();
+    match config::config_value(&cfg, key) {
+        Some(value) => {
+            cli_println!("{}", value);
+            json_field(key, json!(value));
+        }
+        None => {
+            cli_println!("(not set)");
+            json_field(key, json!(null));
+        }
+    }
+    Ok(())
+}
+
+/// Set a persisted CLI configuration value (`config-set`).
+fn handle_config_set(tool_params: &Value) -> Result<(), String> {
+    let key = tool_params
+        .get("key")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+    let value = tool_params
+        .get("value")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let mut cfg = config::read_config();
+    config::config_set_value(&mut cfg, key, value)?;
+    config::write_config(&cfg).map_err(|e| format!("Failed to write config: {e}"))?;
+    cli_println!("Set '{}' = '{}'", key, value);
+    json_field(key, json!(value));
+    Ok(())
+}
+
+/// Remove a persisted CLI configuration value (`config-delete`).
+fn handle_config_delete(tool_params: &Value) -> Result<(), String> {
+    let key = tool_params
+        .get("key")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+    let mut cfg = config::read_config();
+    config::config_delete_value(&mut cfg, key)?;
+    config::write_config(&cfg).map_err(|e| format!("Failed to write config: {e}"))?;
+    cli_println!("Deleted '{}'", key);
+    json_field(key, json!(null));
     Ok(())
 }
 
@@ -7506,10 +7660,14 @@ fn strip_html_scripts_and_styles(html: &str) -> String {
     while i < len {
         // Check for <script or <style tag (case-insensitive)
         if bytes[i] == b'<' && i + 7 < len {
-            let tag_check = &lower[i..std::cmp::min(i + 8, lower.len())];
-            let (close_tag, tag_len) = if tag_check.starts_with("<script") {
+            // `i` points at an ASCII '<', so it is always a char boundary.
+            // Slice to the end (`starts_with` is prefix-safe) instead of a
+            // fixed 8-byte window, which panics when the window end falls
+            // inside a multi-byte char (e.g. CJK right after "<style"/"<script").
+            let rest = &lower[i..];
+            let (close_tag, tag_len) = if rest.starts_with("<script") {
                 ("</script>", 7usize)
-            } else if tag_check.starts_with("<style") {
+            } else if rest.starts_with("<style") {
                 ("</style>", 7usize)
             } else {
                 ("", 0)
@@ -14816,6 +14974,11 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "loop"
         && command != "snapshot-list"
         && command != "snapshot-clean"
+        && command != "config"
+        && command != "config-list"
+        && command != "config-get"
+        && command != "config-set"
+        && command != "config-delete"
 }
 
 /// Commands that require a web page to already be loaded in the browser.
@@ -14862,7 +15025,7 @@ fn validate_required_args(cmd_def: &commands::CommandDef, parsed: &HashMap<Strin
     for arg in cmd_def.args {
         if !arg.optional {
             let has_value = match parsed.get(arg.name) {
-                Some(Value::String(s)) => !s.is_empty(),
+                Some(Value::String(_)) => true, // empty string "" is a valid explicit value
                 Some(Value::Number(_)) => true,
                 Some(Value::Bool(_)) => true,
                 Some(Value::Array(arr)) => !arr.is_empty(),
@@ -14997,6 +15160,7 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         "snapshot" => format!("snapshot-{}", sub),
         "skills" => format!("skills-{}", sub),
         "plugin" => format!("plugin-{}", sub),
+        "config" => format!("config-{}", sub),
         _ => return None,
     };
     let mut rewritten = vec![rewritten_command];
@@ -15055,6 +15219,10 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "snapshot-clean" => Some("snapshot clean"),
         "webdb-export" => Some("webdb export"),
         "webdb-normalize" => Some("webdb normalize"),
+        "config-list" => Some("config list"),
+        "config-get" => Some("config get"),
+        "config-set" => Some("config set"),
+        "config-delete" => Some("config delete"),
         _ => None,
     }
 }
@@ -15968,12 +16136,41 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
     }
 }
 
+/// Apply persisted CLI config defaults for global flags the user did not
+/// override on the command line or via environment variables.
+///
+/// Precedence (highest first):
+///   server:  `--server` / `BROWSER4_CLI_SERVER`  >  config `server`  >  persisted state
+///   session: `-s` / `--session` / `BROWSER4_CLI_SESSION`  >  config `session`
+///   timeout: `--timeout`  >  config `timeout`
+///   proxy:   `--proxy`  >  config `proxy`
+///
+/// `server` is resolved in `resolve_base_url` (not here) so an explicit
+/// `--server` override keeps its persist-once semantics.
+fn apply_config_defaults(global: &mut GlobalFlags) {
+    let cfg = config::read_config();
+
+    if global.session_name.is_none() {
+        global.session_name = cfg.session.clone();
+    }
+    if global.proxy_url.is_none() {
+        global.proxy_url = cfg.proxy.clone();
+    }
+    if global.timeout_secs.is_none() {
+        if let Some(secs) = cfg.timeout.filter(|s| *s > 0) {
+            global.timeout_secs = Some(secs);
+            http::set_global_timeout_override(secs);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     init_root_search_start_dir_from_startup();
 
     let raw_args: Vec<String> = std::env::args().skip(1).collect();
-    let global = parse_global_flags(&raw_args);
+    let mut global = parse_global_flags(&raw_args);
+    apply_config_defaults(&mut global);
     let json_mode = global.json;
     let (command, effective_global, from_spaced_prefix) = normalize_command_invocation(&global);
 
@@ -16378,6 +16575,18 @@ async fn run(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             handle_list(&client, &base_url, verbose).await?;
+        }
+        "config" | "config-list" => {
+            handle_config_list()?;
+        }
+        "config-get" => {
+            handle_config_get(&tool_params)?;
+        }
+        "config-set" => {
+            handle_config_set(&tool_params)?;
+        }
+        "config-delete" => {
+            handle_config_delete(&tool_params)?;
         }
         "install" => {
             handle_install(&tool_params).await?;
@@ -17986,10 +18195,10 @@ mod tests {
     }
 
     #[test]
-    fn build_open_session_capabilities_without_headed_does_not_set_key() {
+    fn build_open_session_capabilities_defaults_to_headless() {
         let caps = build_open_session_capabilities_with_test_mode(&json!({}), false);
 
-        assert!(caps.get("headed").is_none());
+        assert_eq!(caps["headed"], json!(false));
     }
 
     #[test]
@@ -18231,6 +18440,15 @@ mod tests {
     }
 
     #[test]
+    fn should_not_ensure_server_for_config_commands() {
+        assert!(!should_ensure_server_running("config"));
+        assert!(!should_ensure_server_running("config-list"));
+        assert!(!should_ensure_server_running("config-get"));
+        assert!(!should_ensure_server_running("config-set"));
+        assert!(!should_ensure_server_running("config-delete"));
+    }
+
+    #[test]
     fn should_ensure_server_for_open() {
         assert!(should_ensure_server_running("open"));
     }
@@ -18397,7 +18615,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_required_args_fails_when_required_empty_string() {
+    fn validate_required_args_accepts_empty_string_as_valid_value() {
         let cmd_def = commands::CommandDef {
             name: "test-cmd",
             description: "",
@@ -18411,8 +18629,12 @@ mod tests {
             tool_params_fn: |_| json!({}),
         };
         let mut parsed = HashMap::new();
-        parsed.insert("url".to_string(), json!("")); // empty string
-        let err = validate_required_args(&cmd_def, &parsed).unwrap_err();
+        parsed.insert("url".to_string(), json!("")); // empty string is valid
+        // Should NOT error — explicitly providing "" is a valid value.
+        validate_required_args(&cmd_def, &parsed).expect("empty string should be accepted");
+        // But truly missing args should still fail.
+        let empty = HashMap::new();
+        let err = validate_required_args(&cmd_def, &empty).unwrap_err();
         assert!(err.contains("Missing required argument"));
     }
 
@@ -18510,6 +18732,35 @@ mod tests {
     }
 
     #[test]
+    fn rewrite_prefixed_command_supports_config_subcommands() {
+        let rewritten = rewrite_prefixed_command(&[
+            "config".to_string(),
+            "set".to_string(),
+            "server".to_string(),
+            "http://localhost:9090".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "config-set");
+        assert_eq!(rewritten[1], "server");
+        assert_eq!(rewritten[2], "http://localhost:9090");
+
+        let rewritten = rewrite_prefixed_command(&[
+            "config".to_string(),
+            "get".to_string(),
+            "server".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "config-get");
+        assert_eq!(rewritten[1], "server");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_leaves_bare_config_unchanged() {
+        // Bare `config` (no subcommand) is a valid standalone command.
+        assert!(rewrite_prefixed_command(&["config".to_string()]).is_none());
+    }
+
+    #[test]
     fn rewrite_prefixed_command_rejects_legacy_co_prefix() {
         assert!(rewrite_prefixed_command(&["co".to_string(), "create".to_string(),]).is_none());
     }
@@ -18586,6 +18837,24 @@ mod tests {
             preferred_spaced_command_form("htmlsnapshot-get-all"),
             Some("htmlsnapshot get all")
         );
+        assert_eq!(
+            preferred_spaced_command_form("config-list"),
+            Some("config list")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("config-get"),
+            Some("config get")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("config-set"),
+            Some("config set")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("config-delete"),
+            Some("config delete")
+        );
+        // Bare `config` is a valid standalone command, not a spaced form.
+        assert_eq!(preferred_spaced_command_form("config"), None);
     }
 
     #[test]
@@ -19849,6 +20118,32 @@ mod tests {
         let opts = make_grep_opts("absent");
         let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_strip_html_scripts_and_styles_cjk_after_style_tag() {
+        // Regression: a CJK char immediately after `<style>` puts the 8-byte
+        // tag window's end inside a multi-byte char, which used to panic with
+        // "end byte index ... is not a char boundary".
+        let html = "<style>中文字体{}</style>正文内容";
+        let result = strip_html_scripts_and_styles(html);
+        assert!(result.contains("正文内容"));
+        assert!(!result.contains("中文字体"));
+    }
+
+    #[test]
+    fn test_strip_html_scripts_and_styles_cjk_after_script_tag() {
+        let html = "<script>alert('中文')</script>后文";
+        let result = strip_html_scripts_and_styles(html);
+        assert!(result.contains("后文"));
+        assert!(!result.contains("alert"));
+    }
+
+    #[test]
+    fn test_strip_html_scripts_and_styles_no_tags_unchanged() {
+        let html = "纯文本，无标签 <b>加粗</b>";
+        let result = strip_html_scripts_and_styles(html);
+        assert_eq!(result, html);
     }
 
     // -----------------------------------------------------------------------

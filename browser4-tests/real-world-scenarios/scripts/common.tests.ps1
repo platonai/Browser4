@@ -285,6 +285,10 @@ Write-Host '━━━ $generalPrompt (Dev Mode) ━━━' -ForegroundColor Yell
     Assert-NotContains 'should NOT contain browser4-cli help' $generalPrompt 'browser4-cli help'
     Assert-NotContains 'should NOT contain browser4.io' $generalPrompt 'browser4.io'
 
+    Write-TestGroup 'invocation anti-pattern guard (dev)'
+    Assert-NotContains 'should NOT contain $(./b4w.ps1) anti-pattern' $generalPrompt '$(./b4w.ps1)'
+    Assert-NotContains 'should NOT contain unexpanded $(' $generalPrompt '$('
+
     Write-TestGroup 'first-time user language'
     Assert-Contains 'mentions first-time user' $generalPrompt 'first-time user'
     Assert-Contains 'mentions new user' $generalPrompt 'new user'
@@ -307,6 +311,10 @@ Write-Host '━━━ $generalPrompt (Production Mode) ━━━' -ForegroundCol
     Assert-Contains 'contains browser4.io' $generalPrompt 'browser4.io'
     Assert-NotContains 'should NOT contain ./b4w.ps1 help' $generalPrompt './b4w.ps1 help'
     Assert-NotContains 'should NOT contain skills/browser4-cli/SKILL.md' $generalPrompt 'skills/browser4-cli/SKILL.md'
+
+    Write-TestGroup 'invocation anti-pattern guard (production)'
+    Assert-NotContains 'should NOT contain $(./b4w.ps1) anti-pattern' $generalPrompt '$(./b4w.ps1)'
+    Assert-NotContains 'should NOT contain unexpanded $(' $generalPrompt '$('
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -515,6 +523,69 @@ Write-Host '━━━ Get-ScenarioAgent: Backend Detection (opencode, codex, dsh
         ($commonContent -match 'Get-Command codex.*return.*codex')
     Assert-True 'Auto-detection includes dsh' `
         ($commonContent -match 'Get-Command dsh.*return.*dsh')
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 7c: Get-ScenarioAgent — $env:BROWSER4_AGENT override
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ Get-ScenarioAgent: BROWSER4_AGENT Env Var ━━━' -ForegroundColor Yellow
+
+& {
+    $browser4cliMode = 'dev'
+    . "$PSScriptRoot/common.ps1"
+
+    # Ensure no script-level override interferes
+    $script:scenarioAgentCli = $null
+
+    Write-TestGroup 'BROWSER4_AGENT=claude returns claude'
+    $orig = $env:BROWSER4_AGENT
+    try {
+        $env:BROWSER4_AGENT = 'claude'
+        $resolved = Get-ScenarioAgent
+        Assert-Equal 'Returns claude' 'claude' $resolved
+    } finally { $env:BROWSER4_AGENT = $orig }
+
+    Write-TestGroup 'BROWSER4_AGENT=kimi returns kimi'
+    try {
+        $env:BROWSER4_AGENT = 'kimi'
+        $resolved = Get-ScenarioAgent
+        Assert-Equal 'Returns kimi' 'kimi' $resolved
+    } finally { $env:BROWSER4_AGENT = $orig }
+
+    Write-TestGroup 'BROWSER4_AGENT=dsh returns dsh'
+    try {
+        $env:BROWSER4_AGENT = 'dsh'
+        $resolved = Get-ScenarioAgent
+        Assert-Equal 'Returns dsh' 'dsh' $resolved
+    } finally { $env:BROWSER4_AGENT = $orig }
+
+    Write-TestGroup 'BROWSER4_AGENT=unknown falls through to auto-detect'
+    try {
+        $env:BROWSER4_AGENT = 'nonexistent-agent'
+        $resolved = Get-ScenarioAgent
+        Assert-True 'Fallback returns something' ($null -ne $resolved)
+        Assert-True 'Not the unknown value' ($resolved -ne 'nonexistent-agent')
+    } finally { $env:BROWSER4_AGENT = $orig }
+
+    Write-TestGroup 'BROWSER4_AGENT with whitespace is trimmed'
+    try {
+        $env:BROWSER4_AGENT = '  dsh  '
+        $resolved = Get-ScenarioAgent
+        Assert-Equal 'Returns dsh after trim' 'dsh' $resolved
+    } finally { $env:BROWSER4_AGENT = $orig }
+
+    Write-TestGroup '$script:scenarioAgentCli still wins over BROWSER4_AGENT'
+    try {
+        $env:BROWSER4_AGENT = 'dsh'
+        $script:scenarioAgentCli = 'codex'
+        $resolved = Get-ScenarioAgent
+        Assert-Equal 'script override wins' 'codex' $resolved
+    } finally {
+        $env:BROWSER4_AGENT = $orig
+        $script:scenarioAgentCli = $null
+    }
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

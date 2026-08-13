@@ -296,8 +296,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "url", description: "The URL to navigate to", optional: true }],
             options: &[
-                OptionDef { name: "headed", description: "Run browser in headed mode", is_bool: true, short: None },
-                OptionDef { name: "headless", description: "Run browser in headless mode", is_bool: true, short: None },
+                OptionDef { name: "headed", description: "Run browser in headed (GUI) mode. Default is headless.", is_bool: true, short: None },
+                OptionDef { name: "headless", description: "Run browser in headless mode (this is the default)", is_bool: true, short: None },
+                OptionDef { name: "fresh", description: "Close the current session and start a new one instead of reconnecting", is_bool: true, short: None },
                 OptionDef { name: "profile", description: "Path to browser profile directory", is_bool: false, short: None },
                 OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, sequential, default)", is_bool: false, short: None },
                 OptionDef { name: "interact-level", description: "Interaction level for the new session (for example FASTEST, FAST, DEFAULT)", is_bool: false, short: None },
@@ -313,11 +314,22 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |args| {
                 let url = get_opt_str(args, "url").unwrap_or("about:blank");
                 let mut params = json!({ "url": url });
+                // Default to headless mode for privacy and resource efficiency.
+                // --headed explicitly opts into a visible browser window.
                 // --headless takes priority over --headed when both are passed.
+                //
+                // `headed` is only set when a flag is explicitly passed, so
+                // the session-reconnect path can detect (and warn about) a
+                // display-mode flag that is ignored because an existing
+                // session is reused.  `build_open_session_capabilities`
+                // defaults to headless when the key is absent.
                 if let Some(true) = get_bool(args, "headless") {
                     params["headed"] = json!(false);
                 } else if let Some(true) = get_bool(args, "headed") {
                     params["headed"] = json!(true);
+                }
+                if let Some(true) = get_bool(args, "fresh") {
+                    params["fresh"] = json!(true);
                 }
                 if let Some(pf) = get_opt_str(args, "profile") {
                     params["profilePath"] = json!(pf);
@@ -1068,9 +1080,12 @@ pub fn all_commands() -> Vec<CommandDef> {
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_type".to_string(),
             tool_params_fn: |args| {
+                // get_string_value (not get_str): build_command_args stores
+                // numeric-looking positionals as JSON numbers, so `fill "#el" 42`
+                // would otherwise lose the text ("42" → Number → "" via get_str).
                 let mut p = json!({
                     "ref": get_str(args, "ref").unwrap_or_default(),
-                    "text": get_str(args, "text").unwrap_or_default(),
+                    "text": get_string_value(args, "text").unwrap_or_default(),
                 });
                 if let Some(submit) = get_bool(args, "submit") {
                     p["submit"] = json!(submit);
@@ -4065,13 +4080,29 @@ mod tests {
     }
 
     #[test]
-    fn test_open_params_without_headed_or_headless_does_not_set_key() {
+    fn test_open_params_defaults_to_headless() {
         let map = commands_map();
         let cmd = map.get("open").unwrap();
         let args = HashMap::new();
 
         let params = (cmd.tool_params_fn)(&args);
 
+        // No display-mode flag was passed, so `headed` must be absent —
+        // its presence signals an explicit flag to the reconnect path.
+        // `build_open_session_capabilities` defaults to headless when absent.
+        assert!(params.get("headed").is_none());
+    }
+
+    #[test]
+    fn test_open_params_with_fresh() {
+        let map = commands_map();
+        let cmd = map.get("open").unwrap();
+        let mut args = HashMap::new();
+        args.insert("fresh".to_string(), json!(true));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert_eq!(params["fresh"], true);
         assert!(params.get("headed").is_none());
     }
 
@@ -6463,6 +6494,34 @@ mod tests {
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["ref"], "#my-input");
         assert_eq!(params["text"], "hello world");
+    }
+
+    #[test]
+    fn test_fill_params_stringify_numeric_text() {
+        // build_command_args stores numeric-looking positionals as JSON
+        // numbers (e.g. `fill "#el" 42`), which get_str would read as an
+        // empty default.  The fill text must round-trip as the string "42".
+        let map = commands_map();
+        let cmd = map.get("fill").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("#number-input"));
+        args.insert("text".to_string(), json!(42));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["ref"], "#number-input");
+        assert_eq!(params["text"], "42");
+    }
+
+    #[test]
+    fn test_fill_params_stringify_float_numeric_text() {
+        let map = commands_map();
+        let cmd = map.get("fill").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("#number-input"));
+        args.insert("text".to_string(), json!(3.14));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["text"], "3.14");
     }
 
     #[test]

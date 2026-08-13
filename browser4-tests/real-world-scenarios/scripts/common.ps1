@@ -663,10 +663,10 @@ You are evaluating the usability, discoverability, and reliability of browser4-c
 
 Before performing any browser interaction:
 
-0. Verify your working directory is the repository root: `$($RepoRootPath)`. If `pwd` is anything other than this directory, navigate there immediately with `cd "$RepoRootPath"`. All browser4-cli commands use `$($cliInvocation)` which works from the repo root — stay in this directory for all commands.
+0. Verify your working directory is the repository root: ``$RepoRootPath``. If ``pwd`` is anything other than this directory, navigate there immediately with ``cd "$RepoRootPath"``. All browser4-cli commands use ``$cliInvocation`` which works from the repo root — stay in this directory for all commands.
     **IMPORTANT — Temporary files:** Create ALL temporary, intermediate, and scratch files (scripts, data dumps, HTML snapshots, JSON exports, markdown drafts, log files, etc.) inside `./.test-sessions/` (not the repo root). Before creating any file, ensure the directory exists with `mkdir -p .test-sessions`. Do NOT pollute the repository root with temporary files — every generated file that is not a permanent project asset belongs under `.test-sessions/`.
-1. Run `$($helpCmd)`.
-2. Read `$($skillPath)` completely.
+1. Run ``$helpCmd``.
+2. Read ``$skillPath`` completely.
 3. Learn the available commands, workflows, and conventions directly from the documentation.
 4. Do not assume any prior knowledge of browser4-cli.
 
@@ -1881,10 +1881,22 @@ function Start-NativeCommand {
     if ($isWindowsPlatform) {
         if (-not [System.IO.Path]::HasExtension($resolvedExe) -and
             -not $resolvedExe.Contains([System.IO.Path]::DirectorySeparatorChar)) {
+            # Try .cmd first (batch wrappers are common on Windows).
             $cmdCandidate = "$resolvedExe.cmd"
             $resolvedCmd = Get-Command $cmdCandidate -ErrorAction SilentlyContinue
             if ($resolvedCmd) {
                 $resolvedExe = $resolvedCmd.Source
+            } else {
+                # Try .ps1 fallback (PowerShell wrappers).  System.Diagnostics.Process
+                # cannot execute .ps1 directly with UseShellExecute=$false, so we
+                # wrap through pwsh.exe -NoProfile -File.
+                $ps1Candidate = "$resolvedExe.ps1"
+                $resolvedPs1 = Get-Command $ps1Candidate -ErrorAction SilentlyContinue
+                if ($resolvedPs1) {
+                    $ps1Path = $resolvedPs1.Source
+                    $ArgumentList = @('-NoProfile', '-File', $ps1Path) + $ArgumentList
+                    $resolvedExe = (Get-Command pwsh.exe -ErrorAction Stop).Source
+                }
             }
         }
     }
@@ -2475,21 +2487,41 @@ function Get-ScenarioAgentArgs {
 function Get-ScenarioAgent {
     <#
     .SYNOPSIS
-        Resolve which agent CLI (claude, kimi, opencode, or codex) scenario
+        Resolve which agent CLI (claude, kimi, opencode, codex, or dsh) scenario
         scripts should invoke.
     .DESCRIPTION
+        Priority (highest to lowest):
+          1. $script:scenarioAgentCli — explicit script-level override
+          2. $env:BROWSER4_AGENT — global machine/user override
+          3. Auto-detection from PATH: claude > kimi > opencode > codex > dsh
+          4. Fallback: 'claude'
+
         Callers may force a backend by setting $script:scenarioAgentCli = 'kimi'
         (or 'claude', 'opencode', 'codex', 'dsh') after dot-sourcing this module.
-        Otherwise auto-detects with priority claude > kimi > opencode > codex > dsh.
-        Falls back to 'claude' when none are on PATH so the invocation fails
-        with a clear command-not-found error.
+        Set BROWSER4_AGENT in the environment to configure globally.
     #>
+
+    # 1. Explicit script-level override
     if ($script:scenarioAgentCli) { return $script:scenarioAgentCli }
+
+    # 2. Global environment variable
+    if ($env:BROWSER4_AGENT) {
+        $envAgent = $env:BROWSER4_AGENT.Trim()
+        if ($envAgent -in @('claude', 'kimi', 'opencode', 'codex', 'dsh')) {
+            return $envAgent
+        }
+        Write-Host "WARNING: BROWSER4_AGENT='$envAgent' is not a known agent." -ForegroundColor Yellow
+        Write-Host "  Known values: claude, kimi, opencode, codex, dsh" -ForegroundColor DarkGray
+    }
+
+    # 3. Auto-detection from PATH
     if (Get-Command claude -ErrorAction SilentlyContinue) { return 'claude' }
     if (Get-Command kimi -ErrorAction SilentlyContinue) { return 'kimi' }
     if (Get-Command opencode -ErrorAction SilentlyContinue) { return 'opencode' }
     if (Get-Command codex -ErrorAction SilentlyContinue) { return 'codex' }
     if (Get-Command dsh -ErrorAction SilentlyContinue) { return 'dsh' }
+
+    # 4. Fallback
     return 'claude'
 }
 

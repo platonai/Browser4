@@ -169,7 +169,7 @@ function Get-MaintenanceThreshold {
     $envKey = "MAINTENANCE_${Section}_${Key}"
     $ev = [Environment]::GetEnvironmentVariable($envKey)
     if ($ev) { return $ev }
-    $tp = Join-Path $PSScriptRoot "..\thresholds\thresholds.psd1"
+    $tp = Join-Path $PSScriptRoot "../thresholds/thresholds.psd1"
     if (Test-Path $tp) {
         try {
             $th = Import-PowerShellDataFile -Path $tp
@@ -214,7 +214,7 @@ function Invoke-MaintenanceStep {
 # Test root and check scripts directory
 # ═══════════════════════════════════════════════════════════════════
 
-$checksDir = Join-Path $PSScriptRoot "..\checks"
+$checksDir = Join-Path $PSScriptRoot "../checks"
 $repoRoot = Get-RepositoryRoot
 
 # ═══════════════════════════════════════════════════════════════════
@@ -376,7 +376,7 @@ Assert-NotNull "Root not null" $root
 Assert-True "Root is absolute" ([System.IO.Path]::IsPathRooted($root))
 Assert-Match "Contains Browser4" $root "Browser4"
 
-$resolved = Resolve-MaintenancePath "bin\maintenance\README.md"
+$resolved = Resolve-MaintenancePath "bin/maintenance/README.md"
 Assert-True "Resolve is absolute" ([System.IO.Path]::IsPathRooted($resolved))
 Assert-Match "Resolve contains path" $resolved "bin[/\\]maintenance"
 $absPath = if (Test-IsWindows) { "C:\absolute\file.txt" } else { "/absolute/file.txt" }

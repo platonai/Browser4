@@ -31,10 +31,13 @@ source tree use one of the following:
 
 > **⚡ First-run latency:** The Browser4 backend (Spring Boot + JVM) takes ~10s to start on first launch. Subsequent commands are instant — the server stays alive between invocations. The spinner shows stage-level progress (JVM → Spring Boot → MCP tools) so you can see what's happening.
 
+> **🖥️ Headless mode is the default for AI agents:** Always open browsers in **headless mode** (`--headless`) unless the user **explicitly** asks to see the browser window (e.g., "show me the browser", "open visibly", "I want to watch", or "headed"). Headless mode is faster, uses fewer resources, and avoids unnecessary GUI windows. Use `--headed` **only** when the user specifically requests a visible browser. See the Display Mode section below (§2 Key Concepts) for details.
+
 Every browser4-cli session follows this pattern.
 
 ```
-1. NAVIGATE    browser4-cli goto <url>              # auto-opens/reconnects session
+1. OPEN        browser4-cli open --headless <url>   # headless by default for AI agents
+              browser4-cli goto <url>               # or goto to navigate within existing session
 2. SNAPSHOT    browser4-cli snapshot -v 0           # capture accessibility tree (viewport 0 = current visible screen)
 3. INTERACT    browser4-cli click <ref>             # use refs from the snapshot
               browser4-cli fill <ref> <value>
@@ -46,7 +49,7 @@ Every browser4-cli session follows this pattern.
 ### Copy-Paste Template
 
 ```bash
-browser4-cli goto "https://example.com"
+browser4-cli open --headless "https://example.com"  # headless by default for AI agents
 browser4-cli snapshot -v 0 --stdout       # read the page; note refs
 browser4-cli fill <ref> "<value>"         # interact
 browser4-cli press Enter
@@ -97,6 +100,34 @@ Interaction commands capture an automatic snapshot after execution. Pass `--no-s
 - **`--json`** — single-line JSON envelope on stdout for commands that support structured output. This is the clean machine-readable mode for commands such as `tab-list`, `htmlsnapshot get`, `htmlsnapshot query`, and `eval`. **Exception:** `snapshot` remains YAML-focused and warns on stderr instead of returning JSON snapshot data.
 - **`--quiet` / `-q`** — suppress all normal output; only errors appear on stderr.
 
+### Display Mode (Headless vs Headed)
+
+Browser4 can launch Chrome in two display modes:
+
+| Mode | Flag | Window | Use case |
+|------|------|--------|----------|
+| **Headless** | `--headless` | No GUI window | **Default for AI agents** — scraping, automation, CI/CD, server environments |
+| **Headed** | `--headed` | Visible browser window | Debugging, user demonstration, interactive development |
+
+**Rule for AI agents: always use `--headless` by default.** Headless mode is faster, uses fewer resources, and avoids cluttering the user's desktop with browser windows. The only reason to use `--headed` is when the user **explicitly** requests a visible browser — look for phrases like "show me the browser", "I want to see", "open visibly", "headed", "watch what happens", or "debug visually".
+
+Set the display mode with the `open` command when starting a **new** session. The `goto` command does **not** accept `--headless`/`--headed` directly — it inherits the session's existing display mode:
+
+```bash
+browser4-cli open --headless https://example.com     # headless (preferred default)
+browser4-cli open --headed https://example.com       # headed (only when user asks)
+```
+
+Once a session is open, use `goto` for subsequent navigations (the display mode persists):
+
+```bash
+browser4-cli goto https://other-page.com             # stays headless (or headed) as set by open
+```
+
+> **Note — `goto` on first invocation:** When `goto` is the very first command (no prior `open`), it auto-opens a new session using the **CLI's default display mode, which is headless**. The display mode is still fixed at session creation, so if you want a visible window, start with `open --headed` before using `goto`.
+
+> **Note — reconnecting to an existing session:** The `--headless`/`--headed` flags only take effect when creating a new session. When `open` reconnects to an already-running session, the display mode is already set and the flags are ignored — the CLI prints a warning on stderr and the reconnect message shows the tab count so inherited state is visible. To change the mode of an existing session, close it first (`close`), then `open --headless` to create a new one. To discard a stale session's tabs/cookies/location entirely and start clean, use `open --fresh` (closes the current session, then opens a new one).
+
 ### Sessions
 
 Named sessions isolate browser state (cookies, localStorage, tabs). Use `-s <name>` to target a named session. `goto` auto-opens/reconnects — you rarely need to manage sessions manually.
@@ -104,6 +135,39 @@ Named sessions isolate browser state (cookies, localStorage, tabs). Use `-s <nam
 The `list` command displays a "Next open" column showing what happens when `goto` or `open` targets a named session that already exists:
 - **Reuse** — reconnects to the existing browser window (session is active on the backend).
 - **Refresh** — opens a fresh window (session is stale or missing).
+
+Session state is stored in `~/.browser4` by default. When that directory is not
+writable (e.g. sandboxed shells), the CLI automatically falls back to
+`./.browser4-cli-state` (workspace-relative) and prints a warning — set
+`BROWSER4_CLI_STATE_DIR` to an explicit writable path to silence it.
+`BROWSER4_RUNTIME_DIR` likewise overrides the runtime bundle location.
+
+### Configuration
+
+The `config` command manages persistent CLI defaults stored in
+`~/.browser4/config.json` (honours `BROWSER4_CLI_STATE_DIR`). These are global
+fallbacks — an explicit flag or environment variable always wins per invocation.
+
+| Key | Purpose | Overridden by |
+|-----|---------|---------------|
+| `server` | Default Browser4 server URL | `--server` / `BROWSER4_CLI_SERVER` |
+| `timeout` | Default HTTP timeout (seconds) | `--timeout` |
+| `proxy` | Default download proxy URL | `--proxy` |
+| `session` | Default session name | `-s` / `--session` / `BROWSER4_CLI_SESSION` |
+
+```bash
+browser4-cli config                              # List all values + config file path
+browser4-cli config list                         # Same as above
+browser4-cli config get server                   # Print one value ("(not set)" if unset)
+browser4-cli config set server http://localhost:8182
+browser4-cli config set timeout 45               # Positive integer seconds
+browser4-cli config delete session               # Reset a key to its default
+```
+
+Notes:
+- `config get` / `set` / `delete` use the spaced form (`config get server`), not `config-get server`.
+- `timeout` must be a positive integer; `0` and unknown keys are rejected with a non-zero exit.
+- `config set server` sets the persistent default; a later `--server` flag or `BROWSER4_CLI_SERVER` still overrides it for that invocation.
 
 ### Tab Management
 
@@ -167,7 +231,7 @@ browser4-cli -s ext-session tab-select 0
 | Command family | Purpose | When to use | Full reference |
 |---------------|---------|-------------|----------------|
 | `goto`, `open`, `close`, `reload` | Navigation & session management | Every session starts here | — |
-| `snapshot` | Capture accessibility tree (AXTree) with element refs | **Page structure & interaction** — find elements to click, fill, etc. Use `snapshot` when you need refs (e5, e36) to interact with. | [htmlsnapshot.md](references/htmlsnapshot.md) |
+| `snapshot` | Capture accessibility tree (AXTree) with element refs | **Page structure & interaction** — find elements to click, fill, etc. Use `snapshot` when you need refs (e5, e36) to interact with. | [snapshot.md](references/snapshot.md) |
 | `snapshot grep` | Search snapshot content with regex | Find elements by text or pattern | — |
 | `click`, `dblclick`, `drag`, `hover`, `fill`, `type`, `press`, `select`, `check`, `generate-locator` | Page interaction | Form filling, button clicks, mouse actions, navigation | — |
 | `dialog-accept`, `dialog-dismiss` | Native JS dialog handling | After clicking buttons that trigger alert/confirm/prompt | — |
@@ -186,6 +250,7 @@ browser4-cli -s ext-session tab-select 0
 | `skill-list`, `skill-info`, `skill-install`, `skill-uninstall`, `skill-reload` | Backend skill management | Install/manage server-side skills | [skills.md](references/skills.md) |
 | `screenshot`, `scroll`, `wait`, `resize` | Visual capture & viewport control | Screenshots, viewport sizing, scroll control | — |
 | `tab-list`, `tab-new`, `tab-select`, `tab-close` | Tab management | Multi-tab workflows, session-scoped tab operations. See §Tab Management below. | — |
+| `config` | Persistent CLI defaults (server, timeout, proxy, session) | Set default server URL, timeout, proxy, or session name. See §Configuration. | — |
 
 ### Refreshing This Skill
 
@@ -260,7 +325,7 @@ Need to process multiple pages?
 ├─ Need parallel execution (high throughput)? → swarm create → swarm query --seed-file ...
 ├─ Repeated monitoring (check every hour)? → loop -- eval "..." -i 3600
 └─ Just a few URLs in a shell script?
-   → for url in ...; do browser4-cli goto "$url"; ... done  (add wait between iterations)
+   → browser4-cli open --headless (once) then use goto for each URL; add wait between iterations
 ```
 
 ### 4c. Query Granularity: get vs get all vs query
@@ -286,7 +351,7 @@ Have HTML files and want structured data — without tokens?
 │  Same encode → cluster → views pipeline, distributed across machines
 │  → Scales to 100K+ pages/day
 └─ Need to acquire pages first?
-   ├─ Single pages: browser4-cli goto → htmlsnapshot → htmlsnapshot export
+   ├─ Single pages: browser4-cli open --headless → htmlsnapshot → htmlsnapshot export
    ├─ Bulk download: browser4-cli crawl --seed-file urls.txt --depth 0
    └─ High throughput: browser4-cli swarm create → swarm query --seed-file ...
        Then feed the HTML directory to WebMiner
@@ -298,7 +363,7 @@ Have HTML files and want structured data — without tokens?
 
 **Commercial tier (Apache Spark ML):** Distributed clustering for production workloads. Scales to 100K+ pages/day. Same pipeline, enterprise throughput.
 
-> **Install:** `.\webminer.ps1 install` (PowerShell) or download from [web-miner releases](https://github.com/platonai/web-miner/releases). Requires JDK 17+.
+> **Install:** `.\webminer.ps1 install` (PowerShell — the script ships with the [web-miner](https://github.com/platonai/web-miner) project, not this repo) or download from [web-miner releases](https://github.com/platonai/web-miner/releases). Requires JDK 17+.
 
 See **[scent-miner/SKILL.md](../scent-miner/SKILL.md)** for the full reference.
 
@@ -382,7 +447,7 @@ browser4-cli htmlsnapshot get text ".price" --all    # quick test: does this sel
 > | Mode | What it shows | Best for |
 > |------|--------------|----------|
 > | `snapshot` (default) | Full AX tree with all element refs | General exploration, first look at a page |
-> | `snapshot -v 0` | Full AX tree, no viewport trim | Pages with complex/long content where default viewport clipping hides elements |
+> | `snapshot -v 0` | Current visible screen (a single screen-height viewport chunk) | Long pages — read one chunk at a time to keep output small. Use `-v all` for the entire page |
 > | `snapshot -i` | **Interactive elements only:** buttons, links, inputs, selects, textareas. Strips generic `<div>`, `<span>`, and other non-interactive containers | Simple forms, login pages, sparse pages with clear interactive controls. Reduces noise when you only need clickable/fillable elements |
 > | `htmlsnapshot` | Static HTML (CSS selectors) | Content extraction (text, attributes), when you need CSS selectors instead of AX refs |
 >
@@ -404,12 +469,24 @@ browser4-cli htmlsnapshot get text ".price" --all    # quick test: does this sel
 
 > **Warning:** `htmlsnapshot` captures the **initial page HTML**, not the live DOM. After interactions (form fills, clicks, submissions) or on pages where JavaScript updates the DOM (SPA route changes, dynamic content), the snapshot will be **stale** — it won't reflect the current page state. For JS-updated pages, use `eval` for live-DOM access instead. The `htmlsnapshot inspect` command also reads from the stored initial HTML, not the live DOM.
 
+> **Warning — backend startup fails in sandboxed/restricted environments:** The Browser4 backend (Spring Boot/JVM) writes its log files to a `logs/` directory inside the runtime bundle — `BROWSER4_RUNTIME_DIR` (default `%APPDATA%/browser4` on Windows, `~/.local/share/browser4` on Linux). In sandboxes that only allow writes to the workspace, this write is denied and the server never becomes ready: `goto`/`open` hang until the startup timeout with `FileNotFoundException … Access denied` (or `拒绝访问`) in the startup log.
+>
+> **Diagnose:** the failed command prints a startup-log path under `🧾 Details` — look for a `logs\*.log` (or `logs/*.log`) write failure there.
+>
+> **Fix:** point the runtime and state at writable locations before the first launch:
+> ```bash
+> # PowerShell
+> $env:BROWSER4_RUNTIME_DIR  = "D:\workspace\browser4-runtime"  # JRE/JARs + logs (~200 MB)
+> $env:BROWSER4_CLI_STATE_DIR = "D:\workspace\.browser4-state"  # session state
+> ```
+> `BROWSER4_RUNTIME_DIR` relocates the runtime (re-downloads the bundle if not already present); `BROWSER4_CLI_STATE_DIR` already auto-falls back to `./.browser4-cli-state` when `~/.browser4` is unwritable.
+
 ## 6. Quick Patterns
 
 ### Interactive Form Fill
 
 ```bash
-browser4-cli goto "https://example.com/login"
+browser4-cli open --headless "https://example.com/login"
 browser4-cli snapshot -v 0
 browser4-cli fill <email-ref> "user@example.com"
 browser4-cli fill <password-ref> "password"
@@ -421,7 +498,7 @@ browser4-cli snapshot -v 0 --auto-diff
 ### Find Elements by Text (snapshot grep)
 
 ```bash
-browser4-cli goto "https://example.com"
+browser4-cli open --headless "https://example.com"
 browser4-cli snapshot -v 0                        # capture snapshot first
 browser4-cli snapshot grep "See also"             # search for text in the full AX tree
 browser4-cli snapshot grep -i "price|rating"      # case-insensitive regex alternation
@@ -491,7 +568,7 @@ browser4-cli get text "#contactForm > button.primary"  # verify with the generat
 ### Static Data Extraction (Single Field)
 
 ```bash
-browser4-cli goto "https://example.com/product/42"
+browser4-cli open --headless "https://example.com/product/42"
 browser4-cli htmlsnapshot                           # capture static HTML snapshot
 browser4-cli htmlsnapshot get text ".product-title"
 browser4-cli htmlsnapshot get attr ".product-image" src
@@ -601,10 +678,14 @@ See **[agent.md](references/agent.md)** for full details including LLM key confi
 
 Organized by task — follow the link that matches what you're trying to do:
 
+**Interact with pages (accessibility tree & element refs):**
+[snapshot.md](references/snapshot.md) — `snapshot`, `snapshot grep`, `-v` viewport paging, `--auto-diff`, `-i` interactive mode, element refs
+
 **Extract data from pages:**
 [htmlsnapshot.md](references/htmlsnapshot.md) — `get`, `get all`, `query`, `grep`, `summary`, `inspect`, `export`
 [x-sql.md](references/x-sql.md) — X-SQL function reference (DOM, STR, ARRAY namespaces)
-[htmlsnapshot-scenarios.md](references/htmlsnapshot-scenarios.md) — 16 end-to-end recipes (e-commerce, Amazon, SEO, CI, jobs, real estate)
+[x-sql-dom-functions.md](references/x-sql-dom-functions.md), [x-sql-dom-load-select.md](references/x-sql-dom-load-select.md), [x-sql-dom-select-functions.md](references/x-sql-dom-select-functions.md), [x-sql-string-functions.md](references/x-sql-string-functions.md), [x-sql-array-functions.md](references/x-sql-array-functions.md) — X-SQL namespace sub-references
+[htmlsnapshot-scenarios.md](references/htmlsnapshot-scenarios.md) — end-to-end recipes; focused variants: [advanced](references/htmlsnapshot-scenarios-advanced.md), [amazon](references/htmlsnapshot-scenarios-amazon.md), [audit](references/htmlsnapshot-scenarios-audit.md), [extraction](references/htmlsnapshot-scenarios-extraction.md)
 
 **Run at scale (multiple pages/URLs):**
 [crawl.md](references/crawl.md) — recursive crawling, seed-file bulk fetch, X-SQL extraction
@@ -631,6 +712,9 @@ Organized by task — follow the link that matches what you're trying to do:
 
 **Troubleshoot:**
 [shell-quoting.md](references/shell-quoting.md) — avoid shell-quoting breakage for complex JS/X-SQL on Windows / Git Bash
+
+**Developers:**
+[development.md](references/development.md) — build the CLI from source (Rust, Java 17+)
 
 ## Installation
 

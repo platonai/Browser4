@@ -236,25 +236,14 @@ class HTMLSnapshotToolExecutor(
             val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(managed.driver)
             val document = pulsarSession.parse(page)
 
-            val allElements = document.select(selector)
-            val matchCount = allElements.size
-            val value = when (field) {
-                "text" -> allElements.firstOrNull()?.text()?.trim() ?: ""
-                "textcontent" -> allElements.firstOrNull()?.text()?.trim() ?: ""
-                "html" -> allElements.firstOrNull()?.html() ?: ""
-                "attr" -> allElements.firstOrNull()?.attr(attrName!!) ?: ""
+            // `get` follows querySelector semantics: return the first match only.
+            // (`get all` — scrapeAll — returns the full array via querySelectorAll.)
+            when (field) {
+                "text" -> document.selectFirstOrNull(selector)?.text() ?: ""
+                "textcontent" -> document.selectFirstOrNull(selector)?.text() ?: ""
+                "html" -> document.selectFirstOrNull(selector)?.html() ?: ""
+                "attr" -> document.selectFirstOrNull(selector)?.attr(attrName!!) ?: ""
                 else -> ""
-            }
-
-            if (matchCount > 1) {
-                // Return JSON with metadata so the CLI can warn about multi-match ambiguity
-                pulsarObjectMapper().createObjectNode().apply {
-                    put("value", value)
-                    put("matchCount", matchCount)
-                    put("selector", selector)
-                }.toString()
-            } else {
-                value
             }
         }
     }

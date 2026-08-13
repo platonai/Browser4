@@ -33,13 +33,13 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "C1" -Name "Internal Documentation Links"
 $repoRoot = Get-RepositoryRoot
 
 # ── Locate fix-links.py ──
-$fixLinksPath = Join-Path $repoRoot "bin\quality\fix-links.py"
+$fixLinksPath = Join-Path $repoRoot "bin/quality/fix-links.py"
 $hasFixLinks = Test-Path $fixLinksPath
 
 if (-not $hasFixLinks) {
@@ -129,3 +129,4 @@ else {
 
 Set-MaintenanceResultSummary -Result $result
 $result
+

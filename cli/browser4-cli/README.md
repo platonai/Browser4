@@ -177,6 +177,17 @@ Skills are AI agent instruction files bundled into the CLI binary at compile tim
 | `upgrade` | Upgrade Browser4 to the latest version (or a specified release tag) |
 | `uninstall` | Remove all globally installed browser4-cli and its runtime data |
 
+### Config
+
+| Command | Description |
+|---|---|
+| `config` | List all CLI configuration values (server, timeout, proxy, session) |
+| `config get <key>` | Get a single configuration value |
+| `config set <key> <value>` | Set a configuration value (persisted to `~/.browser4/config.json`) |
+| `config delete <key>` | Remove a configuration value, resetting it to default |
+
+Keys: `server` (default Browser4 URL), `timeout` (seconds, positive integer), `proxy` (download proxy URL), `session` (default session name). Configuration values are global fallbacks — explicit flags (`--server`, `--timeout`, `--proxy`, `-s`) override them per invocation.
+
 ### Global options
 
 | Option | Description |

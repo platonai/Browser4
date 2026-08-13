@@ -34,6 +34,9 @@ abstract class AbstractAgenticSession(
     sessionConfig: VolatileConfig,
     id: Long = nextId()
 ) : AbstractPulsarSession(context, sessionConfig, id = id), AgenticSession {
+    // createBoundDriver() is inherited from AbstractPulsarSession, which
+    // already swaps in Browser4WebDriver via Browser4WebDriver.from().
+    // No override needed here.
 }
 
 open class AbstractAgenticQLSession(

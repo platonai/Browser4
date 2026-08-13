@@ -151,16 +151,9 @@ private val createdSessions = mutableListOf<String>()
         }
         val response = callTool("html_snapshot_scrape", args)
         assertNotError(response)
-        val raw = textContent(response)
-        // When a selector matches multiple elements, scrape returns a JSON
-        // object with "value", "matchCount", and "selector" fields.  Extract
-        // the actual value from this wrapper when present.
-        return try {
-            val node = objectMapper.readTree(raw)
-            if (node.has("value")) node.get("value").asText() else raw
-        } catch (_: Exception) {
-            raw
-        }
+        // `get` (html_snapshot_scrape) follows querySelector semantics and
+        // returns the first match's value directly as a plain string.
+        return textContent(response)
     }
 
     /** Call html_snapshot_query and return parsed JSON. */

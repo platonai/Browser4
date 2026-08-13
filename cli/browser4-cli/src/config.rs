@@ -58,6 +58,16 @@ pub fn write_config(config: &ConfigStore) -> std::io::Result<()> {
     fs::write(path, json)
 }
 
+/// Build the "Unknown config key" error message listing all valid keys.
+pub fn config_unknown_key_error(key: &str) -> String {
+    let valid = VALID_CONFIG_KEYS
+        .iter()
+        .map(|k| format!("'{}'", k))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("Unknown config key '{}'. Valid keys are: {}", key, valid)
+}
+
 /// Look up a config key and return its string value, or `None` if not set.
 pub fn config_value(config: &ConfigStore, key: &str) -> Option<String> {
     match key {
@@ -77,21 +87,17 @@ pub fn config_set_value(config: &mut ConfigStore, key: &str, value: &str) -> Res
             let n: u64 = value
                 .parse()
                 .map_err(|_| format!("Invalid timeout value '{}': expected a positive integer (seconds)", value))?;
+            if n == 0 {
+                return Err(format!(
+                    "Invalid timeout value '{}': expected a positive integer (seconds)",
+                    value
+                ));
+            }
             config.timeout = Some(n);
         }
         "proxy" => config.proxy = Some(value.to_string()),
         "session" => config.session = Some(value.to_string()),
-        other => {
-            let valid = VALID_CONFIG_KEYS
-                .iter()
-                .map(|k| format!("'{}'", k))
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(format!(
-                "Unknown config key '{}'. Valid keys are: {}",
-                other, valid
-            ));
-        }
+        other => return Err(config_unknown_key_error(other)),
     }
     Ok(())
 }
@@ -104,17 +110,7 @@ pub fn config_delete_value(config: &mut ConfigStore, key: &str) -> Result<(), St
         "timeout" => config.timeout = None,
         "proxy" => config.proxy = None,
         "session" => config.session = None,
-        other => {
-            let valid = VALID_CONFIG_KEYS
-                .iter()
-                .map(|k| format!("'{}'", k))
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(format!(
-                "Unknown config key '{}'. Valid keys are: {}",
-                other, valid
-            ));
-        }
+        other => return Err(config_unknown_key_error(other)),
     }
     Ok(())
 }
@@ -143,6 +139,13 @@ mod tests {
     fn test_config_set_timeout_rejects_non_numeric() {
         let mut c = ConfigStore::default();
         let err = config_set_value(&mut c, "timeout", "abc").unwrap_err();
+        assert!(err.contains("Invalid timeout"), "Expected 'Invalid timeout' in: {err}");
+    }
+
+    #[test]
+    fn test_config_set_timeout_rejects_zero() {
+        let mut c = ConfigStore::default();
+        let err = config_set_value(&mut c, "timeout", "0").unwrap_err();
         assert!(err.contains("Invalid timeout"), "Expected 'Invalid timeout' in: {err}");
     }
 

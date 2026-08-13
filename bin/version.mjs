@@ -591,6 +591,38 @@ function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * Update the root pom.xml SCM <tag> to `expectedTag`, reading the current
+ * value first so a drifted tag (e.g. one that accidentally gained a
+ * "-SNAPSHOT" suffix) can never silently fail to update. Mirrors cmdSync's
+ * robust approach; warns instead of silently no-oping when no <tag> exists.
+ */
+function setPomTag(expectedTag) {
+  const pomXmlPath = join(REPO_ROOT, "pom.xml");
+  if (!existsSync(pomXmlPath)) {
+    console.warn("  Warning: root pom.xml not found; <tag> not updated.");
+    return false;
+  }
+  let pomContent = readFileSync(pomXmlPath, "utf-8");
+  const tagMatch = pomContent.match(/<tag>([^<]*)<\/tag>/);
+  if (!tagMatch) {
+    console.warn("  Warning: could not find <tag> in root pom.xml; leaving it unchanged.");
+    return false;
+  }
+  const currentTag = tagMatch[1];
+  if (currentTag === expectedTag) {
+    console.log(`  pom.xml <tag> already up to date (${currentTag})`);
+    return true;
+  }
+  pomContent = pomContent.replace(
+    new RegExp(`<tag>${escapeRegex(currentTag)}</tag>`),
+    `<tag>${expectedTag}</tag>`
+  );
+  writeFileSync(pomXmlPath, pomContent);
+  console.log(`  Updated pom.xml <tag>: ${currentTag} -> ${expectedTag}`);
+  return true;
+}
+
 /** Read the project <version> from a pom.xml (skipping any <parent> block). */
 function readPomProjectVersion(pomPath) {
   let content = readFileSync(pomPath, "utf-8");
@@ -831,15 +863,9 @@ async function cmdBump(args) {
     process.exit(1);
   }
 
-  // Update root pom.xml <tag>
-  const pomXmlPath = join(REPO_ROOT, "pom.xml");
-  if (existsSync(pomXmlPath)) {
-    let pomContent = readFileSync(pomXmlPath, "utf-8");
-    // Use regex for robust matching (handles whitespace variations in pom.xml)
-    const tagRegex = new RegExp(`<tag>\\s*${escapeRegex(`v${version}`)}\\s*</tag>`);
-    pomContent = pomContent.replace(tagRegex, `<tag>v${nextVersion}</tag>`);
-    writeFileSync(pomXmlPath, pomContent);
-  }
+  // Update root pom.xml <tag> (read actual value first so a drifted tag
+  // cannot silently fail to update).
+  setPomTag(`v${nextVersion}`);
 
   // Confirm and commit
   const comment = `Bump version to v${nextVersion}`;
@@ -1155,17 +1181,9 @@ async function cmdAuto(args) {
     process.exit(1);
   }
 
-  // Update root pom.xml <tag>
-  const pomXmlPath = join(REPO_ROOT, "pom.xml");
-  if (existsSync(pomXmlPath)) {
-    let pomContent = readFileSync(pomXmlPath, "utf-8");
-    // Use regex for robust matching (handles whitespace variations in pom.xml)
-    pomContent = pomContent.replace(
-      new RegExp(`<tag>\\s*${escapeRegex(`v${localVersion}`)}\\s*</tag>`),
-      `<tag>v${nextBackend}</tag>`
-    );
-    writeFileSync(pomXmlPath, pomContent);
-  }
+  // Update root pom.xml <tag> (read actual value first so a drifted tag
+  // cannot silently fail to update).
+  setPomTag(`v${nextBackend}`);
 
   // Sync CLI files (Cargo.toml, package.json) to the new unified version
   cmdCliSync([]);

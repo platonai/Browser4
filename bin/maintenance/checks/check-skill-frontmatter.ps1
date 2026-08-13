@@ -37,7 +37,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "D1" -Name "SKILL Frontmatter Validation"
 
@@ -126,3 +126,4 @@ foreach ($file in $skillFiles) {
 
 Set-MaintenanceResultSummary -Result $result
 $result
+

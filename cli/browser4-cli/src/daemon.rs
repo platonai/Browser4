@@ -4798,6 +4798,7 @@ pub fn resolve_base_url(override_url: Option<&str>, session_name: Option<&str>) 
     let state = read_state(None, session_name);
     let base = override_url
         .map(|s| s.to_string())
+        .or_else(|| crate::config::read_config().server.clone())
         .unwrap_or(state.base_url);
     base.trim_end_matches('/').to_string()
 }
@@ -4987,13 +4988,21 @@ fn format_server_startup_failure_message(
         message.push(format!("  Summary: {summary}"));
     }
 
+    let log_tail = startup_log_path.map(read_startup_log_tail);
+    let permission_denied = log_tail
+        .as_deref()
+        .is_some_and(log_mentions_permission_denied);
+
     let mut suggestions = vec!["inspect the Browser4 startup log for the underlying server error."];
     if timeout.is_some() {
         suggestions.push("retry the command after Browser4 finishes starting.");
     } else {
         suggestions.push("confirm Java/Browser4 dependencies are available, then retry.");
     }
-    suggestions.push("common causes: insufficient JVM heap memory, missing native dependencies, port conflicts, or corrupt Browser4 runtime installation.");
+    suggestions.push("common causes: insufficient JVM heap memory, missing native dependencies, port conflicts, an unwritable logs/runtime directory, or a corrupt Browser4 runtime installation.");
+    if permission_denied {
+        suggestions.push("the startup log shows a denied write to the backend's logs/ directory — set BROWSER4_RUNTIME_DIR (and BROWSER4_CLI_STATE_DIR) to a writable directory, then retry.");
+    }
 
     message.push(String::new());
     message.push("💡 What to try".to_string());
@@ -5028,8 +5037,11 @@ fn read_startup_log_tail(path: &Path) -> String {
     const MAX_LINES: usize = 40;
     const MAX_CHARS: usize = 8_000;
 
-    let contents = match fs::read_to_string(path) {
-        Ok(contents) => contents,
+    // Lossy read: backend logs can contain non-UTF-8 bytes (e.g. GBK-encoded
+    // OS error messages like `拒绝访问` on Windows). `read_to_string` fails on
+    // those, which hid the tail entirely; lossy decoding keeps it visible.
+    let contents = match fs::read(path) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
         Err(error) => return format!("(failed to read startup log: {error})"),
     };
     let lines: Vec<&str> = contents.lines().collect();
@@ -5050,6 +5062,17 @@ fn read_startup_log_tail(path: &Path) -> String {
     }
 
     tail
+}
+
+/// True when the startup log tail shows the backend could not create its
+/// `logs/*.log` files — the signature of a denied write in sandboxes that only
+/// allow writes to the workspace. Matching `FileNotFoundException` against a
+/// `logs` path (rather than any exception) keeps this specific and avoids
+/// flagging unrelated missing-file errors. Both tokens are ASCII in the JVM's
+/// log even when the OS message that follows is GBK-encoded (`拒绝访问`).
+fn log_mentions_permission_denied(log: &str) -> bool {
+    let haystack = log.to_lowercase();
+    haystack.contains("filenotfoundexception") && haystack.contains("logs")
 }
 
 #[cfg(test)]
@@ -6076,6 +6099,64 @@ mod tests {
     }
 
     #[test]
+    fn test_format_server_startup_failure_message_suggests_writable_dir_on_permission_error() {
+        let tmp = test_temp_dir();
+        let log_path = tmp.path().join("startup.log");
+        // GBK-encoded `拒绝访问` after the ASCII exception/class name, matching
+        // what a zh-CN Windows JVM writes when it cannot create logs/*.log.
+        write(
+            &log_path,
+            b"java.io.FileNotFoundException: logs\\pulsar.log (\xBE\xDC\xBE\xF8\xB7\xC3\xCE\xCA)\n",
+        )
+        .unwrap();
+
+        let message = format_server_startup_failure_message(
+            "http://127.0.0.1:8182",
+            Some("Browser4 did not become MCP-ready before the startup timeout elapsed."),
+            "Last readiness probe result: connection refused",
+            Some(Duration::from_secs(60)),
+            Some(&log_path),
+        );
+
+        assert!(message.contains("BROWSER4_RUNTIME_DIR"));
+        assert!(message.contains("unwritable logs/runtime directory"));
+    }
+
+    #[test]
+    fn test_format_server_startup_failure_message_no_writable_hint_without_permission_error() {
+        let tmp = test_temp_dir();
+        let log_path = tmp.path().join("startup.log");
+        write(&log_path, "some unrelated startup failure\n").unwrap();
+
+        let message = format_server_startup_failure_message(
+            "http://127.0.0.1:8182",
+            Some("Browser4 did not become MCP-ready before the startup timeout elapsed."),
+            "Last readiness probe result: connection refused",
+            Some(Duration::from_secs(60)),
+            Some(&log_path),
+        );
+
+        assert!(!message.contains("BROWSER4_RUNTIME_DIR"));
+    }
+
+    #[test]
+    fn test_read_startup_log_tail_decodes_non_utf8() {
+        let tmp = test_temp_dir();
+        let log_path = tmp.path().join("startup.log");
+        write(
+            &log_path,
+            b"java.io.FileNotFoundException: logs\\pulsar.log (\xBE\xDC\xBE\xF8)\n",
+        )
+        .unwrap();
+
+        let tail = read_startup_log_tail(&log_path);
+
+        assert!(!tail.contains("failed to read startup log"));
+        assert!(tail.contains("FileNotFoundException"));
+        assert!(tail.contains("logs"));
+    }
+
+    #[test]
     fn test_create_server_startup_log_writes_header() {
         let tmp = test_temp_dir();
         let log = create_server_startup_log_in(Some(tmp.path()), &sample_launch_spec(), 8123)
@@ -6418,6 +6499,79 @@ mod tests {
 
         let read = read_installed_browser4_runtime_metadata();
         assert!(read.is_none());
+    }
+
+    // -------------------------------------------------------------------
+    // resolve_base_url config fallback tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_base_url_falls_back_to_config_server() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let _env = TestEnvGuard::lock(&tmp.path());
+
+        // No persisted state, but config has `server` set.
+        fs::write(
+            tmp.path().join("state").join("config.json"),
+            r#"{"server":"http://config:9000"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(resolve_base_url(None, None), "http://config:9000");
+    }
+
+    #[test]
+    fn test_resolve_base_url_config_server_beats_persisted_state() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let _env = TestEnvGuard::lock(&tmp.path());
+
+        fs::write(
+            tmp.path().join("state").join("config.json"),
+            r#"{"server":"http://config:9000"}"#,
+        )
+        .unwrap();
+        fs::write(
+            tmp.path().join("state").join("cli-state.json"),
+            r#"{"baseUrl":"http://state:9002"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(resolve_base_url(None, None), "http://config:9000");
+    }
+
+    #[test]
+    fn test_resolve_base_url_override_beats_config_server() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let _env = TestEnvGuard::lock(&tmp.path());
+
+        fs::write(
+            tmp.path().join("state").join("config.json"),
+            r#"{"server":"http://config:9000"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_base_url(Some("http://flag:9001"), None),
+            "http://flag:9001"
+        );
+    }
+
+    #[test]
+    fn test_resolve_base_url_uses_state_when_no_config() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let _env = TestEnvGuard::lock(&tmp.path());
+
+        fs::write(
+            tmp.path().join("state").join("cli-state.json"),
+            r#"{"baseUrl":"http://state:9002"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(resolve_base_url(None, None), "http://state:9002");
     }
 
     // -------------------------------------------------------------------

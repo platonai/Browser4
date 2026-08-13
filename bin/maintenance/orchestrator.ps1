@@ -54,8 +54,8 @@ $ErrorActionPreference = "Continue"
 
 # ── Resolve paths ──
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "common\MaintenanceUtil.ps1")
-. (Join-Path $ScriptDir "common\MaintenanceState.ps1")
+. (Join-Path $ScriptDir "common/MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "common/MaintenanceState.ps1")
 
 # ── Determine mode ──
 if ($Mode) {
@@ -306,19 +306,19 @@ do {
 
 if ($allResults.Count -gt 0) {
     # Console report
-    $reporterPath = Join-Path $ScriptDir "reporters\report-console.ps1"
+    $reporterPath = Join-Path $ScriptDir "reporters/report-console.ps1"
     if (Test-Path $reporterPath) {
         & $reporterPath -Results $allResults
     }
 
     # JSON report
-    $jsonReporterPath = Join-Path $ScriptDir "reporters\report-json.ps1"
+    $jsonReporterPath = Join-Path $ScriptDir "reporters/report-json.ps1"
     if (Test-Path $jsonReporterPath) {
         & $jsonReporterPath -Results $allResults
     }
 
     # Summary report
-    $summaryReporterPath = Join-Path $ScriptDir "reporters\report-summary.ps1"
+    $summaryReporterPath = Join-Path $ScriptDir "reporters/report-summary.ps1"
     if (Test-Path $summaryReporterPath) {
         & $summaryReporterPath -Results $allResults
     }

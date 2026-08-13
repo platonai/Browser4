@@ -460,8 +460,8 @@ Write-Host "━━━ Safe argument quoting ━━━" -ForegroundColor Cyan
 # Verify the safe-args quoting logic by checking the source code
 $srcText = Get-Content $B4wPs1Path -Raw
 Assert-ContainsString -Label 'Safe args: uses Invoke-Expression' -Haystack $srcText -Needle 'Invoke-Expression'
-Assert-ContainsString -Label 'Safe args: double-quotes each arg' -Haystack $srcText -Needle '-replace'
-Assert-ContainsString -Label 'Safe args: escapes internal double quotes' -Haystack $srcText -Needle '""'
+Assert-ContainsString -Label 'Safe args: single-quotes each arg' -Haystack $srcText -Needle '.Replace'
+Assert-ContainsString -Label "Safe args: escapes internal single quotes" -Haystack $srcText -Needle "''"
 
 # ═══════════════════════════════════════════════════════════════════
 # TESTS: Rebuild flag logic
@@ -598,7 +598,48 @@ Assert-ContainsString -Label 'Source: help mentions b4w.sh workaround' -Haystack
 # Verify that b4w.ps1 has [CmdletBinding()] or does NOT — with PS 5.1+, scripts
 # without CmdletBinding still get implicit common parameters. We test that the
 # help mentions the passthrough workaround, which is how users avoid the issue.
-Assert-NotContainsString -Label 'Source: has no [CmdletBinding()] (avoids extra common params)' -Haystack $srcText -Needle '[CmdletBinding()]'
+Assert-NotContainsString -Label 'Source: has no [CmdletBinding( (avoids extra common params)' -Haystack $srcText -Needle '[CmdletBinding('
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: Short-flag passthrough via test subcommand
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ Short-flag passthrough: b4w test ━━━" -ForegroundColor Cyan
+
+# Verify that short flags like -i, -v, -b pass through b4w.ps1's
+# test-subcommand handler without being intercepted as PowerShell
+# common parameters (the handler uses Invoke-Expression with -- to
+# prevent parameter binding in the target script's [CmdletBinding()]).
+#
+# Every test uses -Show to avoid actual test execution and asserts
+# the [SHOW] marker to confirm test.ps1 received the args correctly.
+
+# Single short flag: -i (ambiguous between -InformationAction / -InformationVariable)
+$output = pwsh -NoProfile -Command "& '$b4wAbs' test -Show cli -i *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'Flags: b4w test -Show cli -i' -Haystack $output -Needle '[SHOW]'
+
+# Single short flag: -b (unambiguous match for -BuildBackend in test.ps1 param block)
+$output = pwsh -NoProfile -Command "& '$b4wAbs' test -Show cli -b *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'Flags: b4w test -Show cli -b' -Haystack $output -Needle '[SHOW]'
+
+# Single short flag: -v (ambiguous between -Verbose and other common params)
+$output = pwsh -NoProfile -Command "& '$b4wAbs' test -Show cli -v *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'Flags: b4w test -Show cli -v' -Haystack $output -Needle '[SHOW]'
+
+# Multiple short flags: the exact user scenario (all cargo test flags)
+$output = pwsh -NoProfile -Command "& '$b4wAbs' test -Show cli -i -b -v -L=ALL *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'Flags: b4w test -Show cli -i -b -v -L=ALL' -Haystack $output -Needle '[SHOW]'
+
+# Explicit -- separator with short flags
+$output = pwsh -NoProfile -Command "& '$b4wAbs' test -Show cli -- -i -b -L=ALL *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'Flags: b4w test -Show cli -- -i -b -L=ALL' -Haystack $output -Needle '[SHOW]'
+
+# sc subcommand: passes through to test.ps1 rws sc
+$output = pwsh -NoProfile -Command "& '$b4wAbs' sc --help *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'Flags: b4w sc --help (passthrough)' -Haystack $output -Needle 'Usage:'
+
+# sc subcommand with short flag
+$output = pwsh -NoProfile -Command "& '$b4wAbs' sc -i *>&1" *>&1 | Out-String
+Assert-NotNull -Label 'Flags: b4w sc -i (no crash)' -Value $output
 
 # ═══════════════════════════════════════════════════════════════════
 # Summary

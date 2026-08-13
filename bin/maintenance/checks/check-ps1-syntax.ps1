@@ -30,7 +30,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "G2" -Name "PS1 Syntax Validation"
 $repoRoot = Get-RepositoryRoot
@@ -76,3 +76,4 @@ $failed  = @($result.Results | Where-Object { $_.Status -eq "failed" }).Count
 Write-Host "PS1 Syntax: $passed passed, $failed failed - $($result.Results.Count) total scripts"
 
 $result
+

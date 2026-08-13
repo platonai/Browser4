@@ -1433,6 +1433,146 @@ pub(super) fn test_open_refreshes_inactive_saved_session(ctx: &mut E2ECtx) {
     assert_eq!(read_persisted_session_id(&ctx.state_dir), "swarm-session-2");
 }
 
+pub(super) fn test_open_fresh_closes_existing_session(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    mock_server.queue_open_session_ids(vec!["swarm-session-1", "swarm-session-2"]);
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let first_open = run_command(
+        ctx,
+        &["open", "https://example.com/", OPEN_PROFILE_MODE_ARG],
+    );
+    assert!(
+        first_open
+            .stdout
+            .contains("Session opened: swarm-session-1"),
+        "Expected first open to create the initial session:\n{}",
+        first_open.stdout
+    );
+
+    let second_open = run_command(
+        ctx,
+        &[
+            "open",
+            "--fresh",
+            "https://example.com/",
+            OPEN_PROFILE_MODE_ARG,
+        ],
+    );
+    assert!(
+        second_open
+            .stdout
+            .contains("Closing existing session swarm-session-1 — starting fresh (--fresh)."),
+        "Expected --fresh to announce closing the existing session:\n{}",
+        second_open.stdout
+    );
+    assert!(
+        second_open
+            .stdout
+            .contains("Session opened: swarm-session-2"),
+        "Expected --fresh to open a new session:\n{}",
+        second_open.stdout
+    );
+    assert!(
+        !second_open.stdout.contains("Using existing session"),
+        "Expected no reconnect message when using --fresh:\n{}",
+        second_open.stdout
+    );
+    assert!(
+        !second_open.stdout.contains("Session already open"),
+        "Expected no reuse confirmation when using --fresh:\n{}",
+        second_open.stdout
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let close_session_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "close_session")
+        .collect();
+    assert_eq!(
+        close_session_calls.len(),
+        1,
+        "Expected --fresh to close the existing session exactly once"
+    );
+    assert_eq!(
+        close_session_calls[0].arguments["sessionId"], "swarm-session-1",
+        "Expected --fresh to close the previously-opened session"
+    );
+    let open_session_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "open_session")
+        .collect();
+    assert_eq!(
+        open_session_calls.len(),
+        2,
+        "Expected --fresh to call open_session again after closing"
+    );
+    assert_eq!(read_persisted_session_id(&ctx.state_dir), "swarm-session-2");
+}
+
+pub(super) fn test_open_reconnect_warns_when_display_flag_ignored(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    mock_server.queue_open_session_ids(vec!["swarm-session-1"]);
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let first_open = run_command(
+        ctx,
+        &["open", "https://example.com/", OPEN_PROFILE_MODE_ARG],
+    );
+    assert!(
+        first_open
+            .stdout
+            .contains("Session opened: swarm-session-1"),
+        "Expected first open to create the initial session:\n{}",
+        first_open.stdout
+    );
+    assert!(
+        !first_open.stderr.contains("ignored: reconnecting to existing session"),
+        "Expected no display-flag warning on the first open:\n{}",
+        first_open.stderr
+    );
+
+    let second_open = run_command(
+        ctx,
+        &[
+            "open",
+            "--headless",
+            "https://example.com/",
+            OPEN_PROFILE_MODE_ARG,
+        ],
+    );
+    assert!(
+        second_open
+            .stdout
+            .contains("Using existing session"),
+        "Expected second open to reconnect to the existing session:\n{}",
+        second_open.stdout
+    );
+    assert!(
+        second_open
+            .stderr
+            .contains("--headless ignored: reconnecting to existing session"),
+        "Expected a stderr warning that --headless was ignored on reconnect:\n{}",
+        second_open.stderr
+    );
+
+    // No new session should have been created by the reconnect.
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let open_session_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "open_session")
+        .collect();
+    assert_eq!(
+        open_session_calls.len(),
+        1,
+        "Expected the reconnect to reuse the session without calling open_session"
+    );
+}
+
 pub(super) fn test_open_reopens_saved_session_after_human_closed_tab(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 

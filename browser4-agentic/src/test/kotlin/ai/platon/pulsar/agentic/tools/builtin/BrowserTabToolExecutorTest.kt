@@ -2,6 +2,8 @@ package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.agentic.model.ToolCall
+import ai.platon.pulsar.chrome.Browser4WebDriver
+import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -67,6 +69,74 @@ class BrowserTabToolExecutorTest {
             )
 
             verify(driver).press("Enter", "#q")
+        }
+    }
+
+    @Test
+    fun `keydown dispatches driver keyDown with the key`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+
+            executor.callFunctionOn(
+                ToolCall("tab", "keyDown", mutableMapOf<String, Any?>("key" to "Control")),
+                driver
+            )
+
+            // Browser4WebDriver overrides keyDown with the stateful
+            // Keyboard.down() path; the executor must route the modifier
+            // key through the driver rather than dispatching its own JS event.
+            verify(driver).keyDown("Control")
+        }
+    }
+
+    @Test
+    fun `keyup dispatches driver keyUp with the key`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+
+            executor.callFunctionOn(
+                ToolCall("tab", "keyUp", mutableMapOf<String, Any?>("key" to "Control")),
+                driver
+            )
+
+            verify(driver).keyUp("Control")
+        }
+    }
+
+    @Test
+    fun `fill fallback JS respects input constraints`() {
+        runBlocking {
+            // The mock must be a PulsarWebDriver so the executor's
+            // `driver is PulsarWebDriver` check routes to the fallback path.
+            // The fallback now reuses the shared Browser4WebDriver.fillValueJs
+            // helper via evaluateValue(selector, functionDeclaration) — capture
+            // the function declaration (2nd argument) and assert it matches the
+            // shared helper (constraint-aware, `this`-bound element).
+            val driver = Mockito.mock(PulsarWebDriver::class.java)
+            val captured = java.util.concurrent.atomic.AtomicReference<String>()
+            Mockito.doAnswer { inv ->
+                captured.set(inv.getArgument(1))
+                null
+            }.`when`(driver).evaluateValue(Mockito.anyString(), Mockito.anyString())
+
+            executor.callFunctionOn(
+                ToolCall(
+                    "tab", "fill",
+                    mutableMapOf<String, Any?>("selector" to "#number-target", "text" to "42")
+                ),
+                driver
+            )
+
+            val js = captured.get()
+            assertEquals(Browser4WebDriver.fillValueJs("42"), js)
+            // read-only/disabled inputs keep their value (user input blocked)
+            assertTrue(js.contains("el.disabled || el.readOnly"), "JS must skip disabled/readonly: $js")
+            // number/range inputs set valueAsNumber instead of string coercion
+            assertTrue(js.contains("valueAsNumber"), "JS must use valueAsNumber: $js")
+            // contenteditable elements get textContent instead of value
+            assertTrue(js.contains("isContentEditable"), "JS must handle contenteditable: $js")
+            // maxlength guard still present
+            assertTrue(js.contains("maxLength"), "JS must guard maxlength: $js")
         }
     }
 

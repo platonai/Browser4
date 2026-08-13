@@ -15,7 +15,7 @@ Directory to write JSON files. Defaults to bin/maintenance/logs/.
 
 .EXAMPLE
 $r = & .\checks\check-ps1-syntax.ps1
-.\reporters\report-json.ps1 -Results $r
+.\reporters/report-json.ps1 -Results $r
 #>
 
 param(
@@ -41,7 +41,7 @@ end {
     if (-not $OutputDir) {
         $repoRoot = & { try { git rev-parse --show-toplevel 2>$null } catch { $null } }
         if (-not $repoRoot) { $repoRoot = Split-Path $PSScriptRoot -Parent }
-        $OutputDir = Join-Path $repoRoot "bin\maintenance\logs"
+        $OutputDir = Join-Path $repoRoot "bin/maintenance/logs"
     }
 
     if (-not (Test-Path $OutputDir)) {

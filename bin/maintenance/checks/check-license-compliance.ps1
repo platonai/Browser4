@@ -28,7 +28,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = $PSScriptRoot
-. (Join-Path $ScriptDir "..\common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "../common/MaintenanceUtil.ps1")
 
 $result = New-MaintenanceResult -CheckId "F3" -Name "License Compliance"
 $repoRoot = Get-RepositoryRoot
@@ -47,7 +47,7 @@ $licenseResult = Invoke-MaintenanceStep `
         $LASTEXITCODE
     }
 
-$licenseReport = Join-Path $repoRoot "target\generated-sources\license\THIRD-PARTY.txt"
+$licenseReport = Join-Path $repoRoot "target/generated-sources/license/THIRD-PARTY.txt"
 if (Test-Path $licenseReport) {
     $reportContent = Get-Content $licenseReport -Raw
     $violations = @()

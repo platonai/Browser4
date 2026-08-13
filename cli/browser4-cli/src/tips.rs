@@ -114,7 +114,7 @@ const TIPS_NAVIGATION: &[Tip] = &[
         text: "Use load options in the URL: `goto \"url -expires 1d -refresh\"` for caching control",
     },
     Tip {
-        text: "Use `--headed` flag to see the browser window — invaluable for debugging automation issues",
+        text: "Browsers open headless by default. Use `--headed` to see the browser window for debugging",
     },
     Tip {
         text: "Use named sessions (`-s <name>`) with `goto` to maintain separate browser state per task",
@@ -350,6 +350,9 @@ const TIPS_GENERAL: &[Tip] = &[
     },
     Tip {
         text: "Use `doctor` to diagnose Chrome, Java, and network issues when things aren't working",
+    },
+    Tip {
+        text: "Set BROWSER4_CLI_STATE_DIR to a writable path in sandboxed environments — the CLI falls back to ./.browser4-cli-state when ~/.browser4 is not writable",
     },
 ];
 

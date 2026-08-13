@@ -2,8 +2,11 @@ package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.api.AbstractBrowser
+import ai.platon.pulsar.api.AbstractWebDriver
+import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
@@ -70,5 +73,64 @@ class BrowserToolExecutorTest {
     @DisplayName("domain property is browser")
     fun domainPropertyIsBrowser() {
         assertEquals("browser", executor.domain)
+    }
+
+    @Test
+    @DisplayName("closeTab without target destroys the live front driver")
+    fun closeTabWithoutTargetDestroysLiveFrontDriver() = runBlocking {
+        val front = mockk<AbstractWebDriver>(relaxed = true)
+        every { front.guid } returns "FRONT-GUID"
+        every { browser.frontDriver } returns front
+        every { browser.drivers } returns mapOf("FRONT-GUID" to front)
+
+        val result = executor.callFunctionOn(
+            ToolCall("browser", "closeTab", mutableMapOf()),
+            browser
+        )
+
+        assertNull(result.exception)
+        verify(exactly = 1) { browser.destroyDriver(front) }
+    }
+
+    @Test
+    @DisplayName("closeTab without target ignores a dangling front driver")
+    fun closeTabWithoutTargetIgnoresDanglingFrontDriver() = runBlocking {
+        // A frontDriver that destroyDriver never cleared after the tab was
+        // closed: its guid is no longer a key of the browser's driver map.
+        val staleFront = mockk<AbstractWebDriver>(relaxed = true)
+        every { staleFront.guid } returns "STALE-GUID"
+        every { browser.frontDriver } returns staleFront
+        every { browser.drivers } returns emptyMap()
+
+        val liveDriver = mockk<AbstractWebDriver>(relaxed = true)
+        coEvery { browser.listDrivers() } returns listOf(liveDriver)
+
+        val result = executor.callFunctionOn(
+            ToolCall("browser", "closeTab", mutableMapOf()),
+            browser
+        )
+
+        assertNull(result.exception)
+        verify(exactly = 1) { browser.destroyDriver(liveDriver) }
+        verify(exactly = 0) { browser.destroyDriver(staleFront) }
+    }
+
+    @Test
+    @DisplayName("switchTab records the switch on the browser even when bringToFront fails")
+    fun switchTabRecordsSwitchWhenBringToFrontFails() = runBlocking {
+        val tabDriver = mockk<AbstractWebDriver>(relaxed = true)
+        every { tabDriver.guid } returns "TAB-GUID"
+        coEvery { tabDriver.bringToFront() } throws IllegalStateException("no window")
+        every { browser.findDriverByGUID("TAB-GUID") } returns tabDriver
+
+        val result = executor.callFunctionOn(
+            ToolCall("browser", "switchTab", mutableMapOf("tabId" to "TAB-GUID")),
+            browser
+        )
+
+        // The failed CDP activation must not abort the switch: the browser's
+        // front driver still follows the requested tab.
+        assertNull(result.exception)
+        verify(exactly = 1) { browser.frontDriver = tabDriver }
     }
 }

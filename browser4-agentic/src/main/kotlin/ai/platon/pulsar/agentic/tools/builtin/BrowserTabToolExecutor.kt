@@ -590,10 +590,35 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 when {
                     args.containsKey("selector") && args.containsKey("key") -> {
                         validateArgs(args, allowed("selector", "key"), setOf("selector", "key"), functionName)
-                        driver.press(
-                            paramString(args, "key", functionName)!!,
-                            paramString(args, "selector", functionName)!!
-                        )
+                        val key = paramString(args, "key", functionName)!!
+                        val selector = paramString(args, "selector", functionName)!!
+                        val b4Driver = driver as? Browser4WebDriver
+                        if (b4Driver != null) {
+                            // Use Browser4WebDriver.pressSafe — conditional cursor
+                            // positioning (skipped for nav keys like Home/Delete)
+                            b4Driver.pressSafe(key, selector)
+                        } else {
+                            // Fallback for non-Browser4WebDriver sessions:
+                            // inline the same fix via PulsarWebDriver API
+                            val pulsarDriver = driver as? PulsarWebDriver
+                            if (pulsarDriver != null) {
+                                pulsarDriver.page.focusOnSelector(selector)
+                                if (key.length == 1 && !Character.isISOControl(key[0])) {
+                                    pulsarDriver.evaluate("""
+                                        (function(){
+                                            var el = document.querySelector('${Browser4WebDriver.escapeJsSelector(selector)}');
+                                            if (!el) return;
+                                            if (typeof el.setSelectionRange === 'function') {
+                                                el.setSelectionRange(99999, 99999);
+                                            }
+                                        })()
+                                    """.trimIndent())
+                                }
+                                pulsarDriver.press(key)
+                            } else {
+                                driver.press(key, selector)
+                            }
+                        }
                     }
 
                     args.containsKey("key") -> {
@@ -613,10 +638,35 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                         val selector = paramString(args, "selector", functionName)!!
                         val timeoutMillis = paramLong(args, "timeoutMillis", functionName, required = false)
                         val typeBlock: suspend () -> Unit = {
-                            driver.type(
-                                paramString(args, "text", functionName)!!,
-                                selector
-                            )
+                            val text = paramString(args, "text", functionName)!!
+                            val b4Driver = driver as? Browser4WebDriver
+                            if (b4Driver != null) {
+                                // Use Browser4WebDriver.typeSafe — code-point-aware
+                                // typing that avoids the charAt() surrogate-splitting
+                                // bug in Keyboard.type() (pulsar-browser:4.11.2)
+                                b4Driver.typeSafe(text, selector)
+                            } else {
+                                // Fallback: inline the same fix via PulsarWebDriver API
+                                val pulsarDriver = driver as? PulsarWebDriver
+                                if (pulsarDriver != null) {
+                                    pulsarDriver.page.focusOnSelector(selector)
+                                    for (charString in Browser4WebDriver.codePoints(text)) {
+                                        if (Character.isISOControl(charString.codePointAt(0))) {
+                                            pulsarDriver.press(charString)
+                                        } else {
+                                            pulsarDriver.browserProtocol.insertText(charString)
+                                        }
+                                        val typeDelay = pulsarDriver.randomDelayMillis("type")
+                                        if (charString.length > 1) {
+                                            delay(typeDelay * 2)
+                                        } else {
+                                            delay(typeDelay)
+                                        }
+                                    }
+                                } else {
+                                    driver.type(text, selector)
+                                }
+                            }
                             if (args["submit"] == true) {
                                 // Target the filled element for the same reason as fill
                                 // above: JS-heavy pages may shift focus after type.
@@ -692,7 +742,24 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 val selector = paramString(args, "selector", functionName)!!
                 val timeoutMillis = paramLong(args, "timeoutMillis", functionName, required = false)
                 val fillBlock: suspend () -> Unit = {
-                    driver.fill(selector, paramString(args, "text", functionName)!!)
+                    val text = paramString(args, "text", functionName)!!
+                    val b4Driver = driver as? Browser4WebDriver
+                    if (b4Driver != null) {
+                        // Use Browser4WebDriver.fillSafe — maxlength-aware
+                        // fill that respects HTMLInputElement.maxLength
+                        b4Driver.fillSafe(selector, text)
+                    } else {
+                        // Fallback: same constraint-aware fill as Browser4WebDriver.fillSafe,
+                        // via the shared fillValueJs helper.  evaluateValue resolves
+                        // CSS/XPath/backend locators and binds `this` to the element,
+                        // matching fillSafe exactly.  The upstream PulsarWebDriver.fill()
+                        // is known to fail on constrained inputs (e.g. <input type=number>).
+                        if (driver is PulsarWebDriver) {
+                            driver.evaluateValue(selector, Browser4WebDriver.fillValueJs(text))
+                        } else {
+                            driver.fill(selector, text)
+                        }
+                    }
                     if (args["submit"] == true) {
                         // Dispatch Enter on the target element so CDP key events land
                         // on the correct input even when JS-heavy pages (e.g. Google
@@ -897,6 +964,10 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
             "keydown", "keyDown" -> {
                 validateArgs(args, allowed("key"), setOf("key"), functionName)
+                // Browser4WebDriver.keyDown routes through the stateful
+                // Keyboard.down() CDP path, which tracks held modifiers so
+                // that sequences like keyDown("Control") → press("a")
+                // produce DOM events with ctrlKey: true.
                 driver.keyDown(paramString(args, "key", functionName)!!)
             }
 
