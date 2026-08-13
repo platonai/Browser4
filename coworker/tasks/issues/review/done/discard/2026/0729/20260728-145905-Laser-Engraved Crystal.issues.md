@@ -178,13 +178,13 @@ The inspect algorithm analyzes the first N elements of a broad selector (div) an
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-Duplicate of Calabi-Yau #8. The `--file` approach is already the documented escape hatch. ACCEPT the documentation improvement: add a prominent "@file is the safest cross-platform pattern" recommendation at the top of the extraction section. The `eval --json` suggestion from Calabi-Yau #8 is also worth considering.
+The browser session inherits IP-based geolocation from the host. Adding `--locale`/`--country` flags to `goto` is a feature request for CDP geolocation override, not a bug fix. DEFER for now. Workaround: document how to use `cookie-set` or navigate to Amazon's delivery address page to change locale.
 
 ---
 
@@ -222,12 +222,12 @@ get all uses querySelectorAll which returns elements in document order. Differen
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-The browser session inherits IP-based geolocation from the host. Adding `--locale`/`--country` flags to `goto` is a feature request for CDP geolocation override, not a bug fix. DEFER for now. Workaround: document how to use `cookie-set` or navigate to Amazon's delivery address page to change locale.
+Amazon wraps sponsored links in `/sspa/click?...` tracking redirects. The tool correctly extracts what's in the DOM — this is Amazon's behavior, not a tool defect. Document the URL pattern difference (clean `/dp/ASIN` for organic vs `/sspa/click?...` for sponsored) in SKILL.md.
 
 ---
 
@@ -261,14 +261,14 @@ Documentation was written primarily with Windows/PowerShell pain points in mind.
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [x] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-Amazon wraps sponsored links in `/sspa/click?...` tracking redirects. The tool correctly extracts what's in the DOM — this is Amazon's behavior, not a tool defect. Document the URL pattern difference (clean `/dp/ASIN` for organic vs `/sspa/click?...` for sponsored) in SKILL.md.
+Valid UX concern. 6+ lines of output per `goto` becomes noise in multi-step workflows (this session had 8 detail page visits). A `--terse`/`--brief` flag showing only URL + title is a reasonable feature. The snapshot file path is rarely actionable in the terminal. Consider a persistent verbosity preference (`minimal`/`normal`/`verbose`).
 
 ---
 

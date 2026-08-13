@@ -1,0 +1,442 @@
+{
+  "meta": {
+    "source": "20260813-091900-extraction-method-routing.full.md",
+    "scenario": "extraction-method-routing",
+    "mode": "production",
+    "date": "20260813-091900"
+  },
+  "background": {
+    "executionContext": "**Commands used (chronological):**\n1. `browser4-cli help`, `browser4-cli --version` → 4.13.3; server UP at `http://localhost:18182`.\n2. Read local `skills/browser4-cli/SKILL.md` (737 lines) plus references (`htmlsnapshot.md`, `x-sql.md`, `crawl.md`, `agent.md`, `docs/eval-command-output.md`, `docs/mocksite.md`). `https://browser4.io/SKILL.md` returned an SSL error (environmental network restriction; the local copy was complete).\n3. Inspected MockSite source to learn exact markup/selectors: `EcControllers.kt`, `HtmlRenderer.kt`, `EcommerceController.kt`, `products.json`, `ec-product.html`, `form-filling.html`, `interactive-1.html`.\n4. Verified MockSite health (200) and backend status; confirmed no LLM key in my shell.\n5. **AC1:** `goto form-filling.html` (flaky first load — see Issue 1), re-`goto`, `snapshot -i --stdout`, filled via refs (`e1822`–`e1829`, `e1825`, `e1828`, `e1836`, `e1837`), `click #submit-btn`, `eval` to confirm live DOM, then `htmlsnapshot` + `htmlsnapshot get text \"#result-data\"` and `#result-panel`.\n6. **AC2:** `goto /ec/dp/B0E000001` → `htmlsnapshot` → `get text \"#productTitle\"`.\n7. **AC3:** `goto /ec/b?node=1292115012` → `htmlsnapshot` → `get all text '[class*=\"product-title\"]'`.\n8. **AC4:** wrote X-SQL files to `.test-sessions/`; tested scopes `[class*=…]`, `div[…]`, `article[…]`; tested `DOM_FIRST_HREF('.product-link')` vs `DOM_FIRST_HREF('a.product-link')` vs `DOM_FIRST_ATTR`. Final query used `DOM_FIRST_HREF('a.product-link')`.\n9. **AC5:** `goto interactive-1.html` → `eval --json --file ac5-eval.js`.\n10. **AC6:** `goto /ec/dp/B0E000002` → `extract … --stdout`; `doctor` confirmed backend LLM.\n11. **AC7:** wrote `ac7-seeds.txt` (4 URLs) + `ac7-query.sql` → `crawl --seed-file … --depth 0 --sql @… --format table --refresh`.\n\n**Key decisions:** used single-quoted PowerShell strings for selectors containing `\"`; quoted `@file` arguments to avoid PowerShell splatting; used `DOM_FIRST_HREF('a.product-link')` (tag-qualified) after `.product-link` returned empty; used `div[class*=\"product-card\"]` after confirming the browser4-cli-served markup uses `<div>` (not `<article>`).\n\n**Workarounds required:** re-`goto` after the flaky first load; single-quote selectors; quote `@file`; tag-qualify the `DOM_FIRST_HREF` selector (or use `DOM_FIRST_ATTR`).\n\n**Temporary files** were created under `.test-sessions/` (`ac4-*.sql`, `ac5-eval.js`, `ac7-seeds.txt`, `ac7-query.sql`). Note: `.test-sessions/` already contained extensive leftovers from prior evaluation runs.\n\n---\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"First goto reports \\\"Page loaded\\\" but the DOM is empty and stuck in readyState \\\"loading\\\"\",\n      \"severity\": \"Medium\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"browser4-cli goto \\\"http://localhost:18080/generated/form-filling.html\\\"\\nThen immediately: browser4-cli eval \\\"document.readyState\\\"  → returns \\\"loading\\\"; eval \\\"document.querySelectorAll('input').length\\\" → 0. The goto output printed \\\"Page loaded\\\" and even \\\"wait --load networkidle\\\" reported \\\"✓ Wait complete\\\".\",\n      \"expected\": \"After goto reports success, the page should be fully loaded (readyState \\\"complete\\\", populated DOM).\",\n      \"actual\": \"The first navigation (reconnecting an existing DEFAULT session that was on /ec/dp/B0E000003) left the target URL set but the document empty: document.title was \\\"\\\", document.documentElement.outerHTML.length was null, and there were 0 inputs/selects/buttons. A second goto (which printed \\\"Already at … page unchanged\\\") actually completed the load (readyState \\\"complete\\\", 13 inputs).\",\n      \"rootCause\": \"Likely a race in the reconnect-and-navigate path: when goto reuses a pre-existing session and navigates, the 'Page loaded' signal fires before the document finishes parsing/committing. The auto-captured snapshot and page-info read an empty document. Needs investigation into the goto navigation-completion detection (vs. the load-event/readyState it actually waits on).\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs (goto/navigation completion handling) — follow-up analysis needed\",\n      \"suggestion\": \"- Make goto's 'Page loaded' wait on document.readyState === 'complete' (or DOM content readiness), not just the HTTP navigation commit, before printing success and capturing the snapshot\\n- If the navigation is to the same URL the session already had, force a reload instead of printing 'page unchanged' with a stale empty DOM\\n- Surface a clearer diagnostic when the post-goto snapshot is empty (e.g. 'page appears empty; try wait --load networkidle or reload')\"\n    },\n    {\n      \"title\": \"CLI pollutes the repo root with 128 files across two inconsistently-named state directories\",\n      \"severity\": \"Medium\",\n      \"category\": \"Product\",\n      \"reproduction\": \"Run several browser4-cli commands from the repo root with an unwritable ~/.browser4. Observe D:\\\\workspace\\\\Browser4\\\\Browser4-4.13\\\\.browser4-cli\\\\snapshot\\\\ (128 files: snapshot-*.yml, extract-*.txt) and .\\\\.browser4-cli-state\\\\ (sessions\\\\, loops\\\\).\",\n      \"expected\": \"State/snapshots land in a single, clearly-named, configurable directory (ideally outside the repo, or at least consistently named and documented).\",\n      \"actual\": \"Two sibling dirs are created at the repo root: .browser4-cli (snapshots/extract results, 128 files) and .browser4-cli-state (session/loop state). The warning text names .browser4-cli-state, but snapshots go to .browser4-cli, so a user cannot tell which env var controls which directory.\",\n      \"rootCause\": \"The CLI state fallback path and the snapshot-output path are computed independently and use different names ('.browser4-cli' vs '.browser4-cli-state'). BROWSER4_CLI_STATE_DIR relocates state but snapshots appear to be written to a separately-derived '.browser4-cli' path.\",\n      \"codePointer\": \"cli/browser4-cli/src/ (state-dir fallback and snapshot-dir resolution)\",\n      \"suggestion\": \"- Unify snapshot and session state under one root (e.g. honor BROWSER4_CLI_STATE_DIR for both, defaulting snapshots under <state>/snapshot)\\n- Document the exact directory each artifact type is written to and the env var that controls it\\n- Prefer ~/.browser4 (outside the repo) when writable, and when falling back, print the full resolved path once rather than per-command\"\n    },\n    {\n      \"title\": \"Permission-denied CLI-state warning printed on every single command\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"browser4-cli fill e1822 \\\"Jane\\\" (or any command) in a sandbox where C:\\\\Users\\\\<user>\\\\.browser4 is not writable.\",\n      \"expected\": \"The fallback warning should appear once (or be suppressible), not on every command.\",\n      \"actual\": \"Every command prints two lines: 'cannot write CLI state to C:\\\\Users\\\\pereg\\\\.browser4 (permission denied)' and 'using …\\\\.browser4-cli-state instead — set BROWSER4_CLI_STATE_DIR to a writable location to silence this warning'. This adds noise to every interaction and clutters output that is otherwise meant to be parseable.\",\n      \"rootCause\": \"The fallback/warning logic runs on each invocation with no deduplication or sticky suppression.\",\n      \"codePointer\": \"cli/browser4-cli/src/ (state-dir initialization/fallback warning)\",\n      \"suggestion\": \"- Emit the warning only once per process lifetime (or cache a 'warned' marker)\\n- Add a --quiet-aware suppression or a dedicated config flag to silence it\"\n    },\n    {\n      \"title\": \"PowerShell treats unquoted @file as a splat; documented `--sql @query.sql` fails on Windows\",\n      \"severity\": \"Medium\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"browser4-cli htmlsnapshot query \\\"http://localhost:18080/ec/b?node=1292115012\\\" --sql @.test-sessions/ac4-query.sql\\n→ ParserError: Unrecognized token in source text (the @ is the PowerShell splat operator).\",\n      \"expected\": \"The @file syntax shown throughout SKILL.md/help should work in PowerShell (the primary Windows shell) or be documented with a Windows-safe form.\",\n      \"actual\": \"Unquoted @file is a PowerShell parse error. Quoting it (--sql \\\"@.test-sessions/...\\\") works, but the docs and help examples use the unquoted form copied from bash.\",\n      \"rootCause\": \"@ is PowerShell's splat operator, so an unquoted @path token never reaches the CLI. The docs were written bash-first.\",\n      \"codePointer\": \"skills/browser4-cli/SKILL.md (X-SQL quickstart examples) and references/htmlsnapshot.md / x-sql.md\",\n      \"suggestion\": \"- Add explicit PowerShell examples showing --sql \\\"@query.sql\\\" (quoted) alongside the bash form\\n- Add a note in the SKILL.md §4e and §5 shell-quoting warning that on PowerShell @file must be quoted\"\n    },\n    {\n      \"title\": \"PowerShell backslash-quote escaping breaks CSS selectors; must use single quotes\",\n      \"severity\": \"Medium\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"browser4-cli htmlsnapshot get all text \\\"[class*=\\\\\\\"product-title\\\\\\\"]\\\"\\n→ 'No elements matched \\\"[class*=\\\\\\\".'\",\n      \"expected\": \"A clear, working way to pass a CSS attribute selector like [class*=\\\"x\\\"] from PowerShell.\",\n      \"actual\": \"Using \\\\\\\" inside a double-quoted PowerShell string passes a mangled selector (the CLI sees '[class*=\\\"' truncated). Single quotes — '[class*=\\\"product-title\\\"]' — work, but this is easy to get wrong and the error message is confusing (it echoes the truncated selector and suggests a nonsense command).\",\n      \"rootCause\": \"PowerShell uses the backtick for escaping, not backslash; \\\\\\\" is a literal backslash+quote. The docs' Windows guidance exists in shell-quoting.md but the primary SKILL.md examples use bash quoting.\",\n      \"codePointer\": \"skills/browser4-cli/references/shell-quoting.md and SKILL.md §5 Critical Warnings\",\n      \"suggestion\": \"- Prominently document the single-quote pattern for PowerShell selectors with double-quoted attribute values\\n- Improve the empty-match error message to not echo a half-parsed selector and to drop the misleading 'query the live accessibility tree' suggestion\"\n    },\n    {\n      \"title\": \"DOM_FIRST_HREF(DOM, '.product-link') returns empty; requires tag-qualified selector or DOM_FIRST_ATTR\",\n      \"severity\": \"Medium\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"SELECT DOM_FIRST_HREF(DOM, '.product-link') AS link FROM DOM_LOAD_AND_SELECT(@url, '[class*=\\\"product-card\\\"]')\\n→ link is \\\"\\\" for all rows. DOM_FIRST_HREF(DOM, 'a.product-link') → correct absolute URL; DOM_FIRST_ATTR(DOM, '.product-link', 'href') → correct relative URL.\",\n      \"expected\": \"DOM_FIRST_HREF with any selector that matches an <a> element should return its href consistently.\",\n      \"actual\": \"A class-only selector (.product-link) yields empty; the same element selected with a tag+class selector (a.product-link) works. The task's own AC4 instruction to use DOM_FIRST_HREF is a trap for a user who naturally writes the class-only selector.\",\n      \"rootCause\": \"DOM_FIRST_HREF resolves relative→absolute and, per docs/ql-functions-guide.md:902-906, can return empty in scoped DOM. Empirically it is selector-sensitive (class-only fails, tag-qualified succeeds), which points to the internal element-selection vs. href-resolution step, not merely a base-URL absence. The function lives in an external Pulsar library (not this repo's .kt files).\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Investigate why firstHref(dom, '.product-link') and firstHref(dom, 'a.product-link') diverge for the same element, and normalize them\\n- Add a regression test for class-only vs tag-qualified selectors with relative hrefs in scoped DOM\\n- Update SKILL.md §4e/x-sql.md to call out this gotcha and recommend DOM_FIRST_ATTR for href extraction\"\n    },\n    {\n      \"title\": \"SKILL.md §4a/§5 falsely claim htmlsnapshot is stale after JS interactions — it actually reflects the live DOM\",\n      \"severity\": \"High\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"Fill+submit the client-side form-filling page, then: browser4-cli htmlsnapshot; browser4-cli htmlsnapshot get text \\\"#result-data\\\". It returns the just-submitted JSON payload, not the initial 'No submission yet.'\",\n      \"expected\": \"Behavior should match the documentation. §5 states 'htmlsnapshot captures the initial page HTML, not the live DOM… the snapshot will be stale' and §4a says JS-modified content 'will not be reflected'.\",\n      \"actual\": \"htmlsnapshot capture reflects the current live DOM: after a JS-driven form submission, get text \\\"#result-data\\\" returns the submitted values. The documented 'use eval instead' advice is therefore wrong for this version and would push users to a needlessly indirect path (and the reverse concern — trusting a genuinely-stale cached snapshot — is real and unaddressed).\",\n      \"rootCause\": \"The docs describe an older implementation ('initial server-rendered HTML') while the current htmlsnapshot capture re-serializes the live DOM. The documentation was not updated when the capture semantics changed.\",\n      \"codePointer\": \"skills/browser4-cli/SKILL.md lines 299 and 470-471 (and references/htmlsnapshot.md 'initial page HTML' wording)\",\n      \"suggestion\": \"- Correct §4a/§5 to state that htmlsnapshot capture serializes the current live DOM and will reflect JS updates as long as you re-capture after interacting\\n- Clarify the real staleness rule: the *cached* snapshot is stale only if you do not re-capture after a navigation/interaction; document that the auto-captured snapshot after goto is a distinct earlier capture\\n- Add an explicit note in AC1-style scenarios: after submit, run htmlsnapshot (capture) before get, then eval is not required\"\n    },\n    {\n      \"title\": \"crawl.md MockSite selector table is inaccurate (#feature-bullets and .breadcrumb don't exist)\",\n      \"severity\": \"Medium\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"Open http://localhost:18080/ec/dp/B0E000002 and inspect. crawl.md lists MockSite selectors: Description=#feature-bullets, Category=.breadcrumb. Neither selector matches (the actual IDs/classes are #product-features and .breadcrumbs).\",\n      \"expected\": \"The documented MockSite selectors should match the served pages.\",\n      \"actual\": \"#feature-bullets matches 0 elements; the feature list is <ul id=\\\"product-features\\\">. The breadcrumb is .breadcrumbs (plural). Title (#productTitle) and price (#product-price) are correct.\",\n      \"rootCause\": \"The crawl.md selector table was written against a different/older template or the Amazon fixture, and was not reconciled with the current HtmlRenderer product template (ec-product.html) which uses #product-features and .breadcrumbs.\",\n      \"codePointer\": \"skills/browser4-cli/references/crawl.md lines 272-280\",\n      \"suggestion\": \"- Correct the table to #productTitle, #product-price, #product-features, .breadcrumbs (and note the listing-page selectors .product-card/.product-title/.product-price)\\n- Add a note that listing pages use .product-title/.product-price classes while detail pages use #productTitle/#product-price IDs\"\n    },\n    {\n      \"title\": \"extract output is a Java-serialization wrapper with double-encoded JSON and leaked token metadata\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"browser4-cli extract \\\"Return the product title, displayed price, rating, and the top three feature bullets as JSON.\\\" --stdout\\n→ {\\\"type\\\":\\\"ai.platon.pulsar.agentic.ExtractResult\\\",\\\"description\\\":\\\"{\\\\\\\"product_title\\\\\\\":…,\\\\\\\"metadata\\\\\\\":{…},\\\\\\\"inputToken\\\\\\\":1932,\\\\\\\"outputToken\\\\\\\":4872,\\\\\\\"totalToken\\\\\\\":6804,\\\\\\\"inferenceTimeMillis\\\\\\\":5}\\\"}\",\n      \"expected\": \"The user asked for '…as JSON'; they should get a clean JSON object (e.g. {\\\"product_title\\\":…,\\\"displayed_price\\\":…,\\\"rating\\\":…,\\\"feature_bullets\\\":[…]}) — not an implementation wrapper.\",\n      \"actual\": \"The requested data is correct but is (1) wrapped in a {\\\"type\\\",\\\"description\\\"} envelope, (2) double-encoded as an escaped string inside 'description', (3) polluted with inputToken/outputToken/totalToken/inferenceTimeMillis and a metadata.completed:false field, and (4) saved to a file by default instead of stdout.\",\n      \"rootCause\": \"MCPToolController.kt:952-959 has an 'is ExtractResult' branch that would emit clean {success,message,data} JSON, but the extract result apparently falls through to the generic else branch (lines 963-968) that wraps any non-serializable object as {type, description}. The token-usage stats are also merged into the result data node before serialization.\",\n      \"codePointer\": \"browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/mcp/controller/MCPToolController.kt:952-968 and browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/PerceptiveAgent.kt:111-119\",\n      \"suggestion\": \"- Ensure the extract tool result is typed as ExtractResult at the serialization point so it hits the clean {success,message,data} branch\\n- Emit the LLM's structured data as the top-level payload and move token usage/inference timing into a separate, clearly-labeled metadata field (or strip it from user output)\\n- Default extract to --stdout for a single-page sync extraction, or clearly print the extracted JSON inline alongside the saved file path\"\n    },\n    {\n      \"title\": \"extract/agent help says the LLM key is 'configured in the environment' but the key lives on the backend server\",\n      \"severity\": \"Low\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"Run browser4-cli extract … with no OPENROUTER_API_KEY/DEEPSEEK_API_KEY in the CLI shell. It succeeds; browser4-cli doctor shows '✓ LLM is configured'.\",\n      \"expected\": \"The docs should specify where the LLM key must be set (the process/environment that runs the backend server, not the CLI shell).\",\n      \"actual\": \"extract worked because the separately-managed backend (port 18182) has the key. A first-time user who starts the backend themselves via the CLI would reasonably assume 'the environment' means their own shell; the reference (agent.md §Prerequisites) likewise shows export DEEPSEEK_API_KEY=… without stating it must reach the backend process.\",\n      \"rootCause\": \"Ambiguous phrasing — 'environment' can mean the CLI shell or the backend server environment. The architecture (CLI → REST backend → LLM) means the key must be visible to the backend JVM.\",\n      \"codePointer\": \"skills/browser4-cli/references/agent.md (Prerequisites section) and cli/browser4-cli/src/help.rs (extract/chat help text)\",\n      \"suggestion\": \"- Reword to: 'the key must be set in the environment of the Browser4 backend server process (wherever it runs); when the CLI auto-starts the backend, set it in the CLI's own environment before the first launch'\\n- Add a doctor-based tip ('LLM is configured/not configured') pointing users at the right place\"\n    },\n    {\n      \"title\": \"MockSite serves two different HTML structures for the same URL depending on Accept header\",\n      \"severity\": \"Low\",\n      \"category\": \"Product\",\n      \"reproduction\": \"GET http://localhost:18080/ec/b?node=1292115012 with Accept */* (e.g. PowerShell Invoke-WebRequest) → article.product-card with h2.product-title. Same URL in browser4-cli (browser goto and scrape API) → div.product-card with div.product-title.\",\n      \"expected\": \"One stable markup for a given URL regardless of client Accept header, so selector discovery is unambiguous.\",\n      \"actual\": \"Two Spring controllers map /ec/b (EcommerceController vs EcCategoryController); the more specific produces=text/html match wins for the browser, so browser4-cli consistently sees div.product-card, but a curl/Invoke-WebRequest with */* sees article.product-card. The fixture README's 'Suggested ID / Class Conventions' still documents article.product-card.\",\n      \"rootCause\": \"MockSite fixture design: duplicated /ec/b mappings with different renderers and no unambiguous single winner across Accept values. Not a browser4-cli defect, but it undermines the scenario's selector discoverability when users cross-check with a different HTTP client.\",\n      \"codePointer\": \"browser4-tests/pulsar-tests-common/src/main/kotlin/ai/platon/pulsar/test/server/ec/EcControllers.kt and EcommerceController.kt (duplicate /ec/b mappings)\",\n      \"suggestion\": \"- Consolidate to a single /ec/b handler (or make both renderers emit the same product-card element tag/classes)\\n- Update the ec/README.md conventions to match the markup actually served to text/html clients (div.product-card / div.product-title)\"\n    },\n    {\n      \"title\": \"Misleading empty-match hint suggests htmlsnapshot get text queries 'the live accessibility tree'\",\n      \"severity\": \"Low\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"browser4-cli htmlsnapshot get all text \\\"[class*=\\\\\\\"product-title\\\\\\\"]\\\" (with a mangled/empty selector) → 'No elements matched … Alternatively, use get text \\\"…\\\" to query the live accessibility tree instead of the stored snapshot.'\",\n      \"expected\": \"Accurate guidance: get/get all query the stored HTML snapshot via CSS selectors, not the accessibility tree.\",\n      \"actual\": \"The hint claims get text queries the live accessibility tree, which is incorrect (that is snapshot/eval territory). Combined with echoing the half-parsed selector, the recovery message actively misleads.\",\n      \"rootCause\": \"Copy/pasted or outdated hint text in the empty-result path; the selector truncation is a downstream effect of the PowerShell escaping issue but the 'live accessibility tree' wording is independently wrong.\",\n      \"codePointer\": \"cli/browser4-cli/src/ (htmlsnapshot get empty-result error/hint text)\",\n      \"suggestion\": \"- Replace the 'live accessibility tree' wording with accurate guidance: verify the selector with htmlsnapshot grep, or re-capture with htmlsnapshot\\n- Don't echo a truncated selector in the suggestion line; show the exact selector the CLI received\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Successful — all 7 acceptance criteria (AC1–AC7) covering every branch of SKILL.md §4a were completed and verified against MockSite. AC6 (extract) succeeded because the backend server has an LLM key configured (confirmed via doctor), not because the CLI shell had one.\",\n    \"successRate\": \"95% — all criteria passed; the remaining 5% reflects friction and workarounds required along the way (flaky first load, PowerShell quoting, DOM_FIRST_HREF empty, messy extract output) rather than any failed criterion.\",\n    \"issuesFound\": 12,\n    \"majorBlockers\": \"None. No criterion was blocked; every issue had a workaround that allowed the task to proceed.\",\n    \"mostConfusingAspects\": \"PowerShell-specific quoting (unquoted @file splat and \\\\\\\" escaping) that breaks otherwise-correct documented commands; DOM_FIRST_HREF returning empty for a class-only selector; SKILL.md asserting htmlsnapshot is stale when it is not; the extract command's Java-wrapper output format; and the CLI silently writing 128 files into the repo root under two inconsistently-named directories.\",\n    \"mostValuableImprovements\": \"1) Fix the PowerShell quoting story for @file and attribute selectors and surface it in the primary SKILL.md (not just shell-quoting.md). 2) Make DOM_FIRST_HREF consistent (or document DOM_FIRST_ATTR as the canonical href extractor). 3) Correct the §4a/§5 'htmlsnapshot is stale after JS interactions' claim to match actual live-DOM behavior. 4) Return clean structured JSON from extract instead of the {type,description} wrapper with leaked token stats. 5) Make goto's 'Page loaded' detection actually wait for document readiness, and unify/relocate CLI state+snapshot directories.\",\n    \"usabilityRating\": 6\n  }\n}\n```",
+    "task": "All seven acceptance criteria in **SKILL.md §4a — Choosing an Extraction Method** were completed successfully against MockSite (`http://localhost:18080`), using only `browser4-cli` commands:\n\n| AC | Branch | Command used | Result |\n|----|--------|--------------|--------|\n| AC1 | Interact first, then extract | `snapshot -i` → `fill`/`select`/`check` → `click` → `htmlsnapshot` → `htmlsnapshot get text \"#result-data\"` | ✅ Confirmation banner + submitted JSON (Jane / Smith / jane.smith@example.com / us / advanced) extracted and matched inputs |\n| AC2 | Static, one field | `htmlsnapshot get text \"#productTitle\"` | ✅ `4K OLED TV 55` |\n| AC3 | Static, all matches | `htmlsnapshot get all text '[class*=\"product-title\"]'` | ✅ All 6 Electronics titles |\n| AC4 | Correlated multi-field rows | `htmlsnapshot query --sql @ac4-final.sql` | ✅ 6 rows, title/price/URL aligned per card |\n| AC5 | Dynamic/complex logic | `eval --json --file ac5-eval.js` | ✅ title, 2 buttons, 0 links, 0 forms, 5 headings |\n| AC6 | Natural-language extraction | `extract \"…\" --stdout` | ✅ title / $199.99 / 4.4 / 2 feature bullets (backend has LLM key) |\n| AC7 | High-volume bulk | `crawl --seed-file … --depth 0 --sql @… --format table --refresh` | ✅ 4 rows, one per seed URL |\n\n**Important AC6 note:** The task said to record AC6 as *environment-blocked* if no LLM key was configured. My shell has no LLM key (all four env vars unset), but `extract` **succeeded** — `browser4-cli doctor` reports \"✓ LLM is configured\" on the **backend server** (port 18182). So the LLM key lives on the backend, not the CLI shell. This surfaced a documentation ambiguity (see Issue 10).\n\n---"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "SKILL.md §4a/§5 falsely claim htmlsnapshot is stale after JS interactions — it actually reflects the live DOM",
+      "severity": "High",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Fill+submit the client-side form-filling page, then: browser4-cli htmlsnapshot; browser4-cli htmlsnapshot get text \"#result-data\". It returns the just-submitted JSON payload, not the initial 'No submission yet.'"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Behavior should match the documentation. §5 states 'htmlsnapshot captures the initial page HTML, not the live DOM… the snapshot will be stale' and §4a says JS-modified content 'will not be reflected'."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "htmlsnapshot capture reflects the current live DOM: after a JS-driven form submission, get text \"#result-data\" returns the submitted values. The documented 'use eval instead' advice is therefore wrong for this version and would push users to a needlessly indirect path (and the reverse concern — trusting a genuinely-stale cached snapshot — is real and unaddressed)."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The docs describe an older implementation ('initial server-rendered HTML') while the current htmlsnapshot capture re-serializes the live DOM. The documentation was not updated when the capture semantics changed."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "skills/browser4-cli/SKILL.md lines 299 and 470-471 (and references/htmlsnapshot.md 'initial page HTML' wording)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Correct §4a/§5 to state that htmlsnapshot capture serializes the current live DOM and will reflect JS updates as long as you re-capture after interacting\n- Clarify the real staleness rule: the *cached* snapshot is stale only if you do not re-capture after a navigation/interaction; document that the auto-captured snapshot after goto is a distinct earlier capture\n- Add an explicit note in AC1-style scenarios: after submit, run htmlsnapshot (capture) before get, then eval is not required"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "First goto reports \"Page loaded\" but the DOM is empty and stuck in readyState \"loading\"",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "browser4-cli goto \"http://localhost:18080/generated/form-filling.html\"\nThen immediately: browser4-cli eval \"document.readyState\"  → returns \"loading\"; eval \"document.querySelectorAll('input').length\" → 0. The goto output printed \"Page loaded\" and even \"wait --load networkidle\" reported \"✓ Wait complete\"."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "After goto reports success, the page should be fully loaded (readyState \"complete\", populated DOM)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The first navigation (reconnecting an existing DEFAULT session that was on /ec/dp/B0E000003) left the target URL set but the document empty: document.title was \"\", document.documentElement.outerHTML.length was null, and there were 0 inputs/selects/buttons. A second goto (which printed \"Already at … page unchanged\") actually completed the load (readyState \"complete\", 13 inputs)."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Likely a race in the reconnect-and-navigate path: when goto reuses a pre-existing session and navigates, the 'Page loaded' signal fires before the document finishes parsing/committing. The auto-captured snapshot and page-info read an empty document. Needs investigation into the goto navigation-completion detection (vs. the load-event/readyState it actually waits on)."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs (goto/navigation completion handling) — follow-up analysis needed"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Make goto's 'Page loaded' wait on document.readyState === 'complete' (or DOM content readiness), not just the HTTP navigation commit, before printing success and capturing the snapshot\n- If the navigation is to the same URL the session already had, force a reload instead of printing 'page unchanged' with a stale empty DOM\n- Surface a clearer diagnostic when the post-goto snapshot is empty (e.g. 'page appears empty; try wait --load networkidle or reload')"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "CLI pollutes the repo root with 128 files across two inconsistently-named state directories",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run several browser4-cli commands from the repo root with an unwritable ~/.browser4. Observe D:\\workspace\\Browser4\\Browser4-4.13\\.browser4-cli\\snapshot\\ (128 files: snapshot-*.yml, extract-*.txt) and .\\.browser4-cli-state\\ (sessions\\, loops\\)."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "State/snapshots land in a single, clearly-named, configurable directory (ideally outside the repo, or at least consistently named and documented)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Two sibling dirs are created at the repo root: .browser4-cli (snapshots/extract results, 128 files) and .browser4-cli-state (session/loop state). The warning text names .browser4-cli-state, but snapshots go to .browser4-cli, so a user cannot tell which env var controls which directory."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The CLI state fallback path and the snapshot-output path are computed independently and use different names ('.browser4-cli' vs '.browser4-cli-state'). BROWSER4_CLI_STATE_DIR relocates state but snapshots appear to be written to a separately-derived '.browser4-cli' path."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ (state-dir fallback and snapshot-dir resolution)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Unify snapshot and session state under one root (e.g. honor BROWSER4_CLI_STATE_DIR for both, defaulting snapshots under <state>/snapshot)\n- Document the exact directory each artifact type is written to and the env var that controls it\n- Prefer ~/.browser4 (outside the repo) when writable, and when falling back, print the full resolved path once rather than per-command"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "PowerShell treats unquoted @file as a splat; documented `--sql @query.sql` fails on Windows",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "browser4-cli htmlsnapshot query \"http://localhost:18080/ec/b?node=1292115012\" --sql @.test-sessions/ac4-query.sql\n→ ParserError: Unrecognized token in source text (the @ is the PowerShell splat operator)."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The @file syntax shown throughout SKILL.md/help should work in PowerShell (the primary Windows shell) or be documented with a Windows-safe form."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Unquoted @file is a PowerShell parse error. Quoting it (--sql \"@.test-sessions/...\") works, but the docs and help examples use the unquoted form copied from bash."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "@ is PowerShell's splat operator, so an unquoted @path token never reaches the CLI. The docs were written bash-first."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "skills/browser4-cli/SKILL.md (X-SQL quickstart examples) and references/htmlsnapshot.md / x-sql.md"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add explicit PowerShell examples showing --sql \"@query.sql\" (quoted) alongside the bash form\n- Add a note in the SKILL.md §4e and §5 shell-quoting warning that on PowerShell @file must be quoted"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "PowerShell backslash-quote escaping breaks CSS selectors; must use single quotes",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "browser4-cli htmlsnapshot get all text \"[class*=\\\"product-title\\\"]\"\n→ 'No elements matched \"[class*=\\\".'"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A clear, working way to pass a CSS attribute selector like [class*=\"x\"] from PowerShell."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Using \\\" inside a double-quoted PowerShell string passes a mangled selector (the CLI sees '[class*=\"' truncated). Single quotes — '[class*=\"product-title\"]' — work, but this is easy to get wrong and the error message is confusing (it echoes the truncated selector and suggests a nonsense command)."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "PowerShell uses the backtick for escaping, not backslash; \\\" is a literal backslash+quote. The docs' Windows guidance exists in shell-quoting.md but the primary SKILL.md examples use bash quoting."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "skills/browser4-cli/references/shell-quoting.md and SKILL.md §5 Critical Warnings"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Prominently document the single-quote pattern for PowerShell selectors with double-quoted attribute values\n- Improve the empty-match error message to not echo a half-parsed selector and to drop the misleading 'query the live accessibility tree' suggestion"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "DOM_FIRST_HREF(DOM, '.product-link') returns empty; requires tag-qualified selector or DOM_FIRST_ATTR",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "SELECT DOM_FIRST_HREF(DOM, '.product-link') AS link FROM DOM_LOAD_AND_SELECT(@url, '[class*=\"product-card\"]')\n→ link is \"\" for all rows. DOM_FIRST_HREF(DOM, 'a.product-link') → correct absolute URL; DOM_FIRST_ATTR(DOM, '.product-link', 'href') → correct relative URL."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "DOM_FIRST_HREF with any selector that matches an <a> element should return its href consistently."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "A class-only selector (.product-link) yields empty; the same element selected with a tag+class selector (a.product-link) works. The task's own AC4 instruction to use DOM_FIRST_HREF is a trap for a user who naturally writes the class-only selector."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "DOM_FIRST_HREF resolves relative→absolute and, per docs/ql-functions-guide.md:902-906, can return empty in scoped DOM. Empirically it is selector-sensitive (class-only fails, tag-qualified succeeds), which points to the internal element-selection vs. href-resolution step, not merely a base-URL absence. The function lives in an external Pulsar library (not this repo's .kt files)."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Investigate why firstHref(dom, '.product-link') and firstHref(dom, 'a.product-link') diverge for the same element, and normalize them\n- Add a regression test for class-only vs tag-qualified selectors with relative hrefs in scoped DOM\n- Update SKILL.md §4e/x-sql.md to call out this gotcha and recommend DOM_FIRST_ATTR for href extraction"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "crawl.md MockSite selector table is inaccurate (#feature-bullets and .breadcrumb don't exist)",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Open http://localhost:18080/ec/dp/B0E000002 and inspect. crawl.md lists MockSite selectors: Description=#feature-bullets, Category=.breadcrumb. Neither selector matches (the actual IDs/classes are #product-features and .breadcrumbs)."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The documented MockSite selectors should match the served pages."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "#feature-bullets matches 0 elements; the feature list is <ul id=\"product-features\">. The breadcrumb is .breadcrumbs (plural). Title (#productTitle) and price (#product-price) are correct."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The crawl.md selector table was written against a different/older template or the Amazon fixture, and was not reconciled with the current HtmlRenderer product template (ec-product.html) which uses #product-features and .breadcrumbs."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "skills/browser4-cli/references/crawl.md lines 272-280"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Correct the table to #productTitle, #product-price, #product-features, .breadcrumbs (and note the listing-page selectors .product-card/.product-title/.product-price)\n- Add a note that listing pages use .product-title/.product-price classes while detail pages use #productTitle/#product-price IDs"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "extract output is a Java-serialization wrapper with double-encoded JSON and leaked token metadata",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "browser4-cli extract \"Return the product title, displayed price, rating, and the top three feature bullets as JSON.\" --stdout\n→ {\"type\":\"ai.platon.pulsar.agentic.ExtractResult\",\"description\":\"{\\\"product_title\\\":…,\\\"metadata\\\":{…},\\\"inputToken\\\":1932,\\\"outputToken\\\":4872,\\\"totalToken\\\":6804,\\\"inferenceTimeMillis\\\":5}\"}"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The user asked for '…as JSON'; they should get a clean JSON object (e.g. {\"product_title\":…,\"displayed_price\":…,\"rating\":…,\"feature_bullets\":[…]}) — not an implementation wrapper."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The requested data is correct but is (1) wrapped in a {\"type\",\"description\"} envelope, (2) double-encoded as an escaped string inside 'description', (3) polluted with inputToken/outputToken/totalToken/inferenceTimeMillis and a metadata.completed:false field, and (4) saved to a file by default instead of stdout."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "MCPToolController.kt:952-959 has an 'is ExtractResult' branch that would emit clean {success,message,data} JSON, but the extract result apparently falls through to the generic else branch (lines 963-968) that wraps any non-serializable object as {type, description}. The token-usage stats are also merged into the result data node before serialization."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/mcp/controller/MCPToolController.kt:952-968 and browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/PerceptiveAgent.kt:111-119"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Ensure the extract tool result is typed as ExtractResult at the serialization point so it hits the clean {success,message,data} branch\n- Emit the LLM's structured data as the top-level payload and move token usage/inference timing into a separate, clearly-labeled metadata field (or strip it from user output)\n- Default extract to --stdout for a single-page sync extraction, or clearly print the extracted JSON inline alongside the saved file path"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 9,
+      "title": "Permission-denied CLI-state warning printed on every single command",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "browser4-cli fill e1822 \"Jane\" (or any command) in a sandbox where C:\\Users\\<user>\\.browser4 is not writable."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The fallback warning should appear once (or be suppressible), not on every command."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Every command prints two lines: 'cannot write CLI state to C:\\Users\\pereg\\.browser4 (permission denied)' and 'using …\\.browser4-cli-state instead — set BROWSER4_CLI_STATE_DIR to a writable location to silence this warning'. This adds noise to every interaction and clutters output that is otherwise meant to be parseable."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The fallback/warning logic runs on each invocation with no deduplication or sticky suppression."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ (state-dir initialization/fallback warning)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Emit the warning only once per process lifetime (or cache a 'warned' marker)\n- Add a --quiet-aware suppression or a dedicated config flag to silence it"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 10,
+      "title": "extract/agent help says the LLM key is 'configured in the environment' but the key lives on the backend server",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run browser4-cli extract … with no OPENROUTER_API_KEY/DEEPSEEK_API_KEY in the CLI shell. It succeeds; browser4-cli doctor shows '✓ LLM is configured'."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The docs should specify where the LLM key must be set (the process/environment that runs the backend server, not the CLI shell)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "extract worked because the separately-managed backend (port 18182) has the key. A first-time user who starts the backend themselves via the CLI would reasonably assume 'the environment' means their own shell; the reference (agent.md §Prerequisites) likewise shows export DEEPSEEK_API_KEY=… without stating it must reach the backend process."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Ambiguous phrasing — 'environment' can mean the CLI shell or the backend server environment. The architecture (CLI → REST backend → LLM) means the key must be visible to the backend JVM."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "skills/browser4-cli/references/agent.md (Prerequisites section) and cli/browser4-cli/src/help.rs (extract/chat help text)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Reword to: 'the key must be set in the environment of the Browser4 backend server process (wherever it runs); when the CLI auto-starts the backend, set it in the CLI's own environment before the first launch'\n- Add a doctor-based tip ('LLM is configured/not configured') pointing users at the right place"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 11,
+      "title": "MockSite serves two different HTML structures for the same URL depending on Accept header",
+      "severity": "Low",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "GET http://localhost:18080/ec/b?node=1292115012 with Accept */* (e.g. PowerShell Invoke-WebRequest) → article.product-card with h2.product-title. Same URL in browser4-cli (browser goto and scrape API) → div.product-card with div.product-title."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "One stable markup for a given URL regardless of client Accept header, so selector discovery is unambiguous."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Two Spring controllers map /ec/b (EcommerceController vs EcCategoryController); the more specific produces=text/html match wins for the browser, so browser4-cli consistently sees div.product-card, but a curl/Invoke-WebRequest with */* sees article.product-card. The fixture README's 'Suggested ID / Class Conventions' still documents article.product-card."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "MockSite fixture design: duplicated /ec/b mappings with different renderers and no unambiguous single winner across Accept values. Not a browser4-cli defect, but it undermines the scenario's selector discoverability when users cross-check with a different HTTP client."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-tests/pulsar-tests-common/src/main/kotlin/ai/platon/pulsar/test/server/ec/EcControllers.kt and EcommerceController.kt (duplicate /ec/b mappings)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Consolidate to a single /ec/b handler (or make both renderers emit the same product-card element tag/classes)\n- Update the ec/README.md conventions to match the markup actually served to text/html clients (div.product-card / div.product-title)"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 12,
+      "title": "Misleading empty-match hint suggests htmlsnapshot get text queries 'the live accessibility tree'",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "browser4-cli htmlsnapshot get all text \"[class*=\\\"product-title\\\"]\" (with a mangled/empty selector) → 'No elements matched … Alternatively, use get text \"…\" to query the live accessibility tree instead of the stored snapshot.'"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Accurate guidance: get/get all query the stored HTML snapshot via CSS selectors, not the accessibility tree."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The hint claims get text queries the live accessibility tree, which is incorrect (that is snapshot/eval territory). Combined with echoing the half-parsed selector, the recovery message actively misleads."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Copy/pasted or outdated hint text in the empty-result path; the selector truncation is a downstream effect of the PowerShell escaping issue but the 'live accessibility tree' wording is independently wrong."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ (htmlsnapshot get empty-result error/hint text)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Replace the 'live accessibility tree' wording with accurate guidance: verify the selector with htmlsnapshot grep, or re-capture with htmlsnapshot\n- Don't echo a truncated selector in the suggestion line; show the exact selector the CLI received"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}
