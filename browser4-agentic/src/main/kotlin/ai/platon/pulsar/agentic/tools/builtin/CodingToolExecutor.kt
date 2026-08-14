@@ -7,6 +7,7 @@ import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingAgentShell
 import ai.platon.pulsar.coding.DevFlowScaffolds
 import ai.platon.pulsar.coding.LanguageServerManager
+import ai.platon.pulsar.coding.KotlinSemanticIndexer
 import ai.platon.pulsar.coding.MavenBuildSupport
 import ai.platon.pulsar.coding.SkeletonExtractor
 import ai.platon.pulsar.coding.ValidationResult
@@ -82,6 +83,9 @@ class CodingToolExecutor : AbstractToolExecutor() {
 
     /** Maven build wrapper for Browser4 self-development (`coding.mvnBuild`). */
     private val mavenBuild = MavenBuildSupport()
+
+    /** Zero-dependency Kotlin symbol/reference extraction (`coding.ktSymbols`/`ktReferences`). */
+    private val kotlinIndexer = KotlinSemanticIndexer()
 
     /**
      * Composite target that bundles the enhanced shell and filesystem.
@@ -372,6 +376,30 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "Kotlin/Java compiler diagnostics (file:line:col — message) instead of raw logs. " +
                 "module e.g. 'browser4-rest' or 'browser4-plugins/browser4-seo'; goals default 'compile'. " +
                 "Use this to check Kotlin code before/after edits — the fast alternative to a JDTLS server."
+        )
+
+        // --- Kotlin semantic layer (zero-dependency symbol/reference extraction) ---
+        toolSpec["ktSymbols"] = ToolSpec(
+            domain = domain, method = "ktSymbols",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("pattern", "String", "null"),
+            ),
+            returnType = "String",
+            description = "List Kotlin symbol definitions (classes, objects, interfaces, functions, properties) " +
+                "in a .kt file via lightweight language-structure analysis (zero dependencies). " +
+                "pattern filters by name substring. For Browser4 self-development."
+        )
+        toolSpec["ktReferences"] = ToolSpec(
+            domain = domain, method = "ktReferences",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("symbol", "String"),
+            ),
+            returnType = "String",
+            description = "Find references to a Kotlin symbol in a .kt file — call sites and property usages — " +
+                "via lightweight language-structure analysis (zero dependencies). " +
+                "Use before refactoring Browser4 code to assess impact."
         )
 
         // --- Extract skeleton from real code (anti-staleness scaffold) ---
@@ -717,6 +745,29 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     timeoutSeconds = timeout,
                 )
                 mavenBuild.format(result)
+            }
+            "ktSymbols" -> {
+                validateArgs(args, allowed = setOf("path", "pattern"), required = setOf("path"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                val resolved = fs.resolvePathString(path)
+                    ?: throw IllegalArgumentException("Path not allowed: $path")
+                val content = fs.readFile(resolved)
+                val pattern = paramString(args, "pattern", functionName, required = false, default = "") ?: ""
+                val symbols = kotlinIndexer.symbols(content, resolved.substringAfterLast('/').substringAfterLast('\\'))
+                    .filter { pattern.isBlank() || it.name.contains(pattern, ignoreCase = true) }
+                if (symbols.isEmpty()) "No Kotlin symbols found${if (pattern.isNotBlank()) " for '$pattern'" else ""} in $path"
+                else symbols.joinToString("\n") { "${it.kind} ${it.name} — line ${it.line}" }
+            }
+            "ktReferences" -> {
+                validateArgs(args, allowed = setOf("path", "symbol"), required = setOf("path", "symbol"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                val symbol = paramString(args, "symbol", functionName)!!
+                val resolved = fs.resolvePathString(path)
+                    ?: throw IllegalArgumentException("Path not allowed: $path")
+                val content = fs.readFile(resolved)
+                val refs = kotlinIndexer.references(content, symbol, resolved.substringAfterLast('/').substringAfterLast('\\'))
+                if (refs.isEmpty()) "No references to '$symbol' found in $path"
+                else refs.joinToString("\n") { "line ${it.line}: ${it.snippet}" }
             }
             "scaffoldFromExample" -> {
                 validateArgs(args, allowed = setOf("path", "basePackage", "className", "domain", "toolMethod"),
