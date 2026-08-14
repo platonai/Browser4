@@ -150,13 +150,17 @@ object ArtifactValidator {
             }
         }
 
-        // Check for at least one ToolExecutor
+        // Check for at least one ToolExecutor. Match the CLASS declaration (not any
+        // file merely mentioning "ToolExecutor", e.g. an AutoConfiguration that
+        // wires/imports one) — otherwise config classes get mis-validated as executors.
         val toolExecutors = dir.walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
             .mapNotNull { file ->
                 val content = try { file.readText() } catch (_: Exception) { null }
-                content?.takeIf { it.contains("AbstractToolExecutor") || it.contains("ToolExecutor") }
-                    ?.let { file to it }
+                content?.takeIf {
+                    it.contains(Regex("""(class|open class)\s+\w+ToolExecutor\b""")) ||
+                        it.contains("AbstractToolExecutor")
+                }?.let { file to it }
             }
             .toList()
 
@@ -177,10 +181,13 @@ object ArtifactValidator {
             pluginJsonFile.takeIf { it.exists() }?.readText().orEmpty()
         )?.groupValues?.get(1)
         if (manifestName != null && pomFile.exists()) {
-            val artifactId = Regex("""<artifactId>\s*([^<\s]+)\s*</artifactId>""")
-                .findAll(pomFile.readText())
+            // The project artifactId is the one directly under <project> — strip the
+            // <parent> block and <dependencies> so nested artifactIds don't fool us.
+            val pomText = pomFile.readText()
+            val artifactId = Regex("""(?s)<artifactId>\s*([^<\s]+)\s*</artifactId>""")
+                .findAll(pomText.substringBefore("<dependencies>"))
                 .map { it.groupValues[1] }
-                .lastOrNull() // last one = project-level artifactId (after <parent>)
+                .lastOrNull()
             if (artifactId != null && artifactId != manifestName) {
                 issues += ValidationIssue(Severity.WARNING,
                     "plugin.json 'name' ('$manifestName') does not match pom <artifactId> ('$artifactId') — " +

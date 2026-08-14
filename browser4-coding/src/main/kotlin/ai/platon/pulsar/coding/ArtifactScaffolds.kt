@@ -90,7 +90,7 @@ object ArtifactScaffolds {
 
         return linkedMapOf(
             "pom.xml" to pluginPom(pluginName, pdkVersion),
-            "build.ps1" to pluginBuildScript(pluginName, className, autoConfigClass, toolExecutorClass, jsFile),
+            "build.ps1" to pluginBuildScript(pluginName, basePackage, autoConfigClass, toolExecutorClass, jsFile),
             "src/main/resources/META-INF/browser4-plugin.json" to
                 pluginJson(pluginName, toolDescription, autoConfigFqn),
             "src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports" to
@@ -116,12 +116,12 @@ object ArtifactScaffolds {
      */
     private fun pluginBuildScript(
         pluginName: String,
-        className: String,
+        basePackage: String,
         autoConfigClass: String,
         toolExecutorClass: String,
         jsFile: String,
     ): String {
-        val configClass = "${className}Config"
+        val packagePath = basePackage.replace('.', '/')
         return """
             # build.ps1 — Build, verify, and deploy the $pluginName plugin
             #
@@ -164,8 +164,8 @@ object ArtifactScaffolds {
                     @{ Name = "plugin manifest";     Pattern = "META-INF/browser4-plugin.json" },
                     @{ Name = "auto-config imports"; Pattern = "META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports" },
                     @{ Name = "js resource";         Pattern = "$jsFile" },
-                    @{ Name = "${'$'}autoConfigClass"; Pattern = "ai/platon/pulsar/${'$'}([a-z]+)/config/${'$'}autoConfigClass.class" },
-                    @{ Name = "${'$'}toolExecutorClass"; Pattern = "ai/platon/pulsar/${'$'}([a-z]+)/tools/${'$'}toolExecutorClass.class" }
+                    @{ Name = "$autoConfigClass";    Pattern = "$packagePath/config/$autoConfigClass.class" },
+                    @{ Name = "$toolExecutorClass";   Pattern = "$packagePath/tools/$toolExecutorClass.class" }
                 )
                 foreach (${'$'}check in ${'$'}checks) {
                     if (${'$'}jarContents -notcontains ${'$'}check.Pattern) {

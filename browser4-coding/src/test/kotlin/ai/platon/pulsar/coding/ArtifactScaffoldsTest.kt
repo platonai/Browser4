@@ -48,6 +48,11 @@ class ArtifactScaffoldsTest {
         assertTrue(script.contains("AutoConfiguration.imports"))
         assertTrue(script.contains("seo/extractMeta.js"))
         assertTrue(script.contains("-RestInstall"))
+        // Class names must be interpolated, not left as literal $vars (regression:
+        // a prior template emitted literal "\$autoConfigClass" which breaks the check).
+        assertTrue(script.contains("SeoAutoConfiguration.class"), "class name not interpolated: $script")
+        assertTrue(script.contains("SeoToolExecutor.class"), "class name not interpolated: $script")
+        assertFalse(script.contains("\$autoConfigClass"), "literal \$autoConfigClass leaked: $script")
     }
 
     @Test
