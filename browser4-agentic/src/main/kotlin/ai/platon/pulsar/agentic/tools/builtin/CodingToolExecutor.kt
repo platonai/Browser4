@@ -776,8 +776,24 @@ class CodingToolExecutor : AbstractToolExecutor() {
                         toolMethod = toolMethod ?: "doAction",
                         toolDescription = description,
                     )
+                    "rest-endpoint" -> DevFlowScaffolds.restEndpoint(
+                        resource = name,
+                        description = description,
+                    )
+                    "test-class" -> DevFlowScaffolds.testClass(
+                        packageName = basePackage ?: "ai.platon.pulsar.agentic.tools",
+                        testClass = toolName ?: "${toTestClassName(name)}Test",
+                        targetClass = toolName ?: toTestClassName(name),
+                        description = description,
+                    )
+                    "skill" -> DevFlowScaffolds.skill(
+                        name = name,
+                        description = description,
+                        triggers = if (category.isNullOrBlank()) emptyList() else listOf(category),
+                        tools = if (toolName.isNullOrBlank()) emptyList() else listOf(toolName),
+                    )
                     else -> throw IllegalArgumentException(
-                        "Unknown scaffoldFlow type: $type. Supported: b4-cli-command, agent-tool")
+                        "Unknown scaffoldFlow type: $type. Supported: b4-cli-command, agent-tool, rest-endpoint, test-class, skill")
                 }
                 files.entries.joinToString("\n\n") { (path, content) ->
                     "=== File: $path ===\n$content"
@@ -912,5 +928,10 @@ class CodingToolExecutor : AbstractToolExecutor() {
             else -> segments.lastOrNull() ?: ""
         }
     }
+
+    /** kebab/snake → PascalCase (my-tool → MyTool), for test-class names. */
+    private fun toTestClassName(name: String): String =
+        name.split('-', '_').filter { it.isNotEmpty() }
+            .joinToString("") { it.replaceFirstChar { c -> c.uppercase() } }
 }
 

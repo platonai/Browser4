@@ -222,10 +222,206 @@ object DevFlowScaffolds {
         }
     """.trimIndent()
 
+    // ==================== rest-endpoint ====================
+
+    /**
+     * Generate the REST endpoint skeleton (Controller + Service + test),
+     * mirroring the SwarmController/SwarmService task-store pattern:
+     * @RestController + @RequestMapping("api/<resource>") + @PostMapping,
+     * @Service with a ConcurrentHashMap<UUID, ...> task store, submit→UUID and
+     * result-polling endpoints.
+     */
+    fun restEndpoint(
+        resource: String,
+        description: String = "Task for $resource",
+    ): Map<String, String> {
+        val controllerClass = toPascalCase(resource) + "Controller"
+        val serviceClass = toPascalCase(resource) + "Service"
+        return linkedMapOf(
+            "browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/controller/$controllerClass.kt" to
+                controllerSkeleton(resource, controllerClass, serviceClass),
+            "browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/$serviceClass.kt" to
+                serviceSkeleton(resource, serviceClass, description),
+            "browser4-rest/src/test/kotlin/ai/platon/pulsar/rest/api/controller/${controllerClass}Test.kt" to
+                restControllerTestSkeleton(resource, controllerClass),
+        )
+    }
+
+    private fun controllerSkeleton(resource: String, controllerClass: String, serviceClass: String): String = """
+        package ai.platon.pulsar.rest.api.controller
+
+        import ai.platon.pulsar.rest.api.service.$serviceClass
+        import org.slf4j.LoggerFactory
+        import org.springframework.http.MediaType
+        import org.springframework.web.bind.annotation.*
+        import java.util.UUID
+
+        @RestController
+        @CrossOrigin
+        @RequestMapping(
+            "api/$resource",
+            consumes = [MediaType.ALL_VALUE],
+            produces = [MediaType.APPLICATION_JSON_VALUE]
+        )
+        class $controllerClass(
+            private val service: $serviceClass,
+        ) {
+            private val logger = LoggerFactory.getLogger($controllerClass::class.java)
+
+            /**
+             * Submit a new task. Returns the task UUID for polling.
+             */
+            @PostMapping("submit")
+            fun submit(@RequestBody payload: String): String {
+                // TODO: parse payload, delegate to service
+                val taskId: UUID = service.submit(payload)
+                return taskId.toString()
+            }
+
+            /**
+             * Poll a task result by UUID.
+             */
+            @GetMapping("{id}/result")
+            fun result(@PathVariable id: String): Any {
+                // TODO: return task result or a pending marker
+                return service.getResult(id)
+            }
+        }
+    """.trimIndent()
+
+    private fun serviceSkeleton(resource: String, serviceClass: String, description: String): String = """
+        package ai.platon.pulsar.rest.api.service
+
+        import org.springframework.stereotype.Service
+        import java.util.UUID
+        import java.util.concurrent.ConcurrentHashMap
+
+        /**
+         * Task store service for "$resource" — $description.
+         *
+         * Follows the SwarmService pattern: submit() puts a task in a
+         * ConcurrentHashMap keyed by UUID, an async worker fills the result,
+         * getResult() returns it (or a pending marker).
+         */
+        @Service
+        open class $serviceClass {
+
+            private val tasks = ConcurrentHashMap<UUID, String>()
+
+            /**
+             * Submit a task and return its UUID.
+             */
+            open fun submit(payload: String): UUID {
+                val id = UUID.randomUUID()
+                tasks[id] = payload
+                // TODO: dispatch async work; store result in tasks[id]
+                return id
+            }
+
+            /**
+             * Get the result for a task UUID.
+             */
+            open fun getResult(id: String): Any {
+                val uuid = runCatching { UUID.fromString(id) }.getOrNull()
+                    ?: return mapOf("error" to "invalid task id: ${'$'}id")
+                return tasks[uuid]?.let { mapOf("id" to id, "status" to "done", "result" to it) }
+                    ?: mapOf("id" to id, "status" to "pending")
+            }
+        }
+    """.trimIndent()
+
+    private fun restControllerTestSkeleton(resource: String, controllerClass: String): String = """
+        package ai.platon.pulsar.rest.api.controller
+
+        import org.junit.jupiter.api.Assertions.*
+        import org.junit.jupiter.api.DisplayName
+        import org.junit.jupiter.api.Test
+
+        /**
+         * Tests for the api/$resource endpoints.
+         */
+        class ${controllerClass}Test {
+
+            @Test
+            @DisplayName("$resource submit returns a task id and result can be polled")
+            fun ${toCamelCase(resource)}SubmitAndPoll() {
+                // TODO: exercise $controllerClass.submit + result round-trip
+                assertTrue(true)
+            }
+        }
+    """.trimIndent()
+
+    // ==================== test-class ====================
+
+    /**
+     * Generate a Kotlin test-class skeleton following repo conventions
+     * (camelCase method names + @DisplayName, runBlocking for suspend).
+     */
+    fun testClass(
+        packageName: String,
+        testClass: String,
+        targetClass: String,
+        description: String = "Tests for $targetClass",
+    ): Map<String, String> {
+        return linkedMapOf(
+            "browser4-agentic/src/test/kotlin/${packageName.replace('.', '/')}/$testClass.kt" to
+                testClassSkeleton(packageName, testClass, targetClass, description),
+        )
+    }
+
+    private fun testClassSkeleton(packageName: String, testClass: String, targetClass: String, description: String): String = """
+        package $packageName
+
+        import org.junit.jupiter.api.Assertions.*
+        import org.junit.jupiter.api.DisplayName
+        import org.junit.jupiter.api.Test
+
+        /**
+         * $description
+         */
+        class $testClass {
+
+            @Test
+            @DisplayName("happy path")
+            fun happyPath() {
+                // TODO: construct $targetClass and assert behavior
+                assertTrue(true)
+            }
+
+            @Test
+            @DisplayName("edge case")
+            fun edgeCase() {
+                // TODO: exercise a boundary condition
+            }
+        }
+    """.trimIndent()
+
+    // ==================== skill ====================
+
+    /**
+     * Generate a SKILL.md skeleton matching the SkillDefinitionLoader contract
+     * (name + description frontmatter, kebab-case name == directory name).
+     */
+    fun skill(
+        name: String,
+        description: String,
+        triggers: List<String> = emptyList(),
+        tools: List<String> = emptyList(),
+    ): Map<String, String> {
+        return linkedMapOf(
+            "skills/$name/SKILL.md" to ArtifactScaffolds.skillScaffold(name, description, triggers, tools),
+        )
+    }
+
     // ==================== helpers ====================
 
     private fun toCamelCase(name: String): String {
         val parts = name.split('-', '_').filter { it.isNotEmpty() }
         return parts.firstOrNull()?.lowercase() + parts.drop(1).joinToString("") { it.replaceFirstChar { c -> c.uppercase() } }
+    }
+
+    private fun toPascalCase(name: String): String {
+        val camel = toCamelCase(name)
+        return camel.replaceFirstChar { it.uppercase() }
     }
 }

@@ -83,4 +83,66 @@ class DevFlowScaffoldsTest {
         // Cross-file: config references the executor class.
         assertTrue(config.contains("listOf(WeatherToolExecutor())"))
     }
+
+    @Test
+    @DisplayName("restEndpoint generates controller + service + test trio")
+    fun restEndpointTrio() {
+        val files = DevFlowScaffolds.restEndpoint("analysis")
+        assertEquals(3, files.size)
+        val controller = files["browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/controller/AnalysisController.kt"]!!
+        val service = files["browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/AnalysisService.kt"]!!
+        val test = files["browser4-rest/src/test/kotlin/ai/platon/pulsar/rest/api/controller/AnalysisControllerTest.kt"]!!
+        assertTrue(controller.contains("@RestController"))
+        assertTrue(controller.contains("\"api/analysis\""))
+        assertTrue(controller.contains("@PostMapping(\"submit\")"))
+        assertTrue(service.contains("@Service"))
+        assertTrue(service.contains("ConcurrentHashMap"))
+        assertTrue(service.contains("UUID"))
+        assertTrue(service.contains("fun submit(payload: String): UUID"))
+        assertTrue(test.contains("@DisplayName"))
+        // Cross-file: controller imports the service class.
+        assertTrue(controller.contains("import ai.platon.pulsar.rest.api.service.AnalysisService"))
+    }
+
+    @Test
+    @DisplayName("restEndpoint service follows submit→UUID→poll pattern")
+    fun restEndpointTaskStorePattern() {
+        val service = DevFlowScaffolds.restEndpoint("report")["browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/ReportService.kt"]!!
+        assertTrue(service.contains("submit(payload: String): UUID"))
+        assertTrue(service.contains("getResult(id: String): Any"))
+        assertTrue(service.contains("status\" to \"pending\""))
+    }
+
+    @Test
+    @DisplayName("testClass generates repo-convention test skeleton")
+    fun testClassSkeleton() {
+        val files = DevFlowScaffolds.testClass(
+            packageName = "ai.platon.pulsar.agentic.tools",
+            testClass = "MyToolTest",
+            targetClass = "MyTool",
+        )
+        assertEquals(1, files.size)
+        val test = files["browser4-agentic/src/test/kotlin/ai/platon/pulsar/agentic/tools/MyToolTest.kt"]!!
+        assertTrue(test.contains("class MyToolTest"))
+        assertTrue(test.contains("@DisplayName"))
+        assertTrue(test.contains("fun happyPath()"))
+        assertTrue(test.contains("fun edgeCase()"))
+    }
+
+    @Test
+    @DisplayName("skill generates a loader-contract SKILL.md")
+    fun skillSkeleton() {
+        val files = DevFlowScaffolds.skill(
+            name = "browser4-myflow",
+            description = "A custom Browser4 flow",
+            triggers = listOf("When the user asks to run my flow"),
+            tools = listOf("coding.read", "coding.write"),
+        )
+        assertEquals(1, files.size)
+        val md = files["skills/browser4-myflow/SKILL.md"]!!
+        assertTrue(md.startsWith("---"))
+        assertTrue(md.contains("name: browser4-myflow"))
+        assertTrue(md.contains("description: \"A custom Browser4 flow\""))
+        assertTrue(md.contains("allowed-tools: coding.read coding.write"))
+    }
 }
