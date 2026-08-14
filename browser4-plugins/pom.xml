@@ -30,5 +30,6 @@
         <module>browser4-images</module>
         <module>browser4-pptx</module>
         <module>browser4-markdown</module>
+        <module>browser4-seo</module>
     </modules>
 </project>
