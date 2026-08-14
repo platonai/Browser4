@@ -29,7 +29,7 @@ source tree use one of the following:
 
 ## 1. Core Loop
 
-> **⚡ First-run latency:** The Browser4 backend (Spring Boot + JVM) takes ~10s to start on first launch. Subsequent commands are instant — the server stays alive between invocations. The spinner shows stage-level progress (JVM → Spring Boot → MCP tools) so you can see what's happening.
+> **⚡ First-run latency:** From a source tree, the first launch builds the runtime bundle via Maven (~1–3 min, before the spinner appears) and then starts the Browser4 backend (Spring Boot + JVM, ~10s). Subsequent commands are instant — the server stays alive between invocations. The spinner shows stage-level progress (JVM → Spring Boot → MCP tools) so you can see what's happening.
 
 > **🖥️ Headless mode is the default for AI agents:** Always open browsers in **headless mode** (`--headless`) unless the user **explicitly** asks to see the browser window (e.g., "show me the browser", "open visibly", "I want to watch", or "headed"). Headless mode is faster, uses fewer resources, and avoids unnecessary GUI windows. Use `--headed` **only** when the user specifically requests a visible browser. See the Display Mode section below (§2 Key Concepts) for details.
 
@@ -296,12 +296,12 @@ Set `BROWSER4_SKILLS_DIR` to override the skills directory location. Skill files
 >
 > **If you get "No HTML snapshot found" or a timeout:** either run `htmlsnapshot` first to capture, or use `htmlsnapshot query` with `@url` for independent fetching.
 
-> **⚠️ Important:** `htmlsnapshot` captures the **initial server-rendered HTML** at page load. Content added or modified by JavaScript after load (form submission results, dynamic updates, SPA route changes) **will not be reflected** in the stored snapshot. For pages where you have interacted (clicked, filled forms, submitted) or where JS modifies the DOM, use `eval` for live-DOM access. See [§5 Critical Warnings](#5-critical-warnings) for more.
+> **⚠️ Important:** `htmlsnapshot` captures the **current live DOM** at capture time. Content added or modified by JavaScript before the capture (form submission results, dynamic updates, SPA route changes) **is reflected** — but only if you run `htmlsnapshot` (capture) *after* the interaction. The stored snapshot becomes stale only if you do not re-capture after a navigation or interaction. For one-off live reads without a capture step, use `eval`. See [§5 Critical Warnings](#5-critical-warnings) for more.
 
 ```
 Need to extract data from a page?
 ├─ Need to interact first (click, fill, scroll)?
-│  → snapshot + refs, then eval for extraction (htmlsnapshot may be stale)
+│  → snapshot + refs, then re-capture htmlsnapshot after interacting, then extract
 ├─ Page has JS-updated content (after interaction, form submit, SPA)?
 │  → eval --json for live DOM (use --stdin or --file on Windows)
 ├─ Static page, one field? → htmlsnapshot get text "<selector>"
@@ -432,7 +432,7 @@ browser4-cli htmlsnapshot get text ".price" --all    # quick test: does this sel
 
 > **Warning:** CSS selectors are tied to live websites — they break when sites change their HTML. Always discover selectors with `htmlsnapshot inspect` or `htmlsnapshot summary` before extraction. Treat scenario examples as patterns, not copy-paste recipes.
 
-> **Warning:** Shell quoting on Windows — complex JS/SQL with nested quotes causes escaping issues. Prefer `--sql @file.sql` (read from file), `--sql-stdin` (piped), `--sql-base64` (encoded), or `eval --file`/`eval --stdin`/`eval --base64` (JS from file or base64). For `htmlsnapshot inspect`, use `@file`, `--stdin`, or `--selector-base64`. Never inline `--sql "..."` with double-quoted CSS selectors on Windows. See [shell-quoting.md](references/shell-quoting.md) for the full workaround workflow.
+> **Warning:** Shell quoting on Windows — complex JS/SQL with nested quotes causes escaping issues. Prefer `--sql @file.sql` (read from file), `--sql-stdin` (piped), `--sql-base64` (encoded), or `eval --file`/`eval --stdin`/`eval --base64` (JS from file or base64). For `htmlsnapshot inspect`, use `@file`, `--stdin`, or `--selector-base64`. Never inline `--sql "..."` with double-quoted CSS selectors on Windows. **On PowerShell, always quote `@file` paths (`--sql "@query.sql"`) — an unquoted `@` is read as the splatting operator.** See [shell-quoting.md](references/shell-quoting.md) for the full workaround workflow.
 >
 > **Tip:** To generate base64 for `eval --base64`: `echo -n 'document.title' | base64` (Linux/macOS) or `[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('document.title'))` (PowerShell).
 >
@@ -467,7 +467,7 @@ browser4-cli htmlsnapshot get text ".price" --all    # quick test: does this sel
 > # 12 lines — just the interactive controls
 > ```
 
-> **Warning:** `htmlsnapshot` captures the **initial page HTML**, not the live DOM. After interactions (form fills, clicks, submissions) or on pages where JavaScript updates the DOM (SPA route changes, dynamic content), the snapshot will be **stale** — it won't reflect the current page state. For JS-updated pages, use `eval` for live-DOM access instead. The `htmlsnapshot inspect` command also reads from the stored initial HTML, not the live DOM.
+> **Warning:** `htmlsnapshot` captures the **current live DOM** at capture time. Re-capture (run `htmlsnapshot`) after any interaction or navigation to reflect JS updates — a previously captured snapshot is stale only if you do not re-capture. The auto-captured snapshot after `goto` is an earlier capture and does not include later interactions. For one-off live reads without a capture step, use `eval`. The `htmlsnapshot inspect` command reads the stored snapshot — re-capture first to inspect the updated DOM.
 
 > **Warning — backend startup fails in sandboxed/restricted environments:** The Browser4 backend (Spring Boot/JVM) writes its log files to a `logs/` directory inside the runtime bundle — `BROWSER4_RUNTIME_DIR` (default `%APPDATA%/browser4` on Windows, `~/.local/share/browser4` on Linux). In sandboxes that only allow writes to the workspace, this write is denied and the server never becomes ready: `goto`/`open` hang until the startup timeout with `FileNotFoundException … Access denied` (or `拒绝访问`) in the startup log.
 >
@@ -482,6 +482,19 @@ browser4-cli htmlsnapshot get text ".price" --all    # quick test: does this sel
 > `BROWSER4_RUNTIME_DIR` relocates the runtime (re-downloads the bundle if not already present); `BROWSER4_CLI_STATE_DIR` already auto-falls back to `./.browser4-cli-state` when `~/.browser4` is unwritable.
 
 ## 6. Quick Patterns
+
+### Multi-Session Workflow
+
+Named sessions isolate browser state. Create and switch with `-s <name>`, list with `list`, close one with `close`, and clean up with `close-all`:
+
+```bash
+browser4-cli -s research goto "https://en.wikipedia.org"   # opens "research"
+browser4-cli -s news     goto "https://news.ycombinator.com" # opens "news"
+browser4-cli -s news     snapshot -i --stdout              # act inside "news"
+browser4-cli list                                          # show all sessions
+browser4-cli -s news     close                             # close only "news"
+browser4-cli close-all                                     # close every session
+```
 
 ### Interactive Form Fill
 

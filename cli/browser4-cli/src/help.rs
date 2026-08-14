@@ -905,7 +905,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Requires: OPENROUTER_API_KEY (or equivalent LLM API key) configured in the environment."
+            "  - Requires: an LLM API key configured on the Browser4 backend server (the CLI shell itself does not need the key)."
                 .to_string(),
         );
         lines.push(wrap_text(
@@ -937,7 +937,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Requires: OPENROUTER_API_KEY (or equivalent LLM API key) configured in the environment."
+            "  - Requires: an LLM API key configured on the Browser4 backend server (the CLI shell itself does not need the key)."
                 .to_string(),
         );
         lines.push(wrap_text(
@@ -970,7 +970,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Requires: OPENROUTER_API_KEY (or equivalent LLM API key) configured in the environment."
+            "  - Requires: an LLM API key configured on the Browser4 backend server (the CLI shell itself does not need the key)."
                 .to_string(),
         );
         lines.push(String::new());

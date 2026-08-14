@@ -10,7 +10,7 @@ Submit natural-language tasks and let Browser4's AI agent plan and execute brows
 
 ## Prerequisites
 
-Agent commands require an LLM API key. Configure one provider via environment variables:
+Agent commands require an LLM API key, which must be visible to the **Browser4 backend server** process (the CLI only sends HTTP requests to the backend; the backend calls the LLM). When the CLI auto-starts the backend, set the key in the CLI's own environment before the first launch. Configure one provider via environment variables:
 
 | Provider | Required Variables |
 |---|---|
@@ -21,8 +21,11 @@ Agent commands require an LLM API key. Configure one provider via environment va
 | Aliyun Qwen (DashScope) | `OPENAI_API_KEY`, `OPENAI_MODEL_NAME`, `OPENAI_BASE_URL` |
 
 ```bash
+# Set in the environment of the process that runs the backend server.
 export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 ```
+
+> The key must reach the backend server process, not just your CLI shell. Run `browser4-cli doctor` to confirm whether "✓ LLM is configured" on the backend.
 
 If no valid LLM key is configured, `agent run` fails fast with a clear error.
 
@@ -30,8 +33,9 @@ If no valid LLM key is configured, `agent run` fails fast with a clear error.
 
 ```bash
 browser4-cli agent run "Open browser4.io and summarize the hero section"
-browser4-cli agent status agent-task-1    # poll until COMPLETED
-browser4-cli agent result agent-task-1
+# agent run prints a UUID task id (e.g. 3b27930e-48bc-4460-aae7-be521f0a9194)
+browser4-cli agent status <task-id>   # poll until COMPLETED
+browser4-cli agent result <task-id>
 ```
 
 ## When to Use
@@ -48,8 +52,8 @@ Use **agent** for natural-language tasks where you describe what you want withou
 
 ```bash
 browser4-cli agent run "Go to amazon.com, search for 'wireless headphones', extract the top 5 product titles and prices"
-browser4-cli agent status agent-task-1    # poll until COMPLETED
-browser4-cli agent result agent-task-1
+browser4-cli agent status <task-id>   # poll until COMPLETED
+browser4-cli agent result <task-id>
 ```
 
 **Writing tasks:** Describe **what** you want, not how. Good: "extract the top 5 product titles and prices." Avoid step-by-step ref-based instructions.
@@ -62,7 +66,7 @@ browser4-cli agent status <task-id>
 
 Returns JSON:
 ```json
-{"id":"agent-task-1","status":"RUNNING","statusCode":null,"processState":"processing","message":"Navigating..."}
+{"id":"3b27930e-48bc-4460-aae7-be521f0a9194","status":"RUNNING","statusCode":null,"processState":"processing","message":"Navigating..."}
 ```
 
 | Status | Meaning |

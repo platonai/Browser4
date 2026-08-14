@@ -50,7 +50,7 @@ class SwarmService(
      * - Persisted to a JSONL file so task statuses survive restarts.
      * */
     val responseCache: Cache<String, ScrapeResponse> = Caffeine.newBuilder()
-        .maximumSize(100)
+        .maximumSize(100_000)
         .removalListener<String, ScrapeResponse> { key, value, cause ->
             if (value != null && cause.wasEvicted()) {
                 responseStatusIndex[value.statusCode]?.remove(key)

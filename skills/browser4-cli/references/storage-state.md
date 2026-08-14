@@ -28,7 +28,9 @@ browser4-cli state-save my-auth-state.json
 # Load storage state from file
 browser4-cli state-load my-auth-state.json
 
-# Reload page to apply cookies
+# Cookies are restored to the browser's cookie jar immediately (visible via
+# cookie-list). Reload/open the page only if you need them sent with the next
+# HTTP request.
 browser4-cli open https://example.com
 ```
 

@@ -78,10 +78,16 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
         if arg.starts_with("-s=") {
             if !seen_command {
                 flags.session_name = Some(arg["-s=".len()..].to_string());
+            } else {
+                // After the command name, forward unchanged so nested
+                // subcommands (e.g. `loop -- ...`) can pass -s= through.
+                flags.args.push(arg.clone());
             }
         } else if arg.starts_with("--session=") {
             if !seen_command {
                 flags.session_name = Some(arg["--session=".len()..].to_string());
+            } else {
+                flags.args.push(arg.clone());
             }
         } else if arg == "-s" || arg == "--session" {
             if !seen_command {
@@ -89,6 +95,11 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
                     i += 1;
                     flags.session_name = Some(argv[i].clone());
                 }
+            } else {
+                // Forward `-s` / `--session` after the command name so the
+                // value is preserved for the nested binary. The value itself
+                // is consumed by the `else` branch on the next iteration.
+                flags.args.push(arg.clone());
             }
         } else if !seen_command && arg == "--json" {
             flags.json = true;
@@ -579,6 +590,49 @@ mod tests {
 
         assert_eq!(flags.session_name.as_deref(), Some("mysession"));
         assert_eq!(flags.args, vec!["goto"]);
+    }
+
+    #[test]
+    fn test_parse_global_flags_session_after_command_forwarded() {
+        // `loop -- ... -s price-watch eval ...` must keep -s in args so the
+        // nested browser4-cli receives the session flag instead of treating
+        // "price-watch" as the command name.
+        let argv = vec![
+            "loop".to_string(),
+            "--count".to_string(),
+            "2".to_string(),
+            "--".to_string(),
+            "-s".to_string(),
+            "price-watch".to_string(),
+            "eval".to_string(),
+            "1+1".to_string(),
+        ];
+
+        let flags = parse_global_flags(&argv);
+
+        assert_eq!(flags.session_name, None);
+        assert_eq!(
+            flags.args,
+            vec!["loop", "--count", "2", "--", "-s", "price-watch", "eval", "1+1"]
+        );
+    }
+
+    #[test]
+    fn test_parse_global_flags_session_equals_after_command_forwarded() {
+        let argv = vec![
+            "loop".to_string(),
+            "--".to_string(),
+            "-s=price-watch".to_string(),
+            "eval".to_string(),
+        ];
+
+        let flags = parse_global_flags(&argv);
+
+        assert_eq!(flags.session_name, None);
+        assert_eq!(
+            flags.args,
+            vec!["loop", "--", "-s=price-watch", "eval"]
+        );
     }
 
     #[test]

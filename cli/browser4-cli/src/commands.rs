@@ -3060,7 +3060,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 },
                 OptionDef {
                     name: "format",
-                    description: "Output format: json, csv, or table (default: table)",
+                    description: "Output format: json, csv, or table (default: json — the raw scrape response envelope; use --format table for readable output, or --result-only for the bare resultSet)",
                     is_bool: false,
                     short: None,
                 },

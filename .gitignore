@@ -158,6 +158,7 @@ bin/maintenance/state/*.lock
 /.coworker/
 .build-state
 /.build/
+/.build-localappdata/
 /b4w
 /b4w.bat
 /b4w-*.bat

@@ -54,6 +54,27 @@ class TestLoadOptions {
     }
 
     @Test
+    fun testOutLinkPatternQuoteTrim() {
+        // The CLI and recursive crawl path pass the pattern with surrounding
+        // double quotes (e.g. -outLinkPattern "/product/"). Those must be
+        // trimmed so the pattern compiles as a regex that actually matches.
+        val options = LoadOptions.parse("-ol \"a.product\" -olp \"/product/\"", conf)
+        assertEquals("a.product", options.outLinkSelector)
+        assertEquals("/product/", options.outLinkPattern)
+    }
+
+    @Test
+    fun testOutLinkPatternDefaultUnchanged() {
+        // No -olp given: default stays ".+" (match all).
+        val options = LoadOptions.parse("-expires 1s", conf)
+        assertEquals(".+", options.outLinkPattern)
+
+        // Unquoted pattern value is left as-is.
+        val unquoted = LoadOptions.parse("-olp product", conf)
+        assertEquals("product", unquoted.outLinkPattern)
+    }
+
+    @Test
     fun testSpecialChar() {
         val args = "-label com.br"
         val options = LoadOptions.parse(args)

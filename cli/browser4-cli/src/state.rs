@@ -549,11 +549,21 @@ fn write_loop_state_to_dir(
 }
 
 /// Return the full path to the loop state file (for display).
+/// When the implicit default dir is used and the primary path does not exist
+/// but the fallback path does, the fallback path is returned so `loop --status`
+/// shows where the state was actually written.
 pub fn loop_state_path(state_dir: Option<&Path>, name: Option<&str>) -> PathBuf {
     let dir = state_dir
         .map(|p| p.to_path_buf())
         .unwrap_or_else(resolve_default_state_dir);
-    loop_state_file(&dir, name)
+    let path = loop_state_file(&dir, name);
+    if !path.exists() && is_implicit_default_dir(state_dir) {
+        let fallback_path = loop_state_file(&fallback_state_dir(), name);
+        if fallback_path.exists() {
+            return fallback_path;
+        }
+    }
+    path
 }
 
 /// Clear the persisted loop state.
@@ -683,14 +693,45 @@ pub struct LoopListEntry {
 }
 
 /// List all persisted loops. Returns entries sorted by name (default first).
+/// When the implicit default dir is used, the fallback directory is also
+/// scanned so loops written there (e.g. when ~/.browser4 is unwritable) still
+/// appear, matching `read_loop_state`'s fallback behavior.
 pub fn list_loop_states(state_dir: Option<&Path>) -> Vec<LoopListEntry> {
     let dir = state_dir
         .map(|p| p.to_path_buf())
         .unwrap_or_else(resolve_default_state_dir);
     let mut entries: Vec<LoopListEntry> = Vec::new();
 
+    collect_loop_entries(&dir, &mut entries);
+
+    if is_implicit_default_dir(state_dir) {
+        let fallback = fallback_state_dir();
+        if fallback != dir {
+            collect_loop_entries(&fallback, &mut entries);
+        }
+    }
+
+    // Sort: default first, then alphabetical. Sorting is stable, so for a
+    // duplicate name the entry collected from the primary dir is kept first
+    // and `dedup_by` drops the fallback duplicate.
+    entries.sort_by(|a, b| {
+        if a.name == "default" {
+            std::cmp::Ordering::Less
+        } else if b.name == "default" {
+            std::cmp::Ordering::Greater
+        } else {
+            a.name.cmp(&b.name)
+        }
+    });
+    entries.dedup_by(|a, b| a.name == b.name);
+
+    entries
+}
+
+/// Collect persisted loop entries from a single state directory.
+fn collect_loop_entries(dir: &Path, entries: &mut Vec<LoopListEntry>) {
     // Default loop
-    let default_path = loop_state_file(&dir, None);
+    let default_path = loop_state_file(dir, None);
     if let Ok(raw) = fs::read_to_string(&default_path) {
         if let Ok(ls) = serde_json::from_str::<LoopState>(&raw) {
             entries.push(LoopListEntry {
@@ -736,19 +777,6 @@ pub fn list_loop_states(state_dir: Option<&Path>) -> Vec<LoopListEntry> {
             }
         }
     }
-
-    // Sort: default first, then alphabetical
-    entries.sort_by(|a, b| {
-        if a.name == "default" {
-            std::cmp::Ordering::Less
-        } else if b.name == "default" {
-            std::cmp::Ordering::Greater
-        } else {
-            a.name.cmp(&b.name)
-        }
-    });
-
-    entries
 }
 
 /// Entry in the loop completion history.
@@ -1968,5 +1996,66 @@ mod tests {
         let result = summarize_async_tasks(&tasks);
         assert!(result.contains("3 total"));
         assert!(result.contains("3 failed"));
+    }
+
+    fn loop_state_sample(tokens: Vec<String>) -> LoopState {
+        LoopState {
+            task_tokens: tokens,
+            mode: "subcommand".to_string(),
+            interval_secs: 10,
+            count: Some(2),
+            timeout_secs: None,
+            iterations_completed: 1,
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:10Z".to_string(),
+            status: "running".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_list_loop_states_default_and_named() {
+        let tmp = test_temp_dir();
+        write_loop_state(
+            &loop_state_sample(vec!["eval".to_string(), "1+1".to_string()]),
+            Some(tmp.path()),
+            None,
+        )
+        .unwrap();
+        write_loop_state(
+            &loop_state_sample(vec!["goto".to_string(), "https://example.com".to_string()]),
+            Some(tmp.path()),
+            Some("watch"),
+        )
+        .unwrap();
+
+        let entries = list_loop_states(Some(tmp.path()));
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "default");
+        assert_eq!(entries[0].task, "eval 1+1");
+        assert_eq!(entries[1].name, "watch");
+        assert_eq!(entries[1].task, "goto https://example.com");
+    }
+
+    #[test]
+    fn test_loop_state_path_points_at_existing_named_file() {
+        let tmp = test_temp_dir();
+        write_loop_state(
+            &loop_state_sample(vec!["eval".to_string()]),
+            Some(tmp.path()),
+            Some("monitor"),
+        )
+        .unwrap();
+        let path = loop_state_path(Some(tmp.path()), Some("monitor"));
+        assert!(path.exists());
+        assert!(path.ends_with("monitor.json"));
+    }
+
+    #[test]
+    fn test_loop_state_path_default_when_missing() {
+        let tmp = test_temp_dir();
+        // No state written: path still resolves to the primary location.
+        let path = loop_state_path(Some(tmp.path()), None);
+        assert!(!path.exists());
+        assert!(path.ends_with("loop-state.json"));
     }
 }

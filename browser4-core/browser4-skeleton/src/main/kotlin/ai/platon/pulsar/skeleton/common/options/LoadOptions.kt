@@ -760,6 +760,7 @@ open class LoadOptions(
                 }
             // fix out link parsing (remove surrounding symbols)
             outLinkSelector = correctOutLinkSelector() ?: ""
+            outLinkPattern = correctOutLinkPattern() ?: ".+"
         }
         return b
     }
@@ -989,6 +990,22 @@ open class LoadOptions(
         return outLinkSelector.trim('"')
             .takeIf { it.isNotBlank() }
             ?.let { appendSelectorIfMissing(it, "a") }
+    }
+
+    /**
+     * Corrects the outLinkPattern format by removing surrounding quotes.
+     *
+     * The CLI and recursive crawl path pass the pattern value with surrounding
+     * double quotes (e.g. `-outLinkPattern "/product/"`). Those quotes must be
+     * trimmed before the value is compiled as a regex, otherwise the pattern
+     * never matches any URL and every out-link is filtered out. Mirrors the
+     * quote-trimming already applied to the selector by [correctOutLinkSelector].
+     *
+     * @return the corrected pattern, or null if blank after trimming
+     */
+    private fun correctOutLinkPattern(): String? {
+        return outLinkPattern.trim('"').trim('\'')
+            .takeIf { it.isNotBlank() }
     }
 
     /**

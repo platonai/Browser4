@@ -212,6 +212,14 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     status.agentHistory = this.agentHistory?.toCommandAgentHistory()
     status.agentState = status.agentHistory?.lastOrNull()
 
+    // Transfer instruct results so agent-extracted data (fields/links/pageSummary)
+    // flows into commandResult — mirrors PageVisitStatus.toCommandStatus().
+    // Without this, `agent result` returned {} even though instructResults held
+    // the extracted data (critical data loss).
+    this.instructResults.map { it.toInstructResult() }.forEach { result ->
+        status.addInstructResult(result)
+    }
+
     // Populate commandResult from available sources so that callers
     // (including `command_result`) always have at least a status message,
     // even when the agent produced no summary.
