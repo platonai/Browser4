@@ -7,6 +7,7 @@ import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingAgentShell
 import ai.platon.pulsar.coding.LanguageServerManager
 import ai.platon.pulsar.coding.MavenBuildSupport
+import ai.platon.pulsar.coding.SkeletonExtractor
 import ai.platon.pulsar.coding.ValidationResult
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
@@ -372,6 +373,25 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "Use this to check Kotlin code before/after edits — the fast alternative to a JDTLS server."
         )
 
+        // --- Extract skeleton from real code (anti-staleness scaffold) ---
+        toolSpec["scaffoldFromExample"] = ToolSpec(
+            domain = domain, method = "scaffoldFromExample",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("basePackage", "String", "null"),
+                ToolSpec.Arg("className", "String", "null"),
+                ToolSpec.Arg("domain", "String", "null"),
+                ToolSpec.Arg("toolMethod", "String", "null"),
+            ),
+            returnType = "String",
+            description = "Generate a skeleton from an EXISTING reference file (e.g. an installed plugin's " +
+                "ToolExecutor or Service): reads the real code, parameterizes volatile identifiers " +
+                "(package, class name, domain, tool method) into placeholders, then instantiates with new " +
+                "values. Because the template comes from the repository's own code, it never goes stale — " +
+                "unlike hand-written scaffolds. Provide path (reference file) plus any of basePackage/className/" +
+                "domain/toolMethod to rename; omit to see the discovered parameters."
+        )
+
         // --- Sandboxed code execution ---
         toolSpec["runCode"] = ToolSpec(
             domain = domain, method = "runCode",
@@ -674,6 +694,37 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     timeoutSeconds = timeout,
                 )
                 mavenBuild.format(result)
+            }
+            "scaffoldFromExample" -> {
+                validateArgs(args, allowed = setOf("path", "basePackage", "className", "domain", "toolMethod"),
+                    required = setOf("path"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                val resolved = fs.resolvePathString(path)
+                    ?: throw IllegalArgumentException("Path not allowed: $path")
+                val content = fs.readFile(resolved)
+                val skeleton = SkeletonExtractor.extract(content, resolved.substringAfterLast('/').substringAfterLast('\\'))
+                val renameParams: Map<String, String> = mapOf(
+                    "basePackage" to paramString(args, "basePackage", functionName, required = false, default = null),
+                    "className" to paramString(args, "className", functionName, required = false, default = null),
+                    "domain" to paramString(args, "domain", functionName, required = false, default = null),
+                    "toolMethod" to paramString(args, "toolMethod", functionName, required = false, default = null),
+                ).filterValues { !it.isNullOrBlank() }.mapValues { it.value!! }
+
+                if (renameParams.isEmpty()) {
+                    // Discovery mode: report the parameters found in the reference file.
+                    buildString {
+                        appendLine("Skeleton extracted from $path — discovered parameters:")
+                        skeleton.parameters.forEach { (k, v) -> appendLine("  $k = $v") }
+                        appendLine("Re-instantiate with: coding.scaffoldFromExample(path=..., " +
+                            skeleton.parameters.keys.joinToString(", ") { "$it=<new-value>" } + ")")
+                    }
+                } else {
+                    val generated = SkeletonExtractor.instantiate(skeleton, renameParams)
+                    buildString {
+                        appendLine("=== Generated from $path (skeleton) ===")
+                        append(generated)
+                    }
+                }
             }
             "runCode" -> {
                 validateArgs(args, allowed = setOf("language", "code", "timeoutSeconds"), required = setOf("language", "code"), functionName)
