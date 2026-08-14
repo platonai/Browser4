@@ -1,0 +1,13 @@
+{
+  "meta": {
+    "scenario": "crawl-advanced-extraction",
+    "date": "20260814-130631",
+    "source": "20260814-130631-crawl-advanced-extraction.full.md",
+    "mode": "dev"
+  },
+  "background": {
+    "task": "",
+    "executionContext": ""
+  },
+  "issues": []
+}

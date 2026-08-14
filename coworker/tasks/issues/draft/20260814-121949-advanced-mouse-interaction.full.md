@@ -1,0 +1,1 @@
+All prerequisites are present (JDK 17, PowerShell 7.6.4, cargo 1.94.1, 26 GB free). Now waiting for the two background builds — the runtime bundle build and the MockSite Spring Boot server — to finish. I'll continue as soon as they're ready.
