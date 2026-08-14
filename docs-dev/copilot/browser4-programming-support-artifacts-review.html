@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Browser4 四类工件编程支持评估（plugin / skill / JS / 脚本）</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0;
+    --accent: #0969da; --green: #1a7f37; --green-soft: #dafbe1;
+    --red: #cf222e; --red-soft: #ffebe9; --amber: #9a6700; --amber-soft: #fff8c5;
+    --code-bg: #f6f8fa;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: var(--bg); color: var(--fg); line-height: 1.7; padding: 32px 16px 64px; }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  header { border-bottom: 3px solid var(--accent); padding-bottom: 20px; margin-bottom: 28px; }
+  h1 { font-size: 26px; letter-spacing: -0.02em; margin-bottom: 6px; }
+  .sub { color: var(--muted); font-size: 14px; }
+  .badge-row { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .badge { font-size: 12px; padding: 3px 10px; border-radius: 20px;
+           border: 1px solid var(--border); background: var(--code-bg); color: var(--muted); }
+  h2 { font-size: 20px; margin: 40px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 16px; margin: 24px 0 10px; }
+  p { margin-bottom: 12px; }
+  code { font-family: "SFMono-Regular", Consolas, monospace; font-size: 12.5px;
+         background: var(--code-bg); padding: 2px 6px; border-radius: 6px; border: 1px solid var(--border); }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+        padding: 14px 16px; overflow-x: auto; font-size: 12.5px; margin: 10px 0 16px; line-height: 1.6; }
+  pre code { background: none; border: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0 20px; font-size: 13.5px; }
+  th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); font-weight: 600; white-space: nowrap; }
+  tr:nth-child(even) td { background: #fafbfc; }
+  .verdict { border-radius: 10px; padding: 16px 20px; margin: 16px 0 24px; border: 1px solid var(--border); }
+  .verdict.p0 { background: var(--red-soft); border-color: #f6b7bb; }
+  .verdict.p1 { background: var(--amber-soft); border-color: #e3c896; }
+  .card { border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin-bottom: 14px; }
+  .lv { display: inline-block; padding: 1px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+  .lv-p0 { background: var(--red-soft); color: var(--red); }
+  .lv-p1 { background: var(--amber-soft); color: var(--amber); }
+  .lv-p2 { background: var(--accent); color: var(--accent); }
+  .tag { display: inline-block; font-size: 11.5px; padding: 1px 8px; border-radius: 4px; margin-right: 6px; }
+  .tag-good { background: var(--green-soft); color: var(--green); }
+  .tag-warn { background: var(--amber-soft); color: var(--amber); }
+  .tag-risk { background: var(--red-soft); color: var(--red); }
+  ul, ol { margin: 6px 0 14px 22px; }
+  li { margin-bottom: 5px; }
+  .file-ref { font-size: 12px; color: var(--muted); font-family: "SFMono-Regular", Consolas, monospace; }
+  .footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border);
+            color: var(--muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Browser4 四类工件编程支持评估</h1>
+  <div class="sub">plugin（Kotlin）· skill（SKILL.md）· JS（浏览器脚本）· 简单脚本（PS1/Bash）— 源码核查 + 离线编译验证 · 2026-08-14 · 分支 4.14.x</div>
+  <div class="badge-row">
+    <span class="badge">验证方式：静态源码审查 + <code>mvn -pl browser4-agentic -am compile -DskipTests -o</code> 真实编译</span>
+    <span class="badge">范围：browser4-agentic（coding 域）· browser4-boot（plugin 加载）· browser4-pdk · skills/ · browser4-plugins/browser4-seo</span>
+  </div>
+</header>
+
+<div class="verdict p0">
+  <h3>总体结论：四类工件的「模板 + 校验」骨架已落地，但当前代码<b>编译不过</b>，且模板与真实运行时契约存在多处错位</h3>
+  <p>上一轮「编程内核只需补模板 + 校验器，约 600 行」的收敛判断方向正确，且工作区里已经出现了实现：<code>ArtifactScaffolds.kt</code>（491 行）、<code>ArtifactValidator.kt</code>（470 行）、<code>coding.scaffold / coding.validate</code> 两个新工具、<code>skills/browser4-coding</code> 编排技能、<code>browser4-plugins/browser4-seo</code> 参考插件。但经真实编译验证：<b>这些新增代码目前无法通过编译</b>（<code>ArtifactScaffolds.kt:468</code> 字符串模板转义错误），意味着 <code>coding.scaffold</code>/<code>coding.validate</code> 在运行时<b>根本不存在</b>。此外，模板与验证器与真实加载链路（PluginManifest / ToolMount / SkillDefinitionLoader / 命令白名单）存在 5 处契约错位，按现状交付无法端到端打通。</p>
+</div>
+
+<h2>1. 四场景 × 能力现状（实测）</h2>
+
+<table>
+  <tr><th>场景</th><th>编写</th><th>校验</th><th>验证</th><th>实测结论</th></tr>
+  <tr>
+    <td>① Plugin (Kotlin)</td>
+    <td>✅ <code>coding.write</code> + <code>coding.scaffold(type=plugin)</code> 7 文件骨架</td>
+    <td>⚠️ <code>coding.validate(type=plugin)</code> 存在，但 plugin.json 契约与真实 <code>PluginManifest</code> 不符</td>
+    <td>✅ <code>coding.shell: mvn compile</code>（但骨架 pom 依赖 <code>${revision}</code>，仓库未定义该属性 → 构建失败）</td>
+    <td><span class="tag tag-warn">骨架齐、链路断</span> 缺 ToolMount 接线 + manifest 字段错位</td>
+  </tr>
+  <tr>
+    <td>② Skill (SKILL.md)</td>
+    <td>✅ <code>coding.scaffold(type=skill)</code></td>
+    <td>⚠️ <code>coding.validate(type=skill)</code> 校验 <code>summary</code> 字段，真实加载器要求 <code>description</code> → 校验器放行、加载器拒绝</td>
+    <td>❌ 无技能加载验证（<code>SkillDefinitionLoader</code> 有 name=目录名校验，模板未对齐）</td>
+    <td><span class="tag tag-warn">契约错位</span> frontmatter 字段与加载器不一致</td>
+  </tr>
+  <tr>
+    <td>③ JS（浏览器脚本）★</td>
+    <td>✅ <code>coding.scaffold(type=js)</code>（extract/inject/interact 三模板）</td>
+    <td>✅ <code>coding.validate(type=js)</code> 括号平衡/return/'use strict'/反模式</td>
+    <td>✅ <code>tab.eval</code> 语法检查 → <code>tab.console</code> 运行时反馈 → 修复迭代（浏览器即调试器）</td>
+    <td><span class="tag tag-good">全链路已打通</span> 唯一完全就绪的场景，差异化所在</td>
+  </tr>
+  <tr>
+    <td>④ 脚本 (PS1/Bash)</td>
+    <td>✅ <code>coding.scaffold(type=script)</code>（ps1/bash 模板）</td>
+    <td>✅ <code>coding.validate(type=script)</code> shebang/set -e/param 块等静态检查</td>
+    <td>✅ <code>coding.shell</code> 白名单含 bash/sh/zsh/powershell/pwsh（CodingAgentShell.kt:83），可跑 <code>bash -n</code> / <code>pwsh -File</code></td>
+    <td><span class="tag tag-warn">模板含编译错误</span> bash 模板第 468 行 <code>$BROWSER4_HOME</code> 未转义 → 整个模块编译失败</td>
+  </tr>
+</table>
+
+<h2>2. P0 阻塞项（必须先修）</h2>
+
+<div class="card">
+  <h3><span class="lv lv-p0">P0</span> 编译错误：ArtifactScaffolds.kt:468 字符串模板转义</h3>
+  <p>bash 模板内 <code>"$BROWSER4_HOME/plugins/"</code> 中的 <code>$BROWSER4_HOME</code> 被 Kotlin 解释为模板表达式引用未定义变量。PS1 模板已正确使用 <code>${'$'}</code> 转义，bash 模板漏了。</p>
+  <pre><code>// ArtifactScaffolds.kt:468
+#   cp target/*.jar "$BROWSER4_HOME/plugins/"   ← 编译错误：Unresolved reference 'BROWSER4_HOME'
+// 修复：改为 "${'$'}BROWSER4_HOME/plugins/"</code></pre>
+  <p class="file-ref">browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/common/ArtifactScaffolds.kt:468</p>
+  <p><b>影响</b>：整个 browser4-agentic 模块无法编译，<code>coding.scaffold</code>/<code>coding.validate</code> 两个新工具及全部配套测试（ArtifactScaffoldsTest / ArtifactValidatorTest）均不可用。这是上一轮交付物的<b>头号问题</b>——上轮结论「只缺模板和校验，编写和执行链路已全部就位」低估了「新代码必须能编译」这一前提。</p>
+</div>
+
+<h2>3. P1 契约错位（模板/校验器 vs 真实运行时）</h2>
+
+<div class="card">
+  <h3><span class="lv lv-p1">P1</span> plugin.json 字段与真实 PluginManifest 不符</h3>
+  <p>真实契约（<code>browser4-skeleton/.../plugin/PluginManifest.kt</code>）：必填 <code>name</code>、<code>version</code>；可选 <code>description</code>、<code>dependsOn</code>、<code>autoConfigurationClasses</code>。真实插件（browser4-captcha/markdown/seo）均用此结构。</p>
+  <p>脚手架生成的是：<code>{"id", "name", "version", "domain", "description"}</code> —— 多出 <code>id</code>/<code>domain</code>（Jackson 因 FAIL_ON_UNKNOWN_PROPERTIES=false 宽容，但语义不对），<b>缺失 <code>dependsOn</code> 与 <code>autoConfigurationClasses</code></b>。后者是 <code>PluginService.isPluginLoaded()</code> 判断插件是否已激活的第一检查项（按自动配置类查 Bean）；缺失会导致「已加载插件显示为未加载」。且 <code>name</code> 用了 <code>toClassName()</code>（如 "Browser4Seo"），而真实插件 name 是 artifact 名（"browser4-seo"），<code>isPluginLoaded</code> 的 <code>removePrefix("browser4-")</code> 域推导随之失效。</p>
+  <p><b>校验器同病</b>：<code>ArtifactValidator.validatePluginJson</code> 把 <code>id</code> 当必填——真实 manifest 根本没有 <code>id</code>，用它校验真实插件会误报。</p>
+  <p class="file-ref">browser4-skeleton/.../plugin/PluginManifest.kt · browser4-boot/.../plugin/PluginService.kt:205-234 · ArtifactScaffolds.kt:118-126 · ArtifactValidator.kt:162-186</p>
+</div>
+
+<div class="card">
+  <h3><span class="lv lv-p1">P1</span> 脚手架生成的 AutoConfiguration 未实现 ToolMount → 工具永远不会注册</h3>
+  <p>工具暴露链是 <code>PluginManager</code> 扫描 <code>PluginMount</code> Bean → <code>ToolMount.getToolExecutors()</code> → <code>CustomToolRegistry</code> → 渲染进 LLM prompt（ToolCallSpecificationRenderer）。参考插件 browser4-seo 的 <code>SeoAutoConfiguration : ToolMount</code> 并重写 <code>getToolExecutors()</code>。而脚手架生成的 AutoConfiguration 只有两个 <code>@Bean</code>（config + toolExecutor），<b>没有实现 ToolMount</b>——照模板写出的插件即使编译安装成功，工具也永远不会进入 CustomToolRegistry，Agent 完全看不到。</p>
+  <p class="file-ref">browser4-agentic/.../tools/ToolMount.kt · browser4-boot/.../plugin/PluginManager.kt:148-162 · ArtifactScaffolds.kt:145-171（对照 browser4-plugins/browser4-seo/config/SeoAutoConfiguration.kt:45-56）</p>
+</div>
+
+<div class="card">
+  <h3><span class="lv lv-p1">P1</span> skill frontmatter 字段与 SkillDefinitionLoader 不符</h3>
+  <p>真实加载器（<code>SkillDefinitionLoader.parseFromYamlAndMarkdown</code>）要求：<code>name</code>（须与目录同名、kebab-case、≤64 字符）与 <code>description</code>（1..1024 字符）必填；另有 <code>allowed-tools</code> 等可选。脚手架与校验器却围绕 <code>summary</code> + <code>read_when</code> 展开——按脚手架生成的 SKILL.md 在真实加载器下会被 <code>require(rawDescription.isNotBlank())</code> 直接拒绝。校验器会放行加载器拒绝的技能，等于「校验通过 ≠ 可加载」。</p>
+  <p>注意：仓库自带技能（browser4-cli / browser4-seo / browser4-experience）均使用 <code>name + title + description + tier</code> 结构，与加载器一致；脚手架/校验器反而偏离了仓库既有惯例。</p>
+  <p class="file-ref">browser4-agentic/.../skills/SkillDefinitionLoader.kt:423-438, 529-535 · ArtifactScaffolds.kt:273-307 · ArtifactValidator.kt:274-327</p>
+</div>
+
+<div class="card">
+  <h3><span class="lv lv-p1">P1</span> 脚手架 pom 依赖未定义的 ${revision}，且依赖声明不足</h3>
+  <p>脚手架 pom 的 parent version 写死 <code>${revision}</code>，但本仓库 36 个 pom.xml 均无 <code>&lt;revision&gt;</code> 属性（pulsar-parent 4.5.0 亦无），真实版本是字面量 <code>4.13.4-SNAPSHOT</code>——照模板生成的插件直接 <code>mvn compile</code> 会因 parent 无法解析而失败。另：脚手架只声明了 <code>browser4-agentic</code>（provided），生成的代码还用到 <code>MutableConfig/ImmutableConfig</code>（browser4-common）与 <code>spring-boot-autoconfigure</code>（@AutoConfiguration 注解），参考 seo pom 明确声明了 browser4-skeleton/browser4-protocol/spring-boot-autoconfigure 等，脚手架需补齐。</p>
+  <p class="file-ref">ArtifactScaffolds.kt:91-116（对照 browser4-plugins/browser4-seo/pom.xml 全量依赖）</p>
+</div>
+
+<div class="card">
+  <h3><span class="lv lv-p1">P1</span> validate 的 plugin 模式绕过沙箱文件系统</h3>
+  <p><code>coding.validate(type=plugin)</code> 直接用 <code>java.io.File</code> 读任意路径（ArtifactValidator.validatePlugin 内部 <code>File(baseDir).walkTopDown()</code> + <code>readText()</code>），而 coding 域其他文件操作都经 <code>CodingAgentFileSystem.resolvePath()</code> 做 workspace 沙箱约束。该入口绕过了路径穿越防护，且对超深/超大目录有性能与 IO 风险，应改为经 fs 解析路径或显式限制在 workspaceRoot 内。</p>
+  <p class="file-ref">CodingToolExecutor.kt「validate」分支 · ArtifactValidator.kt:76-157 · CodingAgentFileSystem.kt resolvePath</p>
+</div>
+
+<h2>4. 上轮发现核对</h2>
+<table>
+  <tr><th>上轮判断</th><th>核对结果</th></tr>
+  <tr><td>JS 是唯一全链路已打通的场景，浏览器就是调试器</td><td>✅ 成立。<code>tab.eval/evaluateValue</code> + <code>tab.consoleMessages/consoleClear</code> 齐备（BrowserTabToolExecutor.kt），模板+校验也已就位，且 seo 插件内还沉淀了 <code>extract-meta.js / check-issues.js</code> 真实参考实现（SeoService 经 <code>WebDriver.evaluateValue</code> 执行）。</td></tr>
+  <tr><td>plugin/skill/script 只缺模板 + 校验器，合计约 600 行</td><td>⚠️ 方向对、估计偏乐观。实际已写 960+ 行（scaffolds 491 + validator 470），但<b>未通过编译</b>；且模板与真实契约（manifest 字段、ToolMount、frontmatter、pom 属性）存在 5 处错位。补齐这些契约对齐的改动量约等于模板本身。</td></tr>
+  <tr><td>browser4-seo demo 插件是误解产物，但不浪费，可作场景①③参考实现</td><td>✅ 基本成立。seo 插件结构规范（ToolMount、plugin.json、JS 资源、build.ps1 校验 JAR 结构），是脚手架模板应仿照的活教材——但脚手架目前并未对齐它（见 P1 第 2、4 条）。</td></tr>
+  <tr><td>PS1 AST / bash -n 缺语法检查</td><td>⚠️ 白名单已含 bash/pwsh/powershell（CodingAgentShell.kt:83），Agent 可自行 <code>coding.shell("bash -n file")</code> 补语法检查；校验器本身仅静态检查，可作为增强点而非阻塞。</td></tr>
+</table>
+
+<h2>5. 修复建议（按优先级）</h2>
+<ol>
+  <li><b>P0</b>：修复 ArtifactScaffolds.kt:468 转义（<code>"${'$'}BROWSER4_HOME/plugins/"</code>），恢复编译；跑通 ArtifactScaffoldsTest / ArtifactValidatorTest。</li>
+  <li><b>P1</b>：plugin.json 模板与校验器对齐真实 PluginManifest（name=artifact 名、version、description、dependsOn、autoConfigurationClasses；去掉 id/domain）。</li>
+  <li><b>P1</b>：脚手架 AutoConfiguration 模板实现 <code>ToolMount</code> + <code>getToolExecutors()</code>（照抄 SeoAutoConfiguration 模式），校验器增加 ToolMount 检查。</li>
+  <li><b>P1</b>：skill 模板/校验器改用 <code>name + description + allowed-tools</code> frontmatter（对齐 SkillDefinitionLoader 与仓库既有技能），校验器补「name=目录名」「description 1..1024」检查。</li>
+  <li><b>P1</b>：脚手架 pom 改字面版本或定义 revision 属性，补齐 browser4-skeleton / spring-boot-autoconfigure 等依赖。</li>
+  <li><b>P2</b>：validate(plugin) 走 fs 沙箱解析；校验器补工具名交叉引用（skill 中引用的 coding./tab./自定义域是否真实存在）。</li>
+</ol>
+
+<h2>6. 修复状态（2026-08-14 已执行）</h2>
+<table>
+  <tr><th>问题</th><th>状态</th><th>改动</th></tr>
+  <tr><td>P0 ArtifactScaffolds.kt:468 转义错误</td><td>✅ 已修复</td><td><code>$BROWSER4_HOME</code> → <code>"${'$'}BROWSER4_HOME"</code>；browser4-agentic 全模块恢复编译</td></tr>
+  <tr><td>P1 plugin.json 字段与 PluginManifest 不符</td><td>✅ 已修复</td><td>脚手架生成 name/version/description/dependsOn/autoConfigurationClasses；name 用 artifact 名（browser4-seo）而非 PascalCase；校验器必填改 name+version，去掉 id 误报</td></tr>
+  <tr><td>P1 脚手架 AutoConfiguration 缺 ToolMount</td><td>✅ 已修复</td><td>生成的 AutoConfiguration 实现 ToolMount + getToolExecutors()（照 SeoAutoConfiguration 模式）；校验器检查 ToolMount/getToolExecutors 存在性</td></tr>
+  <tr><td>P1 skill frontmatter 与加载器不符</td><td>✅ 已修复</td><td>脚手架/校验器改用 name+description(1..1024)+allowed-tools；校验器补「name=目录名」「kebab-case」检查；browser4-coding SKILL.md 自身 frontmatter 已对齐</td></tr>
+  <tr><td>P1 pom 依赖未定义 ${revision}、依赖不足</td><td>✅ 已修复</td><td>脚手架支持 pdkVersion 参数（默认读仓库 VERSION 文件）；pom 模板补齐 browser4-skeleton/browser4-protocol/spring-boot-autoconfigure/kotlin-stdlib/kotlinx-coroutines（均 provided）；relativePath 对齐 ../../browser4-pdk/pom.xml；校验器检测 ${revision} 与缺失依赖</td></tr>
+  <tr><td>P1 validate(plugin) 绕过沙箱</td><td>✅ 已修复</td><td>CodingAgentFileSystem 新增 resolvePathString()；validate(plugin) 先经 fs 沙箱解析再交校验器</td></tr>
+  <tr><td>P2 工具名交叉引用</td><td>✅ 已实现</td><td><code>ArtifactValidator.validateToolReferences()</code>：提取工件中 <code>domain.method(</code> 调用并与运行时可见工具集（硬编码域 + coding/cli + CustomToolRegistry 插件域）交叉比对；已知域的未知方法=ERROR、未知域=WARNING（容忍插件未装）；内置噪声域清单（java/kotlin/JSON/Math/document/console/os 等）防误报；<code>coding.validate(type=skill)</code> 自动执行。7 个新测试（正例/错拼/未知域/噪声/去重/非调用/空白容忍）</td></tr>
+</table>
+<p><b>验证</b>：<code>mvn -pl browser4-agentic -am compile -DskipTests -o</code> 通过；<code>CodingToolExecutorTest（26 specs）</code>、<code>ArtifactScaffoldsTest（21）</code>、<code>ArtifactValidatorTest（38，含 7 个交叉引用测试）</code> 及 browser4-agentic 全模块测试全绿。</p>
+
+<h2>7. 结论</h2>
+<p><b>架构判断不变</b>：以 <code>coding.scaffold → coding.write → coding.validate → coding.shell/tab.eval</code> 组织四类工件生产，方向正确且贴合编程内核定位；JS 场景已是差异化亮点。<b>当前状态是「骨架已在工作区、但不可编译、契约未对齐」</b>——上一轮把「缺什么」收敛到模板+校验是对的，但交付前提是能编译且模板与真实加载链路一致。按 P0+P1 六条修复后，四场景可全部端到端打通；届时编程支持评级可从上轮 B+ 提升至 A-。</p>
+
+<div class="footer">
+  评估方法：静态源码审查（browser4-agentic / browser4-boot / browser4-skeleton / browser4-pdk / browser4-plugins / skills）+ 真实离线编译（mvn -pl browser4-agentic -am compile -DskipTests -o，失败于 ArtifactScaffolds.kt:468）· 未做浏览器运行时验证<br>
+  主要参考：CodingToolExecutor.kt · ArtifactScaffolds.kt · ArtifactValidator.kt · PluginManifest.kt · PluginService.kt · PluginManager.kt · ToolMount.kt · SkillDefinitionLoader.kt · BrowserTabToolExecutor.kt · browser4-plugins/browser4-seo/（参考实现）· skills/browser4-coding/SKILL.md
+</div>
+
+</div>
+</body>
+</html>
