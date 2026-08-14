@@ -401,6 +401,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "swarm-status",
         "swarm-result",
         "swarm-list",
+        "swarm-close",
         "page-info",
         "tab-list",
         "tab-new",
@@ -4080,8 +4081,20 @@ async fn handle_cookie_set(
     }
     if let Some(expires) = tool_params.get("expires").and_then(|value| value.as_str()) {
         let expires_number = expires
-            .parse::<f64>()
+            .parse::<i64>()
             .map_err(|e| format!("Invalid --expires value '{expires}': {e}"))?;
+        // Warn when the expiry is already in the past — the browser expires the
+        // cookie immediately and the user otherwise gets no indication.
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        if expires_number < now_secs {
+            eprintln!(
+                "⚠  Warning: --expires {} is in the past — the cookie will be expired immediately by the browser.",
+                expires_number
+            );
+        }
         cookie.insert("expires".to_string(), json!(expires_number));
     }
     if let Some(http_only) = tool_params
@@ -5990,13 +6003,10 @@ async fn handle_html_snapshot_get(
             display_selector
         );
         cli_println!(
-            "  The snapshot may be stale — it captures the initial server-rendered HTML, not the live DOM."
+            "  The snapshot may be stale — it reflects the DOM at capture time. If the page has changed since the last `htmlsnapshot`, re-capture with `htmlsnapshot` first."
         );
         cli_println!(
-            "  If the page has been modified by JavaScript since the last `htmlsnapshot`, re-capture with `htmlsnapshot` first."
-        );
-        cli_println!(
-            "  Alternatively, use `get text \"{}\"` to query the live accessibility tree instead of the stored snapshot.",
+            "  Verify the selector with `htmlsnapshot grep \"{}\"`, or discover valid selectors with `htmlsnapshot inspect`.",
             display_selector
         );
     } else if is_get_all && !json_active() {
@@ -9812,12 +9822,26 @@ async fn handle_swarm_result(
     });
     cli_println!("{}", serde_json::to_string_pretty(&payload).unwrap_or_default());
 
-    // Guide users when resultSet is empty — likely no X-SQL query was provided
+    // Guide users when resultSet is empty — distinguish "page never fetched"
+    // from "page fetched but nothing extracted" so the hint doesn't mislead
+    // `swarm query` users whose task was silently dropped/evicted.
     if is_empty && !parsed.get("error").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
-        cli_println!(
-            "Note: resultSet is empty.  If you used `swarm submit` without --sql, no data was extracted — only the page was fetched.\n\
-             Use `swarm query --sql @query.sql` for structured extraction, or check `swarm status <id>` for errors."
-        );
+        let page_content_bytes = parsed
+            .get("pageContentBytes")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        if page_content_bytes <= 0 {
+            cli_println!(
+                "Note: resultSet is empty and pageContentBytes is 0 — the page was never fetched.\n\
+                 The task may have been dropped or evicted. Check `swarm status <id>`, then re-run `swarm query --sql @query.sql --refresh`."
+            );
+        } else {
+            cli_println!(
+                "Note: resultSet is empty but the page was fetched ({} bytes).\n\
+                 If you used `swarm submit` without --sql, no data was extracted — use `swarm query --sql @query.sql` instead.",
+                page_content_bytes
+            );
+        }
     }
     json_field("task_id", json!(id));
     json_field("raw", parsed);
@@ -17922,6 +17946,11 @@ mod tests {
     #[test]
     fn no_snapshot_commands_include_eval() {
         assert!(no_snapshot_commands().contains("eval"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_swarm_close() {
+        assert!(no_snapshot_commands().contains("swarm-close"));
     }
 
     #[test]

@@ -611,11 +611,23 @@ class CrawlService(
                             "$totalElements total elements, 0 anchors). " +
                             "The page may not have loaded correctly. Try --refresh, " +
                             "verify the URL is reachable, or check network connectivity."
-                        allAnchors > 0 ->
-                            "The page has $allAnchors anchors and ${htmlLength}B of HTML, " +
-                            "but the CSS selector '${options.outLinkSelector}' matched zero " +
-                            "elements. Try a broader selector (e.g., 'a') or use " +
-                            "'htmlsnapshot inspect' to discover valid selectors."
+                        allAnchors > 0 -> {
+                            val selectorMatches = runCatching {
+                                document.select(options.outLinkSelector).size
+                            }.getOrDefault(-1)
+                            if (selectorMatches > 0) {
+                                "The page has $allAnchors anchors and ${htmlLength}B of HTML, " +
+                                "and the selector '${options.outLinkSelector}' matched " +
+                                "$selectorMatches element(s), but the out-link pattern " +
+                                "'${options.outLinkPattern}' filtered them all. " +
+                                "Try a broader pattern (or drop -olp / --out-link-pattern)."
+                            } else {
+                                "The page has $allAnchors anchors and ${htmlLength}B of HTML, " +
+                                "but the CSS selector '${options.outLinkSelector}' matched zero " +
+                                "elements. Try a broader selector (e.g., 'a') or use " +
+                                "'htmlsnapshot inspect' to discover valid selectors."
+                            }
+                        }
                         else ->
                             "No out-links found. The page has 0 anchors and ${htmlLength}B " +
                             "of HTML (${totalElements} elements). The page may have loaded " +
@@ -793,8 +805,8 @@ class CrawlService(
                 }
             } // parseHandler defined
 
-            // Submit the seed URL
-            val seedArgs = buildArgsForDepth(options, 1)
+            // Submit the seed URL (depth 0 — it is the starting page).
+            val seedArgs = buildArgsForDepth(options, 0)
             val seedHyperlink = ParsableHyperlink("${request.url} $seedArgs", parseHandler)
             session.submit(seedHyperlink)
 
@@ -1085,8 +1097,9 @@ class CrawlService(
 
     private fun extractDepth(page: WebPage): Int? {
         // Depth is embedded as a synthetic option in the URL's args string.
-        // ParsableHyperlink stores the URL with args like "https://... -depth 2 -parse"
-        val url = page.url
+        // `configuredUrl` carries the args (e.g. "https://... -depth 2 -parse"),
+        // while `page.url` is the resolved URL without args.
+        val url = page.configuredUrl
         val match = Regex("""-depth\s+(\d+)""").find(url)
         return match?.groupValues?.get(1)?.toIntOrNull()
     }

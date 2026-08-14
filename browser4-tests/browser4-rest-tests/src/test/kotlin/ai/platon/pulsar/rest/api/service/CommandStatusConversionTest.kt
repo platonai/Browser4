@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.api.service
 
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskStatus
+import ai.platon.pulsar.agentic.tools.advanced.crawl.PGInstructResult
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitStatus
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
@@ -134,5 +135,27 @@ class CommandStatusConversionTest {
         // Verify processState is mapped from internal "done" to user-facing "completed"
         assertEquals("completed", commandStatus.processState)
         assertEquals(true, commandStatus.isDone)
+    }
+
+    @Test
+        @DisplayName("test AgentTaskStatus to CommandStatus transfers instructResults to commandResult")
+    fun testAgentTaskStatusToCommandStatusTransfersInstructResults() {
+        val agentTaskStatus = AgentTaskStatus(
+            id = "agent-extract",
+            statusCode = ResourceStatus.SC_OK,
+            processState = "done"
+        )
+        agentTaskStatus.instructResults.add(
+            PGInstructResult.ok("fields", mapOf("title" to "Python", "year" to "1991"), "map")
+        )
+
+        val commandStatus = agentTaskStatus.toCommandStatus()
+
+        assertEquals(1, commandStatus.instructResults.size)
+        assertEquals("fields", commandStatus.instructResults[0].name)
+        assertEquals(
+            mapOf("title" to "Python", "year" to "1991"),
+            commandStatus.commandResult?.fields
+        )
     }
 }

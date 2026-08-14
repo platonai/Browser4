@@ -325,6 +325,8 @@ Scalar functions (input: DOM + selector string, output: scalar)
 
 > ⚠ **Warning:** Functions marked with ⚠ return a **scalar** (`String`), not a `ValueDom`. They select an element AND extract a property in one step. Their results **cannot** be passed to `ValueDom` functions like `DOM_ABS_SRC`, `DOM_ABS_HREF`, `DOM_TEXT`, etc. Use the `DOM_SELECT_*` + property-function pattern instead for composable DOM access (see [§Composability](#function-inputoutput-types--composability) above).
 
+> **Note on `DOM_FIRST_HREF`:** For href extraction, `DOM_FIRST_HREF(DOM, sel)` can return an empty string for a class-only selector (e.g. `.product-link`) while the tag-qualified form (`a.product-link`) works. Prefer `DOM_FIRST_ATTR(DOM, sel, 'href')` — it accepts any selector and returns the href consistently (relative; use `DOM_ABS_HREF` or `abs:href` for the absolute URL).
+
 ### STR Namespace
 
 | SQL Alias | Returns | Category |

@@ -275,8 +275,10 @@ Typical MockSite selectors:
 |---|---|
 | Product title | `#productTitle` |
 | Price | `#product-price` |
-| Description | `#feature-bullets` |
-| Category | `.breadcrumb` |
+| Description (feature list) | `#product-features` |
+| Category (breadcrumb) | `.breadcrumbs` |
+
+> **Note:** Detail pages (`/ec/dp/…`) use ID selectors (`#productTitle`, `#product-price`), while listing pages (`/ec/b?node=…`) use class selectors (`.product-card`, `.product-title`, `.product-price`).
 
 ### MockSite crawl example
 

@@ -96,6 +96,22 @@ browser4-cli crawl --sql "@.test-sessions/extract.sql"
 
 **Always quote `@file` paths in PowerShell.** The quotes are stripped before the argument reaches the CLI, so the `@` prefix is still recognized.
 
+## PowerShell-Specific: CSS Attribute Selectors
+
+CSS attribute selectors use double quotes (`[class*="product-title"]`), which collide with PowerShell's double-quote string syntax. A `\"` inside a double-quoted PowerShell string is a literal backslash + quote (PowerShell escapes with the backtick `` ` ``, not backslash), so the selector reaches the CLI truncated (`[class*="`).
+
+Wrap the selector in **single quotes** — PowerShell passes single-quoted strings verbatim:
+
+```powershell
+# This FAILS — \" is a literal backslash+quote, selector is truncated:
+browser4-cli htmlsnapshot get all text "[class*=\"product-title\"]"
+
+# This WORKS — single quotes pass the selector verbatim:
+browser4-cli htmlsnapshot get all text '[class*="product-title"]'
+```
+
+**In PowerShell, use single quotes around CSS selectors that contain double quotes.**
+
 ## Why This Works
 
 - **`--file`** — File content is read directly; the shell never interprets it.

@@ -57,12 +57,20 @@ $ErrorActionPreference = "Stop"
     Normalize raw log output (string or array) into a clean string[].
     gh run view --log-failed returns a single string; other paths return
     arrays. This ensures consistent line-by-line iteration downstream.
+
+.NOTES
+    Every return uses a unary comma (`,`) so PowerShell does NOT unroll the
+    array into individual pipeline objects. Without it the caller receives
+    Object[] (2+ lines) or a scalar string (1 line), and
+    List[string].AddRange(...) then throws:
+        Cannot convert argument "collection", with value "System.Object[]" ...
+    because the generic AddRange(IEnumerable[string]) overload cannot bind.
 #>
 function ConvertTo-LogLines {
     param([object]$RawLogs)
-    if ($null -eq $RawLogs) { return @() }
+    if ($null -eq $RawLogs) { return ,[string[]]@() }
     if ($RawLogs -is [string]) {
-        return @($RawLogs -split '\r?\n')
+        return ,[string[]]($RawLogs -split '\r?\n')
     }
     if ($RawLogs -is [System.Collections.IEnumerable]) {
         $result = [System.Collections.Generic.List[string]]::new()
@@ -74,9 +82,9 @@ function ConvertTo-LogLines {
                 $result.Add([string]$item)
             }
         }
-        return [string[]]$result.ToArray()
+        return ,[string[]]$result.ToArray()
     }
-    return @([string]$RawLogs)
+    return ,[string[]]@([string]$RawLogs)
 }
 
 <#
