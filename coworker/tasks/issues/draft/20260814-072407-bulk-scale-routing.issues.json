@@ -1,0 +1,194 @@
+{
+  "meta": {
+    "date": "20260814-084524",
+    "mode": "production",
+    "scenario": "bulk-scale-routing",
+    "source": "20260814-072407-bulk-scale-routing.full.md"
+  },
+  "background": {
+    "executionContext": "**Preparation:** Verified cwd was the repo root; created `.test-sessions/`; ran `browser4-cli help`; downloaded and read `https://browser4.io/SKILL.md` in full (45.8 KB); read the local SKILL.md §4b and the crawl/swarm/loop/htmlsnapshot/x-sql reference docs; confirmed MockSite (HTTP 200 on :18080) and backend health (`browser4-cli status`).\n\n**Commands and steps per AC:**\n\n1. **AC1:** `browser4-cli goto \"http://localhost:18080/ec/b?node=1292115012\"` → `browser4-cli htmlsnapshot` → `browser4-cli htmlsnapshot inspect` (auto-discovered `.product-card` with `.product-title`/`.product-price`) → wrote `.test-sessions/ac1-listing-query.sql` → `browser4-cli htmlsnapshot query \"<url>\" --sql \"@.test-sessions/ac1-listing-query.sql\"` → 6 rows.\n2. **AC2:** Wrote `.test-sessions/seed-urls.txt` (B0E000001/2/3) and `.test-sessions/ac2-product-query.sql`; ran `browser4-cli crawl --seed-file \".test-sessions/seed-urls.txt\" --depth 0 --sql \"@.test-sessions/ac2-product-query.sql\" --format table --refresh` → 3 rows in ~26s.\n3. **AC3:** `browser4-cli crawl \"http://localhost:18080/generated/crawl/index.html\" -d 2 -ol \"a.product\" -olp \"/product/\"` → 10 pages in ~60s. Verified fixture HTML contained `a.category-link`, `a.guide-link`, `a.promo-link`, `a.utility-link` that were correctly excluded; confirmed product pages cross-link (`a.product` → 4.html/5.html) so depth-2 discovery occurred. Checked raw result via `crawl result <id> --json`.\n4. **AC4:** `browser4-cli swarm create --display-mode HEADLESS --max-browser-contexts 2 --max-open-tabs 4` (warned about 2 stale tasks) → `swarm list` → `swarm list --clear` → `browser4-cli swarm query --sql \"@.test-sessions/ac2-product-query.sql\" --seed-file \".test-sessions/seed-urls.txt\" --refresh` → 3 task IDs → polled `swarm status`/`swarm list` until all `completed` → `swarm result <id>` ×3 → `swarm close`. Re-ran the full cycle once with `--clear-stale` to confirm extraction and observe scheduling variability.\n5. **AC5:** `browser4-cli -s price-watch goto \"http://localhost:18080/ec/dp/B0E000001\"` → sanity-checked `-s price-watch eval \"document.querySelector('#product-price').textContent.trim()\"` → launched the loop in the background (hidden `Start-Process` running `.test-sessions/run-loop.ps1` so status could be inspected mid-run) → `loop --list` (1/2 iters, running) → `loop --status --name mock-price-watch` → loop finished, log showed 2 iterations of `$899.99`.\n6. **AC6:** Wrote and ran `.test-sessions/ac6-few-urls.ps1` — `ForEach-Object` over 3 URLs with `goto`, `htmlsnapshot`, `htmlsnapshot get text \"#productTitle\"`, `Start-Sleep -Seconds 2` → titles extracted for all 3 pages.\n\n**Key decisions/workarounds:** quoted PowerShell `@file` paths (`--sql \"@...\"`) per the shell-quoting warning; used `swarm list --clear` after the stale-task warning before submitting; used a hidden background process for the loop so `loop --status` could be observed while running; closed the swarm session and all 5 browser sessions at the end (`swarm close`, `close-all`).\n\n**Investigation notes:** the stray \"No active session — creating a new one.\" line turned out to be the intentional new-session notice from the first `goto`, written to stderr and thus appearing detached in merged output (not a functional bug). The crawl depth labels were confirmed wrong from raw backend JSON. Swarm queued-job timing was confirmed variable across two runs.",
+    "task": "All six acceptance criteria were completed successfully, each reproducing the exact branch of SKILL.md §4b:\n\n- **AC1 (single list page):** `htmlsnapshot query` with `DOM_LOAD_AND_SELECT(@url, '.product-card')` returned 6 rows (title + price + link) from `http://localhost:18080/ec/b?node=1292115012` — one row per product card.\n- **AC2 (multiple known URLs):** `crawl --seed-file seed-urls.txt --depth 0 --sql @ac2-product-query.sql --format table --refresh` returned exactly 3 rows, one per seed URL, each with `DOM_BASE_URI` + `#productTitle` + `#product-price`.\n- **AC3 (crawl from start URL):** `crawl http://localhost:18080/generated/crawl/index.html -d 2 -ol \"a.product\" -olp \"/product/\"` discovered 10 pages (hub + 9 product pages, including depth-2 pages reachable only via product→product links). Category/guide/utility links present in the fixture HTML were correctly excluded.\n- **AC4 (parallel execution):** `swarm create --display-mode HEADLESS --max-browser-contexts 2 --max-open-tabs 4` → `swarm query --sql @ac2-product-query.sql --seed-file seed-urls.txt --refresh` → 3 tasks, polled via `swarm status`/`swarm list`, results fetched with `swarm result` (one row each), then `swarm close`.\n- **AC5 (repeated monitoring):** `-s price-watch goto ...` then `loop --name mock-price-watch --count 2 -i 10 -- -s price-watch eval \"...\"` executed 2 iterations, both returning `$899.99`; `loop --list` and `loop --status` worked mid-run, and the state was auto-cleaned on completion as documented.\n- **AC6 (few URLs in a shell script):** A PowerShell `ForEach-Object` loop over 3 URLs calling `goto` → `htmlsnapshot` → `htmlsnapshot get text \"#productTitle\"` with `Start-Sleep 2` extracted all 3 titles without needing crawl/swarm/loop.\n\nThe backend was the released runtime bundle (browser4-cli 4.13.4 ↔ server 4.13.4-SNAPSHOT at localhost:18182, health UP), and all temporary files were created under `.test-sessions/`."
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "Crawl reports every page at depth=1 regardless of actual discovery depth",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "browser4-cli crawl \"http://localhost:18080/generated/crawl/index.html\" -d 2 -ol \"a.product\" -olp \"/product/\"\nthen: browser4-cli crawl result <task-id> --json\nResult: every page in the pages[] array has \"depth\":1, including the seed URL (http://localhost:18080/generated/crawl/index.html) and pages that are only reachable at depth 2 (product/4.html ... product/9.html, found via product->product links).",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The seed URL should be reported at depth=0, pages linked from the hub at depth=1, and pages found via product->product links at depth=2 (matching crawl.md's documented 'depth=0 | URL | Page 1 Title' output).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "All 10 pages are reported as \"depth\":1. The crawl itself recurses correctly (10 unique pages, no category pages, terminates), so only the reported depth is wrong, but users cannot verify link depth or filter results by depth.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "In CrawlService.crawlDepthN the recorded depth is `extractDepth(page) ?: 1`. extractDepth parses `page.configuredUrl` for a '-depth N' marker, which is apparently not preserved in configuredUrl for pages loaded through the parse handler, so the silent `?: 1` fallback applies to every page (seed and depth-2 pages alike). The internal recursion still knows the real depth (it stops at maxDepth), so only the reporting is affected. Needs backend verification of what configuredUrl contains for each page.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/CrawlService.kt:742 (crawlDepthN) and :1098 (extractDepth)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Track depth explicitly in the parse handler (e.g. a ConcurrentHashMap<normalizedUrl, depth> populated from buildArgsForDepth) and record it in CrawlPageResult instead of scraping the configured URL\n- Remove the silent `?: 1` fallback or apply it only to the seed so a missing depth fails loudly\n- Add a backend integration test asserting seed=0, direct links=1, second-level links=2 for a depth-2 crawl",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "Swarm jobs can sit in 'queued' for 20-25s while sibling jobs complete, looking stuck with no worker visibility",
+      "severity": "Low",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "browser4-cli swarm create --display-mode HEADLESS --max-browser-contexts 2 --max-open-tabs 4\nbrowser4-cli swarm query --sql \"@q.sql\" --seed-file seeds.txt --refresh\nbrowser4-cli swarm status <id> (poll)\nRun 1: B0E000001 stayed statusCode=201 'queued' for ~25s while B0E000002/B0E000003 completed in ~1s each. Run 2 (same commands): B0E000001 completed instantly while the other two took ~18s each.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "With 2 contexts and 3 jobs, jobs should be picked up promptly in submission order and roughly evenly; `swarm status` should not look like the job is stuck while others succeed.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Job pickup order and latency vary widely between runs (different task is 'slow' each time). One worker context appears warm (instant) while the other takes ~18s, and the queued job shows only statusCode 201 with no indication of worker warm-up.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The swarm worker pool initializes browser contexts lazily and job->context assignment does not appear to be strict FIFO; the client has no visibility into per-worker state, so a job waiting for a cold context is indistinguishable from a stuck one. The CLI's own warning text ('If jobs appear stuck...') amplifies the impression. Backend scheduling in SwarmService needs investigation to confirm exact worker pick-up order.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/SwarmService.kt (task dispatch/worker pool); browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/config/StartupWarmer.kt (swarm pool warming)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Warm the swarm browser pool during `swarm create` so no job hits a cold context\n- Include per-worker state (initializing/ready/busy) in `swarm status`/`swarm list` output\n- Assign jobs FIFO so the first submitted job starts first\n- Adjust the CLI 'stuck' guidance to mention expected worker warm-up latency",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "Crawl progress output is repetitive and slow-looking for small local jobs (26s for 3 pages; ~56s 'waiting for first page' for 10 pages)",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "browser4-cli crawl --seed-file .test-sessions/seed-urls.txt --depth 0 --sql \"@q.sql\" --format table --refresh   # 3 localhost pages, 26s\nbrowser4-cli crawl http://localhost:18080/generated/crawl/index.html -d 2 -ol \"a.product\" -olp \"/product/\"   # prints 'Crawling... waiting for first page (6s/16s/26s/36s/46s/56s elapsed, 1 URLs queued)' for ~56s",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Local pages should complete in a few seconds, and progress should show meaningful per-URL detail rather than near-identical lines that make the crawl look stalled.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Each page takes ~5-7s (backend parse/load pipeline) and the CLI prints essentially the same 'waiting for first page' / 'N pages found so far' line every poll (~2s interval), which reads as a hang. The depth-0 mode did show '1/3 seeds done ... 1 rows extracted' per seed, which was much clearer.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "crawlDepthN processes pages sequentially through Pulsar's parse pipeline (engine-level latency dominates); the CLI polls every 2s but backend state only changes on page completion, so output lines repeat. Not a correctness failure, but a real UX/confidence problem for first-time users.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:10846 (crawl polling loop) and :10970 (progress messages); browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/CrawlService.kt (per-page processing)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Emit a per-URL completion line as soon as each page finishes (like depth-0 mode does), including in link-discovery mode\n- Replace repeated identical progress lines in place (e.g. carriage-return update) instead of appending duplicates\n- Document expected per-page latency in crawl.md so users don't interpret slow local crawls as failures",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "'No active session — creating a new one.' is written to stderr and can appear detached from the 'Session opened:' confirmation in merged/scripted output",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "browser4-cli -s demo goto http://localhost:18080/ec/dp/B0E000001; browser4-cli -s demo goto http://localhost:18080/ec/dp/B0E000002\nCapture combined stdout+stderr: the line 'No active session — creating a new one.' appears after the second command's output, far from the 'Session opened: demo (...)' line it belongs to.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The new-session notice should appear adjacent to 'Session opened:' (same stream, same command), or be omitted in favor of the 'Session opened:' message.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The informational notice goes to stderr via eprintln! while the success message goes to stdout; in merged/captured output (and command chains), the notice surfaces at the very end, making it look like a stray error from the last command. This confused the evaluator initially before source inspection showed it was intentional.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:1252 uses eprintln! for an informational message while the paired 'Session opened:' message uses println! (cli_println!), so stream separation reorders them in merged output. stderr is conventionally reserved for warnings/errors, which makes the notice look alarming.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:1248-1253 (get_or_create_navigation_session)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Emit 'No active session — creating a new one.' to stdout immediately before 'Session opened:' (or drop it and let 'Session opened:' carry the message)\n- Keep stderr strictly for warnings/errors so informational session lifecycle messages are consistently on stdout",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 5,
+      "title": "Loop output contains non-ASCII glyphs (—, ✓) that are corrupted when redirected to a file on Windows PowerShell",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Create a script that runs: browser4-cli loop --name mock-price-watch --count 2 -i 10 -- -s price-watch eval \"document.querySelector('#product-price').textContent.trim()\" *> loop-run.log\nThen inspect loop-run.log: lines contain '鈥?every 10s...' and '鉁? Loop finished' instead of '— every 10s' and '✓ Loop finished'.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Redirected loop logs should preserve UTF-8 characters (— and ✓).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The em-dash and checkmark are mangled into mojibake in the redirected file. Console display is fine; only scripted/logging workflows are affected.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The CLI emits UTF-8, but Windows PowerShell 5.1's `*>` redirection decodes the byte stream using the system ANSI codepage (GBK in this environment), corrupting non-ASCII characters. Cosmetic, but it degrades log-based automation on a first-class platform.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs (loop command output formatting with —/✓ glyphs)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Use ASCII-safe framing characters (e.g. '-' and 'OK') in loop iteration/history output, or\n- Document in loop.md/shell-quoting.md that Windows users should set `[Console]::OutputEncoding = [Text.Encoding]::UTF8` before redirecting loop output",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}
