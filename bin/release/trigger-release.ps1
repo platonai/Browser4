@@ -21,12 +21,14 @@
     checks, previews the tag and release notes, and exits without changing
     anything. Pass -Apply to actually create and push the tag.
 
-    Release notes: when an AI agent is available (claude, codex, kimi, dsh, or
-    gh copilot — resolved via coworker/scripts/workers/agent.ps1), the commit
-    list since the previous tag is sent to the agent to produce structured
-    release notes. Those notes are used as the annotated tag message (unless
-    -message is given) and shown as a preview. Use -NoAgent to disable this and
-    fall back to the raw commit list.
+    Release notes: by default the script does NOT call an AI agent and uses the
+    raw commit list. Pass -Agent auto to opt in with the backend auto-resolved
+    (claude, codex, kimi, dsh, or gh copilot — via
+    coworker/scripts/workers/agent.ps1), or -Agent <name> to pin a specific
+    backend (claude, kimi, codex, dsh, copilot). The commit list since the
+    previous tag is sent to the agent to produce structured release notes, used
+    as the annotated tag message (unless -message is given) and shown as a
+    preview. Falls back to the raw commit list if no agent is available.
 
 .PARAMETER remote
     The git remote to push the tag to (default: "origin").
@@ -43,14 +45,20 @@
     Explicit dry-run mode. This is the default; the flag exists for clarity and
     for callers (e.g. monitor-release.ps1) that forward a verbatim flag.
 
-.PARAMETER NoAgent
-    Skip AI-generated release notes and use the raw commit list instead.
+.PARAMETER Agent
+    Generate AI release notes using an agent backend. Values: auto (resolve the
+    backend via coworker/scripts/workers/agent.ps1: claude, kimi, codex, dsh,
+    or gh copilot), or a specific backend name (claude, kimi, codex, dsh,
+    copilot). Without this flag the script uses the raw commit list and never
+    invokes an AI agent. A pinned backend overrides $env:BROWSER4_AGENT and the
+    config.psd1 backend order for this invocation.
 
 .EXAMPLE
     .\bin\release\trigger-release.ps1                       # dry run (preview only)
     .\bin\release\trigger-release.ps1 -Apply                # actually create + push
     .\bin\release\trigger-release.ps1 -Apply -message "Hotfix for login crash"
-    .\bin\release\trigger-release.ps1 -NoAgent              # dry run, skip AI notes
+    .\bin\release\trigger-release.ps1 -Agent auto           # dry run, AI notes (auto backend)
+    .\bin\release\trigger-release.ps1 -Agent dsh            # dry run, AI notes via dsh
 #>
 
 param(
@@ -58,7 +66,8 @@ param(
     [string]$message = "",
     [switch]$Apply,
     [switch]$DryRun,
-    [switch]$NoAgent
+    [ValidateSet('auto', 'claude', 'kimi', 'codex', 'dsh', 'copilot')]
+    [string]$Agent = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -66,6 +75,17 @@ $ErrorActionPreference = "Stop"
 # Dry run is the default. -Apply opts into real execution; -DryRun is an
 # explicit (redundant) confirmation of the default.
 $isDryRun = $DryRun -or -not $Apply
+
+# AI release notes are opt-in via -Agent. Any non-empty value (auto or a
+# pinned backend name) enables them; ValidateSet guards the allowed values.
+$useAgent = [bool]$Agent
+
+# -Agent auto leaves the backend to the normal resolution chain
+# (config.psd1 order); a pinned name overrides it via $env:BROWSER4_AGENT,
+# the canonical override honored first by config.ps1's Get-AgentBackend.
+if ($Agent -and $Agent -ne 'auto') {
+    $env:BROWSER4_AGENT = $Agent
+}
 
 $repoRoot = (git rev-parse --show-toplevel 2>$null)
 Set-Location $repoRoot
@@ -318,26 +338,39 @@ if ($prevTag) {
 # with their correct CLI flags and Windows stdin handling.
 # ═══════════════════════════════════════════════════════════════════
 
+# Dot-source the agent helpers at SCRIPT scope. Dot-sourcing inside a
+# function scopes the defined functions to that function only, so
+# Invoke-Agent would not be visible to Invoke-ReleaseNotesAgent below
+# (it failed with: "The term 'Invoke-Agent' is not recognized").
+$script:AgentScriptPath = Join-Path $repoRoot 'coworker\scripts\workers\agent.ps1'
+$script:AgentHelpersLoaded = $false
+if (Test-Path -LiteralPath $script:AgentScriptPath) {
+    try {
+        . $script:AgentScriptPath
+        if (Get-Command Invoke-Agent -ErrorAction SilentlyContinue) {
+            $script:AgentHelpersLoaded = $true
+        }
+    } catch {
+        $script:AgentHelpersLoaded = $false
+    }
+}
+
 $script:ReleaseAgent = @{ Initialized = $false; Backend = ''; Executable = '' }
 
 function Initialize-ReleaseAgent {
     if ($script:ReleaseAgent.Initialized) { return }
     $script:ReleaseAgent.Initialized = $true
 
-    $agentScript = Join-Path $repoRoot 'coworker\scripts\workers\agent.ps1'
-    if (-not (Test-Path -LiteralPath $agentScript)) { return }
+    if (-not $script:AgentHelpersLoaded) { return }
 
     try {
-        . $agentScript
-        if (Get-Command Invoke-Agent -ErrorAction SilentlyContinue) {
-            $command = Get-AgentCommand -RepoRoot $repoRoot -WorkingDirectory $repoRoot
-            if ($command -and $command.Executable) {
-                $script:ReleaseAgent.Backend = [string]$command.Backend
-                $script:ReleaseAgent.Executable = [string]$command.Executable
-            }
+        $command = Get-AgentCommand -RepoRoot $repoRoot -WorkingDirectory $repoRoot
+        if ($command -and $command.Executable) {
+            $script:ReleaseAgent.Backend = [string]$command.Backend
+            $script:ReleaseAgent.Executable = [string]$command.Executable
         }
     } catch {
-        # Dot-sourcing failed — leave the agent state empty (no agent).
+        # Agent resolution failed — leave the agent state empty (no agent).
     }
 }
 
@@ -401,7 +434,7 @@ $Changes
 $releaseNotes = ''
 $agentUsed = $false
 
-if (-not $NoAgent) {
+if ($useAgent) {
     Write-Host ""
     Write-Host "Checking for an AI agent to generate release notes..." -ForegroundColor DarkGray
     if ($changesText) {
@@ -421,8 +454,8 @@ if ($agentUsed) {
     Write-Host $releaseNotes
     Write-Host "──────────────────────────────────────────────────────────" -ForegroundColor Cyan
 } else {
-    if ($NoAgent) {
-        Write-Host "  -NoAgent set — skipping AI release notes." -ForegroundColor DarkGray
+    if (-not $useAgent) {
+        Write-Host "  AI release notes disabled by default — pass -Agent auto to enable." -ForegroundColor DarkGray
     } elseif (-not $changesText) {
         Write-Host "  No changes to summarize — skipping AI release notes." -ForegroundColor DarkGray
     } else {

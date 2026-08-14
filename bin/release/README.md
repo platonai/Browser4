@@ -97,17 +97,21 @@ checks and previews the tag and release notes; it never creates or pushes anythi
 - Creates and pushes a `v{version}` tag (e.g. `v4.13.0`), which triggers
   the release workflow via the `on.push.tags` trigger.
 - Shows changes since the previous release tag for release notes.
-- **AI release notes**: if an agent (claude/codex/kimi/dsh/gh copilot) is
-  available, the commit list is sent to it to generate structured release notes,
-  used as the annotated tag message (unless `-message` is given). Use `-NoAgent`
-  to disable.
-- Supports `-remote`, `-message`, `-Apply`, `-DryRun`, and `-NoAgent`.
+- **AI release notes (opt-in)**: by default the script does NOT call an AI
+  agent — the raw commit list is used as the release notes. Pass `-Agent auto`
+  to opt in with the backend auto-resolved (claude/codex/kimi/dsh/gh copilot),
+  or `-Agent <name>` to pin a specific backend (claude, kimi, codex, dsh,
+  copilot). The commit list is sent to the agent to generate structured release
+  notes, used as the annotated tag message (unless `-message` is given). Falls
+  back to the raw commit list if no agent is available.
+- Supports `-remote`, `-message`, `-Apply`, `-DryRun`, and `-Agent`.
 
 ```
 .\bin\release\trigger-release.ps1                             # dry run (preview)
 .\bin\release\trigger-release.ps1 -Apply                      # actually create + push
 .\bin\release\trigger-release.ps1 -Apply -message "Hotfix for login crash"
-.\bin\release\trigger-release.ps1 -NoAgent                    # dry run, skip AI notes
+.\bin\release\trigger-release.ps1 -Agent auto                 # dry run, AI notes (auto backend)
+.\bin\release\trigger-release.ps1 -Agent dsh                  # dry run, AI notes via dsh
 ```
 
 ### `monitor-release.ps1`
@@ -124,7 +128,7 @@ actually trigger and monitor.
 - Streams the workflow logs in real time.
 - Reports the final conclusion (success/failure) and exits with the same code.
 - Supports `-NoWatch` for non-interactive terminals (polls via `gh run list`/`gh run view`).
-- Supports `-Apply`, `-DryRun`, and `-NoAgent` (forwarded to `trigger-release.ps1`).
+- Supports `-Apply`, `-DryRun`, and `-Agent` (forwarded to `trigger-release.ps1`).
 - On workflow failure, auto-extracts diagnostic information (failing tests,
   error blocks) for quick triage.
 

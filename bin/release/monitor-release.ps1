@@ -47,8 +47,10 @@
 .PARAMETER DryRun
     Explicit dry-run mode. This is the default; the flag exists for clarity.
 
-.PARAMETER NoAgent
-    Passed through to trigger-release.ps1 to skip AI-generated release notes.
+.PARAMETER Agent
+    Passed through to trigger-release.ps1 to generate AI release notes: auto
+    (resolve the backend) or a specific backend name (claude, kimi, codex, dsh,
+    copilot). Without it, the raw commit list is used.
 
 .EXAMPLE
     .\bin\release\monitor-release.ps1                              # dry run (preview)
@@ -67,7 +69,8 @@ param(
     [switch]$NoWatch,
     [switch]$Apply,
     [switch]$DryRun,
-    [switch]$NoAgent
+    [ValidateSet('auto', 'claude', 'kimi', 'codex', 'dsh', 'copilot')]
+    [string]$Agent = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -780,12 +783,12 @@ Write-Host "  Step 1/3: Triggering release via tag push" -ForegroundColor Cyan
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 
 # Build args for trigger-release.ps1 — passthrough of remote, message,
-# dry-run state, and agent flag.
+# dry-run state, and the -Agent flag.
 $triggerArgs = @{}
 if ($remote)      { $triggerArgs['remote'] = $remote }
 if ($message)     { $triggerArgs['message'] = $message }
 if (-not $isDryRun) { $triggerArgs['Apply'] = $true }
-if ($NoAgent)     { $triggerArgs['NoAgent'] = $true }
+if ($Agent)       { $triggerArgs['Agent'] = $Agent }
 
 # Capture all output streams so we can extract the tag
 $tagOutput = & $triggerScript @triggerArgs 2>&1
