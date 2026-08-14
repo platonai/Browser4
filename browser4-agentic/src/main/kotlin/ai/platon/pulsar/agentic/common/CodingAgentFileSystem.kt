@@ -618,6 +618,16 @@ class CodingAgentFileSystem(
     fun getWorkspaceRoot(): String = canonicalRoot.toString()
 
     /**
+     * Resolve a path against the workspace sandbox and return the absolute path string.
+     *
+     * Returns null when the path is blocked (external access without [allowExternalAccess],
+     * or traversal outside [workspaceRoot]) — same policy as [readFile]/[writeFile].
+     * Use this for tools that hand the path to third-party validators that do raw IO
+     * (e.g. `ArtifactValidator.validatePlugin`), so they cannot escape the sandbox.
+     */
+    fun resolvePathString(path: String): String? = resolvePath(path)?.toString()
+
+    /**
      * Detect the programming languages used in the workspace.
      */
     fun detectLanguages(): Map<String, Int> {

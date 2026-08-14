@@ -1,8 +1,13 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.pulsar.agentic.common.ArtifactScaffolds
+import ai.platon.pulsar.agentic.common.ArtifactValidator
 import ai.platon.pulsar.agentic.common.CodingAgentFileSystem
 import ai.platon.pulsar.agentic.common.CodingAgentShell
+import ai.platon.pulsar.agentic.common.ValidationResult
 import ai.platon.pulsar.agentic.model.ToolSpec
+import ai.platon.pulsar.agentic.tools.CustomToolRegistry
+import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationRenderer
 import kotlin.reflect.KClass
 
 /**
@@ -43,6 +48,10 @@ import kotlin.reflect.KClass
  * - `diff(path)` — Show changes since snapshot
  * - `changeSummary()` — Show all tracked changes
  * - `languages()` — Detect programming languages in workspace
+ *
+ * ### Artifact Scaffolding & Validation
+ * - `scaffold(type, ...)` — Generate template for plugin/skill/js/script
+ * - `validate(type, path)` — Validate a plugin dir, skill file, JS file, or script file
  */
 class CodingToolExecutor : AbstractToolExecutor() {
 
@@ -246,6 +255,45 @@ class CodingToolExecutor : AbstractToolExecutor() {
             returnType = "String",
             description = "Get the workspace root directory path"
         )
+
+        // --- Artifact scaffolding & validation ---
+        toolSpec["scaffold"] = ToolSpec(
+            domain = domain, method = "scaffold",
+            arguments = listOf(
+                ToolSpec.Arg("type", "String"),
+                ToolSpec.Arg("pluginName", "String", "null"),
+                ToolSpec.Arg("domain", "String", "null"),
+                ToolSpec.Arg("basePackage", "String", "null"),
+                ToolSpec.Arg("toolMethod", "String", "null"),
+                ToolSpec.Arg("toolDescription", "String", "null"),
+                ToolSpec.Arg("pdkVersion", "String", "null"),
+                ToolSpec.Arg("name", "String", "null"),
+                ToolSpec.Arg("description", "String", "null"),
+                ToolSpec.Arg("triggers", "String", "null"),
+                ToolSpec.Arg("tools", "String", "null"),
+                ToolSpec.Arg("purpose", "String", "null"),
+                ToolSpec.Arg("scriptType", "String", "null"),
+                ToolSpec.Arg("shell", "String", "null"),
+            ),
+            returnType = "String",
+            description = "Generate a scaffold template for a Browser4 plugin, skill, JS script, or shell script. " +
+                "type: 'plugin' | 'skill' | 'js' | 'script'. " +
+                "For plugin: provide pluginName, domain, basePackage, toolMethod, toolDescription (pdkVersion optional, defaults to current project version). " +
+                "For skill: provide name (must match the directory name), description (1-1024 chars), triggers (comma-separated), tools (comma-separated). " +
+                "For js: provide name, purpose ('extract'|'inject'|'interact'). " +
+                "For script: provide name, scriptType ('build'|'deploy'|'run'), shell ('ps1'|'bash')."
+        )
+        toolSpec["validate"] = ToolSpec(
+            domain = domain, method = "validate",
+            arguments = listOf(
+                ToolSpec.Arg("type", "String"),
+                ToolSpec.Arg("path", "String"),
+            ),
+            returnType = "String",
+            description = "Validate a Browser4 plugin directory, skill file, JS file, or script file. " +
+                "type: 'plugin' (path=plugin dir) | 'skill' | 'js' | 'script' (path=file path). " +
+                "Returns a list of issues with severity (error/warning/info)."
+        )
     }
 
     @Throws(IllegalArgumentException::class)
@@ -399,7 +447,92 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 fs.getWorkspaceRoot()
             }
 
+            // --- Artifact scaffolding & validation ---
+            "scaffold" -> {
+                val allowed = setOf("type", "pluginName", "domain", "basePackage",
+                    "toolMethod", "toolDescription", "pdkVersion", "name", "description",
+                    "triggers", "tools", "purpose", "scriptType", "shell")
+                validateArgs(args, allowed = allowed, required = setOf("type"), functionName)
+                val type = paramString(args, "type", functionName)!!
+                val params = args.filterKeys { it != "type" }
+                    .mapValues { it.value?.toString() ?: "" }
+                    .filterValues { it.isNotEmpty() }
+                    .toMutableMap()
+                // Default the plugin's pdk parent version from the repo VERSION file when available
+                if (type == "plugin" && !params.containsKey("pdkVersion")) {
+                    val versionFile = fs.readFile("VERSION")
+                    if (!versionFile.startsWith("Error:") && versionFile.isNotBlank()) {
+                        params["pdkVersion"] = versionFile.trim()
+                    }
+                }
+                val result = ArtifactScaffolds.scaffold(type, params)
+                if (result.size == 1 && result.containsKey("_content")) {
+                    result["_content"]!!
+                } else {
+                    result.entries.joinToString("\n\n") { (path, content) ->
+                        "=== File: $path ===\n$content"
+                    }
+                }
+            }
+            "validate" -> {
+                validateArgs(args, allowed = setOf("type", "path"), required = setOf("type", "path"), functionName)
+                val type = paramString(args, "type", functionName)!!
+                val path = paramString(args, "path", functionName)!!
+                when (type) {
+                    "plugin" -> {
+                        // Resolve through the fs sandbox before handing the raw path to the validator
+                        val resolved = fs.resolvePathString(path)
+                            ?: throw IllegalArgumentException("Path not allowed: $path")
+                        ArtifactValidator.validatePlugin(resolved).format()
+                    }
+                    "skill" -> {
+                        val content = fs.readFile(path)
+                        val result = ArtifactValidator.validateSkill(content, path)
+                        // Cross-check every domain.method( reference in the skill body
+                        // against the tools the agent can actually see/call.
+                        val refIssues = ArtifactValidator.validateToolReferences(content, knownTools(), path)
+                        ValidationResult.of(result.issues + refIssues).format()
+                    }
+                    "js" -> {
+                        val content = fs.readFile(path)
+                        ArtifactValidator.validateJs(content, path).format()
+                    }
+                    "script" -> {
+                        val content = fs.readFile(path)
+                        ArtifactValidator.validateScript(content, path).format()
+                    }
+                    else -> throw IllegalArgumentException("Unknown validate type: $type. Supported: plugin, skill, js, script")
+                }
+            }
+
             else -> throw IllegalArgumentException("Unsupported coding method: $functionName(${args.keys})")
         }
+    }
+
+    /**
+     * Assemble the map of tools the LLM agent can actually see/call, used for
+     * cross-referencing tool names inside skills and other artifacts.
+     *
+     * Sources:
+     * - [ToolCallSpecificationRenderer.collectAllToolSpecs] — hardcoded builtin
+     *   domains (tab/browser/fs/agent/system) + dynamically registered builtin
+     *   domains (coding/cli).
+     * - [CustomToolRegistry] — executors registered by plugins/mounts (seo,
+     *   captcha, image, markdown, media, pptx, command, crawl, html_snapshot,
+     *   skill, swarm, webdb, ...).
+     */
+    private fun knownTools(): Map<String, Set<String>> {
+        val tools = mutableMapOf<String, MutableSet<String>>()
+
+        ToolCallSpecificationRenderer.collectAllToolSpecs().forEach { spec ->
+            tools.getOrPut(spec.domain) { mutableSetOf() }.add(spec.method)
+        }
+
+        CustomToolRegistry.instance.getAllExecutors().forEach { executor ->
+            val methods = executor.getToolSpecs().keys
+            tools.getOrPut(executor.domain) { mutableSetOf() }.addAll(methods)
+        }
+
+        return tools.mapValues { it.value.toSet() }
     }
 }
