@@ -4,6 +4,7 @@ import ai.platon.pulsar.agentic.common.ArtifactScaffolds
 import ai.platon.pulsar.agentic.common.ArtifactValidator
 import ai.platon.pulsar.agentic.common.CodingAgentFileSystem
 import ai.platon.pulsar.agentic.common.CodingAgentShell
+import ai.platon.pulsar.agentic.common.LanguageServerManager
 import ai.platon.pulsar.agentic.common.ValidationResult
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
@@ -58,6 +59,19 @@ class CodingToolExecutor : AbstractToolExecutor() {
     override val domain = "coding"
 
     override val receiverClass: KClass<*> = CodingToolExecutor.Target::class
+
+    /**
+     * Lazily-created LSP client bound to the workspace root of the first fs
+     * target it sees. Servers are started on demand and idle-reaped.
+     */
+    @Volatile
+    private var languageServer: LanguageServerManager? = null
+
+    private fun lsp(fs: CodingAgentFileSystem): LanguageServerManager {
+        return languageServer ?: synchronized(this) {
+            languageServer ?: LanguageServerManager(fs.workspaceRoot).also { languageServer = it }
+        }
+    }
 
     /**
      * Composite target that bundles the enhanced shell and filesystem.
@@ -166,6 +180,46 @@ class CodingToolExecutor : AbstractToolExecutor() {
             returnType = "String",
             description = "Replace text occurrences in a file. Use count to limit replacements (-1 = replace all)."
         )
+        toolSpec["replaceRegex"] = ToolSpec(
+            domain = domain, method = "replaceRegex",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("regex", "String"),
+                ToolSpec.Arg("replacement", "String"),
+                ToolSpec.Arg("count", "Int", "-1"),
+            ),
+            returnType = "String",
+            description = "Replace all matches of a regular expression in a file. Supports capture groups via \$1/\${name} in replacement. Use count to limit (-1 = replace all)."
+        )
+        toolSpec["editLines"] = ToolSpec(
+            domain = domain, method = "editLines",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("startLine", "Int"),
+                ToolSpec.Arg("endLine", "Int"),
+                ToolSpec.Arg("content", "String"),
+            ),
+            returnType = "String",
+            description = "Replace lines startLine..endLine (1-based, inclusive) with new content. Preferred over replace for whole-block edits."
+        )
+        toolSpec["insertAfter"] = ToolSpec(
+            domain = domain, method = "insertAfter",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("anchor", "String"),
+                ToolSpec.Arg("content", "String"),
+            ),
+            returnType = "String",
+            description = "Insert content after the first line containing anchor (substring match)."
+        )
+        toolSpec["revert"] = ToolSpec(
+            domain = domain, method = "revert",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+            ),
+            returnType = "String",
+            description = "Restore a file to its snapshot (state before the first tracked write in this session)."
+        )
         toolSpec["delete"] = ToolSpec(
             domain = domain, method = "delete",
             arguments = listOf(
@@ -233,9 +287,13 @@ class CodingToolExecutor : AbstractToolExecutor() {
         )
         toolSpec["diff"] = ToolSpec(
             domain = domain, method = "diff",
-            arguments = listOf(ToolSpec.Arg("path", "String")),
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("algorithm", "String", "myers"),
+            ),
             returnType = "String",
-            description = "Show diff between snapshot and current content of a file"
+            description = "Show unified diff between snapshot and current content of a file. " +
+                "algorithm: 'myers' (default, fastest) or 'patience' (better for code moves)."
         )
         toolSpec["changeSummary"] = ToolSpec(
             domain = domain, method = "changeSummary",
@@ -254,6 +312,40 @@ class CodingToolExecutor : AbstractToolExecutor() {
             arguments = emptyList(),
             returnType = "String",
             description = "Get the workspace root directory path"
+        )
+
+        // --- Language server (LSP) tools ---
+        toolSpec["diagnostics"] = ToolSpec(
+            domain = domain, method = "diagnostics",
+            arguments = listOf(ToolSpec.Arg("path", "String")),
+            returnType = "String",
+            description = "Get compiler/linter diagnostics for a file via its language server (ts, js, py, rs). " +
+                "Returns structured errors/warnings with line numbers. Requires the language server to be installed."
+        )
+        toolSpec["symbols"] = ToolSpec(
+            domain = domain, method = "symbols",
+            arguments = listOf(
+                ToolSpec.Arg("pattern", "String", "null"),
+            ),
+            returnType = "String",
+            description = "Search for symbol definitions (classes, functions, variables) across open documents " +
+                "via language servers. pattern filters by name substring."
+        )
+        toolSpec["references"] = ToolSpec(
+            domain = domain, method = "references",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("symbol", "String"),
+            ),
+            returnType = "String",
+            description = "Find all references to a symbol in a file via its language server. " +
+                "Use before refactoring to assess impact."
+        )
+        toolSpec["lspServers"] = ToolSpec(
+            domain = domain, method = "lspServers",
+            arguments = emptyList(),
+            returnType = "String",
+            description = "Report which language servers are installed/available for diagnostics, symbols, and references."
         )
 
         // --- Artifact scaffolding & validation ---
@@ -380,6 +472,36 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     count = paramInt(args, "count", functionName, required = false, default = -1) ?: -1,
                 )
             }
+            "replaceRegex" -> {
+                validateArgs(args, allowed = setOf("path", "regex", "replacement", "count"), required = setOf("path", "regex", "replacement"), functionName)
+                fs.replaceRegexInFile(
+                    path = paramString(args, "path", functionName)!!,
+                    regex = paramString(args, "regex", functionName)!!,
+                    replacement = paramString(args, "replacement", functionName)!!,
+                    count = paramInt(args, "count", functionName, required = false, default = -1) ?: -1,
+                )
+            }
+            "editLines" -> {
+                validateArgs(args, allowed = setOf("path", "startLine", "endLine", "content"), required = setOf("path", "startLine", "endLine", "content"), functionName)
+                fs.editLinesInFile(
+                    path = paramString(args, "path", functionName)!!,
+                    startLine = paramInt(args, "startLine", functionName)!!,
+                    endLine = paramInt(args, "endLine", functionName)!!,
+                    content = paramString(args, "content", functionName)!!,
+                )
+            }
+            "insertAfter" -> {
+                validateArgs(args, allowed = setOf("path", "anchor", "content"), required = setOf("path", "anchor", "content"), functionName)
+                fs.insertAfterInFile(
+                    path = paramString(args, "path", functionName)!!,
+                    anchor = paramString(args, "anchor", functionName)!!,
+                    content = paramString(args, "content", functionName)!!,
+                )
+            }
+            "revert" -> {
+                validateArgs(args, allowed = setOf("path"), required = setOf("path"), functionName)
+                fs.revert(paramString(args, "path", functionName)!!)
+            }
             "delete" -> {
                 validateArgs(args, allowed = setOf("path", "recursive"), required = setOf("path"), functionName)
                 fs.delete(
@@ -431,7 +553,10 @@ class CodingToolExecutor : AbstractToolExecutor() {
             }
             "diff" -> {
                 validateArgs(args, allowed = setOf("path"), required = setOf("path"), functionName)
-                fs.diff(paramString(args, "path", functionName)!!)
+                fs.diff(
+                    path = paramString(args, "path", functionName)!!,
+                    algorithm = paramString(args, "algorithm", functionName, required = false, default = "myers") ?: "myers",
+                )
             }
             "changeSummary" -> {
                 validateArgs(args, allowed = emptySet(), required = emptySet(), functionName)
@@ -445,6 +570,39 @@ class CodingToolExecutor : AbstractToolExecutor() {
             "workspaceRoot" -> {
                 validateArgs(args, allowed = emptySet(), required = emptySet(), functionName)
                 fs.getWorkspaceRoot()
+            }
+
+            // --- Language server (LSP) tools ---
+            "diagnostics" -> {
+                validateArgs(args, allowed = setOf("path"), required = setOf("path"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                val resolved = fs.resolvePathString(path)
+                    ?: throw IllegalArgumentException("Path not allowed: $path")
+                val diags = lsp(fs).diagnostics(resolved)
+                if (diags.isEmpty()) "✓ No diagnostics reported for $path (or no language server available)"
+                else diags.joinToString("\n") { "[${it.severity}] ${it.file}:${it.line} — ${it.message}" }
+            }
+            "symbols" -> {
+                validateArgs(args, allowed = setOf("pattern"), required = emptySet(), functionName)
+                val pattern = paramString(args, "pattern", functionName, required = false, default = "") ?: ""
+                val symbols = lsp(fs).symbols(pattern)
+                if (symbols.isEmpty()) "No symbols found${if (pattern.isNotBlank()) " for '$pattern'" else ""} (or no language server available)"
+                else symbols.joinToString("\n") { "${it.kind} ${it.name} — ${it.file}:${it.line}" }
+            }
+            "references" -> {
+                validateArgs(args, allowed = setOf("path", "symbol"), required = setOf("path", "symbol"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                val symbol = paramString(args, "symbol", functionName)!!
+                val resolved = fs.resolvePathString(path)
+                    ?: throw IllegalArgumentException("Path not allowed: $path")
+                val refs = lsp(fs).references(resolved, symbol)
+                if (refs.isEmpty()) "No references to '$symbol' found in $path"
+                else refs.joinToString("\n") { "${it.file}:${it.line}" }
+            }
+            "lspServers" -> {
+                validateArgs(args, allowed = emptySet(), required = emptySet(), functionName)
+                val servers = lsp(fs).availableServers()
+                servers.entries.joinToString("\n") { "${it.key}: ${if (it.value) "available" else "NOT installed"}" }
             }
 
             // --- Artifact scaffolding & validation ---
@@ -536,3 +694,4 @@ class CodingToolExecutor : AbstractToolExecutor() {
         return tools.mapValues { it.value.toSet() }
     }
 }
+

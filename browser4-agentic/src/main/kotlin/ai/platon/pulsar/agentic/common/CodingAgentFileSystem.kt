@@ -244,6 +244,162 @@ class CodingAgentFileSystem(
         }
     }
 
+    /**
+     * Replace all matches of a regular expression in a file.
+     *
+     * @param regex   Java regex pattern; the whole match is replaced by [replacement].
+     *                Use `$1`/`${name}` groups with [replacement] as in [String.replace].
+     * @param count   max number of matches to replace; -1 = replace all
+     */
+    suspend fun replaceRegexInFile(
+        path: String,
+        regex: String,
+        replacement: String,
+        count: Int = -1,
+    ): String {
+        if (regex.isEmpty()) return errorResult("Cannot replace empty regex")
+        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        if (!resolved.exists()) return errorResult("File not found: $path")
+
+        return try {
+            val pattern = Regex(regex)
+            val original = withContext(Dispatchers.IO) { Files.readString(resolved) }
+            val matches = pattern.findAll(original).toList()
+            if (matches.isEmpty()) {
+                return "⚠️ Regex '$regex' not found in $path — no changes made"
+            }
+
+            snapshotFile(resolved)
+
+            val replaced = if (count < 0) {
+                original.replace(pattern, replacement)
+            } else {
+                val sb = StringBuilder()
+                var last = 0
+                var c = 0
+                for (m in matches) {
+                    if (c >= count) break
+                    sb.append(original, last, m.range.first)
+                    sb.append(expandReplacement(m, replacement))
+                    last = m.range.last + 1
+                    c++
+                }
+                sb.append(original, last, original.length)
+                sb.toString()
+            }
+
+            withContext(Dispatchers.IO) {
+                Files.writeString(resolved, replaced)
+            }
+            changeCounter.incrementAndGet()
+
+            val occurrences = if (count < 0) "${matches.size}" else "up to $count"
+            "✓ Replaced $occurrences regex match(es) of '$regex' → '$replacement' in $path"
+        } catch (e: IllegalArgumentException) {
+            errorResult("Invalid regex '$regex': ${e.message}")
+        } catch (e: IOException) {
+            errorResult("Failed to replace in '$path': ${e.message}")
+        }
+    }
+
+    /**
+     * Replace a line range [startLine]..[endLine] (1-based, inclusive) with [content].
+     * Uses the snapshot BEFORE the edit as its diff baseline is captured on first write.
+     */
+    suspend fun editLinesInFile(
+        path: String,
+        startLine: Int,
+        endLine: Int,
+        content: String,
+    ): String {
+        if (startLine < 1 || endLine < startLine) {
+            return errorResult("Invalid line range: start=$startLine end=$endLine (1-based, start <= end)")
+        }
+        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        if (!resolved.exists()) return errorResult("File not found: $path")
+
+        return try {
+            val lines = withContext(Dispatchers.IO) { Files.readAllLines(resolved) }
+            if (startLine > lines.size) {
+                return errorResult("startLine $startLine beyond file end (${lines.size} lines): $path")
+            }
+
+            snapshotFile(resolved)
+
+            val newLines = lines.toMutableList()
+            val end = endLine.coerceAtMost(lines.size)
+            newLines.subList(startLine - 1, end).clear()
+            newLines.addAll(startLine - 1, content.lines())
+
+            withContext(Dispatchers.IO) {
+                Files.writeString(resolved, newLines.joinToString("\n") + "\n")
+            }
+            changeCounter.incrementAndGet()
+
+            "✓ Replaced lines $startLine..$endLine in $path with ${content.lines().size} line(s)"
+        } catch (e: IOException) {
+            errorResult("Failed to edit '$path': ${e.message}")
+        }
+    }
+
+    /**
+     * Insert [content] after the line containing [anchor] (substring match on first hit).
+     */
+    suspend fun insertAfterInFile(path: String, anchor: String, content: String): String {
+        if (anchor.isEmpty()) return errorResult("Anchor must not be empty")
+        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        if (!resolved.exists()) return errorResult("File not found: $path")
+
+        return try {
+            val lines = withContext(Dispatchers.IO) { Files.readAllLines(resolved) }
+            val idx = lines.indexOfFirst { it.contains(anchor) }
+            if (idx < 0) {
+                return "⚠️ Anchor '$anchor' not found in $path — no changes made"
+            }
+
+            snapshotFile(resolved)
+
+            val newLines = lines.toMutableList()
+            newLines.addAll(idx + 1, content.lines())
+
+            withContext(Dispatchers.IO) {
+                Files.writeString(resolved, newLines.joinToString("\n") + "\n")
+            }
+            changeCounter.incrementAndGet()
+
+            "✓ Inserted after line ${idx + 1} (anchor '$anchor') in $path"
+        } catch (e: IOException) {
+            errorResult("Failed to insert in '$path': ${e.message}")
+        }
+    }
+
+    /**
+     * Restore a file to its snapshot (the state before the first tracked write).
+     * Fails if no snapshot exists — use [changeSummary] to see tracked files.
+     */
+    suspend fun revert(path: String): String {
+        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        val snapshot = snapshots[resolved] ?: return errorResult("No snapshot available for revert: $path")
+
+        return try {
+            withContext(Dispatchers.IO) {
+                if (snapshot.existed && snapshot.content != null) {
+                    Files.createDirectories(resolved.parent)
+                    Files.writeString(resolved, snapshot.content)
+                } else if (snapshot.existed) {
+                    // Snapshot existed but content was null (binary or unreadable) — leave untouched
+                    return@withContext
+                } else {
+                    Files.deleteIfExists(resolved)
+                }
+            }
+            changeCounter.incrementAndGet()
+            "✓ Reverted $path to snapshot"
+        } catch (e: IOException) {
+            errorResult("Failed to revert '$path': ${e.message}")
+        }
+    }
+
     // ------------------------------------------------------------------
     // File / Directory operations
     // ------------------------------------------------------------------
@@ -554,9 +710,13 @@ class CodingAgentFileSystem(
     }
 
     /**
-     * Get a unified diff between two revisions of a file.
+     * Get a unified diff between the snapshot and current content of a file.
+     *
+     * @param algorithm "myers" (default, fastest, edit-distance optimal) or
+     *                  "patience" (anchors on unique lines — reads better for
+     *                  code moves and repeated boilerplate).
      */
-    suspend fun diff(path: String): String {
+    suspend fun diff(path: String, algorithm: String = "myers"): String {
         val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
         val snapshot = snapshots[resolved] ?: return "No snapshot available for diff: $path"
 
@@ -568,25 +728,11 @@ class CodingAgentFileSystem(
 
         if (oldContent == current) return "No changes in $path"
 
-        return buildString {
-            appendLine("--- a/$path (snapshot)")
-            appendLine("+++ b/$path (current)")
-            val oldLines = oldContent.lines()
-            val newLines = current.lines()
-            val maxLen = maxOf(oldLines.size, newLines.size)
-            for (i in 0 until maxLen) {
-                val old = oldLines.getOrNull(i)
-                val new = newLines.getOrNull(i)
-                when {
-                    old == null && new != null -> appendLine("+$new")
-                    old != null && new == null -> appendLine("-$old")
-                    old != new -> {
-                        appendLine("-$old")
-                        appendLine("+$new")
-                    }
-                }
-            }
-        }.trimEnd()
+        val oldLines = oldContent.lines()
+        val newLines = current.lines()
+        val edits = DiffEngine.diff(oldLines, newLines, algorithm)
+        val unified = DiffEngine.toUnified(path, path, edits) ?: return "No changes in $path"
+        return "diff $path ($algorithm)\n$unified"
     }
 
     /**
@@ -716,6 +862,24 @@ class CodingAgentFileSystem(
     }
 
     private fun errorResult(message: String): String = "Error: $message"
+
+    /**
+     * Expand `$1`, `$2`, `${name}` capture-group references in a regex replacement
+     * for a given [MatchResult] (Kotlin equivalent of java Matcher.appendReplacement).
+     */
+    private fun expandReplacement(match: MatchResult, replacement: String): String {
+        val groupRef = Regex("""\$(?:\{([a-zA-Z_][a-zA-Z0-9_]*)\}|([1-9][0-9]*))""")
+        return groupRef.replace(replacement) { m ->
+            val name = m.groupValues[1]
+            val number = m.groupValues[2]
+            if (name.isNotEmpty()) {
+                match.groups[name]?.value ?: ""
+            } else {
+                val idx = number.toInt()
+                match.groupValues.getOrNull(idx) ?: ""
+            }
+        }
+    }
 
     private fun formatSize(bytes: Long): String = when {
         bytes < 1024 -> "$bytes B"
