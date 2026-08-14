@@ -78,14 +78,14 @@ runs:
 
         Use the CLI to download the matching Browser4 runtime bundle for your platform:
 
-        ```shell
+        \`\`\`shell
         browser4-cli install
         browser4-cli open
-        ```
+        \`\`\`
 
         ### CLI & SKILLS
 
-        ```shell
+        \`\`\`shell
         # Open a new browser window
         browser4-cli open
 
@@ -130,7 +130,7 @@ runs:
 
         # Close the session when done
         browser4-cli close
-        ```
+        \`\`\`
 
         ---
 
