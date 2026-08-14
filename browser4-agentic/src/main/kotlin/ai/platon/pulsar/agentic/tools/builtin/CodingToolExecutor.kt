@@ -6,6 +6,7 @@ import ai.platon.pulsar.coding.CodeRunner
 import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingAgentShell
 import ai.platon.pulsar.coding.LanguageServerManager
+import ai.platon.pulsar.coding.MavenBuildSupport
 import ai.platon.pulsar.coding.ValidationResult
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
@@ -76,6 +77,9 @@ class CodingToolExecutor : AbstractToolExecutor() {
 
     /** Sandboxed code runner for `coding.runCode`. Stateless, safe to share. */
     private val codeRunner = CodeRunner()
+
+    /** Maven build wrapper for Browser4 self-development (`coding.mvnBuild`). */
+    private val mavenBuild = MavenBuildSupport()
 
     /**
      * Composite target that bundles the enhanced shell and filesystem.
@@ -352,6 +356,22 @@ class CodingToolExecutor : AbstractToolExecutor() {
             description = "Report which language servers are installed/available for diagnostics, symbols, and references."
         )
 
+        // --- Browser4 self-development: Maven build with structured diagnostics ---
+        toolSpec["mvnBuild"] = ToolSpec(
+            domain = domain, method = "mvnBuild",
+            arguments = listOf(
+                ToolSpec.Arg("module", "String"),
+                ToolSpec.Arg("goals", "String", "compile"),
+                ToolSpec.Arg("skipTests", "Boolean", "true"),
+                ToolSpec.Arg("timeoutSeconds", "Long", "300"),
+            ),
+            returnType = "String",
+            description = "Build a Browser4 Maven module (-pl <module> -am <goals>) and return structured " +
+                "Kotlin/Java compiler diagnostics (file:line:col — message) instead of raw logs. " +
+                "module e.g. 'browser4-rest' or 'browser4-plugins/browser4-seo'; goals default 'compile'. " +
+                "Use this to check Kotlin code before/after edits — the fast alternative to a JDTLS server."
+        )
+
         // --- Sandboxed code execution ---
         toolSpec["runCode"] = ToolSpec(
             domain = domain, method = "runCode",
@@ -602,9 +622,20 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 val path = paramString(args, "path", functionName)!!
                 val resolved = fs.resolvePathString(path)
                     ?: throw IllegalArgumentException("Path not allowed: $path")
-                val diags = lsp(fs).diagnostics(resolved)
-                if (diags.isEmpty()) "✓ No diagnostics reported for $path (or no language server available)"
-                else diags.joinToString("\n") { "[${it.severity}] ${it.file}:${it.line} — ${it.message}" }
+                // Kotlin/Java have no lightweight LSP server configured — route to the
+                // Maven compiler passthrough so the agent still gets file:line:col
+                // diagnostics (Browser4 self-development path).
+                val ext = path.substringAfterLast('.', "").lowercase()
+                if (ext in setOf("kt", "kts", "java")) {
+                    val module = inferModule(resolved)
+                    "Kotlin/Java diagnostics via compiler passthrough: run " +
+                        "coding.mvnBuild(module=\"$module\", goals=\"compile\") — no JDTLS server is " +
+                        "configured for lightweight diagnostics. (inferred module from path: $module)"
+                } else {
+                    val diags = lsp(fs).diagnostics(resolved)
+                    if (diags.isEmpty()) "✓ No diagnostics reported for $path (or no language server available)"
+                    else diags.joinToString("\n") { "[${it.severity}] ${it.file}:${it.line} — ${it.message}" }
+                }
             }
             "symbols" -> {
                 validateArgs(args, allowed = setOf("pattern"), required = emptySet(), functionName)
@@ -627,6 +658,22 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 validateArgs(args, allowed = emptySet(), required = emptySet(), functionName)
                 val servers = lsp(fs).availableServers()
                 servers.entries.joinToString("\n") { "${it.key}: ${if (it.value) "available" else "NOT installed"}" }
+            }
+            "mvnBuild" -> {
+                validateArgs(args, allowed = setOf("module", "goals", "skipTests", "timeoutSeconds"),
+                    required = setOf("module"), functionName)
+                val module = paramString(args, "module", functionName)!!
+                val goals = paramString(args, "goals", functionName, required = false, default = "compile") ?: "compile"
+                val skipTests = paramBool(args, "skipTests", functionName, required = false, default = true) ?: true
+                val timeout = paramLong(args, "timeoutSeconds", functionName, required = false, default = 300L) ?: 300L
+                val result = mavenBuild.build(
+                    shell = shell,
+                    module = module,
+                    goals = goals,
+                    skipTests = skipTests,
+                    timeoutSeconds = timeout,
+                )
+                mavenBuild.format(result)
             }
             "runCode" -> {
                 validateArgs(args, allowed = setOf("language", "code", "timeoutSeconds"), required = setOf("language", "code"), functionName)
@@ -733,6 +780,29 @@ class CodingToolExecutor : AbstractToolExecutor() {
         }
 
         return tools.mapValues { it.value.toSet() }
+    }
+
+    /**
+     * Infer the Maven module that owns a file path, for `coding.mvnBuild`.
+     *
+     * Browser4 layout: `<module>/src/...` for top-level modules (browser4-rest,
+     * browser4-coding, browser4-boot, ...) and `<parent>/<module>/src/...` for
+     * nested ones (browser4-core/browser4-common, browser4-plugins/browser4-seo,
+     * browser4-apps/browser4-standalone). Best-effort: returns a module path the
+     * agent can pass to `-pl`.
+     */
+    private fun inferModule(absolutePath: String): String {
+        val norm = absolutePath.replace('\\', '/')
+        val idx = norm.indexOf("/src/")
+        if (idx <= 0) return norm.substringAfterLast('/')
+        val before = norm.substring(0, idx)
+        val segments = before.split('/').filter { it.isNotEmpty() }
+        // Top-level module dir (browser4-rest) OR nested (browser4-core/browser4-common)
+        return when {
+            segments.size >= 2 && segments[segments.size - 2].startsWith("browser4-") ->
+                segments.takeLast(2).joinToString("/")
+            else -> segments.lastOrNull() ?: ""
+        }
     }
 }
 
