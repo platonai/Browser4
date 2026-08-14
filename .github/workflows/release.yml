@@ -639,6 +639,10 @@ jobs:
           # by trigger-release.ps1. Extract it (checkout uses fetch-depth: 0,
           # so the tag object is present) and insert it before the template's
           # "Release Highlights" section.
+          # NOTE: actions/checkout materializes a LIGHTWEIGHT local tag pointing
+          # at the commit, so %(contents) would return the commit message.
+          # Force-fetch the real annotated tag object first.
+          git fetch origin "refs/tags/$TAG:refs/tags/$TAG" --force 2>/dev/null || true
           git tag -l --format='%(contents)' "$TAG" > tag_notes.md 2>/dev/null || true
           if [ ! -s tag_notes.md ]; then
             echo "No tag message for $TAG (lightweight tag) — skipping prepend."
