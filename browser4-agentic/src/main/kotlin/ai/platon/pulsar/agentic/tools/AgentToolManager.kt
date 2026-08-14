@@ -42,9 +42,19 @@ class AgentToolManager constructor(
     val shell: AgentShell = AgentShell(baseDir)
 
     /** Enhanced coding shell for dev tools (git, cargo, mvn, npm, etc.) */
-    val codingShell: CodingAgentShell = CodingAgentShell(baseDir)
+    val codingShell: CodingAgentShell = CodingAgentShell(
+        baseDir = baseDir,
+        // Independent/multi-tenant deployments can tighten defaults via system property:
+        // -Dbrowser4.agent.allowDestructive=false denies rm/del/mv/cp/kill etc.
+        allowDestructive = System.getProperty("browser4.agent.allowDestructive", "true") != "false",
+    )
     /** Enhanced coding file system for full filesystem access */
-    val codingFs: CodingAgentFileSystem = CodingAgentFileSystem(baseDir)
+    val codingFs: CodingAgentFileSystem = CodingAgentFileSystem(
+        workspaceRoot = baseDir,
+        // Same tightening switch; note delete() additionally hard-protects the
+        // workspace root and VCS directories regardless of this flag.
+        allowDestructive = System.getProperty("browser4.agent.allowDestructive", "true") != "false",
+    )
     /** Composite target for the coding domain */
     val codingTarget: CodingToolExecutor.Target by lazy {
         CodingToolExecutor.Target(codingShell, codingFs)

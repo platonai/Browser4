@@ -39,11 +39,30 @@ class CodingAgentFileSystem(
     val workspaceRoot: Path,
     private val allowExternalAccess: Boolean = false,
     private val allowDestructive: Boolean = true,
+    /**
+     * Directory names skipped by recursive searches ([glob]/[grep]/[detectLanguages]).
+     * Default excludes the usual build/dependency/vcs noise that makes full-tree
+     * walks slow in large repos.
+     */
+    private val searchExcludedDirs: Set<String> = DEFAULT_SEARCH_EXCLUDED_DIRS,
 ) {
     companion object {
         const val MAX_READ_SIZE_BYTES = 5 * 1024 * 1024L // 5 MB
         const val MAX_GLOB_RESULTS = 10_000
         private val logger = getLogger(CodingAgentFileSystem::class)
+
+        /** Directories skipped by recursive searches by default. */
+        val DEFAULT_SEARCH_EXCLUDED_DIRS: Set<String> = setOf(
+            ".git", ".svn", ".hg",
+            "node_modules", "bower_components",
+            "target", "build", "dist", "out", "bin",
+            ".gradle", ".idea", ".vscode", ".claude", ".mvn",
+            "__pycache__", ".venv", "venv", ".tox",
+            ".next", ".nuxt", ".cache", ".parcel-cache",
+        )
+
+        /** Version-control metadata directories — protected from recursive deletion. */
+        val VCS_DIRS: Set<String> = setOf(".git", ".svn", ".hg")
 
         /** Binary file extensions that should not be read as text */
         val BINARY_EXTENSIONS = setOf(
@@ -440,11 +459,31 @@ class CodingAgentFileSystem(
 
     /**
      * Delete a file or empty directory.
+     *
+     * Hard protections (always active, independent of [allowDestructive]):
+     * - the workspace root itself can never be deleted
+     * - version-control directories (.git/.svn/.hg) can never be deleted recursively
      */
     suspend fun delete(path: String, recursive: Boolean = false): String {
         if (!allowDestructive) return errorResult("Destructive operations disabled")
         val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
         if (!resolved.exists()) return errorResult("Not found: $path")
+
+        // Hard protection: never delete the workspace root itself.
+        if (resolved == canonicalRoot) {
+            return errorResult("Refusing to delete the workspace root: $path")
+        }
+        // Hard protection: never delete VCS metadata directories.
+        if (resolved.fileName.toString() in VCS_DIRS) {
+            return errorResult("Refusing to delete version-control directory: $path")
+        }
+        // Also refuse deleting a VCS dir when the target is one of its parents and
+        // recursive would swallow it — e.g. deleting a directory that *is* a .git
+        // parent is allowed, but the walk below never enters VCS dirs.
+        if (recursive && resolved.isDirectory() && hasVcsChild(resolved)) {
+            return errorResult("Refusing recursive delete of '$path' — it contains a version-control directory")
+        }
+
         if (resolved.isDirectory() && !recursive) {
             return errorResult("Use recursive=true to delete directory: $path")
         }
@@ -463,6 +502,11 @@ class CodingAgentFileSystem(
         } catch (e: IOException) {
             errorResult("Failed to delete '$path': ${e.message}")
         }
+    }
+
+    /** Version-control metadata directory names that recursive deletes must not touch. */
+    private fun hasVcsChild(dir: Path): Boolean {
+        return VCS_DIRS.any { vcs -> Files.isDirectory(dir.resolve(vcs)) }
     }
 
     /**
@@ -571,21 +615,14 @@ class CodingAgentFileSystem(
      * Supports ** for recursive matching.
      */
     suspend fun glob(pattern: String, maxResults: Int = MAX_GLOB_RESULTS): String {
-        // Determine if pattern is absolute or relative
-        val globPath = if (Path.of(pattern).isAbsolute) {
-            Path.of(pattern)
-        } else {
-            canonicalRoot.resolve(pattern.trimStart('/'))
-        }
-
         // Separate the base dir from the glob pattern
         val baseDir: Path
         val globPart: String
 
         if (pattern.contains("**") || pattern.contains("*")) {
-            // Find the last non-wildcard directory as base
-            val parts = Path.of(pattern)
-            val allParts = (0 until parts.nameCount).map { parts.getName(it).toString() }
+            // Find the last non-wildcard directory as base. Split on '/' and '\\'
+            // manually — Path.of() rejects wildcard characters on Windows.
+            val allParts = pattern.replace('\\', '/').split('/').filter { it.isNotEmpty() }
             val lastNonWildcard = allParts.indexOfLast { !it.contains("*") && !it.contains("?") }
             baseDir = if (lastNonWildcard >= 0) {
                 canonicalRoot.resolve(allParts.take(lastNonWildcard + 1).joinToString("/"))
@@ -610,6 +647,13 @@ class CodingAgentFileSystem(
 
             withContext(Dispatchers.IO) {
                 Files.walkFileTree(baseDir, object : SimpleFileVisitor<Path>() {
+                    override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                        if (dir != baseDir && dir.fileName.toString() in searchExcludedDirs) {
+                            return FileVisitResult.SKIP_SUBTREE
+                        }
+                        return FileVisitResult.CONTINUE
+                    }
+
                     override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
                         val rel = baseDir.relativize(file)
                         if (pathMatcher.matches(rel) || pathMatcher.matches(file.fileName)) {
@@ -669,6 +713,13 @@ class CodingAgentFileSystem(
 
             withContext(Dispatchers.IO) {
                 Files.walkFileTree(resolved, object : SimpleFileVisitor<Path>() {
+                    override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                        if (dir != resolved && dir.fileName.toString() in searchExcludedDirs) {
+                            return FileVisitResult.SKIP_SUBTREE
+                        }
+                        return FileVisitResult.CONTINUE
+                    }
+
                     override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
                         if (results.size >= maxResults) return FileVisitResult.TERMINATE
                         val ext = file.extension.lowercase()

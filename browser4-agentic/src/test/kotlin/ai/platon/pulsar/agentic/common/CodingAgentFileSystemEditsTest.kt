@@ -168,4 +168,83 @@ class CodingAgentFileSystemEditsTest {
         val result = f.diff("a.txt")
         assertTrue(result.contains("No snapshot") || result.contains("No changes"), "result: $result")
     }
+
+    // ==================== grep/glob excluded dirs ====================
+
+    @Test
+    @DisplayName("grep skips excluded directories by default")
+    fun grepSkipsExcludedDirs() = runBlocking {
+        write("src/a.txt", "needle here\n")
+        write("node_modules/pkg/index.js", "needle in node_modules\n")
+        write("target/generated.js", "needle in target\n")
+        val f = fs()
+        val result = f.grep("needle", path = ".")
+        assertTrue(result.contains("a.txt"), "result: $result")
+        assertFalse(result.contains("node_modules"), "excluded dir leaked: $result")
+        assertFalse(result.contains("target/"), "excluded dir leaked: $result")
+    }
+
+    @Test
+    @DisplayName("glob skips excluded directories by default")
+    fun globSkipsExcludedDirs() = runBlocking {
+        write("src/a.txt", "x\n")
+        write("node_modules/deep/file.txt", "x\n")
+        val f = fs()
+        val result = f.glob("**/*.txt")
+        assertTrue(result.contains("a.txt"), "result: $result")
+        assertFalse(result.contains("node_modules"), "excluded dir leaked: $result")
+    }
+
+    @Test
+    @DisplayName("custom exclusion set is honored")
+    fun customExclusionSet() = runBlocking {
+        write("keep/ok.txt", "x\n")
+        write("vendor/skip.txt", "x\n")
+        val f = CodingAgentFileSystem(tempDir, searchExcludedDirs = setOf("vendor"))
+        val result = f.glob("**/*.txt")
+        assertTrue(result.contains("ok.txt"), "result: $result")
+        assertFalse(result.contains("vendor"), "custom exclusion leaked: $result")
+    }
+
+    // ==================== delete hard protections ====================
+
+    @Test
+    @DisplayName("delete refuses to remove the workspace root")
+    fun deleteWorkspaceRootProtected() = runBlocking {
+        val f = fs()
+        val result = f.delete(".", recursive = true)
+        assertTrue(result.contains("workspace root"), "result: $result")
+    }
+
+    @Test
+    @DisplayName("delete refuses to remove .git recursively")
+    fun deleteVcsProtected() = runBlocking {
+        write(".git/config", "dummy\n")
+        val f = fs()
+        val result = f.delete(".git", recursive = true)
+        assertTrue(result.contains("version-control"), "result: $result")
+        assertTrue(tempDir.resolve(".git/config").toFile().exists(), ".git must survive")
+    }
+
+    @Test
+    @DisplayName("delete refuses recursive delete of a dir containing .git")
+    fun deleteParentContainingVcsProtected() = runBlocking {
+        write("repo/.git/config", "dummy\n")
+        write("repo/src/main.kt", "x\n")
+        val f = fs()
+        val result = f.delete("repo", recursive = true)
+        assertTrue(result.contains("version-control"), "result: $result")
+        assertTrue(tempDir.resolve("repo/.git/config").toFile().exists(), "nested .git must survive")
+    }
+
+    @Test
+    @DisplayName("delete of ordinary file still works")
+    fun deleteOrdinaryFileWorks() = runBlocking {
+        write("junk.txt", "bye\n")
+        val f = fs()
+        val result = f.delete("junk.txt")
+        assertTrue(result.contains("Deleted"), "result: $result")
+        assertFalse(tempDir.resolve("junk.txt").toFile().exists())
+    }
 }
+

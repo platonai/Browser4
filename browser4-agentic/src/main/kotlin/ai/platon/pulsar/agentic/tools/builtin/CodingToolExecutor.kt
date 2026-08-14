@@ -4,6 +4,7 @@ import ai.platon.pulsar.agentic.common.ArtifactScaffolds
 import ai.platon.pulsar.agentic.common.ArtifactValidator
 import ai.platon.pulsar.agentic.common.CodingAgentFileSystem
 import ai.platon.pulsar.agentic.common.CodingAgentShell
+import ai.platon.pulsar.agentic.common.CodeRunner
 import ai.platon.pulsar.agentic.common.LanguageServerManager
 import ai.platon.pulsar.agentic.common.ValidationResult
 import ai.platon.pulsar.agentic.model.ToolSpec
@@ -72,6 +73,9 @@ class CodingToolExecutor : AbstractToolExecutor() {
             languageServer ?: LanguageServerManager(fs.workspaceRoot).also { languageServer = it }
         }
     }
+
+    /** Sandboxed code runner for `coding.runCode`. Stateless, safe to share. */
+    private val codeRunner = CodeRunner()
 
     /**
      * Composite target that bundles the enhanced shell and filesystem.
@@ -348,6 +352,26 @@ class CodingToolExecutor : AbstractToolExecutor() {
             description = "Report which language servers are installed/available for diagnostics, symbols, and references."
         )
 
+        // --- Sandboxed code execution ---
+        toolSpec["runCode"] = ToolSpec(
+            domain = domain, method = "runCode",
+            arguments = listOf(
+                ToolSpec.Arg("language", "String"),
+                ToolSpec.Arg("code", "String"),
+                ToolSpec.Arg("timeoutSeconds", "Long", "30"),
+            ),
+            returnType = "String",
+            description = "Run code in a sandboxed subprocess (private temp dir, hard timeout, output truncation). " +
+                "languages: kotlin, js/javascript, ts, python/python3, bash/sh. " +
+                "Use for quick snippets; for workspace builds/tests use coding.shell."
+        )
+        toolSpec["runCodeLanguages"] = ToolSpec(
+            domain = domain, method = "runCodeLanguages",
+            arguments = emptyList(),
+            returnType = "String",
+            description = "List languages supported by coding.runCode."
+        )
+
         // --- Artifact scaffolding & validation ---
         toolSpec["scaffold"] = ToolSpec(
             domain = domain, method = "scaffold",
@@ -603,6 +627,23 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 validateArgs(args, allowed = emptySet(), required = emptySet(), functionName)
                 val servers = lsp(fs).availableServers()
                 servers.entries.joinToString("\n") { "${it.key}: ${if (it.value) "available" else "NOT installed"}" }
+            }
+            "runCode" -> {
+                validateArgs(args, allowed = setOf("language", "code", "timeoutSeconds"), required = setOf("language", "code"), functionName)
+                val language = paramString(args, "language", functionName)!!
+                val code = paramString(args, "code", functionName)!!
+                val timeout = paramLong(args, "timeoutSeconds", functionName, required = false, default = 30L) ?: 30L
+                val result = codeRunner.run(language, code, timeoutSeconds = timeout.coerceIn(1, 120))
+                buildString {
+                    if (result.timedOut) appendLine("⏱ Timed out after ${timeout}s — process killed")
+                    if (result.stdout.isNotBlank()) appendLine(result.stdout.trimEnd())
+                    if (result.stderr.isNotBlank()) appendLine("stderr: ${result.stderr.trimEnd()}")
+                    appendLine("exit code: ${result.exitCode}")
+                }.trimEnd()
+            }
+            "runCodeLanguages" -> {
+                validateArgs(args, allowed = emptySet(), required = emptySet(), functionName)
+                "Supported: ${codeRunner.supportedLanguages().joinToString(", ")}"
             }
 
             // --- Artifact scaffolding & validation ---
