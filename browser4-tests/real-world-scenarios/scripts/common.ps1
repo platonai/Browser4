@@ -689,7 +689,11 @@ For example:
   $cliInvocation snapshot -i
   $cliInvocation click e5
 
-Do NOT use a plain `browser4-cli` command unless the invocation above fails after a genuine attempt.  Using the wrong invocation will test a stale installed binary instead of the local source code, invalidating the evaluation.
+$(if ($browser4cliMode -eq 'production') {
+"Always use \`$cliInvocation\` exactly as shown. In production mode \`browser4-cli\` IS the released product under test — do not substitute \`./b4w.ps1\`, \`b4\`, or \`cargo run\`, which would test the local source tree instead of the released binary and invalidate the evaluation."
+} else {
+"Do NOT use a plain \`browser4-cli\` command unless the invocation above fails after a genuine attempt.  Using the wrong invocation will test a stale installed binary instead of the local source code, invalidating the evaluation."
+})
 
 ## Tool Usage Rules
 
@@ -1067,6 +1071,109 @@ function ConvertFrom-IssuesSection {
 # when no valid JSON block is found, signalling the caller to fall back to
 # markdown parsing.
 
+function ConvertFrom-SalvagedIssuesArray {
+    <#
+    .SYNOPSIS
+        Salvage an "issues" array from a partially malformed JSON block.
+    .DESCRIPTION
+        Agents occasionally emit a hybrid document: a valid "issues" array
+        followed by markdown prose wedged into the JSON (breaking full-JSON
+        parsing), or even wedged into the middle of a late issue's string
+        fields.  When the full block fails JSON parsing, this function tries
+        progressively shorter prefixes of the issues array — closing at every
+        ']' and at every complete issue-object boundary ('},') — and lets
+        ConvertFrom-Json arbitrate, returning the longest parseable prefix.
+        Returns an object exposing an .issues property, or $null when nothing
+        parses.
+    .PARAMETER JsonText
+        The raw JSON code block text (without the ```json fences).
+    .OUTPUTS
+        Object with an .issues array, or $null.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$JsonText
+    )
+
+    $keyIdx = $JsonText.IndexOf('"issues"', [StringComparison]::OrdinalIgnoreCase)
+    if ($keyIdx -lt 0) { return $null }
+    $openIdx = $JsonText.IndexOf('[', $keyIdx)
+    if ($openIdx -lt 0) { return $null }
+
+    # Candidate end positions for the issues array:
+    #   - every ']' outside a string (the real array close, when present)
+    #   - every '}' followed by ',' outside a string (end of a complete issue
+    #     object — the array may never close because prose was wedged in)
+    $candidates = [System.Collections.Generic.List[object]]::new()
+    $inString = $false
+    $escaped = $false
+    for ($j = $openIdx + 1; $j -lt $JsonText.Length; $j++) {
+        $ch = $JsonText[$j]
+        if ($inString) {
+            if ($escaped) { $escaped = $false }
+            elseif ($ch -eq '\') { $escaped = $true }
+            elseif ($ch -eq '"') { $inString = $false }
+        } else {
+            if ($ch -eq '"') { $inString = $true }
+            elseif ($ch -eq ']') { $candidates.Add(@{ Index = $j; Kind = 'array-close' }) }
+            elseif ($ch -eq '}' -and $j + 1 -lt $JsonText.Length -and $JsonText[$j + 1] -eq ',') {
+                $candidates.Add(@{ Index = $j; Kind = 'object-close' })
+            }
+        }
+    }
+    # Also try the very end of the block.
+    $candidates.Add(@{ Index = $JsonText.Length - 1; Kind = 'end' })
+
+    # Try candidates longest-first; ConvertFrom-Json arbitrates correctness.
+    $sorted = $candidates | Sort-Object { $_.Index } -Unique
+    for ($k = $sorted.Count - 1; $k -ge 0; $k--) {
+        $endIdx = $sorted[$k].Index
+        $kind = $sorted[$k].Kind
+        $sub = $JsonText.Substring($openIdx, $endIdx - $openIdx + 1)
+        # An object-boundary candidate ends with '}' — synthesize the array close.
+        $wrap = if ($kind -eq 'object-close') { ']}' } else { '}' }
+        $issuesJson = '{"issues":' + $sub + $wrap
+        try {
+            $data = $issuesJson | ConvertFrom-Json -ErrorAction Stop
+            if ($data -and $data.issues -and @($data.issues).Count -gt 0) { return $data }
+        } catch { }
+    }
+    return $null
+}
+
+function ConvertFrom-PartialAssessment {
+    <#
+    .SYNOPSIS
+        Best-effort extraction of assessment fields from a malformed JSON block.
+    .DESCRIPTION
+        In hybrid reports the assessment object is frequently the part that got
+        polluted by wedged prose.  When full parsing fails, this helper pulls
+        whatever assessment fields are still intact (completionStatus,
+        successRate, issuesFound, usabilityRating) via regex.
+    .PARAMETER JsonText
+        The raw JSON code block text (without the ```json fences).
+    .OUTPUTS
+        Hashtable of found fields, or $null when none are found.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$JsonText
+    )
+
+    $a = @{}
+    $m = [regex]::Match($JsonText, '"completionStatus"\s*:\s*"((?:[^"\\]|\\.)*)"')
+    if ($m.Success) { $a['completionStatus'] = $m.Groups[1].Value }
+    $m = [regex]::Match($JsonText, '"successRate"\s*:\s*"((?:[^"\\]|\\.)*)"')
+    if ($m.Success) { $a['successRate'] = $m.Groups[1].Value }
+    $m = [regex]::Match($JsonText, '"issuesFound"\s*:\s*(\d+)')
+    if ($m.Success) { $a['issuesFound'] = [int]$m.Groups[1].Value }
+    $m = [regex]::Match($JsonText, '"usabilityRating"\s*:\s*(\d+)')
+    if ($m.Success) { $a['usabilityRating'] = [int]$m.Groups[1].Value }
+
+    if ($a.Count -eq 0) { return $null }
+    return $a
+}
+
 function ConvertFrom-JsonEvaluation {
     <#
     .SYNOPSIS
@@ -1100,19 +1207,38 @@ function ConvertFrom-JsonEvaluation {
 
     $normalized = $Content -replace '\r\n', "`n"
 
-    # Find all ```json code blocks — try each one until we get a valid parse
+    # Find all ```json code blocks.  Agents such as codex echo the full prompt
+    # back into their output, and the prompt embeds a JSON *template example*
+    # (title "Brief descriptive title", placeholder assessment text) that parses
+    # as valid JSON with an issues array.  Template blocks are skipped; among
+    # the remaining blocks the LAST one wins, since an agent may emit
+    # intermediate drafts before its final evaluation JSON.
     $blockPattern = '(?s)```json\s*\n(.*?)```'
     $blockMatches = [regex]::Matches($normalized, $blockPattern)
+
+    $evaluation = $null
 
     foreach ($blockMatch in $blockMatches) {
         $jsonStr = $blockMatch.Groups[1].Value.Trim()
         if (-not $jsonStr) { continue }
 
+        # Primary parse — full JSON object.
+        $data = $null
         try {
             $data = $jsonStr | ConvertFrom-Json -ErrorAction Stop
         } catch {
-            # Not valid JSON — try the next block
-            continue
+            # Agents occasionally emit a hybrid document: a valid "issues" array
+            # followed by markdown prose wedged into the JSON.  Salvage the
+            # issues array when the full block does not parse, and attach any
+            # assessment fields that are still intact.
+            $data = ConvertFrom-SalvagedIssuesArray -JsonText $jsonStr
+            if (-not $data) { continue }
+            if (-not $data.assessment) {
+                $partial = ConvertFrom-PartialAssessment -JsonText $jsonStr
+                if ($partial) {
+                    $data | Add-Member -NotePropertyName assessment -NotePropertyValue $partial -Force
+                }
+            }
         }
 
         # Must have at least an issues array
@@ -1120,6 +1246,18 @@ function ConvertFrom-JsonEvaluation {
 
         $issueArray = @($data.issues)  # @() guards against single-object unwrapping
         if ($issueArray.Count -eq 0) { continue }
+
+        # Skip the prompt's embedded template example: placeholder title and/or
+        # placeholder reproduction text identify it unambiguously.
+        $firstIssue = $issueArray[0]
+        $isTemplate = (
+            ([string]$firstIssue.title) -eq 'Brief descriptive title' -or
+            ([string]$firstIssue.reproduction) -like '*Exact command(s) or steps to reproduce the issue.*'
+        )
+        if (-not $isTemplate -and $data.assessment) {
+            $isTemplate = ([string]$data.assessment.completionStatus) -like '*describe the overall task outcome*'
+        }
+        if ($isTemplate) { continue }
 
         # ── Map JSON issues → hashtable array (same shape as ConvertFrom-IssuesSection) ──
         $defaultReview = @'
@@ -1163,12 +1301,14 @@ function ConvertFrom-JsonEvaluation {
             }
         }
 
-        return @{
+        # Prefer the LAST real block (intermediate drafts, if any, are skipped).
+        $evaluation = @{
             Issues     = $issues.ToArray()
             Assessment = $assessment
         }
     }
 
+    if ($null -ne $evaluation) { return $evaluation }
     return $null
 }
 
@@ -1195,6 +1335,11 @@ function Extract-BackgroundContext {
 
     $normalized = $Content -replace '\r\n', "`n"
 
+    # Strip ```json blocks before section extraction — agents embed markdown
+    # prose inside them (hybrid reports), and the JSON can contain headings
+    # that would otherwise win the last-occurrence lookup below.
+    $normalized = [regex]::Replace($normalized, '(?s)```json\s*\n.*?```', '')
+
     $result = @{
         TaskSummary    = ''
         ExecutionTrace = ''
@@ -1204,14 +1349,17 @@ function Extract-BackgroundContext {
 
     # ── Extract Section A (Task Result) ──────────────────────────────────────
     # Handles: "### A. Task Result", "## A. Task Result", "## ✅ Task Result: ..."
+    # Agents such as codex echo the prompt, whose template contains the same
+    # headings with placeholder bodies — prefer the LAST occurrence, which is
+    # the agent's real section.
     $aStart = -1
     $aMarkers = @(
         '### A. Task Result', '## A. Task Result', '# A. Task Result', '## ✅ Task Result',
         '### A Task Result', '## A Task Result', '# A Task Result', '## Task Result', '# Task Result'
     )
     foreach ($m in $aMarkers) {
-        $aStart = $normalized.IndexOf($m, [StringComparison]::OrdinalIgnoreCase)
-        if ($aStart -ge 0) { break }
+        $idx = $normalized.LastIndexOf($m, [StringComparison]::OrdinalIgnoreCase)
+        if ($idx -gt $aStart) { $aStart = $idx }
     }
 
     if ($aStart -ge 0) {
@@ -1233,6 +1381,7 @@ function Extract-BackgroundContext {
     }
 
     # ── Extract Section B (Execution Trace) ──────────────────────────────────
+    # Same last-occurrence rule as Section A (skip the prompt-echo template).
     $bStart = -1
     $bMarkers = @(
         '### B. Execution Trace', '## B. Execution Trace', '# B. Execution Trace',
@@ -1240,8 +1389,8 @@ function Extract-BackgroundContext {
         '## B. Execution Trace'
     )
     foreach ($m in $bMarkers) {
-        $bStart = $normalized.IndexOf($m, [StringComparison]::OrdinalIgnoreCase)
-        if ($bStart -ge 0) { break }
+        $idx = $normalized.LastIndexOf($m, [StringComparison]::OrdinalIgnoreCase)
+        if ($idx -gt $bStart) { $bStart = $idx }
     }
 
     if ($bStart -ge 0) {
@@ -1916,12 +2065,26 @@ function Start-NativeCommand {
 
     # On Windows, redirect large prompts via stdin to avoid CreateProcess
     # command-line length limits (~32 KiB, or ~8191 with legacy cmd.exe).
+    # Two prompt styles are supported:
+    #   - `-p <prompt>` style (claude, kimi): the argument following -p.
+    #   - trailing positional prompt (codex `exec ... <prompt>`, opencode
+    #     `run <prompt>`, dsh `run <prompt>`): the final argument when it is
+    #     large.  codex/opencode/dsh read the prompt from stdin when it is
+    #     piped and no prompt argument is present.
     if ($isWindowsPlatform) {
         $promptValue = $null
+        $promptIsPositional = $false
         $foundP = $false
-        foreach ($a in $ArgumentList) {
-            if ($foundP) { $promptValue = $a; break }
-            if ($a -eq '-p') { $foundP = $true }
+        for ($pi = 0; $pi -lt $ArgumentList.Count; $pi++) {
+            if ($foundP) { $promptValue = $ArgumentList[$pi]; break }
+            if ($ArgumentList[$pi] -eq '-p') { $foundP = $true }
+        }
+        if (-not $promptValue -and $ArgumentList.Count -ge 2) {
+            $lastArg = $ArgumentList[$ArgumentList.Count - 1]
+            if ($lastArg.Length -gt 2000) {
+                $promptValue = $lastArg
+                $promptIsPositional = $true
+            }
         }
         $promptLen = if ($promptValue) { $promptValue.Length } else { 0 }
 
@@ -1931,13 +2094,19 @@ function Start-NativeCommand {
         foreach ($a in $ArgumentList) { $estimatedLen += $a.Length + 1 }
 
         if ($promptLen -gt 0 -and $estimatedLen -gt 6000) {
-            # Strip -p <prompt> and pipe the prompt via stdin instead.
-            $skipNext = $false
-            foreach ($a in $ArgumentList) {
-                if ($skipNext) { $skipNext = $false; continue }
-                if ($a -eq '-p') { $skipNext = $true; continue }
-                $psi.ArgumentList.Add($a)
+            # Strip the prompt argument(s) and pipe the prompt via stdin instead.
+            if ($promptIsPositional) {
+                $filteredArgs = $ArgumentList[0..($ArgumentList.Count - 2)]
+            } else {
+                $filteredArgs = @()
+                $skipNext = $false
+                foreach ($a in $ArgumentList) {
+                    if ($skipNext) { $skipNext = $false; continue }
+                    if ($a -eq '-p') { $skipNext = $true; continue }
+                    $filteredArgs += $a
+                }
             }
+            foreach ($a in $filteredArgs) { $psi.ArgumentList.Add($a) }
 
             $stdinRedirectPath = [System.IO.Path]::GetTempFileName()
             [System.IO.File]::WriteAllText($stdinRedirectPath, $promptValue, $utf8NoBom)

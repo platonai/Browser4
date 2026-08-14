@@ -1839,6 +1839,125 @@ Done.
     Assert-Equal 'Found issue from second JSON block' 1 $result.Count
     Assert-Equal 'Title from second block' 'Second block issue' $result[0].Title
 
+    Write-TestGroup 'Skips the prompt template example echoed by codex'
+    $templateThenReal = @'
+Some agent preamble, then the echoed prompt template example:
+
+```json
+{
+  "issues": [
+    {
+      "title": "Brief descriptive title",
+      "severity": "Critical",
+      "category": "Product",
+      "reproduction": "Exact command(s) or steps to reproduce the issue.",
+      "expected": "What should have happened.",
+      "actual": "What actually happened.",
+      "rootCause": "",
+      "codePointer": "",
+      "suggestion": ""
+    }
+  ],
+  "assessment": {
+    "completionStatus": "Successful / Partially Successful / Failed — describe the overall task outcome",
+    "successRate": "e.g. 80% — estimated percentage of task steps that succeeded",
+    "issuesFound": 8,
+    "majorBlockers": "",
+    "mostConfusingAspects": "",
+    "mostValuableImprovements": "",
+    "usabilityRating": 5
+  }
+}
+```
+
+Then the agent's real report:
+
+```json
+{
+  "issues": [
+    {
+      "title": "Real issue title",
+      "severity": "High",
+      "category": "Reliability",
+      "reproduction": "browser4-cli goto <url> -q",
+      "expected": "Navigates quietly",
+      "actual": "URL gets -q concatenated",
+      "rootCause": "Trailing flag concatenated into URL",
+      "codePointer": "cli/browser4-cli/src/main.rs:1916",
+      "suggestion": "- Reject trailing global flags after the URL"
+    }
+  ],
+  "assessment": {
+    "completionStatus": "Successful",
+    "successRate": "95%",
+    "issuesFound": 1,
+    "majorBlockers": "",
+    "mostConfusingAspects": "",
+    "mostValuableImprovements": "",
+    "usabilityRating": 6
+  }
+}
+```
+'@
+    $raw = ConvertFrom-JsonEvaluation -Content $templateThenReal
+    Assert-NotNullOrEmpty 'Real evaluation block found (not the template)' 'found'
+    $result = $raw.Issues
+    Assert-Equal 'Template example skipped — real issue parsed' 1 $result.Count
+    Assert-Equal 'Real issue title' 'Real issue title' $result[0].Title
+    Assert-Equal 'Real assessment picked' 'Successful' $raw.Assessment.CompletionStatus
+    Assert-Equal 'Real success rate picked' '95%' $raw.Assessment.SuccessRate
+
+    Write-TestGroup 'Salvages issues from a hybrid block (valid issues + wedged prose)'
+    $hybridBlock = @'
+The report:
+
+```json
+{
+  "issues": [
+    {
+      "title": "Hybrid issue one",
+      "severity": "Medium",
+      "category": "Documentation",
+      "reproduction": "Run the command",
+      "expected": "Works",
+      "actual": "Fails",
+      "rootCause": "Bug",
+      "codePointer": "main.rs:1",
+      "suggestion": "- Fix it"
+    },
+    {
+      "title": "Hybrid issue two",
+      "severity": "Low",
+      "category": "UX",
+      "reproduction": "Step two",
+      "expected": "Nice",
+      "actual": "Meh",
+      "rootCause": "",
+      "codePointer": "",
+      "suggestion": ""
+    }
+  ],
+  "assessment": {
+    "completionStatus": "Successful",
+    "successRate": "90%",
+    "issuesFound": 2,
+    "usabilityRating": 7,
+# A. Task Result
+All acceptance criteria passed. Some prose wedged into the JSON here.
+- **AC1:** done
+- **AC2:** done
+```
+'@
+    $raw = ConvertFrom-JsonEvaluation -Content $hybridBlock
+    Assert-NotNullOrEmpty 'Hybrid block salvaged' 'found'
+    $result = $raw.Issues
+    Assert-Equal 'Both hybrid issues salvaged' 2 $result.Count
+    Assert-Equal 'First hybrid title' 'Hybrid issue one' $result[0].Title
+    Assert-Equal 'Second hybrid title' 'Hybrid issue two' $result[1].Title
+    Assert-NotNullOrEmpty 'Partial assessment salvaged' 'assessment'
+    Assert-Equal 'Partial assessment rating' 7 $raw.Assessment.UsabilityRating
+    Assert-Equal 'Partial assessment status' 'Successful' $raw.Assessment.CompletionStatus
+
     Write-TestGroup 'Handles JSON block with indentation variations'
     $indentedJson = @'
 Some text before.
