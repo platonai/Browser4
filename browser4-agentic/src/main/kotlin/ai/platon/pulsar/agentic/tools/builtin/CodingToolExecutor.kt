@@ -5,6 +5,7 @@ import ai.platon.pulsar.coding.ArtifactValidator
 import ai.platon.pulsar.coding.CodeRunner
 import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingAgentShell
+import ai.platon.pulsar.coding.DevFlowScaffolds
 import ai.platon.pulsar.coding.LanguageServerManager
 import ai.platon.pulsar.coding.MavenBuildSupport
 import ai.platon.pulsar.coding.SkeletonExtractor
@@ -392,6 +393,28 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "domain/toolMethod to rename; omit to see the discovered parameters."
         )
 
+        // --- Browser4 development-flow scaffolds (multi-file) ---
+        toolSpec["scaffoldFlow"] = ToolSpec(
+            domain = domain, method = "scaffoldFlow",
+            arguments = listOf(
+                ToolSpec.Arg("type", "String"),
+                ToolSpec.Arg("name", "String"),
+                ToolSpec.Arg("description", "String", "null"),
+                ToolSpec.Arg("category", "String", "null"),
+                ToolSpec.Arg("toolName", "String", "null"),
+                ToolSpec.Arg("domain", "String", "null"),
+                ToolSpec.Arg("basePackage", "String", "null"),
+                ToolSpec.Arg("toolMethod", "String", "null"),
+            ),
+            returnType = "String",
+            description = "Generate a multi-file development-flow skeleton for Browser4 self-development. " +
+                "type: 'b4-cli-command' (new CLI command → commands.rs CommandDef + MCPToolController alias + " +
+                "backend method + test) or 'agent-tool' (new tool domain → ToolExecutor + ToolMount auto-config). " +
+                "Identifiers derive from name; cross-file consistency is automatic. " +
+                "For b4-cli-command: name=kebab-case, description, category (e.g. Extract/Swarm), toolName (snake). " +
+                "For agent-tool: name=plugin name, domain, basePackage, toolMethod, description."
+        )
+
         // --- Sandboxed code execution ---
         toolSpec["runCode"] = ToolSpec(
             domain = domain, method = "runCode",
@@ -724,6 +747,40 @@ class CodingToolExecutor : AbstractToolExecutor() {
                         appendLine("=== Generated from $path (skeleton) ===")
                         append(generated)
                     }
+                }
+            }
+            "scaffoldFlow" -> {
+                validateArgs(args, allowed = setOf("type", "name", "description", "category",
+                    "toolName", "domain", "basePackage", "toolMethod"),
+                    required = setOf("type", "name"), functionName)
+                val type = paramString(args, "type", functionName)!!
+                val name = paramString(args, "name", functionName)!!
+                val description = paramString(args, "description", functionName, required = false, default = "") ?: ""
+                val category = paramString(args, "category", functionName, required = false, default = null)
+                val toolName = paramString(args, "toolName", functionName, required = false, default = null)
+                val domain = paramString(args, "domain", functionName, required = false, default = null)
+                val basePackage = paramString(args, "basePackage", functionName, required = false, default = null)
+                val toolMethod = paramString(args, "toolMethod", functionName, required = false, default = null)
+
+                val files: Map<String, String> = when (type) {
+                    "b4-cli-command" -> DevFlowScaffolds.b4CliCommand(
+                        name = name,
+                        description = description,
+                        category = category ?: "Extract",
+                        toolName = toolName ?: name.replace('-', '_'),
+                    )
+                    "agent-tool" -> DevFlowScaffolds.agentTool(
+                        pluginName = name,
+                        domain = domain ?: name.removePrefix("browser4-").replace("-", "_"),
+                        basePackage = basePackage ?: "ai.platon.pulsar.${name.removePrefix("browser4-").replace("-", "")}",
+                        toolMethod = toolMethod ?: "doAction",
+                        toolDescription = description,
+                    )
+                    else -> throw IllegalArgumentException(
+                        "Unknown scaffoldFlow type: $type. Supported: b4-cli-command, agent-tool")
+                }
+                files.entries.joinToString("\n\n") { (path, content) ->
+                    "=== File: $path ===\n$content"
                 }
             }
             "runCode" -> {
