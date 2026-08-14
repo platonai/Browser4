@@ -1,4 +1,4 @@
-package ai.platon.pulsar.agentic.common
+package ai.platon.pulsar.coding
 
 /**
  * Line-based diff engine with standard algorithms — Myers (default) and Patience.
@@ -251,3 +251,4 @@ object DiffEngine {
         return result.reversed()
     }
 }
+

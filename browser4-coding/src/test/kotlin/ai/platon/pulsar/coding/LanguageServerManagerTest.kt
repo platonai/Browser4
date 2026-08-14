@@ -1,4 +1,4 @@
-package ai.platon.pulsar.agentic.common
+package ai.platon.pulsar.coding
 
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.*
@@ -35,7 +35,7 @@ class LanguageServerManagerTest {
         // The fake server is driven by a script name; we generate a tiny Kotlin
         // runner at test time? Simpler: use `java -cp <cp> FakeLspServerMain <script>`
         // and rely on the class being on the test classpath.
-        return listOf(javaBin(), "-cp", classpath(), "ai.platon.pulsar.agentic.common.FakeLspServerMain", script)
+        return listOf(javaBin(), "-cp", classpath(), "ai.platon.pulsar.coding.FakeLspServerMain", script)
     }
 
     private fun writeSample(path: String, content: String) {
@@ -97,3 +97,4 @@ class LanguageServerManagerTest {
         manager.close()
     }
 }
+

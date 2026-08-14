@@ -1,6 +1,6 @@
-package ai.platon.pulsar.agentic.common
+package ai.platon.pulsar.coding
 
-import ai.platon.pulsar.common.getLogger
+import org.slf4j.LoggerFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -40,7 +40,7 @@ class CodingAgentShell(
     companion object {
         const val MAX_TIMEOUT_SECONDS = 600L
         const val MAX_OUTPUT_CHARS = 200_000
-        private val logger = getLogger(CodingAgentShell::class)
+        private val logger = LoggerFactory.getLogger(CodingAgentShell::class.java)
 
         // ------------------------------------------------------------------
         // Command categories
@@ -686,3 +686,5 @@ class CodingAgentShell(
         }.removeSuffix(", ").ifEmpty { "unknown" }
     }
 }
+
+

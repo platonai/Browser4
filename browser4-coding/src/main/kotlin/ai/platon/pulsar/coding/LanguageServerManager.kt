@@ -1,6 +1,8 @@
-package ai.platon.pulsar.agentic.common
+package ai.platon.pulsar.coding
 
-import ai.platon.pulsar.common.getLogger
+import com.fasterxml.jackson.databind.DeserializationFeature
+import com.fasterxml.jackson.databind.ObjectMapper
+import org.slf4j.LoggerFactory
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import java.io.BufferedReader
@@ -47,7 +49,12 @@ class LanguageServerManager(
 ) : AutoCloseable {
 
     companion object {
-        private val logger = getLogger(LanguageServerManager::class)
+        private val logger = LoggerFactory.getLogger(LanguageServerManager::class.java)
+
+        /** Local Jackson mapper for JSON-RPC framing — no dependency on pulsar-common. */
+        private val mapper: ObjectMapper by lazy {
+            ObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+        }
 
         const val IDLE_TIMEOUT_MS = 10 * 60 * 1000L
 
@@ -386,7 +393,7 @@ class LanguageServerManager(
 
     @Synchronized
     private fun writeMessage(session: ServerSession, message: Map<String, Any?>) {
-        val json = ai.platon.pulsar.common.serialize.json.pulsarObjectMapper().writeValueAsString(message)
+        val json = mapper.writeValueAsString(message)
         val bytes = json.toByteArray(StandardCharsets.UTF_8)
         session.writer.write("Content-Length: ${bytes.size}\r\n\r\n")
         session.writer.write(json)
@@ -412,14 +419,14 @@ class LanguageServerManager(
         }
         val json = String(payload)
         try {
-            val tree = ai.platon.pulsar.common.serialize.json.pulsarObjectMapper().readTree(json)
+            val tree = mapper.readTree(json)
             if (tree.has("id")) {
                 val id = tree["id"].asText()
                 val result = if (tree.has("error")) {
                     logger.debug("LSP error response for {}: {}", id, tree["error"])
                     null
                 } else {
-                    ai.platon.pulsar.common.serialize.json.pulsarObjectMapper()
+                    mapper
                         .convertValue(tree["result"], Any::class.java)
                 }
                 session.pending.remove(id)?.complete(result)
@@ -429,7 +436,7 @@ class LanguageServerManager(
                     "textDocument/publishDiagnostics" -> {
                         val uri = tree["params"]["uri"].asText()
                         val diags = tree["params"]["diagnostics"].let { d ->
-                            ai.platon.pulsar.common.serialize.json.pulsarObjectMapper()
+                            mapper
                                 .convertValue(d, List::class.java)
                         }
                         session.diagnosticsByUri[uri] = diags as List<Map<String, Any?>>
@@ -480,3 +487,6 @@ class LanguageServerManager(
         else -> "unknown"
     }
 }
+
+
+

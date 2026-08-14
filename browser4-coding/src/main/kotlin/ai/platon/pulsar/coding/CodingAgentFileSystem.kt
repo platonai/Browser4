@@ -1,6 +1,6 @@
-package ai.platon.pulsar.agentic.common
+package ai.platon.pulsar.coding
 
-import ai.platon.pulsar.common.getLogger
+import org.slf4j.LoggerFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
@@ -49,7 +49,7 @@ class CodingAgentFileSystem(
     companion object {
         const val MAX_READ_SIZE_BYTES = 5 * 1024 * 1024L // 5 MB
         const val MAX_GLOB_RESULTS = 10_000
-        private val logger = getLogger(CodingAgentFileSystem::class)
+        private val logger = LoggerFactory.getLogger(CodingAgentFileSystem::class.java)
 
         /** Directories skipped by recursive searches by default. */
         val DEFAULT_SEARCH_EXCLUDED_DIRS: Set<String> = setOf(
@@ -939,3 +939,5 @@ class CodingAgentFileSystem(
         else -> "${bytes / (1024 * 1024 * 1024)} GB"
     }
 }
+
+

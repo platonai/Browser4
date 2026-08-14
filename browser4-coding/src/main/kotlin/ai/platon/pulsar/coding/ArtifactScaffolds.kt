@@ -1,4 +1,4 @@
-package ai.platon.pulsar.agentic.common
+package ai.platon.pulsar.coding
 
 /**
  * Scaffold templates for Browser4's four core programming artifact types.
@@ -322,7 +322,7 @@ object ArtifactScaffolds {
     // ==================== Skill ====================
 
     /**
-     * Generate a SKILL.md scaffold matching the real [ai.platon.pulsar.agentic.skills.SkillDefinitionLoader]
+     * Generate a SKILL.md scaffold matching the real SkillDefinitionLoader
      * frontmatter contract: `name` (must equal the directory name, kebab-case),
      * `description` (1..1024 chars), optional `allowed-tools` (space-separated).
      *
@@ -573,3 +573,4 @@ object ArtifactScaffolds {
         return pascal.replaceFirstChar { it.lowercase() }
     }
 }
+

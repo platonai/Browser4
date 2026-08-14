@@ -1,4 +1,4 @@
-package ai.platon.pulsar.agentic.common
+package ai.platon.pulsar.coding
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import java.io.BufferedReader
@@ -125,3 +125,4 @@ object FakeLspServerMain {
         writer.flush()
     }
 }
+

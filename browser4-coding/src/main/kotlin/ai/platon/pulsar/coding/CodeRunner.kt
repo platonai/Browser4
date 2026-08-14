@@ -1,6 +1,6 @@
-package ai.platon.pulsar.agentic.common
+package ai.platon.pulsar.coding
 
-import ai.platon.pulsar.common.getLogger
+import org.slf4j.LoggerFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -28,7 +28,7 @@ class CodeRunner(
     private val maxOutputChars: Int = 20_000,
 ) {
     companion object {
-        private val logger = getLogger(CodeRunner::class)
+        private val logger = LoggerFactory.getLogger(CodeRunner::class.java)
 
         /** Languages we can run and how to interpret them. */
         private val RUNNERS: Map<String, List<String>> = mapOf(
@@ -163,3 +163,5 @@ class CodeRunner(
     private fun truncate(s: String): String =
         if (s.length <= maxOutputChars) s else s.take(maxOutputChars) + "\n... (truncated)"
 }
+
+

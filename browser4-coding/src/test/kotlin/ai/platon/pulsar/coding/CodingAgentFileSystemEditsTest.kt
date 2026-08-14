@@ -1,4 +1,4 @@
-package ai.platon.pulsar.agentic.common
+package ai.platon.pulsar.coding
 
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.*
@@ -247,4 +247,5 @@ class CodingAgentFileSystemEditsTest {
         assertFalse(tempDir.resolve("junk.txt").toFile().exists())
     }
 }
+
 

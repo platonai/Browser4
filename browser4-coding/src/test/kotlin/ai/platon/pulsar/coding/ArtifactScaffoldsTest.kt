@@ -1,4 +1,4 @@
-package ai.platon.pulsar.agentic.common
+package ai.platon.pulsar.coding
 
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
@@ -292,5 +292,6 @@ class ArtifactScaffoldsTest {
         assertEquals("myPlugin", ArtifactScaffolds.toCamelCase("my-plugin"))
     }
 }
+
 
 

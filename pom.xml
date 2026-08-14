@@ -83,6 +83,7 @@
         <module>browser4-plugins</module>
         <module>browser4-agent-tools</module>
         <module>browser4-agentic</module>
+        <module>browser4-coding</module>
         <module>browser4-boot</module>
         <module>browser4-pdk</module>
         <module>browser4-rest</module>
@@ -629,6 +630,11 @@
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>browser4-agentic</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>browser4-coding</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

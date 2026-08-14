@@ -1,4 +1,4 @@
-package ai.platon.pulsar.agentic.common
+package ai.platon.pulsar.coding
 
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
@@ -189,4 +189,5 @@ class DiffEngineTest {
         assertEquals(1, DiffEngine.diff(old, new, "patience").count { it is DiffEngine.Edit.Delete })
     }
 }
+
 

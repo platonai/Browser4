@@ -1,4 +1,4 @@
-package ai.platon.pulsar.agentic.common
+package ai.platon.pulsar.coding
 
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.*
@@ -103,3 +103,4 @@ class CodeRunnerTest {
     fun hasNode() = has("node")
     fun hasBash() = has("bash")
 }
+

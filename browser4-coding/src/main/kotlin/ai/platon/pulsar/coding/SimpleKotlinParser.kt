@@ -1,6 +1,14 @@
-package ai.platon.pulsar.agentic.common
+package ai.platon.pulsar.coding
 
-import ai.platon.pulsar.agentic.model.ToolCall
+/**
+ * A parsed `domain.method(args...)` expression — the neutral representation
+ * produced by [SimpleKotlinParser], independent of any agent tool model.
+ */
+data class ParsedCall(
+    val domain: String,
+    val method: String,
+    val arguments: Map<String, Any?>,
+)
 
 class SimpleKotlinParser {
 
@@ -11,7 +19,7 @@ class SimpleKotlinParser {
      * - Nested parentheses inside arguments
      * - Optional whitespace and trailing commas
      */
-    fun parseFunctionExpression(input: String): ToolCall? {
+    fun parseFunctionExpression(input: String): ParsedCall? {
         val s = input.trim().removeSuffix(";")
         if (s.isEmpty()) return null
 
@@ -93,7 +101,7 @@ class SimpleKotlinParser {
         val args: MutableMap<String, Any?> = normalized.withIndex()
             .associateTo(mutableMapOf()) { it.index.toString() to it.value }
 
-        return ToolCall(objectName, functionName, args)
+        return ParsedCall(objectName, functionName, args)
     }
 
     // Split arguments by commas at top level, honoring quotes, escapes, and nested parentheses.
@@ -222,3 +230,4 @@ class SimpleKotlinParser {
         return sb.toString()
     }
 }
+

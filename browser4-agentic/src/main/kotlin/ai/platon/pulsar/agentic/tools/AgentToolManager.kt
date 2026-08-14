@@ -4,8 +4,8 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.common.AgentFileSystem
 import ai.platon.pulsar.agentic.common.AgentShell
-import ai.platon.pulsar.agentic.common.CodingAgentFileSystem
-import ai.platon.pulsar.agentic.common.CodingAgentShell
+import ai.platon.pulsar.coding.CodingAgentFileSystem
+import ai.platon.pulsar.coding.CodingAgentShell
 import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.skills.SkillContext
 import ai.platon.pulsar.agentic.skills.SkillRegistry
