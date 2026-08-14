@@ -12,9 +12,6 @@ pages to local files and normalize URLs into consistent database keys.
 ## Quick start
 
 ```bash
-# Export all cached pages to a directory
-browser4-cli webdb-export "*" ./exported-pages
-
 # Export specific pages by URL
 browser4-cli webdb-export "https://example.com,https://example.com/about" ./out
 
@@ -44,7 +41,6 @@ stored in webdb.  Subsequent visits to the same URL reuse the cached copy
 
 - **webdb-export** looks up each URL in the cache, normalizes it, retrieves
   the stored page, and writes it as an `.htm` file to the output directory.
-  Wildcard `"*"` exports every page in the database.
 - **webdb-normalize** runs URL normalization (lowercase, trailing-slash
   removal, redirect resolution) and returns the result — the exact key used
   for webdb lookups.
@@ -61,7 +57,7 @@ Export cached pages to a local directory.
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `urls` | Yes | Comma-separated URLs to export, or `"*"` for all pages |
+| `urls` | Yes | Comma-separated URLs to export |
 | `output-dir` | Yes | Directory to save exported `.htm` files |
 
 Filenames are derived from the normalized URL.  For example,
@@ -99,11 +95,11 @@ Returns the normalized URL string.  Normalization includes:
 
 ## Common patterns
 
-### Export all pages after a crawl
+### Export crawled pages after a crawl
 
 ```bash
 browser4-cli crawl --seed-file urls.txt --depth 0
-browser4-cli webdb-export "*" ./crawl-output
+browser4-cli webdb-export "https://example.com/page1,https://example.com/page2" ./crawl-output
 ```
 
 ### Export specific pages for offline analysis
@@ -125,7 +121,7 @@ browser4-cli webdb-normalize "HTTPS://Example.COM/page?ref=ad#section"
 ### Script-friendly export with error handling
 
 ```bash
-result=$(browser4-cli webdb-export "*" ./out --json)
+result=$(browser4-cli webdb-export "https://example.com/page1,https://example.com/page2" ./out --json)
 succeeded=$(echo "$result" | jq '.succeeded')
 failed=$(echo "$result" | jq '.failed')
 echo "Exported $succeeded pages ($failed failed)"
@@ -135,11 +131,11 @@ echo "Exported $succeeded pages ($failed failed)"
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `Missing required parameter 'urls'` | No URLs argument provided | Pass comma-separated URLs or `"*"` |
+| `Missing required parameter 'urls'` | No URLs argument provided | Pass comma-separated URLs |
 | `Missing required parameter 'outputDir'` | No output directory provided | Pass an output directory path |
 | `Session not found` | No active browser session | Run `goto <any-url>` or `open` first |
 | `Page not found in webdb` | URL was never fetched or cache expired | Run `goto <url>` first, or use `--refresh` on the crawl |
-| `No URLs provided` | Empty URL list or `*` matched nothing | Verify pages were cached (check crawl output) |
+| `No URLs provided` | Empty URL list | Verify pages were cached (check crawl output) |
 
 ## How it compares to other export mechanisms
 

@@ -113,6 +113,23 @@ fn get_str<'a>(map: &'a HashMap<String, Value>, key: &str) -> Option<&'a str> {
     map.get(key).and_then(|v| v.as_str())
 }
 
+/// Resolve a user-supplied output directory to an absolute path against the
+/// CLI's current working directory.  Paths that are already absolute (native
+/// drive/UNC forms, or rooted with `/` or `\` like the POSIX-style `/tmp/x`
+/// the tests and docs use) are returned unchanged.  Relative paths are joined
+/// onto `std::env::current_dir()` so the backend writes exports where the
+/// caller expects instead of resolving them against the backend's own CWD.
+fn absolutize_local_dir(dir: &str) -> String {
+    let path = std::path::Path::new(dir);
+    if path.is_absolute() || dir.starts_with('/') || dir.starts_with('\\') {
+        return dir.to_string();
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => cwd.join(dir).to_string_lossy().into_owned(),
+        Err(_) => dir.to_string(),
+    }
+}
+
 fn get_opt_str<'a>(map: &'a HashMap<String, Value>, key: &str) -> Option<&'a str> {
     map.get(key).and_then(|v| v.as_str())
 }
@@ -1917,7 +1934,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[
                 ArgDef {
                     name: "urls",
-                    description: "Comma-separated URLs to export, or \"*\" for all pages in the database",
+                    description: "Comma-separated URLs to export",
                     optional: false,
                 },
                 ArgDef {
@@ -1932,7 +1949,14 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(urls) = get_str(args, "urls") { p["urls"] = json!(urls); }
-                if let Some(dir) = get_str(args, "output-dir") { p["outputDir"] = json!(dir); }
+                if let Some(dir) = get_str(args, "output-dir") {
+                    // Resolve relative output directories against the CLI's own
+                    // working directory.  The backend otherwise resolves them
+                    // against its own process CWD (e.g. the runtime bundle dir),
+                    // so in production exports would land somewhere the user
+                    // cannot find.
+                    p["outputDir"] = json!(absolutize_local_dir(dir));
+                }
                 p
             },
         },
@@ -6677,6 +6701,25 @@ mod tests {
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["urls"], "http://a.com,http://b.com");
         assert_eq!(params["outputDir"], "/tmp/export");
+    }
+
+    #[test]
+    fn test_webdb_export_absolutizes_relative_output_dir() {
+        let map = commands_map();
+        let cmd = map.get("webdb-export").unwrap();
+        let mut args = HashMap::new();
+        args.insert("urls".to_string(), json!("http://a.com"));
+        args.insert("output-dir".to_string(), json!("export/out"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        let out = params["outputDir"].as_str().unwrap();
+        // Relative paths are resolved against the CLI's CWD so the backend
+        // writes them where the caller expects.
+        assert!(
+            out.ends_with("export/out") || out.ends_with("export\\out"),
+            "expected outputDir to be absolutized against CWD, got: {out}"
+        );
+        assert!(std::path::Path::new(out).is_absolute() || out.starts_with('/') || out.starts_with('\\'));
     }
 
     #[test]

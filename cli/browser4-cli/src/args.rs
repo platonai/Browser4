@@ -223,9 +223,14 @@ pub fn parse_raw_args(
             // POSIX end-of-options marker: bare `--` stops option parsing
             // and treats all remaining tokens as positional arguments.
             if rest.is_empty() {
+                // Record where the `--`-prefixed positionals begin (raw
+                // positional-array index) so downstream arg building can
+                // distinguish explicit pass-through tokens from stray flags.
+                let dd_start = positional.len();
                 for j in i + 1..raw_args.len() {
                     positional.push(json!(&raw_args[j]));
                 }
+                result.insert("_.dd".to_string(), json!(dd_start));
                 break;
             }
             if let Some(eq) = rest.find('=') {
@@ -370,6 +375,31 @@ pub fn build_command_args(
             // (e.g. `loop -- -s price-watch eval …`), join them with
             // spaces so the subcommand handler can re-parse them.
             if i == arg_names.len() - 1 && positional.len() > arg_names.len() {
+                // Never absorb stray flag-like tokens into the last argument:
+                // `goto <url> -q` must error instead of silently navigating to
+                // "<url> -q".  Tokens explicitly passed after the POSIX `--`
+                // marker are exempt (intentional pass-through).  The raw
+                // positional array includes the command name at index 0, so
+                // the post-`--` boundary shifts by one here.
+                let dd_start_raw = raw.get("_.dd").and_then(|v| v.as_i64()).map(|v| v as usize);
+                let post_dd_start = dd_start_raw.map(|s| s.saturating_sub(1)).unwrap_or(usize::MAX);
+                let offending: Vec<&String> = positional[i..]
+                    .iter()
+                    .enumerate()
+                    .filter(|(k, t)| {
+                        t.starts_with('-')
+                            && !looks_like_negative_value(t)
+                            && i + k < post_dd_start
+                    })
+                    .map(|(_, t)| t)
+                    .collect();
+                if !offending.is_empty() {
+                    return Err(format!(
+                        "error: unexpected positional arguments (this command accepts {}): {:?}",
+                        arg_names.len(),
+                        &offending
+                    ));
+                }
                 result.insert(name.to_string(), json!(positional[i..].join(" ")));
             } else if let Ok(n) = positional[i].parse::<i64>() {
                 result.insert(name.to_string(), json!(n));
@@ -860,6 +890,51 @@ mod tests {
         let result = build_command_args(&raw, &[]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("unexpected positional arguments"));
+    }
+
+    #[test]
+    fn test_goto_rejects_trailing_flag_into_url() {
+        // `goto <url> -q` must not silently navigate to "<url> -q" — the stray
+        // flag is rejected instead (regression: extra positionals were joined
+        // into the url slot).
+        let mut raw = HashMap::new();
+        raw.insert("_".to_string(), json!(["goto", "http://example.com/page", "-q"]));
+        let result = build_command_args(&raw, &["url"]);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("-q"), "error should list the stray flag: {err}");
+    }
+
+    #[test]
+    fn test_goto_rejects_leading_flag_before_url() {
+        // `goto -q <url>` must also fail loudly instead of url="-q <url>".
+        let mut raw = HashMap::new();
+        raw.insert("_".to_string(), json!(["goto", "-q", "http://example.com/page"]));
+        let result = build_command_args(&raw, &["url"]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("-q"));
+    }
+
+    #[test]
+    fn test_goto_keeps_plain_url() {
+        let mut raw = HashMap::new();
+        raw.insert("_".to_string(), json!(["goto", "http://example.com/page"]));
+        let result = build_command_args(&raw, &["url"]).unwrap();
+        assert_eq!(result.get("url"), Some(&json!("http://example.com/page")));
+    }
+
+    #[test]
+    fn test_pass_through_after_dashdash_allows_flags() {
+        // `loop -- -s price-watch eval ...` — flags after `--` are intentional
+        // pass-through and must still be joined into the task slot.
+        let mut raw = HashMap::new();
+        raw.insert("_".to_string(), json!(["loop", "-s", "price-watch", "eval", "x"]));
+        raw.insert("_.dd".to_string(), json!(1)); // `--` right after the command name
+        let result = build_command_args(&raw, &["task"]).unwrap();
+        assert_eq!(
+            result.get("task"),
+            Some(&json!("-s price-watch eval x"))
+        );
     }
 
     #[test]

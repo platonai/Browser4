@@ -59,7 +59,7 @@ results than guessing a number.
 | Flag | Default | Purpose |
 |------|---------|---------|
 | `--max-files <n>` | `40` | Maximum number of HTML files to process |
-| `--output <dir>` | `<html-dir>-ml-output` | Where to write results |
+| `--output <dir>` | `<html-dir>-ml-output` | Where to write the clustered results (CSV + clustering info; the views stage uses the app temp root — see [Output](#output)) |
 | `--resume [<project-id>]` | — | Pick up where a previous run left off. If no project ID is given, the most recent project is used. |
 
 ### Building Views from an Existing Run
@@ -72,23 +72,47 @@ java -jar scent-miner.jar views <html-dir>-ml-output/kmeans-result/p<timestamp>
 
 ## Output
 
-The pipeline writes results to `<html-dir>-ml-output/` (or wherever `--output`
-points). The views live in a `predictionAndMinimalFeatures.views/` directory
-inside the timestamped result folder:
+`all` produces two kinds of artifacts in **two different places**:
+
+1. **Clustered results** — written to `<html-dir>-ml-output/kmeans-result/p<timestamp>/`
+   (or wherever `--output` points): one `result.csv` per feature view
+   (`predictionAnd{Final,Minimal,Original}Features/result.csv`) plus
+   `clusteringInfo.txt`.
+2. **Views** (interactive HTML report + Excel + JSON) — the `views` stage of
+   `all` writes them to the application's **temp task-output root**, NOT under
+   `<html-dir>-ml-output`:
+   `%TEMP%\<app>-pereg\ml\tasks\unsupervised\result\p<timestamp>\predictionAndMinimalFeatures.views\`
+   on Windows (the `<app>` prefix follows `-Dapp.name`: `pulsar` for a direct
+   `java -jar` run, `webminer` when launched through `webminer.ps1`).  The end
+   of the run prints the resolved absolute views path.
+
+So after `java -jar scent-miner.jar all ./html-pages/` the clustered results
+look like:
 
 ```
-<html-dir>-ml-output/
+html-pages-ml-output/
   └── kmeans-result/
       └── p<timestamp>/
-          └── predictionAndMinimalFeatures.views/
-              ├── index.html    ← Open this in a browser
-              ├── *.xlsx        ← Excel reports
-              ├── *.json        ← Data files
-              └── ...
+          ├── predictionAndFinalFeatures/result.csv
+          ├── predictionAndMinimalFeatures/result.csv
+          ├── predictionAndOriginalFeatures/result.csv
+          └── clusteringInfo.txt
 ```
 
-Open `index.html` in a browser to explore the clustering results. The `.xlsx`
-files can be opened in Excel for sorting, filtering, or further analysis.
+and the views (`index.html`, `*.xlsx`, `*.json`) live in the temp
+task-output directory printed by the run.
+
+To place the views **beside the clustered results** (e.g. to archive them with
+the project), rebuild them from the result directory:
+
+```bash
+java -jar scent-miner.jar views <html-dir>-ml-output/kmeans-result/p<timestamp>
+```
+
+This writes `predictionAndMinimalFeatures.views/` inside the given result
+directory.  Open the generated `index.html` in a browser to explore the
+clustering results. The `.xlsx` files can be opened in Excel for sorting,
+filtering, or further analysis.
 
 ## Tips
 
