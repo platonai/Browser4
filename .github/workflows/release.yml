@@ -630,6 +630,37 @@ jobs:
           \`browser4-cli install\`
           EOF
 
+      - name: Prepend tag release notes (What's New + curated sections)
+        if: success()
+        shell: bash
+        run: |
+          TAG="${{ needs.prepare.outputs.tag }}"
+          # The annotated tag carries the What's New + curated sections written
+          # by trigger-release.ps1. Extract it (checkout uses fetch-depth: 0,
+          # so the tag object is present) and insert it before the template's
+          # "Release Highlights" section.
+          git tag -l --format='%(contents)' "$TAG" > tag_notes.md 2>/dev/null || true
+          if [ ! -s tag_notes.md ]; then
+            echo "No tag message for $TAG (lightweight tag) — skipping prepend."
+            exit 0
+          fi
+          # Drop the deterministic "Other" bucket: the full changelog below covers it.
+          awk '/^### Other/{skip=1; next} /^### /{skip=0} !skip' tag_notes.md > tag_notes_clean.md
+          if [ ! -s tag_notes_clean.md ]; then
+            echo "No curated content to prepend — skipping."
+            exit 0
+          fi
+          awk '
+            !done && /^## .*Release Highlights/ {
+              while ((getline line < "tag_notes_clean.md") > 0) print line
+              print ""
+              done = 1
+            }
+            { print }
+          ' release_notes.md > release_notes_combined.md
+          mv release_notes_combined.md release_notes.md
+          echo "✅ Prepended tag release notes for $TAG"
+
       - name: Upload JAR artifact
         if: success() && needs.prepare.outputs.should_publish_artifacts == 'true'
         uses: actions/upload-artifact@v6

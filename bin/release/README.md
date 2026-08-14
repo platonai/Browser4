@@ -98,12 +98,17 @@ checks and previews the tag and release notes; it never creates or pushes anythi
   the release workflow via the `on.push.tags` trigger.
 - Shows changes since the previous release tag for release notes.
 - **AI release notes (opt-in)**: by default the script does NOT call an AI
-  agent — the raw commit list is used as the release notes. Pass `-Agent auto`
-  to opt in with the backend auto-resolved (claude/codex/kimi/dsh/gh copilot),
+  agent — release notes are built from the commit list into categorized
+  sections (Features, Fixes, Performance, ...; chore/ci/style/revert/build and
+  version-bump commits are skipped). Pass `-Agent auto` to opt in: the AI
+  agent then generates ONLY the "What's New" highlights section on top of
+  those sections (backend auto-resolved: claude/codex/kimi/dsh/gh copilot),
   or `-Agent <name>` to pin a specific backend (claude, kimi, codex, dsh,
-  copilot). The commit list is sent to the agent to generate structured release
-  notes, used as the annotated tag message (unless `-message` is given). Falls
-  back to the raw commit list if no agent is available.
+  copilot). The What's New is user-facing (English, 3-5 bullets, release scale
+  stats) and the combined notes are used as the annotated tag message (unless
+  `-message` is given). Falls back to commit-derived sections only if no agent
+  is available. The tag message (What's New + curated sections) is also
+  prepended into the GitHub Release body by `release.yml`.
 - Supports `-remote`, `-message`, `-Apply`, `-DryRun`, and `-Agent`.
 
 ```

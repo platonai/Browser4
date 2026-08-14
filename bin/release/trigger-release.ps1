@@ -21,14 +21,15 @@
     checks, previews the tag and release notes, and exits without changing
     anything. Pass -Apply to actually create and push the tag.
 
-    Release notes: by default the script does NOT call an AI agent and uses the
-    raw commit list. Pass -Agent auto to opt in with the backend auto-resolved
-    (claude, codex, kimi, dsh, or gh copilot — via
-    coworker/scripts/workers/agent.ps1), or -Agent <name> to pin a specific
-    backend (claude, kimi, codex, dsh, copilot). The commit list since the
-    previous tag is sent to the agent to produce structured release notes, used
-    as the annotated tag message (unless -message is given) and shown as a
-    preview. Falls back to the raw commit list if no agent is available.
+    Release notes: by default the script does NOT call an AI agent. Notes are
+    built from the commit list into categorized sections (Features, Fixes,
+    Performance, ...; chore/ci/style/revert/build and version-bump commits are
+    skipped). Pass -Agent auto to opt in: the AI agent generates ONLY the
+    "What's New" highlights section on top of those sections (backend
+    auto-resolved via coworker/scripts/workers/agent.ps1: claude, codex, kimi,
+    dsh, or gh copilot), or -Agent <name> to pin a specific backend (claude,
+    kimi, codex, dsh, copilot). The combined notes are used as the annotated
+    tag message (unless -message is given) and shown as a preview.
 
 .PARAMETER remote
     The git remote to push the tag to (default: "origin").
@@ -389,25 +390,35 @@ function Invoke-ReleaseNotesAgent {
     if (-not (Test-ReleaseAgentAvailable)) { return $null }
     if ([string]::IsNullOrWhiteSpace($Changes)) { return $null }
 
+    # Release scale stats for the prompt (match the shown commit list).
+    $statsText = ''
+    if ($prevTag) {
+        $commitCount = (git rev-list --count --no-merges "$prevTag..HEAD" 2>$null) -as [int]
+        $contributorCount = ((git shortlog -sn --no-merges "$prevTag..HEAD" 2>$null) | Where-Object { $_.Trim() } | Measure-Object).Count
+        if ($commitCount -gt 0) { $statsText = "$commitCount commits from $contributorCount contributors" }
+    }
+
     $prompt = @"
-Generate release notes for a software release.
+Write the "What's New" highlights section for a software release.
 
 Repository: Browser4
 Version: $Version
+Release stats: $statsText
 
-Analyze the commit list below and produce well-structured release notes
-as Markdown.
+Analyze the commit list below and write a concise "What's New" section
+summarizing this release for end users.
 
-Rules:
-- Start with a one-paragraph summary of the highlights of this release.
-- Then group changes into categories by conventional-commit type:
-  Features (feat), Fixes (fix), Performance (perf), Refactor (refactor),
-  Documentation (docs), Tests (test).
-- Skip pure chore/ci/style/revert commits unless user-visible.
-- One concise bullet per meaningful change; no commit hashes.
-- Omit empty categories.
-- Output ONLY the release notes Markdown body — no code fences, no
-  preamble such as "Here are the release notes".
+Style:
+- English, concise, user-facing and scannable: an optional one-sentence
+  lead followed by 3-5 bullet points.
+- Lead with the biggest user-visible wins. Mention the release scale
+  (commits/contributors) only if it reads naturally.
+- Do not restate the version or release date (the release title already
+  has them) and do not repeat the categorized change list — focus on
+  value and impact instead.
+- If any change affects install or upgrade steps, call it out explicitly.
+- No commit hashes; no markdown headings; no code fences; no preamble
+  such as "Here are the release notes".
 
 Commit list (most recent first):
 ---
@@ -430,38 +441,111 @@ $Changes
     return $null
 }
 
-# ── Generate release notes (agent if available, otherwise raw commits) ──
+# ── Build commit-derived release note sections (deterministic) ─────────
+# Classifies each commit by conventional-commit type into categorized
+# markdown sections. Chore/ci/style/revert/build commits and version-bump
+# noise are skipped; non-conventional subjects land in "Other".
+function Get-ReleaseNoteSections {
+    param(
+        [string]$Changes
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Changes)) { return '' }
+
+    $sectionTitles = @{
+        feat     = 'Features'
+        fix      = 'Fixes'
+        perf     = 'Performance'
+        refactor = 'Refactor'
+        docs     = 'Documentation'
+        test     = 'Tests'
+    }
+    $skippedTypes = @('chore', 'ci', 'style', 'revert', 'build')
+    $otherTitle = 'Other'
+
+    $groups = @{}
+    foreach ($line in ($Changes -split "`r?`n")) {
+        $subject = $line -replace '^\s*[0-9a-f]{7,40}\s+', ''
+        if ([string]::IsNullOrWhiteSpace($subject)) { continue }
+
+        if ($subject -match '^(?<type>[a-zA-Z]+)(?:\([^)]*\))?:\s*(?<desc>.*)$') {
+            $type = $matches['type'].ToLower()
+            $desc = $matches['desc'].Trim()
+            if ($type -in $skippedTypes -or -not $desc) { continue }
+            $section = if ($sectionTitles.ContainsKey($type)) { $sectionTitles[$type] } else { $otherTitle }
+        } else {
+            $desc = $subject.Trim()
+            if (-not $desc) { continue }
+            # Skip version-bump noise (e.g. "Auto-bump version to X.Y.Z-SNAPSHOT").
+            if ($desc -match '^(auto-?bump|bump version|prepare release|release prep)') { continue }
+            $section = $otherTitle
+        }
+
+        if (-not $groups.ContainsKey($section)) {
+            $groups[$section] = [System.Collections.Generic.List[string]]::new()
+        }
+        $groups[$section].Add($desc)
+    }
+
+    $order = @('Features', 'Fixes', 'Performance', 'Refactor', 'Documentation', 'Tests', 'Other')
+    $sb = [System.Text.StringBuilder]::new()
+    foreach ($section in $order) {
+        if ($groups.ContainsKey($section) -and $groups[$section].Count -gt 0) {
+            [void]$sb.AppendLine("### $section")
+            foreach ($item in $groups[$section]) {
+                [void]$sb.AppendLine("- $item")
+            }
+            [void]$sb.AppendLine('')
+        }
+    }
+    return $sb.ToString().TrimEnd()
+}
+
+# ── Generate release notes ─────────────────────────────────────────────
+# Structure: "What's New" (AI-generated, only when -Agent is passed) on top
+# of commit-derived categorized sections (always deterministic).
 $releaseNotes = ''
 $agentUsed = $false
 
+$sectionNotes = Get-ReleaseNoteSections -Changes $changesText
+
+$whatsNewText = ''
 if ($useAgent) {
     Write-Host ""
-    Write-Host "Checking for an AI agent to generate release notes..." -ForegroundColor DarkGray
+    Write-Host "Checking for an AI agent to generate the What's New section..." -ForegroundColor DarkGray
     if ($changesText) {
-        $releaseNotes = Invoke-ReleaseNotesAgent -Changes $changesText -Version $newTag
-        if ($releaseNotes) {
+        $whatsNewText = Invoke-ReleaseNotesAgent -Changes $changesText -Version $newTag
+        if ($whatsNewText) {
             $agentUsed = $true
-            Write-Host "  Release notes generated with $($script:ReleaseAgent.Backend)." -ForegroundColor Green
+            Write-Host "  What's New generated with $($script:ReleaseAgent.Backend)." -ForegroundColor Green
         }
     }
 }
 
 if ($agentUsed) {
+    $releaseNotes = "## What's New`n`n$whatsNewText`n`n$sectionNotes"
+} else {
+    $releaseNotes = $sectionNotes
+}
+
+if (-not $changesText) {
+    Write-Host "  No changes to summarize." -ForegroundColor DarkGray
+} else {
     Write-Host ""
     Write-Host "──────────────────────────────────────────────────────────" -ForegroundColor Cyan
-    Write-Host "  AI-generated release notes (preview)" -ForegroundColor Cyan
+    if ($agentUsed) {
+        Write-Host "  Release notes (preview) — What's New: AI ($($script:ReleaseAgent.Backend)), sections: commit-derived" -ForegroundColor Cyan
+    } else {
+        Write-Host "  Release notes (preview) — commit-derived sections" -ForegroundColor Cyan
+    }
     Write-Host "──────────────────────────────────────────────────────────" -ForegroundColor Cyan
     Write-Host $releaseNotes
     Write-Host "──────────────────────────────────────────────────────────" -ForegroundColor Cyan
-} else {
     if (-not $useAgent) {
-        Write-Host "  AI release notes disabled by default — pass -Agent auto to enable." -ForegroundColor DarkGray
-    } elseif (-not $changesText) {
-        Write-Host "  No changes to summarize — skipping AI release notes." -ForegroundColor DarkGray
-    } else {
-        Write-Host "  No AI agent available — falling back to the raw commit list." -ForegroundColor DarkGray
+        Write-Host "  (AI What's New disabled by default — pass -Agent auto to enable.)" -ForegroundColor DarkGray
+    } elseif (-not $agentUsed) {
+        Write-Host "  (No AI agent available — What's New omitted.)" -ForegroundColor DarkGray
     }
-    $releaseNotes = $changesText
 }
 
 # ── Resolve the effective tag message ──────────────────────────────────
@@ -487,9 +571,9 @@ if ($isDryRun) {
         Write-Host "  Note:          tag '$newTag' already exists (would be overwritten)" -ForegroundColor Yellow
     }
     if ($agentUsed) {
-        Write-Host "  Release notes: AI-generated ($($script:ReleaseAgent.Backend))" -ForegroundColor Green
+        Write-Host "  Release notes: What's New (AI via $($script:ReleaseAgent.Backend)) + commit sections" -ForegroundColor Green
     } else {
-        Write-Host "  Release notes: raw commit list"
+        Write-Host "  Release notes: commit-derived sections"
     }
     Write-Host ""
     Write-Host "  Run with -Apply to actually create and push the tag." -ForegroundColor Cyan
