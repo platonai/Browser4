@@ -171,6 +171,44 @@ object ArtifactValidator {
             }
         }
 
+        // manifest.name must match the pom artifactId — PluginService.getPlugin()
+        // matches by manifest name (or JAR file name), so a mismatch breaks lookup.
+        val manifestName = Regex(""""name"\s*:\s*"([^"]+)""").find(
+            pluginJsonFile.takeIf { it.exists() }?.readText().orEmpty()
+        )?.groupValues?.get(1)
+        if (manifestName != null && pomFile.exists()) {
+            val artifactId = Regex("""<artifactId>\s*([^<\s]+)\s*</artifactId>""")
+                .findAll(pomFile.readText())
+                .map { it.groupValues[1] }
+                .lastOrNull() // last one = project-level artifactId (after <parent>)
+            if (artifactId != null && artifactId != manifestName) {
+                issues += ValidationIssue(Severity.WARNING,
+                    "plugin.json 'name' ('$manifestName') does not match pom <artifactId> ('$artifactId') — " +
+                        "PluginService.getPlugin() lookup by name will fail",
+                    "browser4-plugin.json")
+            }
+        }
+
+        // Browser-side JS resources referenced by Service classes must exist
+        // under src/main/resources — a loadResource("/seo/x.js") with no matching
+        // file blows up at runtime with IllegalStateException.
+        val resourcesDir = File(dir, "src/main/resources")
+        val jsLoadRefs = dir.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .flatMap { f ->
+                Regex("""loadResource\("/([^"]+\.js)"\)""").findAll(f.readText())
+                    .map { it.groupValues[1] }
+            }
+            .toList()
+        jsLoadRefs.forEach { ref ->
+            if (!File(resourcesDir, ref).exists()) {
+                issues += ValidationIssue(Severity.WARNING,
+                    "Service loads '/$ref' but no such file exists under src/main/resources — " +
+                        "runtime loadResource will throw",
+                    ref)
+            }
+        }
+
         return ValidationResult.of(issues)
     }
 
@@ -287,6 +325,15 @@ object ArtifactValidator {
         // Check for domain override
         if (!content.contains(Regex("""override\s+val\s+domain\s*="""))) {
             issues += ValidationIssue(Severity.WARNING, "Missing 'override val domain' — will use default", fileName)
+        }
+
+        // Browser-tool executors should receive the WebDriver (current page) as
+        // receiver — a Unit receiver means tools cannot access the page.
+        val receiverMatch = Regex("""override\s+val\s+receiverClass\s*=\s*([\w.]+)::class""").find(content)
+        if (receiverMatch != null && receiverMatch.groupValues[1] !in setOf("WebDriver", "ai.platon.pulsar.api.WebDriver")) {
+            issues += ValidationIssue(Severity.WARNING,
+                "receiverClass is '${receiverMatch.groupValues[1]}' — browser tools should use WebDriver::class " +
+                    "so they receive the current page", fileName)
         }
 
         // Check for callFunctionOn override

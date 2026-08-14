@@ -54,6 +54,13 @@ object ArtifactScaffolds {
     /**
      * Generate a complete Browser4 plugin scaffold.
      *
+     * Browser4-targeted optimizations beyond a plain Kotlin skeleton:
+     * - the generated tool runs browser-side JS via [WebDriver.evaluateValue]
+     *   (the browser-first plugin form, mirroring browser4-seo's extract-meta.js)
+     * - a Service layer that loads the JS resource from the classpath
+     * - a build.ps1 that builds, verifies the JAR structure (manifest +
+     *   auto-config imports + classes) and deploys via REST or copy
+     *
      * @param pluginName kebab-case plugin name (e.g., "browser4-seo")
      * @param domain tool domain (e.g., "seo")
      * @param basePackage Kotlin base package (e.g., "ai.platon.pulsar.seo")
@@ -77,23 +84,194 @@ object ArtifactScaffolds {
         val configClass = "${className}Config"
         val autoConfigClass = "${className}AutoConfiguration"
         val toolExecutorClass = "${className}ToolExecutor"
+        val serviceClass = "${className}Service"
         val autoConfigFqn = "$basePackage.config.$autoConfigClass"
+        val jsFile = "$domain/$toolMethod.js"
 
         return linkedMapOf(
             "pom.xml" to pluginPom(pluginName, pdkVersion),
+            "build.ps1" to pluginBuildScript(pluginName, className, autoConfigClass, toolExecutorClass, jsFile),
             "src/main/resources/META-INF/browser4-plugin.json" to
                 pluginJson(pluginName, toolDescription, autoConfigFqn),
             "src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports" to
                 autoConfigFqn,
+            "src/main/resources/$jsFile" to
+                jsResourceTemplate(domain, toolMethod, toolDescription),
             "src/main/kotlin/$packagePath/config/$configClass.kt" to
                 pluginConfig(basePackage, configClass),
             "src/main/kotlin/$packagePath/config/$autoConfigClass.kt" to
-                pluginAutoConfig(basePackage, autoConfigClass, toolExecutorClass, configClass, pluginName, domain),
+                pluginAutoConfig(basePackage, autoConfigClass, toolExecutorClass, serviceClass, configClass, pluginName, domain),
+            "src/main/kotlin/$packagePath/service/$serviceClass.kt" to
+                pluginService(basePackage, serviceClass, domain, toolMethod, jsFile),
             "src/main/kotlin/$packagePath/tools/$toolExecutorClass.kt" to
-                pluginToolExecutor(basePackage, toolExecutorClass, domain, toolMethod, toolDescription),
+                pluginToolExecutor(basePackage, toolExecutorClass, serviceClass, domain, toolMethod, toolDescription),
             "README.md" to pluginReadme(pluginName, domain, toolMethod, toolDescription)
         )
     }
+
+    /**
+     * build.ps1 — one-command build + JAR verification + deploy, mirroring
+     * browser4-seo's build script (mvn package → jar tf structural checks →
+     * copy to plugins dir or REST install).
+     */
+    private fun pluginBuildScript(
+        pluginName: String,
+        className: String,
+        autoConfigClass: String,
+        toolExecutorClass: String,
+        jsFile: String,
+    ): String {
+        val configClass = "${className}Config"
+        return """
+            # build.ps1 — Build, verify, and deploy the $pluginName plugin
+            #
+            # Usage:
+            #   .\build.ps1                  # Build + verify JAR structure
+            #   .\build.ps1 -DeployDir ..    # Build + copy JAR to a plugins directory
+            #   .\build.ps1 -RestInstall     # Build + install via REST API
+            #
+            param(
+                [string]${'$'}DeployDir = "",
+                [switch]${'$'}RestInstall,
+                [string]${'$'}RestUrl = "http://localhost:8182"
+            )
+
+            ${'$'}ErrorActionPreference = "Stop"
+
+            # Resolve the plugin directory (where this script lives)
+            ${'$'}PluginDir = Split-Path -Parent ${'$'}MyInvocation.MyCommand.Path
+            Push-Location ${'$'}PluginDir
+
+            try {
+                Write-Host "[1/3] Building $pluginName..." -ForegroundColor Cyan
+                mvn package -DskipTests -q
+                if (${'$'}LASTEXITCODE -ne 0) {
+                    throw "Maven build failed (exit code ${'$'}LASTEXITCODE)"
+                }
+
+                # Find the built JAR
+                ${'$'}Jar = Get-ChildItem "target/$pluginName-*.jar" |
+                    Where-Object { ${'$'}_.Name -notmatch "sources|javadoc" } |
+                    Select-Object -First 1
+                if (-not ${'$'}Jar) {
+                    throw "No JAR found in target/ after build"
+                }
+                Write-Host "[1/3] Built: ${'$'}(${'$'}Jar.Name)" -ForegroundColor Green
+
+                Write-Host "[2/3] Verifying JAR structure..." -ForegroundColor Cyan
+                ${'$'}jarContents = jar tf ${'$'}Jar.FullName
+                ${'$'}checks = @(
+                    @{ Name = "plugin manifest";     Pattern = "META-INF/browser4-plugin.json" },
+                    @{ Name = "auto-config imports"; Pattern = "META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports" },
+                    @{ Name = "js resource";         Pattern = "$jsFile" },
+                    @{ Name = "${'$'}autoConfigClass"; Pattern = "ai/platon/pulsar/${'$'}([a-z]+)/config/${'$'}autoConfigClass.class" },
+                    @{ Name = "${'$'}toolExecutorClass"; Pattern = "ai/platon/pulsar/${'$'}([a-z]+)/tools/${'$'}toolExecutorClass.class" }
+                )
+                foreach (${'$'}check in ${'$'}checks) {
+                    if (${'$'}jarContents -notcontains ${'$'}check.Pattern) {
+                        throw "JAR verification failed: missing ${'$'}(${'$'}check.Name) (${'$'}(${'$'}check.Pattern))"
+                    }
+                }
+                Write-Host "[2/3] All required entries present in JAR" -ForegroundColor Green
+
+                Write-Host "[3/3] Deploying..." -ForegroundColor Cyan
+                if (${'$'}DeployDir) {
+                    ${'$'}dest = if (Test-Path ${'$'}DeployDir -PathType Container) { ${'$'}DeployDir } else { (New-Item -ItemType Directory -Force -Path ${'$'}DeployDir).FullName }
+                    Copy-Item ${'$'}Jar.FullName ${'$'}dest -Force
+                    Write-Host "[3/3] Copied to: ${'$'}dest\${'$'}(${'$'}Jar.Name)" -ForegroundColor Green
+                    Write-Host "      Restart Browser4 to load the plugin." -ForegroundColor Yellow
+                }
+                elseif (${'$'}RestInstall) {
+                    ${'$'}response = curl.exe -s -X POST "${'$'}RestUrl/api/plugins/install" -F "file=@${'$'}(${'$'}Jar.FullName)"
+                    Write-Host "[3/3] REST install response: ${'$'}response" -ForegroundColor Green
+                }
+                else {
+                    Write-Host "[3/3] No deploy target specified." -ForegroundColor Yellow
+                    Write-Host "      JAR ready at: ${'$'}(${'$'}Jar.FullName)" -ForegroundColor Gray
+                    Write-Host "      To deploy: copy to Browser4's plugins/ dir, or rerun with -DeployDir or -RestInstall" -ForegroundColor Gray
+                }
+            }
+            finally {
+                Pop-Location
+            }
+        """.trimIndent()
+    }
+
+    /**
+     * Browser-side JS resource executed via WebDriver.evaluateValue — the
+     * browser-first plugin form (mirrors browser4-seo's extract-meta.js).
+     */
+    private fun jsResourceTemplate(domain: String, toolMethod: String, toolDescription: String): String = """
+        /**
+         * $toolMethod.js — $domain plugin ($toolDescription)
+         *
+         * Runs inside the browser page (via WebDriver.evaluateValue / tab.eval).
+         * Returns a plain object serialized as JSON.
+         */
+        (function () {
+          'use strict';
+
+          var result = {
+            url: location.href,
+            data: {}
+          };
+
+          // TODO: implement $toolMethod logic here, e.g.:
+          // result.data.headings = Array.from(document.querySelectorAll('h1'))
+          //   .map(function (h) { return h.textContent.trim(); });
+
+          return JSON.stringify(result, null, 2);
+        })();
+    """.trimIndent()
+
+    /**
+     * Service layer that loads the JS resource from the classpath and runs it
+     * on the current page via [WebDriver.evaluateValue] — the browser-first
+     * advantage over static HTML scraping.
+     */
+    private fun pluginService(
+        basePackage: String,
+        serviceClass: String,
+        domain: String,
+        toolMethod: String,
+        jsFile: String,
+    ): String = """
+        package $basePackage.service
+
+        import ai.platon.pulsar.api.WebDriver
+        import org.slf4j.LoggerFactory
+
+        /**
+         * Business logic for the $domain plugin.
+         *
+         * Loads a browser-side JavaScript resource from the classpath and executes
+         * it via [WebDriver.evaluateValue]. The script runs in the real page
+         * context, so it sees the fully rendered DOM.
+         */
+        open class $serviceClass {
+            private val logger = LoggerFactory.getLogger($serviceClass::class.java)
+
+            private val script: String by lazy { loadResource("/$jsFile") }
+
+            /**
+             * Run the browser-side script on the current page.
+             */
+            fun $toolMethod(driver: WebDriver): Any? {
+                requireNotNull(driver) { "$toolMethod requires a WebDriver (current page context)" }
+                return try {
+                    driver.evaluateValue(script)
+                } catch (e: Exception) {
+                    logger.warn("$domain $toolMethod failed on {}: {}", driver.currentUrl(), e.message)
+                    mapOf("error" to (e.message ?: "unknown error"))
+                }
+            }
+
+            private fun loadResource(path: String): String {
+                return javaClass.getResourceAsStream(path)?.bufferedReader()?.use { it.readText() }
+                    ?: throw IllegalStateException("$domain script resource not found on classpath: ${'$'}path")
+            }
+        }
+    """.trimIndent()
 
     private fun pluginPom(pluginName: String, pdkVersion: String): String = """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -186,6 +364,7 @@ object ArtifactScaffolds {
         basePackage: String,
         autoConfigClass: String,
         toolExecutorClass: String,
+        serviceClass: String,
         configClass: String,
         pluginName: String,
         domain: String
@@ -193,6 +372,7 @@ object ArtifactScaffolds {
         val camel = toCamelCase(pluginName.removePrefix("browser4-"))
         val configBean = "${camel}Config"
         val executorBean = "${camel}ToolExecutor"
+        val serviceBean = "${camel}Service"
 
         return """
             package $basePackage.config
@@ -206,6 +386,7 @@ object ArtifactScaffolds {
             import ai.platon.pulsar.agentic.tools.ToolMount
             import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
             import ai.platon.pulsar.common.config.MutableConfig
+            import $basePackage.service.$serviceClass
             import $basePackage.tools.$toolExecutorClass
 
             /**
@@ -234,9 +415,13 @@ object ArtifactScaffolds {
                 @ConditionalOnMissingBean(name = ["$configBean"])
                 open fun ${camel}Config(config: MutableConfig) = $configClass(config)
 
+                @Bean(name = ["$serviceBean"])
+                @ConditionalOnMissingBean(name = ["$serviceBean"])
+                open fun ${camel}Service() = $serviceClass()
+
                 @Bean(name = ["$executorBean"])
                 @ConditionalOnMissingBean(name = ["$executorBean"])
-                open fun ${camel}ToolExecutor() = $toolExecutorClass()
+                open fun ${camel}ToolExecutor(service: $serviceClass) = $toolExecutorClass(service)
             }
         """.trimIndent()
     }
@@ -244,6 +429,7 @@ object ArtifactScaffolds {
     private fun pluginToolExecutor(
         basePackage: String,
         toolExecutorClass: String,
+        serviceClass: String,
         domain: String,
         toolMethod: String,
         toolDescription: String
@@ -252,25 +438,32 @@ object ArtifactScaffolds {
 
         import ai.platon.pulsar.agentic.model.ToolSpec
         import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
+        import ai.platon.pulsar.api.WebDriver
+        import $basePackage.service.$serviceClass
+        import kotlin.reflect.KClass
 
         /**
          * Tool executor for the "$domain" domain.
          *
-         * Register tools in [init] and dispatch them in [callFunctionOn].
+         * Tools run browser-side JS via [$serviceClass], which executes a
+         * classpath script with [WebDriver.evaluateValue] — so they see the
+         * fully rendered DOM.
          */
-        class $toolExecutorClass : AbstractToolExecutor() {
+        open class $toolExecutorClass(
+            private val service: $serviceClass,
+        ) : AbstractToolExecutor() {
 
             override val domain = "$domain"
-            override val receiverClass = Unit::class
+
+            /** Tools receive the current page as the receiver. */
+            override val receiverClass: KClass<*> = WebDriver::class
 
             init {
                 toolSpec["$toolMethod"] = ToolSpec(
                     domain = domain,
                     method = "$toolMethod",
-                    arguments = listOf(
-                        ToolSpec.Arg("param", "String", "null")
-                    ),
-                    returnType = "String",
+                    arguments = emptyList(),
+                    returnType = "Any",
                     description = "$toolDescription"
                 )
             }
@@ -280,13 +473,12 @@ object ArtifactScaffolds {
                 domain: String, functionName: String, args: Map<String, Any?>, receiver: Any
             ): Any? {
                 require(domain == this.domain) { "Unsupported domain: ${'$'}domain" }
+                val driver = receiver as? WebDriver
+                    ?: throw IllegalArgumentException(
+                        "${'$'}domain.${'$'}functionName requires a WebDriver receiver (current page context)"
+                    )
                 return when (functionName) {
-                    "$toolMethod" -> {
-                        validateArgs(args, allowed = setOf("param"), required = emptySet(), functionName)
-                        val param = paramString(args, "param", functionName, required = false, default = null)
-                        // TODO: Implement tool logic
-                        "Result from $toolMethod(param=${'$'}param)"
-                    }
+                    "$toolMethod" -> service.$toolMethod(driver)
                     else -> throw IllegalArgumentException("Unsupported $domain method: ${'$'}functionName(${'$'}{args.keys})")
                 }
             }
@@ -304,9 +496,17 @@ object ArtifactScaffolds {
 
         | Method | Description |
         |--------|-------------|
-        | `$domain.$toolMethod` | $toolDescription |
+        | `$domain.$toolMethod` | $toolDescription (runs browser-side JS via WebDriver.evaluateValue) |
 
         ## Build
+
+        ```powershell
+        .\build.ps1                  # build + verify JAR structure
+        .\build.ps1 -DeployDir ..    # build + copy JAR to a plugins directory
+        .\build.ps1 -RestInstall     # build + install via REST API (default http://localhost:8182)
+        ```
+
+        Or with Maven directly:
 
         ```bash
         mvn -pl browser4-plugins/$pluginName -am compile -DskipTests
@@ -315,8 +515,9 @@ object ArtifactScaffolds {
 
         ## Deploy
 
-        Copy the JAR to the Browser4 plugins directory, or use REST install.
-        Restart Browser4 to activate.
+        `build.ps1 -RestInstall` installs the JAR through the REST API
+        (`POST /api/plugins/install`); `-DeployDir` copies it to a plugins
+        directory. Restart Browser4 to activate.
     """.trimIndent()
 
     // ==================== Skill ====================

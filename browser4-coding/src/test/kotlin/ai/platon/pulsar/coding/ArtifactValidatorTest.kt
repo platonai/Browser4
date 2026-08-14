@@ -100,6 +100,89 @@ class ArtifactValidatorTest {
             "Expected no errors but got: ${result.issues.filter { it.severity == Severity.ERROR }}")
     }
 
+    @Test
+    @DisplayName("validatePlugin warns when receiverClass is not WebDriver")
+    fun validatePluginReceiverClassWarning() {
+        val pluginDir = tempDir.resolve("rc-plugin").toFile()
+        pluginDir.mkdirs()
+        pluginDir.resolve("pom.xml").writeText(
+            "<project><parent><artifactId>browser4-pdk</artifactId></parent><artifactId>rc-plugin</artifactId></project>")
+        val metaDir = pluginDir.resolve("src/main/resources/META-INF")
+        metaDir.mkdirs()
+        metaDir.resolve("browser4-plugin.json").writeText(
+            """{"name": "rc-plugin", "version": "1.0.0", "autoConfigurationClasses": ["x.Y"]}""")
+        val springDir = pluginDir.resolve("src/main/resources/META-INF/spring")
+        springDir.mkdirs()
+        springDir.resolve("org.springframework.boot.autoconfigure.AutoConfiguration.imports")
+            .writeText("ai.platon.pulsar.test.config.TestPluginAutoConfiguration")
+        val kotlinDir = pluginDir.resolve("src/main/kotlin/ai/platon/pulsar/test/config")
+        kotlinDir.mkdirs()
+        kotlinDir.resolve("TestPluginAutoConfiguration.kt").writeText("""
+            package ai.platon.pulsar.test.config
+            import ai.platon.pulsar.agentic.tools.ToolMount
+            class TestPluginAutoConfiguration : ToolMount {
+                override fun getToolExecutors() = emptyList<ai.platon.pulsar.agentic.tools.builtin.ToolExecutor>()
+            }
+        """.trimIndent())
+        val toolDir = pluginDir.resolve("src/main/kotlin/ai/platon/pulsar/test/tools")
+        toolDir.mkdirs()
+        toolDir.resolve("TestPluginToolExecutor.kt").writeText("""
+            package ai.platon.pulsar.test.tools
+            import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
+            class TestPluginToolExecutor : AbstractToolExecutor() {
+                override val domain = "test"
+                override val receiverClass = Unit::class
+                init { toolSpec["doTest"] = ToolSpec(domain = "test", method = "doTest") }
+                override suspend fun callFunctionOn(
+                    domain: String, functionName: String, args: Map<String, Any?>, receiver: Any
+                ): Any? = "ok"
+            }
+        """.trimIndent())
+
+        val result = ArtifactValidator.validatePlugin(pluginDir.absolutePath)
+        assertTrue(result.issues.any { it.message.contains("receiverClass") && it.message.contains("WebDriver") },
+            "Expected receiverClass warning, got: ${result.issues}")
+    }
+
+    @Test
+    @DisplayName("validatePlugin warns when manifest name differs from artifactId")
+    fun validatePluginManifestNameMismatch() {
+        val pluginDir = tempDir.resolve("name-mismatch").toFile()
+        pluginDir.mkdirs()
+        pluginDir.resolve("pom.xml").writeText(
+            "<project><parent><artifactId>browser4-pdk</artifactId></parent><artifactId>real-artifact</artifactId></project>")
+        val metaDir = pluginDir.resolve("src/main/resources/META-INF")
+        metaDir.mkdirs()
+        metaDir.resolve("browser4-plugin.json").writeText(
+            """{"name": "different-name", "version": "1.0.0"}""")
+
+        val result = ArtifactValidator.validatePlugin(pluginDir.absolutePath)
+        assertTrue(result.issues.any { it.message.contains("does not match pom") },
+            "Expected name/artifactId mismatch warning, got: ${result.issues}")
+    }
+
+    @Test
+    @DisplayName("validatePlugin warns when Service loads a missing JS resource")
+    fun validatePluginMissingJsResource() {
+        val pluginDir = tempDir.resolve("js-missing").toFile()
+        pluginDir.mkdirs()
+        pluginDir.resolve("pom.xml").writeText(
+            "<project><parent><artifactId>browser4-pdk</artifactId></parent><artifactId>js-missing</artifactId></project>")
+        val kotlinDir = pluginDir.resolve("src/main/kotlin/ai/platon/pulsar/test/service")
+        kotlinDir.mkdirs()
+        kotlinDir.resolve("TestService.kt").writeText("""
+            package ai.platon.pulsar.test.service
+            class TestService {
+                private val script: String by lazy { loadResource("/test/missing.js") }
+                private fun loadResource(path: String): String = path
+            }
+        """.trimIndent())
+
+        val result = ArtifactValidator.validatePlugin(pluginDir.absolutePath)
+        assertTrue(result.issues.any { it.message.contains("missing.js") && it.message.contains("loadResource") },
+            "Expected missing JS resource warning, got: ${result.issues}")
+    }
+
     // --- Plugin JSON validation ---
 
     @Test

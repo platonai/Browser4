@@ -22,10 +22,67 @@ class ArtifactScaffoldsTest {
         )
 
         assertTrue(result.containsKey("pom.xml"))
+        assertTrue(result.containsKey("build.ps1"))
         assertTrue(result.containsKey("src/main/resources/META-INF/browser4-plugin.json"))
         assertTrue(result.containsKey("src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports"))
+        assertTrue(result.containsKey("src/main/resources/seo/extractMeta.js"))
+        assertTrue(result.containsKey("src/main/kotlin/ai/platon/pulsar/seo/service/SeoService.kt"))
         assertTrue(result.containsKey("README.md"))
-        assertEquals(7, result.size)
+        assertEquals(10, result.size)
+    }
+
+    @Test
+    @DisplayName("pluginScaffold build.ps1 verifies JAR structure")
+    fun pluginScaffoldBuildScript() {
+        val result = ArtifactScaffolds.pluginScaffold(
+            pluginName = "browser4-seo",
+            domain = "seo",
+            basePackage = "ai.platon.pulsar.seo",
+            toolMethod = "extractMeta",
+            toolDescription = "Extract SEO metadata from the page"
+        )
+
+        val script = result["build.ps1"]!!
+        assertTrue(script.contains("mvn package -DskipTests"))
+        assertTrue(script.contains("META-INF/browser4-plugin.json"))
+        assertTrue(script.contains("AutoConfiguration.imports"))
+        assertTrue(script.contains("seo/extractMeta.js"))
+        assertTrue(script.contains("-RestInstall"))
+    }
+
+    @Test
+    @DisplayName("pluginScaffold generates browser-side JS resource")
+    fun pluginScaffoldJsResource() {
+        val result = ArtifactScaffolds.pluginScaffold(
+            pluginName = "browser4-seo",
+            domain = "seo",
+            basePackage = "ai.platon.pulsar.seo",
+            toolMethod = "extractMeta",
+            toolDescription = "Extract SEO metadata"
+        )
+
+        val js = result["src/main/resources/seo/extractMeta.js"]!!
+        assertTrue(js.contains("(function"))
+        assertTrue(js.contains("location.href"))
+        assertTrue(js.contains("JSON.stringify"))
+    }
+
+    @Test
+    @DisplayName("pluginScaffold Service loads JS and runs via WebDriver.evaluateValue")
+    fun pluginScaffoldService() {
+        val result = ArtifactScaffolds.pluginScaffold(
+            pluginName = "browser4-seo",
+            domain = "seo",
+            basePackage = "ai.platon.pulsar.seo",
+            toolMethod = "extractMeta",
+            toolDescription = "Extract SEO metadata"
+        )
+
+        val service = result["src/main/kotlin/ai/platon/pulsar/seo/service/SeoService.kt"]!!
+        assertTrue(service.contains("WebDriver"))
+        assertTrue(service.contains("evaluateValue"))
+        assertTrue(service.contains("loadResource(\"/seo/extractMeta.js\")"))
+        assertTrue(service.contains("fun extractMeta(driver: WebDriver): Any?"))
     }
 
     @Test
@@ -97,6 +154,9 @@ class ArtifactScaffoldsTest {
         assertTrue(executorFile.contains("callFunctionOn"))
         assertTrue(executorFile.contains("extractMeta"))
         assertTrue(executorFile.contains("package ai.platon.pulsar.seo.tools"))
+        assertTrue(executorFile.contains("receiverClass: KClass<*> = WebDriver::class"))
+        assertTrue(executorFile.contains("private val service: SeoService"))
+        assertTrue(executorFile.contains("service.extractMeta(driver)"))
     }
 
     @Test
