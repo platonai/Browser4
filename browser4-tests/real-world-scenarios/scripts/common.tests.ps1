@@ -22,8 +22,9 @@ Tests common.ps1 functionality:
   3. Invoke-Agent function signature and argument forwarding
   4. Path resolution ($IssuesDraftDir, $RepoRoot)
   5. ConvertFrom-IssuesSection parsing
-  6. Write-IssuesToDraft file output
-  7. Invoke-Agent backward compatibility
+  6. Write-IssuesToDraft file output (.issues.json first, .issues.md derived, no .full.md)
+  7. ConvertTo-IssuesMarkdown (JSON → Markdown rendering)
+  8. Invoke-Agent backward compatibility
 
 .NOTES
 Each test group runs in a clean scope by dot-sourcing common.ps1 in a script block.
@@ -966,17 +967,10 @@ Fix.
 OK.
 '@
 
-        Write-TestGroup 'Writes full.md file'
+        Write-TestGroup 'Does NOT write .full.md (removed — no longer meaningful)'
         Write-IssuesToDraft -ScenarioName 'unit-test' -Content $sampleContent -OutputDirectory $tempDir
         $fullFiles = Get-ChildItem -Path $tempDir -Filter '*.full.md'
-        Assert-Equal 'Exactly 1 full.md file' 1 $fullFiles.Count
-
-        Write-TestGroup 'Full.md file is not empty'
-        $fullContent = Get-Content -Path $fullFiles[0].FullName -Raw -Encoding UTF8
-        Assert-True 'Full content non-empty' (-not [string]::IsNullOrWhiteSpace($fullContent))
-
-        Write-TestGroup 'Full.md file name contains scenario name'
-        Assert-True 'Name contains unit-test' $fullFiles[0].Name.Contains('unit-test')
+        Assert-Equal 'Exactly 0 full.md files' 0 $fullFiles.Count
 
         Write-TestGroup 'Writes consolidated .issues.md file (not individual issue files)'
         $issueFiles = Get-ChildItem -Path $tempDir -Filter '*.issues.md'
@@ -1006,8 +1000,21 @@ OK.
         Assert-True 'Contains Actual Behavior section' $issueContent.Contains('#### Actual Behavior')
 
         Write-TestGroup 'Consolidated issues file contains source reference'
-        Assert-True 'Contains Source link to full.md' $issueContent.Contains('Source:')
+        Assert-True 'Contains Source line' $issueContent.Contains('Source:')
+        Assert-True 'Source references the .issues.json filename' $issueContent.Contains('.issues.json`')
         Assert-True 'Contains Mode' $issueContent.Contains('Mode:')
+
+        Write-TestGroup 'Canonical .issues.json is written alongside the markdown'
+        $jsonFiles = Get-ChildItem -Path $tempDir -Filter '*.issues.json'
+        Assert-Equal 'Exactly 1 issues.json' 1 $jsonFiles.Count
+        Assert-True 'JSON file is non-empty' ($jsonFiles[0].Length -gt 10)
+
+        Write-TestGroup '.issues.md is derived from the .issues.json file'
+        $jsonText = Get-Content -Path $jsonFiles[0].FullName -Raw -Encoding UTF8
+        $parsed = $jsonText | ConvertFrom-Json
+        Assert-Equal 'meta.scenario' 'unit-test' $parsed.meta.scenario
+        Assert-True 'meta.source references the .issues.json filename' $parsed.meta.source.Contains('.issues.json')
+        Assert-Equal 'issues count' 1 $parsed.issues.Count
     }
     finally {
         Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -1913,7 +1920,7 @@ Write-Host '━━━ Write-IssuesToDraft / JSON Path ━━━' -ForegroundColo
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
     try {
-        Write-TestGroup 'JSON evaluation: writes both .full.md and .issues.md'
+        Write-TestGroup 'JSON evaluation: writes .issues.json first, then .issues.md (no .full.md)'
         $jsonContent = @'
 ## Task Result
 Completed.
@@ -1952,7 +1959,7 @@ Steps taken.
 
         $fullFiles = Get-ChildItem -Path $tempDir -Filter '*.full.md'
         $issueFiles = Get-ChildItem -Path $tempDir -Filter '*.issues.md'
-        Assert-Equal 'Exactly 1 full.md' 1 $fullFiles.Count
+        Assert-Equal 'Exactly 0 full.md (removed)' 0 $fullFiles.Count
         Assert-Equal 'Exactly 1 issues.md' 1 $issueFiles.Count
 
         $issueContent = Get-Content -Path $issueFiles[0].FullName -Raw -Encoding UTF8
@@ -2005,7 +2012,7 @@ Steps taken.
         $parsed = $jsonText | ConvertFrom-Json
         Assert-Equal 'meta.scenario' 'json-test' $parsed.meta.scenario
         Assert-Equal 'meta.mode' 'dev' $parsed.meta.mode
-        Assert-True 'meta.source references full.md' $parsed.meta.source.Contains('.full.md')
+        Assert-True 'meta.source references the .issues.json filename' $parsed.meta.source.Contains('.issues.json')
         Assert-Equal 'issues count' 1 $parsed.issues.Count
         Assert-Equal 'issue title' 'JSON-parsed issue' $parsed.issues[0].title
         Assert-Equal 'issue severity' 'Critical' $parsed.issues[0].severity
@@ -2014,6 +2021,17 @@ Steps taken.
         Assert-Equal 'first section label' 'Reproduction' $parsed.issues[0].sections[0].label
         Assert-NotNullOrEmpty 'background.task is present' $parsed.background.task
         Assert-True 'review.decision is null (no human review yet)' ($null -eq $parsed.issues[0].review.decision)
+
+        Write-TestGroup 'JSON path: assessment is preserved in the JSON'
+        Assert-Equal 'assessment.completionStatus' 'Successful' $parsed.assessment.completionStatus
+        Assert-Equal 'assessment.successRate' '95%' $parsed.assessment.successRate
+        Assert-Equal 'assessment.issuesFound' 1 $parsed.assessment.issuesFound
+        Assert-Equal 'assessment.usabilityRating' 8 $parsed.assessment.usabilityRating
+
+        Write-TestGroup 'JSON path: .issues.md is fully derived from .issues.json (idempotent re-render)'
+        $reRendered = ConvertTo-IssuesMarkdown -JsonFilePath $jsonFiles[0].FullName
+        $mdContent = Get-Content -Path $issueFiles[0].FullName -Raw -Encoding UTF8
+        Assert-True 'Re-rendering the JSON reproduces the written .issues.md exactly' ($reRendered -eq $mdContent)
     }
     finally {
         Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -2021,7 +2039,134 @@ Steps taken.
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Test group 26: $generalPrompt — JSON format section
+# Test group 26: ConvertTo-IssuesMarkdown — .issues.md derived from .issues.json
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ ConvertTo-IssuesMarkdown (JSON → Markdown) ━━━' -ForegroundColor Yellow
+
+& {
+    $browser4cliMode = 'dev'
+    . "$PSScriptRoot/common.ps1"
+
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "b4cli-md-from-json-$(Get-Random)"
+    New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+
+    try {
+        Write-TestGroup 'ConvertTo-IssuesMarkdown renders a canonical JSON to markdown'
+        $bg = @{
+            TaskSummary    = 'Compare product prices.'
+            ExecutionTrace = 'Ran commands.'
+            Commands       = 'b4w.ps1 crawl'
+            Workarounds    = ''
+        }
+        $assessment = @{
+            CompletionStatus         = 'Successful'
+            SuccessRate              = '100%'
+            IssuesFound              = 2
+            MajorBlockers            = ''
+            MostConfusingAspects     = 'None'
+            MostValuableImprovements = 'Docs'
+            UsabilityRating          = 9
+        }
+        $issues = @(
+            @{
+                Title        = 'High sev issue'
+                Severity     = 'High'
+                Category     = 'Reliability'
+                Reproduction = 'Run cmd'
+                Expected     = 'Works'
+                Actual       = 'Fails'
+                RootCause    = ''
+                CodePointer  = 'src/main.rs:10'
+                Suggestion   = 'Fix it'
+                Review       = ''
+            },
+            @{
+                Title        = 'Low sev issue'
+                Severity     = 'Low'
+                Category     = 'UX'
+                Reproduction = ''
+                Expected     = ''
+                Actual       = ''
+                RootCause    = ''
+                CodePointer  = ''
+                Suggestion   = ''
+                Review       = ''
+            }
+        )
+        $json = ConvertTo-IssueJson -ScenarioName 'md-test' `
+            -SourceFile '20260814-000000-md-test.issues.json' `
+            -Timestamp '20260814-000000' `
+            -Mode 'dev' `
+            -Background $bg `
+            -Assessment $assessment `
+            -Issues $issues
+        $jsonPath = Join-Path $tempDir '20260814-000000-md-test.issues.json'
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText($jsonPath, $json, $utf8NoBom)
+
+        $md = ConvertTo-IssuesMarkdown -JsonFilePath $jsonPath
+
+        Assert-True 'Header contains scenario name' $md.Contains('# Issues: md-test')
+        Assert-True 'Source line references the .issues.json filename' $md.Contains('20260814-000000-md-test.issues.json')
+        Assert-True 'Contains background task' $md.Contains('Compare product prices.')
+        Assert-True 'Contains key commands' $md.Contains('b4w.ps1 crawl')
+        Assert-True 'Contains both issues' ($md.Contains('High sev issue') -and $md.Contains('Low sev issue'))
+        Assert-True 'Contains Overall Assessment' $md.Contains('## Overall Assessment')
+        Assert-True 'Contains usability rating' $md.Contains('**Usability Rating:** 9/10')
+        Assert-True 'Contains How to Reproduce' $md.Contains('## How to Reproduce')
+        Assert-True 'Contains Per-Issue Reproduction Steps' $md.Contains('### Per-Issue Reproduction Steps')
+        Assert-True 'Issues sorted by severity (High before Low)' ($md.IndexOf('High sev issue') -lt $md.IndexOf('Low sev issue'))
+        Assert-True 'No .full.md reference anywhere' (-not $md.Contains('.full.md'))
+
+        Write-TestGroup 'ConvertTo-IssuesMarkdown: round-trip through ConvertFrom-IssueJson'
+        $roundTrip = ConvertFrom-IssueJson -Json $json
+        Assert-Equal 'ScenarioName round-trips' 'md-test' $roundTrip.ScenarioName
+        Assert-Equal 'SourceFile round-trips' '20260814-000000-md-test.issues.json' $roundTrip.SourceFile
+        Assert-Equal 'Assessment round-trips' 'Successful' $roundTrip.Assessment.CompletionStatus
+        Assert-Equal 'Assessment rating round-trips' 9 $roundTrip.Assessment.UsabilityRating
+        Assert-Equal 'Issues count round-trips' 2 $roundTrip.Issues.Count
+
+        Write-TestGroup 'ConvertTo-IssuesMarkdown: empty issues fallback'
+        $emptyJson = ConvertTo-IssueJson -ScenarioName 'empty-test' `
+            -SourceFile '20260814-000000-empty-test.issues.json' `
+            -Timestamp '20260814-000000' `
+            -Mode 'production' `
+            -Background @{ TaskSummary = 'T'; ExecutionTrace = 'E' } `
+            -Issues @()
+        $emptyPath = Join-Path $tempDir '20260814-000000-empty-test.issues.json'
+        [System.IO.File]::WriteAllText($emptyPath, $emptyJson, $utf8NoBom)
+        $emptyMd = ConvertTo-IssuesMarkdown -JsonFilePath $emptyPath
+        Assert-True 'Empty issues → Issues Found (0)' $emptyMd.Contains('## Issues Found (0)')
+        Assert-True 'Empty issues points to the .issues.json for details' $emptyMd.Contains('20260814-000000-empty-test.issues.json')
+        Assert-True 'Mode is rendered from the JSON' $emptyMd.Contains('**Mode:** production')
+        Assert-True 'Empty issues md has no full.md reference' (-not $emptyMd.Contains('.full.md'))
+
+        Write-TestGroup 'ConvertTo-IssuesMarkdown: production mode setup guide'
+        $prodJson = ConvertTo-IssueJson -ScenarioName 'prod-test' `
+            -SourceFile '20260814-000000-prod-test.issues.json' `
+            -Timestamp '20260814-000000' `
+            -Mode 'production' `
+            -Background @{ TaskSummary = 'T'; ExecutionTrace = 'E' } `
+            -Issues @(@{
+                Title = 'P'; Severity = 'High'; Category = 'Reliability'
+                Reproduction = 'R'; Expected = ''; Actual = ''; RootCause = ''
+                CodePointer = ''; Suggestion = ''; Review = ''
+            })
+        $prodPath = Join-Path $tempDir '20260814-000000-prod-test.issues.json'
+        [System.IO.File]::WriteAllText($prodPath, $prodJson, $utf8NoBom)
+        $prodMd = ConvertTo-IssuesMarkdown -JsonFilePath $prodPath
+        Assert-True 'Production mode renders cargo install setup' $prodMd.Contains('cargo install --path cli/browser4-cli')
+        Assert-True 'Production mode renders browser4-cli invocation' $prodMd.Contains('`browser4-cli <command>`')
+    }
+    finally {
+        Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 27: $generalPrompt — JSON format section
 # ═══════════════════════════════════════════════════════════════════════════════
 
 Write-Host ''

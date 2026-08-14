@@ -10,7 +10,7 @@
  * {
  *   "meta": {
  *     "scenario": "form-filling",            // short name
- *     "source": "20260706-...full.md",       // source .full.md filename
+ *     "source": "20260706-...issues.json",   // canonical .issues.json filename
  *     "date": "20260706-203229",             // timestamp
  *     "mode": "dev"                          // "dev" | "production"
  *   },
@@ -81,7 +81,8 @@ var ISSUE_MODEL = (function() {
 
     var result = emptyResult();
 
-    // Parse meta line: > **Source:** `file.full.md` | **Date:** ts | **Mode:** mode
+    // Parse meta line: > **Source:** `file.issues.json` | **Date:** ts | **Mode:** mode
+    // (older files referenced the removed .full.md — the regex accepts any filename)
     var metaMatch = content.match(/>\s*\*\*Source:\*\*\s*`([^`]+)`\s*\|\s*\*\*Date:\*\*\s*(\S+)\s*\|\s*\*\*Mode:\*\*\s*(\S+)/);
     if (metaMatch) {
       result.meta.source = metaMatch[1];

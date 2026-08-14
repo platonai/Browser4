@@ -868,8 +868,8 @@ function ConvertFrom-IssuesSection {
 
         Returns an array of hashtables with fields: Title, Severity, Category,
         Reproduction, Expected, Actual, RootCause, CodePointer, Review, Suggestion.
-        Returns empty array if no issues can be parsed (the full output is always
-        preserved by Write-IssuesToDraft).
+        Returns empty array if no issues can be parsed (the full evaluation data
+        is always preserved in the .issues.json written by Write-IssuesToDraft).
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -1285,16 +1285,24 @@ function ConvertTo-IssueJson {
         Takes the output of ConvertFrom-IssuesSection plus background context
         and produces a JSON string matching the schema in coworker/gui/frontend/issue-model.js.
         This is the interchange format between PowerShell scripts and the web GUI.
+
+        The .issues.json file is the SINGLE source of truth for an evaluation:
+        Write-IssuesToDraft writes it FIRST and then derives .issues.md from it
+        via ConvertTo-IssuesMarkdown.  No other output file is authoritative.
     .PARAMETER ScenarioName
         Short scenario identifier (e.g. "form-filling").
     .PARAMETER SourceFile
-        Source .full.md filename.
+        Canonical .issues.json filename this JSON is written to.
     .PARAMETER Timestamp
         ISO-style timestamp string (yyyyMMdd-HHmmss).
     .PARAMETER Mode
         "dev" or "production".
     .PARAMETER Background
         Hashtable from Extract-BackgroundContext.
+    .PARAMETER Assessment
+        Optional assessment hashtable from ConvertFrom-JsonEvaluation
+        (CompletionStatus, SuccessRate, IssuesFound, MajorBlockers,
+        MostConfusingAspects, MostValuableImprovements, UsabilityRating).
     .PARAMETER Issues
         Array of issue hashtables from ConvertFrom-IssuesSection.
     .OUTPUTS
@@ -1307,6 +1315,7 @@ function ConvertTo-IssueJson {
         [string]$Timestamp = '',
         [string]$Mode = 'dev',
         [hashtable]$Background = @{},
+        [hashtable]$Assessment = $null,
         [object[]]$Issues = @()
     )
 
@@ -1361,6 +1370,19 @@ function ConvertTo-IssueJson {
         $issueArray += $issueObj
     }
 
+    $assessmentObj = $null
+    if ($Assessment) {
+        $assessmentObj = [ordered]@{
+            completionStatus         = if ($Assessment.CompletionStatus)        { [string]$Assessment.CompletionStatus }        else { '' }
+            successRate              = if ($Assessment.SuccessRate)             { [string]$Assessment.SuccessRate }             else { '' }
+            issuesFound              = if ($null -ne $Assessment.IssuesFound)   { [int]$Assessment.IssuesFound }                else { 0 }
+            majorBlockers            = if ($Assessment.MajorBlockers)           { [string]$Assessment.MajorBlockers }           else { '' }
+            mostConfusingAspects     = if ($Assessment.MostConfusingAspects)    { [string]$Assessment.MostConfusingAspects }    else { '' }
+            mostValuableImprovements = if ($Assessment.MostValuableImprovements) { [string]$Assessment.MostValuableImprovements } else { '' }
+            usabilityRating          = if ($null -ne $Assessment.UsabilityRating) { [int]$Assessment.UsabilityRating }          else { 0 }
+        }
+    }
+
     $result = [ordered]@{
         meta       = @{
             scenario = $ScenarioName
@@ -1371,7 +1393,10 @@ function ConvertTo-IssueJson {
         background = @{
             task             = $Background.TaskSummary
             executionContext = $Background.ExecutionTrace
+            commands         = $Background.Commands
+            workarounds      = $Background.Workarounds
         }
+        assessment = $assessmentObj
         issues     = $issueArray
     }
 
@@ -1389,7 +1414,8 @@ function ConvertFrom-IssueJson {
         JSON string in the canonical issue schema format.
     .OUTPUTS
         Hashtable with keys: ScenarioName, SourceFile, Timestamp, Mode,
-        Background (hashtable), Issues (array of hashtables).
+        Background (hashtable), Assessment (hashtable or $null), Issues
+        (array of hashtables).
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -1446,6 +1472,20 @@ function ConvertFrom-IssueJson {
         $issues += $issue
     }
 
+    $assessment = $null
+    if ($data.assessment) {
+        $a = $data.assessment
+        $assessment = @{
+            CompletionStatus         = if ($a.completionStatus)        { [string]$a.completionStatus }        else { '' }
+            SuccessRate              = if ($a.successRate)             { [string]$a.successRate }             else { '' }
+            IssuesFound              = if ($null -ne $a.issuesFound)   { [int]$a.issuesFound }                else { 0 }
+            MajorBlockers            = if ($a.majorBlockers)           { [string]$a.majorBlockers }           else { '' }
+            MostConfusingAspects     = if ($a.mostConfusingAspects)    { [string]$a.mostConfusingAspects }    else { '' }
+            MostValuableImprovements = if ($a.mostValuableImprovements) { [string]$a.mostValuableImprovements } else { '' }
+            UsabilityRating          = if ($null -ne $a.usabilityRating) { [int]$a.usabilityRating }          else { 0 }
+        }
+    }
+
     return @{
         ScenarioName = $data.meta.scenario
         SourceFile   = $data.meta.source
@@ -1454,104 +1494,72 @@ function ConvertFrom-IssueJson {
         Background   = @{
             TaskSummary    = $data.background.task
             ExecutionTrace = $data.background.executionContext
+            Commands       = if ($data.background.commands)    { [string]$data.background.commands }    else { '' }
+            Workarounds    = if ($data.background.workarounds) { [string]$data.background.workarounds } else { '' }
         }
+        Assessment   = $assessment
         Issues       = $issues
     }
 }
 
 # ── Issue file output ─────────────────────────────────────────────────────────
+#
+# Pipeline (JSON first, markdown derived):
+#
+#   1. Write-IssuesToDraft parses the agent output (JSON block preferred,
+#      markdown fallback) and writes the canonical .issues.json to the
+#      issues/draft directory FIRST.
+#   2. ConvertTo-IssuesMarkdown reads that .issues.json and renders the
+#      consolidated .issues.md report from it.
+#
+# The .issues.json file is the single source of truth — no .full.md is
+# written anymore (the raw agent output already lives in .test-sessions/).
 
-function Write-IssuesToDraft {
+function ConvertTo-IssuesMarkdown {
     <#
     .SYNOPSIS
-        Write the agent evaluation output to the issues draft directory.
+        Render the consolidated .issues.md report from a canonical .issues.json file.
     .DESCRIPTION
-        Saves the complete agent output (containing A. Task Result, B. Execution Trace,
-        C. Issues Found, D. Overall Assessment) as a markdown file in the
-        issues/draft directory for downstream refinement.
+        Reads a .issues.json written by Write-IssuesToDraft / ConvertTo-IssueJson
+        and renders the consolidated markdown report: scenario background,
+        sorted issues with detail sections, overall assessment, and a practical
+        reproduction guide.  Issues are kept together because issues in one
+        scenario are often interrelated — shared root causes, shared
+        reproduction environments, or cascading failures.
 
-        Also extracts background context (Sections A + B) and parses individual
-        issues from Section C, then writes three files:
-
-          - .full.md    — complete raw agent output (verbatim reference)
-          - .issues.md  — consolidated issues with background, reproduction
-                           guide, and overall assessment (markdown)
-          - .issues.json — canonical JSON per the schema shared with
-                            coworker/gui/frontend/issue-model.js
-                           (machine-readable, for GUI / CI consumption)
-
-        Issues discovered in a single scenario are kept together because they
-        are often interrelated — shared root causes, shared reproduction
-        environments, or cascading failures.
-
-        Always writes the full output regardless of whether individual issues
-        can be parsed.
-    .PARAMETER ScenarioName
-        Short name identifying the scenario (e.g. "amazon", "hacker-news").
-    .PARAMETER Content
-        The full text output from the agent evaluation.
-    .PARAMETER OutputDirectory
-        Optional override for the draft directory. Defaults to $IssuesDraftDir.
+        This is the ONLY path that produces .issues.md — the JSON file is the
+        single source of truth, so any .issues.json can be re-rendered.
+    .PARAMETER JsonFilePath
+        Path to the canonical .issues.json file.
+    .OUTPUTS
+        Markdown string for the consolidated issues report.
     #>
     param(
         [Parameter(Mandatory = $true)]
-        [string]$ScenarioName,
-
-        [Parameter(Mandatory = $true)]
-        [string]$Content,
-
-        [string]$OutputDirectory = $script:IssuesDraftDir
+        [string]$JsonFilePath
     )
 
-    if ([string]::IsNullOrWhiteSpace($Content)) {
-        Write-Host "  WARNING: Cannot write empty content for '$ScenarioName'" -ForegroundColor Yellow
-        return
+    if (-not (Test-Path -LiteralPath $JsonFilePath)) {
+        throw "Issues JSON file not found: $JsonFilePath"
     }
 
-    # Ensure the output directory exists
-    if (-not (Test-Path -LiteralPath $OutputDirectory)) {
-        New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
-        Write-Host "  Created output directory: $OutputDirectory" -ForegroundColor DarkGray
-    }
-
-    $timestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
-    $safeName = $ScenarioName -replace '[\\/:*?"<>|]', '_'
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    $jsonText = [System.IO.File]::ReadAllText(
+        [System.IO.Path]::GetFullPath($JsonFilePath), $utf8NoBom
+    )
+    $data = ConvertFrom-IssueJson -Json $jsonText
 
-    # 1) Write the full output as a reference file
-    $fullFileName = "$timestamp-$safeName.full.md"
-    $fullFilePath = Join-Path $OutputDirectory $fullFileName
-    $absoluteFullPath = [System.IO.Path]::GetFullPath($fullFilePath)
-    [System.IO.File]::WriteAllText($absoluteFullPath, $Content, $utf8NoBom)
-    Write-Host "  Wrote full output: $absoluteFullPath" -ForegroundColor DarkGray
+    $ScenarioName = $data.ScenarioName
+    $SourceFile   = $data.SourceFile   # the canonical .issues.json filename itself
+    $timestamp    = $data.Timestamp
+    $modeLabel    = $data.Mode
+    $bg           = $data.Background
+    $issues       = $data.Issues
+    $assessment   = $data.Assessment
 
-    # 2) Extract background context (Sections A + B) for AI reproduction
-    $bg = Extract-BackgroundContext -Content $Content
-
-    # 3) Parse issues — try JSON first (preferred, more reliable), fall back to
-    #    markdown parsing when no valid JSON block is found.
-    $jsonEval = ConvertFrom-JsonEvaluation -Content $Content
-    if ($jsonEval) {
-        $issues = $jsonEval.Issues
-        $assessment = $jsonEval.Assessment
-        Write-Host "  Parsed $($issues.Count) issue(s) from JSON block" -ForegroundColor DarkGray
-    } else {
-        $issues = ConvertFrom-IssuesSection -Content $Content
-        $assessment = $null
-    }
-
-    # 4) Write a SINGLE consolidated issues file with background context and
-    #    reproduction guide.  Writing all issues together preserves their
-    #    interrelationships — issues in one scenario often share root causes,
-    #    share reproduction environments, or cascade from each other.
-    $consFileName = "$timestamp-$safeName.issues.md"
-    $consFilePath = Join-Path $OutputDirectory $consFileName
-    $absoluteConsPath = [System.IO.Path]::GetFullPath($consFilePath)
-
-    # Build the consolidated file body
     $consBody = "# Issues: $ScenarioName`n`n"
-    $consBody += "> **Source:** ``$fullFileName`` | **Date:** $timestamp | "
-    $consBody += "**Mode:** $(if ($browser4cliMode -eq 'production') { 'production' } else { 'dev' })`n`n"
+    $consBody += "> **Source:** ``$SourceFile`` | **Date:** $timestamp | "
+    $consBody += "**Mode:** $modeLabel`n`n"
 
     # ── Background section ──────────────────────────────────────────────────
     if ($bg.TaskSummary) {
@@ -1570,10 +1578,11 @@ function Write-IssuesToDraft {
         }
         # If we have execution trace but couldn't extract subsections, include
         # a condensed version (first 800 chars) so the AI has some context.
+        # The complete trace lives in the .issues.json source file.
         if (-not $bg.Commands -and -not $bg.Workarounds) {
             $condensed = $bg.ExecutionTrace
             if ($condensed.Length -gt 800) {
-                $condensed = $condensed.Substring(0, 800) + "...`n`n(truncated — see full.md for complete trace)"
+                $condensed = $condensed.Substring(0, 800) + "...`n`n(truncated — see $SourceFile for the complete execution trace)"
             }
             $consBody += "$condensed`n`n"
         }
@@ -1629,7 +1638,7 @@ function Write-IssuesToDraft {
             $consBody += "---`n`n"
         }
 
-        # ── Overall assessment (JSON-parsed evaluations only) ───────────────
+        # ── Overall assessment (when present in the JSON) ────────────────────
         if ($assessment) {
             $consBody += "## Overall Assessment`n`n"
             if ($assessment.CompletionStatus) {
@@ -1661,7 +1670,7 @@ function Write-IssuesToDraft {
         $consBody += "## How to Reproduce`n`n"
         $consBody += "### Common Setup`n`n"
         $consBody += "1. Clone the repository and ``cd`` to the repo root.`n"
-        if ($browser4cliMode -eq 'production') {
+        if ($modeLabel -eq 'production') {
             $consBody += "2. Install browser4-cli: ``cargo install --path cli/browser4-cli```n"
             $consBody += "3. Ensure the backend server is running.`n"
             $consBody += "4. All commands: ``browser4-cli <command>```n`n"
@@ -1683,36 +1692,117 @@ function Write-IssuesToDraft {
             if ($issue.Reproduction) {
                 $consBody += "$($issue.Reproduction)`n`n"
             } else {
-                $consBody += "(No reproduction steps recorded — see full.md for surrounding context)`n`n"
+                $consBody += "(No reproduction steps recorded in the source evaluation)`n`n"
             }
         }
     } else {
         $consBody += "## Issues Found (0)`n`n"
-        $consBody += "No issues could be parsed from Section C of the agent output.`n`n"
-        $consBody += "See ``$fullFileName`` for the complete evaluation output.`n`n"
+        $consBody += "No issues could be parsed from the agent evaluation.`n`n"
+        $consBody += "See ``$SourceFile`` for the complete evaluation data.`n`n"
     }
 
-    [System.IO.File]::WriteAllText($absoluteConsPath, $consBody, $utf8NoBom)
-    Write-Host "  Wrote consolidated issues: $absoluteConsPath" -ForegroundColor DarkGray
-    if ($issues.Count -gt 0) {
-        Write-Host "  $($issues.Count) issue(s) in one file (interrelated issues stay together)" -ForegroundColor DarkGray
+    return $consBody
+}
+
+function Write-IssuesToDraft {
+    <#
+    .SYNOPSIS
+        Write the agent evaluation output to the issues draft directory.
+    .DESCRIPTION
+        Parses the agent evaluation output (A. Task Result, B. Execution Trace,
+        C. Issues Found, D. Overall Assessment) and writes TWO files to the
+        issues/draft directory:
+
+          - .issues.json — canonical JSON (single source of truth, written
+                           FIRST, schema shared with
+                           coworker/gui/frontend/issue-model.js)
+          - .issues.md   — consolidated markdown report DERIVED from the
+                           .issues.json via ConvertTo-IssuesMarkdown
+
+        No .full.md is written — the raw agent output is already captured in
+        .test-sessions/, so a draft-directory copy adds no value.
+
+        Issues discovered in a single scenario are kept together because they
+        are often interrelated — shared root causes, shared reproduction
+        environments, or cascading failures.
+    .PARAMETER ScenarioName
+        Short name identifying the scenario (e.g. "amazon", "hacker-news").
+    .PARAMETER Content
+        The full text output from the agent evaluation.
+    .PARAMETER OutputDirectory
+        Optional override for the draft directory. Defaults to $IssuesDraftDir.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ScenarioName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Content,
+
+        [string]$OutputDirectory = $script:IssuesDraftDir
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Content)) {
+        Write-Host "  WARNING: Cannot write empty content for '$ScenarioName'" -ForegroundColor Yellow
+        return
+    }
+
+    # Ensure the output directory exists
+    if (-not (Test-Path -LiteralPath $OutputDirectory)) {
+        New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+        Write-Host "  Created output directory: $OutputDirectory" -ForegroundColor DarkGray
+    }
+
+    $timestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
+    $safeName = $ScenarioName -replace '[\\/:*?"<>|]', '_'
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+
+    # 1) Extract background context (Sections A + B) for AI reproduction
+    $bg = Extract-BackgroundContext -Content $Content
+
+    # 2) Parse issues — try JSON first (preferred, more reliable), fall back to
+    #    markdown parsing when no valid JSON block is found.
+    $jsonEval = ConvertFrom-JsonEvaluation -Content $Content
+    if ($jsonEval) {
+        $issues = $jsonEval.Issues
+        $assessment = $jsonEval.Assessment
+        Write-Host "  Parsed $($issues.Count) issue(s) from JSON block" -ForegroundColor DarkGray
     } else {
-        Write-Host "  (No individual issues parsed -- full output + background context saved)" -ForegroundColor DarkGray
+        $issues = ConvertFrom-IssuesSection -Content $Content
+        $assessment = $null
     }
+    # Normalize to an array: ConvertFrom-IssuesSection returns a bare hashtable
+    # when exactly one issue is parsed, which would make .Count report the
+    # hashtable's key count (10) instead of the issue count.
+    $issues = @($issues)
 
-    # 5) Write the canonical JSON file for machine consumption (GUI, CI, etc.)
+    # 3) FIRST write the canonical .issues.json — the single source of truth.
     $jsonFileName = "$timestamp-$safeName.issues.json"
     $jsonFilePath = Join-Path $OutputDirectory $jsonFileName
     $absoluteJsonPath = [System.IO.Path]::GetFullPath($jsonFilePath)
     $modeLabel = if ($browser4cliMode -eq 'production') { 'production' } else { 'dev' }
     $jsonOutput = ConvertTo-IssueJson -ScenarioName $ScenarioName `
-        -SourceFile $fullFileName `
+        -SourceFile $jsonFileName `
         -Timestamp $timestamp `
         -Mode $modeLabel `
         -Background $bg `
+        -Assessment $assessment `
         -Issues $issues
     [System.IO.File]::WriteAllText($absoluteJsonPath, $jsonOutput, $utf8NoBom)
     Write-Host "  Wrote issues JSON: $absoluteJsonPath" -ForegroundColor DarkGray
+
+    # 4) THEN derive the consolidated .issues.md from the JSON file.
+    $consFileName = "$timestamp-$safeName.issues.md"
+    $consFilePath = Join-Path $OutputDirectory $consFileName
+    $absoluteConsPath = [System.IO.Path]::GetFullPath($consFilePath)
+    $consBody = ConvertTo-IssuesMarkdown -JsonFilePath $absoluteJsonPath
+    [System.IO.File]::WriteAllText($absoluteConsPath, $consBody, $utf8NoBom)
+    Write-Host "  Wrote consolidated issues (from JSON): $absoluteConsPath" -ForegroundColor DarkGray
+    if ($issues.Count -gt 0) {
+        Write-Host "  $($issues.Count) issue(s) in one file (interrelated issues stay together)" -ForegroundColor DarkGray
+    } else {
+        Write-Host "  (No individual issues parsed -- background context saved in JSON)" -ForegroundColor DarkGray
+    }
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
