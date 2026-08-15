@@ -20,6 +20,10 @@ import kotlinx.coroutines.runBlocking
 import org.slf4j.LoggerFactory
 import java.io.Closeable
 import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.time.Duration
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -289,6 +293,32 @@ class PulsarSessionManager(
             else -> throw IllegalArgumentException("No CDP endpoint or port provided")
         }
 
+        // Verify the CDP endpoint is actually reachable and hosts a page target
+        // BEFORE binding it to a session. Previously this step was skipped: a
+        // `PulsarBrowser(port)` wrapper was bound unconditionally, so attach
+        // reported success even when the endpoint pointed at a dead or wrong
+        // browser (the CLI then "navigated" a window that never moved). Fail
+        // loud here instead of silently attaching to nothing.
+        val normalizedEndpoint = cdpEndpoint?.let { normalizeCdpEndpoint(it, port) }
+            ?: "http://127.0.0.1:$port"
+        val verification = verifyCdpEndpoint(normalizedEndpoint)
+        if (!verification.reachable) {
+            throw IllegalArgumentException(
+                "CDP endpoint $normalizedEndpoint is not reachable: ${verification.detail}. " +
+                    "Start the target browser with --remote-debugging-port and retry attach."
+            )
+        }
+        if (verification.pageTargetCount == 0) {
+            throw IllegalArgumentException(
+                "CDP endpoint $normalizedEndpoint is reachable but has no page targets " +
+                    "(${verification.detail}). Open a tab in the target browser, then retry attach."
+            )
+        }
+        logger.info(
+            "CDP attach verification OK | {} | browser={} | pageTargets={}",
+            normalizedEndpoint, verification.browser, verification.pageTargetCount
+        )
+
         val session = sessions.computeIfAbsent(sessionId) {
             createManagedSession(sessionId, normalizedCapabilities)
         }
@@ -303,6 +333,117 @@ class PulsarSessionManager(
         )
 
         return session
+    }
+
+    /**
+     * Result of a CDP endpoint verification probe.
+     */
+    data class CdpEndpointVerification(
+        val reachable: Boolean,
+        val browser: String?,
+        val pageTargetCount: Int,
+        val detail: String,
+    )
+
+    /**
+     * Normalize a CDP endpoint into an HTTP base URL for verification.
+     * Accepts `http://host:port`, `ws://host:port/path`, and bare `host:port`.
+     */
+    companion object {
+        fun normalizeCdpEndpoint(endpoint: String, port: Int): String {
+            val trimmed = endpoint.trim()
+            return when {
+                trimmed.startsWith("http://") || trimmed.startsWith("https://") ->
+                    trimmed.trimEnd('/')
+                trimmed.startsWith("ws://") -> {
+                    val withoutScheme = trimmed.removePrefix("ws://")
+                    val host = withoutScheme.substringBefore('/')
+                    "http://$host"
+                }
+                else -> "http://$trimmed"
+            }.let { base ->
+                // Ensure a port is present; ws/http endpoints may omit it.
+                val uri = URI(base)
+                if (uri.port > 0) base else "http://${uri.host ?: "127.0.0.1"}:$port"
+            }
+        }
+
+        /**
+         * Probe a CDP HTTP endpoint: `GET /json/version` proves the browser is
+         * reachable and identifies it; `GET /json` counts page targets so we never
+         * attach to a browser that has nothing to navigate.
+         */
+        fun verifyCdpEndpoint(baseUrl: String): CdpEndpointVerification {
+            val client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(3))
+                .build()
+
+            val version = try {
+                val request = HttpRequest.newBuilder(URI.create("$baseUrl/json/version"))
+                    .timeout(Duration.ofSeconds(3))
+                    .GET()
+                    .build()
+                client.send(request, HttpResponse.BodyHandlers.ofString())
+            } catch (e: Exception) {
+                return CdpEndpointVerification(
+                    reachable = false,
+                    browser = null,
+                    pageTargetCount = 0,
+                    detail = e.message ?: e.javaClass.simpleName
+                )
+            }
+            if (version.statusCode() !in 200..299) {
+                return CdpEndpointVerification(
+                    reachable = false,
+                    browser = null,
+                    pageTargetCount = 0,
+                    detail = "GET /json/version → HTTP ${version.statusCode()}"
+                )
+            }
+
+            val browser = runCatching {
+                val body = com.fasterxml.jackson.databind.ObjectMapper().readTree(version.body())
+                body.path("Browser").asText("").takeIf { it.isNotBlank() }
+                    ?: body.path("browser").asText("")
+            }.getOrNull()
+
+            val pageTargets = try {
+                val request = HttpRequest.newBuilder(URI.create("$baseUrl/json"))
+                    .timeout(Duration.ofSeconds(3))
+                    .GET()
+                    .build()
+                val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+                if (response.statusCode() !in 200..299) {
+                    return CdpEndpointVerification(
+                        reachable = true,
+                        browser = browser,
+                        pageTargetCount = 0,
+                        detail = "GET /json → HTTP ${response.statusCode()}"
+                    )
+                }
+                val array = com.fasterxml.jackson.databind.ObjectMapper().readTree(response.body())
+                // Count only page targets; ignore browser_ui / service_worker etc.
+                var pages = 0
+                for (node in array) {
+                    if (node.path("type").asText("") == "page") pages++
+                }
+                pages
+            } catch (e: Exception) {
+                return CdpEndpointVerification(
+                    reachable = true,
+                    browser = browser,
+                    pageTargetCount = 0,
+                    detail = "GET /json failed: ${e.message ?: e.javaClass.simpleName}"
+                )
+            }
+
+            return CdpEndpointVerification(
+                reachable = true,
+                browser = browser,
+                pageTargetCount = pageTargets,
+                detail = "browser=$browser pages=$pageTargets"
+            )
+        }
     }
 
     // ------------------------------------------------------------------

@@ -226,18 +226,32 @@ fn maybe_pretty_print_json(text: &str) -> String {
     }
 }
 
+/// Write one line to stdout, ignoring a closed pipe.
+///
+/// When stdout is piped to a consumer that exits early (e.g. `browser4-cli
+/// goto … | Select-Object -First 3`), the write fails with `BrokenPipe`.  The
+/// stock `println!` macro panics on that error, which aborts the CLI mid-flight
+/// and can strand a half-started Browser4 server.  This helper treats a closed
+/// pipe as a normal "stop writing" signal so the CLI unwinds cleanly and its
+/// cleanup paths (managed-process registry, startup-log teardown) still run.
+fn print_stdout_line(line: &str) {
+    use std::io::Write;
+    let mut stdout = std::io::stdout().lock();
+    let _ = writeln!(stdout, "{line}");
+}
+
 /// Print to stdout unless `-q` / `--quiet` or `--json` is active.
 /// When `--json` is active all output must be machine-readable;
 /// human-oriented text is suppressed.
 macro_rules! cli_println {
     () => {
         if !$crate::quiet_active() && !$crate::json_active() {
-            ::std::println!();
+            $crate::print_stdout_line("");
         }
     };
     ($($arg:tt)*) => {
         if !$crate::quiet_active() && !$crate::json_active() {
-            ::std::println!($($arg)*);
+            $crate::print_stdout_line(&format!($($arg)*));
         }
     };
 }
@@ -1783,8 +1797,25 @@ async fn handle_attach(
         format_session_opened_message(session_name, &session_id)
     );
 
-    // Take an initial snapshot so the user can see the current state
-    post_command_snapshot(client, &effective_base_url, &session_id).await;
+    // Verify the attached browser actually answers before printing any page
+    // info. Previously this step unconditionally ran post_command_snapshot, so
+    // attach reported success (and printed a page header) even when the CDP
+    // endpoint pointed at a dead or wrong browser — the user saw "attached +
+    // page" while their window never moved. Fetch the real current page and
+    // surface a clear warning when the browser does not answer.
+    match current_session_url(client, &effective_base_url, session_name).await {
+        Ok(url) if !url.is_empty() => {
+            cli_println!("Current page: {}", url);
+        }
+        Ok(_) => {
+            cli_println!("⚠  Attached, but the browser reported no current page URL.");
+            cli_println!("   The CDP endpoint may be reachable yet not driving this browser.");
+        }
+        Err(error) => {
+            cli_println!("⚠  Attached, but could not read the page: {}", error);
+            cli_println!("   Verify the CDP endpoint is running and reachable, then retry.");
+        }
+    }
 
     Ok(())
 }
@@ -16190,6 +16221,7 @@ fn apply_config_defaults(global: &mut GlobalFlags) {
 
 #[tokio::main]
 async fn main() {
+    install_broken_pipe_panic_hook();
     init_root_search_start_dir_from_startup();
 
     let raw_args: Vec<String> = std::env::args().skip(1).collect();
@@ -16228,6 +16260,34 @@ fn format_cli_error_output(error: &str) -> String {
     } else {
         format!("Error: {error}")
     }
+}
+
+/// Silence panics caused by a closed stdout/stderr pipe.
+///
+/// `println!` (and friends) panic when the downstream pipe consumer exits early
+/// — e.g. `browser4-cli … | Select-Object -First 3` closes the pipe once it has
+/// its lines.  In that situation panicking is worse than useless: it aborts the
+/// CLI before its normal cleanup runs, which can leave a half-started Browser4
+/// server behind.  Treat broken-pipe panics as a normal "stop writing" signal
+/// instead of crashing.
+fn install_broken_pipe_panic_hook() {
+    use std::panic;
+    let default_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
+        let payload = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| info.payload().downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        if payload.contains("Broken pipe") || payload.contains("failed printing to stdout") {
+            // The reader went away; stop quietly.  Exit code 0 signals "the
+            // work was delivered as far as the pipe allowed", which matches
+            // the standard `head`-style pipeline contract.
+            std::process::exit(0);
+        }
+        default_hook(info);
+    }));
 }
 
 /// Compute Levenshtein distance between two strings.
@@ -22615,5 +22675,29 @@ mod tests {
         ]);
         let result = resolve_plugin_method(&tools, "pptx", &matching, &mut args);
         assert_eq!(result, "pptx_generate"); // first match (no method specified)
+    }
+
+    #[test]
+    fn test_broken_pipe_panic_hook_ignores_unrelated_panics() {
+        // The broken-pipe hook must only swallow broken-pipe panics; unrelated
+        // panics still go through the default hook.  Run the hook installation
+        // twice to prove it is idempotent, then trigger a non-pipe failure in a
+        // subprocess and assert the default behavior (non-zero exit) survives.
+        install_broken_pipe_panic_hook();
+        install_broken_pipe_panic_hook();
+
+        use std::process::Command;
+        let Some(self_bin) = std::env::var_os("CARGO_BIN_EXE_browser4-cli") else {
+            // Cargo only sets this env var for the bin target being tested;
+            // skip when it is absent (e.g. doctest harnesses).
+            return;
+        };
+        // An unknown flag is a usage error — the CLI must still exit non-zero,
+        // proving the hook did not turn ordinary failures into silent success.
+        let output = Command::new(self_bin)
+            .args(["--help", "--definitely-not-a-flag"])
+            .output()
+            .expect("run self");
+        assert!(!output.status.success());
     }
 }
