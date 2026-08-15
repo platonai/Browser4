@@ -623,6 +623,12 @@ try {
     }
 
     Write-Output $newTag
+
+    # Explicit success exit: without this, $LASTEXITCODE is left at whatever the
+    # last native command returned (e.g. `git config --get remote.<url>.url` fails
+    # with exit 1 when $remote is a URL), and monitor-release.ps1 misreads a
+    # successful tag push as a trigger failure.
+    exit 0
 } catch {
     Write-Error "Failed to create/push tag: $_"
     exit 1
