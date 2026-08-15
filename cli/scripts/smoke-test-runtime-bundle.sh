@@ -39,8 +39,20 @@ cleanup() {
         wait "$HTTP_PID" 2>/dev/null || true
     fi
     if [ -n "${TEMP_DIR:-}" ] && [ -d "$TEMP_DIR" ]; then
-        rm -rf "$TEMP_DIR"
+        # On Windows the JVM/Chrome may hold jar and log handles open for a
+        # few seconds after kill-all ("Device or resource busy").  Retry
+        # briefly, and never let a cleanup failure override the script's
+        # PASS/FAIL exit status — the test result is what matters, and CI
+        # runners are ephemeral anyway.
+        local attempt
+        for attempt in 1 2 3 4 5; do
+            if rm -rf "$TEMP_DIR" 2>/dev/null; then
+                break
+            fi
+            sleep 2
+        done
     fi
+    return 0
 }
 trap cleanup EXIT
 
