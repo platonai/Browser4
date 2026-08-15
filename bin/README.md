@@ -119,8 +119,9 @@ Browser4 uses a single VERSION file as the source of truth across all modules.
 - `node bin/version.mjs show -v`: Print version + git hash, branch, date.
 
 **Version changes:**
-- `node bin/version.mjs release`: Strip `-SNAPSHOT` for release deployment.
+- `node bin/version.mjs release`: Strip `-SNAPSHOT` / `-rc.N` to finalize a release.
 - `node bin/version.mjs bump <part>`: Bump version (major/minor/patch) with precheck.
+- `node bin/version.mjs bump rc`: Create or increment an `-rc.N` candidate (`-rc.1`, `-rc.2`, ...). Skips the publish-status precheck (an rc candidate precedes release).
 - `node bin/version.mjs auto`: Bump to next patch if changes detected. Shows release info, change summary, and asks for confirmation.
 - `node bin/version.mjs auto --dry-run`: Preview the bump plan without applying.
 - `node bin/version.mjs auto --commit`: Apply and commit+push.

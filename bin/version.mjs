@@ -13,8 +13,9 @@
  *   node bin/version.mjs show -v           Print version + git metadata
  *
  *   # Version changes
- *   node bin/version.mjs release           Strip -SNAPSHOT for release
+ *   node bin/version.mjs release           Strip -SNAPSHOT / -rc.N for release
  *   node bin/version.mjs bump <part>       Bump major/minor/patch, update pom.xml, commit
+ *   node bin/version.mjs bump rc           Create/increment -rc.N candidate (rc.1, rc.2, ...)
  *   node bin/version.mjs bump <part> --dry-run     Show what would change
  *   node bin/version.mjs bump <part> --skip-precheck  Skip publish-status check
  *   node bin/version.mjs auto              Show bump plan (dry-run by default)
@@ -75,15 +76,73 @@ function stripSnapshot(version) {
     : version;
 }
 
+/** Strip a trailing `-rc.N` prerelease qualifier (case-insensitive). */
+function stripRc(version) {
+  return version.replace(/-rc\.\d+$/i, "");
+}
+
 function parseSemver(version) {
   const m = version.match(/^(\d+)\.(\d+)\.(\d+)(?:-(.+))?$/);
   if (!m) return null;
-  return {
+  const prerelease = m[4] || null;
+  const result = {
     major: Number(m[1]),
     minor: Number(m[2]),
     patch: Number(m[3]),
-    prerelease: m[4] || null,
+    prerelease,
   };
+  // Expose the rc counter for `-rc.N` prereleases (e.g. "-rc.1" → rc = 1)
+  // so bump/compare logic can reason about candidate versions.
+  if (prerelease) {
+    const rcMatch = prerelease.match(/^rc\.(\d+)$/i);
+    result.rc = rcMatch ? Number(rcMatch[1]) : null;
+  } else {
+    result.rc = null;
+  }
+  return result;
+}
+
+/**
+ * Compare two prerelease identifiers (the part after "-"), e.g. "rc.1" vs "rc.2".
+ * Follows semver precedence: a missing prerelease sorts after any present one;
+ * numeric identifiers compare numerically; numeric < alphanumeric; a shorter
+ * list sorts lower once all shared identifiers are equal.
+ */
+function comparePrerelease(a, b) {
+  if (a === b) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  const aIds = a.split(".");
+  const bIds = b.split(".");
+  const len = Math.max(aIds.length, bIds.length);
+  for (let i = 0; i < len; i++) {
+    const ai = aIds[i];
+    const bi = bIds[i];
+    if (ai === undefined) return -1;
+    if (bi === undefined) return 1;
+    if (ai === bi) continue;
+    const aNum = /^\d+$/.test(ai);
+    const bNum = /^\d+$/.test(bi);
+    if (aNum && bNum) return Number(ai) < Number(bi) ? -1 : 1;
+    if (aNum) return -1;
+    if (bNum) return 1;
+    return ai < bi ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
+ * Compare two version strings per semver precedence.
+ * Returns -1 (a < b), 0 (a == b), or 1 (a > b). Unparseable input compares equal.
+ */
+function compareSemver(a, b) {
+  const pa = parseSemver(a);
+  const pb = parseSemver(b);
+  if (!pa || !pb) return 0;
+  if (pa.major !== pb.major) return pa.major < pb.major ? -1 : 1;
+  if (pa.minor !== pb.minor) return pa.minor < pb.minor ? -1 : 1;
+  if (pa.patch !== pb.patch) return pa.patch < pb.patch ? -1 : 1;
+  return comparePrerelease(pa.prerelease, pb.prerelease);
 }
 
 /**
@@ -141,24 +200,47 @@ function checkVersionBump(published, local) {
   const loc = parseSemver(local);
   if (!pub || !loc) return { ok: true };
 
-  if (loc.major === pub.major && loc.minor === pub.minor && loc.patch === pub.patch) {
+  // Full semver ordering first: catches "behind" (including rc.1 vs a stable
+  // release of the same base) and "identical".
+  const cmp = compareSemver(local, published);
+  if (cmp < 0) {
+    return {
+      ok: false,
+      reason: `local version ${local} is behind the published version ${published}`,
+    };
+  }
+  if (cmp === 0) {
     return { ok: true, note: `version ${local} is already published` };
   }
+
+  const sameBase =
+    loc.major === pub.major && loc.minor === pub.minor && loc.patch === pub.patch;
+
+  // rc candidates: only a +1 increment (rc.N -> rc.N+1) is valid, or
+  // finalizing the rc into its stable release (rc.N -> X.Y.Z).
+  if (sameBase && pub.rc != null) {
+    if (loc.rc != null) {
+      if (loc.rc === pub.rc + 1) return { ok: true };
+      if (loc.rc > pub.rc) {
+        return {
+          ok: false,
+          reason: `version bump from ${published} to ${local} skips rc versions (expected -rc.${pub.rc + 1})`,
+        };
+      }
+      return {
+        ok: false,
+        reason: `version bump from ${published} to ${local} is not a forward rc increment`,
+      };
+    }
+    // published is rc, local is the stable release of the same base.
+    return { ok: true };
+  }
+
   if (loc.major === pub.major && loc.minor === pub.minor && loc.patch === pub.patch + 1) {
     return { ok: true };
   }
   if (loc.major === pub.major && loc.minor === pub.minor + 1 && loc.patch === 0) {
     return { ok: true };
-  }
-  if (
-    loc.major < pub.major ||
-    (loc.major === pub.major && loc.minor < pub.minor) ||
-    (loc.major === pub.major && loc.minor === pub.minor && loc.patch < pub.patch)
-  ) {
-    return {
-      ok: false,
-      reason: `local version ${local} is behind the published version ${published}`,
-    };
   }
   return {
     ok: false,
@@ -178,6 +260,14 @@ function bumpSemverPart(version, part) {
     default: return null;
   }
   return `${major}.${minor}.${patch}`;
+}
+
+/** Bump to (or increment) an `-rc.N` prerelease of the given version. */
+function bumpRc(version) {
+  const parsed = parseSemver(version);
+  if (!parsed) return null;
+  const base = `${parsed.major}.${parsed.minor}.${parsed.patch}`;
+  return `${base}-rc.${parsed.rc != null ? parsed.rc + 1 : 1}`;
 }
 
 /**
@@ -660,16 +750,15 @@ function checkAllPomVersions(expectedVersion) {
 
 function cmdRelease() {
   const versionFileContent = readBackendVersion();
-  const isSnapshot = versionFileContent.endsWith("-SNAPSHOT");
-  const version = stripSnapshot(versionFileContent);
-  const snapshotVersion = isSnapshot ? versionFileContent : version + "-SNAPSHOT";
+  // A release version has neither a -SNAPSHOT nor an -rc.N suffix.
+  const version = stripRc(stripSnapshot(versionFileContent));
 
-  if (isSnapshot) {
-    console.log(`Converting from SNAPSHOT to release: ${snapshotVersion} -> ${version}`);
+  if (versionFileContent !== version) {
+    console.log(`Converting to release: ${versionFileContent} -> ${version}`);
 
     // Write release version to VERSION file
     writeFileSync(join(REPO_ROOT, "VERSION"), version + "\n");
-    console.log(`  Updated VERSION: ${snapshotVersion} -> ${version}`);
+    console.log(`  Updated VERSION: ${versionFileContent} -> ${version}`);
   } else {
     console.log(`VERSION file already contains release version: ${version}`);
     console.log("Proceeding with file updates to ensure consistency (idempotent)...");
@@ -681,10 +770,10 @@ function cmdRelease() {
     const files = findFiles(REPO_ROOT, pattern, 8);
     for (const file of files) {
       let content = readFileSync(file, "utf-8");
-      if (content.includes(snapshotVersion)) {
-        content = content.replaceAll(snapshotVersion, version);
+      if (versionFileContent !== version && content.includes(versionFileContent)) {
+        content = content.replaceAll(versionFileContent, version);
         writeFileSync(file, content);
-        console.log(`  Updated ${relative(REPO_ROOT, file)}: ${snapshotVersion} -> ${version}`);
+        console.log(`  Updated ${relative(REPO_ROOT, file)}: ${versionFileContent} -> ${version}`);
       }
     }
   }
@@ -722,14 +811,21 @@ async function confirm(prompt) {
 
 async function cmdBump(args) {
   const partIdx = args.findIndex(
-    (a) => a === "major" || a === "minor" || a === "patch"
+    (a) =>
+      a === "major" ||
+      a === "minor" ||
+      a === "patch" ||
+      a === "rc" ||
+      a === "prerelease"
   );
   if (partIdx === -1) {
-    console.error("ERROR: Must specify part to bump: major, minor, or patch");
-    console.error("Usage: node bin/version.mjs bump <major|minor|patch> [--dry-run] [--skip-precheck]");
+    console.error("ERROR: Must specify part to bump: major, minor, patch, or rc");
+    console.error("Usage: node bin/version.mjs bump <major|minor|patch|rc> [--dry-run] [--skip-precheck]");
     process.exit(1);
   }
-  const part = args[partIdx];
+  // "prerelease" is an alias for the rc candidate flow.
+  const part = args[partIdx] === "prerelease" ? "rc" : args[partIdx];
+  const isRcBump = part === "rc";
   const dryRun = args.includes("--dry-run");
   const skipPrecheck = args.includes("--skip-precheck");
 
@@ -753,15 +849,20 @@ async function cmdBump(args) {
   const version = stripSnapshot(snapshotVersion);
   const parsed = parseSemver(version);
   if (!parsed) {
-    console.error(`ERROR: Version '${version}' does not match X.Y.Z format.`);
+    console.error(`ERROR: Version '${version}' does not match X.Y.Z (or X.Y.Z-rc.N) format.`);
     process.exit(1);
   }
 
-  const nextVersion = bumpSemverPart(version, part);
-  const nextSnapshot = `${nextVersion}-SNAPSHOT`;
+  // An rc bump produces (or increments) the -rc.N prerelease itself, which
+  // replaces -SNAPSHOT as the version's prerelease marker — so no extra
+  // -SNAPSHOT suffix is appended in that case.
+  const nextVersion = isRcBump ? bumpRc(version) : bumpSemverPart(version, part);
+  const nextSnapshot = isRcBump ? nextVersion : `${nextVersion}-SNAPSHOT`;
 
-  // Precheck: verify current version is published (unless skipped)
-  if (!skipPrecheck && !dryRun) {
+  // Precheck: verify current version is published (unless skipped). rc bumps
+  // skip it by design — an rc candidate precedes release, so the current
+  // version is not expected to be published yet.
+  if (!skipPrecheck && !dryRun && !isRcBump) {
     console.log("");
     console.log(`Running publish-status precheck for version v${version}...`);
     console.log("---------------------------------------------------------");
@@ -786,6 +887,10 @@ async function cmdBump(args) {
       console.warn(`check-publish-status.ps1 not found at '${checkScript}'. Skipping precheck.`);
     }
     console.log("---------------------------------------------------------");
+    console.log("");
+  } else if (isRcBump && !dryRun) {
+    console.log("");
+    console.log("Precheck skipped (rc bump): rc candidates precede release, so the current version is not expected to be published yet.");
     console.log("");
   } else if (skipPrecheck && !dryRun) {
     console.log("");
@@ -894,10 +999,12 @@ async function cmdBump(args) {
 /** Get the latest GitHub release tag, falling back to git tags. */
 function getLatestReleaseTag() {
   try {
-    // Try gh CLI first (gives us actual GitHub Releases).
+    // Try gh CLI first (gives us actual GitHub Releases). Exclude
+    // prereleases (e.g. -rc.N) so "last release" means the last stable one —
+    // rc candidates are prereleases of the *upcoming* patch, not releases.
     // Parse JSON in Node rather than using --jq, so the command works on
     // Windows (cmd.exe doesn't handle single quotes in --jq '…').
-    const raw = execSync("gh release list --limit 1 --json tagName", {
+    const raw = execSync("gh release list --limit 1 --exclude-pre-releases --json tagName", {
       cwd: REPO_ROOT, stdio: ["ignore", "pipe", "ignore"],
       timeout: 10_000,
     }).toString().trim();
@@ -1417,8 +1524,9 @@ function printUsage() {
   console.log("    show -v           Print version + git hash, branch, date");
   console.log("");
   console.log("  Version changes");
-  console.log("    release           Strip -SNAPSHOT for release deployment");
+  console.log("    release           Strip -SNAPSHOT / -rc.N to finalize a release");
   console.log("    bump <part>       Bump major/minor/patch, update pom.xml, commit");
+  console.log("    bump rc           Create or increment an -rc.N candidate (rc.1, rc.2, ...)");
   console.log("    bump <part> --dry-run    Show what would change without applying");
   console.log("    bump <part> --skip-precheck  Skip publish-status verification");
   console.log("    auto              Show bump plan (dry-run by default)");
