@@ -3646,8 +3646,48 @@ fn probe_cdp_port(port: u16) -> bool {
         .build()
         .and_then(|client| client.get(&url).send())
     {
-        Ok(resp) => resp.status().is_success(),
-        Err(_) => false,
+        Ok(resp) => resp.status().is_success(),        Err(_) => false,
+    }
+}
+
+/// Detect whether a Browser4-managed Chrome (a chrome process launched with
+/// `--remote-debugging-port`) has a visible top-level window.
+///
+/// Returns `(found_browser, has_window)`. `found_browser` is true when at least
+/// one debugging-enabled chrome process exists; `has_window` is true when any of
+/// them owns a visible main window (`MainWindowHandle != 0`). A headed launch
+/// that ends with `found_browser=true, has_window=false` means the browser
+/// process is alive but its window never appeared — the classic silent
+/// no-window failure. Headless browsers never have a window, so callers should
+/// only consult this for headed sessions.
+pub fn browser_window_visibility() -> (bool, bool) {
+    #[cfg(target_os = "windows")]
+    {
+        // Find debugging-enabled chrome processes and check each one's
+        // MainWindowHandle via PowerShell. Get-Process exposes MainWindowHandle
+        // directly; -IncludeUserName is unnecessary, plain listing suffices.
+        let ps = "Get-Process chrome -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1 -ExpandProperty MainWindowHandle";
+        let out = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", ps])
+            .output();
+        let visible = match out {
+            Ok(o) => o.status.success() && !o.stdout.is_empty(),
+            Err(_) => false,
+        };
+
+        // Any chrome with remote debugging? Reuse the process scan.
+        let has_debug_chrome = if let Some(port) = find_debug_port_in_running_processes("chrome") {
+            port != 0
+        } else {
+            false
+        };
+
+        (has_debug_chrome, visible)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // No portable window-visibility check on Unix; report unknown.
+        (false, true)
     }
 }
 
