@@ -132,16 +132,23 @@ actually trigger and monitor.
 - Captures the tag name and locates the triggered Release workflow run.
 - Streams the workflow logs in real time.
 - Reports the final conclusion (success/failure) and exits with the same code.
+- On **success**, automatically bumps the version to the next patch
+  (`X.Y.Z-SNAPSHOT` → `X.Y.(Z+1)-SNAPSHOT`) across `VERSION`, all `pom.xml`,
+  `cli/package.json`, `cli/browser4-cli/Cargo.toml` and `Cargo.lock`, then commits
+  and pushes it as `Auto-bump version to X.Y.(Z+1)-SNAPSHOT` — so the next
+  release starts from the next patch. Pass `-SkipVersionBump` to disable this.
+  (Pure PowerShell — no `node`/`mvn` dependency, works in restricted sandboxes.)
+- On workflow **failure**, auto-extracts diagnostic information (failing tests,
+  error blocks) and dispatches a coworker fix task.
 - Supports `-NoWatch` for non-interactive terminals (polls via `gh run list`/`gh run view`).
-- Supports `-Apply`, `-DryRun`, and `-Agent` (forwarded to `trigger-release.ps1`).
-- On workflow failure, auto-extracts diagnostic information (failing tests,
-  error blocks) for quick triage.
+- Supports `-Apply`, `-DryRun`, `-Agent`, and `-SkipVersionBump`.
 
 ```
 .\bin\release\monitor-release.ps1                             # dry run (preview)
 .\bin\release\monitor-release.ps1 -Apply                      # actually trigger + monitor
 .\bin\release\monitor-release.ps1 -Apply -message "Hotfix for login crash"
 .\bin\release\monitor-release.ps1 -Apply -NoWatch -PollIntervalSeconds 10
+.\bin\release\monitor-release.ps1 -Apply -SkipVersionBump     # release, no auto-bump
 ```
 
 ### `download-release-assets.ps1`
@@ -173,7 +180,8 @@ node bin/version.mjs release
 The `tests/` subdirectory contains PowerShell test scripts runnable with Pester:
 
 - `monitor-release.tests.ps1` — Unit tests for `monitor-release.ps1` helper functions
-  (`ConvertTo-LogLines`, `Parse-GitHubLogLine`, `Extract-MinimalErrors`).
+  (`ConvertTo-LogLines`, `Parse-GitHubLogLine`, `Extract-MinimalErrors`,
+  `New-CoworkerFailureTask`, `Invoke-PostReleaseVersionBump`).
 
 Run with:
 

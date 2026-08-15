@@ -18,6 +18,11 @@
     2. Captures the tag name and locates the triggered Release workflow run.
     3. Streams the workflow logs in real time.
     4. Reports the final conclusion (success/failure) and exits with the same code.
+    5. On SUCCESS (unless -SkipVersionBump): automatically bumps the version to the
+       next patch (X.Y.Z-SNAPSHOT -> X.Y.(Z+1)-SNAPSHOT) across VERSION, all pom.xml,
+       cli/package.json, Cargo.toml and Cargo.lock, then commits and pushes the bump
+       as "Auto-bump version to X.Y.(Z+1)-SNAPSHOT" — so the next release starts
+       from the next patch. On FAILURE: dispatches a coworker fix task.
 
     By default this script runs in DRY RUN mode: it calls trigger-release.ps1 in
     dry-run mode (preview only, no tag pushed, no workflow triggered) and exits
@@ -52,6 +57,13 @@
     (resolve the backend) or a specific backend name (claude, kimi, codex, dsh,
     copilot). Without it, the raw commit list is used.
 
+.PARAMETER SkipVersionBump
+    Skip the automatic post-release version bump (next patch). By default, after
+    a successful release the script bumps VERSION (and all pom.xml / Cargo.toml /
+    Cargo.lock / package.json) to X.Y.(Z+1)-SNAPSHOT and commits + pushes it as
+    "Auto-bump version to X.Y.(Z+1)-SNAPSHOT", so the next release starts from
+    the next patch. Pass this switch to leave the version untouched.
+
 .EXAMPLE
     .\bin\release\monitor-release.ps1                              # dry run (preview)
 
@@ -60,6 +72,8 @@
     .\bin\release\monitor-release.ps1 -Apply -message "Hotfix for login crash"
 
     .\bin\release\monitor-release.ps1 -Apply -NoWatch -PollIntervalSeconds 10
+
+    .\bin\release\monitor-release.ps1 -Apply -SkipVersionBump      # release, no auto-bump
 #>
 
 param(
@@ -69,6 +83,7 @@ param(
     [switch]$NoWatch,
     [switch]$Apply,
     [switch]$DryRun,
+    [switch]$SkipVersionBump,
     [ValidateSet('auto', 'claude', 'kimi', 'codex', 'dsh', 'copilot')]
     [string]$Agent = ""
 )
@@ -756,6 +771,155 @@ function Invoke-WorkflowFailureHandler {
     }
 }
 
+<#
+.SYNOPSIS
+    After a successful release, bump the current version's patch and sync all
+    version files, then commit and push the bump.
+
+.DESCRIPTION
+    Reads VERSION (expected "X.Y.Z-SNAPSHOT" or "X.Y.Z"), increments the patch
+    (X.Y.Z -> X.Y.(Z+1)), writes the new "-SNAPSHOT" value back to VERSION and
+    every version-bearing file (VERSION, all pom.xml, cli/package.json,
+    cli/browser4-cli/Cargo.toml, cli/browser4-cli/Cargo.lock), then commits as
+    "Auto-bump version to X.Y.(Z+1)-SNAPSHOT" and pushes.
+
+    Implemented in pure PowerShell (no node/mvn dependency) so it also works in
+    restricted sandboxes where `node bin/version.mjs auto` cannot spawn cmd.exe.
+    Mirrors what `node bin/version.mjs auto --commit` would do, minus the Maven
+    versions:set call (the pom.xml files are updated with direct text replacement
+    of the exact version strings).
+
+    File set is discovered dynamically (all tracked pom.xml + the fixed CLI
+    files), so newly added modules are covered automatically.
+
+.NOTES
+    Skips gracefully (warning, exit code unaffected) when:
+      - VERSION is missing or not parseable as X.Y.Z(-SNAPSHOT)
+      - the working tree has uncommitted changes other than the bump itself
+        (to avoid sweeping unrelated changes into the bump commit)
+#>
+function Invoke-PostReleaseVersionBump {
+    param(
+        [string]$RepoRoot,
+        [string]$Remote,
+        [switch]$SkipPush
+    )
+
+    $versionFile = Join-Path $RepoRoot "VERSION"
+    if (-not (Test-Path $versionFile)) {
+        Write-Host "  [bump] VERSION not found at $versionFile — skipping version bump." -ForegroundColor Yellow
+        return
+    }
+
+    $current = (Get-Content $versionFile -Raw).Trim()
+    if ($current -notmatch '^(\d+)\.(\d+)\.(\d+)(-SNAPSHOT)?$') {
+        Write-Host "  [bump] VERSION '$current' is not X.Y.Z(-SNAPSHOT) — skipping version bump." -ForegroundColor Yellow
+        return
+    }
+
+    $base = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
+    $nextPatch = [int]$Matches[3] + 1
+    $nextBase = "$($Matches[1]).$($Matches[2]).$nextPatch"
+    $nextSnapshot = "${nextBase}-SNAPSHOT"
+
+    Write-Host ""
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "  Post-release version bump: $base-SNAPSHOT -> $nextSnapshot" -ForegroundColor Cyan
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+
+    # ── Guard: working tree must be clean (except files we are about to touch) ──
+    $dirty = git -C $RepoRoot status --porcelain 2>$null
+    if ($dirty) {
+        Write-Host "  [bump] Working tree has uncommitted changes — skipping version bump to avoid sweeping them into the bump commit:" -ForegroundColor Yellow
+        $dirty | ForEach-Object { Write-Host "    $_" -ForegroundColor Yellow }
+        return
+    }
+
+    # ── Build the file set: VERSION + all tracked pom.xml + CLI version files ──
+    $targets = [System.Collections.Generic.List[string]]::new()
+    $targets.Add("VERSION")
+
+    $tracked = git -C $RepoRoot ls-files 2>$null
+    foreach ($line in $tracked) {
+        $f = $line.Trim()
+        if (-not $f) { continue }
+        if ($f -match '(^|/)pom\.xml$') { $targets.Add($f); continue }
+        if ($f -in @('cli/package.json', 'cli/browser4-cli/Cargo.toml', 'cli/browser4-cli/Cargo.lock')) {
+            $targets.Add($f)
+        }
+    }
+
+    # ── Apply replacements ────────────────────────────────────────────────
+    $oldSnapshot = "$base-SNAPSHOT"
+    $changed = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($rel in $targets) {
+        $full = Join-Path $RepoRoot $rel
+        if (-not (Test-Path $full)) { continue }
+
+        $content = Get-Content -Path $full -Raw
+        if ($null -eq $content) { continue }
+
+        $updated = $content
+        if ($rel -eq 'VERSION') {
+            $updated = $nextSnapshot + "`n"
+        } elseif ($rel -match 'pom\.xml$') {
+            # pom.xml carries <version>X.Y.Z-SNAPSHOT</version> plus the root
+            # <scm><tag>vX.Y.Z</tag></scm> — replace both forms.
+            $updated = $updated.Replace($oldSnapshot, $nextSnapshot)
+            $updated = $updated.Replace("v$base", "v$nextBase")
+        } else {
+            # Cargo.toml / Cargo.lock / package.json carry the bare "X.Y.Z"
+            $updated = $updated.Replace('"' + $base + '"', '"' + $nextBase + '"')
+        }
+
+        if ($updated -ne $content) {
+            try {
+                [System.IO.File]::WriteAllText($full, $updated)
+                $changed.Add($rel)
+                Write-Host "  [bump] updated: $rel" -ForegroundColor DarkGray
+            } catch {
+                Write-Host "  [bump] WARN: could not write $rel : $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    }
+
+    if ($changed.Count -eq 0) {
+        Write-Host "  [bump] No version files needed updating (already at $nextSnapshot?)." -ForegroundColor Green
+        return
+    }
+
+    # ── Commit & push ─────────────────────────────────────────────────────
+    $commitMsg = "Auto-bump version to $nextSnapshot"
+    Push-Location $RepoRoot
+    try {
+        git add -- $changed
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  [bump] WARN: git add failed — leaving changes uncommitted." -ForegroundColor Yellow
+            return
+        }
+        git commit -m $commitMsg
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  [bump] WARN: git commit failed — leaving changes staged." -ForegroundColor Yellow
+            return
+        }
+        Write-Host "  [bump] Committed: $commitMsg" -ForegroundColor Green
+
+        if (-not $SkipPush) {
+            git push $Remote HEAD
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "  [bump] Pushed to $Remote" -ForegroundColor Green
+            } else {
+                Write-Host "  [bump] WARN: git push failed (exit $LASTEXITCODE) — commit is local only." -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "  [bump] -SkipPush set — commit left local." -ForegroundColor DarkGray
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
 $repoRoot = (git rev-parse --show-toplevel 2>$null)
 if (-not $repoRoot) {
     Write-Error "Not inside a git repository."
@@ -905,6 +1069,12 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if ($finalConclusion -eq "success") {
+    if (-not $SkipVersionBump) {
+        # Post-release: bump to next patch so the next release starts fresh.
+        Invoke-PostReleaseVersionBump -RepoRoot $repoRoot -Remote $remote
+    } else {
+        Write-Host "Version bump skipped (-SkipVersionBump)." -ForegroundColor DarkGray
+    }
     exit 0
 } else {
     # Extract errors from failed logs and dispatch a coworker task to fix them

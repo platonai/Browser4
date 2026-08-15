@@ -260,7 +260,7 @@ Release management scripts. See also [release/README.md](release/README.md) for 
 - **`trigger-release.ps1`**: Interactive script to create and push a release tag (`vX.Y.Z`). Validates the version in `VERSION`, shows changelog since the previous tag, and pushes to the specified remote.
 - **`check-publish-status.ps1`**: Check whether the current project version and CLI version have been fully published to GitHub and npm.
 - **`download-release-assets.ps1`**: Download all assets from a GitHub release (defaults to latest, supports specific tags via `-Tag`).
-- **`monitor-release.ps1`**: Monitor release workflow runs with diagnostic pipeline for release-specific failures.
+- **`monitor-release.ps1`**: Monitor release workflow runs with diagnostic pipeline for release-specific failures. On success, auto-bumps the version to the next patch (unless `-SkipVersionBump`).
 - **`tests/monitor-release.tests.ps1`**: Unit tests for `monitor-release.ps1`.
 
 > **Note:** Version bumping is handled by the root-level [`version.mjs`](#versionmjs). Deprecated scripts (`bump-version.ps1`, `bump-version-patch.ps1`, `update-versions.sh`) have been consolidated into `version.mjs`.
