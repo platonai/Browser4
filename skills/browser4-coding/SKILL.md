@@ -1,7 +1,7 @@
 ---
 name: browser4-coding
 description: "Create and validate Browser4 plugins, skills, JS scripts, and shell scripts; and develop Browser4 ITSELF (self-development): build modules, extract live skeletons, analyze impact, plan dev tasks, and check CDP pitfalls. Use when the user asks to write a Browser4 plugin or skill, write browser JS or build scripts, modify Browser4's own Kotlin/Rust code, or validate repo consistency."
-allowed-tools: coding.scaffold coding.scaffoldFlow coding.scaffoldFromExample coding.validate coding.write coding.read coding.replace coding.replaceRegex coding.editLines coding.insertAfter coding.revert coding.shell coding.mvnBuild coding.ktSymbols coding.ktReferences coding.impact coding.moduleGraph coding.devTask coding.trapCheck tab.eval tab.console
+allowed-tools: coding.scaffold coding.scaffoldFlow coding.scaffoldFromExample coding.validate coding.write coding.read coding.replace coding.replaceRegex coding.editLines coding.insertAfter coding.revert coding.shell coding.mvnBuild coding.ktSymbols coding.ktReferences coding.ktInheritance coding.impact coding.moduleGraph coding.devTask coding.trapCheck coding.protect tab.eval tab.console
 ---
 
 # browser4-coding
@@ -57,21 +57,24 @@ Which module owns a file, which modules are affected transitively (from the LIVE
 ### `coding.mvnBuild(module=..., goals=...)`
 `mvn -pl <module> -am <goals>` with structured Kotlin/Java compiler diagnostics instead of raw logs — the fast, dependency-free alternative to a Kotlin LSP server. Use to check code after edits (goals default `compile`, `skipTests=true`).
 
-### `coding.ktSymbols` / `coding.ktReferences`
-Zero-dependency Kotlin symbol/reference extraction (classes, functions, properties + call sites) — use before refactoring to assess impact without starting a JDTLS server.
+### `coding.ktSymbols` / `coding.ktReferences` / `coding.ktInheritance`
+Zero-dependency Kotlin analysis: symbols (classes/functions/properties), references (`scope='file'` default, or `scope='module'` for a cross-file scan that excludes the declaring file), and the inheritance chain (`ktInheritance(path, className?)` walks the primary supertype across the module's files). Use before refactoring to assess impact without starting a JDTLS server.
 
-### `coding.devTask(task=..., verify=...)`
-High-level entry: parse a natural-language dev task into an executable plan following the AGENTS.md flow — locate files → impact → mvnBuild compile → smallest-scope tests → trapCheck (driver code) → repo-consistency → commit guidance. `verify=true` runs the fast checks live. `module=` overrides the inferred module.
+### `coding.devTask(task=..., verify=..., runTests=...)`
+High-level entry: parse a natural-language dev task into an executable plan following the AGENTS.md flow — locate files → impact → mvnBuild compile → smallest-scope tests → trapCheck (driver code) → repo-consistency → commit guidance. Module mentions resolve against the LIVE pom graph when available. `verify=true` runs the fast checks (compile, trapCheck, repo-consistency); `runTests=true` (with verify) also runs the module's test suite — scoped to `-Dtest=<FooTest>` when the task names a test class. `module=` overrides the inferred module.
 
 ### `coding.trapCheck(path=...)`
 Scan a file for the three known Browser4 CDP pitfalls (AGENTS.md): mouseWheel race (crbug.com/444929150), cursor positioning after focus+click, Input.insertText racing. **Run before editing browser-driver code** (PulsarWebDriver.kt and friends).
+
+### `coding.protect(path=..., on=...)`
+Session-level dynamic file protection: `coding.protect(path="src/Foo.kt", on=true)` blocks delete/replace/editLines/insertAfter on that exact file; `on=false` removes it; `coding.protect()` lists dynamic protections. Repo-governance defaults (VERSION/AGENTS.md/CLAUDE.md/root pom/BOM/CI) are always protected and cannot be unprotected.
 
 ## Shell & Filesystem Tools
 
 - `coding.shell(command, timeoutSeconds?, workingDir?)` — execute allowed dev commands (git/cargo/mvn/npm/python/...)
 - File ops: `read`, `readLines`, `write`, `append`, `replace`, `replaceRegex`, `editLines`, `insertAfter`, `revert`, `delete`, `mkdir`, `copy`, `move`, `stat`, `diff` (myers/patience)
 - Search: `glob`, `grep` (skip excluded dirs), `languages`
-- **Repo governance protection**: delete/replace/editLines/insertAfter are BLOCKED for VERSION, AGENTS.md, CLAUDE.md, root pom.xml, browser4-dependencies/pom.xml (BOM), .github/workflows/ci.yml — do not try to work around this; ask the user for explicit intent instead
+- **Repo governance protection**: delete/replace/editLines/insertAfter are BLOCKED for VERSION, AGENTS.md, CLAUDE.md, root pom.xml, browser4-dependencies/pom.xml (BOM), .github/workflows/ci.yml — do not try to work around this; ask the user for explicit intent instead. Add session-level protections with `coding.protect(path, on)`.
 - `coding.runCode(language, code)` — sandboxed snippet execution (kotlin/js/python/bash)
 - LSP: `diagnostics(path)`, `symbols(pattern?)`, `references(path, symbol)`, `lspServers` — per-language servers (ts/js/py/rs), started on demand, requires the server installed; degrade gracefully when missing
 

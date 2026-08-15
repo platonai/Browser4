@@ -1,7 +1,7 @@
 ---
 name: browser4-dev
 description: "Develop features inside the Browser4 repository itself: add CLI commands, agent tool domains, REST endpoints, tests, and skills; analyze impact, plan dev tasks, check CDP pitfalls, and verify builds. Use when the user asks to add a new browser4-cli command, new tool domain, REST endpoint, modify Browser4's own Kotlin/Rust code, or check which modules a change affects."
-allowed-tools: coding.scaffoldFlow coding.scaffoldFromExample coding.mvnBuild coding.devTask coding.impact coding.moduleGraph coding.trapCheck coding.scaffold coding.write coding.read coding.readLines coding.replace coding.replaceRegex coding.editLines coding.insertAfter coding.revert coding.validate coding.shell coding.ktSymbols coding.ktReferences coding.diagnostics coding.references coding.symbols
+allowed-tools: coding.scaffoldFlow coding.scaffoldFromExample coding.mvnBuild coding.devTask coding.impact coding.moduleGraph coding.trapCheck coding.protect coding.scaffold coding.write coding.read coding.readLines coding.replace coding.replaceRegex coding.editLines coding.insertAfter coding.revert coding.validate coding.shell coding.ktSymbols coding.ktReferences coding.ktInheritance coding.diagnostics coding.references coding.symbols
 ---
 
 # browser4-dev
@@ -124,10 +124,12 @@ coding.devTask(task="fix the mouseWheel race in PulsarWebDriver.kt under
    undoes a bad edit.
 6. **Governance files are protected**: delete/replace on VERSION, AGENTS.md,
    CLAUDE.md, root pom.xml, the BOM, and the CI workflow are blocked by design —
-   ask the user for explicit intent instead of working around it.
+   ask the user for explicit intent instead of working around it. Add
+   session-level protections for any other file with `coding.protect(path, on)`.
 7. **Module topology is live**: `coding.moduleGraph`/`coding.impact` rebuild from
    the real poms; the static ModuleMap snapshot is guarded by E2E tests against
-   drift — sync it when adding a module.
+   drift — sync it when adding a module. Use `coding.ktReferences(scope="module")`
+   and `coding.ktInheritance` before refactoring shared Kotlin symbols.
 
 ## Examples
 

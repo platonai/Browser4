@@ -29,6 +29,7 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
   - [🚀 Build from Source](#-build-from-source)
   - [Architecture](#architecture)
   - [📦 Modules Overview](#-modules-overview)
+  - [🧩 Programming-Agent Kernel (browser4-coding)](#-programming-agent-kernel-browser4-coding)
   - [🧪 Test Fixture Server (MockSite)](#-test-fixture-server-mocksite)
   - [🤝 Support & Community](#-support--community)
   - [📜 Documentation](#-documentation)
@@ -655,6 +656,7 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 - **Backend** (`browser4-rest`) — Spring Boot server, dispatches MCP tools to browser drivers
 - **Browser driver** (`browser4-core/browser4-browser`) — wraps Chrome DevTools Protocol
 - **Agent tools** (`browser4-agentic`) — maps MCP tool names to browser automation methods
+- **Programming kernel** (`browser4-coding`) — dependency-light agent toolkit (sandboxed shell/filesystem, scaffolding, validation, self-development tools) — see [below](#-programming-agent-kernel-browser4-coding)
 
 ## 📦 Modules Overview
 
@@ -666,6 +668,7 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 | `browser4-dependencies` | BOM and dependency version alignment                                 |
 | `browser4-tools` | Operational tools and launch helpers                                 |
 | `browser4-agentic` | AI agents, MCP integration, skill registration                       |
+| `browser4-coding` | Programming-agent kernel — sandboxed shell/fs, artifact scaffolding & validation, self-development tools (47 `coding.*` tools) |
 | `browser4-agent-tools` | High-level agent tools: scraping, crawling, stateful page interaction |
 | `browser4-rest` | Spring Boot REST layer & command endpoints                           |
 | `browser4-apps/browser4-standalone` | Product packaging — unified launcher (`target/Browser4.jar`)         |
@@ -673,6 +676,28 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 | `browser4-tests` | E2E, integration, and scenario test suites                           |
 | `cdp-protocol` | Chrome DevTools Protocol JSON definitions                            |
 | `coworker/` | Builtin AI coworker                                                  |
+
+---
+
+## 🧩 Programming-Agent Kernel (browser4-coding)
+
+`browser4-coding` is the dependency-light programming kernel that lets an AI agent create Browser4 artifacts **and** develop Browser4 itself. It is independent of `browser4-agentic` and `pulsar-common` (only SLF4J + Jackson + coroutines), so it can be reused by non-agent hosts. Heavy backends (LSP servers, kotlin-compiler-embeddable) are probed at runtime and never downloaded by default.
+
+The `coding` domain exposes **47 tools** in four groups:
+
+| Group | Count | Highlights |
+|---|---|---|
+| Shell & filesystem | 28 | sandboxed `coding.shell` (command whitelist), snapshot-based edit primitives with `revert`, `diff` (Myers/Patience), repo-governance protection (`coding.protect`) |
+| Artifact creation & validation | 6 | `scaffold` (plugin/skill/js/script), `scaffoldFlow` (multi-file dev-flow), `scaffoldFromExample` (anti-staleness live templates, directory mode + stem-derived renames), `validate` (incl. `repo-consistency`) |
+| Self-development | 7 | `mvnBuild` (structured diagnostics), `ktSymbols`/`ktReferences`/`ktInheritance` (zero-dep Kotlin analysis), `impact` + `moduleGraph` (live pom graph), `devTask` (AGENTS.md flow + execution), `trapCheck` (CDP pitfalls) |
+| LSP | 4 | on-demand `diagnostics`/`symbols`/`references` for ts/js/py/rs (degrades gracefully when a server is missing) |
+
+**Generic vs project-specific**: the kernel is layered by *mechanism vs data* — diff, sandbox, LSP client, Kotlin analysis, Maven passthrough and the pom-graph scanner are generic and portable; the scaffolds, validators, `ModuleMap`, `CdpTrapCheck` and the governance defaults encode Browser4 conventions and are the layer to rewrite when reusing the kernel elsewhere.
+
+- Full tool reference & workflows: `skills/browser4-coding/SKILL.md`
+- Developing Browser4 itself: `skills/browser4-dev/SKILL.md`
+- Four-artifact comparison examples (real vs scaffold output): `docs-dev/copilot/examples/`
+- Evaluation summary (P1–P7): `docs-dev/copilot/browser4-programming-support-eval.md`
 
 ---
 

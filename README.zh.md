@@ -29,6 +29,7 @@
   - [🚀 从源码构建](#-从源码构建)
   - [架构](#架构)
   - [📦 模块概览](#-模块概览)
+  - [🧩 编程内核（browser4-coding）](#-编程内核browser4-coding)
   - [🧪 测试夹具服务器（MockSite）](#-测试夹具服务器mocksite)
   - [🤝 支持与社区](#-支持与社区)
   - [📜 文档](#-文档)
@@ -671,6 +672,7 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 - **Backend**（`browser4-rest`）— Spring Boot 服务，负责把 MCP 工具请求分发给浏览器驱动
 - **Browser driver**（`browser4-core/browser4-browser`）— 对 Chrome DevTools Protocol 的封装
 - **Agent tools**（`browser4-agentic`）— 把 MCP 工具名映射到浏览器自动化方法
+- **编程内核**（`browser4-coding`）— 轻依赖 agent 工具箱（沙箱 shell/文件系统、脚手架、校验、自身开发工具），见[下文](#-编程内核browser4-coding)
 
 ## 📦 模块概览
 
@@ -682,6 +684,7 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 | `browser4-dependencies` | BOM 与依赖版本对齐 |
 | `browser4-tools` | 运维工具与启动辅助 |
 | `browser4-agentic` | AI agent、MCP 集成、skill 注册 |
+| `browser4-coding` | 编程内核——沙箱 shell/fs、工件脚手架与校验、自身开发工具（47 个 `coding.*` 工具） |
 | `browser4-agent-tools` | 高层 agent 工具：抓取、爬取、有状态页面交互 |
 | `browser4-rest` | Spring Boot REST 层与命令端点 |
 | `browser4-apps/browser4-standalone` | 产品打包——统一启动器（`target/Browser4.jar`） |
@@ -689,6 +692,28 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 | `browser4-tests` | E2E、集成与场景测试套件 |
 | `cdp-protocol` | Chrome DevTools Protocol JSON 定义 |
 | `coworker/` | 内置 AI 协作助手 |
+
+---
+
+## 🧩 编程内核（browser4-coding）
+
+`browser4-coding` 是轻依赖的编程内核：让 AI agent 既能创建 Browser4 工件，也能**开发 Browser4 自身**。它独立于 `browser4-agentic` 与 `pulsar-common`（仅依赖 SLF4J + Jackson + 协程），可供非 agent 宿主复用；重后端（LSP 服务器、kotlin-compiler-embeddable）仅在运行时探测，默认不加载不下载。
+
+`coding` 域共 **47 个工具**，分四组：
+
+| 分组 | 数量 | 要点 |
+|---|---|---|
+| Shell 与文件系统 | 28 | 沙箱 `coding.shell`（命令白名单）、快照编辑原语 + `revert`、`diff`（Myers/Patience）、仓库治理保护（`coding.protect`） |
+| 工件创作与校验 | 6 | `scaffold`（plugin/skill/js/script）、`scaffoldFlow`（多文件开发流）、`scaffoldFromExample`（反陈旧活模板，目录模式 + 词干派生改名）、`validate`（含 `repo-consistency`） |
+| 自身开发 | 7 | `mvnBuild`（结构化诊断）、`ktSymbols`/`ktReferences`/`ktInheritance`（零依赖 Kotlin 分析）、`impact` + `moduleGraph`（实时 pom 图谱）、`devTask`（AGENTS.md 流程 + 执行）、`trapCheck`（CDP 陷阱） |
+| LSP | 4 | 按需 `diagnostics`/`symbols`/`references`（ts/js/py/rs，服务器缺失时优雅降级） |
+
+**通用能力 vs 项目专用**：内核按"机制 vs 数据"分层——diff、沙箱、LSP 客户端、Kotlin 分析、Maven 通道与 pom 图谱扫描均为通用可移植；脚手架、校验器、`ModuleMap`、`CdpTrapCheck` 与治理默认清单编码了 Browser4 约定，复用到其他项目时需重写这一层。
+
+- 工具全量参考与工作流：`skills/browser4-coding/SKILL.md`
+- 开发 Browser4 自身：`skills/browser4-dev/SKILL.md`
+- 四类工件对照示例（真实实现 vs 脚手架输出）：`docs-dev/copilot/examples/`
+- 评估总结（P1–P7）：`docs-dev/copilot/browser4-programming-support-eval.md`
 
 ---
 
