@@ -7,7 +7,7 @@
     Checks for and optionally installs all prerequisites listed in the
     "Build from Source" section of README.md:
 
-      Git, JDK 17+ (21+ recommended, Eclipse Temurin), Maven 3.9+,
+      Git, JDK 25+ (Eclipse Temurin), Maven 3.9+,
       PowerShell 7 (pwsh, on Linux/macOS), Chrome/Chromium,
       Rust (stable), Node.js + pnpm, and platform tools (tar, wget/curl).
 
@@ -138,20 +138,20 @@ Check "Git" {
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# 2. JDK 17+  (Eclipse Temurin recommended; 21+ even better)
+# 2. JDK 25+  (Eclipse Temurin recommended)
 # ═══════════════════════════════════════════════════════════════════
-Write-Hdr "JDK  (requires 17+, 21+ recommended)"
+Write-Hdr "JDK  (requires 25+)"
 Check "JDK" {
     if (Test-Cmd java) {
         $v = Get-Ver java
-        $ok = Test-MinVer $v '17'
+        $ok = Test-MinVer $v '25'
         if ($ok) { return $true, $v } else { return $false, $v }
     }
     return $false, $null
 } {
-    $jdkVer = '21'  # install Temurin 21 (LTS)
+    $jdkVer = '25'  # install Temurin 25 (LTS)
     if ($IsWin) {
-        winget install --id EclipseAdoptium.Temurin.21.JDK -e --source winget 2>$null
+        winget install --id EclipseAdoptium.Temurin.25.JDK -e --source winget 2>$null
         # Refresh PATH for this session
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
                     [System.Environment]::GetEnvironmentVariable("Path","User")
@@ -248,7 +248,7 @@ Check "jdeps" {
 } {
     # These come with the JDK — nothing to install separately.
     # The JDK step above should have installed them.
-    Write-Warn "jdeps not found. Ensure JDK 17+ is installed and JAVA_HOME/bin is on PATH."
+    Write-Warn "jdeps not found. Ensure JDK 25+ is installed and JAVA_HOME/bin is on PATH."
 }
 Check "jlink" {
     if (Test-Cmd jlink) { return $true, (Get-Ver jlink) }

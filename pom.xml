@@ -750,7 +750,7 @@
         <jacocoArgLine></jacocoArgLine>
 
         <!--  Language  -->
-        <javaVersion>17</javaVersion>
+        <javaVersion>25</javaVersion>
         <kotlin.coroutine.version>1.10.2</kotlin.coroutine.version>
 
         <!--  Kotlin  -->

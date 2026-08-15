@@ -5,7 +5,7 @@
 # Checks for (and with -i, installs) the prerequisites listed in the
 # "Build from Source" section of README.md:
 #
-#   Git, JDK 17+ (21+ recommended, Eclipse Temurin), Maven 3.9+,
+#   Git, JDK 25+ (Eclipse Temurin), Maven 3.9+,
 #   PowerShell 7 (pwsh, on Linux/macOS), Chrome/Chromium,
 #   Rust (stable), Node.js + pnpm, and platform tools (tar, wget/curl).
 #
@@ -164,7 +164,7 @@ check() {
 # ═══════════════════════════════════════════════════════════════════
 
 install_jdk() {
-    local JDK_VER=21
+    local JDK_VER=25
     case "$OS" in
         macos)
             brew install --cask "temurin@${JDK_VER}" ;;
@@ -279,11 +279,11 @@ check "Git" \
     'pkg_install git'
 
 # ═══════════════════════════════════════════════════════════════════
-# 2. JDK 17+  (Eclipse Temurin recommended; 21+ even better)
+# 2. JDK 25+  (Eclipse Temurin recommended)
 # ═══════════════════════════════════════════════════════════════════
-echo -e "${CYAN}── JDK  (requires 17+, 21+ recommended) ──${NC}"
+echo -e "${CYAN}── JDK  (requires 25+) ──${NC}"
 check "JDK" \
-    'v=$(try_version java); if [[ -n $v ]] && version_ge "$v" 17; then echo "java $v"; fi' \
+    'v=$(try_version java); if [[ -n $v ]] && version_ge "$v" 25; then echo "java $v"; fi' \
     'install_jdk'
 
 # ═══════════════════════════════════════════════════════════════════

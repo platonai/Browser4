@@ -1,5 +1,5 @@
 # Stage 1: Build stage
-FROM maven:3.9.9-eclipse-temurin-21-alpine AS builder
+FROM maven:3.9.9-eclipse-temurin-25-alpine AS builder
 
 # Set working directory
 WORKDIR /build
@@ -38,7 +38,7 @@ RUN jar xf /build/app.jar META-INF/MANIFEST.MF && \
     echo "JAR validated: Start-Class is Browser4StandaloneApplicationKt"
 
 # Stage 2: Run stage
-FROM eclipse-temurin:21-jre-alpine AS runner
+FROM eclipse-temurin:25-jre-alpine AS runner
 
 # Set working directory
 WORKDIR /app

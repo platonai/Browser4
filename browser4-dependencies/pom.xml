@@ -536,7 +536,7 @@
         <mcp-sdk.version>0.8.1</mcp-sdk.version>
 
         <!--  Language  -->
-        <javaVersion>17</javaVersion>
+        <javaVersion>25</javaVersion>
         <kotlinVersion>2.3.21</kotlinVersion>
         <kotlin.coroutine.version>1.10.2</kotlin.coroutine.version>
 

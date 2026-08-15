@@ -384,7 +384,7 @@ Use `--force` to bypass the cache and fetch a fresh download.
 | macOS | ARM64 (Apple Silicon) | `browser4-bundle-runtime-darwin-arm64.tar.gz` |
 
 If your platform is not listed, the CLI prints an error with instructions to
-install Java 17+ and use the standalone `Browser4.jar` release asset instead.
+install Java 25+ and use the standalone `Browser4.jar` release asset instead.
 
 ---
 

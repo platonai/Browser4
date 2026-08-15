@@ -22,7 +22,7 @@ env:
   DEPENDENCY_SERVICES: 'mongodb'
   MONGODB_CONTAINER: 'mongodb'
   MONGODB_PORT: '27017'
-  JAVA_VERSION: '17'
+  JAVA_VERSION: '25'
   MAVEN_OPTS: '-Xmx3g -XX:+UseG1GC'
 
 jobs:

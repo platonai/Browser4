@@ -727,7 +727,7 @@ Organized by task — follow the link that matches what you're trying to do:
 [shell-quoting.md](references/shell-quoting.md) — avoid shell-quoting breakage for complex JS/X-SQL on Windows / Git Bash
 
 **Developers:**
-[development.md](references/development.md) — build the CLI from source (Rust, Java 17+)
+[development.md](references/development.md) — build the CLI from source (Rust, Java 25+)
 
 ## Installation
 

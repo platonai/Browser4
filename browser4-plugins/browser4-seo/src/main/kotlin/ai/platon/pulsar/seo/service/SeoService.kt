@@ -40,7 +40,7 @@ open class SeoService(
      * Returns the raw result of [extract-meta.js] (title, description, canonical,
      * Open Graph, Twitter, headings, word count, JSON-LD, etc.).
      */
-    fun extractMeta(driver: WebDriver): Any? {
+    suspend fun extractMeta(driver: WebDriver): Any? {
         requireNotNull(driver) { "extractMeta requires a WebDriver (current page context)" }
         return try {
             driver.evaluateValue(extractScript)
@@ -54,7 +54,7 @@ open class SeoService(
      * Audit the current page for common SEO issues.
      * Returns the raw result of [check-issues.js] (a list of issues with severity).
      */
-    fun checkIssues(driver: WebDriver): Any? {
+    suspend fun checkIssues(driver: WebDriver): Any? {
         requireNotNull(driver) { "checkIssues requires a WebDriver (current page context)" }
         return try {
             driver.evaluateValue(checkScript)

@@ -23,7 +23,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  JAVA_VERSION: '17'
+  JAVA_VERSION: '25'
   MAVEN_OPTS: '-Xmx3g -XX:+UseG1GC'
 
 jobs:

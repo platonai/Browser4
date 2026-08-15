@@ -616,7 +616,7 @@ export BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS=300
 
 ## 🚀 从源码构建
 
-**前置要求：** Git、JDK 17+（推荐 21+）、Chrome/Chromium，以及 PowerShell 7（Linux/macOS 需要）。完整前置条件表、平台差异工具和 Chrome 自动探测路径请见 [Build from Source](docs/build-from-source.md)。
+**前置要求：** Git、JDK 25+（Eclipse Temurin）、Chrome/Chromium，以及 PowerShell 7（Linux/macOS 需要）。完整前置条件表、平台差异工具和 Chrome 自动探测路径请见 [Build from Source](docs/build-from-source.md)。
 
 1. **克隆仓库**
    ```shell

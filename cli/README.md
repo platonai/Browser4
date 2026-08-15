@@ -611,7 +611,7 @@ The runtime bundle is stored separately in a platform-conventional application-d
 
 ## 🚀 Build from Source
 
-**Prerequisites:** Git, JDK 17+ (21+ recommended), Chrome/Chromium, and PowerShell 7 (Linux/macOS only). For the full prerequisites table, platform-specific tools, and Chrome auto-detection paths, see [Build from Source](docs/build-from-source.md).
+**Prerequisites:** Git, JDK 25+ (Eclipse Temurin), Chrome/Chromium, and PowerShell 7 (Linux/macOS only). For the full prerequisites table, platform-specific tools, and Chrome auto-detection paths, see [Build from Source](docs/build-from-source.md).
 
 1. **Clone the repository**
    ```shell

@@ -767,7 +767,15 @@ $mvnCmd = Resolve-MavenCommand -repositoryRoot $repoRoot
 # runs `mvn install` before invoking this script and passes -SkipMavenInstall).
 if (-not $SkipMavenInstall) {
     Write-Host "Ensuring main modules are installed to ~/.m2 ..."
+    # GraalVM (JDK 25) defaults UseJVMCICompiler=true, which breaks the Kotlin
+    # compile/kapt daemon's RMI handshake ("Failed connecting to the daemon in
+    # 4 retries"). Fall back to in-process compilation in that case.
+    $mavenJdkIsGraalVm = (Get-JavaVersionText) -match 'GraalVM'
     $installArgs = @('install', '-Pall-main-modules,asset-bundle', '-DskipTests')
+    if ($mavenJdkIsGraalVm) {
+        Write-Host "GraalVM detected - disabling the Kotlin compiler daemon (in-process compilation)." -ForegroundColor Yellow
+        $installArgs += '-Dkotlin.compiler.daemon=false'
+    }
     if (-not $ShowMavenOutput) {
         $installArgs += '-q'
     }

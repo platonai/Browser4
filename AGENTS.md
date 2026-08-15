@@ -208,7 +208,7 @@ File-queue system for task-driven AI workflows (`coworker/`). Task files (Markdo
 |---|---|
 | `.ps1` scripts don't run on Linux | `sudo apt-get install -y powershell`, then `pwsh script.ps1` |
 | `mvnw` no execute permission | `chmod +x mvnw` |
-| JDK version mismatch | JDK 17+ in `JAVA_HOME` |
+| JDK version mismatch | JDK 25+ in `JAVA_HOME` |
 | Windows parameter escaping | `-D"key.with.dots=value"` |
 | Port 8182 in use | Override `server.port` in root `application.properties` |
 | BrowserProtocol retry log storms | Use existing retry utilities, lower log level |

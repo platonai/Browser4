@@ -7,7 +7,7 @@ This guide covers prerequisites, platform-specific requirements, and build steps
 | Tool | Minimum Version | Required For | Notes |
 |------|----------------|-------------|-------|
 | **Git** | any | Clone, root discovery | |
-| **JDK** | 17+ (21+ recommended) | Build & runtime | Eclipse Temurin recommended. JDK 21+ enables best jlink compression (zip-9). |
+| **JDK** | 25+ | Build & runtime | Eclipse Temurin recommended. JDK 25 enables the JVM AOT cache (JEP 483/515) for fast startup. |
 | **Maven** | 3.9+ | Java build | Included via `mvnw` wrapper — no separate install needed. |
 | **PowerShell 7** (`pwsh`) | 7.0+ | Runtime bundle assembly (jlink) | Required on **Linux** and **macOS**. Built-in on Windows (`powershell.exe`). Install: `curl -fsSL https://aka.ms/install-powershell.sh \| bash` |
 | **JDK tools** (`jdeps`, `jlink`, `jpackage`) | bundled with JDK 16+ | Runtime bundle assembly | Included in your JDK installation — no separate install needed. |

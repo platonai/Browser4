@@ -9,7 +9,7 @@ tier: procedure
 ## Prerequisites for Development
 
 - **[Rust](https://rustup.rs/)** — via `rustup`; needed to compile the CLI binary.
-- **Java 17+** — required by the Browser4 backend server.
+- **Java 25+** — required by the Browser4 backend server.
 - **[Git](https://git-scm.com/)** — for cloning the repository.
 
 Verify your setup with:

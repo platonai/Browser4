@@ -6,7 +6,7 @@
 # This Dockerfile skips the Maven build stage and directly copies the pre-built JAR,
 # significantly reducing build time when the JAR is already available.
 
-FROM eclipse-temurin:21-jre-alpine AS runner
+FROM eclipse-temurin:25-jre-alpine AS runner
 
 # Set working directory
 WORKDIR /app
