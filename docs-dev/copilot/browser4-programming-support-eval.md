@@ -12,7 +12,7 @@
 
 **最终结论**：
 - **四类工件支持**：从"模板+校验"升级为"脚手架（scaffold / scaffoldFlow）+ 校验器（validate，含工具引用交叉验证）+ 反陈旧活模板（scaffoldFromExample，文件/目录双模式 + 词干派生改名）"，并通过真实插件 browser4-seo 逐文件对照验证为成熟超集。
-- **自身开发支持**：新增 45 个 `coding.*` 工具覆盖"改前影响分析 → 编译诊断 → 最小测试 → CDP 陷阱提醒 → 治理校验 → 提交"的完整 AGENTS.md 开发流；模块拓扑从静态快照升级为运行时实时图谱（含防漂移守门测试）。
+- **自身开发支持**：新增 47 个 `coding.*` 工具覆盖"改前影响分析 → 编译诊断 → 最小测试 → CDP 陷阱提醒 → 治理校验 → 提交"的完整 AGENTS.md 开发流；模块拓扑从静态快照升级为运行时实时图谱（含防漂移守门测试）。
 - **工程质量**：browser4-coding 18 个主文件 6,161 行 + 19 个测试文件 3,313 行；browser4-coding 208 / browser4-agentic 909 测试全绿；全部提交已推送到 GitHub（4.14.x）。
 
 ## 2. 原始评估发现（回顾）
@@ -45,7 +45,7 @@
 | P6 快照治理 | `21e06cd6f` | ModuleMap 静态快照与实时图谱同步（12→36 模块）；`ModuleMapDriftE2ETest` + `ModuleGraphE2ETest` 守门 |
 | P7 执行闭环 | `2892e9a27` | devTask `runTests` 实跑模块测试；规划接入实时模块图；browser4-dev 技能同步 |
 
-## 4. coding 域 45 工具分组
+## 4. coding 域 47 工具分组
 
 （`CodingToolExecutor`，domain=`coding`，receiver=`CodingAgentShell` + `CodingAgentFileSystem` 复合 Target）
 
@@ -107,16 +107,19 @@ Shell（7）：`shell` `shellOutput` `shellStatus` `shellList` `shellSetEnv` `to
 
 ## 8. 使用指南
 
-- **四类工件创作 / 自身开发**：见 `skills/browser4-coding/SKILL.md`（45 工具全量文档 + 工作流）
+- **四类工件创作 / 自身开发**：见 `skills/browser4-coding/SKILL.md`（47 工具全量文档 + 工作流）
 - **开发 Browser4 自身**：见 `skills/browser4-dev/SKILL.md`（改前影响半径 → 脚手架 → 编译 → 测试 → 治理）
 - **推荐顺序**（自身开发）：`coding.impact` → `coding.read` → `coding.trapCheck`（驱动代码）→ 编辑 → `coding.mvnBuild` → 最小测试 → `coding.validate(type=repo-consistency)` → `coding.moduleGraph()` 确认无漂移
 - **一步到位**：`coding.devTask(task="...", verify=true, runTests=true)`
 
-## 9. 后续候选（未做，按价值排序）
+## 9. 后续候选（已完成标记 ✅，2026-08-15 收尾轮）
 
-1. devTask 测试类名解析（runTests 精准到 -Dtest=）
-2. `coding.protect` 运行时动态增删受保护文件
-3. KotlinSemanticIndexer 跨文件引用/继承链
-4. 四类工件对照示例库（真实实现 vs 脚手架输出）
-5. 工具级真实 E2E 套件（与"不跑重套件"政策平衡）
-6. GitHub release/tag（版本意图需确认：VERSION 当前 4.13.4-SNAPSHOT）
+1. ✅ devTask 测试类名解析（runTests 精准到 -Dtest=，提交 dd33387d6）
+2. ✅ `coding.protect` 运行时动态增删受保护文件（提交 2758a1c76）
+3. ✅ KotlinSemanticIndexer 跨文件引用/继承链（ktReferences scope=module、ktInheritance，提交 d6fafa8a1）
+4. ✅ 四类工件对照示例库（docs-dev/copilot/examples/，真实生成输出，提交 4b66fd427）
+5. ✅ 工具级真实 E2E 套件（CodingToolsE2ETest，轻量不跑 mvn，提交 547477705）
+6. ⏭ GitHub release/tag —— 跳过：需远端操作且 VERSION 仍为 4.13.4-SNAPSHOT，发布前需确认版本意图
+
+coding 工具总数：**47**（+devTask 测试类解析、+protect、+ktInheritance）。测试：coding 222 / agentic 912。
+
