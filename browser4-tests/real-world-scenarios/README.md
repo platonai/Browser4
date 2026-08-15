@@ -123,6 +123,7 @@ htmlsnapshot, attach, named sessions, auto-diff).
 | `crawl-link-discovery.md` | books.toscrape.com | Crawl with link discovery, seed files, format/output options |
 | `loop-monitoring.md` | httpbin.org | Loop in plain-text/shell/subcommand modes, named loops, pause/resume/stop |
 | `attach-remote-debug.md` | Chrome/Edge CDP | Attach to running Chrome/Edge via CDP, capture state |
+| `attach-failure-boundaries.md` | Chrome CDP | Attach failure modes: unreachable endpoint fails loudly, page-less endpoint is an error, real current page reported, random-port discovery via channel |
 
 ### Real-World — Plugin Scenarios (`tasks/real-world/browser4/plugin-*.md`)
 
