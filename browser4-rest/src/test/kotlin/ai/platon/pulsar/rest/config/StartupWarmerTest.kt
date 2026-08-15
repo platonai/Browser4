@@ -10,13 +10,16 @@ import org.springframework.context.ApplicationContext
 
 /**
  * Verifies [StartupWarmer] touches every bean on the critical path
- * from HTTP request → MCP dispatch → session → browser → fetch → swarm.
+ * from HTTP request → MCP dispatch → session → browser → fetch.
  *
  * These tests pin the exact bean-name list so that CI catches a regression
  * when a bean is removed from the warmer (or added to the chain without
  * updating the warmer), which would reintroduce "Protocol not found (1600)"
- * errors and stuck swarm worker pools on cold starts with
- * [spring.main.lazy-initialization=true].
+ * errors on cold starts with [spring.main.lazy-initialization=true].
+ *
+ * Crawl ([crawlService]) and swarm ([swarmService]) are intentionally
+ * absent: they are non-primary scenarios with heavy initialization and
+ * fall back to lazy creation on first use (see StartupWarmer KDoc).
  */
 class StartupWarmerTest {
 
@@ -33,8 +36,6 @@ class StartupWarmerTest {
         "agenticContext",
         "protocolFactory",
         "fetchComponent",
-        "crawlService",
-        "swarmService",
     )
 
     @Test
@@ -75,7 +76,7 @@ class StartupWarmerTest {
         val warmer = StartupWarmer(context)
         warmer.onReady() // must not throw synchronously
 
-        // All 7 beans must still be attempted — the warm-up must not
+        // All beans must still be attempted — the warm-up must not
         // short-circuit on the first failure.
         val captor = argumentCaptor<String>()
         Mockito.verify(context, timeout(3000).times(expectedWarmupBeanNames.size))

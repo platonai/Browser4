@@ -28,19 +28,26 @@ class StartupWarmer(
     private val logger = LoggerFactory.getLogger(StartupWarmer::class.java)
 
     /**
-     * Bean names that cover the critical path from HTTP request →
-     * MCP dispatch → session → browser → fetch → swarm.
+     * Bean names covering the critical path from HTTP request →
+     * MCP dispatch → session → browser → fetch.
      *
      * Order matters: beans are touched in sequence so Spring resolves
      * each dependency chain before moving to the next.
      *
      * With [spring.main.lazy-initialization=true] the first request that
-     * touches a lazy bean pays the full creation cost — including protocol
-     * handler registration (FetchComponent), browser pool creation
-     * (SwarmService), and crawl infrastructure (CrawlService).  By warming
-     * these eagerly in the background, the first real request finds them
-     * already initialized and avoids "Protocol not found (1600)" errors
-     * and stuck swarm worker pools.
+     * touches a lazy bean pays the full creation cost.  Warming these
+     * eagerly in the background keeps the primary scenario (CLI browser
+     * automation via MCP dispatch) fast on the first command after boot.
+     *
+     * The fetch/protocol layer stays on the warm-up list because scrape
+     * requests depend on registered protocol handlers — skipping it would
+     * reintroduce "Protocol not found (1600)" errors on cold starts.
+     *
+     * Crawl ([crawlService]) and swarm ([swarmService]) infrastructure are
+     * deliberately NOT warmed: they are non-primary scenarios with heavy
+     * initialization (browser pools, worker pools), and their first request
+     * can tolerate the lazy-creation cost.  They fall back to plain lazy
+     * initialization on first use.
      */
     private val warmupBeanNames = listOf(
         // REST layer
@@ -50,17 +57,10 @@ class StartupWarmer(
         // Agentic context (H2 DB init, etc.)
         "agenticContext",
         // Fetch / protocol layer — ensures protocol handlers are registered
-        // before the first crawl/scrape/swarm request, avoiding race conditions
-        // where FetchComponent reports "Protocol not found (1600)".
+        // before the first scrape request, avoiding race conditions where
+        // FetchComponent reports "Protocol not found (1600)".
         "protocolFactory",
         "fetchComponent",
-        // Crawl infrastructure
-        "crawlService",
-        // Swarm infrastructure — forces the swarm browser pool and worker
-        // pool to initialize eagerly so that swarm-submit jobs transition
-        // from "queued" → "processing" immediately instead of timing out
-        // because the browser session was never created.
-        "swarmService",
     )
 
     @EventListener(ApplicationReadyEvent::class)

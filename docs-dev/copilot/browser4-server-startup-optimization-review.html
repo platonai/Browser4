@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Browser4 服务器端启动速度优化评估</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #1f2328; --muted: #57606a;
+    --border: #d8dee4; --accent: #0969da; --good: #1a7f37; --warn: #9a6700; --bad: #cf222e;
+    --code-bg: #f0f2f5; --tag-bg: #ddf4ff; --tag-ink: #0969da;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.65; font-size: 15px; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 32px 24px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .meta { color: var(--muted); font-size: 13px; margin-bottom: 28px; }
+  h2 { font-size: 19px; margin: 40px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 16px; margin: 24px 0 8px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px 20px; margin: 14px 0; }
+  .tldr { border-left: 4px solid var(--accent); }
+  code, pre { font-family: "Cascadia Code", Consolas, "JetBrains Mono", monospace; font-size: 13px; }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+  pre { background: var(--code-bg); border-radius: 8px; padding: 12px 14px; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; background: var(--card);
+    font-size: 13.5px; }
+  th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #eef1f4; }
+  .tag { display: inline-block; background: var(--tag-bg); color: var(--tag-ink);
+    border-radius: 10px; padding: 0 8px; font-size: 12px; font-weight: 600; margin-right: 6px; }
+  .p0 { background: #ffebe9; color: var(--bad); }
+  .p1 { background: #fff8c5; color: var(--warn); }
+  .p2 { background: #dafbe1; color: var(--good); }
+  .done { color: var(--good); font-weight: 600; }
+  .todo { color: var(--muted); }
+  ul { padding-left: 22px; margin: 8px 0; }
+  li { margin: 4px 0; }
+  .small { font-size: 12.5px; color: var(--muted); }
+  .flow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 10px 0; }
+  .flow .step { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 10px; font-size: 12.5px; }
+  .flow .arrow { color: var(--muted); }
+  .risk-high { color: var(--bad); font-weight: 600; }
+  .risk-mid { color: var(--warn); font-weight: 600; }
+  .risk-low { color: var(--good); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Browser4 服务器端启动速度优化评估</h1>
+<div class="meta">2026-08-15 · 基于 Browser4-4.14 工作区 · Spring Boot 4.0.6 / Kotlin 2.3.21 / JDK 17+</div>
+
+<div class="card tldr">
+<strong>结论（TL;DR）</strong>
+<p>项目已完成<strong>第一轮低成本优化</strong>：全局懒加载 + 18 项自动装配排除 + C1 编译限制 + 后台预热，据代码注释记录启动时间已从 <strong>~6s 降至 ~2s</strong>。剩余最大的确定性收益是 <strong>AppCDS / Spring CDS 训练归档</strong>（典型可再减 30–40% 类加载时间），其次是<strong>启动可观测性基线</strong>（当前缺少量化数据，所有后续优化都应先补上它）。Spring AOT 与 GraalVM native image 虽已铺路（RuntimeHints、native profile、Dockerfile.native），但与运行时插件动态加载（URLClassLoader）存在结构性冲突，只建议作为可选发布形态，不建议作为默认路径。</p>
+</div>
+
+<h2>1. 启动链路现状</h2>
+
+<div class="flow">
+  <span class="step">browser4-cli (Rust)<br><span class="small">daemon.rs</span></span><span class="arrow">→</span>
+  <span class="step">检测 Java / 浏览器<br><span class="small">find_browser_executable()</span></span><span class="arrow">→</span>
+  <span class="step">java -cp … MainClass<br><span class="small">-XX:TieredStopAtLevel=1</span></span><span class="arrow">→</span>
+  <span class="step">PluginClasspathEnhancer<br><span class="small">扫描 ./plugins/*.jar</span></span><span class="arrow">→</span>
+  <span class="step">Spring Boot 启动<br><span class="small">profiles: standalone/private/advanced</span></span><span class="arrow">→</span>
+  <span class="step">端口 8182 就绪<br><span class="small">ApplicationReadyEvent</span></span><span class="arrow">→</span>
+  <span class="step">StartupWarmer 后台预热<br><span class="small">MCP 关键路径 5 个 bean</span></span>
+</div>
+
+<p>关键事实：</p>
+<ul>
+  <li>生产启动由 <code>cli/browser4-cli/src/daemon.rs</code> 拼装 JVM 参数：<code>-Dchrome.path=…</code>、<code>-Dapp.name=browser4</code>、<code>-XX:TieredStopAtLevel=1</code>，用户可通过 <code>BROWSER4_SERVER_OPTS</code> 环境变量覆盖/追加（JVM 标志前置、程序参数后置，设计合理）。</li>
+  <li>主类 <code>Browser4StandaloneApplication</code> → <code>@Import(ApiApplication)</code>， profiles 强制 <code>standalone/private/advanced</code>。</li>
+  <li><code>PluginClasspathEnhancer</code> 在 <code>main()</code> 中把 <code>plugins/*.jar</code> 挂到 URLClassLoader —— 这是启动路径上唯一的动态类加载源，也是 AOT/native 的主要障碍。</li>
+  <li>启动完成不代表可用：<code>StartupWarmer</code> 在就绪后<strong>异步</strong>预热 <code>mcpToolController → sessionManager → agenticContext → protocolFactory → fetchComponent</code>。首条 CLI 命令若落在预热完成前，仍会触发懒加载创建链。<em>（2026-08-15 复审调整：<code>crawlService</code>、<code>swarmService</code> 已移出预热列表 —— crawl/swarm 为非首要场景、初始化重（浏览器池/工作池），首请求懒创建可接受，从而缩短启动后的后台预热窗口。）</em></li>
+</ul>
+
+<h2>2. 已落地的优化（无需重复做）</h2>
+
+<table>
+<tr><th>措施</th><th>位置</th><th>状态</th></tr>
+<tr><td>全局懒加载 <code>spring.main.lazy-initialization=true</code></td><td><code>browser4-rest/src/main/resources/application.properties</code> 等 3 处 profile</td><td class="done">已落地（~6s → ~2s）</td></tr>
+<tr><td>显式 Web 栈 <code>web-application-type=servlet</code></td><td>同上</td><td class="done">已落地</td></tr>
+<tr><td><code>spring.jmx.enabled=false</code></td><td>同上</td><td class="done">已落地</td></tr>
+<tr><td>排除 18 项自动装配（JDBC/JPA/Mongo/Redis/ES/Kafka/Rabbit/Batch/Cache/Quartz/模板引擎/Security 等）</td><td>同上</td><td class="done">已落地</td></tr>
+<tr><td>后台预热关键 bean 链（规避懒加载首请求代价与竞态）</td><td><code>browser4-rest/.../config/StartupWarmer.kt</code></td><td class="done">已落地，含竞态回归测试</td></tr>
+<tr><td>C1 限档编译 <code>-XX:TieredStopAtLevel=1</code>（可被用户覆盖为 4）</td><td><code>cli/browser4-cli/src/daemon.rs</code></td><td class="done">已落地</td></tr>
+<tr><td>容器瘦身：Tomcat→Jetty，剔除 netty QUIC/epoll 平台原生库</td><td><code>browser4-apps/browser4-standalone/pom.xml</code></td><td class="done">已落地</td></tr>
+<tr><td>GraalVM native 铺路：RuntimeHints + <code>native</code> profile + <code>Dockerfile.native</code></td><td><code>Browser4NativeHints.kt</code>、根目录 <code>Dockerfile.native</code></td><td class="done">已铺路（未默认启用）</td></tr>
+</table>
+
+<h2>3. 方案评估矩阵</h2>
+
+<table>
+<tr><th>#</th><th>方案</th><th>预估收益</th><th>改造成本</th><th>风险</th><th>优先级</th></tr>
+<tr>
+  <td>A</td>
+  <td><strong>启动可观测性基线</strong>：接入 <code>BufferingApplicationStartup</code> + <code>/actuator/startup</code>（management 端点已全量暴露），记录 JAR 加载 → 上下文刷新 → 就绪各段耗时</td>
+  <td>不直接提速，但一切后续决策的依据</td>
+  <td>极低（~20 行）</td>
+  <td class="risk-low">低</td>
+  <td><span class="tag p0">P0</span></td>
+</tr>
+<tr>
+  <td>B</td>
+  <td><strong>AppCDS / Spring CDS 训练归档</strong>：Spring Boot 4 对 CDS 一等支持。<code>java -Djarmode=tools -jar Browser4.jar extract</code> 得到解压布局 → 训练运行 <code>-XX:ArchiveClassesAtExit</code> 生成归档 → 正式启动带 <code>-XX:SharedArchiveFile</code></td>
+  <td>类加载时间 −30~40%，整体启动预计再降 0.3–0.8s（在 ~2s 基础上）</td>
+  <td>中：daemon.rs 需支持「首次提取 + 训练 + 归档缓存/版本失效」逻辑（~150 行 Rust）</td>
+  <td class="risk-mid">中：归档与 JAR 版本必须严格对应，需失效策略；<code>BROWSER4_SERVER_OPTS</code> 与 CDS 标志的交互需测试</td>
+  <td><span class="tag p0">P0</span></td>
+</tr>
+<tr>
+  <td>C</td>
+  <td><strong>解压布局运行（exploded jar）</strong>：不解压的 fat jar nested-jar 加载本身偏慢；改为目录 + Main-Class 清单方式启动，同时也是方案 B 的前置</td>
+  <td>5–15%，且为 CDS 铺路</td>
+  <td>低：daemon.rs 提取逻辑 + 发布物布局调整</td>
+  <td class="risk-low">低</td>
+  <td><span class="tag p1">P1</span></td>
+</tr>
+<tr>
+  <td>D</td>
+  <td><strong>依赖与扫描面继续裁剪</strong>：审计 <code>docs-dev/maven-dependency-tree.txt</code>，收窄 <code>@SpringBootApplication</code> 的包扫描范围（当前从根包 <code>ai.platon.pulsar.apps</code> + <code>@Import</code> 出发）；懒加载下自动装配条件评估仍会读 classpath</td>
+  <td>5–10%，看剩余冗余依赖量</td>
+  <td>低–中（主要是验证）</td>
+  <td class="risk-mid">中：包扫描收窄容易漏 bean，需靠现有测试兜底</td>
+  <td><span class="tag p1">P1</span></td>
+</tr>
+<tr>
+  <td>E</td>
+  <td><strong>Spring AOT（<code>spring.aot.enabled=true</code>）</strong>：构建期生成 bean 定义，消除运行时反射/条件评估</td>
+  <td>再降 20–30%（与 B 叠加有上限）</td>
+  <td>高：需 AOT processing 构建步骤 + 全量反射适配</td>
+  <td class="risk-high">高：封闭世界假设与 <code>PluginClasspathEnhancer</code> 运行时插件加载<strong>结构性冲突</strong>（native 分支已显式跳过它）；启用 AOT 后第三方插件基本不可用</td>
+  <td><span class="tag p1">P1</span> 仅限无插件发布形态</td>
+</tr>
+<tr>
+  <td>F</td>
+  <td><strong>GraalVM native image</strong>：已有 <code>Dockerfile.native</code> 与 RuntimeHints</td>
+  <td>启动 ~0.1–0.5s（数量级改善）</td>
+  <td>高：构建资源大（内存/时长），反射/CDP/动态代理需持续维护 hints</td>
+  <td class="risk-high">高：同 E 的插件冲突；且峰值吞吐、堆弹性受限</td>
+  <td><span class="tag p2">P2</span> 场景化（Serverless/容器冷启动敏感场景）</td>
+</tr>
+<tr>
+  <td>G</td>
+  <td><strong>JVM 微调</strong>：<code>-Xshare:on</code>（强制 CDS）、小内存场景 <code>-XX:+UseSerialGC</code>、关闭 <code>setLogStartupInfo(true)</code> 噪音等</td>
+  <td>1–5%</td>
+  <td>极低</td>
+  <td class="risk-low">低</td>
+  <td><span class="tag p2">P2</span></td>
+</tr>
+<tr>
+  <td>H</td>
+  <td><strong>CRaC / Project Leyden premain、Framework 7 后台 bean 初始化</strong></td>
+  <td>理论上极大（checkpoint 恢复 &lt;1s）</td>
+  <td>高</td>
+  <td class="risk-high">高：CRaC 限 Linux + 特定 JDK 发行版；Windows 开发环境不适用；Framework 7 后台初始化与现有懒加载/预热策略需重新调和</td>
+  <td><span class="tag p2">P2</span> 仅调研</td>
+</tr>
+</table>
+
+<h2>4. 推荐路线图</h2>
+
+<div class="card">
+<h3>阶段一：先测量（1 天内）</h3>
+<ul>
+  <li>方案 A：接入 <code>BufferingApplicationStartup</code>，把「进程启动 → JVM ready → 上下文刷新 → 端口就绪 → 预热完成」分段打点进现有日志。</li>
+  <li>建立基线数据：冷/热页缓存 × 3 次取中位数，Windows/Linux 各一份。</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>阶段二：确定性收益（约 1 周）</h3>
+<ul>
+  <li>方案 C（解压布局）→ 方案 B（CDS 训练归档）：daemon.rs 增加提取与归档缓存逻辑，归档按 jar 内容 hash 失效；默认开启，<code>BROWSER4_SERVER_OPTS</code> 可退出。</li>
+  <li>方案 D（依赖裁剪）按基线数据决定投入多少。</li>
+  <li>目标：~2s → <strong>~1.2–1.5s</strong>（端口就绪），预热完成时间同步前移。</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>阶段三：形态级优化（按需）</h3>
+<ul>
+  <li>若有 Serverless/密度敏感场景，以独立发布物形式提供 native/AOT 构建（方案 E/F），与默认「JVM + 插件」形态并存——代码里 native 分支跳过 PluginClasspathEnhancer 的处理已证明这条分叉是产品共识。</li>
+  <li>方案 H 持续跟踪 JDK 与 Framework 演进，不提前投入。</li>
+</ul>
+</div>
+
+<h2>5. 风险清单</h2>
+<ul>
+  <li><strong>懒加载 + 后台预热竞态</strong>：曾导致 "Protocol not found (1600)" 与 swarm 池卡死（见 <code>StartupWarmer</code> 注释与 <code>SwarmCrawlFixtureTest</code>）。任何调整 bean 初始化时序的优化（尤其 AOT/E）都必须重跑该回归。</li>
+  <li><strong>C1 限档（TieredStopAtLevel=1）的吞吐代价</strong>：长时间运行的服务吞吐会低于 C2。当前设计允许用户覆盖，属合理默认；但若 Browser4 被用作长驻高吞吐服务，应重新评估该默认值。</li>
+  <li><strong>CDS 归档版本漂移</strong>：升级版本或用户更换 BROWSER4_SERVER_OPTS 中的类路径相关标志后归档失效，必须有「静默回退到无 CDS 启动」的降级路径，避免启动失败。</li>
+  <li><strong>插件生态是 AOT/native 的硬约束</strong>：任何封闭世界方案都改变第三方插件分发型态（构建期注入），需产品层决策，不宜由性能优化单方面推动。</li>
+</ul>
+
+<h2>6. 附录：证据文件索引</h2>
+<ul class="small">
+  <li><code>browser4-rest/src/main/resources/application.properties</code> — 懒加载/自动装配排除主配置</li>
+  <li><code>browser4-apps/browser4-standalone/src/main/resources/application-standalone.properties</code>、<code>browser4-bundle/.../application-bundle.properties</code> — 同策略的 profile 副本</li>
+  <li><code>browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/config/StartupWarmer.kt</code> — 后台预热链</li>
+  <li><code>cli/browser4-cli/src/daemon.rs</code> — 生产 JVM 参数拼装（TieredStopAtLevel=1、BROWSER4_SERVER_OPTS 合并逻辑）</li>
+  <li><code>browser4-apps/browser4-standalone/src/main/kotlin/ai/platon/pulsar/apps/Browser4StandaloneApplication.kt</code> — 主类与插件类路径增强</li>
+  <li><code>browser4-apps/browser4-standalone/pom.xml</code>（native profile）、<code>Dockerfile.native</code> — native 铺路</li>
+  <li><code>docs-dev/maven-dependency-tree.txt</code> — 依赖裁剪审计入口</li>
+</ul>
+
+</div>
+</body>
+</html>
