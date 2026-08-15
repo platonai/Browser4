@@ -31,7 +31,26 @@ Use **attach** to connect to an already-running browser instead of launching a n
 
 ## How It Works
 
-`attach` scans running processes, probes default debugging ports, and falls back to a port-range scan to find a Chromium-based browser with remote debugging enabled. Once connected, all subsequent commands (`snapshot`, `click`, `screenshot`, etc.) operate on the attached browser's tabs.
+`attach` resolves the target browser in layers, then verifies the CDP endpoint before binding the session. All subsequent commands (`snapshot`, `click`, `screenshot`, etc.) operate on the attached browser's tabs.
+
+### Endpoint resolution (channel name)
+
+When you pass a channel name (`attach --cdp chrome`), the CLI finds the browser in three tiers:
+
+1. **Process scan** — enumerates running processes whose command line contains `--remote-debugging-port=N`:
+   - `N != 0` (e.g. `chrome --remote-debugging-port=9222`): use that port directly.
+   - `N == 0` (Browser4-launched browsers use this — Chrome picks a free port at random): the requested value is not a usable endpoint, so the CLI resolves the real port by asking the process which ports it is actually listening on (Windows: `Get-NetTCPConnection` keyed to the process id), then probing each listener with a CDP health check (`GET /json/version`) and returning the first that answers. This is what makes Browser4-managed browsers (random debug port) discoverable via `attach --cdp chrome`.
+2. **Channel default port** — probes the channel's conventional port (9222 for Chrome), for browsers started manually with the documented flag.
+3. **Port-range scan** — concurrently probes a range of ports for any CDP responder, as a last resort.
+
+### Endpoint verification
+
+Before the session is bound, the backend probes the resolved endpoint:
+
+- `GET /json/version` must succeed — the browser is reachable and its identity is captured.
+- `GET /json` must list at least one `page` target — attaching to a browser with nothing to navigate is refused.
+
+Both failures produce a loud error (naming the endpoint and how to fix it) instead of a silent success. After a successful attach, the CLI prints the target browser's real current page URL so you can confirm it is driving the browser you intended.
 
 ## Patterns
 
@@ -144,6 +163,9 @@ browser4-cli screenshot --filename remote-state.png
 | Cannot find target browser | Verify remote debugging is enabled; check the browser is running |
 | No matching channel found | Verify channel name spelling; try a CDP URL or port instead |
 | No CDP endpoint listening | Verify the port is correct and not blocked by a firewall |
+| `CDP endpoint ... is not reachable` | Start the target browser with `--remote-debugging-port` and retry; the endpoint named in the error is not answering |
+| `... reachable but has no page targets` | Open a tab in the target browser, then retry attach — the browser has nothing to navigate yet |
+| Attached, but the reported page looks wrong | The CLI prints the real current page URL after attach; if it does not match the window you expect, the endpoint pointed at a different browser — target the correct port |
 | Extension session goes stale | Run `close` first, then re-attach with `attach --extension`; avoid navigating to chrome:// internal pages |
 | Extension not found / not installed | Install the Browser4 Chrome Extension in the target browser first |
 
