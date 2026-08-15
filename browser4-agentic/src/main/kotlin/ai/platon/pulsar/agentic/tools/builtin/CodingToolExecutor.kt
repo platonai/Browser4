@@ -552,6 +552,20 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "browser-driver code (PulsarWebDriver.kt and friends)."
         )
 
+        // --- Session-level dynamic file protection ---
+        toolSpec["protect"] = ToolSpec(
+            domain = domain, method = "protect",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String", "null"),
+                ToolSpec.Arg("on", "Boolean", "true"),
+            ),
+            returnType = "String",
+            description = "Manage session-level file protections: coding.protect(path=\"src/Foo.kt\", on=true) " +
+                "blocks delete/replace/editLines/insertAfter on that exact file; on=false removes it. " +
+                "Without path: lists the dynamic protections. Repo-governance files (VERSION/AGENTS.md/CLAUDE.md/" +
+                "root pom/BOM/CI) are always protected and cannot be unprotected."
+        )
+
         // --- Browser4 self-development: high-level dev task entry ---
         toolSpec["devTask"] = ToolSpec(
             domain = domain, method = "devTask",
@@ -1114,6 +1128,13 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 val content = fs.readFile(path)
                 if (content.startsWith("Error:")) return content
                 CdpTrapCheck.format(content)
+            }
+            "protect" -> {
+                validateArgs(args, allowed = setOf("path", "on"), required = emptySet(), functionName)
+                val path = paramString(args, "path", functionName, required = false, default = null)
+                if (path.isNullOrBlank()) return fs.protectedList()
+                val on = paramBool(args, "on", functionName, required = false, default = true) ?: true
+                fs.protect(path, on)
             }
             "devTask" -> {
                 validateArgs(args, allowed = setOf("task", "verify", "runTests", "module"), required = setOf("task"), functionName)

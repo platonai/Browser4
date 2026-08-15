@@ -777,10 +777,10 @@ class CodingToolExecutorTest {
         }
 
         @Test
-        @DisplayName("getToolSpecs returns 45 registered specs")
+        @DisplayName("getToolSpecs returns 46 registered specs")
         fun testToolSpecsCount() {
             val specs = executor.getToolSpecs()
-            assertEquals(45, specs.size)
+            assertEquals(46, specs.size)
         }
 
         @Test
@@ -798,7 +798,7 @@ class CodingToolExecutorTest {
                 "diagnostics", "symbols", "references", "lspServers",
                 "runCode", "runCodeLanguages",
                 "mvnBuild", "scaffoldFromExample", "scaffoldFlow", "ktSymbols", "ktReferences", "impact",
-                "trapCheck", "devTask", "moduleGraph"
+                "trapCheck", "devTask", "moduleGraph", "protect"
             )
             assertEquals(expectedMethods, specs.keys)
         }
@@ -1088,6 +1088,28 @@ class CodingToolExecutorTest {
             val value = result.value as String
             assertTrue(value.contains("Module graph: 1 modules"), value)
             assertTrue(value.contains("browser4-coding"), value)
+        }
+
+        @Test
+        @DisplayName("protect toggles session protection through the executor")
+        fun testProtect() = runBlocking {
+            val root = tempDir
+            java.nio.file.Files.writeString(root.resolve("secret.txt"), "hidden\n")
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+
+            val on = ToolCall("coding", "protect", mutableMapOf("path" to "secret.txt", "on" to "true"))
+            val onResult = executor.callFunctionOn(on, realTarget)
+            assertTrue((onResult.value as String).contains("Protected"), "result: ${onResult.value}")
+            assertTrue(realFs.replaceInFile("secret.txt", "hidden", "x").contains("protected"))
+
+            val list = ToolCall("coding", "protect", mutableMapOf())
+            val listResult = executor.callFunctionOn(list, realTarget)
+            assertTrue((listResult.value as String).contains("secret.txt"), "result: ${listResult.value}")
+
+            val off = ToolCall("coding", "protect", mutableMapOf("path" to "secret.txt", "on" to "false"))
+            executor.callFunctionOn(off, realTarget)
+            assertTrue(realFs.replaceInFile("secret.txt", "hidden", "ok").contains("Replaced"))
         }
 
         private val rootPomXml = """

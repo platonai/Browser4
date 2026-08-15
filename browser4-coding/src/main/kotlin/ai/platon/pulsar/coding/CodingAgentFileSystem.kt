@@ -984,7 +984,8 @@ class CodingAgentFileSystem(
     private fun errorResult(message: String): String = "Error: $message"
 
     /**
-     * Reject destructive ops on repo-governance files (VERSION, AGENTS.md, poms, ...).
+     * Reject destructive ops on repo-governance files (VERSION, AGENTS.md, poms, ...)
+     * or session-dynamically protected files ([protect]).
      * Returns an error string when the resolved path is protected, else null.
      */
     private fun protectionViolation(resolved: Path): String? {
@@ -995,11 +996,50 @@ class CodingAgentFileSystem(
             // exact root path so module poms stay editable.
             if (p == "pom.xml" || p.contains('/')) p == rel
             else rel.substringAfterLast('/') == p
-        }
+        } || dynamicProtected.contains(rel)
         return if (protected) {
-            "Repo-governance file is protected: $rel — delete/replace blocked. " +
-                "Use explicit intent or human review to modify repository-critical files."
+            "File is protected: $rel — delete/replace blocked. " +
+                "Use explicit intent, human review, or coding.protect(path=..., on=false) for dynamic protections."
         } else null
+    }
+
+    // ------------------------------------------------------------------
+    // Dynamic protection (session-level)
+    // ------------------------------------------------------------------
+
+    /**
+     * Dynamically protected files added at runtime via [protect] (exact relative
+     * paths, session-scoped). Repo-governance defaults ([protectedFiles]) cannot
+     * be removed this way.
+     */
+    private val dynamicProtected: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /**
+     * Add (or remove) a session-level protection on a specific file.
+     *
+     * @param path file path (resolved against the workspace root)
+     * @param on true = protect (destructive ops blocked), false = unprotect
+     * @return confirmation message
+     */
+    fun protect(path: String, on: Boolean = true): String {
+        val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
+        val rel = canonicalRoot.relativize(resolved).toString().replace('\\', '/')
+        return if (on) {
+            if (dynamicProtected.add(rel)) "✓ Protected $rel from destructive operations (session)"
+            else "Already protected: $rel"
+        } else {
+            if (dynamicProtected.remove(rel)) "✓ Removed dynamic protection on $rel"
+            else "Not dynamically protected: $rel"
+        }
+    }
+
+    /** List the session-level dynamic protections. */
+    fun protectedList(): String {
+        if (dynamicProtected.isEmpty()) return "No dynamic protections."
+        return buildString {
+            appendLine("Dynamically protected (${dynamicProtected.size}):")
+            dynamicProtected.sorted().forEach { appendLine("  $it") }
+        }.trimEnd()
     }
 
     /**

@@ -388,6 +388,47 @@ class CodingAgentFileSystemEditsTest {
         assertTrue(allowed.contains("Replaced"), "result: $allowed")
         assertEquals("y\n", read("other.txt"))
     }
+
+    // ==================== dynamic protection (protect) ====================
+
+    @Test
+    @DisplayName("protect blocks destructive ops until unprotected")
+    fun dynamicProtectRoundTrip() = runBlocking {
+        write("secret.txt", "hidden\n")
+        val f = fs()
+        val protectResult = f.protect("secret.txt", on = true)
+        assertTrue(protectResult.contains("Protected"), "result: $protectResult")
+        val blocked = f.replaceInFile("secret.txt", "hidden", "leaked")
+        assertTrue(blocked.contains("protected"), "result: $blocked")
+        assertEquals("hidden\n", read("secret.txt"), "file must be untouched while protected")
+
+        assertTrue(f.protectedList().contains("secret.txt"), f.protectedList())
+        f.protect("secret.txt", on = false)
+        val allowed = f.replaceInFile("secret.txt", "hidden", "ok")
+        assertTrue(allowed.contains("Replaced"), "result: $allowed")
+        assertEquals("ok\n", read("secret.txt"))
+        assertFalse(f.protectedList().contains("secret.txt"), f.protectedList())
+    }
+
+    @Test
+    @DisplayName("dynamic protection matches the exact relative path only")
+    fun dynamicProtectExactPath() = runBlocking {
+        write("src/keep.txt", "a\n")
+        write("other/keep.txt", "b\n")
+        val f = fs()
+        f.protect("src/keep.txt")
+        assertTrue(f.replaceInFile("src/keep.txt", "a", "x").contains("protected"))
+        // Same basename elsewhere stays editable.
+        val allowed = f.replaceInFile("other/keep.txt", "b", "y")
+        assertTrue(allowed.contains("Replaced"), "result: $allowed")
+    }
+
+    @Test
+    @DisplayName("protectedList reports empty when nothing is dynamically protected")
+    fun protectedListEmpty() = runBlocking {
+        val f = fs()
+        assertTrue(f.protectedList().contains("No dynamic protections"), f.protectedList())
+    }
 }
 
 
