@@ -419,14 +419,18 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 ToolSpec.Arg("className", "String", "null"),
                 ToolSpec.Arg("domain", "String", "null"),
                 ToolSpec.Arg("toolMethod", "String", "null"),
+                ToolSpec.Arg("stem", "String", "null"),
             ),
             returnType = "String",
             description = "Generate a skeleton from EXISTING real code — a single file OR a whole directory " +
                 "(plugin/module). For a file: parameterizes package/class/domain/tool method into placeholders. " +
                 "For a directory: extracts a MULTI-FILE skeleton set and parameterizes volatile identifiers " +
                 "consistently ACROSS files (className renames the executor AND its references in the " +
-                "AutoConfiguration/Service files; artifactId from pom.xml, pluginName from plugin.json). " +
-                "Provide path (file or directory) plus any of basePackage/className/domain/toolMethod to rename; " +
+                "AutoConfiguration/Service files; sibling classes sharing the detected STEM follow the rename — " +
+                "renaming SeoToolExecutor → WeatherToolExecutor also derives WeatherAutoConfiguration/WeatherService; " +
+                "pass stem=<new-stem> to override; explicit per-class keys always win). " +
+                "artifactId from pom.xml, pluginName from plugin.json. " +
+                "Provide path (file or directory) plus any of basePackage/className/domain/toolMethod/stem to rename; " +
                 "omit to see the discovered parameters."
         )
 
@@ -820,7 +824,7 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 else refs.joinToString("\n") { "line ${it.line}: ${it.snippet}" }
             }
             "scaffoldFromExample" -> {
-                validateArgs(args, allowed = setOf("path", "basePackage", "className", "domain", "toolMethod"),
+                validateArgs(args, allowed = setOf("path", "basePackage", "className", "domain", "toolMethod", "stem"),
                     required = setOf("path"), functionName)
                 val path = paramString(args, "path", functionName)!!
                 val resolved = fs.resolvePathString(path)
@@ -830,6 +834,7 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     "className" to paramString(args, "className", functionName, required = false, default = null),
                     "domain" to paramString(args, "domain", functionName, required = false, default = null),
                     "toolMethod" to paramString(args, "toolMethod", functionName, required = false, default = null),
+                    "stem" to paramString(args, "stem", functionName, required = false, default = null),
                 ).filterValues { !it.isNullOrBlank() }.mapValues { it.value!! }
 
                 // Directory path → multi-file live template (cross-file consistent).

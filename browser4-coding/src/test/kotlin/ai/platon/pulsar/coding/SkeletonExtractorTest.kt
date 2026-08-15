@@ -157,6 +157,13 @@ class SkeletonExtractorTest {
                 }
             }
         """.trimIndent(),
+        "browser4-plugins/browser4-seo/src/main/kotlin/ai/platon/pulsar/seo/service/SeoService.kt" to """
+            package ai.platon.pulsar.seo.service
+
+            open class SeoService {
+                fun extractMeta(driver: Any): Any? = null
+            }
+        """.trimIndent(),
     )
 
     @Test
@@ -232,6 +239,82 @@ class SkeletonExtractorTest {
         val autoConfig = out.keys.first { it.endsWith("SeoAutoConfiguration.kt") }
         assertTrue(out[autoConfig]!!.contains("open class WeatherAutoConfiguration"),
             "AutoConfig must rename via its own key: ${out[autoConfig]}")
+    }
+
+    @Test
+    @DisplayName("extractDir records the shared class stem")
+    fun extractDirRecordsStem() {
+        val set = SkeletonExtractor.extractDir(pluginFiles)
+        assertEquals("Seo", set.parameters["stem"],
+            "classes SeoToolExecutor/SeoAutoConfiguration/SeoService share stem 'Seo'")
+    }
+
+    @Test
+    @DisplayName("renaming className derives sibling classes from the stem")
+    fun instantiateDerivesSiblingClasses() {
+        val set = SkeletonExtractor.extractDir(pluginFiles)
+        val out = SkeletonExtractor.instantiate(set, mapOf("className" to "WeatherToolExecutor"))
+        val autoConfig = out.keys.first { it.endsWith("SeoAutoConfiguration.kt") }
+        assertTrue(out[autoConfig]!!.contains("open class WeatherAutoConfiguration"),
+            "AutoConfig must follow the stem rename: ${out[autoConfig]}")
+        val service = out.keys.first { it.endsWith("SeoService.kt") }
+        assertTrue(out[service]!!.contains("open class WeatherService"),
+            "Service must follow the stem rename: ${out[service]}")
+        val executor = out.keys.first { it.endsWith("SeoToolExecutor.kt") }
+        assertTrue(out[executor]!!.contains("open class WeatherToolExecutor"))
+        assertTrue(out[executor]!!.contains("import ai.platon.pulsar.seo.service.{SeoService}") == false,
+            "executor's SeoService reference must follow the rename: ${out[executor]}")
+        assertTrue(out[executor]!!.contains("WeatherService"), "executor reference must rename: ${out[executor]}")
+    }
+
+    @Test
+    @DisplayName("explicit per-class key wins over stem derivation")
+    fun explicitKeyWinsOverStem() {
+        val set = SkeletonExtractor.extractDir(pluginFiles)
+        val out = SkeletonExtractor.instantiate(set, mapOf(
+            "className" to "WeatherToolExecutor",
+            "SeoService" to "CustomService",
+        ))
+        val service = out.keys.first { it.endsWith("SeoService.kt") }
+        assertTrue(out[service]!!.contains("open class CustomService"),
+            "explicit key must win: ${out[service]}")
+        val autoConfig = out.keys.first { it.endsWith("SeoAutoConfiguration.kt") }
+        assertTrue(out[autoConfig]!!.contains("open class WeatherAutoConfiguration"),
+            "un-explicit sibling still follows the stem: ${out[autoConfig]}")
+    }
+
+    @Test
+    @DisplayName("explicit stem override renames siblings without className")
+    fun explicitStemOverride() {
+        val set = SkeletonExtractor.extractDir(pluginFiles)
+        val out = SkeletonExtractor.instantiate(set, mapOf("stem" to "Climate"))
+        val autoConfig = out.keys.first { it.endsWith("SeoAutoConfiguration.kt") }
+        assertTrue(out[autoConfig]!!.contains("open class ClimateAutoConfiguration"),
+            "stem override must rename siblings: ${out[autoConfig]}")
+        val executor = out.keys.first { it.endsWith("SeoToolExecutor.kt") }
+        assertTrue(out[executor]!!.contains("open class SeoToolExecutor"),
+            "className untouched without rename: ${out[executor]}")
+    }
+
+    @Test
+    @DisplayName("single-class directory records no stem")
+    fun singleClassNoStem() {
+        val files = mapOf(
+            "src/Tool.kt" to "package a.b\n\nopen class Tool {\n    override val domain = \"x\"\n}\n",
+        )
+        val set = SkeletonExtractor.extractDir(files)
+        assertNull(set.parameters["stem"], "single class must not produce a stem")
+    }
+
+    @Test
+    @DisplayName("classes without a shared prefix record no stem")
+    fun unrelatedClassesNoStem() {
+        val files = mapOf(
+            "src/Alpha.kt" to "package a.b\n\nopen class Alpha {}\n",
+            "src/Beta.kt" to "package a.b\n\nopen class Beta {}\n",
+        )
+        val set = SkeletonExtractor.extractDir(files)
+        assertNull(set.parameters["stem"])
     }
 
     @Test

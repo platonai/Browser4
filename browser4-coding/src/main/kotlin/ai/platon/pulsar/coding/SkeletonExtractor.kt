@@ -214,11 +214,15 @@ object SkeletonExtractor {
         //    `domain`), independent of file-walk order — the tool executor is
         //    what scaffoldFromExample's className targets. Every class is also
         //    exposed as its own value-named key for independent renames.
+        //    The shared class STEM (e.g. "Seo" for SeoToolExecutor /
+        //    SeoAutoConfiguration / SeoService) is recorded so renaming the
+        //    executor derives its sibling classes automatically.
         val executorClass = skeletons.entries
             .firstOrNull { it.value.parameters["domain"] != null }
             ?.value?.parameters?.get("className")
         (executorClass ?: classNames.firstOrNull())?.let { parameters["className"] = it }
         classNames.forEach { cn -> parameters.putIfAbsent(cn, cn) }
+        commonClassStem(classNames)?.let { parameters["stem"] = it }
 
         return SkeletonSet(
             files = templated.mapValues { (relPath, tpl) -> Skeleton(tpl, parameters) },
@@ -227,33 +231,88 @@ object SkeletonExtractor {
     }
 
     /**
+     * Longest common class-name prefix shared by at least two classes, ending at
+     * a class boundary (the next character in every name is uppercase).
+     *
+     * For `[SeoToolExecutor, SeoAutoConfiguration, SeoService]` the common
+     * prefix is "Seo" (next chars T/A/S are uppercase) → stem "Seo". For
+     * `[SeoToolExecutor]` (single class) or `[SeoToolExecutor,
+     * WeatherToolExecutor]` (no common prefix) → null.
+     */
+    private fun commonClassStem(classNames: List<String>): String? {
+        if (classNames.size < 2) return null
+        var prefix = classNames.first()
+        for (name in classNames.drop(1)) {
+            var i = 0
+            while (i < prefix.length && i < name.length && prefix[i] == name[i]) i++
+            prefix = prefix.substring(0, i)
+            if (prefix.length < 2) return null
+        }
+        // Every name must hit a class boundary right after the prefix.
+        val boundary = classNames.all { name ->
+            prefix.length >= name.length || name[prefix.length].isUpperCase()
+        }
+        return if (boundary) prefix else null
+    }
+
+    /**
      * Instantiate a [SkeletonSet] with new parameter values, consistently across
      * all files. Resolves shared placeholders (`{basePackage}`, `{domain}`),
-     * class placeholders via their own key (`{SeoAutoConfiguration}`), and the
-     * `className` convenience alias (renames the first discovered class and its
-     * cross-file references).
+     * class placeholders via their own key (`{SeoAutoConfiguration}`), the
+     * `className` convenience alias (renames the executor class and its
+     * cross-file references), and STEM-derived sibling renames: renaming
+     * `className` (or passing an explicit `stem`) renames every class sharing
+     * the recorded stem (`{SeoService}` → WeatherService when
+     * SeoToolExecutor → WeatherToolExecutor). Explicit per-class keys always
+     * win over stem derivation.
      *
      * @return relative path → generated content; unresolved placeholders are
      *         left as-is for caller inspection
      */
     fun instantiate(set: SkeletonSet, params: Map<String, String>): Map<String, String> {
+        // Class names: the value-named self-keys plus the canonical className.
+        val classNames = (set.parameters.filter { it.key == it.value }.keys + listOfNotNull(
+            set.parameters["className"])).distinct()
+
         return set.files.mapValues { (_, sk) ->
+            // Key placeholders ({basePackage}, {domain}, {className}, self-keys).
             val effective = mutableMapOf<String, String>()
-            // Pass 1: {key} placeholders → new value (or discovered when not renamed).
             set.parameters.forEach { (key, discovered) ->
                 effective[key] = params[key] ?: discovered
             }
-            // Pass 2: {discoveredValue} placeholders (value-named class refs and
-            // self placeholders) → the rename value of their owning key. An
-            // explicit value-named key (params["SeoAutoConfiguration"]) wins over
-            // the className alias; identity when nothing was renamed.
+
+            // Value-named renames ({discoveredValue} placeholders, incl. classes).
+            val valueRenames = mutableMapOf<String, String>()
+            // (a) Explicit per-class keys win.
             set.parameters.forEach { (key, discovered) ->
-                if (params.containsKey(key)) {
-                    effective[discovered] = params[key]!!
-                } else if (key != discovered) {
-                    effective.putIfAbsent(discovered, discovered)
+                if (params.containsKey(key)) valueRenames[discovered] = params[key]!!
+            }
+            // (b) Stem-derived sibling renames: renaming className (or passing an
+            //     explicit stem) renames every class sharing the recorded stem.
+            val stem = set.parameters["stem"]
+            val oldMain = set.parameters["className"]
+            val newMain = params["className"]
+            val newStem = when {
+                !params["stem"].isNullOrBlank() -> params["stem"]
+                stem != null && oldMain != null && !newMain.isNullOrBlank() && newMain != oldMain -> {
+                    val suffix = oldMain.removePrefix(stem)
+                    if (suffix.isNotEmpty() && newMain.endsWith(suffix)) newMain.removeSuffix(suffix) else newMain
+                }
+                else -> null
+            }
+            if (stem != null && newStem != null && newStem != stem) {
+                classNames.filter { it != oldMain && it.startsWith(stem) }
+                    .forEach { cn -> valueRenames.putIfAbsent(cn, newStem + cn.removePrefix(stem)) }
+            }
+            // (c) Identity for the rest (non-self value-named placeholders).
+            set.parameters.forEach { (key, discovered) ->
+                if (key != discovered && !valueRenames.containsKey(discovered)) {
+                    valueRenames[discovered] = discovered
                 }
             }
+
+            effective.putAll(valueRenames)
+
             var out = sk.template
             effective.entries.sortedByDescending { it.key.length }
                 .forEach { (placeholder, value) ->
