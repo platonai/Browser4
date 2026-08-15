@@ -777,10 +777,10 @@ class CodingToolExecutorTest {
         }
 
         @Test
-        @DisplayName("getToolSpecs returns 44 registered specs")
+        @DisplayName("getToolSpecs returns 45 registered specs")
         fun testToolSpecsCount() {
             val specs = executor.getToolSpecs()
-            assertEquals(44, specs.size)
+            assertEquals(45, specs.size)
         }
 
         @Test
@@ -798,7 +798,7 @@ class CodingToolExecutorTest {
                 "diagnostics", "symbols", "references", "lspServers",
                 "runCode", "runCodeLanguages",
                 "mvnBuild", "scaffoldFromExample", "scaffoldFlow", "ktSymbols", "ktReferences", "impact",
-                "trapCheck", "devTask"
+                "trapCheck", "devTask", "moduleGraph"
             )
             assertEquals(expectedMethods, specs.keys)
         }
@@ -997,6 +997,58 @@ class CodingToolExecutorTest {
             assertTrue(value.contains("open class WeatherToolExecutor"), value)
             assertTrue(value.contains("listOf(WeatherToolExecutor())"),
                 "cross-file reference must follow the rename: $value")
+        }
+
+        @Test
+        @DisplayName("moduleGraph reports the live pom graph and drift")
+        fun testModuleGraph() = runBlocking {
+            val root = tempDir
+            java.nio.file.Files.writeString(root.resolve("pom.xml"),
+                "<project>\n  <artifactId>browser4</artifactId>\n  <packaging>pom</packaging>\n</project>\n")
+            java.nio.file.Files.createDirectories(root.resolve("browser4-coding"))
+            java.nio.file.Files.writeString(root.resolve("browser4-coding/pom.xml"),
+                "<project>\n  <artifactId>browser4-coding</artifactId>\n</project>\n")
+            java.nio.file.Files.createDirectories(root.resolve("browser4-agentic"))
+            java.nio.file.Files.writeString(root.resolve("browser4-agentic/pom.xml"),
+                "<project>\n  <artifactId>browser4-agentic</artifactId>\n  <dependencies>\n" +
+                    "    <dependency>\n      <groupId>ai.platon.pulsar</groupId>\n      <artifactId>browser4-coding</artifactId>\n" +
+                    "    </dependency>\n  </dependencies>\n</project>\n")
+
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "moduleGraph",
+                arguments = mutableMapOf("module" to "browser4-coding")
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("Module: browser4-coding"), value)
+            assertTrue(value.contains("browser4-agentic"), "dependent must be reported: $value")
+            assertTrue(value.contains("affects (transitively)"), value)
+        }
+
+        @Test
+        @DisplayName("moduleGraph without module lists the whole graph")
+        fun testModuleGraphAll() = runBlocking {
+            val root = tempDir
+            java.nio.file.Files.createDirectories(root.resolve("browser4-coding"))
+            java.nio.file.Files.writeString(root.resolve("browser4-coding/pom.xml"),
+                "<project>\n  <artifactId>browser4-coding</artifactId>\n</project>\n")
+
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "moduleGraph",
+                arguments = mutableMapOf()
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("Module graph: 1 modules"), value)
+            assertTrue(value.contains("browser4-coding"), value)
         }
 
         private val rootPomXml = """

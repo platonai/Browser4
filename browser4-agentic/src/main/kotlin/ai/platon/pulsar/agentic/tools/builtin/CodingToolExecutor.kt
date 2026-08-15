@@ -11,6 +11,7 @@ import ai.platon.pulsar.coding.DevTaskPlanner
 import ai.platon.pulsar.coding.LanguageServerManager
 import ai.platon.pulsar.coding.KotlinSemanticIndexer
 import ai.platon.pulsar.coding.MavenBuildSupport
+import ai.platon.pulsar.coding.ModuleGraph
 import ai.platon.pulsar.coding.ModuleMap
 import ai.platon.pulsar.coding.RepoConsistencyCheck
 import ai.platon.pulsar.coding.SkeletonExtractor
@@ -463,9 +464,21 @@ class CodingToolExecutor : AbstractToolExecutor() {
             arguments = listOf(ToolSpec.Arg("path", "String")),
             returnType = "String",
             description = "Analyze the impact of changing a file in the Browser4 repo: which Maven module owns " +
-                "it, which modules depend on it (transitively), and the suggested test commands " +
-                "(Rust CLI: cargo test --bin browser4-cli; Kotlin: mvn test -pl <module> -am). " +
+                "it, which modules depend on it (transitively, from the LIVE pom graph), and the suggested test " +
+                "commands (Rust CLI: cargo test --bin browser4-cli; Kotlin: mvn test -pl <module> -am). " +
                 "Use before modifying Browser4's own code."
+        )
+
+        // --- Live module graph (anti-staleness: rebuilt from real poms) ---
+        toolSpec["moduleGraph"] = ToolSpec(
+            domain = domain, method = "moduleGraph",
+            arguments = listOf(ToolSpec.Arg("module", "String", "null")),
+            returnType = "String",
+            description = "Scan the repository's real pom.xml files and report the LIVE module graph: module " +
+                "path, artifactId, parent, and internal dependencies. Warns when the graph drifted from the " +
+                "static ModuleMap snapshot (new modules the snapshot missed). " +
+                "With module=<path> (e.g. browser4-coding): reports its transitive dependents and suggested " +
+                "test commands. The same graph powers coding.impact."
         )
 
         // --- Sandboxed code execution ---
@@ -974,12 +987,46 @@ class CodingToolExecutor : AbstractToolExecutor() {
                         appendLine("  Note: CLI changes may require the Kotlin backend to accept new tools — " +
                             "also run coding.mvnBuild(module=\"browser4-rest\")")
                     } else {
-                        val affected = ModuleMap.transitiveDependents(module)
+                        // Prefer the LIVE pom graph (anti-staleness); fall back to the static snapshot.
+                        val graph = scanModuleGraph(fs)
+                        val affected = if (module in graph.nodes) {
+                            ModuleGraph.transitiveDependents(graph, module)
+                        } else {
+                            ModuleMap.transitiveDependents(module)
+                        }
                         appendLine("  affects (transitively): ${affected.joinToString(", ")}")
                         appendLine("  test: ${ModuleMap.mavenTestCommand(module)}")
                         appendLine("  also run for dependents: ${affected.drop(1).joinToString(", ")}")
+                        if (module !in graph.nodes) {
+                            appendLine("  ⚠ module not found in the live pom graph — static snapshot used; " +
+                                "run coding.moduleGraph() to check for drift")
+                        }
                     }
                 }.trimEnd()
+            }
+            "moduleGraph" -> {
+                validateArgs(args, allowed = setOf("module"), required = emptySet(), functionName)
+                val module = paramString(args, "module", functionName, required = false, default = null)
+                val graph = scanModuleGraph(fs)
+                if (module.isNullOrBlank()) {
+                    ModuleGraph.format(graph, ModuleMap.MODULES)
+                } else {
+                    if (module !in graph.nodes) {
+                        "Module '$module' not found in the live pom graph. Known: ${graph.nodes.keys.sorted().joinToString(", ")}"
+                    } else {
+                        val affected = ModuleGraph.transitiveDependents(graph, module)
+                        buildString {
+                            appendLine("Module: $module [${graph.nodes[module]!!.artifactId}]")
+                            appendLine("  directly depends on: ${graph.nodes[module]!!.dependencies.joinToString(", ")}")
+                            appendLine("  affects (transitively): ${affected.joinToString(", ")}")
+                            appendLine("  test: ${ModuleMap.mavenTestCommand(module)}")
+                            val missing = ModuleGraph.drift(graph, ModuleMap.MODULES)
+                            if (missing.isNotEmpty()) {
+                                appendLine("⚠ static ModuleMap snapshot is missing these real modules: ${missing.joinToString(", ")}")
+                            }
+                        }.trimEnd()
+                    }
+                }
             }
             "runCode" -> {
                 validateArgs(args, allowed = setOf("language", "code", "timeoutSeconds"), required = setOf("language", "code"), functionName)
@@ -1142,6 +1189,23 @@ class CodingToolExecutor : AbstractToolExecutor() {
             onDiskModuleDirs = onDiskModuleDirs,
         )
         return result.format()
+    }
+
+    /**
+     * Scan the live module graph from the workspace's real pom.xml files
+     * (skipping target/.git via the fs's excluded-dir walk). Powers
+     * `coding.moduleGraph` and `coding.impact` — anti-staleness: the graph is
+     * rebuilt from the poms instead of a hand-maintained snapshot.
+     */
+    private suspend fun scanModuleGraph(fs: CodingAgentFileSystem): ModuleGraph.Graph {
+        val poms = fs.collectTextFiles(".")
+            .filterKeys { (it.endsWith("/pom.xml") || it == "pom.xml") && !it.contains("/archetype-resources/") }
+            .mapKeys { (relPath, _) ->
+                val dir = relPath.removeSuffix("/pom.xml")
+                // The repo-root aggregator pom gets the artifact id "browser4".
+                if (dir.isEmpty()) "browser4" else dir
+            }
+        return ModuleGraph.build(poms)
     }
 
     /**
