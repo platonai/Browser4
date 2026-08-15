@@ -43,6 +43,17 @@ const BROWSER4_RUNTIME_DIR_NAME: &str = "runtime";
 const DOWNLOADS_DIR_NAME: &str = "downloads";
 const BROWSER4_MAIN_CLASS: &str = "ai.platon.pulsar.apps.Browser4BundleApplicationKt";
 const BROWSER4_INSTALL_METADATA_FILE_NAME: &str = "browser4-installation.json";
+/// Subdirectory of the runtime data dir that holds the trained JVM AOT cache.
+const AOT_CACHE_DIR_NAME: &str = "aot-cache";
+/// The trained AOT cache artifact (JEP 483 class loading & linking + JEP 515
+/// method profiles).
+const AOT_CACHE_FILE_NAME: &str = "app.aot";
+/// Sidecar that records the invalidation key for `app.aot`, so a stale cache
+/// (version bump, jar change, JVM flag change) triggers a fresh training run.
+const AOT_CACHE_KEY_FILE_NAME: &str = "app.aot.key";
+/// Minimum JDK major version for the AOT cache (JEP 483 shipped in JDK 24;
+/// the one-step `-XX:AOTCacheOutput` workflow and method profiles need JDK 25).
+const AOT_CACHE_MIN_JDK: u32 = 24;
 /// Env var override for the browser binary path.  When set to an existing
 /// executable file it is used regardless of other browser search heuristics.
 /// The value is also forwarded to the server via `-Dchrome.path`.
@@ -978,7 +989,7 @@ fn detect_current_runtime_bundle_platform() -> Result<RuntimeBundlePlatform, Str
         ("macos", "x86_64") => Ok(RuntimeBundlePlatform::MacOsX64),
         ("macos", "aarch64") => Ok(RuntimeBundlePlatform::MacOsArm64),
         (os, arch) => Err(format!(
-            "browser4-cli install does not yet publish a bundled Browser4 runtime for {os}/{arch}. Please install Java 17+ and use the Browser4.jar release asset instead."
+            "browser4-cli install does not yet publish a bundled Browser4 runtime for {os}/{arch}. Please install Java 25+ and use the Browser4.jar release asset instead."
         )),
     }
 }
@@ -3859,6 +3870,7 @@ fn install_chrome_rhel() -> Result<(), String> {
 
 async fn resolve_server_launch_spec(port: u16) -> Result<ServerLaunchSpec, String> {
     let runtime = find_or_install_runtime().await?;
+    ensure_aot_cache_trained(&runtime);
     Ok(build_jar_launch_spec(&runtime, port))
 }
 
@@ -3868,19 +3880,11 @@ fn is_jvm_option(token: &str) -> bool {
     token.starts_with("-D") || token.starts_with("-X") || token.starts_with("--add-")
 }
 
-fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> ServerLaunchSpec {
-    let program = runtime.java_path.clone();
-    let program_display = program.display().to_string();
-    let classpath_arg = if cfg!(windows) {
-        format!("{}\\*", runtime.lib_dir.display())
-    } else {
-        format!("{}/*", runtime.lib_dir.display())
-    };
-
-    // Collect extra options from BROWSER4_SERVER_OPTS (space-separated).
-    // Tokens starting with -D, -X, -XX:, or --add- are JVM flags and go
-    // before -cp.  Everything else (e.g. --spring.profiles.active=test)
-    // is placed after the main class as a program argument.
+/// Collect the core JVM options and program arguments shared by both the
+/// training run and the production run.  Keeping this set identical between
+/// the two is what makes the AOT cache valid (the JVM requires the same
+/// classpath and JVM flag set when the cache is produced and consumed).
+fn collect_jvm_opts_and_program_args() -> (Vec<String>, Vec<String>) {
     let mut jvm_opts: Vec<String> = Vec::new();
     let mut program_args: Vec<String> = Vec::new();
 
@@ -3890,8 +3894,7 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
     // user-supplied -Dchrome.path=... in that env var overrides (Java uses
     // the last -D value for a given key).
     if let Some(browser_path) = find_browser_executable() {
-        let path_str = browser_path.to_string_lossy().to_string();
-        jvm_opts.push(format!("-Dchrome.path={}", path_str));
+        jvm_opts.push(format!("-Dchrome.path={}", browser_path.to_string_lossy()));
     }
 
     // The Pulsar SDK's AppContext.APP_DATA_DIR defaults to $HOME/.pulsar.
@@ -3906,6 +3909,9 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
     // -XX:TieredStopAtLevel=4 in the env var for peak throughput.
     jvm_opts.push("-XX:TieredStopAtLevel=1".to_string());
 
+    // Extra options from BROWSER4_SERVER_OPTS (space-separated).  Tokens
+    // starting with -D, -X, -XX:, or --add- are JVM flags and go before -cp;
+    // everything else is a program argument.
     if let Ok(raw) = std::env::var(BROWSER4_SERVER_OPTS_ENV) {
         for token in raw
             .split_whitespace()
@@ -3918,6 +3924,238 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
                 program_args.push(token.to_string());
             }
         }
+    }
+
+    (jvm_opts, program_args)
+}
+
+/// Enumerate the dependency JARs under `lib_dir` and join them, sorted, into
+/// a classpath.  CDS and the AOT cache both require a stable, ordered JAR
+/// list; the previous `lib/*` directory wildcard does not guarantee one.
+fn enumerate_classpath(lib_dir: &Path) -> Result<String, String> {
+    let mut jars: Vec<String> = Vec::new();
+    let entries = fs::read_dir(lib_dir)
+        .map_err(|e| format!("cannot read lib dir {}: {e}", lib_dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("jar") {
+            jars.push(path.to_string_lossy().to_string());
+        }
+    }
+    if jars.is_empty() {
+        return Err(format!("no jar files found in {}", lib_dir.display()));
+    }
+    jars.sort();
+    Ok(jars.join(if cfg!(windows) { ";" } else { ":" }))
+}
+
+/// Detect the major JDK version of the bundled runtime by parsing
+/// `java -version` (which prints to stderr, e.g. `openjdk version "25.0.4"`).
+fn detect_java_major_version(java_path: &Path) -> Result<u32, String> {
+    let output = Command::new(java_path)
+        .arg("-version")
+        .output()
+        .map_err(|e| format!("cannot run {} -version: {e}", java_path.display()))?;
+    let mut text = String::from_utf8_lossy(&output.stderr).to_string();
+    if text.trim().is_empty() {
+        text = String::from_utf8_lossy(&output.stdout).to_string();
+    }
+    let version = text
+        .lines()
+        .find_map(|line| line.split('"').nth(1))
+        .ok_or_else(|| format!("cannot parse java version from: {}", text.trim()))?;
+    let major = match version.strip_prefix("1.") {
+        // Legacy `1.8.0_xxx` scheme → major 8.
+        Some(rest) => rest.split('.').next().unwrap_or("0"),
+        None => version.split('.').next().unwrap_or("0"),
+    };
+    major
+        .parse::<u32>()
+        .map_err(|_| format!("cannot parse java major version from: {version}"))
+}
+
+fn aot_cache_dir() -> PathBuf {
+    resolve_runtime_data_dir().join(AOT_CACHE_DIR_NAME)
+}
+
+fn aot_cache_file() -> PathBuf {
+    aot_cache_dir().join(AOT_CACHE_FILE_NAME)
+}
+
+fn aot_cache_key_file() -> PathBuf {
+    aot_cache_dir().join(AOT_CACHE_KEY_FILE_NAME)
+}
+
+/// Compute the AOT cache invalidation key: version tag + sorted jar list
+/// (name + size) + the core JVM flag set.  This is a fast "should we
+/// retrain?" heuristic — the JVM additionally validates the actual classpath
+/// when loading the cache and silently falls back on any mismatch, so a
+/// false-negative here is harmless.
+fn aot_cache_invalidation_key(
+    runtime: &InstalledBrowser4Runtime,
+    jvm_opts: &[String],
+) -> Result<String, String> {
+    let mut hasher = Sha256::new();
+    hasher.update(runtime.tag.as_bytes());
+    hasher.update(b"\0");
+
+    let mut entries: Vec<(String, u64)> = Vec::new();
+    let dir = fs::read_dir(&runtime.lib_dir).map_err(|e| e.to_string())?;
+    for entry in dir.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("jar") {
+            if let Ok(meta) = entry.metadata() {
+                entries.push((
+                    entry.file_name().to_string_lossy().to_string(),
+                    meta.len(),
+                ));
+            }
+        }
+    }
+    entries.sort();
+    for (name, size) in entries {
+        hasher.update(name.as_bytes());
+        hasher.update(b"\x1f");
+        hasher.update(size.to_string().as_bytes());
+        hasher.update(b"\0");
+    }
+
+    hasher.update(b"jvm-opts\0");
+    for opt in jvm_opts {
+        hasher.update(opt.as_bytes());
+        hasher.update(b"\0");
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Train the JVM AOT cache (JEP 483 class loading & linking, plus JEP 515
+/// method profiles on JDK 25) on first launch, and reuse it on subsequent
+/// launches.
+///
+/// This is deliberately non-fatal: on any failure (JDK < 24, unparseable
+/// version, missing jars, training crash) we log a warning and proceed with a
+/// normal JVM start.  The runtime plugin loader (`PluginClasspathEnhancer`,
+/// a URLClassLoader for `plugins/*.jar`) is unaffected — the AOT cache only
+/// pre-loads classes seen on the main classpath, so plugin classes simply load
+/// normally and are not cached.
+fn ensure_aot_cache_trained(runtime: &InstalledBrowser4Runtime) {
+    // Respect an explicit user-provided AOT configuration.
+    if let Ok(raw) = std::env::var(BROWSER4_SERVER_OPTS_ENV) {
+        if raw.contains("-XX:AOTCache") {
+            return;
+        }
+    }
+
+    let major = match detect_java_major_version(&runtime.java_path) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("AOT cache: {e}; skipping");
+            return;
+        }
+    };
+    if major < AOT_CACHE_MIN_JDK {
+        return; // JEP 483 requires JDK 24+; older JVMs fall back to normal start.
+    }
+
+    let (jvm_opts, program_args) = collect_jvm_opts_and_program_args();
+    let classpath = match enumerate_classpath(&runtime.lib_dir) {
+        Ok(cp) => cp,
+        Err(e) => {
+            eprintln!("AOT cache: {e}; skipping");
+            return;
+        }
+    };
+    let key = match aot_cache_invalidation_key(runtime, &jvm_opts) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("AOT cache: {e}; skipping");
+            return;
+        }
+    };
+
+    let cache_file = aot_cache_file();
+    let key_file = aot_cache_key_file();
+    let cached_key = fs::read_to_string(&key_file).unwrap_or_default();
+    if cache_file.is_file() && cached_key == key {
+        return; // Cache already trained and still valid.
+    }
+
+    if let Err(e) = fs::create_dir_all(aot_cache_dir()) {
+        eprintln!("AOT cache: cannot create cache dir: {e}; skipping");
+        return;
+    }
+
+    eprintln!("Training JVM AOT cache (one-time, only on first launch) ...");
+
+    // The training run reuses the same JVM flags and classpath as production,
+    // but binds a random port and exits after context refresh.  A 1G heap
+    // keeps the single-step `-XX:AOTCacheOutput` peak (2× heap) bounded; heap
+    // size is not part of the AOT cache validity check.
+    let mut cmd = Command::new(&runtime.java_path);
+    cmd.args(&jvm_opts)
+        .arg("-Xmx1G")
+        .arg(format!("-XX:AOTCacheOutput={}", cache_file.display()))
+        .arg("-Dspring.context.exit=onRefresh")
+        .arg("-cp")
+        .arg(&classpath)
+        .arg(BROWSER4_MAIN_CLASS)
+        .args(&program_args)
+        .arg("--server.port=0")
+        .current_dir(&runtime.install_dir)
+        .stdin(Stdio::null());
+
+    let started = Instant::now();
+    match cmd.output() {
+        Ok(output) if output.status.success() => {
+            let elapsed = started.elapsed().as_secs_f64();
+            if cache_file.is_file() {
+                let _ = fs::write(&key_file, &key);
+                eprintln!("AOT cache trained in {:.1}s", elapsed);
+            } else {
+                eprintln!("AOT cache: training run exited but no cache file was produced; skipping");
+            }
+        }
+        Ok(output) => {
+            let tail: String = String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .rev()
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(" | ");
+            eprintln!(
+                "AOT cache: training run failed (exit {}): {tail}",
+                output.status
+            );
+            let _ = fs::remove_file(&cache_file);
+        }
+        Err(e) => {
+            eprintln!("AOT cache: training run could not start: {e}");
+        }
+    }
+}
+
+fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> ServerLaunchSpec {
+    let program = runtime.java_path.clone();
+    let program_display = program.display().to_string();
+
+    // Enumerate the classpath explicitly; fall back to the directory wildcard
+    // if enumeration fails so startup is never blocked by this change.
+    let classpath_arg = enumerate_classpath(&runtime.lib_dir).unwrap_or_else(|_| {
+        if cfg!(windows) {
+            format!("{}\\*", runtime.lib_dir.display())
+        } else {
+            format!("{}/*", runtime.lib_dir.display())
+        }
+    });
+
+    let (mut jvm_opts, program_args) = collect_jvm_opts_and_program_args();
+
+    // Attach the trained AOT cache when present.  The JVM silently falls back
+    // to a normal start if the cache is stale or incompatible.
+    let cache_file = aot_cache_file();
+    if cache_file.is_file() {
+        jvm_opts.push(format!("-XX:AOTCache={}", cache_file.display()));
     }
 
     let mut args: Vec<String> = Vec::with_capacity(4 + jvm_opts.len() + program_args.len());
@@ -5266,6 +5504,67 @@ mod tests {
     fn test_launch_ready_timeout_uses_jar_timeout() {
         let spec = sample_launch_spec();
         assert_eq!(launch_ready_timeout(&spec), JAR_SERVER_READY_TIMEOUT);
+    }
+
+    #[test]
+    fn test_enumerate_classpath_sorts_and_ignores_non_jars() {
+        let tmp = test_temp_dir();
+        let lib = tmp.path().join("lib");
+        create_dir_all(&lib).unwrap();
+        write(lib.join("z.jar"), "z").unwrap();
+        write(lib.join("a.jar"), "a").unwrap();
+        write(lib.join("m.jar"), "m").unwrap();
+        write(lib.join("readme.txt"), "not a jar").unwrap();
+
+        let cp = enumerate_classpath(&lib).unwrap();
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let names: Vec<&str> = cp
+            .split(sep)
+            .map(|p| Path::new(p).file_name().unwrap().to_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["a.jar", "m.jar", "z.jar"]);
+    }
+
+    #[test]
+    fn test_enumerate_classpath_empty_dir_errors() {
+        let tmp = test_temp_dir();
+        let lib = tmp.path().join("lib");
+        create_dir_all(&lib).unwrap();
+        assert!(enumerate_classpath(&lib).is_err());
+    }
+
+    #[test]
+    fn test_aot_cache_invalidation_key_stable_and_sensitive() {
+        let tmp = test_temp_dir();
+        let lib = tmp.path().join("lib");
+        create_dir_all(&lib).unwrap();
+        write(lib.join("a.jar"), "content-a").unwrap();
+        write(lib.join("b.jar"), "content-b").unwrap();
+
+        let runtime = InstalledBrowser4Runtime {
+            tag: "v4.13.4".to_string(),
+            asset_name: "asset".to_string(),
+            download_url: "url".to_string(),
+            install_dir: tmp.path().to_path_buf(),
+            lib_dir: lib.clone(),
+            jar_path: lib.join("a.jar"),
+            java_path: tmp.path().join("runtime/bin/java"),
+            reused_existing: false,
+        };
+        let opts = vec!["-XX:TieredStopAtLevel=1".to_string()];
+
+        let k1 = aot_cache_invalidation_key(&runtime, &opts).unwrap();
+        let k2 = aot_cache_invalidation_key(&runtime, &opts).unwrap();
+        assert_eq!(k1, k2, "same inputs must produce the same key");
+
+        write(lib.join("c.jar"), "content-c").unwrap();
+        let k3 = aot_cache_invalidation_key(&runtime, &opts).unwrap();
+        assert_ne!(k1, k3, "adding a jar must change the key");
+
+        let mut runtime2 = runtime.clone();
+        runtime2.tag = "v4.14.0".to_string();
+        let k4 = aot_cache_invalidation_key(&runtime2, &opts).unwrap();
+        assert_ne!(k1, k4, "a version bump must change the key");
     }
 
     #[test]

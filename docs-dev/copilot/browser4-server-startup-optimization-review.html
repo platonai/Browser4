@@ -56,7 +56,7 @@
 
 <div class="card tldr">
 <strong>结论（TL;DR）</strong>
-<p>项目已完成<strong>第一轮低成本优化</strong>：全局懒加载 + 18 项自动装配排除 + C1 编译限制 + 后台预热，据代码注释记录启动时间已从 <strong>~6s 降至 ~2s</strong>。剩余最大的确定性收益是 <strong>AppCDS / Spring CDS 训练归档</strong>（典型可再减 30–40% 类加载时间），其次是<strong>启动可观测性基线</strong>（当前缺少量化数据，所有后续优化都应先补上它）。Spring AOT 与 GraalVM native image 虽已铺路（RuntimeHints、native profile、Dockerfile.native），但与运行时插件动态加载（URLClassLoader）存在结构性冲突，只建议作为可选发布形态，不建议作为默认路径。</p>
+<p>项目已完成<strong>第一轮低成本优化</strong>：全局懒加载 + 18 项自动装配排除 + C1 编译限制 + 后台预热，据代码注释记录启动时间已从 <strong>~6s 降至 ~2s</strong>。剩余最大的确定性收益是 <strong>JVM AOT Cache 训练归档</strong>（官方 bundle = Temurin JDK 25.0.4 + Boot 4.0.6，满足 Spring「JDK 25+ 用 AOT cache」条件；JEP 483 缓存已链接类，官方基准 −41%，JEP 515 附赠热点方法 profile 改善 warmup；本地源码构建 JDK 17–24 时回退 AppCDS，典型 −30–40% 类加载时间），其次是<strong>启动可观测性基线</strong>（当前缺少量化数据，所有后续优化都应先补上它）。Spring AOT 与 GraalVM native image 虽已铺路（RuntimeHints、native profile、Dockerfile.native），但与运行时插件动态加载（URLClassLoader）存在结构性冲突，只建议作为可选发布形态，不建议作为默认路径——注意 JVM AOT cache <em>不属于</em>该冲突范围，它不改 bean 装配来源，插件类仅按普通路径加载。</p>
 </div>
 
 <h2>1. 启动链路现状</h2>
@@ -107,10 +107,10 @@
 </tr>
 <tr>
   <td>B</td>
-  <td><strong>AppCDS / Spring CDS 训练归档</strong>：Spring Boot 4 对 CDS 一等支持。<code>java -Djarmode=tools -jar Browser4.jar extract</code> 得到解压布局 → 训练运行 <code>-XX:ArchiveClassesAtExit</code> 生成归档 → 正式启动带 <code>-XX:SharedArchiveFile</code></td>
-  <td>类加载时间 −30~40%，整体启动预计再降 0.3–0.8s（在 ~2s 基础上）</td>
-  <td>中：daemon.rs 需支持「首次提取 + 训练 + 归档缓存/版本失效」逻辑（~150 行 Rust）</td>
-  <td class="risk-mid">中：归档与 JAR 版本必须严格对应，需失效策略；<code>BROWSER4_SERVER_OPTS</code> 与 CDS 标志的交互需测试</td>
+  <td><strong>JVM AOT Cache（首选）/ AppCDS（旧 JDK 回退）训练归档</strong>：官方 runtime bundle 为 Temurin JDK 25.0.4（jlink 裁剪）+ Boot 4.0.6，满足 Spring「JDK 25+ 用 AOT cache」的建议。JDK 25 单步训练 <code>-XX:AOTCacheOutput=app.aot</code> → 启动 <code>-XX:AOTCache=app.aot</code>；JDK 17–24 回退 CDS（<code>-XX:ArchiveClassesAtExit</code> / <code>-XX:SharedArchiveFile</code>）。注意：全局懒加载下 <code>-Dspring.context.exit=onRefresh</code> 覆盖面差，训练应走「启动 → StartupWarmer 完成 → 一轮轻量 MCP 调用 → 退出」</td>
+  <td>AOT cache 缓存已加载+已链接类（JEP 483，PetClinic 官方基准 −41%）并附赠热点方法 profile（JEP 515，改善 warmup 与首请求延迟）；CDS 仅省解析（−30~40% 类加载时间）。预计整体启动 ~2s → 1.0–1.4s，首条 CLI 命令延迟同时受益</td>
+  <td>中：daemon.rs 需支持「训练运行 + 归档缓存/版本失效 + 按 JDK 版本分叉 .aot/.jsa」逻辑（~150–200 行 Rust）</td>
+  <td class="risk-mid">中：AOT cache 硬约束更严——同一 JVM、同一类路径（JAR 列表，禁目录/通配）、<strong>训练与正式运行的 JVM 参数集需一致</strong>（纳入 hash）；失配时静默降级普通启动；<code>BROWSER4_SERVER_OPTS</code> 交互需测试</td>
   <td><span class="tag p0">P0</span></td>
 </tr>
 <tr>
@@ -176,9 +176,9 @@
 <div class="card">
 <h3>阶段二：确定性收益（约 1 周）</h3>
 <ul>
-  <li>方案 C（解压布局）→ 方案 B（CDS 训练归档）：daemon.rs 增加提取与归档缓存逻辑，归档按 jar 内容 hash 失效；默认开启，<code>BROWSER4_SERVER_OPTS</code> 可退出。</li>
+  <li>方案 C（解压布局，官方 bundle 天然满足）→ 方案 B（AOT cache 训练归档，JDK 25+；本地构建 JDK 17–24 回退 CDS）：daemon.rs 增加「仿真负载训练运行 + 归档缓存 + 按 jar 内容与 JVM 参数集 hash 失效 + 按版本分叉 .aot/.jsa」；默认开启，<code>BROWSER4_SERVER_OPTS</code> 可退出。</li>
   <li>方案 D（依赖裁剪）按基线数据决定投入多少。</li>
-  <li>目标：~2s → <strong>~1.2–1.5s</strong>（端口就绪），预热完成时间同步前移。</li>
+  <li>目标：~2s → <strong>~1.0–1.4s</strong>（端口就绪），且 JEP 515 方法 profile 让首条 CLI 命令（建会话+开浏览器）的 warmup 延迟同步下降。</li>
 </ul>
 </div>
 

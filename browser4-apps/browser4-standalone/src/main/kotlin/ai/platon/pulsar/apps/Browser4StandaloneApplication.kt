@@ -12,6 +12,7 @@ import org.springframework.context.annotation.ImportRuntimeHints
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.context.event.ApplicationReadyEvent
+import org.springframework.boot.context.metrics.buffering.BufferingApplicationStartup
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Import
 import org.springframework.context.event.EventListener
@@ -91,6 +92,9 @@ fun runBrowser4StandaloneApplication(args: Array<String>) {
         PluginClasspathEnhancer.enhance(Path.of("plugins"))
     }
     runApplication<Browser4StandaloneApplication>(*args) {
+        // Buffer startup steps so /actuator/startup can report per-phase
+        // timing (bean init, auto-configuration evaluation, etc.).
+        setApplicationStartup(BufferingApplicationStartup(4096))
         setAdditionalProfiles("standalone", "private", "advanced")
         addInitializers(PulsarContextInitializer())
         setLogStartupInfo(true)
