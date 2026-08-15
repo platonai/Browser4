@@ -40,13 +40,17 @@ object DevTaskPlanner {
      *
      * @param task the natural-language task (e.g. "fix mouseWheel in
      *   PulsarWebDriver.kt and add a test in browser4-rest")
+     * @param knownModules module paths to normalize mentions against. Defaults
+     *   to the static [ModuleMap.MODULES] snapshot; callers with workspace
+     *   access should pass the LIVE module list from [ModuleGraph] so mentions
+     *   resolve against the real pom topology.
      * @return the plan; [DevPlan.modules]/[DevPlan.files] are the signals found,
      *   [DevPlan.steps] the ordered execution plan
      */
-    fun plan(task: String): DevPlan {
+    fun plan(task: String, knownModules: List<String> = ModuleMap.MODULES): DevPlan {
         val files = FILE_PATTERN.findAll(task).map { it.value.replace('\\', '/') }
             .distinct().toList()
-        val modules = inferModules(task, files)
+        val modules = inferModules(task, files, knownModules)
         val driverFiles = files.filter { it.contains("/browser4-browser/") || it.endsWith("PulsarWebDriver.kt") }
         val steps = buildSteps(task, modules, files, driverFiles)
 
@@ -61,15 +65,15 @@ object DevTaskPlanner {
 
     // ==================== parsing ====================
 
-    /** Module names: explicit `browser4-*` mentions normalized against [ModuleMap.MODULES]. */
-    private fun inferModules(task: String, files: List<String>): List<String> {
+    /** Module names: explicit `browser4-*` mentions normalized against [knownModules]. */
+    private fun inferModules(task: String, files: List<String>, knownModules: List<String>): List<String> {
         val found = linkedSetOf<String>()
 
         // Normalize direct module mentions: "browser4-browser" → "browser4-core/browser4-browser".
         val mentions = Regex("""browser4-[\w-]+(?=/[\w-]+)?""").findAll(task)
             .map { it.value }.distinct().toList()
         mentions.forEach { mention ->
-            val hit = ModuleMap.MODULES.firstOrNull { it.endsWith(mention) || it == mention }
+            val hit = knownModules.firstOrNull { it.endsWith(mention) || it == mention }
             if (hit != null) found.add(hit)
         }
 
@@ -128,7 +132,10 @@ object DevTaskPlanner {
         }
 
         // 3. Compile check of the affected module (or cargo for the CLI crate).
-        val mavenModule = modules.firstOrNull { it != ModuleMap.CLI_CRATE }
+        //    Prefer the most specific (deepest-path) module so the build targets
+        //    the leaf (e.g. browser4-plugins/browser4-seo) over its aggregator.
+        val mavenModule = modules.filter { it != ModuleMap.CLI_CRATE }
+            .maxByOrNull { it.count { c -> c == '/' } }
         if (mavenModule != null) {
             steps += PlanStep(order++, "coding.mvnBuild",
                 "Compile the affected module to catch Kotlin/Java errors before tests",

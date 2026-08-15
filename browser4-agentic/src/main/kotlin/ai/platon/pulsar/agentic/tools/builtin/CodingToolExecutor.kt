@@ -558,14 +558,17 @@ class CodingToolExecutor : AbstractToolExecutor() {
             arguments = listOf(
                 ToolSpec.Arg("task", "String"),
                 ToolSpec.Arg("verify", "Boolean", "false"),
+                ToolSpec.Arg("runTests", "Boolean", "false"),
                 ToolSpec.Arg("module", "String", "null"),
             ),
             returnType = "String",
             description = "High-level entry for a Browser4 self-development task: parse a natural-language task " +
                 "into an executable plan following the AGENTS.md dev flow — locate the affected files, impact " +
                 "analysis, compile the owning module, smallest-scope tests, CDP trap check for driver code, " +
-                "repo-consistency validation, commit guidance. verify=true additionally RUNS the fast checks " +
-                "(mvnBuild compile of the affected module, trapCheck, repo-consistency). " +
+                "repo-consistency validation, commit guidance. Module mentions resolve against the LIVE pom " +
+                "graph (coding.moduleGraph) when available. verify=true additionally RUNS the fast checks " +
+                "(mvnBuild compile of the affected module, trapCheck, repo-consistency); runTests=true (with " +
+                "verify) also runs the module's test suite (mvn test -pl <module> -am / cargo test). " +
                 "module overrides the inferred module."
         )
     }
@@ -1113,12 +1116,17 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 CdpTrapCheck.format(content)
             }
             "devTask" -> {
-                validateArgs(args, allowed = setOf("task", "verify", "module"), required = setOf("task"), functionName)
+                validateArgs(args, allowed = setOf("task", "verify", "runTests", "module"), required = setOf("task"), functionName)
                 val task = paramString(args, "task", functionName)!!
                 val verify = paramBool(args, "verify", functionName, required = false, default = false) ?: false
+                val runTests = paramBool(args, "runTests", functionName, required = false, default = false) ?: false
                 val moduleOverride = paramString(args, "module", functionName, required = false, default = null)
 
-                val plan = DevTaskPlanner.plan(task)
+                // Resolve module mentions against the LIVE pom graph when possible.
+                val graph = runCatching { scanModuleGraph(fs) }.getOrNull()
+                val knownModules = graph?.nodes?.keys?.toList()?.takeIf { it.isNotEmpty() }
+                    ?: ModuleMap.MODULES
+                val plan = DevTaskPlanner.plan(task, knownModules)
                 val modules = if (!moduleOverride.isNullOrBlank()) listOf(moduleOverride) else plan.modules
                 val planText = buildString {
                     appendLine("Dev task plan (${plan.steps.size} steps):")
@@ -1133,13 +1141,17 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     if (moduleOverride != null) {
                         appendLine("Module override: $moduleOverride")
                     }
+                    if (graph == null) {
+                        appendLine("⚠ live pom graph unavailable — static ModuleMap used for normalization")
+                    }
                 }.trimEnd()
 
                 if (!verify) return planText
 
                 // verify=true: run the fast checks against the live workspace.
                 val results = mutableListOf<String>()
-                val mavenModule = modules.firstOrNull { it != ModuleMap.CLI_CRATE }
+                val mavenModule = modules.filter { it != ModuleMap.CLI_CRATE }
+                    .maxByOrNull { it.count { c -> c == '/' } }
                 if (mavenModule != null) {
                     results += "mvnBuild compile of $mavenModule:\n" +
                         mavenBuild.format(mavenBuild.build(shell, mavenModule, "compile", true, 300))
@@ -1151,6 +1163,23 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     }
                 }
                 results += "repo-consistency:\n${repoConsistencyReport(fs)}"
+
+                // runTests=true: execute the module's test suite (the AGENTS.md
+                // "smallest scope" step) after the compile check passed.
+                if (runTests) {
+                    if (mavenModule != null) {
+                        val cmd = ModuleMap.mavenTestCommand(mavenModule)
+                        val r = shell.executeRaw(cmd, timeoutSeconds = 600)
+                        results += "tests on $mavenModule (exit ${r.exitCode}):\n" +
+                            listOf(r.stdout, r.stderr).filter { it.isNotBlank() }.joinToString("\n").takeLast(3000)
+                    }
+                    if (ModuleMap.CLI_CRATE in modules) {
+                        val cmd = ModuleMap.cargoTestCommand()
+                        val r = shell.executeRaw(cmd, timeoutSeconds = 600)
+                        results += "cargo tests (exit ${r.exitCode}):\n" +
+                            listOf(r.stdout, r.stderr).filter { it.isNotBlank() }.joinToString("\n").takeLast(3000)
+                    }
+                }
 
                 planText + "\n\n--- Verification ---\n" + results.joinToString("\n\n")
             }

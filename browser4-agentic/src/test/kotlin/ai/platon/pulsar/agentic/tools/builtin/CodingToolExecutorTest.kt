@@ -959,6 +959,42 @@ class CodingToolExecutorTest {
             assertTrue(value.contains("Verification"), value)
             assertTrue(value.contains("mvnBuild compile of browser4-rest"), value)
             assertTrue(value.contains("All checks passed"), value)
+            assertFalse(value.contains("tests on"), "runTests=false must not run tests")
+        }
+
+        @Test
+        @DisplayName("devTask with runTests executes the module test suite")
+        fun testDevTaskRunTests() = runBlocking {
+            val root = tempDir
+            java.nio.file.Files.writeString(root.resolve("VERSION"), "4.13.4-SNAPSHOT\n")
+            java.nio.file.Files.writeString(root.resolve("pom.xml"), rootPomXml)
+            java.nio.file.Files.createDirectories(root.resolve("browser4-dependencies"))
+            java.nio.file.Files.writeString(root.resolve("browser4-dependencies/pom.xml"), bomPomXml)
+            for (m in listOf("browser4-core", "browser4-rest")) {
+                java.nio.file.Files.createDirectories(root.resolve(m))
+                java.nio.file.Files.writeString(root.resolve("$m/pom.xml"), "<project/>\n")
+            }
+            coEvery { shell.executeRaw(any(), any(), any()) } answers {
+                val cmd = firstArg<String>()
+                ShellResult("s1", cmd, 0,
+                    if (cmd.contains("mvn test")) "Tests run: 12, Failures: 0" else "compiled", "", 100)
+            }
+
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "devTask",
+                arguments = mutableMapOf(
+                    "task" to "change the controller in browser4-rest/src/main/kotlin/XController.kt",
+                    "verify" to "true",
+                    "runTests" to "true")
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("tests on browser4-rest"), value)
+            assertTrue(value.contains("Tests run: 12"), value)
         }
 
         @Test

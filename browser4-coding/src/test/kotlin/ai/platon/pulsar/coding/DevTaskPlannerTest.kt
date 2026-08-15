@@ -67,4 +67,25 @@ class DevTaskPlannerTest {
         assertTrue("browser4-core/browser4-browser" in plan.modules, "modules: ${plan.modules}")
         assertTrue("browser4-rest" in plan.modules, "modules: ${plan.modules}")
     }
+
+    @Test
+    @DisplayName("knownModules drives normalization against the live graph")
+    fun knownModulesParam() {
+        // Default static snapshot does not know a hypothetical weather plugin.
+        val defaultPlan = DevTaskPlanner.plan("add a tool in browser4-weather")
+        assertTrue(defaultPlan.modules.isEmpty(), "unknown module must not resolve by default: ${defaultPlan.modules}")
+
+        // With the LIVE module list (e.g. from ModuleGraph), the mention resolves.
+        val live = ModuleMap.MODULES + "browser4-plugins/browser4-weather"
+        val plan = DevTaskPlanner.plan("add a tool in browser4-weather", knownModules = live)
+        assertTrue("browser4-plugins/browser4-weather" in plan.modules,
+            "mention must normalize against knownModules: ${plan.modules}")
+    }
+
+    @Test
+    @DisplayName("pdk mention resolves when knownModules includes it")
+    fun pdkMentionResolves() {
+        val plan = DevTaskPlanner.plan("the plugin framework is in browser4-pdk")
+        assertTrue("browser4-pdk" in plan.modules, "pdk must resolve (it is in the synced snapshot): ${plan.modules}")
+    }
 }

@@ -1,7 +1,7 @@
 ---
 name: browser4-dev
-description: "Develop features inside the Browser4 repository itself: add CLI commands, agent tool domains, REST endpoints, tests, and skills using coding.scaffoldFlow / coding.scaffoldFromExample / coding.mvnBuild. Use when the user asks to add a new browser4-cli command, new tool domain, REST endpoint, or to modify Browser4's own code."
-allowed-tools: coding.scaffoldFlow coding.scaffoldFromExample coding.mvnBuild coding.scaffold coding.write coding.read coding.readLines coding.replace coding.replaceRegex coding.editLines coding.insertAfter coding.revert coding.validate coding.shell coding.diagnostics coding.references coding.symbols
+description: "Develop features inside the Browser4 repository itself: add CLI commands, agent tool domains, REST endpoints, tests, and skills; analyze impact, plan dev tasks, check CDP pitfalls, and verify builds. Use when the user asks to add a new browser4-cli command, new tool domain, REST endpoint, modify Browser4's own Kotlin/Rust code, or check which modules a change affects."
+allowed-tools: coding.scaffoldFlow coding.scaffoldFromExample coding.mvnBuild coding.devTask coding.impact coding.moduleGraph coding.trapCheck coding.scaffold coding.write coding.read coding.readLines coding.replace coding.replaceRegex coding.editLines coding.insertAfter coding.revert coding.validate coding.shell coding.ktSymbols coding.ktReferences coding.diagnostics coding.references coding.symbols
 ---
 
 # browser4-dev
@@ -17,8 +17,23 @@ repository's real reference implementations, so the output never goes stale.
 - User wants to add a REST endpoint (Controller + Service)
 - User wants to add a test class or a skill
 - User wants to modify Browser4's own Kotlin/Rust code and verify it compiles
+- User wants to know which modules a change affects, or plan a whole dev task
 
 ## Workflows
+
+### 0. Before changing anything — know the blast radius
+
+```
+coding.moduleGraph(module="browser4-core/browser4-browser")
+  → LIVE module graph rebuilt from the real pom.xml files: direct deps,
+    transitive dependents, and drift warnings vs the static snapshot
+
+coding.impact(path="browser4-core/browser4-browser/src/.../PulsarWebDriver.kt")
+  → owning module + affected modules (transitively) + suggested test commands
+
+coding.trapCheck(path=<browser-driver file>)
+  → CDP pitfall advisories (mouseWheel race, cursor positioning, insertText racing)
+```
 
 ### 1. Add a new CLI command
 
@@ -36,7 +51,7 @@ coding.shell(command="cargo test --bin browser4-cli")          # Rust side
 coding.mvnBuild(module="browser4-rest", goals="compile")       # Kotlin side
 ```
 
-### 2. Add a new agent tool domain
+### 2. Add a new agent tool domain (plugin)
 
 ```
 coding.scaffoldFlow(type="agent-tool", name="browser4-weather", domain="weather",
@@ -68,11 +83,30 @@ coding.scaffoldFlow(type="skill", name="browser4-myflow",
 ### 5. Clone an existing implementation (anti-staleness)
 
 ```
+# Single file:
 coding.scaffoldFromExample(path="browser4-plugins/browser4-seo/.../SeoToolExecutor.kt")
   → discovery: shows parameters (basePackage, className, domain, toolMethod)
 coding.scaffoldFromExample(path=<same>, basePackage="ai.platon.pulsar.weather",
      className="WeatherToolExecutor", domain="weather", toolMethod="fetchWeather")
-  → instantiates a renamed skeleton from the real reference code
+
+# Whole plugin directory (cross-file consistent + stem-derived siblings):
+coding.scaffoldFromExample(path="browser4-plugins/browser4-seo",
+     className="WeatherToolExecutor", basePackage="ai.platon.pulsar.weather",
+     domain="weather", artifactId="browser4-weather")
+  → renames the executor AND sibling classes sharing the stem
+    (SeoAutoConfiguration→WeatherAutoConfiguration, SeoService→WeatherService, ...)
+```
+
+### 6. Plan a whole dev task in one call
+
+```
+coding.devTask(task="fix the mouseWheel race in PulsarWebDriver.kt under
+     browser4-core/browser4-browser/src/main/kotlin, add a regression test",
+     verify=true)
+  → AGENTS.md dev-flow plan (read → impact → mvnBuild → tests → trapCheck →
+    repo-consistency → commit), with the fast checks already RUN:
+    compile of the inferred module, CDP trap check, repo-consistency.
+    Add runTests=true to also execute the module's test suite.
 ```
 
 ## Rules
@@ -88,6 +122,12 @@ coding.scaffoldFromExample(path=<same>, basePackage="ai.platon.pulsar.weather",
    stale output.
 5. **Keep changes small**: one command/domain/endpoint per cycle; `coding.revert`
    undoes a bad edit.
+6. **Governance files are protected**: delete/replace on VERSION, AGENTS.md,
+   CLAUDE.md, root pom.xml, the BOM, and the CI workflow are blocked by design —
+   ask the user for explicit intent instead of working around it.
+7. **Module topology is live**: `coding.moduleGraph`/`coding.impact` rebuild from
+   the real poms; the static ModuleMap snapshot is guarded by E2E tests against
+   drift — sync it when adding a module.
 
 ## Examples
 
@@ -98,4 +138,12 @@ Agent: 1. coding.scaffoldFlow(type="b4-cli-command", name="extract-prices", ...)
        3. coding.shell(command="cargo test --bin browser4-cli")
        4. coding.mvnBuild(module="browser4-rest", goals="compile")
        5. 报告：6 处触点全部就位，双端编译通过
+
+User: 克隆 browser4-seo 插件成天气插件
+Agent: 1. coding.scaffoldFromExample(path="browser4-plugins/browser4-seo",
+          className="WeatherToolExecutor", basePackage="ai.platon.pulsar.weather",
+          domain="weather", artifactId="browser4-weather")
+       2. 逐文件 coding.write
+       3. coding.mvnBuild(module="browser4-plugins/browser4-weather")
+       4. coding.validate(type="plugin", path="browser4-plugins/browser4-weather")
 ```
