@@ -256,7 +256,7 @@ object ArtifactScaffolds {
             /**
              * Run the browser-side script on the current page.
              */
-            fun $toolMethod(driver: WebDriver): Any? {
+            suspend fun $toolMethod(driver: WebDriver): Any? {
                 requireNotNull(driver) { "$toolMethod requires a WebDriver (current page context)" }
                 return try {
                     driver.evaluateValue(script)
