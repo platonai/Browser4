@@ -212,7 +212,7 @@ function Get-FunctionsFromScript {
 Write-Host "Source : $MonitorScriptPath" -ForegroundColor DarkGray
 
 $funcText = Get-FunctionsFromScript -ScriptPath $MonitorScriptPath `
-    -FunctionNames @('ConvertTo-LogLines', 'Parse-GitHubLogLine', 'Extract-MinimalErrors', 'New-CoworkerFailureTask', 'Invoke-PostReleaseVersionBump')
+    -FunctionNames @('ConvertTo-LogLines', 'Parse-GitHubLogLine', 'Get-FailingTestNames', 'Extract-MinimalErrors', 'New-CoworkerFailureTask', 'Invoke-PostReleaseVersionBump')
 
 Invoke-Expression $funcText
 
@@ -246,6 +246,29 @@ Assert-Returns -Label 'CLL null: empty' -Actual $cllNull.Count -Expected 0
 $cllEmbedded = ConvertTo-LogLines -RawLogs @("a`nb", 'c')
 Assert-Returns -Label 'CLL embedded newline: returns string[]' -Actual ($cllEmbedded -is [string[]]) -Expected $true
 Assert-Returns -Label 'CLL embedded newline: splits to 3 lines' -Actual $cllEmbedded.Count -Expected 3
+
+# ===================================================================
+# TESTS: Get-FailingTestNames
+# ===================================================================
+Write-Host "━━━ Get-FailingTestNames: formats & dedup ━━━" -ForegroundColor Cyan
+
+$ftLines = @(
+    'test test_e2e_session_lifecycle ... FAILED',
+    'test test_e2e_batch_compile_empty ... ok',
+    'test result: FAILED. 10 passed; 2 failed',
+    '--- FAIL: TestGoFoo',
+    'test_e2e_crawl_depth => FAILED',
+    'test test_e2e_session_lifecycle ... FAILED'   # duplicate
+)
+$ftNames = Get-FailingTestNames -LogLines $ftLines
+Assert-Returns -Label 'FTN: returns string[]' -Actual ($ftNames -is [string[]]) -Expected $true
+Assert-Returns -Label 'FTN: captures Rust FAILED' -Actual ($ftNames -contains 'test_e2e_session_lifecycle') -Expected $true
+Assert-Returns -Label 'FTN: captures Go FAIL' -Actual ($ftNames -contains 'TestGoFoo') -Expected $true
+Assert-Returns -Label 'FTN: captures e2e => FAILED' -Actual ($ftNames -contains 'test_e2e_crawl_depth') -Expected $true
+Assert-Returns -Label 'FTN: dedupes (3 unique)' -Actual $ftNames.Count -Expected 3
+
+$ftEmpty = Get-FailingTestNames -LogLines @('all ok', 'nothing failed')
+Assert-Returns -Label 'FTN: empty input -> empty array' -Actual ($ftEmpty.Count -eq 0 -and $ftEmpty -is [string[]]) -Expected $true
 
 # ===================================================================
 # TESTS: Extract-MinimalErrors

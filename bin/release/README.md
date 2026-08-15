@@ -141,7 +141,9 @@ actually trigger and monitor.
 - On workflow **failure**, auto-extracts diagnostic information (failing tests,
   error blocks) and dispatches a coworker fix task.
 - Supports `-NoWatch` for non-interactive terminals (polls via `gh run list`/`gh run view`).
-- Supports `-Apply`, `-DryRun`, `-Agent`, and `-SkipVersionBump`.
+  The poll loop retries transient `gh` failures (10 attempts) and can be bounded with
+  `-MaxMonitorMinutes` (default 0 = unlimited) so a stuck workflow run can't hang forever.
+- Supports `-Apply`, `-DryRun`, `-Agent`, `-SkipVersionBump`, and `-MaxMonitorMinutes`.
 
 ```
 .\bin\release\monitor-release.ps1                             # dry run (preview)
@@ -149,6 +151,7 @@ actually trigger and monitor.
 .\bin\release\monitor-release.ps1 -Apply -message "Hotfix for login crash"
 .\bin\release\monitor-release.ps1 -Apply -NoWatch -PollIntervalSeconds 10
 .\bin\release\monitor-release.ps1 -Apply -SkipVersionBump     # release, no auto-bump
+.\bin\release\monitor-release.ps1 -Apply -NoWatch -MaxMonitorMinutes 90
 ```
 
 ### `download-release-assets.ps1`
