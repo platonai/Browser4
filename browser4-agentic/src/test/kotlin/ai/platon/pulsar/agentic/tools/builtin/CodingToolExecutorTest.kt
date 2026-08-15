@@ -14,6 +14,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 
 class CodingToolExecutorTest {
 
@@ -775,10 +776,10 @@ class CodingToolExecutorTest {
         }
 
         @Test
-        @DisplayName("getToolSpecs returns 42 registered specs")
+        @DisplayName("getToolSpecs returns 43 registered specs")
         fun testToolSpecsCount() {
             val specs = executor.getToolSpecs()
-            assertEquals(42, specs.size)
+            assertEquals(43, specs.size)
         }
 
         @Test
@@ -795,7 +796,8 @@ class CodingToolExecutorTest {
                 "replaceRegex", "editLines", "insertAfter", "revert",
                 "diagnostics", "symbols", "references", "lspServers",
                 "runCode", "runCodeLanguages",
-                "mvnBuild", "scaffoldFromExample", "scaffoldFlow", "ktSymbols", "ktReferences", "impact"
+                "mvnBuild", "scaffoldFromExample", "scaffoldFlow", "ktSymbols", "ktReferences", "impact",
+                "trapCheck"
             )
             assertEquals(expectedMethods, specs.keys)
         }
@@ -808,6 +810,124 @@ class CodingToolExecutorTest {
                 assertTrue(spec.description?.isNotBlank() == true, "Description for '$method' should not be blank")
             }
         }
+    }
+
+    // ==================== Governance tools (trapCheck, repo-consistency) ====================
+
+    @Nested
+    @DisplayName("Governance tools")
+    inner class GovernanceTools {
+
+        @TempDir
+        lateinit var tempDir: java.nio.file.Path
+
+        @Test
+        @DisplayName("trapCheck flags CDP pitfalls in driver code")
+        fun testTrapCheckFlags() = runBlocking {
+            coEvery { fs.readFile(any()) } returns
+                "session.send(Input.dispatchMouseEvent, mapOf(\"type\" to \"mouseWheel\"))"
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "trapCheck",
+                arguments = mutableMapOf("path" to "PulsarWebDriver.kt")
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            val value = result.value as String
+            assertTrue(value.contains("[crbug-444929150]"), value)
+            coVerify { fs.readFile("PulsarWebDriver.kt") }
+        }
+
+        @Test
+        @DisplayName("trapCheck passes through file read errors")
+        fun testTrapCheckReadError() = runBlocking {
+            coEvery { fs.readFile(any()) } returns "Error: File not found: missing.kt"
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "trapCheck",
+                arguments = mutableMapOf("path" to "missing.kt")
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            assertEquals("Error: File not found: missing.kt", result.value)
+        }
+
+        @Test
+        @DisplayName("validate repo-consistency passes for a consistent workspace")
+        fun testValidateRepoConsistencyPass() = runBlocking {
+            val root = tempDir
+            java.nio.file.Files.writeString(root.resolve("VERSION"), "4.13.4-SNAPSHOT\n")
+            java.nio.file.Files.writeString(root.resolve("pom.xml"), rootPomXml)
+            java.nio.file.Files.createDirectories(root.resolve("browser4-dependencies"))
+            java.nio.file.Files.writeString(root.resolve("browser4-dependencies/pom.xml"), bomPomXml)
+            for (m in listOf("browser4-core", "browser4-rest")) {
+                java.nio.file.Files.createDirectories(root.resolve(m))
+                java.nio.file.Files.writeString(root.resolve("$m/pom.xml"), "<project/>\n")
+            }
+
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "validate",
+                arguments = mutableMapOf("type" to "repo-consistency")
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("All checks passed"), value)
+        }
+
+        @Test
+        @DisplayName("validate repo-consistency reports version drift")
+        fun testValidateRepoConsistencyDrift() = runBlocking {
+            val root = tempDir
+            java.nio.file.Files.writeString(root.resolve("VERSION"), "4.13.4-SNAPSHOT\n")
+            java.nio.file.Files.writeString(
+                root.resolve("pom.xml"), rootPomXml.replace("4.13.4-SNAPSHOT", "4.99.0"))
+            java.nio.file.Files.createDirectories(root.resolve("browser4-dependencies"))
+            java.nio.file.Files.writeString(root.resolve("browser4-dependencies/pom.xml"), bomPomXml)
+            for (m in listOf("browser4-core", "browser4-rest")) {
+                java.nio.file.Files.createDirectories(root.resolve(m))
+                java.nio.file.Files.writeString(root.resolve("$m/pom.xml"), "<project/>\n")
+            }
+
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "validate",
+                arguments = mutableMapOf("type" to "repo-consistency")
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("Root pom version"), value)
+            assertTrue(value.contains("does not match VERSION"), value)
+        }
+
+        private val rootPomXml = """
+            <project>
+                <artifactId>browser4</artifactId>
+                <version>4.13.4-SNAPSHOT</version>
+                <packaging>pom</packaging>
+                <modules>
+                    <module>browser4-dependencies</module>
+                    <module>browser4-core</module>
+                    <module>browser4-rest</module>
+                </modules>
+            </project>
+        """.trimIndent()
+
+        private val bomPomXml = """
+            <project>
+                <artifactId>browser4-dependencies</artifactId>
+                <version>4.13.4-SNAPSHOT</version>
+                <packaging>pom</packaging>
+            </project>
+        """.trimIndent()
     }
 }
 

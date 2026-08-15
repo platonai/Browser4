@@ -45,11 +45,27 @@ class CodingAgentFileSystem(
      * walks slow in large repos.
      */
     private val searchExcludedDirs: Set<String> = DEFAULT_SEARCH_EXCLUDED_DIRS,
+    /**
+     * Repo-critical file names (basenames) that destructive operations must not
+     * touch: delete/replace/append are blocked for these. Defaults to the
+     * Browser4 governance set (VERSION, AGENTS.md, BOM, root pom).
+     */
+    private val protectedFiles: Set<String> = DEFAULT_PROTECTED_FILES,
 ) {
     companion object {
         const val MAX_READ_SIZE_BYTES = 5 * 1024 * 1024L // 5 MB
         const val MAX_GLOB_RESULTS = 10_000
         private val logger = LoggerFactory.getLogger(CodingAgentFileSystem::class.java)
+
+        /** Repo-governance files that destructive ops must never modify. */
+        val DEFAULT_PROTECTED_FILES: Set<String> = setOf(
+            "VERSION",
+            "AGENTS.md",
+            "CLAUDE.md",
+            "pom.xml",          // root aggregator pom — module registration lives here
+            "browser4-dependencies/pom.xml", // BOM
+            ".github/workflows/ci.yml",
+        )
 
         /** Directories skipped by recursive searches by default. */
         val DEFAULT_SEARCH_EXCLUDED_DIRS: Set<String> = setOf(
@@ -228,6 +244,7 @@ class CodingAgentFileSystem(
         if (oldStr.isEmpty()) return errorResult("Cannot replace empty string")
         val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
         if (!resolved.exists()) return errorResult("File not found: $path")
+        protectionViolation(resolved)?.let { return errorResult(it) }
 
         return try {
             val original = withContext(Dispatchers.IO) { Files.readString(resolved) }
@@ -279,6 +296,7 @@ class CodingAgentFileSystem(
         if (regex.isEmpty()) return errorResult("Cannot replace empty regex")
         val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
         if (!resolved.exists()) return errorResult("File not found: $path")
+        protectionViolation(resolved)?.let { return errorResult(it) }
 
         return try {
             val pattern = Regex(regex)
@@ -336,6 +354,7 @@ class CodingAgentFileSystem(
         }
         val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
         if (!resolved.exists()) return errorResult("File not found: $path")
+        protectionViolation(resolved)?.let { return errorResult(it) }
 
         return try {
             val lines = withContext(Dispatchers.IO) { Files.readAllLines(resolved) }
@@ -368,6 +387,7 @@ class CodingAgentFileSystem(
         if (anchor.isEmpty()) return errorResult("Anchor must not be empty")
         val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
         if (!resolved.exists()) return errorResult("File not found: $path")
+        protectionViolation(resolved)?.let { return errorResult(it) }
 
         return try {
             val lines = withContext(Dispatchers.IO) { Files.readAllLines(resolved) }
@@ -468,6 +488,9 @@ class CodingAgentFileSystem(
         if (!allowDestructive) return errorResult("Destructive operations disabled")
         val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
         if (!resolved.exists()) return errorResult("Not found: $path")
+
+        // Governance protection: never delete repo-critical files.
+        protectionViolation(resolved)?.let { return errorResult(it) }
 
         // Hard protection: never delete the workspace root itself.
         if (resolved == canonicalRoot) {
@@ -913,6 +936,25 @@ class CodingAgentFileSystem(
     }
 
     private fun errorResult(message: String): String = "Error: $message"
+
+    /**
+     * Reject destructive ops on repo-governance files (VERSION, AGENTS.md, poms, ...).
+     * Returns an error string when the resolved path is protected, else null.
+     */
+    private fun protectionViolation(resolved: Path): String? {
+        val rel = canonicalRoot.relativize(resolved).toString().replace('\\', '/')
+        val protected = protectedFiles.any { p ->
+            // Exact relative path, or basename match for single-file governance
+            // entries (VERSION, AGENTS.md, CLAUDE.md). pom.xml is matched only by
+            // exact root path so module poms stay editable.
+            if (p == "pom.xml" || p.contains('/')) p == rel
+            else rel.substringAfterLast('/') == p
+        }
+        return if (protected) {
+            "Repo-governance file is protected: $rel — delete/replace blocked. " +
+                "Use explicit intent or human review to modify repository-critical files."
+        } else null
+    }
 
     /**
      * Expand `$1`, `$2`, `${name}` capture-group references in a regex replacement

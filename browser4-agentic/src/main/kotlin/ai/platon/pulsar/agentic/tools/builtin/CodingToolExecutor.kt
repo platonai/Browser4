@@ -2,6 +2,7 @@ package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.coding.ArtifactScaffolds
 import ai.platon.pulsar.coding.ArtifactValidator
+import ai.platon.pulsar.coding.CdpTrapCheck
 import ai.platon.pulsar.coding.CodeRunner
 import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingAgentShell
@@ -10,11 +11,15 @@ import ai.platon.pulsar.coding.LanguageServerManager
 import ai.platon.pulsar.coding.KotlinSemanticIndexer
 import ai.platon.pulsar.coding.MavenBuildSupport
 import ai.platon.pulsar.coding.ModuleMap
+import ai.platon.pulsar.coding.RepoConsistencyCheck
 import ai.platon.pulsar.coding.SkeletonExtractor
 import ai.platon.pulsar.coding.ValidationResult
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationRenderer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.nio.file.Files
 import kotlin.reflect.KClass
 
 /**
@@ -507,12 +512,24 @@ class CodingToolExecutor : AbstractToolExecutor() {
             domain = domain, method = "validate",
             arguments = listOf(
                 ToolSpec.Arg("type", "String"),
-                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("path", "String", "null"),
             ),
             returnType = "String",
-            description = "Validate a Browser4 plugin directory, skill file, JS file, or script file. " +
-                "type: 'plugin' (path=plugin dir) | 'skill' | 'js' | 'script' (path=file path). " +
+            description = "Validate a Browser4 plugin directory, skill file, JS file, script file, or repo governance. " +
+                "type: 'plugin' (path=plugin dir) | 'skill' | 'js' | 'script' (path=file path) | " +
+                "'repo-consistency' (no path — checks VERSION vs root pom vs BOM vs module registration). " +
                 "Returns a list of issues with severity (error/warning/info)."
+        )
+
+        // --- Browser4 self-development: CDP pitfall awareness ---
+        toolSpec["trapCheck"] = ToolSpec(
+            domain = domain, method = "trapCheck",
+            arguments = listOf(ToolSpec.Arg("path", "String")),
+            returnType = "String",
+            description = "Scan a file for known Browser4 CDP pitfalls (AGENTS.md): mouseWheel race " +
+                "(crbug.com/444929150), cursor positioning after focus+click, and Input.insertText " +
+                "racing. Reminds the agent of the documented fix for each trap. Use before editing " +
+                "browser-driver code (PulsarWebDriver.kt and friends)."
         )
     }
 
@@ -957,18 +974,18 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 }
             }
             "validate" -> {
-                validateArgs(args, allowed = setOf("type", "path"), required = setOf("type", "path"), functionName)
+                validateArgs(args, allowed = setOf("type", "path"), required = setOf("type"), functionName)
                 val type = paramString(args, "type", functionName)!!
-                val path = paramString(args, "path", functionName)!!
+                val path = paramString(args, "path", functionName, required = false, default = null)
                 when (type) {
                     "plugin" -> {
                         // Resolve through the fs sandbox before handing the raw path to the validator
-                        val resolved = fs.resolvePathString(path)
+                        val resolved = fs.resolvePathString(path ?: throw IllegalArgumentException("path is required for type 'plugin'"))
                             ?: throw IllegalArgumentException("Path not allowed: $path")
                         ArtifactValidator.validatePlugin(resolved).format()
                     }
                     "skill" -> {
-                        val content = fs.readFile(path)
+                        val content = fs.readFile(path ?: throw IllegalArgumentException("path is required for type 'skill'"))
                         val result = ArtifactValidator.validateSkill(content, path)
                         // Cross-check every domain.method( reference in the skill body
                         // against the tools the agent can actually see/call.
@@ -976,19 +993,60 @@ class CodingToolExecutor : AbstractToolExecutor() {
                         ValidationResult.of(result.issues + refIssues).format()
                     }
                     "js" -> {
-                        val content = fs.readFile(path)
+                        val content = fs.readFile(path ?: throw IllegalArgumentException("path is required for type 'js'"))
                         ArtifactValidator.validateJs(content, path).format()
                     }
                     "script" -> {
-                        val content = fs.readFile(path)
+                        val content = fs.readFile(path ?: throw IllegalArgumentException("path is required for type 'script'"))
                         ArtifactValidator.validateScript(content, path).format()
                     }
-                    else -> throw IllegalArgumentException("Unknown validate type: $type. Supported: plugin, skill, js, script")
+                    "repo-consistency" -> repoConsistencyReport(fs)
+                    else -> throw IllegalArgumentException(
+                        "Unknown validate type: $type. Supported: plugin, skill, js, script, repo-consistency")
                 }
+            }
+            "trapCheck" -> {
+                validateArgs(args, allowed = setOf("path"), required = setOf("path"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                val content = fs.readFile(path)
+                if (content.startsWith("Error:")) return content
+                CdpTrapCheck.format(content)
             }
 
             else -> throw IllegalArgumentException("Unsupported coding method: $functionName(${args.keys})")
         }
+    }
+
+    /**
+     * `validate(type="repo-consistency")`: check the repo-governance invariants
+     * against the live workspace — VERSION vs root pom vs BOM versions, and
+     * module registration (registered modules exist; on-disk module dirs are
+     * registered). Zero dependencies; reads three files + directory listing.
+     */
+    private suspend fun repoConsistencyReport(fs: CodingAgentFileSystem): String {
+        val versionContent = fs.readFile("VERSION").takeUnless { it.startsWith("Error:") }
+        val rootPom = fs.readFile("pom.xml").takeUnless { it.startsWith("Error:") }
+        val bomPom = fs.readFile("browser4-dependencies/pom.xml").takeUnless { it.startsWith("Error:") }
+
+        val root = fs.workspaceRoot
+        val onDiskModuleDirs = withContext(Dispatchers.IO) {
+            Files.list(root).use { stream ->
+                stream.filter { Files.isDirectory(it) }
+                    .filter { Files.isRegularFile(it.resolve("pom.xml")) }
+                    .map { root.relativize(it).toString().replace('\\', '/') }
+                    .sorted()
+                    .toList()
+            }
+        }
+
+        val result = RepoConsistencyCheck.check(
+            versionContent = versionContent,
+            rootPom = rootPom,
+            bomPom = bomPom,
+            moduleExists = { m -> fs.exists(m) },
+            onDiskModuleDirs = onDiskModuleDirs,
+        )
+        return result.format()
     }
 
     /**

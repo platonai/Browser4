@@ -246,6 +246,111 @@ class CodingAgentFileSystemEditsTest {
         assertTrue(result.contains("Deleted"), "result: $result")
         assertFalse(tempDir.resolve("junk.txt").toFile().exists())
     }
+
+    // ==================== repo-governance protection ====================
+
+    @Test
+    @DisplayName("replaceInFile is blocked on VERSION")
+    fun replaceVersionProtected() = runBlocking {
+        write("VERSION", "4.0.0\n")
+        val f = fs()
+        val result = f.replaceInFile("VERSION", "4.0.0", "9.9.9")
+        assertTrue(result.contains("protected"), "result: $result")
+        assertEquals("4.0.0\n", read("VERSION"), "VERSION must be untouched")
+    }
+
+    @Test
+    @DisplayName("replaceRegexInFile is blocked on AGENTS.md")
+    fun replaceRegexAgentsProtected() = runBlocking {
+        write("AGENTS.md", "# guidelines\n")
+        val f = fs()
+        val result = f.replaceRegexInFile("AGENTS.md", "guidelines", "rules")
+        assertTrue(result.contains("protected"), "result: $result")
+        assertEquals("# guidelines\n", read("AGENTS.md"))
+    }
+
+    @Test
+    @DisplayName("editLinesInFile is blocked on CLAUDE.md")
+    fun editLinesClaudeProtected() = runBlocking {
+        write("CLAUDE.md", "line1\nline2\n")
+        val f = fs()
+        val result = f.editLinesInFile("CLAUDE.md", 1, 1, "changed")
+        assertTrue(result.contains("protected"), "result: $result")
+        assertEquals("line1\nline2\n", read("CLAUDE.md"))
+    }
+
+    @Test
+    @DisplayName("insertAfterInFile is blocked on AGENTS.md")
+    fun insertAfterAgentsProtected() = runBlocking {
+        write("AGENTS.md", "# title\n")
+        val f = fs()
+        val result = f.insertAfterInFile("AGENTS.md", "title", "hijacked")
+        assertTrue(result.contains("protected"), "result: $result")
+        assertEquals("# title\n", read("AGENTS.md"))
+    }
+
+    @Test
+    @DisplayName("delete is blocked on VERSION")
+    fun deleteVersionProtected() = runBlocking {
+        write("VERSION", "4.0.0\n")
+        val f = fs()
+        val result = f.delete("VERSION")
+        assertTrue(result.contains("protected"), "result: $result")
+        assertTrue(tempDir.resolve("VERSION").toFile().exists(), "VERSION must survive")
+    }
+
+    @Test
+    @DisplayName("root pom.xml is protected by exact relative path")
+    fun rootPomProtected() = runBlocking {
+        write("pom.xml", "<project/>\n")
+        val f = fs()
+        val result = f.replaceInFile("pom.xml", "<project/>", "<project hacked/>")
+        assertTrue(result.contains("protected"), "result: $result")
+        assertEquals("<project/>\n", read("pom.xml"))
+    }
+
+    @Test
+    @DisplayName("module pom.xml stays editable")
+    fun modulePomEditable() = runBlocking {
+        write("browser4-rest/pom.xml", "<project/>\n")
+        val f = fs()
+        val result = f.replaceInFile("browser4-rest/pom.xml", "<project/>", "<project hacked/>")
+        assertTrue(result.contains("Replaced"), "result: $result")
+        assertEquals("<project hacked/>\n", read("browser4-rest/pom.xml"))
+    }
+
+    @Test
+    @DisplayName("BOM path is protected by exact relative path")
+    fun bomProtected() = runBlocking {
+        write("browser4-dependencies/pom.xml", "<project/>\n")
+        val f = fs()
+        val result = f.replaceInFile("browser4-dependencies/pom.xml", "<project/>", "<project hacked/>")
+        assertTrue(result.contains("protected"), "result: $result")
+        assertEquals("<project/>\n", read("browser4-dependencies/pom.xml"))
+    }
+
+    @Test
+    @DisplayName("CI workflow is protected")
+    fun ciWorkflowProtected() = runBlocking {
+        write(".github/workflows/ci.yml", "jobs: {}\n")
+        val f = fs()
+        val result = f.replaceInFile(".github/workflows/ci.yml", "jobs", "evil")
+        assertTrue(result.contains("protected"), "result: $result")
+        assertEquals("jobs: {}\n", read(".github/workflows/ci.yml"))
+    }
+
+    @Test
+    @DisplayName("custom protectedFiles set is honored")
+    fun customProtectedFiles() = runBlocking {
+        write("SPEC.txt", "x\n")
+        write("other.txt", "x\n")
+        val f = CodingAgentFileSystem(tempDir, protectedFiles = setOf("SPEC.txt"))
+        val blocked = f.replaceInFile("SPEC.txt", "x", "y")
+        assertTrue(blocked.contains("protected"), "result: $blocked")
+        val allowed = f.replaceInFile("other.txt", "x", "y")
+        assertTrue(allowed.contains("Replaced"), "result: $allowed")
+        assertEquals("y\n", read("other.txt"))
+    }
 }
 
 
