@@ -59,10 +59,11 @@
 ```
 Read https://browser4.io/SKILL.md and install browser4-cli (if not installed) for browser automation to perform the following task:
 
-1. go to amazon.com
-2. search for pens to draw on whiteboards
-3. compare the first 4 ones
-4. write the result to a markdown file
+1. Open the browser in headed mode (`open --headed`) so the window is visible — this is a human-facing demo
+2. go to amazon.com
+3. search for pens to draw on whiteboards
+4. compare the first 4 ones
+5. write the result to a markdown file
 ```
 
 ## 🧭 工具选择指南
@@ -205,7 +206,7 @@ browser4-cli htmlsnapshot get text "#main-content"
 browser4-cli htmlsnapshot query --sql @query.sql
 
 # 保存输出
-browser4-cli screenshot --full-page --filename page.png
+browser4-cli screenshot --full-page --filename page.jpg
 browser4-cli pdf --filename page.pdf
 ```
 

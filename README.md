@@ -55,10 +55,11 @@ Paste the following instruction to your favorite AI agent like claude, codex, wo
 ```
 Read https://browser4.io/SKILL.md and install browser4-cli (if not installed) for browser automation to perform the following task:
 
-1. go to amazon.com
-2. search for pens to draw on whiteboards
-3. compare the first 4 ones
-4. write the result to a markdown file
+1. Open the browser in headed mode (`open --headed`) so the window is visible — this is a human-facing demo
+2. go to amazon.com
+3. search for pens to draw on whiteboards
+4. compare the first 4 ones
+5. write the result to a markdown file
 ```
 
 ## 🧭 Tool Selection Guide
@@ -72,7 +73,8 @@ Use `snapshot -i --boxes` to see clickable/typeable elements with refs like `e15
 Typical interactive flow:
 
 ```bash
-browser4-cli goto https://example.com/login
+# Humans usually want to see the browser — open it headed
+browser4-cli open --headed https://example.com/login
 browser4-cli snapshot -i --boxes
 browser4-cli fill e3 "user@example.com"
 browser4-cli fill e4 "secret" --submit
@@ -104,6 +106,7 @@ Need to process multiple pages?
 ├─ Need parallel execution (high throughput)? → swarm create → swarm query --seed-file ...
 ├─ Repeated monitoring (check every hour)? → loop -- eval "..." -i 3600
 └─ Just a few URLs in a shell script?
+   → browser4-cli open --headed "https://first-url"   # humans: open once, visibly
    → for url in ...; do browser4-cli goto "$url"; ... done
 ```
 
@@ -164,10 +167,8 @@ If you want the embedded agent-facing instructions, see [skills/browser4-cli/SKI
 ### Quick start
 
 ```bash
-# Open a browser session (headless by default; add --headed to see the window)
-browser4-cli open https://browser4.io
-
-# Or explicitly open a visible browser:
+# Open a visible browser session (humans usually want to see the window;
+# agents should prefer the default headless mode — see SKILL.md)
 browser4-cli open --headed https://browser4.io
 
 # Inspect the page and get element refs
@@ -186,7 +187,7 @@ browser4-cli htmlsnapshot get text "#main-content"
 browser4-cli htmlsnapshot query --sql @query.sql
 
 # Save output
-browser4-cli screenshot --full-page --filename page.png
+browser4-cli screenshot --full-page --filename page.jpg
 browser4-cli pdf --filename page.pdf
 ```
 
