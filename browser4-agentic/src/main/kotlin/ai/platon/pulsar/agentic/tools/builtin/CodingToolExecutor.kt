@@ -404,11 +404,25 @@ class CodingToolExecutor : AbstractToolExecutor() {
             arguments = listOf(
                 ToolSpec.Arg("path", "String"),
                 ToolSpec.Arg("symbol", "String"),
+                ToolSpec.Arg("scope", "String", "file"),
             ),
             returnType = "String",
             description = "Find references to a Kotlin symbol in a .kt file — call sites and property usages — " +
-                "via lightweight language-structure analysis (zero dependencies). " +
-                "Use before refactoring Browser4 code to assess impact."
+                "via lightweight language-structure analysis (zero dependencies). scope='file' (default) scans " +
+                "the given file; scope='module' scans all .kt files under the owning module for cross-file " +
+                "impact (excludes the declaring file). Use before refactoring Browser4 code to assess impact."
+        )
+        toolSpec["ktInheritance"] = ToolSpec(
+            domain = domain, method = "ktInheritance",
+            arguments = listOf(
+                ToolSpec.Arg("path", "String"),
+                ToolSpec.Arg("className", "String", "null"),
+            ),
+            returnType = "String",
+            description = "Walk the inheritance chain of a Kotlin class across the owning module's files " +
+                "(class X : AbstractToolExecutor → AbstractToolExecutor → ...). className defaults to the " +
+                "file's main class. Zero-dependency text analysis; generic/interface noise is ignored. " +
+                "Use to understand a class hierarchy before editing."
         )
 
         // --- Extract skeleton from real code (anti-staleness scaffold) ---
@@ -843,15 +857,54 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 else symbols.joinToString("\n") { "${it.kind} ${it.name} — line ${it.line}" }
             }
             "ktReferences" -> {
-                validateArgs(args, allowed = setOf("path", "symbol"), required = setOf("path", "symbol"), functionName)
+                validateArgs(args, allowed = setOf("path", "symbol", "scope"), required = setOf("path", "symbol"), functionName)
                 val path = paramString(args, "path", functionName)!!
                 val symbol = paramString(args, "symbol", functionName)!!
+                val scope = paramString(args, "scope", functionName, required = false, default = "file") ?: "file"
                 val resolved = fs.resolvePathString(path)
                     ?: throw IllegalArgumentException("Path not allowed: $path")
-                val content = fs.readFile(resolved)
-                val refs = kotlinIndexer.references(content, symbol, resolved.substringAfterLast('/').substringAfterLast('\\'))
-                if (refs.isEmpty()) "No references to '$symbol' found in $path"
-                else refs.joinToString("\n") { "line ${it.line}: ${it.snippet}" }
+
+                if (scope == "module") {
+                    // Cross-file scan: all .kt files under the owning module
+                    // (fall back to the whole workspace when the module dir
+                    // cannot be resolved, e.g. non-Browser4 layouts).
+                    val module = inferModule(resolved)
+                    val files = fs.collectTextFiles(if (module.isBlank()) "." else module)
+                        .filterKeys { it.endsWith(".kt") }
+                        .takeIf { it.isNotEmpty() }
+                        ?: fs.collectTextFiles(".").filterKeys { it.endsWith(".kt") }
+                    if (files.isEmpty()) return "No Kotlin files found${if (module.isBlank()) "" else " under module $module"}"
+                    val refs = kotlinIndexer.referencesInFiles(files, symbol)
+                    if (refs.isEmpty()) "No references to '$symbol' outside its declaring file${if (module.isBlank()) "" else " in module $module"}"
+                    else refs.joinToString("\n") { "${it.path}:${it.line}: ${it.snippet}" }
+                } else {
+                    val content = fs.readFile(resolved)
+                    val refs = kotlinIndexer.references(content, symbol, resolved.substringAfterLast('/').substringAfterLast('\\'))
+                    if (refs.isEmpty()) "No references to '$symbol' found in $path"
+                    else refs.joinToString("\n") { "line ${it.line}: ${it.snippet}" }
+                }
+            }
+            "ktInheritance" -> {
+                validateArgs(args, allowed = setOf("path", "className"), required = setOf("path"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                val resolved = fs.resolvePathString(path)
+                    ?: throw IllegalArgumentException("Path not allowed: $path")
+                val module = inferModule(resolved)
+                val fileName = resolved.substringAfterLast('/').substringAfterLast('\\')
+                val fileContent = fs.readFile(resolved)
+                val files = if (module.isBlank()) mapOf(fileName to fileContent)
+                else fs.collectTextFiles(module).filterKeys { it.endsWith(".kt") }
+                    .takeIf { it.isNotEmpty() }
+                    ?: fs.collectTextFiles(".").filterKeys { it.endsWith(".kt") }
+                if (files.isEmpty()) return "No Kotlin files found for $path"
+
+                val className = paramString(args, "className", functionName, required = false, default = null)
+                    ?: kotlinIndexer.symbols(fileContent, fileName)
+                        .firstOrNull { it.kind == "class" || it.kind == "interface" }?.name
+                    ?: return "Cannot infer the class of $path — pass className explicitly"
+
+                val chain = kotlinIndexer.inheritanceChain(files, className)
+                chain.joinToString(" → ")
             }
             "scaffoldFromExample" -> {
                 validateArgs(args, allowed = setOf("path", "basePackage", "className", "domain", "toolMethod", "stem"),

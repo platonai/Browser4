@@ -48,6 +48,13 @@ class KotlinSemanticIndexer {
         val snippet: String,
     )
 
+    /** A cross-file reference hit. */
+    data class FileReference(
+        val path: String,
+        val line: Int,
+        val snippet: String,
+    )
+
     /**
      * List symbol definitions in Kotlin source (zero-dependency text analysis).
      */
@@ -112,13 +119,72 @@ class KotlinSemanticIndexer {
         }
 
         // Property/identifier usages: `.symbol` (receiver access) — excluding the
-        // declaration `val symbol` / `fun symbol` / `class symbol`
-        val useRegex = Regex("""\b\.${Regex.escape(symbol)}\b""")
+        // declaration `val symbol` / `fun symbol` / `class symbol`. No \b before
+        // the dot so chained calls like `Executor().doWork()` still match.
+        val useRegex = Regex("""\.${Regex.escape(symbol)}\b""")
         useRegex.findAll(content).forEach { m ->
             refs += KotlinReference(symbol, lineOf(m, content), snippetAt(content, m.range.first))
         }
 
         return refs.distinctBy { "${it.line}:${it.snippet}" }.take(200)
+    }
+
+    /**
+     * Cross-file references: scan [files] (relative path → Kotlin source) for
+     * [symbol], returning hits annotated with their file. Use before refactoring
+     * a symbol to assess the blast radius across the module.
+     *
+     * @param files relative path → file content
+     * @param symbol the symbol to find
+     * @param excludeDeclaringFiles when true, skip files that declare the symbol
+     *   (only count external usages)
+     */
+    fun referencesInFiles(
+        files: Map<String, String>,
+        symbol: String,
+        excludeDeclaringFiles: Boolean = true,
+    ): List<FileReference> {
+        return files.flatMap { (path, content) ->
+            if (excludeDeclaringFiles && symbols(content).any { it.name == symbol }) {
+                emptyList()
+            } else {
+                references(content, symbol).map { FileReference(path, it.line, it.snippet) }
+            }
+        }.sortedWith(compareBy({ it.path }, { it.line }))
+    }
+
+    /**
+     * Inheritance chain of [className] across [files]: `class SeoToolExecutor :
+     * AbstractToolExecutor(...)` → chain [SeoToolExecutor, AbstractToolExecutor,
+     * ...] walking the primary supertype. Stops when no parent is found.
+     * Zero-dependency text analysis; generic/interface noise is ignored.
+     */
+    fun inheritanceChain(files: Map<String, String>, className: String, maxDepth: Int = 10): List<String> {
+        val parents = mutableMapOf<String, String>()
+        val typeRegex = Regex(
+            """(?m)^\s*(?:public\s+|internal\s+|private\s+|protected\s+|open\s+|abstract\s+|final\s+|data\s+|sealed\s+|enum\s+)*(?:class|interface|object|enum\s+class)\s+([A-Za-z_]\w*)\s*(?:\([^)]*\))?\s*(?::\s*([\w<>.,() ]+?))?\s*(?:\{|\s*$)"""
+        )
+        files.forEach { (_, content) ->
+            typeRegex.findAll(content).forEach { m ->
+                val name = m.groupValues[1]
+                val superTypes = m.groupValues[2].trim()
+                if (superTypes.isNotEmpty()) {
+                    val first = superTypes.split(',')
+                        .first { it.trim().isNotEmpty() }
+                        .trim().substringBefore('<').substringBefore('(').trim()
+                    if (first.isNotEmpty()) parents[name] = first
+                }
+            }
+        }
+
+        val chain = mutableListOf(className)
+        var current = className
+        repeat(maxDepth) {
+            val parent = parents[current] ?: return chain
+            chain += parent
+            current = parent
+        }
+        return chain
     }
 
     // ------------------------------------------------------------------

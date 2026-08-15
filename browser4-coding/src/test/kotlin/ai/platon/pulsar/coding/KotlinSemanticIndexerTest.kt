@@ -104,4 +104,75 @@ class KotlinSemanticIndexerTest {
         // Must not throw regardless of classpath.
         assertNotNull(KotlinSemanticIndexer.available)
     }
+
+    // ==================== cross-file references ====================
+
+    private val files: Map<String, String> = linkedMapOf(
+        "src/main/Executor.kt" to sample,
+        "src/main/Caller.kt" to """
+            package ai.platon.pulsar.weather.tools
+
+            open class Caller {
+                fun run() {
+                    val e = WeatherToolExecutor()
+                    e.fetchWeather()
+                }
+            }
+        """.trimIndent(),
+        "src/main/Other.kt" to """
+            package ai.platon.pulsar.weather.tools
+
+            fun helper() {
+                println("no reference here")
+            }
+        """.trimIndent(),
+    )
+
+    @Test
+    @DisplayName("referencesInFiles finds usages across files, excluding the declaring file")
+    fun referencesAcrossFiles() {
+        val refs = KotlinSemanticIndexer().referencesInFiles(files, "fetchWeather")
+        assertEquals(1, refs.size, "expected only the caller's usage, got $refs")
+        assertEquals("src/main/Caller.kt", refs[0].path)
+        assertTrue(refs[0].snippet.contains("e.fetchWeather()"), refs[0].snippet)
+    }
+
+    @Test
+    @DisplayName("referencesInFiles with exclude=false includes the declaring file's call sites")
+    fun referencesIncludingDeclaringFile() {
+        val refs = KotlinSemanticIndexer().referencesInFiles(files, "fetchWeather", excludeDeclaringFiles = false)
+        // Caller.kt usage + Executor.kt's internal helper() call (declaration itself is excluded by references()).
+        assertEquals(2, refs.size, "got $refs")
+    }
+
+    @Test
+    @DisplayName("referencesInFiles returns empty for unknown symbols")
+    fun referencesAcrossFilesUnknown() {
+        assertTrue(KotlinSemanticIndexer().referencesInFiles(files, "doesNotExist").isEmpty())
+    }
+
+    // ==================== inheritance chain ====================
+
+    @Test
+    @DisplayName("inheritanceChain walks the primary supertype across files")
+    fun inheritanceChainAcrossFiles() {
+        val src = mapOf(
+            "Base.kt" to "open class AbstractToolExecutor { }\n",
+            "Impl.kt" to "open class SeoToolExecutor : AbstractToolExecutor() {\n    override val domain = \"seo\"\n}\n",
+        )
+        val chain = KotlinSemanticIndexer().inheritanceChain(src, "SeoToolExecutor")
+        assertEquals(listOf("SeoToolExecutor", "AbstractToolExecutor"), chain)
+    }
+
+    @Test
+    @DisplayName("inheritanceChain handles generic supertypes and stops when no parent")
+    fun inheritanceChainGenericsAndStop() {
+        val src = mapOf(
+            "A.kt" to "class A : Base<String>\n",
+            "B.kt" to "open class Base<T> { }\n",
+        )
+        assertEquals(listOf("A", "Base"), KotlinSemanticIndexer().inheritanceChain(src, "A"))
+        // No parent → single-element chain.
+        assertEquals(listOf("Base"), KotlinSemanticIndexer().inheritanceChain(src, "Base"))
+    }
 }

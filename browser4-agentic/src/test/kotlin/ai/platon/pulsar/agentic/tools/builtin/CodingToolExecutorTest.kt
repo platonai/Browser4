@@ -777,10 +777,10 @@ class CodingToolExecutorTest {
         }
 
         @Test
-        @DisplayName("getToolSpecs returns 46 registered specs")
+        @DisplayName("getToolSpecs returns 47 registered specs")
         fun testToolSpecsCount() {
             val specs = executor.getToolSpecs()
-            assertEquals(46, specs.size)
+            assertEquals(47, specs.size)
         }
 
         @Test
@@ -797,8 +797,8 @@ class CodingToolExecutorTest {
                 "replaceRegex", "editLines", "insertAfter", "revert",
                 "diagnostics", "symbols", "references", "lspServers",
                 "runCode", "runCodeLanguages",
-                "mvnBuild", "scaffoldFromExample", "scaffoldFlow", "ktSymbols", "ktReferences", "impact",
-                "trapCheck", "devTask", "moduleGraph", "protect"
+                "mvnBuild", "scaffoldFromExample", "scaffoldFlow", "ktSymbols", "ktReferences", "ktInheritance",
+                "impact", "trapCheck", "devTask", "moduleGraph", "protect"
             )
             assertEquals(expectedMethods, specs.keys)
         }
@@ -1110,6 +1110,57 @@ class CodingToolExecutorTest {
             val off = ToolCall("coding", "protect", mutableMapOf("path" to "secret.txt", "on" to "false"))
             executor.callFunctionOn(off, realTarget)
             assertTrue(realFs.replaceInFile("secret.txt", "hidden", "ok").contains("Replaced"))
+        }
+
+        @Test
+        @DisplayName("ktReferences scope=module scans cross-file usages")
+        fun testKtReferencesModuleScope() = runBlocking {
+            val root = tempDir
+            java.nio.file.Files.createDirectories(root.resolve("src/main/kotlin/a/b"))
+            java.nio.file.Files.writeString(root.resolve("src/main/kotlin/a/b/Executor.kt"),
+                "package a.b\n\nopen class Executor {\n    fun doWork() { }\n}\n")
+            java.nio.file.Files.writeString(root.resolve("src/main/kotlin/a/b/Caller.kt"),
+                "package a.b\n\nclass Caller {\n    fun run() {\n        Executor().doWork()\n    }\n}\n")
+
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "ktReferences",
+                arguments = mutableMapOf(
+                    "path" to "src/main/kotlin/a/b/Executor.kt",
+                    "symbol" to "doWork",
+                    "scope" to "module")
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("Caller.kt"), value)
+            assertTrue(value.contains("doWork()"), value)
+            assertFalse(value.contains("Executor.kt:"), "declaring file must be excluded: $value")
+        }
+
+        @Test
+        @DisplayName("ktInheritance walks the chain across the module")
+        fun testKtInheritance() = runBlocking {
+            val root = tempDir
+            java.nio.file.Files.createDirectories(root.resolve("src/main/kotlin/a/b"))
+            java.nio.file.Files.writeString(root.resolve("src/main/kotlin/a/b/Base.kt"),
+                "package a.b\n\nopen class Base { }\n")
+            java.nio.file.Files.writeString(root.resolve("src/main/kotlin/a/b/Child.kt"),
+                "package a.b\n\nopen class Child : Base() {\n    override val domain = \"x\"\n}\n")
+
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "ktInheritance",
+                arguments = mutableMapOf("path" to "src/main/kotlin/a/b/Child.kt")
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("Child → Base"), value)
         }
 
         private val rootPomXml = """
