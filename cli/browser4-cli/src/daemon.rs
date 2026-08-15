@@ -980,6 +980,10 @@ struct ServerLaunchSpec {
 struct PreparedLaunchCommand {
     command: Command,
     cleanup_dir: Option<PathBuf>,
+    /// Path to the Java `@argfile` the command was switched to when the
+    /// fully-enumerated classpath would exceed the Windows command-line
+    /// limit.  Kept for startup-log diagnostics.
+    argfile: Option<PathBuf>,
 }
 
 fn detect_current_runtime_bundle_platform() -> Result<RuntimeBundlePlatform, String> {
@@ -4092,28 +4096,55 @@ fn ensure_aot_cache_trained(runtime: &InstalledBrowser4Runtime) {
     // but binds a random port and exits after context refresh.  A 1G heap
     // keeps the single-step `-XX:AOTCacheOutput` peak (2× heap) bounded; heap
     // size is not part of the AOT cache validity check.
+    let mut training_args: Vec<String> =
+        Vec::with_capacity(jvm_opts.len() + program_args.len() + 6);
+    training_args.extend(jvm_opts.iter().cloned());
+    training_args.push("-Xmx1G".to_string());
+    training_args.push(format!("-XX:AOTCacheOutput={}", cache_file.display()));
+    training_args.push("-Dspring.context.exit=onRefresh".to_string());
+    training_args.push("-cp".to_string());
+    training_args.push(classpath);
+    training_args.push(BROWSER4_MAIN_CLASS.to_string());
+    training_args.extend(program_args.iter().cloned());
+    training_args.push("--server.port=0".to_string());
+
     let mut cmd = Command::new(&runtime.java_path);
-    cmd.args(&jvm_opts)
-        .arg("-Xmx1G")
-        .arg(format!("-XX:AOTCacheOutput={}", cache_file.display()))
-        .arg("-Dspring.context.exit=onRefresh")
-        .arg("-cp")
-        .arg(&classpath)
-        .arg(BROWSER4_MAIN_CLASS)
-        .args(&program_args)
-        .arg("--server.port=0")
-        .current_dir(&runtime.install_dir)
-        .stdin(Stdio::null());
+    let mut training_argfile = None;
+    if should_use_java_argfile(&runtime.java_path, &training_args) {
+        match write_java_argfile(&training_args) {
+            Ok(file) => {
+                cmd.arg(format!("@{}", file.display()));
+                training_argfile = Some(file);
+            }
+            Err(_) => {
+                cmd.args(&training_args);
+            }
+        }
+    } else {
+        cmd.args(&training_args);
+    }
+    cmd.current_dir(&runtime.install_dir).stdin(Stdio::null());
 
     let started = Instant::now();
-    match cmd.output() {
+    let training_result = cmd.output();
+    if let Some(file) = &training_argfile {
+        // The launcher reads the argfile before the JVM starts, so it is safe
+        // to remove once the training run has returned.
+        let _ = fs::remove_file(file);
+        if let Some(dir) = file.parent() {
+            let _ = fs::remove_dir(dir);
+        }
+    }
+    match training_result {
         Ok(output) if output.status.success() => {
             let elapsed = started.elapsed().as_secs_f64();
             if cache_file.is_file() {
                 let _ = fs::write(&key_file, &key);
                 eprintln!("AOT cache trained in {:.1}s", elapsed);
             } else {
-                eprintln!("AOT cache: training run exited but no cache file was produced; skipping");
+                eprintln!(
+                    "AOT cache: training run exited but no cache file was produced; skipping"
+                );
             }
         }
         Ok(output) => {
@@ -4181,19 +4212,105 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
     }
 }
 
+/// Windows `CreateProcess` caps the entire command line (program + arguments)
+/// at 32,767 characters.  The explicitly-enumerated classpath (required for a
+/// stable CDS / AOT-cache order) spans ~230 JARs and blows past that cap on
+/// long install paths, so switch to a Java `@argfile` (JDK 9+ launcher
+/// feature) well before the limit.  See `write_java_argfile`.
+///
+/// The threshold sits safely below the 32,767-char cap: per-argument quoting
+/// and encoding overhead vary, so an argfile is used early rather than at the
+/// exact limit.
+const WINDOWS_ARGFILE_THRESHOLD: usize = 30_000;
+
+/// Rough length of the single-string command line Windows would build for
+/// `program args...` (each argument separated by one space, plus two quote
+/// characters as pessimistic quoting overhead).
+fn estimated_windows_command_line_len(program: &Path, args: &[String]) -> usize {
+    program.to_string_lossy().len() + args.iter().map(|a| a.len() + 3).sum::<usize>()
+}
+
+/// Normalize one JVM argument for embedding in a Java `@argfile`.
+///
+/// The java launcher parses `@argfile` tokens itself and interprets
+/// backslash escape sequences (`\t`, `\n`, `\r`, ...) inside tokens, which
+/// would corrupt Windows paths (`C:\tools\...` → tab/newline).  Verbatim
+/// `\\?\` prefixes and backslashes are therefore normalized to forward
+/// slashes, which the JVM accepts on Windows, and tokens containing
+/// whitespace are double-quoted.
+fn java_argfile_token(token: &str) -> String {
+    let stripped = token.strip_prefix(r"\\?\").unwrap_or(token);
+    let normalized = stripped.replace('\\', "/");
+    if normalized.chars().any(char::is_whitespace) {
+        format!("\"{normalized}\"")
+    } else {
+        normalized
+    }
+}
+
+/// Write `args` into a fresh Java `@argfile` and return the file path.
+///
+/// The file lives in its own uniquely-named directory so callers can pass that
+/// directory as `cleanup_dir` and remove everything with one
+/// `fs::remove_dir_all`.
+fn write_java_argfile(args: &[String]) -> Result<PathBuf, String> {
+    let unique = format!(
+        "browser4-argfile-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    );
+    let dir = std::env::temp_dir().join(unique);
+    fs::create_dir_all(&dir).map_err(|e| format!("cannot create argfile dir: {e}"))?;
+    let file = dir.join("java-args.txt");
+    let content = args
+        .iter()
+        .map(|a| java_argfile_token(a))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&file, content).map_err(|e| format!("cannot write argfile: {e}"))?;
+    Ok(file)
+}
+
+/// Decide whether the java command line should be moved into an `@argfile`.
+/// Only relevant on Windows; other platforms have multi-megabyte exec limits.
+fn should_use_java_argfile(program: &Path, args: &[String]) -> bool {
+    cfg!(windows) && estimated_windows_command_line_len(program, args) > WINDOWS_ARGFILE_THRESHOLD
+}
+
 fn command_for_launch_spec(
     launch_spec: &ServerLaunchSpec,
 ) -> Result<PreparedLaunchCommand, String> {
     let mut command = Command::new(&launch_spec.program);
+    let mut cleanup_dir = None;
+    let mut argfile = None;
+    if should_use_java_argfile(&launch_spec.program, &launch_spec.args) {
+        // The fully-enumerated classpath exceeds the Windows command-line
+        // limit; pass it through a Java @argfile instead.  Falls back to the
+        // plain argument list when the argfile cannot be written (the spawn
+        // will then surface the underlying OS error).
+        match write_java_argfile(&launch_spec.args) {
+            Ok(file) => {
+                cleanup_dir = file.parent().map(Path::to_path_buf);
+                command.arg(format!("@{}", file.display()));
+                argfile = Some(file);
+            }
+            Err(e) => {
+                eprintln!("Failed to write java argfile: {e}; using plain arguments");
+                command.args(&launch_spec.args);
+            }
+        }
+    } else {
+        command.args(&launch_spec.args);
+    }
     command
-        .args(&launch_spec.args)
         .current_dir(&launch_spec.working_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     Ok(PreparedLaunchCommand {
         command,
-        cleanup_dir: None,
+        cleanup_dir,
+        argfile,
     })
 }
 
@@ -4667,6 +4784,7 @@ async fn start_server(
     let PreparedLaunchCommand {
         mut command,
         mut cleanup_dir,
+        argfile,
     } = command_for_launch_spec(launch_spec)?;
     append_startup_log_message(
         &startup_log.path,
@@ -4685,6 +4803,17 @@ async fn start_server(
         &startup_log.path,
         format!("Launch command: {}", format_command_for_log(&command)),
     );
+    if let Some(argfile) = &argfile {
+        let contents = fs::read_to_string(argfile).unwrap_or_else(|e| format!("<unreadable: {e}>"));
+        append_startup_log_message(
+            &startup_log.path,
+            format!(
+                "Launch argfile {} contents (classpath moved out of the command line):\n{}",
+                argfile.display(),
+                contents
+            ),
+        );
+    }
 
     command
         .stdin(Stdio::null())
@@ -6960,6 +7089,63 @@ mod tests {
         // may add \\?\ prefix on Windows — compare file names instead).
         assert!(resolved.ends_with(Path::new("runtime").join("v4.10.0")));
         assert!(resolved.join("lib").join("browser4.jar").exists());
+    }
+
+    #[test]
+    fn test_java_argfile_token_normalizes_windows_paths() {
+        // Verbatim prefix is stripped, backslashes become forward slashes so
+        // the java launcher's escape processing (`\t`, `\n`, ...) cannot
+        // corrupt paths inside the argfile.
+        assert_eq!(
+            java_argfile_token(r"\\?\C:\Users\john\app\lib\a.jar"),
+            "C:/Users/john/app/lib/a.jar"
+        );
+        assert_eq!(
+            java_argfile_token(r"C:\Program Files\Browser4\lib\a.jar"),
+            "\"C:/Program Files/Browser4/lib/a.jar\"" // whitespace → quoted
+        );
+        // Non-path arguments pass through untouched.
+        assert_eq!(
+            java_argfile_token("--server.port=8182"),
+            "--server.port=8182"
+        );
+        assert_eq!(
+            java_argfile_token("-XX:TieredStopAtLevel=1"),
+            "-XX:TieredStopAtLevel=1"
+        );
+    }
+
+    #[test]
+    fn test_estimated_windows_command_line_len() {
+        let program = Path::new(r"C:\jdk\bin\java.exe");
+        let args = vec!["-cp".to_string(), "a".repeat(100)];
+        // program (19) + space overhead: "-cp" (3+3) + 100+3
+        assert_eq!(
+            estimated_windows_command_line_len(program, &args),
+            19 + 6 + 103
+        );
+    }
+
+    #[test]
+    fn test_write_java_argfile_round_trip() {
+        let file = write_java_argfile(&[
+            "-cp".to_string(),
+            r"C:\Users\john doe\lib\a.jar".to_string(),
+            "ai.platon.pulsar.apps.Browser4BundleApplicationKt".to_string(),
+        ])
+        .unwrap();
+        assert!(file.is_file());
+        let contents = fs::read_to_string(&file).unwrap();
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines[0], "-cp");
+        assert_eq!(lines[1], "\"C:/Users/john doe/lib/a.jar\"");
+        assert_eq!(
+            lines[2],
+            "ai.platon.pulsar.apps.Browser4BundleApplicationKt"
+        );
+        let dir = file.parent().unwrap();
+        fs::remove_dir_all(dir).unwrap();
+        assert!(!file.exists());
     }
 
     #[test]
