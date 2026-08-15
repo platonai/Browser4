@@ -189,6 +189,13 @@ run_cli() {
     #   BROWSER4_RUNTIME_DIR  → where the installed runtime lives
     #   BROWSER4_CLI_STATE_DIR → where CLI session state is persisted
     #   BROWSER4_SERVER_LOG_DIR → where server startup logs go
+    #   BROWSER4_CLI_FORCE_REMOTE_BUNDLE → skip the "build local bundle from
+    #     the repo checkout" dev path.  Without this, the CLI prefers a
+    #     Maven rebuild of browser4-bundle when run inside a checkout
+    #     (and hard-fails when Maven cannot run, e.g. no/mismatched JDK).
+    #     The smoke test must exercise the *downloaded archive*, not a
+    #     locally rebuilt bundle, so force the installed-runtime path.
+    BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1 \
     BROWSER4_CLI_STATE_DIR="$STATE_DIR" \
     BROWSER4_RUNTIME_DIR="$RUNTIME_DIR" \
     BROWSER4_SERVER_LOG_DIR="$SERVER_LOG_DIR" \
