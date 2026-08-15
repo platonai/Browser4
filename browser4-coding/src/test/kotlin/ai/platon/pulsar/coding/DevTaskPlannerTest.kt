@@ -88,4 +88,26 @@ class DevTaskPlannerTest {
         val plan = DevTaskPlanner.plan("the plugin framework is in browser4-pdk")
         assertTrue("browser4-pdk" in plan.modules, "pdk must resolve (it is in the synced snapshot): ${plan.modules}")
     }
+
+    @Test
+    @DisplayName("named test classes scope the test step with -Dtest")
+    fun testClassScoping() {
+        val plan = DevTaskPlanner.plan(
+            "fix the controller in browser4-rest/src/main/kotlin/XController.kt and add a regression " +
+                "test XControllerTest")
+        assertTrue("XControllerTest" in plan.testClasses, "test classes: ${plan.testClasses}")
+        val testStep = plan.steps.first { it.tool == "coding.shell" && it.command.contains("-Dtest=") }
+        assertTrue(testStep.command.contains("-Dtest=XControllerTest"),
+            "test step must scope with -Dtest: ${testStep.command}")
+        assertTrue(plan.summary.contains("tests: XControllerTest"), plan.summary)
+    }
+
+    @Test
+    @DisplayName("prose words ending in Test do not become test classes")
+    fun proseNotTestClass() {
+        val plan = DevTaskPlanner.plan("write a test and run the module's test suite for browser4-rest")
+        assertTrue(plan.testClasses.isEmpty(), "prose must not yield test classes: ${plan.testClasses}")
+        // No -Dtest= in the test step.
+        assertFalse(plan.steps.any { it.command.contains("-Dtest=") }, "no -Dtest expected: ${plan.steps}")
+    }
 }

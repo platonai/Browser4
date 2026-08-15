@@ -29,11 +29,15 @@ object DevTaskPlanner {
         val modules: List<String>,
         val files: List<String>,
         val driverFiles: List<String>,
+        /** Test class names mentioned in the task (FooTest / FooTests), for -Dtest scoping. */
+        val testClasses: List<String>,
         val steps: List<PlanStep>,
     )
 
     private val FILE_PATTERN = Regex("""[\w./\\-]+\.(?:kt|kts|rs|java|scala|groovy|js|jsx|ts|tsx|py|go|rb|php|swift|sh|bash|ps1|md|json|xml|yaml|yml|toml|properties|sql|gradle|proto|h)""")
     private val CODING_TOOL_PATTERN = Regex("""coding\.([a-zA-Z]+)""")
+    // FooTest / FooTests (uppercase start; bare "Test" in prose does not match).
+    private val TEST_CLASS_PATTERN = Regex("""\b([A-Z][A-Za-z0-9]*(?:Test|Tests))\b""")
 
     /**
      * Parse a task description into a dev plan.
@@ -52,13 +56,16 @@ object DevTaskPlanner {
             .distinct().toList()
         val modules = inferModules(task, files, knownModules)
         val driverFiles = files.filter { it.contains("/browser4-browser/") || it.endsWith("PulsarWebDriver.kt") }
-        val steps = buildSteps(task, modules, files, driverFiles)
+        val testClasses = TEST_CLASS_PATTERN.findAll(task).map { it.groupValues[1] }
+            .filter { it != "Test" }.distinct().toList()
+        val steps = buildSteps(task, modules, files, driverFiles, testClasses)
 
         return DevPlan(
-            summary = summarize(task, modules, files, driverFiles),
+            summary = summarize(task, modules, files, driverFiles, testClasses),
             modules = modules,
             files = files,
             driverFiles = driverFiles,
+            testClasses = testClasses,
             steps = steps,
         )
     }
@@ -111,6 +118,7 @@ object DevTaskPlanner {
         modules: List<String>,
         files: List<String>,
         driverFiles: List<String>,
+        testClasses: List<String>,
     ): List<PlanStep> {
         val steps = mutableListOf<PlanStep>()
         var order = 1
@@ -149,12 +157,16 @@ object DevTaskPlanner {
                 mapOf("command" to ModuleMap.cargoTestCommand()))
         }
 
-        // 4. Smallest-scope test for the affected module.
+        // 4. Smallest-scope test for the affected module. When the task names a
+        //    test class (FooTest), scope with -Dtest=... instead of the whole suite.
         if (mavenModule != null) {
+            val testClassArg = testClasses.joinToString(",")
+            val command = ModuleMap.mavenTestCommand(mavenModule, testClassArg.ifBlank { null })
             steps += PlanStep(order++, "coding.shell",
-                "Run the module's smallest relevant test scope",
-                "coding.shell(command=\"${ModuleMap.mavenTestCommand(mavenModule)}\")",
-                mapOf("command" to ModuleMap.mavenTestCommand(mavenModule)))
+                if (testClassArg.isBlank()) "Run the module's smallest relevant test scope"
+                else "Run the named test class(es) ($testClassArg) — smallest scope",
+                "coding.shell(command=\"$command\")",
+                mapOf("command" to command))
         }
 
         // 5. CDP trap awareness for browser-driver code.
@@ -179,10 +191,14 @@ object DevTaskPlanner {
         return steps
     }
 
-    private fun summarize(task: String, modules: List<String>, files: List<String>, driverFiles: List<String>): String {
+    private fun summarize(
+        task: String, modules: List<String>, files: List<String>,
+        driverFiles: List<String>, testClasses: List<String>,
+    ): String {
         val parts = mutableListOf<String>()
         if (modules.isNotEmpty()) parts.add("modules: ${modules.joinToString(", ")}")
         if (files.isNotEmpty()) parts.add("files: ${files.joinToString(", ")}")
+        if (testClasses.isNotEmpty()) parts.add("tests: ${testClasses.joinToString(", ")}")
         if (driverFiles.isNotEmpty()) parts.add("⚠ browser-driver code involved (CDP pitfalls apply)")
         return if (parts.isEmpty()) "No module/file signals found in the task — the agent should clarify scope."
         else parts.joinToString(" | ")

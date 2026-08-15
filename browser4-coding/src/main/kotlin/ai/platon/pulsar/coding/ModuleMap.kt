@@ -169,8 +169,16 @@ object ModuleMap {
         return result.toList()
     }
 
-    /** Suggested test command for a Maven module. */
-    fun mavenTestCommand(module: String): String = "mvn test -pl $module -am -DskipTests=false"
+    /**
+     * Suggested test command for a Maven module.
+     *
+     * @param testClass optional test-class filter (`-Dtest=...`, comma-separated
+     *   for multiple) — the smallest scope when the task names specific tests
+     */
+    fun mavenTestCommand(module: String, testClass: String? = null): String {
+        val testArg = if (testClass.isNullOrBlank()) "" else " -Dtest=$testClass"
+        return "mvn test -pl $module -am$testArg -DskipTests=false"
+    }
 
     /** Suggested test command for the Rust CLI. */
     fun cargoTestCommand(): String = "cargo test --bin browser4-cli"

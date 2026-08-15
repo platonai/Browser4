@@ -1165,12 +1165,14 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 results += "repo-consistency:\n${repoConsistencyReport(fs)}"
 
                 // runTests=true: execute the module's test suite (the AGENTS.md
-                // "smallest scope" step) after the compile check passed.
+                // "smallest scope" step) after the compile check passed. When the
+                // task named test classes, scope with -Dtest=... (smallest scope).
                 if (runTests) {
                     if (mavenModule != null) {
-                        val cmd = ModuleMap.mavenTestCommand(mavenModule)
+                        val testArg = plan.testClasses.joinToString(",").ifBlank { null }
+                        val cmd = ModuleMap.mavenTestCommand(mavenModule, testArg)
                         val r = shell.executeRaw(cmd, timeoutSeconds = 600)
-                        results += "tests on $mavenModule (exit ${r.exitCode}):\n" +
+                        results += "tests on $mavenModule${testArg?.let { " [-Dtest=$it]" } ?: ""} (exit ${r.exitCode}):\n" +
                             listOf(r.stdout, r.stderr).filter { it.isNotBlank() }.joinToString("\n").takeLast(3000)
                     }
                     if (ModuleMap.CLI_CRATE in modules) {

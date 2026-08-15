@@ -986,7 +986,8 @@ class CodingToolExecutorTest {
                 domain = "coding",
                 method = "devTask",
                 arguments = mutableMapOf(
-                    "task" to "change the controller in browser4-rest/src/main/kotlin/XController.kt",
+                    "task" to "change the controller in browser4-rest/src/main/kotlin/XController.kt " +
+                        "and add a regression test XControllerTest",
                     "verify" to "true",
                     "runTests" to "true")
             )
@@ -994,6 +995,8 @@ class CodingToolExecutorTest {
             val result = executor.callFunctionOn(tc, realTarget)
             val value = result.value as String
             assertTrue(value.contains("tests on browser4-rest"), value)
+            assertTrue(value.contains("-Dtest=XControllerTest"),
+                "test run must scope to the named test class: $value")
             assertTrue(value.contains("Tests run: 12"), value)
         }
 
