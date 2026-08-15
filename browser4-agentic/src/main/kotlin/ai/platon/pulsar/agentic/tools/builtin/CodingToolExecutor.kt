@@ -7,6 +7,7 @@ import ai.platon.pulsar.coding.CodeRunner
 import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingAgentShell
 import ai.platon.pulsar.coding.DevFlowScaffolds
+import ai.platon.pulsar.coding.DevTaskPlanner
 import ai.platon.pulsar.coding.LanguageServerManager
 import ai.platon.pulsar.coding.KotlinSemanticIndexer
 import ai.platon.pulsar.coding.MavenBuildSupport
@@ -20,6 +21,7 @@ import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationRenderer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.file.Files
+import java.nio.file.Path
 import kotlin.reflect.KClass
 
 /**
@@ -419,12 +421,13 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 ToolSpec.Arg("toolMethod", "String", "null"),
             ),
             returnType = "String",
-            description = "Generate a skeleton from an EXISTING reference file (e.g. an installed plugin's " +
-                "ToolExecutor or Service): reads the real code, parameterizes volatile identifiers " +
-                "(package, class name, domain, tool method) into placeholders, then instantiates with new " +
-                "values. Because the template comes from the repository's own code, it never goes stale — " +
-                "unlike hand-written scaffolds. Provide path (reference file) plus any of basePackage/className/" +
-                "domain/toolMethod to rename; omit to see the discovered parameters."
+            description = "Generate a skeleton from EXISTING real code — a single file OR a whole directory " +
+                "(plugin/module). For a file: parameterizes package/class/domain/tool method into placeholders. " +
+                "For a directory: extracts a MULTI-FILE skeleton set and parameterizes volatile identifiers " +
+                "consistently ACROSS files (className renames the executor AND its references in the " +
+                "AutoConfiguration/Service files; artifactId from pom.xml, pluginName from plugin.json). " +
+                "Provide path (file or directory) plus any of basePackage/className/domain/toolMethod to rename; " +
+                "omit to see the discovered parameters."
         )
 
         // --- Browser4 development-flow scaffolds (multi-file) ---
@@ -530,6 +533,23 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "(crbug.com/444929150), cursor positioning after focus+click, and Input.insertText " +
                 "racing. Reminds the agent of the documented fix for each trap. Use before editing " +
                 "browser-driver code (PulsarWebDriver.kt and friends)."
+        )
+
+        // --- Browser4 self-development: high-level dev task entry ---
+        toolSpec["devTask"] = ToolSpec(
+            domain = domain, method = "devTask",
+            arguments = listOf(
+                ToolSpec.Arg("task", "String"),
+                ToolSpec.Arg("verify", "Boolean", "false"),
+                ToolSpec.Arg("module", "String", "null"),
+            ),
+            returnType = "String",
+            description = "High-level entry for a Browser4 self-development task: parse a natural-language task " +
+                "into an executable plan following the AGENTS.md dev flow — locate the affected files, impact " +
+                "analysis, compile the owning module, smallest-scope tests, CDP trap check for driver code, " +
+                "repo-consistency validation, commit guidance. verify=true additionally RUNS the fast checks " +
+                "(mvnBuild compile of the affected module, trapCheck, repo-consistency). " +
+                "module overrides the inferred module."
         )
     }
 
@@ -805,8 +825,6 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 val path = paramString(args, "path", functionName)!!
                 val resolved = fs.resolvePathString(path)
                     ?: throw IllegalArgumentException("Path not allowed: $path")
-                val content = fs.readFile(resolved)
-                val skeleton = SkeletonExtractor.extract(content, resolved.substringAfterLast('/').substringAfterLast('\\'))
                 val renameParams: Map<String, String> = mapOf(
                     "basePackage" to paramString(args, "basePackage", functionName, required = false, default = null),
                     "className" to paramString(args, "className", functionName, required = false, default = null),
@@ -814,19 +832,49 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     "toolMethod" to paramString(args, "toolMethod", functionName, required = false, default = null),
                 ).filterValues { !it.isNullOrBlank() }.mapValues { it.value!! }
 
-                if (renameParams.isEmpty()) {
-                    // Discovery mode: report the parameters found in the reference file.
-                    buildString {
-                        appendLine("Skeleton extracted from $path — discovered parameters:")
-                        skeleton.parameters.forEach { (k, v) -> appendLine("  $k = $v") }
-                        appendLine("Re-instantiate with: coding.scaffoldFromExample(path=..., " +
-                            skeleton.parameters.keys.joinToString(", ") { "$it=<new-value>" } + ")")
+                // Directory path → multi-file live template (cross-file consistent).
+                if (Files.isDirectory(Path.of(resolved))) {
+                    val files = fs.collectTextFiles(resolved)
+                    if (files.isEmpty()) return "No text files found under $path"
+                    val set = SkeletonExtractor.extractDir(files)
+
+                    if (renameParams.isEmpty()) {
+                        // Discovery mode: report parameters found across the directory.
+                        buildString {
+                            appendLine("Multi-file skeleton extracted from $path (${files.size} files) — " +
+                                "discovered parameters:")
+                            set.parameters.forEach { (k, v) -> appendLine("  $k = $v") }
+                            appendLine("Re-instantiate with: coding.scaffoldFromExample(path=..., " +
+                                set.parameters.keys.joinToString(", ") { "$it=<new-value>" } + ")")
+                        }
+                    } else {
+                        val generated = SkeletonExtractor.instantiate(set, renameParams)
+                        buildString {
+                            appendLine("=== Multi-file skeleton generated from $path (${generated.size} files) ===")
+                            generated.forEach { (relPath, content) ->
+                                appendLine("\n=== File: $relPath ===")
+                                append(content)
+                            }
+                        }
                     }
                 } else {
-                    val generated = SkeletonExtractor.instantiate(skeleton, renameParams)
-                    buildString {
-                        appendLine("=== Generated from $path (skeleton) ===")
-                        append(generated)
+                    val content = fs.readFile(resolved)
+                    val skeleton = SkeletonExtractor.extract(content, resolved.substringAfterLast('/').substringAfterLast('\\'))
+
+                    if (renameParams.isEmpty()) {
+                        // Discovery mode: report the parameters found in the reference file.
+                        buildString {
+                            appendLine("Skeleton extracted from $path — discovered parameters:")
+                            skeleton.parameters.forEach { (k, v) -> appendLine("  $k = $v") }
+                            appendLine("Re-instantiate with: coding.scaffoldFromExample(path=..., " +
+                                skeleton.parameters.keys.joinToString(", ") { "$it=<new-value>" } + ")")
+                        }
+                    } else {
+                        val generated = SkeletonExtractor.instantiate(skeleton, renameParams)
+                        buildString {
+                            appendLine("=== Generated from $path (skeleton) ===")
+                            append(generated)
+                        }
                     }
                 }
             }
@@ -1011,6 +1059,48 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 val content = fs.readFile(path)
                 if (content.startsWith("Error:")) return content
                 CdpTrapCheck.format(content)
+            }
+            "devTask" -> {
+                validateArgs(args, allowed = setOf("task", "verify", "module"), required = setOf("task"), functionName)
+                val task = paramString(args, "task", functionName)!!
+                val verify = paramBool(args, "verify", functionName, required = false, default = false) ?: false
+                val moduleOverride = paramString(args, "module", functionName, required = false, default = null)
+
+                val plan = DevTaskPlanner.plan(task)
+                val modules = if (!moduleOverride.isNullOrBlank()) listOf(moduleOverride) else plan.modules
+                val planText = buildString {
+                    appendLine("Dev task plan (${plan.steps.size} steps):")
+                    plan.steps.forEach { s ->
+                        appendLine("  ${s.order}. [${s.tool}] ${s.purpose}")
+                        appendLine("      ${s.command}")
+                    }
+                    appendLine("Signals: ${plan.summary}")
+                    if (modules.isNotEmpty() && moduleOverride.isNullOrBlank()) {
+                        appendLine("Inferred modules: ${modules.joinToString(", ")}")
+                    }
+                    if (moduleOverride != null) {
+                        appendLine("Module override: $moduleOverride")
+                    }
+                }.trimEnd()
+
+                if (!verify) return planText
+
+                // verify=true: run the fast checks against the live workspace.
+                val results = mutableListOf<String>()
+                val mavenModule = modules.firstOrNull { it != ModuleMap.CLI_CRATE }
+                if (mavenModule != null) {
+                    results += "mvnBuild compile of $mavenModule:\n" +
+                        mavenBuild.format(mavenBuild.build(shell, mavenModule, "compile", true, 300))
+                }
+                plan.driverFiles.take(1).forEach { file ->
+                    val content = fs.readFile(file)
+                    if (!content.startsWith("Error:")) {
+                        results += "trapCheck on $file:\n${CdpTrapCheck.format(content)}"
+                    }
+                }
+                results += "repo-consistency:\n${repoConsistencyReport(fs)}"
+
+                planText + "\n\n--- Verification ---\n" + results.joinToString("\n\n")
             }
 
             else -> throw IllegalArgumentException("Unsupported coding method: $functionName(${args.keys})")

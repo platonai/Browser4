@@ -129,4 +129,125 @@ class SkeletonExtractorTest {
         assertNull(skeleton.parameters["domain"])
         assertNull(skeleton.parameters["toolMethod"])
     }
+
+    // ==================== multi-file (directory) extraction ====================
+
+    private val pluginFiles: Map<String, String> = linkedMapOf(
+        "browser4-plugins/browser4-seo/pom.xml" to """
+            <project>
+                <parent>
+                    <artifactId>browser4-pdk</artifactId>
+                    <version>4.13.4-SNAPSHOT</version>
+                </parent>
+                <artifactId>browser4-seo</artifactId>
+                <version>4.13.4-SNAPSHOT</version>
+            </project>
+        """.trimIndent(),
+        "browser4-plugins/browser4-seo/src/main/kotlin/ai/platon/pulsar/seo/tools/SeoToolExecutor.kt" to sampleToolExecutor,
+        "browser4-plugins/browser4-seo/src/main/kotlin/ai/platon/pulsar/seo/config/SeoAutoConfiguration.kt" to """
+            package ai.platon.pulsar.seo.config
+
+            import ai.platon.pulsar.agentic.tools.ToolMount
+            import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
+            import ai.platon.pulsar.seo.tools.SeoToolExecutor
+
+            open class SeoAutoConfiguration : ToolMount {
+                override fun getToolExecutors(): List<ToolExecutor> {
+                    return listOf(SeoToolExecutor())
+                }
+            }
+        """.trimIndent(),
+    )
+
+    @Test
+    @DisplayName("extractDir discovers the union of parameters across files")
+    fun extractDirUnionParameters() {
+        val set = SkeletonExtractor.extractDir(pluginFiles)
+        assertEquals("ai.platon.pulsar.seo", set.parameters["basePackage"],
+            "basePackage must be the common package prefix")
+        assertEquals("SeoToolExecutor", set.parameters["className"], "className = first discovered class")
+        assertEquals("seo", set.parameters["domain"])
+        assertEquals("extractMeta", set.parameters["toolMethod"])
+        assertEquals("browser4-seo", set.parameters["artifactId"],
+            "artifactId must be the module's own artifact, not the parent BOM")
+    }
+
+    @Test
+    @DisplayName("extractDir parameterizes cross-file class references")
+    fun extractDirCrossFileReference() {
+        val set = SkeletonExtractor.extractDir(pluginFiles)
+        val autoConfig = set.files.keys.first { it.endsWith("SeoAutoConfiguration.kt") }
+        val template = set.files[autoConfig]!!.template
+        assertTrue(template.contains("import {basePackage}.tools.{SeoToolExecutor}"),
+            "executor class reference in AutoConfig must be parameterized, got: $template")
+        assertTrue(template.contains("open class {SeoAutoConfiguration}"),
+            "AutoConfig's own class must be a value-named placeholder, got: $template")
+        val executorFile = set.files.keys.first { it.endsWith("SeoToolExecutor.kt") }
+        assertTrue(set.files[executorFile]!!.template.contains("open class {SeoToolExecutor}"),
+            "executor's own class must be a value-named placeholder")
+        val pom = set.files.keys.first { it.endsWith("pom.xml") }
+        assertTrue(set.files[pom]!!.template.contains("<artifactId>{artifactId}</artifactId>"),
+            "pom artifactId must be parameterized")
+    }
+
+    @Test
+    @DisplayName("instantiate of a set renames classes consistently across files")
+    fun instantiateSetRenamesConsistently() {
+        val set = SkeletonExtractor.extractDir(pluginFiles)
+        val out = SkeletonExtractor.instantiate(set, mapOf(
+            "basePackage" to "ai.platon.pulsar.weather",
+            "className" to "WeatherToolExecutor",
+            "domain" to "weather",
+            "toolMethod" to "fetchWeather",
+            "artifactId" to "browser4-weather",
+        ))
+
+        val executorFile = out.keys.first { it.endsWith("SeoToolExecutor.kt") }
+        val executor = out[executorFile]!!
+        assertTrue(executor.contains("package ai.platon.pulsar.weather.tools"), executor)
+        assertTrue(executor.contains("open class WeatherToolExecutor"), executor)
+        assertTrue(executor.contains("override val domain = \"weather\""), executor)
+        assertTrue(executor.contains("toolSpec[\"fetchWeather\"]"), executor)
+
+        val autoConfig = out.keys.first { it.endsWith("SeoAutoConfiguration.kt") }
+        assertTrue(out[autoConfig]!!.contains("package ai.platon.pulsar.weather.config"),
+            "AutoConfig package must follow the base rename: ${out[autoConfig]}")
+        assertTrue(out[autoConfig]!!.contains("import ai.platon.pulsar.weather.tools.WeatherToolExecutor"),
+            "AutoConfig import must follow the rename: ${out[autoConfig]}")
+        assertTrue(out[autoConfig]!!.contains("listOf(WeatherToolExecutor())"),
+            "AutoConfig instantiation must follow the rename: ${out[autoConfig]}")
+
+        val pom = out.keys.first { it.endsWith("pom.xml") }
+        assertTrue(out[pom]!!.contains("<artifactId>browser4-weather</artifactId>"), out[pom])
+    }
+
+    @Test
+    @DisplayName("a second class is renamed via its own value-named key")
+    fun instantiateSetRenamesSecondClass() {
+        val set = SkeletonExtractor.extractDir(pluginFiles)
+        val out = SkeletonExtractor.instantiate(set, mapOf(
+            "className" to "WeatherToolExecutor",
+            "SeoAutoConfiguration" to "WeatherAutoConfiguration",
+        ))
+        val autoConfig = out.keys.first { it.endsWith("SeoAutoConfiguration.kt") }
+        assertTrue(out[autoConfig]!!.contains("open class WeatherAutoConfiguration"),
+            "AutoConfig must rename via its own key: ${out[autoConfig]}")
+    }
+
+    @Test
+    @DisplayName("instantiate without renames resolves to the discovered values")
+    fun instantiateSetNoRename() {
+        val set = SkeletonExtractor.extractDir(pluginFiles)
+        val out = SkeletonExtractor.instantiate(set, emptyMap())
+        val placeholder = Regex("""\{[A-Za-z][A-Za-z0-9_]*\}""")
+        val autoConfig = out.keys.first { it.endsWith("SeoAutoConfiguration.kt") }
+        assertTrue(out[autoConfig]!!.contains("import ai.platon.pulsar.seo.tools.SeoToolExecutor"),
+            "no-rename instantiate must keep the discovered names: ${out[autoConfig]}")
+        assertFalse(placeholder.containsMatchIn(out[autoConfig]!!),
+            "no unresolved placeholders expected: ${out[autoConfig]}")
+        val executor = out.keys.first { it.endsWith("SeoToolExecutor.kt") }
+        assertTrue(out[executor]!!.contains("open class SeoToolExecutor"))
+        assertFalse(placeholder.containsMatchIn(out[executor]!!),
+            "no unresolved placeholders expected: ${out[executor]}")
+    }
 }

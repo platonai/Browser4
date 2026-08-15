@@ -2,6 +2,7 @@ package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingAgentShell
+import ai.platon.pulsar.coding.ShellResult
 import ai.platon.pulsar.agentic.model.ToolCall
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -776,10 +777,10 @@ class CodingToolExecutorTest {
         }
 
         @Test
-        @DisplayName("getToolSpecs returns 43 registered specs")
+        @DisplayName("getToolSpecs returns 44 registered specs")
         fun testToolSpecsCount() {
             val specs = executor.getToolSpecs()
-            assertEquals(43, specs.size)
+            assertEquals(44, specs.size)
         }
 
         @Test
@@ -797,7 +798,7 @@ class CodingToolExecutorTest {
                 "diagnostics", "symbols", "references", "lspServers",
                 "runCode", "runCodeLanguages",
                 "mvnBuild", "scaffoldFromExample", "scaffoldFlow", "ktSymbols", "ktReferences", "impact",
-                "trapCheck"
+                "trapCheck", "devTask"
             )
             assertEquals(expectedMethods, specs.keys)
         }
@@ -906,6 +907,96 @@ class CodingToolExecutorTest {
             val value = result.value as String
             assertTrue(value.contains("Root pom version"), value)
             assertTrue(value.contains("does not match VERSION"), value)
+        }
+
+        @Test
+        @DisplayName("devTask renders an executable plan from a task description")
+        fun testDevTaskPlan() = runBlocking {
+            val tc = ToolCall(
+                domain = "coding",
+                method = "devTask",
+                arguments = mutableMapOf(
+                    "task" to "fix the mouseWheel race in PulsarWebDriver.kt " +
+                        "under browser4-core/browser4-browser/src/main/kotlin")
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            val value = result.value as String
+            assertTrue(value.contains("Dev task plan"), value)
+            assertTrue(value.contains("coding.trapCheck"), value)
+            assertTrue(value.contains("coding.mvnBuild"), value)
+            assertTrue(value.contains("repo-consistency"), value)
+            assertFalse(value.contains("Verification"), "verify=false must not run checks")
+        }
+
+        @Test
+        @DisplayName("devTask with verify runs compile and repo-consistency checks")
+        fun testDevTaskVerify() = runBlocking {
+            val root = tempDir
+            java.nio.file.Files.writeString(root.resolve("VERSION"), "4.13.4-SNAPSHOT\n")
+            java.nio.file.Files.writeString(root.resolve("pom.xml"), rootPomXml)
+            java.nio.file.Files.createDirectories(root.resolve("browser4-dependencies"))
+            java.nio.file.Files.writeString(root.resolve("browser4-dependencies/pom.xml"), bomPomXml)
+            for (m in listOf("browser4-core", "browser4-rest")) {
+                java.nio.file.Files.createDirectories(root.resolve(m))
+                java.nio.file.Files.writeString(root.resolve("$m/pom.xml"), "<project/>\n")
+            }
+            coEvery { shell.executeRaw(any(), any(), any()) } returns
+                ShellResult("s1", "mvn -pl browser4-rest -am compile -DskipTests -q", 0, "compiled", "", 100)
+
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "devTask",
+                arguments = mutableMapOf(
+                    "task" to "change the controller in browser4-rest/src/main/kotlin/XController.kt",
+                    "verify" to "true")
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("Verification"), value)
+            assertTrue(value.contains("mvnBuild compile of browser4-rest"), value)
+            assertTrue(value.contains("All checks passed"), value)
+        }
+
+        @Test
+        @DisplayName("scaffoldFromExample with a directory extracts a multi-file skeleton")
+        fun testScaffoldFromExampleDir() = runBlocking {
+            val root = tempDir
+            val pluginDir = root.resolve("browser4-plugins/browser4-seo")
+            java.nio.file.Files.createDirectories(pluginDir.resolve("src/main/kotlin/a/b/tools"))
+            java.nio.file.Files.createDirectories(pluginDir.resolve("src/main/kotlin/a/b/config"))
+            java.nio.file.Files.writeString(pluginDir.resolve("pom.xml"),
+                "<project>\n  <artifactId>browser4-seo</artifactId>\n</project>\n")
+            java.nio.file.Files.writeString(
+                pluginDir.resolve("src/main/kotlin/a/b/tools/SeoToolExecutor.kt"),
+                "package a.b.tools\n\nopen class SeoToolExecutor {\n    override val domain = \"seo\"\n}\n")
+            java.nio.file.Files.writeString(
+                pluginDir.resolve("src/main/kotlin/a/b/config/SeoAutoConfiguration.kt"),
+                "package a.b.config\n\nimport a.b.tools.SeoToolExecutor\n\n" +
+                    "open class SeoAutoConfiguration {\n    fun executors() = listOf(SeoToolExecutor())\n}\n")
+
+            val realFs = CodingAgentFileSystem(root)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "scaffoldFromExample",
+                arguments = mutableMapOf(
+                    "path" to "browser4-plugins/browser4-seo",
+                    "className" to "WeatherToolExecutor",
+                    "basePackage" to "a.b")
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("Multi-file skeleton generated"), value)
+            assertTrue(value.contains("=== File: pom.xml ==="), value)
+            assertTrue(value.contains("<artifactId>"), value)
+            assertTrue(value.contains("open class WeatherToolExecutor"), value)
+            assertTrue(value.contains("listOf(WeatherToolExecutor())"),
+                "cross-file reference must follow the rename: $value")
         }
 
         private val rootPomXml = """

@@ -206,6 +206,43 @@ class CodingAgentFileSystemEditsTest {
         assertFalse(result.contains("vendor"), "custom exclusion leaked: $result")
     }
 
+    // ==================== collectTextFiles ====================
+
+    @Test
+    @DisplayName("collectTextFiles collects readable text files with relative keys")
+    fun collectTextFilesBasic() = runBlocking {
+        write("src/main/App.kt", "package a\n")
+        write("src/main/AppTest.kt", "package a\n")
+        write("src/resources/plugin.json", "{}\n")
+        val f = fs()
+        val files = f.collectTextFiles("src")
+        assertEquals(setOf("main/App.kt", "main/AppTest.kt", "resources/plugin.json"), files.keys)
+        assertTrue(files["main/App.kt"]!!.contains("package a"))
+    }
+
+    @Test
+    @DisplayName("collectTextFiles skips excluded dirs and binary files")
+    fun collectTextFilesSkipsNoise() = runBlocking {
+        write("src/keep.kt", "x\n")
+        write("src/target/gen.kt", "x\n")
+        write("src/node_modules/pkg.js", "x\n")
+        write("src/logo.png", "\u0000\u0001\u0002".encodeToByteArray().toString(Charsets.ISO_8859_1))
+        val f = fs()
+        val files = f.collectTextFiles(".")
+        assertTrue("src/keep.kt" in files.keys, "keys: ${files.keys}")
+        assertFalse(files.keys.any { it.contains("target") || it.contains("node_modules") || it.endsWith(".png") },
+            "noise leaked: ${files.keys}")
+    }
+
+    @Test
+    @DisplayName("collectTextFiles returns empty for a file path or missing dir")
+    fun collectTextFilesEdgeCases() = runBlocking {
+        write("only.txt", "x\n")
+        val f = fs()
+        assertTrue(f.collectTextFiles("only.txt").isEmpty(), "file path is not a directory")
+        assertTrue(f.collectTextFiles("does-not-exist").isEmpty(), "missing dir yields empty")
+    }
+
     // ==================== delete hard protections ====================
 
     @Test

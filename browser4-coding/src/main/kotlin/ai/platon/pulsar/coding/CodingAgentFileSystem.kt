@@ -784,6 +784,52 @@ class CodingAgentFileSystem(
     }
 
     /**
+     * Collect all text files under [path] (recursively) as relative-path →
+     * content, skipping [searchExcludedDirs], binary extensions, and files over
+     * [MAX_READ_SIZE_BYTES]. Returns an empty map when nothing readable is found
+     * or the path is not a directory.
+     *
+     * Used by the multi-file live-template extraction (`coding.scaffoldFromExample`
+     * with a directory path) and other whole-subtree operations.
+     */
+    suspend fun collectTextFiles(path: String = "."): Map<String, String> {
+        val resolved = resolvePath(path) ?: return emptyMap()
+        if (!resolved.isDirectory()) return emptyMap()
+
+        val results = mutableMapOf<String, String>()
+        try {
+            withContext(Dispatchers.IO) {
+                Files.walkFileTree(resolved, object : SimpleFileVisitor<Path>() {
+                    override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                        if (dir != resolved && dir.fileName.toString() in searchExcludedDirs) {
+                            return FileVisitResult.SKIP_SUBTREE
+                        }
+                        return FileVisitResult.CONTINUE
+                    }
+
+                    override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                        val ext = file.extension.lowercase()
+                        if (ext in BINARY_EXTENSIONS) return FileVisitResult.CONTINUE
+                        if (ext.isNotEmpty() && ext !in SOURCE_EXTENSIONS) return FileVisitResult.CONTINUE
+                        try {
+                            if (Files.size(file) > MAX_READ_SIZE_BYTES) return FileVisitResult.CONTINUE
+                            val content = Files.readString(file)
+                            val rel = resolved.relativize(file).toString().replace('\\', '/')
+                            results[rel] = content
+                        } catch (_: Exception) {}
+                        return FileVisitResult.CONTINUE
+                    }
+
+                    override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult {
+                        return FileVisitResult.SKIP_SUBTREE
+                    }
+                })
+            }
+        } catch (_: Exception) {}
+        return results
+    }
+
+    /**
      * Get a unified diff between the snapshot and current content of a file.
      *
      * @param algorithm "myers" (default, fastest, edit-distance optimal) or
