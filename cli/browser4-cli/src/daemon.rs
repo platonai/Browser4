@@ -3936,6 +3936,12 @@ fn collect_jvm_opts_and_program_args() -> (Vec<String>, Vec<String>) {
 /// Enumerate the dependency JARs under `lib_dir` and join them, sorted, into
 /// a classpath.  CDS and the AOT cache both require a stable, ordered JAR
 /// list; the previous `lib/*` directory wildcard does not guarantee one.
+///
+/// On Windows each entry is stripped of the verbatim `\\?\` prefix inherited
+/// from the canonicalized runtime data dir and normalized to forward slashes,
+/// so the classpath is valid both as a plain command-line argument and inside
+/// a Java `@argfile` (where a leading-only strip would leave `//?/` on every
+/// entry after the first).
 fn enumerate_classpath(lib_dir: &Path) -> Result<String, String> {
     let mut jars: Vec<String> = Vec::new();
     let entries = fs::read_dir(lib_dir)
@@ -3944,7 +3950,13 @@ fn enumerate_classpath(lib_dir: &Path) -> Result<String, String> {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("jar") {
-            jars.push(path.to_string_lossy().to_string());
+            let raw = path.to_string_lossy().to_string();
+            let normalized = if cfg!(windows) {
+                normalize_jvm_windows_path_text(&raw)
+            } else {
+                raw
+            };
+            jars.push(normalized);
         }
     }
     if jars.is_empty() {
@@ -4230,17 +4242,32 @@ fn estimated_windows_command_line_len(program: &Path, args: &[String]) -> usize 
     program.to_string_lossy().len() + args.iter().map(|a| a.len() + 3).sum::<usize>()
 }
 
+/// Normalize Windows path text embedded in JVM arguments: drop verbatim
+/// `\\?\` prefixes **anywhere** they appear and convert backslashes to
+/// forward slashes, which the JVM accepts on Windows.
+///
+/// A single argument can embed several verbatim prefixes: the `-cp`
+/// classpath is one `;`-joined token whose *every* entry carries its own
+/// `\\?\` (the runtime data dir is canonicalized — see
+/// `resolve_runtime_data_dir`), and `-XX:AOTCache=\\?\C:\...` embeds the
+/// prefix after `=`.  Stripping only a leading prefix leaves `//?/` once
+/// backslashes are converted, which the JVM cannot open — that corrupted
+/// both the AOT training run and the main server launch on Windows.
+fn normalize_jvm_windows_path_text(text: &str) -> String {
+    text.replace(r"\\?\UNC\", "//")
+        .replace(r"\\?\", "")
+        .replace('\\', "/")
+}
+
 /// Normalize one JVM argument for embedding in a Java `@argfile`.
 ///
 /// The java launcher parses `@argfile` tokens itself and interprets
 /// backslash escape sequences (`\t`, `\n`, `\r`, ...) inside tokens, which
-/// would corrupt Windows paths (`C:\tools\...` → tab/newline).  Verbatim
-/// `\\?\` prefixes and backslashes are therefore normalized to forward
-/// slashes, which the JVM accepts on Windows, and tokens containing
-/// whitespace are double-quoted.
+/// would corrupt Windows paths (`C:\tools\...` → tab/newline).  All
+/// backslashes are therefore normalized to forward slashes, and tokens
+/// containing whitespace are double-quoted.
 fn java_argfile_token(token: &str) -> String {
-    let stripped = token.strip_prefix(r"\\?\").unwrap_or(token);
-    let normalized = stripped.replace('\\', "/");
+    let normalized = normalize_jvm_windows_path_text(token);
     if normalized.chars().any(char::is_whitespace) {
         format!("\"{normalized}\"")
     } else {
@@ -7103,6 +7130,30 @@ mod tests {
         assert_eq!(
             java_argfile_token(r"C:\Program Files\Browser4\lib\a.jar"),
             "\"C:/Program Files/Browser4/lib/a.jar\"" // whitespace → quoted
+        );
+        // The `-cp` classpath is ONE `;`-joined token whose every entry may
+        // carry its own verbatim prefix (the runtime data dir is
+        // canonicalized) — all of them must be stripped, not just a leading
+        // one, otherwise the entries turn into unopenable `//?/` paths.
+        assert_eq!(
+            java_argfile_token(
+                r"\\?\C:\app\lib\Bundle.jar;\\?\C:\app\lib\EvalEx-2.0.jar;\\?\C:\app\lib\kotlin.jar"
+            ),
+            "C:/app/lib/Bundle.jar;C:/app/lib/EvalEx-2.0.jar;C:/app/lib/kotlin.jar"
+        );
+        // AOT cache options embed the verbatim prefix after `=`.
+        assert_eq!(
+            java_argfile_token(r"-XX:AOTCacheOutput=\\?\C:\Users\runtime\aot\app.aot"),
+            "-XX:AOTCacheOutput=C:/Users/runtime/aot/app.aot"
+        );
+        assert_eq!(
+            java_argfile_token(r"-XX:AOTCache=\\?\C:\Users\runtime\aot\app.aot"),
+            "-XX:AOTCache=C:/Users/runtime/aot/app.aot"
+        );
+        // UNC paths canonicalize to `\\?\UNC\server\share\...`.
+        assert_eq!(
+            java_argfile_token(r"\\?\UNC\server\share\app\lib\a.jar"),
+            "//server/share/app/lib/a.jar"
         );
         // Non-path arguments pass through untouched.
         assert_eq!(
