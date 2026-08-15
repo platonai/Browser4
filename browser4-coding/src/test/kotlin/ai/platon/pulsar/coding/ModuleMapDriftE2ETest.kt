@@ -59,16 +59,6 @@ class ModuleMapDriftE2ETest {
 
     /** Scan the repo's real poms into a graph (mirrors the executor's scan). */
     private fun scanGraph(root: Path): ModuleGraph.Graph {
-        val poms = mutableMapOf<String, String>()
-        Files.walk(root).use { stream ->
-            stream.filter { Files.isRegularFile(it) && it.fileName.toString() == "pom.xml" }
-                .filter { !it.toString().contains("\\target\\") && !it.toString().contains("/target/") }
-                .filter { !it.toString().contains("archetype-resources") }
-                .forEach { pom ->
-                    val rel = root.relativize(pom.parent).toString().replace('\\', '/')
-                    poms[if (rel.isEmpty()) "browser4" else rel] = Files.readString(pom)
-                }
-        }
-        return ModuleGraph.build(poms)
+        return ModuleGraph.build(ModuleGraph.scanPoms(root))
     }
 }

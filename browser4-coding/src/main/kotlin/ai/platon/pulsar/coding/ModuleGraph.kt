@@ -102,6 +102,29 @@ object ModuleGraph {
     }
 
     /**
+     * The standard repository scan: walk [root] for real module pom.xml files
+     * (relative module dir → content). Skips `target/`, maven-archetype template
+     * poms (`archetype-resources/`), and docs trees (`docs/`, `docs-dev/`) which
+     * are not reactor modules. The repo-root aggregator pom is keyed as
+     * `browser4` (its artifact id).
+     */
+    fun scanPoms(root: java.nio.file.Path): Map<String, String> {
+        val poms = mutableMapOf<String, String>()
+        java.nio.file.Files.walk(root).use { stream ->
+            stream.filter { java.nio.file.Files.isRegularFile(it) && it.fileName.toString() == "pom.xml" }
+                .filter { !it.toString().contains("\\target\\") && !it.toString().contains("/target/") }
+                .filter { !it.toString().contains("archetype-resources") }
+                .filter { !it.toString().contains("\\docs\\") && !it.toString().contains("/docs/") &&
+                    !it.toString().contains("\\docs-dev\\") && !it.toString().contains("/docs-dev/") }
+                .forEach { pom ->
+                    val rel = root.relativize(pom.parent).toString().replace('\\', '/')
+                    poms[if (rel.isEmpty()) "browser4" else rel] = java.nio.file.Files.readString(pom)
+                }
+        }
+        return poms
+    }
+
+    /**
      * All modules transitively affected when [modulePath] changes: the module
      * itself plus every module that (directly or transitively) depends on it.
      */

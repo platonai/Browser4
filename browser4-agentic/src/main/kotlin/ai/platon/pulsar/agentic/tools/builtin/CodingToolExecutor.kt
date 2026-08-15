@@ -1297,20 +1297,12 @@ class CodingToolExecutor : AbstractToolExecutor() {
     }
 
     /**
-     * Scan the live module graph from the workspace's real pom.xml files
-     * (skipping target/.git via the fs's excluded-dir walk). Powers
-     * `coding.moduleGraph` and `coding.impact` — anti-staleness: the graph is
-     * rebuilt from the poms instead of a hand-maintained snapshot.
+     * Scan the live module graph from the workspace's real pom.xml files.
+     * Powers `coding.moduleGraph` and `coding.impact` — anti-staleness: the
+     * graph is rebuilt from the poms instead of a hand-maintained snapshot.
      */
     private suspend fun scanModuleGraph(fs: CodingAgentFileSystem): ModuleGraph.Graph {
-        val poms = fs.collectTextFiles(".")
-            .filterKeys { (it.endsWith("/pom.xml") || it == "pom.xml") && !it.contains("/archetype-resources/") }
-            .mapKeys { (relPath, _) ->
-                val dir = relPath.removeSuffix("/pom.xml")
-                // The repo-root aggregator pom gets the artifact id "browser4".
-                if (dir.isEmpty()) "browser4" else dir
-            }
-        return ModuleGraph.build(poms)
+        return ModuleGraph.build(ModuleGraph.scanPoms(fs.workspaceRoot))
     }
 
     /**
