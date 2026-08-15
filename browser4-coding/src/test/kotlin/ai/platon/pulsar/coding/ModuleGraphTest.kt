@@ -122,13 +122,18 @@ class ModuleGraphTest {
     }
 
     @Test
-    @DisplayName("drift reports real modules missing from the static snapshot")
+    @DisplayName("drift reports real modules missing from a stale snapshot")
     fun driftDetection() {
         val graph = ModuleGraph.build(poms)
-        val missing = ModuleGraph.drift(graph, ModuleMap.MODULES)
-        assertTrue(missing.contains("browser4-pdk"), "browser4-pdk is missing from the static snapshot: $missing")
-        assertTrue(missing.contains("browser4-plugins/browser4-seo"), "plugin modules are missing: $missing")
-        assertFalse(missing.contains("browser4-coding"), "browser4-coding is in the static snapshot")
+        // Simulate a stale snapshot (like the pre-sync ModuleMap).
+        val stale = ModuleMap.MODULES.filter { !it.startsWith("browser4-pdk") && !it.startsWith("browser4-plugins/") }
+        val missing = ModuleGraph.drift(graph, stale)
+        assertTrue(missing.contains("browser4-pdk"), "pdk missing from the stale snapshot: $missing")
+        assertTrue(missing.contains("browser4-plugins/browser4-seo"), "plugin modules missing: $missing")
+        assertFalse(missing.contains("browser4-coding"), "browser4-coding is in the stale snapshot")
+        // The CURRENT synced snapshot must have zero drift against the fixture.
+        assertTrue(ModuleGraph.drift(graph, ModuleMap.MODULES).isEmpty(),
+            "current snapshot must match: ${ModuleGraph.drift(graph, ModuleMap.MODULES)}")
     }
 
     @Test

@@ -22,8 +22,8 @@ class ModuleMapTest {
     @Test
     @DisplayName("transitiveDependents of a leaf includes only itself")
     fun transitiveDependentsLeaf() {
-        val affected = ModuleMap.transitiveDependents("browser4-core/browser4-resources")
-        assertEquals(listOf("browser4-core/browser4-resources"), affected)
+        val affected = ModuleMap.transitiveDependents("browser4-dependencies")
+        assertEquals(listOf("browser4-dependencies"), affected)
     }
 
     @Test
