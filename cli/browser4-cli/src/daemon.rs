@@ -3508,6 +3508,7 @@ fn find_debug_port_in_running_processes(executable_name: &str) -> Option<u16> {
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut requested_port: Option<u16> = None;
     for line in stdout.lines() {
         let lower = line.to_ascii_lowercase();
         // Only consider lines that actually reference the executable
@@ -3518,11 +3519,81 @@ fn find_debug_port_in_running_processes(executable_name: &str) -> Option<u16> {
         for part in line.split_whitespace() {
             if let Some(port_str) = part.strip_prefix("--remote-debugging-port=") {
                 if let Ok(port) = port_str.parse::<u16>() {
-                    return Some(port);
+                    requested_port = Some(port);
                 }
             }
         }
     }
+
+    if let Some(port) = requested_port {
+        if port != 0 {
+            return Some(port);
+        }
+        // --remote-debugging-port=0 means Chrome picked a free port at random
+        // (Browser4-launched browsers use this). The requested value 0 is not
+        // a usable endpoint, so fall through to listening-port discovery below.
+    }
+
+    // The command line either had no --remote-debugging-port, or used `=0`
+    // (random port). On Windows, find every port the executable is currently
+    // LISTENING on and return the first one that answers a CDP health check.
+    // This is what makes Browser4-launched browsers (random debug port)
+    // discoverable via `attach --cdp chrome`.
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(pid) = resolve_executable_pid(executable_name) {
+            let ps_cmd = format!(
+                "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object {{ $_.OwningProcess -eq {pid} }} | Select-Object -ExpandProperty LocalPort"
+            );
+            if let Ok(out) = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-Command", &ps_cmd])
+                .output()
+            {
+                if out.status.success() {
+                    for line in String::from_utf8_lossy(&out.stdout).lines() {
+                        if let Ok(port) = line.trim().parse::<u16>() {
+                            if probe_cdp_port(port) {
+                                return Some(port);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fall back to the requested non-zero port even if the listening-port
+    // discovery above found nothing (e.g. non-Windows or probe failures).
+    requested_port.filter(|p| *p != 0)
+}
+
+/// Resolve the PID of a process whose name matches `executable_name` AND whose
+/// command line requests remote debugging. Filtering on `--remote-debugging-port`
+/// matters: without it, the first matching process is usually the user's own
+/// everyday browser (no debug port), which has no listening ports to discover.
+#[cfg(target_os = "windows")]
+fn resolve_executable_pid(executable_name: &str) -> Option<String> {
+    let ps_cmd = format!(
+        "Get-CimInstance Win32_Process | Where-Object {{ $_.Name -like '*{0}*' -and $_.CommandLine -match '--remote-debugging-port' }} | Select-Object -First 1 -ExpandProperty ProcessId",
+        executable_name
+    );
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &ps_cmd])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let pid = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if pid.is_empty() || !pid.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(pid)
+}
+
+// Stub for non-Windows platforms — never called; satisfies the compiler.
+#[cfg(not(target_os = "windows"))]
+fn resolve_executable_pid(_executable_name: &str) -> Option<String> {
     None
 }
 
@@ -4886,7 +4957,28 @@ async fn wait_for_server_ready(
     }
 
     let mut spinner_frame = 0usize;
+    // Cold-start logs reveal fatal backend errors (denied writes, port
+    // conflicts, missing deps) seconds before the readiness timeout elapses.
+    // Poll the log periodically so the CLI fails fast with a real diagnosis
+    // instead of spinning for the full `timeout`.
+    let mut last_fatal_log_check_at = Instant::now() - Duration::from_secs(2);
     while start.elapsed() <= timeout {
+        if is_cold_start && last_fatal_log_check_at.elapsed() >= Duration::from_secs(2) {
+            last_fatal_log_check_at = Instant::now();
+            if let Some(log_path) = startup_log_path {
+                let tail = read_startup_log_tail(log_path);
+                if log_mentions_fatal_startup_error(&tail) {
+                    return Err(format_server_startup_failure_message(
+                        base_url,
+                        Some("the Browser4 backend reported a fatal error during startup."),
+                        &format!("Last readiness probe result: {last_error}"),
+                        None,
+                        startup_log_path,
+                    ));
+                }
+            }
+        }
+
         let progress_status = match probe_server_state(client, base_url).await {
             ServerState::Ready => return Ok(()),
             ServerState::Starting(error) => {
@@ -5073,6 +5165,24 @@ fn read_startup_log_tail(path: &Path) -> String {
 fn log_mentions_permission_denied(log: &str) -> bool {
     let haystack = log.to_lowercase();
     haystack.contains("filenotfoundexception") && haystack.contains("logs")
+}
+
+/// True when the startup log tail shows a fatal error that no amount of
+/// waiting will resolve, so the readiness loop should fail fast instead of
+/// spinning until its timeout.  Each signature is a specific, common backend
+/// failure:
+///
+/// - a denied write to `logs/*.log` (`log_mentions_permission_denied`);
+/// - `APPLICATION FAILED TO START` — Spring Boot's banner for any fatal
+///   context-load failure (bad config, unresolvable bean, missing dep);
+/// - "Web server failed to start" with `Port .* was already in use` — the
+///   classic port-conflict signature Spring Boot logs at startup.
+fn log_mentions_fatal_startup_error(log: &str) -> bool {
+    let haystack = log.to_lowercase();
+    log_mentions_permission_denied(log)
+        || haystack.contains("application failed to start")
+        || (haystack.contains("web server failed to start")
+            && haystack.contains("already in use"))
 }
 
 #[cfg(test)]
@@ -6120,6 +6230,35 @@ mod tests {
 
         assert!(message.contains("BROWSER4_RUNTIME_DIR"));
         assert!(message.contains("unwritable logs/runtime directory"));
+    }
+
+    #[test]
+    fn test_log_mentions_fatal_startup_error_detects_permission_denied() {
+        // `拒绝访问` is GBK-encoded non-UTF-8; read as a lossy String the same
+        // way read_startup_log_tail does, then the ASCII tokens must match.
+        let bytes = b"java.io.FileNotFoundException: logs\\pulsar.dc.log (\xBE\xDC\xBE\xF8\xB7\xC3\xCE\xCA)\n\tat ch.qos.logback.core.FileAppender.openFile";
+        let log = String::from_utf8_lossy(bytes);
+        assert!(log_mentions_fatal_startup_error(&log));
+    }
+
+    #[test]
+    fn test_log_mentions_fatal_startup_error_detects_spring_boot_failure() {
+        let log = "***************************\nAPPLICATION FAILED TO START\n***************************\nDescription:\n\nWeb server failed to start. Port 8182 was already in use.";
+        assert!(log_mentions_fatal_startup_error(log));
+    }
+
+    #[test]
+    fn test_log_mentions_fatal_startup_error_ignores_transient_progress() {
+        let log = "2026-08-15 03:22:51 [main] INFO  o.s.b.StartupInfoLogger - Starting Application v4.13.4-SNAPSHOT using Java 17";
+        assert!(!log_mentions_fatal_startup_error(log));
+    }
+
+    #[test]
+    fn test_log_mentions_fatal_startup_error_ignores_port_conflict_without_web_server() {
+        // "already in use" alone must not trip the detector — only the
+        // Spring Boot "Web server failed to start" pair is a real port conflict.
+        let log = "some other component reports: address already in use";
+        assert!(!log_mentions_fatal_startup_error(log));
     }
 
     #[test]
