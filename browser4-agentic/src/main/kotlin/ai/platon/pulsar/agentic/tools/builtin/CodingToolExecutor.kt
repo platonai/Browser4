@@ -9,6 +9,7 @@ import ai.platon.pulsar.coding.DevFlowScaffolds
 import ai.platon.pulsar.coding.LanguageServerManager
 import ai.platon.pulsar.coding.KotlinSemanticIndexer
 import ai.platon.pulsar.coding.MavenBuildSupport
+import ai.platon.pulsar.coding.ModuleMap
 import ai.platon.pulsar.coding.SkeletonExtractor
 import ai.platon.pulsar.coding.ValidationResult
 import ai.platon.pulsar.agentic.model.ToolSpec
@@ -433,6 +434,7 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 ToolSpec.Arg("domain", "String", "null"),
                 ToolSpec.Arg("basePackage", "String", "null"),
                 ToolSpec.Arg("toolMethod", "String", "null"),
+                ToolSpec.Arg("verify", "Boolean", "false"),
             ),
             returnType = "String",
             description = "Generate a multi-file development-flow skeleton for Browser4 self-development. " +
@@ -441,6 +443,17 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "Identifiers derive from name; cross-file consistency is automatic. " +
                 "For b4-cli-command: name=kebab-case, description, category (e.g. Extract/Swarm), toolName (snake). " +
                 "For agent-tool: name=plugin name, domain, basePackage, toolMethod, description."
+        )
+
+        // --- Impact analysis for Browser4 self-development ---
+        toolSpec["impact"] = ToolSpec(
+            domain = domain, method = "impact",
+            arguments = listOf(ToolSpec.Arg("path", "String")),
+            returnType = "String",
+            description = "Analyze the impact of changing a file in the Browser4 repo: which Maven module owns " +
+                "it, which modules depend on it (transitively), and the suggested test commands " +
+                "(Rust CLI: cargo test --bin browser4-cli; Kotlin: mvn test -pl <module> -am). " +
+                "Use before modifying Browser4's own code."
         )
 
         // --- Sandboxed code execution ---
@@ -802,7 +815,7 @@ class CodingToolExecutor : AbstractToolExecutor() {
             }
             "scaffoldFlow" -> {
                 validateArgs(args, allowed = setOf("type", "name", "description", "category",
-                    "toolName", "domain", "basePackage", "toolMethod"),
+                    "toolName", "domain", "basePackage", "toolMethod", "verify"),
                     required = setOf("type", "name"), functionName)
                 val type = paramString(args, "type", functionName)!!
                 val name = paramString(args, "name", functionName)!!
@@ -812,6 +825,7 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 val domain = paramString(args, "domain", functionName, required = false, default = null)
                 val basePackage = paramString(args, "basePackage", functionName, required = false, default = null)
                 val toolMethod = paramString(args, "toolMethod", functionName, required = false, default = null)
+                val verify = paramBool(args, "verify", functionName, required = false, default = false) ?: false
 
                 val files: Map<String, String> = when (type) {
                     "b4-cli-command" -> DevFlowScaffolds.b4CliCommand(
@@ -846,9 +860,56 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     else -> throw IllegalArgumentException(
                         "Unknown scaffoldFlow type: $type. Supported: b4-cli-command, agent-tool, rest-endpoint, test-class, skill")
                 }
-                files.entries.joinToString("\n\n") { (path, content) ->
+                val generated = files.entries.joinToString("\n\n") { (path, content) ->
                     "=== File: $path ===\n$content"
                 }
+                if (!verify) return generated
+
+                // verify=true: run the type-appropriate build/test check after generating.
+                val verification: String = when (type) {
+                    "b4-cli-command" -> {
+                        // Rust CLI side first (fast), then the Kotlin backend compiles.
+                        val cargo = shell.executeRaw("cargo test --bin browser4-cli", timeoutSeconds = 300)
+                        val cargoLine = if (cargo.exitCode == 0) "✓ cargo test --bin browser4-cli" else
+                            "✗ cargo test failed (exit ${cargo.exitCode})"
+                        "$cargoLine\n${mavenBuild.format(mavenBuild.build(shell, "browser4-rest", "compile", true, 300))}"
+                    }
+                    "agent-tool" -> {
+                        val module = name.removePrefix("browser4-").let { "browser4-plugins/browser4-$it" }
+                        val pluginDir = if (name.startsWith("browser4-")) "browser4-plugins/$name" else ""
+                        val buildLine = mavenBuild.format(mavenBuild.build(shell, module, "compile", true, 300))
+                        val validateLine = if (pluginDir.isNotEmpty()) {
+                            ArtifactValidator.validatePlugin(pluginDir).format()
+                        } else "plugin dir not resolved"
+                        "$buildLine\n$validateLine"
+                    }
+                    "rest-endpoint" -> mavenBuild.format(mavenBuild.build(shell, "browser4-rest", "compile", true, 300))
+                    else -> "No automated verification for type '$type' — verify manually."
+                }
+                generated + "\n\n--- Verification ---\n$verification"
+            }
+            "impact" -> {
+                validateArgs(args, allowed = setOf("path"), required = setOf("path"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                val resolved = fs.resolvePathString(path)
+                    ?: throw IllegalArgumentException("Path not allowed: $path")
+                val module = inferModule(resolved)
+                if (module.isBlank()) return "Cannot determine module for $path"
+
+                buildString {
+                    appendLine("Impact analysis for $path")
+                    appendLine("  module: $module")
+                    if (module == ModuleMap.CLI_CRATE || path.contains("/cli/")) {
+                        appendLine("  Rust CLI: ${ModuleMap.cargoTestCommand()}")
+                        appendLine("  Note: CLI changes may require the Kotlin backend to accept new tools — " +
+                            "also run coding.mvnBuild(module=\"browser4-rest\")")
+                    } else {
+                        val affected = ModuleMap.transitiveDependents(module)
+                        appendLine("  affects (transitively): ${affected.joinToString(", ")}")
+                        appendLine("  test: ${ModuleMap.mavenTestCommand(module)}")
+                        appendLine("  also run for dependents: ${affected.drop(1).joinToString(", ")}")
+                    }
+                }.trimEnd()
             }
             "runCode" -> {
                 validateArgs(args, allowed = setOf("language", "code", "timeoutSeconds"), required = setOf("language", "code"), functionName)
@@ -985,4 +1046,5 @@ class CodingToolExecutor : AbstractToolExecutor() {
         name.split('-', '_').filter { it.isNotEmpty() }
             .joinToString("") { it.replaceFirstChar { c -> c.uppercase() } }
 }
+
 
