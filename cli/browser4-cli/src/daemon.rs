@@ -873,6 +873,10 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(5))
+        // Disable the proxy for the readiness probe (see the comment in
+        // `start_server`): reqwest honours HTTP(S)_PROXY but not NO_PROXY, so
+        // probing localhost would otherwise go through the proxy and stall.
+        .no_proxy()
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -4582,6 +4586,14 @@ async fn start_server(
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(5))
+        // Disable the proxy for the readiness probe.  reqwest reads the
+        // HTTP_PROXY / HTTPS_PROXY environment variables but does NOT honour
+        // NO_PROXY, so probing `localhost` goes through the configured proxy
+        // (e.g. http://127.0.0.1:10808).  During backend startup the proxy
+        // can stall on the just-bound port, hanging every probe for the full
+        // 5s timeout and adding ~10s to a cold `open`.  `no_proxy()` makes the
+        // probe connect to localhost directly.
+        .no_proxy()
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -4876,16 +4888,27 @@ fn resolve_managed_server_pid(launcher_pid: u32) -> u32 {
 
 #[cfg(windows)]
 fn resolve_windows_managed_server_pid(launcher_pid: u32) -> Option<u32> {
+    // Build the parent->children map in a single WMI round-trip, then walk the
+    // tree in memory.  The previous implementation queried `Get-CimInstance
+    // -Filter "ParentProcessId = ..."` once per recursion level, which under a
+    // launcher that fans out into many descendants (JVM + Chrome + helpers)
+    // cost ~10s.  One unfiltered query plus an in-memory walk is ~1s.
     let ps_command = format!(
         r#"
-function Get-DescendantProcessIds([UInt32] $ProcessId) {{
-    $children = Get-CimInstance Win32_Process -Filter "ParentProcessId = $ProcessId" | Sort-Object CreationDate
-    foreach ($child in $children) {{
-        $child.ProcessId
-        Get-DescendantProcessIds -ProcessId $child.ProcessId
+$byParent = @{{}}
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    ForEach-Object {{ $byParent[[string]$_.ParentProcessId] = @($byParent[[string]$_.ParentProcessId]) + $_.ProcessId }}
+$visited = New-Object 'System.Collections.Generic.HashSet[string]'
+function Get-DescendantIds([UInt32] $ProcessId) {{
+    $key = [string]$ProcessId
+    if ($visited.Contains($key)) {{ return }}
+    [void]$visited.Add($key)
+    foreach ($childId in $byParent[$key]) {{
+        $childId
+        Get-DescendantIds $childId
     }}
 }}
-$ids = @(Get-DescendantProcessIds -ProcessId {launcher_pid})
+$ids = @(Get-DescendantIds {launcher_pid})
 if ($ids.Count -gt 0) {{ $ids[-1] }}
 "#
     );
