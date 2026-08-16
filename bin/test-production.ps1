@@ -349,6 +349,55 @@ function Invoke-CliCommand {
     }
 }
 
+function Invoke-PwshScriptWithTimeout {
+    param(
+        [string]$ScriptPath,
+        [int]$TimeoutSeconds = 90
+    )
+    # Run a PowerShell script under a hard wall-clock timeout so a
+    # misbehaving cleanup script (stuck subprocess, leftover prompt)
+    # can never hang the acceptance harness.  Mirrors Invoke-CliCommand.
+    $pwshExe = (Get-Command 'pwsh' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+    if (-not $pwshExe) {
+        Write-WarningMsg "pwsh not found — cannot run $ScriptPath"
+        return $null
+    }
+
+    $tmpOut = Join-Path $TempDir 'remove-script-stdout.txt'
+    $tmpErr = Join-Path $TempDir 'remove-script-stderr.txt'
+    Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
+
+    try {
+        $proc = Start-Process `
+            -FilePath $pwshExe `
+            -ArgumentList @('-NoProfile', '-File', $ScriptPath) `
+            -NoNewWindow `
+            -PassThru `
+            -RedirectStandardOutput $tmpOut `
+            -RedirectStandardError $tmpErr
+
+        $completed = $proc.WaitForExit($TimeoutSeconds * 1000)
+        if (-not $completed) {
+            Write-WarningMsg "$(Split-Path -Leaf $ScriptPath) timed out after ${TimeoutSeconds}s — killed (PID $($proc.Id))"
+            $proc.Kill($true) | Out-Null
+            $proc.WaitForExit(5000) | Out-Null
+        }
+
+        $stdout = Get-Content -Path $tmpOut -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        $stderr = Get-Content -Path $tmpErr -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        return [PSCustomObject]@{
+            ExitCode = if ($completed) { [int]$proc.ExitCode } else { -1 }
+            Output   = (@($stdout, $stderr) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "`n"
+            TimedOut = -not $completed
+        }
+    } catch {
+        Write-WarningMsg "Could not run $ScriptPath : $_"
+        return $null
+    } finally {
+        Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-CliCommandAsync {
     param(
         [string[]]$Arguments,
@@ -714,10 +763,18 @@ if ($existingCli) {
     }
     if (Test-Path $removeScript) {
         Write-Info 'Running remove-global-browser4-cli.ps1 for thorough cleanup …'
-        try {
-            & $removeScript -Confirm:$false -ErrorAction SilentlyContinue
-        } catch {
-            Write-Info "remove-global-browser4-cli.ps1: $_"
+        # Run under a hard timeout: the script must never be able to hang
+        # the whole harness (it no longer prompts, but belt and suspenders).
+        $cleanupResult = Invoke-PwshScriptWithTimeout -ScriptPath $removeScript
+        if ($null -ne $cleanupResult) {
+            if ($cleanupResult.TimedOut) {
+                Write-WarningMsg 'remove-global-browser4-cli.ps1 did not finish within the timeout and was killed.'
+            } elseif ($cleanupResult.ExitCode -ne 0) {
+                Write-WarningMsg "remove-global-browser4-cli.ps1 exited with code $($cleanupResult.ExitCode)"
+            }
+            if (-not [string]::IsNullOrWhiteSpace($cleanupResult.Output)) {
+                Write-Info "remove-global-browser4-cli.ps1 output: $($cleanupResult.Output)"
+            }
         }
     }
 
