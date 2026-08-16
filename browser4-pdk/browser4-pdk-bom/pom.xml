@@ -41,6 +41,15 @@
         </license>
     </licenses>
 
+    <developers>
+        <developer>
+            <name>Vincent Zhang</name>
+            <email>ivincent.zhang@gmail.com</email>
+            <organization>browser4.io</organization>
+            <timezone>+8</timezone>
+        </developer>
+    </developers>
+
     <scm>
         <connection>scm:git:https://github.com/platonai/browser4.git</connection>
         <developerConnection>scm:git:https://github.com/platonai/browser4.git</developerConnection>
