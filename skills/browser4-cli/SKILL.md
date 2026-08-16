@@ -169,23 +169,27 @@ Notes:
 - `timeout` must be a positive integer; `0` and unknown keys are rejected with a non-zero exit.
 - `config set server` sets the persistent default; a later `--server` flag or `BROWSER4_CLI_SERVER` still overrides it for that invocation.
 
-### LLM Token Limit (server-side config key)
+### Server-side Config Keys (runtime overrides)
 
-`agent.llm.maxRequestTokens` is a **server-side** config key handled by the same
-`config` command family. When an agent task exceeds the limit (default 500,000)
-it halts with a status report; raising the limit this way allows the task to
-continue — a runtime override, effective immediately, no server restart.
+`agent.llm.maxRequestTokens` (per-request LLM token limit, default 500,000) and
+`agent.token.budget.total` (cumulative token budget per agent run, default
+5,000,000) are **server-side** config keys handled by the same `config` command
+family. When an agent task exceeds either limit it halts with a status report;
+raising the limit this way allows the task to continue — a runtime override,
+effective immediately, no server restart.
 
 ```bash
-browser4-cli config get agent.llm.maxRequestTokens   # Show configured / override / effective limit
+browser4-cli config get agent.llm.maxRequestTokens   # Show default / configured / override / effective
 browser4-cli config set agent.llm.maxRequestTokens 800000  # Raise the limit
 browser4-cli config set agent.llm.maxRequestTokens unlimited # Disable enforcement
 browser4-cli config delete agent.llm.maxRequestTokens      # Clear override, back to config values
+browser4-cli config set agent.token.budget.total 10000000  # Raise the per-run budget
 ```
 
 Notes:
-- Unlike local keys, this key is not stored in `config.json` — it routes to the running server's REST API (`GET/PUT/DELETE /api/system/token-limit`), so the server must be up.
-- The override is runtime-only — lost on server restart, which falls back to `agent.llm.maxRequestTokens` in the server configuration.
+- Unlike local keys, these are not stored in `config.json` — they route to the running server's unified REST config interface (`GET/PUT/DELETE /api/config/{key}`, `GET /api/config` to list all), so the server must be up.
+- The override is runtime-only — lost on server restart, which falls back to the key's value in the server configuration.
+- Accepted values: a non-negative integer, `0`, or `unlimited` (= 0, disables enforcement). Unknown keys and invalid values are rejected server-side with 404/400.
 
 ### Tab Management
 

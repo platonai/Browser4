@@ -38,12 +38,20 @@ class AgentTokenBudget(val maxTotalTokens: Long = DEFAULT_MAX_TOTAL_TOKENS) {
     private val consumedOutput = AtomicLong(0)
     private val warned = AtomicBoolean(false)
 
+    /**
+     * The budget actually enforced: a runtime override from
+     * [RuntimeConfigRegistry] (unified REST config interface) wins over the
+     * constructor value, effective immediately for existing instances.
+     */
+    val effectiveMaxTotalTokens: Long
+        get() = RuntimeConfigRegistry.getOverrideAsLong(CONFIG_KEY) ?: maxTotalTokens
+
     /** Total tokens consumed so far (input + output). */
     val consumedTotal: Long get() = consumedInput.get() + consumedOutput.get()
 
     /** True when the budget has been exhausted; further calls must not be made. */
     val isExceeded: Boolean
-        get() = maxTotalTokens > 0 && consumedTotal >= maxTotalTokens
+        get() = effectiveMaxTotalTokens > 0 && consumedTotal >= effectiveMaxTotalTokens
 
     /**
      * Record usage from one LLM call and return the new total.
@@ -59,13 +67,16 @@ class AgentTokenBudget(val maxTotalTokens: Long = DEFAULT_MAX_TOTAL_TOKENS) {
      * reaches 80% of the budget (for proactive logging).
      */
     fun shouldWarn(): Boolean {
-        if (maxTotalTokens <= 0) return false
-        return consumedTotal * 5 >= maxTotalTokens * 4 && warned.compareAndSet(false, true)
+        val limit = effectiveMaxTotalTokens
+        if (limit <= 0) return false
+        return consumedTotal * 5 >= limit * 4 && warned.compareAndSet(false, true)
     }
 
-    override fun toString(): String =
-        if (maxTotalTokens <= 0) "TokenBudget(unlimited, consumed=${consumedTotal})"
-        else "TokenBudget(consumed=$consumedTotal/$maxTotalTokens)"
+    override fun toString(): String {
+        val limit = effectiveMaxTotalTokens
+        return if (limit <= 0) "TokenBudget(unlimited, consumed=${consumedTotal})"
+        else "TokenBudget(consumed=$consumedTotal/$limit)"
+    }
 
     companion object {
         /** Configuration key for the per-agent-run token budget. */

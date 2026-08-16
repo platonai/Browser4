@@ -3527,7 +3527,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef {
                     name: "key",
                     optional: false,
-                    description: "The config key to get (server, timeout, proxy, session) or a server-side key (agent.llm.maxRequestTokens)",
+                    description: "The config key to get (server, timeout, proxy, session) or a server-side key (agent.llm.maxRequestTokens, agent.token.budget.total)",
                 },
             ],
             options: &[],
@@ -3548,7 +3548,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef {
                     name: "key",
                     optional: false,
-                    description: "The config key to set (server, timeout, proxy, session) or a server-side key (agent.llm.maxRequestTokens)",
+                    description: "The config key to set (server, timeout, proxy, session) or a server-side key (agent.llm.maxRequestTokens, agent.token.budget.total)",
                 },
                 ArgDef {
                     name: "value",
@@ -3575,7 +3575,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef {
                     name: "key",
                     optional: false,
-                    description: "The config key to delete (server, timeout, proxy, session) or a server-side key (agent.llm.maxRequestTokens)",
+                    description: "The config key to delete (server, timeout, proxy, session) or a server-side key (agent.llm.maxRequestTokens, agent.token.budget.total)",
                 },
             ],
             options: &[],

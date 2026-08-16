@@ -16,9 +16,13 @@ pub const VALID_CONFIG_KEYS: &[&str] = &["server", "timeout", "proxy", "session"
 /// Server-side config keys recognized by `config get` / `set` / `delete`.
 ///
 /// Unlike the local keys above, these are not stored in `config.json` —
-/// they are routed to the running server's REST API (runtime override,
-/// effective immediately, lost on server restart).
-pub const SERVER_CONFIG_KEYS: &[&str] = &["agent.llm.maxRequestTokens"];
+/// they are routed to the running server's unified REST config interface
+/// (`/api/config/{key}`) as runtime overrides: effective immediately,
+/// lost on server restart.
+pub const SERVER_CONFIG_KEYS: &[&str] = &[
+    "agent.llm.maxRequestTokens",
+    "agent.token.budget.total",
+];
 
 /// True when the key refers to server-side configuration routed to the REST API.
 pub fn is_server_config_key(key: &str) -> bool {
