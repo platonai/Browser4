@@ -4,6 +4,7 @@ import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.AgenticEvents
 import ai.platon.pulsar.agentic.inference.AgentMessageList
 import ai.platon.pulsar.agentic.inference.AgentTokenBudget
+import ai.platon.pulsar.agentic.inference.RequestTokenLimiter
 import ai.platon.pulsar.agentic.inference.TokenBudgetExceededException
 import ai.platon.pulsar.agentic.inference.ToolExposeMode
 import ai.platon.pulsar.agentic.inference.collapseToLegacyString
@@ -50,6 +51,13 @@ open class ContextToAction(
     val tokenBudget: AgentTokenBudget = AgentTokenBudget.from(conf)
 
     /**
+     * Per-request token limiter — caps the estimated token count of each
+     * individual LLM call. Older messages are dropped from the middle of
+     * the conversation when the cap is exceeded.
+     */
+    val requestTokenLimiter: RequestTokenLimiter = RequestTokenLimiter.from(conf)
+
+    /**
      * Model name tag used for [InferenceMetrics] token accounting.
      * Falls back to "default" when no model name is configured.
      */
@@ -72,6 +80,7 @@ open class ContextToAction(
                 coordinator = ai.platon.pulsar.agentic.tools.langchain4j.ToolExecutionCoordinator(
                     toolManager, registry
                 ),
+                requestTokenLimiter = requestTokenLimiter,
             )
         }
     }
@@ -140,10 +149,12 @@ open class ContextToAction(
 
     @ExperimentalApi
     open suspend fun generateResponseRaw(messages: AgentMessageList, screenshotB64: String? = null): ModelResponse {
+        // Cap per-request token count before dispatching to either LLM path.
+        val truncatedMessages = requestTokenLimiter.truncate(messages)
         return if (toolExposeMode == ToolExposeMode.TEXT) {
-            generateResponseRawLegacy(messages, screenshotB64)
+            generateResponseRawLegacy(truncatedMessages, screenshotB64)
         } else {
-            generateResponseRawWithLangChain4j(messages, screenshotB64)
+            generateResponseRawWithLangChain4j(truncatedMessages, screenshotB64)
         }.also { response -> accountTokenUsage(response) }
     }
 

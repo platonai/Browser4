@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.inference.chat
 
+import ai.platon.pulsar.agentic.inference.RequestTokenLimiter
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolExecutionCoordinator
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.common.getLogger
@@ -35,6 +36,7 @@ class AgentToolCallLoop(
     private val toolSpecifications: List<LangChain4jToolSpec>,
     private val coordinator: ToolExecutionCoordinator,
     private val maxIterations: Int = 5,
+    private val requestTokenLimiter: RequestTokenLimiter = RequestTokenLimiter(),
 ) {
     private val logger = getLogger(AgentToolCallLoop::class)
 
@@ -54,6 +56,10 @@ class AgentToolCallLoop(
         var totalTotal = 0
 
         for (iteration in 0 until maxIterations) {
+            // Cap message list before each LLM call — tool results accumulate
+            // and can grow the context beyond the model's limit.
+            messages = requestTokenLimiter.truncate(messages).toMutableList()
+
             val request = ChatRequest.builder()
                 .messages(messages)
                 .toolSpecifications(toolSpecifications)
