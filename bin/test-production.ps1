@@ -779,13 +779,31 @@ if ($existingCli) {
     }
 
     # Verify the CLI is actually gone after uninstall.
-    # If it is still on PATH the uninstall is broken — a real user
+    # `uninstall` manages package-manager installs only (npm/pnpm/yarn/
+    # cargo).  A standalone release binary in the official install dir
+    # (install-browser4-cli.sh/.ps1) is intentionally NOT removed — users
+    # refresh it by re-running the install script.  So a leftover standalone
+    # binary is expected and reported as info, not a failure; any OTHER
+    # path still on PATH means the uninstall is broken — a real user
     # would have the same problem.
     Update-SessionPath
     $stillOnPath = Resolve-CliPath
     if ($stillOnPath) {
-        Write-WarningMsg "CLI still on PATH after uninstall: $stillOnPath"
-        Write-StepResult -Step 'Pre-clean' -Passed $false -Detail "browser4-cli still present after uninstall: $stillOnPath"
+        $standaloneCliPaths = @((Join-Path $env:HOME '.local/bin/browser4-cli'))   # Linux/macOS
+        if ($OSWin) {
+            # Windows: binary link (or .cmd wrapper fallback) inside the install dir.
+            # LOCALAPPDATA is $null on Unix — only touch it on Windows.
+            $standaloneCliPaths += Join-Path $env:LOCALAPPDATA 'Programs\browser4-cli\browser4-cli.exe'
+            $standaloneCliPaths += Join-Path $env:LOCALAPPDATA 'Programs\browser4-cli\browser4-cli.cmd'
+        }
+        if ($stillOnPath -in $standaloneCliPaths) {
+            Write-Info "Standalone binary remains at $stillOnPath — outside uninstall scope; the install cycle will refresh it"
+            Write-StepResult -Step 'Pre-clean' -Passed $true `
+                -Detail "Package installs removed; standalone binary at $stillOnPath remains (updated by install script)"
+        } else {
+            Write-WarningMsg "CLI still on PATH after uninstall: $stillOnPath"
+            Write-StepResult -Step 'Pre-clean' -Passed $false -Detail "browser4-cli still present after uninstall: $stillOnPath"
+        }
     } else {
         Write-StepResult -Step 'Pre-clean' -Passed $true -Detail 'Removed existing global CLI'
     }
