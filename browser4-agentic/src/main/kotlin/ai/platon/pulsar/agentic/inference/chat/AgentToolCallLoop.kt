@@ -46,6 +46,12 @@ class AgentToolCallLoop(
     suspend fun generate(initialMessages: List<ChatMessage>): ModelResponse {
         var messages = initialMessages.toMutableList()
         var response: ChatResponse? = null
+        // Accumulate real usage across all rounds — previously only the final
+        // response's usage was reported, undercounting consumption by every
+        // intermediate tool-calling round.
+        var totalInput = 0
+        var totalOutput = 0
+        var totalTotal = 0
 
         for (iteration in 0 until maxIterations) {
             val request = ChatRequest.builder()
@@ -57,11 +63,17 @@ class AgentToolCallLoop(
             val aiMessage = response.aiMessage()
             messages.add(aiMessage)
 
+            response.tokenUsage()?.let { u ->
+                totalInput += u.inputTokenCount() ?: 0
+                totalOutput += u.outputTokenCount() ?: 0
+                totalTotal += u.totalTokenCount() ?: 0
+            }
+
             val toolRequests = aiMessage.toolExecutionRequests()
             if (toolRequests.isNullOrEmpty()) {
                 // No more tool calls — return the final response
                 logger.debug("Tool loop finished after ${iteration + 1} round(s)")
-                return chatResponseToModelResponse(response)
+                return chatResponseToModelResponse(response, totalInput, totalOutput, totalTotal)
             }
 
             logger.debug("Tool loop round ${iteration + 1}: executing ${toolRequests.size} tool(s)")
@@ -75,21 +87,31 @@ class AgentToolCallLoop(
 
         // Max iterations exhausted — return last response with error
         logger.warn("Tool loop exceeded max iterations ($maxIterations)")
-        return chatResponseToModelResponse(response!!).let { mr ->
+        return chatResponseToModelResponse(response!!, totalInput, totalOutput, totalTotal).let { mr ->
             mr.copy(modelError = "Tool call loop exceeded max iterations ($maxIterations)")
         }
     }
 
-    private fun chatResponseToModelResponse(response: ChatResponse): ModelResponse {
+    private fun chatResponseToModelResponse(
+        response: ChatResponse,
+        summedInput: Int = 0,
+        summedOutput: Int = 0,
+        summedTotal: Int = 0,
+    ): ModelResponse {
         val content = response.aiMessage().text() ?: ""
+        // Prefer summed usage when non-zero (multi-round loop); fall back to the
+        // single-response usage for the trivial single-round case.
         val usage = response.tokenUsage()
+        val input = if (summedInput > 0) summedInput else (usage?.inputTokenCount() ?: 0)
+        val output = if (summedOutput > 0) summedOutput else (usage?.outputTokenCount() ?: 0)
+        val total = if (summedTotal > 0) summedTotal else (usage?.totalTokenCount() ?: 0)
         return ModelResponse(
             content = content,
             state = ResponseState.STOP,
             tokenUsage = ai.platon.pulsar.external.TokenUsage(
-                inputTokenCount = usage?.inputTokenCount() ?: 0,
-                outputTokenCount = usage?.outputTokenCount() ?: 0,
-                totalTokenCount = usage?.totalTokenCount() ?: 0,
+                inputTokenCount = input,
+                outputTokenCount = output,
+                totalTokenCount = total,
             ),
         )
     }

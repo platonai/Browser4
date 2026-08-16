@@ -55,6 +55,17 @@ class CodingAgentFileSystem(
     companion object {
         const val MAX_READ_SIZE_BYTES = 5 * 1024 * 1024L // 5 MB
         const val MAX_GLOB_RESULTS = 10_000
+
+        /**
+         * Default cap on the number of characters returned to the LLM context by
+         * [readFile] / [readFileLines] / [diff]. ~120K chars ≈ 35K tokens —
+         * enough for most source files, while preventing a single 5 MB read
+         * (~1.5M tokens) from blowing out the agent's context window.
+         *
+         * Content exceeding this is folded head+tail with an omission marker
+         * directing the agent to [readFileLines] for targeted ranges.
+         */
+        const val DEFAULT_MAX_OUTPUT_CHARS = 120_000
         private val logger = LoggerFactory.getLogger(CodingAgentFileSystem::class.java)
 
         /** Repo-governance files that destructive ops must never modify. */
@@ -150,7 +161,7 @@ class CodingAgentFileSystem(
         return try {
             withContext(Dispatchers.IO) {
                 Files.readString(resolved, encoding)
-            }
+            }.let { truncateForContext(it, path = path) }
         } catch (e: IOException) {
             errorResult("Failed to read '$path': ${e.message}")
         }
@@ -158,11 +169,15 @@ class CodingAgentFileSystem(
 
     /**
      * Read a file with surrounding context lines (like head/tail).
+     *
+     * The returned text is folded to [DEFAULT_MAX_OUTPUT_CHARS] to protect the
+     * agent's context budget; pass a larger [maxChars] when a full range is needed.
      */
     suspend fun readFileLines(
         path: String,
         startLine: Int = 1,
         endLine: Int = -1,
+        maxChars: Int = DEFAULT_MAX_OUTPUT_CHARS,
     ): String {
         val resolved = resolvePath(path) ?: return errorResult("Path not resolved: $path")
         if (!resolved.exists()) return errorResult("File not found: $path")
@@ -173,7 +188,7 @@ class CodingAgentFileSystem(
                 val s = (startLine - 1).coerceIn(0, lines.size - 1)
                 val e = if (endLine < 0) lines.size else endLine.coerceIn(s, lines.size)
                 lines.subList(s, e).joinToString("\n")
-            }
+            }.let { truncateForContext(it, maxChars, path) }
         } catch (e: IOException) {
             errorResult("Failed to read '$path': ${e.message}")
         }
@@ -852,7 +867,7 @@ class CodingAgentFileSystem(
         val newLines = current.lines()
         val edits = DiffEngine.diff(oldLines, newLines, algorithm)
         val unified = DiffEngine.toUnified(path, path, edits) ?: return "No changes in $path"
-        return "diff $path ($algorithm)\n$unified"
+        return truncateForContext("diff $path ($algorithm)\n$unified", path = path)
     }
 
     /**
@@ -982,6 +997,31 @@ class CodingAgentFileSystem(
     }
 
     private fun errorResult(message: String): String = "Error: $message"
+
+    /**
+     * Fold [content] to at most [maxChars] characters for LLM context.
+     *
+     * Keeps the first 60% and last 40% of the allowed budget, joined by an
+     * omission marker that reports the total size and hints the agent to use
+     * [readFileLines] for the skipped middle. No-op when content already fits.
+     */
+    private fun truncateForContext(
+        content: String,
+        maxChars: Int = DEFAULT_MAX_OUTPUT_CHARS,
+        path: String? = null,
+    ): String {
+        if (content.length <= maxChars) return content
+        val headLen = (maxChars * 6 / 10)
+        val tailLen = maxChars - headLen
+        val head = content.substring(0, headLen)
+        val tail = content.substring(content.length - tailLen)
+        val omitted = content.length - maxChars
+        val loc = if (path != null) " of '$path'" else ""
+        val marker = "\n\n[… omitted $omitted chars (total ${content.length} chars$loc). " +
+            "Use readFileLines(startLine, endLine) to inspect the middle section …]\n\n"
+        return head + marker + tail
+    }
+
 
     /**
      * Reject destructive ops on repo-governance files (VERSION, AGENTS.md, poms, ...)

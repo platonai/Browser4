@@ -2,6 +2,7 @@ package ai.platon.pulsar.agentic.agents
 
 import ai.platon.pulsar.chrome.dom.util.DomDebug
 import ai.platon.pulsar.agentic.*
+import ai.platon.pulsar.agentic.inference.TokenBudgetExceededException
 import ai.platon.pulsar.agentic.inference.detail.*
 import ai.platon.pulsar.agentic.model.ActionDescription
 import ai.platon.pulsar.agentic.model.AgentHistory
@@ -290,6 +291,11 @@ open class RobustBrowserAgent(
             try {
                 val result = doRunAgentLoop(action, activeContext, attempt)
                 return result
+            } catch (e: TokenBudgetExceededException) {
+                // Budget breach is permanent — do not retry (each retry would
+                // throw immediately anyway since the budget is already exceeded).
+                logger.error("🛑 resolve.budget.sid={} msg={}", sid, e.message)
+                return ResolveResult(activeContext, ActResultHelper.failed(e, action = action.action))
             } catch (e: Exception) {
                 lastError = e
                 logger.error("💥 resolve.unexpected attempt={} sid={} msg={}", attempt + 1, sid, e.message, e)

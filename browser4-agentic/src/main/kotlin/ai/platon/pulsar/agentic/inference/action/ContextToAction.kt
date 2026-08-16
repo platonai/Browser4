@@ -3,6 +3,8 @@ package ai.platon.pulsar.agentic.inference.action
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.AgenticEvents
 import ai.platon.pulsar.agentic.inference.AgentMessageList
+import ai.platon.pulsar.agentic.inference.AgentTokenBudget
+import ai.platon.pulsar.agentic.inference.TokenBudgetExceededException
 import ai.platon.pulsar.agentic.inference.ToolExposeMode
 import ai.platon.pulsar.agentic.inference.collapseToLegacyString
 import ai.platon.pulsar.agentic.inference.toChatMessages
@@ -15,6 +17,7 @@ import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.event.EventBus
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.agentic.observability.InferenceMetrics
 import ai.platon.pulsar.external.BrowserChatModel
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.external.ModelResponse
@@ -38,6 +41,20 @@ open class ContextToAction(
     val chatModel: BrowserChatModel get() = ChatModelFactory.getOrCreate(conf)
 
     val tta = TextToAction(conf)
+
+    /**
+     * Per-agent token budget, enforced on every LLM call that flows through
+     * [generateResponseRaw]. Prevents runaway agent loops from burning
+     * unbounded provider credits.
+     */
+    val tokenBudget: AgentTokenBudget = AgentTokenBudget.from(conf)
+
+    /**
+     * Model name tag used for [InferenceMetrics] token accounting.
+     * Falls back to "default" when no model name is configured.
+     */
+    private val metricsModelName: String =
+        conf.get("openai.model.name") ?: conf.get("openrouter.model.name") ?: "default"
 
     /** How tools are exposed to the LLM (config-driven). */
     val toolExposeMode: ToolExposeMode = ToolExposeMode.from(conf)
@@ -101,6 +118,11 @@ open class ContextToAction(
             onDidGenerate(context, messages, actionDescription)
 
             return actionDescription
+        } catch (e: TokenBudgetExceededException) {
+            // Must propagate — a budget breach must not be swallowed into an
+            // error ActionDescription (which would let the agent loop continue
+            // stepping and keep burning tokens).
+            throw e
         } catch (e: Exception) {
             val errorResponse = ModelResponse("Unknown exception" + e.brief(), ResponseState.OTHER)
             val actionDescription = ActionDescription(
@@ -122,6 +144,40 @@ open class ContextToAction(
             generateResponseRawLegacy(messages, screenshotB64)
         } else {
             generateResponseRawWithLangChain4j(messages, screenshotB64)
+        }.also { response -> accountTokenUsage(response) }
+    }
+
+    /**
+     * Record real token usage from a [ModelResponse] into the per-agent
+     * [tokenBudget] and [InferenceMetrics]. Throws [TokenBudgetExceededException]
+     * when the budget is exhausted, halting the agent loop.
+     *
+     * Resilient to null/zero usage (some providers omit counts on errors).
+     */
+    private fun accountTokenUsage(response: ModelResponse) {
+        val usage = response.tokenUsage
+        val input = usage.inputTokenCount.toLong().coerceAtLeast(0L)
+        val output = usage.outputTokenCount.toLong().coerceAtLeast(0L)
+        if (input == 0L && output == 0L) return
+
+        val total = tokenBudget.add(input, output)
+
+        // Feed the existing Micrometer metrics — previously never recorded in
+        // production, leaving the token gauges at zero.
+        runCatching {
+            InferenceMetrics.recordTokenUsage(metricsModelName, input.toInt(), output.toInt())
+        }
+
+        if (tokenBudget.shouldWarn()) {
+            logger.warn("⚠️ token usage at 80%+ of budget: $tokenBudget")
+        }
+
+        if (tokenBudget.isExceeded) {
+            logger.error(
+                "🛑 token budget exceeded: consumed {} tokens, budget {} — aborting agent run",
+                total, tokenBudget.maxTotalTokens
+            )
+            throw TokenBudgetExceededException(total, tokenBudget.maxTotalTokens)
         }
     }
 
