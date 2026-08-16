@@ -7,6 +7,9 @@ import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
+import ai.platon.pulsar.agentic.tools.builtin.CodingToolExecutor
+import ai.platon.pulsar.coding.CodingAgentShell
+import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.brief
@@ -25,6 +28,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
+import java.nio.file.Paths
 import java.util.*
 
 // ---------------------------------------------------------------------------
@@ -190,6 +194,32 @@ class MCPToolController(
     }
 
     private val logger = LoggerFactory.getLogger(MCPToolController::class.java)
+
+    /**
+     * Standalone CodingToolExecutor for session-independent code tools.
+     *
+     * When a `coding_*` tool is called WITHOUT a sessionId, the request is
+     * dispatched through this executor — no browser session is required.
+     * The workspace root defaults to the JVM working directory.
+     */
+    private val standaloneCodingShell: CodingAgentShell by lazy {
+        CodingAgentShell(
+            baseDir = Paths.get(System.getProperty("user.dir")),
+            allowDestructive = System.getProperty("browser4.agent.allowDestructive", "true") != "false",
+        )
+    }
+    private val standaloneCodingFs: CodingAgentFileSystem by lazy {
+        CodingAgentFileSystem(
+            workspaceRoot = Paths.get(System.getProperty("user.dir")),
+            allowDestructive = System.getProperty("browser4.agent.allowDestructive", "true") != "false",
+        )
+    }
+    private val standaloneCodingTarget: CodingToolExecutor.Target by lazy {
+        CodingToolExecutor.Target(standaloneCodingShell, standaloneCodingFs)
+    }
+    private val standaloneCodingExecutor: CodingToolExecutor by lazy {
+        CodingToolExecutor()
+    }
 
     private fun requireSessionId(sessionId: String?): String {
         return sessionId ?: throw IllegalArgumentException(MCPConstants.ERROR_NO_ACTIVE_SESSION)
@@ -702,6 +732,11 @@ class MCPToolController(
      * 3. Look up domain in [CustomToolRegistry.instance]
      * 4. If found → dispatch to the custom executor
      * 5. If not found → dispatch to the session agent's tool manager
+     *
+     * Special case: `coding_*` tools without a sessionId are dispatched
+     * through the [standaloneCodingExecutor] — no browser session required.
+     * This enables the `browser4 code <subcommand>` CLI commands that
+     * operate on the server's workspace without starting a browser.
      */
     private suspend fun dispatchToToolExecutor(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
         val normalizedRequest = normalizeFrontendToolCall(request.tool, request.arguments ?: emptyMap())
@@ -723,8 +758,77 @@ class MCPToolController(
             return dispatchToCustomExecutor(toolName, domain, execArgs, customExecutor, request)
         }
 
+        // Session-independent coding dispatch: when a coding_* tool is called
+        // without a sessionId, use the standalone CodingToolExecutor instead
+        // of requiring a browser session. This supports the `browser4 code`
+        // CLI commands for self-development, plugin/skill scaffolding, and
+        // browser JS script writing.
+        if (domain == "coding") {
+            val sessionId = normalizedRequest.arguments["sessionId"]?.toString()
+            if (sessionId.isNullOrEmpty()) {
+                return dispatchToStandaloneCodingTool(toolName, args, request)
+            }
+        }
+
         // Fall back to per-session agent tool dispatch
         return dispatchToAgentToolExecutor(request)
+    }
+
+    /**
+     * Dispatch a coding_* tool call through the standalone [CodingToolExecutor]
+     * — no browser session required.
+     *
+     * This enables the `browser4 code <subcommand>` CLI commands that operate
+     * on the server's workspace for self-development, plugin/skill scaffolding,
+     * and browser JS script writing.
+     */
+    private suspend fun dispatchToStandaloneCodingTool(
+        toolName: String,
+        args: Map<String, Any?>,
+        request: MCPToolCallRequest,
+    ): ResponseEntity<MCPToolCallResponse> {
+        val domain = "coding"
+        // Derive method name: "coding_mvnBuild" → "mvnBuild"
+        val rawMethod = if (toolName.startsWith("${domain}_")) {
+            toolName.substring(domain.length + 1)
+        } else {
+            toolName
+        }
+        // Reverse-match through the executor's tool specs to resolve
+        // snake_case tool names back to camelCase method names.
+        val method = standaloneCodingExecutor.getToolSpecs().keys.firstOrNull { specMethod ->
+            toMcpToolName(domain, specMethod) == toolName
+        } ?: rawMethod
+
+        return try {
+            val toolCall = ToolCall(domain, method, args.toMutableMap())
+            val result = standaloneCodingExecutor.callFunctionOn(toolCall, standaloneCodingTarget)
+            val evaluate = result
+            val exception = evaluate.exception
+            if (exception != null) {
+                ResponseEntity.ok(errorResponse(buildErrorMessage(toolName, exception)))
+            } else {
+                val text = when (val v = evaluate.value) {
+                    null -> if (evaluate.className == "null") "null" else ""
+                    is String -> v
+                    is Number, is Boolean -> v.toString()
+                    is Map<*, *>, is Collection<*>, is Array<*> -> pulsarObjectMapper().writeValueAsString(v)
+                    else -> pulsarObjectMapper().writeValueAsString(
+                        mapOf(
+                            "type" to (evaluate.className ?: v::class.qualifiedName),
+                            "description" to v.toString()
+                        )
+                    )
+                }
+
+                val requestArgs = request.arguments ?: emptyMap()
+                val (paginatedText, pagination) = paginateIfRequested(text, requestArgs)
+                ResponseEntity.ok(textResponse(paginatedText, pagination))
+            }
+        } catch (e: Exception) {
+            logger.warn("Standalone coding tool failed | tool={} | method={} | {}", toolName, method, e.message)
+            ResponseEntity.ok(errorResponse("$toolName failed: ${e.message}"))
+        }
     }
 
     /**
@@ -1035,6 +1139,10 @@ class MCPToolController(
         val tools = linkedSetOf<String>()
 
         for ((domain, methods) in toolSpecs) {
+            // Hide coding tools from the /tools endpoint — they are for
+            // developer use only (via `browser4 code <subcommand>` CLI),
+            // not exposed to AI agents.
+            if (domain == "coding") continue
             for (method in methods.keys) {
                 tools.add(toMcpToolName(domain, method))
             }

@@ -431,6 +431,28 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "plugin-info",
         "plugin-install",
         "plugin-remove",
+        "code-read",
+        "code-write",
+        "code-append",
+        "code-replace",
+        "code-delete",
+        "code-copy",
+        "code-move",
+        "code-list",
+        "code-stat",
+        "code-glob",
+        "code-grep",
+        "code-mkdir",
+        "code-diff",
+        "code-changes",
+        "code-shell",
+        "code-scaffold",
+        "code-validate",
+        "code-mvn",
+        "code-run",
+        "code-devtask",
+        "code-impact",
+        "code-workspace",
     ]
     .into()
 }
@@ -13453,6 +13475,106 @@ fn handle_skills_unpack(tool_params: &Value) -> Result<(), String> {
 // plugin command handlers
 // ---------------------------------------------------------------------------
 
+/// Handle code-* commands that do NOT require a browser session.
+///
+/// These commands call the server's `/mcp/call-tool` endpoint directly,
+/// without injecting a sessionId. The backend dispatches them through
+/// the CodingToolExecutor with a standalone target (no browser needed).
+///
+/// For content-bearing commands (write, append, replace, shell, run),
+/// `--stdin` / `--file` / `--base64` options are resolved here — the
+/// actual content is read and injected into params before the server call.
+async fn handle_code_command(
+    client: &reqwest::Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &mut Value,
+    command: &str,
+) -> Result<(), String> {
+    // --- Resolve --stdin for content-bearing commands ---
+    let use_stdin = tool_params
+        .get("stdin")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if use_stdin {
+        let stdin_field = match command {
+            "code-write" | "code-append" => "content",
+            "code-replace" => "newStr",
+            "code-shell" => "command",
+            "code-run" => "code",
+            _ => "",
+        };
+        if !stdin_field.is_empty() {
+            let mut input = String::new();
+            std::io::stdin()
+                .read_to_string(&mut input)
+                .map_err(|e| format!("Failed to read stdin: {e}"))?;
+            let input = input.trim().to_string();
+            if input.is_empty() {
+                return Err("Stdin was empty. Provide non-empty content via stdin.".to_string());
+            }
+            if let Value::Object(ref mut m) = tool_params {
+                m.insert(stdin_field.to_string(), json!(input));
+            }
+        }
+    }
+
+    // --- Resolve --file for write/append ---
+    if matches!(command, "code-write" | "code-append") {
+        let file_path = tool_params
+            .get("file")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        if let Some(fp) = file_path {
+            let content = std::fs::read_to_string(&fp)
+                .map_err(|e| format!("Failed to read file '{}': {e}", fp))?;
+            if let Value::Object(ref mut m) = tool_params {
+                m.insert("content".to_string(), json!(content));
+            }
+        }
+    }
+
+    // --- Resolve --base64 for write ---
+    if command == "code-write" {
+        let use_base64 = tool_params
+            .get("base64")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if use_base64 {
+            use base64::Engine;
+            let encoded = tool_params
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map_err(|e| format!("Failed to decode base64 content: {e}"))?;
+            let content = String::from_utf8(decoded)
+                .map_err(|e| format!("Decoded content is not valid UTF-8: {e}"))?;
+            if let Value::Object(ref mut m) = tool_params {
+                m.insert("content".to_string(), json!(content));
+            }
+        }
+    }
+
+    // --- Strip CLI-only flags before sending to server ---
+    if let Value::Object(ref mut m) = tool_params {
+        m.remove("stdin");
+        m.remove("file");
+        m.remove("base64");
+    }
+
+    // --- Call the server directly (no session required) ---
+    let result = http::call_tool(client, base_url, tool_name, tool_params.clone()).await?;
+    if result.trim().is_empty() {
+        cli_println!("(no output)");
+    } else {
+        cli_println!("{}", result);
+    }
+    Ok(())
+}
+
 async fn handle_plugin_list(client: &reqwest::Client, base_url: &str) -> Result<(), String> {
     let response = http::list_plugins(client, base_url).await?;
     // Pretty-print the JSON array of PluginInfo objects
@@ -15918,6 +16040,7 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         "skills" => format!("skills-{}", sub),
         "plugin" => format!("plugin-{}", sub),
         "config" => format!("config-{}", sub),
+        "code" => format!("code-{}", sub),
         _ => return None,
     };
     let mut rewritten = vec![rewritten_command];
@@ -15980,6 +16103,28 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "config-get" => Some("config get"),
         "config-set" => Some("config set"),
         "config-delete" => Some("config delete"),
+        "code-read" => Some("code read"),
+        "code-write" => Some("code write"),
+        "code-append" => Some("code append"),
+        "code-replace" => Some("code replace"),
+        "code-delete" => Some("code delete"),
+        "code-copy" => Some("code copy"),
+        "code-move" => Some("code move"),
+        "code-list" => Some("code list"),
+        "code-stat" => Some("code stat"),
+        "code-glob" => Some("code glob"),
+        "code-grep" => Some("code grep"),
+        "code-mkdir" => Some("code mkdir"),
+        "code-diff" => Some("code diff"),
+        "code-changes" => Some("code changes"),
+        "code-shell" => Some("code shell"),
+        "code-scaffold" => Some("code scaffold"),
+        "code-validate" => Some("code validate"),
+        "code-mvn" => Some("code mvn"),
+        "code-run" => Some("code run"),
+        "code-devtask" => Some("code devtask"),
+        "code-impact" => Some("code impact"),
+        "code-workspace" => Some("code workspace"),
         _ => None,
     }
 }
@@ -18271,6 +18416,21 @@ async fn run(
             )
             .await?;
         }
+        "code-read" | "code-write" | "code-append" | "code-replace"
+        | "code-delete" | "code-copy" | "code-move" | "code-list"
+        | "code-stat" | "code-glob" | "code-grep" | "code-mkdir"
+        | "code-diff" | "code-changes" | "code-shell" | "code-scaffold"
+        | "code-validate" | "code-mvn" | "code-run" | "code-devtask"
+        | "code-impact" | "code-workspace" => {
+            handle_code_command(
+                &client,
+                &base_url,
+                &tool_name,
+                &mut tool_params,
+                command,
+            )
+            .await?;
+        }
         _ => {
             if tool_name.is_empty() {
                 cli_println!("Command '{}' is not yet implemented.", command);
@@ -19568,6 +19728,30 @@ mod tests {
     fn rewrite_prefixed_command_leaves_bare_config_unchanged() {
         // Bare `config` (no subcommand) is a valid standalone command.
         assert!(rewrite_prefixed_command(&["config".to_string()]).is_none());
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_code_subcommands() {
+        let rewritten = rewrite_prefixed_command(&[
+            "code".to_string(),
+            "read".to_string(),
+            "src/main.rs".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "code-read");
+        assert_eq!(rewritten[1], "src/main.rs");
+
+        let rewritten = rewrite_prefixed_command(&[
+            "code".to_string(),
+            "shell".to_string(),
+            "ls -la".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "code-shell");
+        assert_eq!(rewritten[1], "ls -la");
+
+        // Bare `code` without a subcommand should not be rewritten.
+        assert!(rewrite_prefixed_command(&["code".to_string()]).is_none());
     }
 
     #[test]

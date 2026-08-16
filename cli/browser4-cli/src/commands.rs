@@ -26,6 +26,7 @@ pub enum Category {
     Act,
     Skills,
     Plugins,
+    Code,
 }
 
 impl Category {
@@ -50,6 +51,7 @@ impl Category {
             Category::Act => "act",
             Category::Skills => "skills",
             Category::Plugins => "plugins",
+            Category::Code => "code",
         }
     }
 }
@@ -3583,6 +3585,500 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
                 json!({ "key": key })
             },
+        },
+        // ---- Code (session-independent coding tools) ----
+        CommandDef {
+            name: "code-read",
+            description: "Read a file's content. Binary files show metadata only.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Path to the file to read", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "start-line", description: "Start line (1-based, default: 1)", is_bool: false, short: None },
+                OptionDef { name: "end-line", description: "End line (1-based, default: last line)", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_read".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                let mut p = json!({ "path": path });
+                if let Some(s) = get_opt_str(args, "start-line") {
+                    if let Ok(n) = s.parse::<i32>() { p["startLine"] = json!(n); }
+                }
+                if let Some(e) = get_opt_str(args, "end-line") {
+                    if let Ok(n) = e.parse::<i32>() { p["endLine"] = json!(n); }
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-write",
+            description: "Write content to a file (creates parent directories, overwrites existing). Use --stdin or --file on Windows to avoid shell quoting issues.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Path to the file to write", optional: false },
+                ArgDef { name: "content", description: "Content to write (use --stdin or --file for multi-line)", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "file", description: "Read content from a file instead of the command line argument", is_bool: false, short: None },
+                OptionDef { name: "stdin", description: "Read content from stdin", is_bool: true, short: None },
+                OptionDef { name: "base64", description: "Decode the content argument as base64 before writing", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_write".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                let content = get_str(args, "content").unwrap_or_default();
+                let mut p = json!({ "path": path, "content": content });
+                if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
+                if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
+                if get_bool(args, "base64").unwrap_or(false) { p["base64"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-append",
+            description: "Append content to a file. Use --stdin or --file for multi-line content.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Path to the file to append to", optional: false },
+                ArgDef { name: "content", description: "Content to append", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "file", description: "Read content from a file", is_bool: false, short: None },
+                OptionDef { name: "stdin", description: "Read content from stdin", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_append".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                let content = get_str(args, "content").unwrap_or_default();
+                let mut p = json!({ "path": path, "content": content });
+                if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
+                if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-replace",
+            description: "Replace text occurrences in a file. Use --stdin for newStr to avoid quoting issues.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Path to the file", optional: false },
+                ArgDef { name: "old", description: "Text to find (old string)", optional: false },
+                ArgDef { name: "new", description: "Replacement text (new string)", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "count", description: "Max replacements (-1 = replace all, default: -1)", is_bool: false, short: None },
+                OptionDef { name: "stdin", description: "Read newStr from stdin (useful for multi-line replacements)", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_replace".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                let old_str = get_str(args, "old").unwrap_or_default();
+                let new_str = get_str(args, "new").unwrap_or_default();
+                let mut p = json!({ "path": path, "oldStr": old_str, "newStr": new_str });
+                if let Some(c) = get_opt_str(args, "count") {
+                    if let Ok(n) = c.parse::<i32>() { p["count"] = json!(n); }
+                }
+                if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-delete",
+            description: "Delete a file or directory",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Path to the file or directory to delete", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "recursive", description: "Delete directories recursively", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_delete".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                let mut p = json!({ "path": path });
+                if get_bool(args, "recursive").unwrap_or(false) { p["recursive"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-copy",
+            description: "Copy a file or directory",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "source", description: "Source path", optional: false },
+                ArgDef { name: "dest", description: "Destination path", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_copy".to_string(),
+            tool_params_fn: |args| {
+                let source = get_str(args, "source").unwrap_or_default();
+                let dest = get_str(args, "dest").unwrap_or_default();
+                json!({ "source": source, "dest": dest })
+            },
+        },
+        CommandDef {
+            name: "code-move",
+            description: "Move or rename a file or directory",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "source", description: "Source path", optional: false },
+                ArgDef { name: "dest", description: "Destination path", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_move".to_string(),
+            tool_params_fn: |args| {
+                let source = get_str(args, "source").unwrap_or_default();
+                let dest = get_str(args, "dest").unwrap_or_default();
+                json!({ "source": source, "dest": dest })
+            },
+        },
+        CommandDef {
+            name: "code-list",
+            description: "List directory contents",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Directory path (default: workspace root)", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "depth", description: "Max depth (default: 1)", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_listDir".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(path) = get_opt_str(args, "path") { p["path"] = json!(path); }
+                if let Some(d) = get_opt_str(args, "depth") {
+                    if let Ok(n) = d.parse::<i32>() { p["maxDepth"] = json!(n); }
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-stat",
+            description: "Get file or directory metadata",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Path to the file or directory", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_stat".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                json!({ "path": path })
+            },
+        },
+        CommandDef {
+            name: "code-glob",
+            description: "Find files matching a glob pattern (e.g., 'src/**/*.kt')",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "pattern", description: "Glob pattern", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_glob".to_string(),
+            tool_params_fn: |args| {
+                let pattern = get_str(args, "pattern").unwrap_or_default();
+                json!({ "pattern": pattern })
+            },
+        },
+        CommandDef {
+            name: "code-grep",
+            description: "Search file contents for a regex pattern (like grep -r)",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "pattern", description: "Regex pattern to search for", optional: false },
+                ArgDef { name: "path", description: "Directory to search in (default: workspace root)", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "file-pattern", description: "File name glob filter (default: *)", is_bool: false, short: None },
+                OptionDef { name: "ignore-case", description: "Case-insensitive search", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_grep".to_string(),
+            tool_params_fn: |args| {
+                let pattern = get_str(args, "pattern").unwrap_or_default();
+                let mut p = json!({ "pattern": pattern });
+                if let Some(path) = get_opt_str(args, "path") { p["path"] = json!(path); }
+                if let Some(fp) = get_opt_str(args, "file-pattern") { p["filePattern"] = json!(fp); }
+                if get_bool(args, "ignore-case").unwrap_or(false) { p["ignoreCase"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-mkdir",
+            description: "Create a directory and any missing parents",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Directory path to create", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_mkdir".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                json!({ "path": path })
+            },
+        },
+        CommandDef {
+            name: "code-diff",
+            description: "Show unified diff between snapshot and current content of a file",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Path to the file", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "algorithm", description: "Diff algorithm: 'myers' (default) or 'patience'", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_diff".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                let mut p = json!({ "path": path });
+                if let Some(a) = get_opt_str(args, "algorithm") { p["algorithm"] = json!(a); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-changes",
+            description: "Show summary of all file changes since tracking started",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_changeSummary".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "code-shell",
+            description: "Execute a shell command (git, cargo, mvn, npm, python, node, etc.). Use --stdin for complex commands.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "command", description: "Shell command to execute", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "timeout", description: "Timeout in seconds (default: 120)", is_bool: false, short: None },
+                OptionDef { name: "cwd", description: "Working directory for the command", is_bool: false, short: None },
+                OptionDef { name: "stdin", description: "Read command from stdin (for complex multi-line commands)", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_shell".to_string(),
+            tool_params_fn: |args| {
+                let command = get_str(args, "command").unwrap_or_default();
+                let mut p = json!({ "command": command });
+                if let Some(t) = get_opt_str(args, "timeout") {
+                    if let Ok(n) = t.parse::<i64>() { p["timeoutSeconds"] = json!(n); }
+                }
+                if let Some(wd) = get_opt_str(args, "cwd") { p["workingDir"] = json!(wd); }
+                if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-scaffold",
+            description: "Generate a scaffold template for a Browser4 plugin, skill, JS script, or shell script. type: 'plugin' | 'skill' | 'js' | 'script'.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "type", description: "Scaffold type: 'plugin' | 'skill' | 'js' | 'script'", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "name", description: "Plugin name (for plugin), skill name (for skill), or script name (for js/script)", is_bool: false, short: None },
+                OptionDef { name: "domain", description: "Tool domain (for plugin)", is_bool: false, short: None },
+                OptionDef { name: "package", description: "Base package (for plugin)", is_bool: false, short: None },
+                OptionDef { name: "method", description: "Tool method name (for plugin)", is_bool: false, short: None },
+                OptionDef { name: "desc", description: "Tool description (for plugin) or skill description", is_bool: false, short: None },
+                OptionDef { name: "triggers", description: "Comma-separated triggers (for skill)", is_bool: false, short: None },
+                OptionDef { name: "tools", description: "Comma-separated tools (for skill)", is_bool: false, short: None },
+                OptionDef { name: "purpose", description: "JS script purpose: 'extract' | 'inject' | 'interact'", is_bool: false, short: None },
+                OptionDef { name: "script-type", description: "Script type: 'build' | 'deploy' | 'run'", is_bool: false, short: None },
+                OptionDef { name: "shell", description: "Shell type for scripts: 'ps1' | 'bash'", is_bool: false, short: None },
+                OptionDef { name: "verify", description: "Run validation after scaffolding", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_scaffold".to_string(),
+            tool_params_fn: |args| {
+                let scaffold_type = get_str(args, "type").unwrap_or_default();
+                let mut p = json!({ "type": scaffold_type });
+                if let Some(v) = get_opt_str(args, "name") { p["name"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "domain") { p["domain"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "package") { p["basePackage"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "method") { p["toolMethod"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "desc") { p["toolDescription"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "triggers") { p["triggers"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "tools") { p["tools"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "purpose") { p["purpose"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "script-type") { p["scriptType"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "shell") { p["shell"] = json!(v); }
+                if get_bool(args, "verify").unwrap_or(false) { p["verify"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-validate",
+            description: "Validate a Browser4 plugin, skill, JS file, script, or repo consistency. type: 'plugin' | 'skill' | 'js' | 'script' | 'repo-consistency'.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "type", description: "Validation type: 'plugin' | 'skill' | 'js' | 'script' | 'repo-consistency'", optional: false },
+                ArgDef { name: "path", description: "Path to plugin dir or file (not needed for repo-consistency)", optional: true },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_validate".to_string(),
+            tool_params_fn: |args| {
+                let vtype = get_str(args, "type").unwrap_or_default();
+                let mut p = json!({ "type": vtype });
+                if let Some(path) = get_opt_str(args, "path") { p["path"] = json!(path); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-mvn",
+            description: "Build a Browser4 Maven module and return structured Kotlin/Java compiler diagnostics.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "module", description: "Maven module path (e.g. 'browser4-rest' or 'browser4-plugins/browser4-seo')", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "goals", description: "Maven goals (default: 'compile')", is_bool: false, short: None },
+                OptionDef { name: "skip-tests", description: "Skip tests (default: true)", is_bool: true, short: None },
+                OptionDef { name: "timeout", description: "Timeout in seconds (default: 300)", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_mvnBuild".to_string(),
+            tool_params_fn: |args| {
+                let module = get_str(args, "module").unwrap_or_default();
+                let mut p = json!({ "module": module });
+                if let Some(g) = get_opt_str(args, "goals") { p["goals"] = json!(g); }
+                if get_bool(args, "skip-tests").unwrap_or(true) { p["skipTests"] = json!(true); }
+                if let Some(t) = get_opt_str(args, "timeout") {
+                    if let Ok(n) = t.parse::<i64>() { p["timeoutSeconds"] = json!(n); }
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-run",
+            description: "Run code in a sandboxed subprocess. Languages: kotlin, js, ts, python, bash.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "language", description: "Language: 'kotlin' | 'js' | 'ts' | 'python' | 'bash'", optional: false },
+                ArgDef { name: "code", description: "Code to execute (use --stdin for multi-line)", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "timeout", description: "Timeout in seconds (default: 30)", is_bool: false, short: None },
+                OptionDef { name: "stdin", description: "Read code from stdin", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_runCode".to_string(),
+            tool_params_fn: |args| {
+                let language = get_str(args, "language").unwrap_or_default();
+                let code = get_str(args, "code").unwrap_or_default();
+                let mut p = json!({ "language": language, "code": code });
+                if let Some(t) = get_opt_str(args, "timeout") {
+                    if let Ok(n) = t.parse::<i64>() { p["timeoutSeconds"] = json!(n); }
+                }
+                if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-devtask",
+            description: "High-level development task entry point for Browser4 self-development.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "task", description: "Development task description", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "verify", description: "Run validation after task", is_bool: true, short: None },
+                OptionDef { name: "run-tests", description: "Run tests after task", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_devTask".to_string(),
+            tool_params_fn: |args| {
+                let task = get_str(args, "task").unwrap_or_default();
+                let mut p = json!({ "task": task });
+                if get_bool(args, "verify").unwrap_or(false) { p["verify"] = json!(true); }
+                if get_bool(args, "run-tests").unwrap_or(false) { p["runTests"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "code-impact",
+            description: "Analyze the impact of changing a file in the Browser4 repo: owning module, dependents, and suggested test commands.",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "path", description: "Path to the file to analyze", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_impact".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                json!({ "path": path })
+            },
+        },
+        CommandDef {
+            name: "code-workspace",
+            description: "Get the workspace root directory path",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_workspaceRoot".to_string(),
+            tool_params_fn: |_| json!({}),
         },
     ]
 }

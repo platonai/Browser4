@@ -77,6 +77,7 @@ pub const CATEGORY_TITLES: &[(&str, &str)] = &[
     ("install", "Install"),
     ("skills", "Skills"),
     ("plugins", "Plugins"),
+    ("code", "Code"),
 ];
 
 /// Short aliases for category-based help filtering.
@@ -96,6 +97,8 @@ const CATEGORY_ALIASES: &[(&str, &str)] = &[
     ("state", "storage"),
     ("skill", "skills"),
     ("plugin", "plugins"),
+    ("dev", "code"),
+    ("coding", "code"),
     ("swarm", "swarm"),
     ("crawl", "swarm"),
     ("cfg", "config"),
