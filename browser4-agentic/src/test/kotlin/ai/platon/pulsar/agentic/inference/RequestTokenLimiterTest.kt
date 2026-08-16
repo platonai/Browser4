@@ -148,4 +148,26 @@ class RequestTokenLimiterTest {
         assertTrue(msg.contains(RequestTokenLimiter.CONFIG_KEY), "report should name the config key")
         assertTrue(msg.contains("halted", ignoreCase = true), "report should state the task was halted")
     }
+
+    @Test
+    @DisplayName("runtime override takes precedence and affects existing instances")
+    fun runtimeOverridePrecedence() {
+        val limiter = RequestTokenLimiter(maxTokens = 100)
+        try {
+            RequestTokenLimiter.setOverride(10_000)
+            assertEquals(10_000, limiter.effectiveMaxTokens)
+            assertEquals(10_000, RequestTokenLimiter.currentOverride())
+            // ~200 estimated tokens: over the configured 100, under the override 10_000
+            val big = AgentMessageList().apply { addUser("x".repeat(1000)) }
+            assertDoesNotThrow { limiter.enforce(big) }
+
+            RequestTokenLimiter.setOverride(100)
+            val ex = assertThrows<RequestTokenLimitExceededException> { limiter.enforce(big) }
+            assertEquals(100, ex.maxTokens, "override should be the enforced limit")
+        } finally {
+            RequestTokenLimiter.clearOverride()
+        }
+        assertEquals(100, limiter.effectiveMaxTokens, "clearOverride falls back to configured value")
+        assertNull(RequestTokenLimiter.currentOverride())
+    }
 }

@@ -3586,6 +3586,27 @@ pub fn all_commands() -> Vec<CommandDef> {
                 json!({ "key": key })
             },
         },
+        CommandDef {
+            name: "llm-limit",
+            description: "Show or set the server-side per-request LLM token limit (agent.llm.maxRequestTokens). Runtime override, effective immediately",
+            category: Category::Config,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef {
+                    name: "value",
+                    optional: true,
+                    description: "Token limit to set (e.g. 800000), 'unlimited', or 'reset' to clear the override. Omit to show the current limit",
+                },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let value = get_string_value(args, "value").unwrap_or_default();
+                json!({ "value": value })
+            },
+        },
         // ---- Code (session-independent coding tools) ----
         CommandDef {
             name: "code-read",

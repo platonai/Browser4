@@ -8,6 +8,7 @@ import dev.langchain4j.data.message.ChatMessage
 import dev.langchain4j.data.message.SystemMessage
 import dev.langchain4j.data.message.ToolExecutionResultMessage
 import dev.langchain4j.data.message.UserMessage
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Thrown when a single LLM request's estimated token count exceeds the
@@ -49,8 +50,17 @@ class RequestTokenLimiter(
 ) {
     private val logger = getLogger(RequestTokenLimiter::class)
 
+    /**
+     * The limit actually enforced: a runtime override set via
+     * [setOverride] (e.g. through the REST/CLI `llm-limit` command) wins over
+     * the value captured at construction time, so already-created
+     * [ai.platon.pulsar.agentic.inference.action.ContextToAction] instances
+     * pick up changes immediately.
+     */
+    val effectiveMaxTokens: Int get() = overrideMaxTokens.get() ?: maxTokens
+
     /** True when the limiter is active. */
-    val enabled: Boolean get() = maxTokens > 0
+    val enabled: Boolean get() = effectiveMaxTokens > 0
 
     /**
      * Verify an [AgentMessageList] fits within [maxTokens] (estimated).
@@ -76,13 +86,14 @@ class RequestTokenLimiter(
     }
 
     private fun checkTotal(total: Long, messageCount: Int) {
-        if (total <= maxTokens) return
+        val limit = effectiveMaxTokens
+        if (total <= limit) return
         logger.error(
             "🛑 per-request token limit exceeded: {} est. tokens across {} messages > max {} " +
-                "— halting task; raise '{}' to continue",
-            total, messageCount, maxTokens, CONFIG_KEY
+                "— halting task; raise '{}' (or use the CLI 'llm-limit' command) to continue",
+            total, messageCount, limit, CONFIG_KEY
         )
-        throw RequestTokenLimitExceededException(total, maxTokens)
+        throw RequestTokenLimitExceededException(total, limit)
     }
 
     /**
@@ -103,6 +114,28 @@ class RequestTokenLimiter(
     companion object {
         /** Configuration key for the per-request token limit. */
         const val CONFIG_KEY = "agent.llm.maxRequestTokens"
+
+        /**
+         * Runtime override for the per-request limit, set via the REST
+         * endpoint / CLI `llm-limit` command. Takes precedence over every
+         * constructor/config value so a halted task can be allowed to
+         * continue without restarting the server. Not persisted — cleared
+         * on restart, back to configuration values.
+         */
+        private val overrideMaxTokens = AtomicReference<Int?>(null)
+
+        /** Set a runtime override (0 = unlimited). */
+        fun setOverride(maxTokens: Int) {
+            overrideMaxTokens.set(maxTokens)
+        }
+
+        /** Clear the runtime override, falling back to configuration values. */
+        fun clearOverride() {
+            overrideMaxTokens.set(null)
+        }
+
+        /** The current runtime override, or null when none is set. */
+        fun currentOverride(): Int? = overrideMaxTokens.get()
 
         /**
          * Default: 500,000 estimated tokens per LLM request. A typical browser

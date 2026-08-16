@@ -169,6 +169,24 @@ Notes:
 - `timeout` must be a positive integer; `0` and unknown keys are rejected with a non-zero exit.
 - `config set server` sets the persistent default; a later `--server` flag or `BROWSER4_CLI_SERVER` still overrides it for that invocation.
 
+### LLM Token Limit
+
+`llm-limit` shows or changes the server-side per-request LLM token limit
+(`agent.llm.maxRequestTokens`, default 500,000). When an agent task exceeds the
+limit it halts with a status report; raising the limit via this command allows
+the task to continue — effective immediately, no server restart.
+
+```bash
+browser4-cli llm-limit                  # Show configured / override / effective limit
+browser4-cli llm-limit 800000           # Set a runtime override (tokens per LLM request)
+browser4-cli llm-limit unlimited        # Disable enforcement
+browser4-cli llm-limit reset            # Clear the override, back to config values
+```
+
+Notes:
+- The override is runtime-only — it is lost on server restart, which falls back to `agent.llm.maxRequestTokens` in the server configuration.
+- Corresponding REST endpoints: `GET/PUT/DELETE /api/system/token-limit`.
+
 ### Tab Management
 
 Tab commands scope to a session — all operations affect the session targeted via `-s <session>` (or the DEFAULT session when `-s` is omitted).

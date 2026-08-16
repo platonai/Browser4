@@ -453,6 +453,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "code-devtask",
         "code-impact",
         "code-workspace",
+        "llm-limit",
     ]
     .into()
 }
@@ -3079,6 +3080,71 @@ fn handle_config_delete(tool_params: &Value) -> Result<(), String> {
     config::write_config(&cfg).map_err(|e| format!("Failed to write config: {e}"))?;
     cli_println!("Deleted '{}'", key);
     json_field(key, json!(null));
+    Ok(())
+}
+
+/// Show, set, or reset the server-side per-request LLM token limit
+/// (runtime override for `agent.llm.maxRequestTokens`) via `llm-limit`.
+///
+/// This is the operator's way to allow a halted task to continue after the
+/// per-request token limit was exceeded — no server restart required.
+async fn handle_llm_limit(client: &Client, base_url: &str, tool_params: &Value) -> Result<(), String> {
+    let value = tool_params
+        .get("value")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    let (method, url): (&str, String) = match value {
+        None => ("GET", format!("{base_url}/api/system/token-limit")),
+        Some(v) if v.eq_ignore_ascii_case("reset") => {
+            ("DELETE", format!("{base_url}/api/system/token-limit"))
+        }
+        Some(v) => ("PUT", format!("{base_url}/api/system/token-limit/{v}")),
+    };
+
+    let response = client
+        .request(reqwest::Method::from_bytes(method.as_bytes()).unwrap(), &url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to contact server at {url}: {e}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("Server returned HTTP {status}: {body}"));
+    }
+
+    let parsed: Value =
+        serde_json::from_str(&body).map_err(|e| format!("Invalid JSON response: {e}"))?;
+    let configured = parsed.get("configured").and_then(|v| v.as_i64());
+    let override_value = parsed.get("override").and_then(|v| v.as_i64());
+    let effective = parsed.get("effective").and_then(|v| v.as_i64());
+    let unlimited = parsed.get("unlimited").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    cli_println!("Per-request LLM token limit (agent.llm.maxRequestTokens)");
+    cli_println!(
+        "  configured: {}",
+        configured.map(|v| v.to_string()).unwrap_or_else(|| "?".into())
+    );
+    match override_value {
+        Some(v) => cli_println!("  override:   {v}"),
+        None => cli_println!("  override:   (none)"),
+    }
+    cli_println!(
+        "  effective:  {}{}",
+        effective.map(|v| v.to_string()).unwrap_or_else(|| "?".into()),
+        if unlimited { "  [unlimited]" } else { "" }
+    );
+    if let Some(message) = parsed.get("message").and_then(|v| v.as_str()) {
+        cli_println!("{}", message);
+    }
+    json_field("configured", json!(configured));
+    json_field("override", json!(override_value));
+    json_field("effective", json!(effective));
+    json_field("unlimited", json!(unlimited));
     Ok(())
 }
 
@@ -17513,6 +17579,9 @@ async fn run(
         }
         "config-delete" => {
             handle_config_delete(&tool_params)?;
+        }
+        "llm-limit" => {
+            handle_llm_limit(&client, &base_url, &tool_params).await?;
         }
         "install" => {
             handle_install(&tool_params).await?;
