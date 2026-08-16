@@ -1,7 +1,7 @@
 ---
 name: browser4-dev
 description: "Develop features inside the Browser4 repository itself: add CLI commands, agent tool domains, REST endpoints, tests, and skills; analyze impact, plan dev tasks, check CDP pitfalls, and verify builds. Use when the user asks to add a new browser4-cli command, new tool domain, REST endpoint, modify Browser4's own Kotlin/Rust code, or check which modules a change affects."
-allowed-tools: coding.scaffoldFlow coding.scaffoldFromExample coding.mvnBuild coding.devTask coding.impact coding.moduleGraph coding.trapCheck coding.protect coding.scaffold coding.write coding.read coding.readLines coding.replace coding.replaceRegex coding.editLines coding.insertAfter coding.revert coding.validate coding.shell coding.ktSymbols coding.ktReferences coding.ktInheritance coding.diagnostics coding.references coding.symbols
+allowed-tools: coding.scaffoldFlow coding.scaffoldFromExample coding.mvnBuild coding.devTask coding.impact coding.moduleGraph coding.trapCheck coding.protect coding.scaffold coding.write coding.read coding.readLines coding.replace coding.replaceRegex coding.editLines coding.insertAfter coding.revert coding.validate coding.shell coding.ktSymbols coding.ktReferences coding.ktInheritance coding.diagnostics coding.references coding.symbols coding.tokenStats coding.estimateTokens
 ---
 
 # browser4-dev

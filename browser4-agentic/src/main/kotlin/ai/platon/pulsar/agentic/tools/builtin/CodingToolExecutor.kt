@@ -15,8 +15,12 @@ import ai.platon.pulsar.coding.ModuleGraph
 import ai.platon.pulsar.coding.ModuleMap
 import ai.platon.pulsar.coding.RepoConsistencyCheck
 import ai.platon.pulsar.coding.SkeletonExtractor
+import ai.platon.pulsar.coding.TokenEstimator
+import ai.platon.pulsar.coding.CodingTokenStats
 import ai.platon.pulsar.coding.ValidationResult
+import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
+import ai.platon.pulsar.agentic.model.TcEvaluate
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationRenderer
 import kotlinx.coroutines.Dispatchers
@@ -67,6 +71,10 @@ import kotlin.reflect.KClass
  * ### Artifact Scaffolding & Validation
  * - `scaffold(type, ...)` — Generate template for plugin/skill/js/script
  * - `validate(type, path)` — Validate a plugin dir, skill file, JS file, or script file
+ *
+ * ### Token Statistics
+ * - `tokenStats(reset?)` — Report token usage of coding tool calls (per method)
+ * - `estimateTokens(text)` — Estimate the token count of a text
  */
 class CodingToolExecutor : AbstractToolExecutor() {
 
@@ -95,6 +103,37 @@ class CodingToolExecutor : AbstractToolExecutor() {
 
     /** Zero-dependency Kotlin symbol/reference extraction (`coding.ktSymbols`/`ktReferences`). */
     private val kotlinIndexer = KotlinSemanticIndexer()
+
+    /**
+     * Token statistics for all coding tool calls executed by this executor
+     * (input = serialized arguments, output = result text). Exposed to the
+     * agent via `coding.tokenStats`.
+     */
+    val tokenStats = CodingTokenStats()
+
+    /** Meta tools that must not be recorded (they exist to report on the rest). */
+    private val metaMethods = setOf("tokenStats", "estimateTokens")
+
+    /**
+     * Record token usage around every tool call, then delegate to the
+     * abstract executor. Failed calls (exception carried in [TcEvaluate])
+     * are counted with their error text as output.
+     */
+    override suspend fun callFunctionOn(tc: ToolCall, receiver: Any): TcEvaluate {
+        if (tc.domain != domain || tc.method in metaMethods) {
+            return super.callFunctionOn(tc, receiver)
+        }
+        val start = System.currentTimeMillis()
+        val result = super.callFunctionOn(tc, receiver)
+        tokenStats.record(
+            method = tc.method,
+            input = tc.arguments.toString(),
+            output = result.value?.toString() ?: result.exception?.toString(),
+            error = !result.success,
+            millis = System.currentTimeMillis() - start,
+        )
+        return result
+    }
 
     /**
      * Composite target that bundles the enhanced shell and filesystem.
@@ -598,6 +637,25 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "(mvnBuild compile of the affected module, trapCheck, repo-consistency); runTests=true (with " +
                 "verify) also runs the module's test suite (mvn test -pl <module> -am / cargo test). " +
                 "module overrides the inferred module."
+        )
+
+        // --- Token usage statistics ---
+        toolSpec["tokenStats"] = ToolSpec(
+            domain = domain, method = "tokenStats",
+            arguments = listOf(
+                ToolSpec.Arg("reset", "Boolean", "false"),
+            ),
+            returnType = "String",
+            description = "Report token usage of coding tool calls so far (per method: calls, errors, " +
+                "input/output tokens, avg/max output). reset=true clears the counters after reporting. " +
+                "Use to audit which coding tools consume the most context window."
+        )
+        toolSpec["estimateTokens"] = ToolSpec(
+            domain = domain, method = "estimateTokens",
+            arguments = listOf(ToolSpec.Arg("text", "String")),
+            returnType = "String",
+            description = "Estimate the LLM token count of a text (heuristic, ±25%). Use to check a message " +
+                "or file chunk before sending it to the model."
         )
     }
 
@@ -1258,6 +1316,20 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 }
 
                 planText + "\n\n--- Verification ---\n" + results.joinToString("\n\n")
+            }
+
+            "tokenStats" -> {
+                validateArgs(args, allowed = setOf("reset"), required = emptySet(), functionName)
+                val report = tokenStats.report()
+                if (paramBool(args, "reset", functionName, required = false, default = false) == true) {
+                    tokenStats.reset()
+                }
+                report
+            }
+            "estimateTokens" -> {
+                validateArgs(args, allowed = setOf("text"), required = setOf("text"), functionName)
+                val text = paramString(args, "text", functionName)!!
+                "≈ ${TokenEstimator.estimateTokens(text)} tokens (${text.length} chars)"
             }
 
             else -> throw IllegalArgumentException("Unsupported coding method: $functionName(${args.keys})")

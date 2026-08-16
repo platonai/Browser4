@@ -1,7 +1,7 @@
 ---
 name: browser4-coding
 description: "Create and validate Browser4 plugins, skills, JS scripts, and shell scripts; and develop Browser4 ITSELF (self-development): build modules, extract live skeletons, analyze impact, plan dev tasks, and check CDP pitfalls. Use when the user asks to write a Browser4 plugin or skill, write browser JS or build scripts, modify Browser4's own Kotlin/Rust code, or validate repo consistency."
-allowed-tools: coding.scaffold coding.scaffoldFlow coding.scaffoldFromExample coding.validate coding.write coding.read coding.replace coding.replaceRegex coding.editLines coding.insertAfter coding.revert coding.shell coding.mvnBuild coding.ktSymbols coding.ktReferences coding.ktInheritance coding.impact coding.moduleGraph coding.devTask coding.trapCheck coding.protect tab.eval tab.console
+allowed-tools: coding.scaffold coding.scaffoldFlow coding.scaffoldFromExample coding.validate coding.write coding.read coding.replace coding.replaceRegex coding.editLines coding.insertAfter coding.revert coding.shell coding.mvnBuild coding.ktSymbols coding.ktReferences coding.ktInheritance coding.impact coding.moduleGraph coding.devTask coding.trapCheck coding.protect coding.tokenStats coding.estimateTokens tab.eval tab.console
 ---
 
 # browser4-coding
@@ -77,6 +77,7 @@ Session-level dynamic file protection: `coding.protect(path="src/Foo.kt", on=tru
 - **Repo governance protection**: delete/replace/editLines/insertAfter are BLOCKED for VERSION, AGENTS.md, CLAUDE.md, root pom.xml, browser4-dependencies/pom.xml (BOM), .github/workflows/ci.yml — do not try to work around this; ask the user for explicit intent instead. Add session-level protections with `coding.protect(path, on)`.
 - `coding.runCode(language, code)` — sandboxed snippet execution (kotlin/js/python/bash)
 - LSP: `diagnostics(path)`, `symbols(pattern?)`, `references(path, symbol)`, `lspServers` — per-language servers (ts/js/py/rs), started on demand, requires the server installed; degrade gracefully when missing
+- `coding.tokenStats(reset?)` — per-method token usage of coding tool calls so far (calls/errors/input/output tokens, avg/max output); use to audit context-window consumption. `coding.estimateTokens(text)` — heuristic token count of any text before sending it.
 
 ## Workflows
 
