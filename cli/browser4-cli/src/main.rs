@@ -18532,10 +18532,11 @@ fn print_help(command_name: Option<&str>) {
             }
             // Not an exact command — collect every command whose public
             // name starts with this prefix (e.g. "swarm" matches
-            // "swarm create", "swarm submit", ...).
+            // "swarm create", "swarm submit", ...). Include hidden commands
+            // since the user explicitly asked for help on this prefix.
             let matching: Vec<&crate::commands::CommandDef> = cmd_map
                 .values()
-                .filter(|c| !c.hidden && public_command_name(c.name).starts_with(name))
+                .filter(|c| public_command_name(c.name).starts_with(name))
                 .collect();
             if !matching.is_empty() {
                 let mut lines: Vec<String> = vec![format!("{} subcommands:\n", name)];

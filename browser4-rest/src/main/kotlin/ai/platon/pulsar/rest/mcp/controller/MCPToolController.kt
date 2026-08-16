@@ -1139,10 +1139,6 @@ class MCPToolController(
         val tools = linkedSetOf<String>()
 
         for ((domain, methods) in toolSpecs) {
-            // Hide coding tools from the /tools endpoint — they are for
-            // developer use only (via `browser4 code <subcommand>` CLI),
-            // not exposed to AI agents.
-            if (domain == "coding") continue
             for (method in methods.keys) {
                 tools.add(toMcpToolName(domain, method))
             }

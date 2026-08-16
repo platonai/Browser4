@@ -124,11 +124,15 @@ pub fn resolve_category_alias(alias: &str) -> Option<&'static str> {
     None
 }
 
-/// Return all non-hidden commands belonging to a category.
+/// Return all commands belonging to a category, including hidden ones.
+/// Used for explicit `--help <category>` requests where the user wants
+/// to see every command in the category. The default help generators
+/// ([generate_help] and [generate_help_json]) apply their own `hidden`
+/// filter inline.
 pub fn commands_in_category(category_name: &str) -> Vec<CommandDef> {
     let cmds = all_commands();
     cmds.into_iter()
-        .filter(|c| !c.hidden && c.category.as_str() == category_name)
+        .filter(|c| c.category.as_str() == category_name)
         .collect()
 }
 
