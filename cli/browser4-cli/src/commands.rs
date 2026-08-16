@@ -4258,7 +4258,7 @@ mod tests {
         let cmd = map.get("swarm-list").unwrap();
         let args: HashMap<String, Value> = HashMap::new();
         assert_eq!((cmd.tool_name_fn)(&args), ""); // handled locally, no MCP tool
-        // With --clear flag
+                                                   // With --clear flag
         let mut args = HashMap::new();
         args.insert("clear".to_string(), json!(true));
         let params = (cmd.tool_params_fn)(&args);
@@ -4479,7 +4479,11 @@ mod tests {
         args.insert("expression".to_string(), json!("ZG9jdW1lbnQudGl0bGU="));
         args.insert("base64".to_string(), json!(true));
         let params = (cmd.tool_params_fn)(&args);
-        assert_eq!(params["base64"], json!(true), "base64 flag should pass through to dispatch");
+        assert_eq!(
+            params["base64"],
+            json!(true),
+            "base64 flag should pass through to dispatch"
+        );
         assert_eq!(params["expression"], json!("ZG9jdW1lbnQudGl0bGU="));
     }
 
@@ -4490,7 +4494,10 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("expression".to_string(), json!("document.title"));
         let params = (cmd.tool_params_fn)(&args);
-        assert!(params.get("base64").is_none(), "base64 should not be set when flag is absent");
+        assert!(
+            params.get("base64").is_none(),
+            "base64 should not be set when flag is absent"
+        );
     }
 
     #[test]
@@ -4581,7 +4588,10 @@ mod tests {
             "summarize",
             "pdf",
         ] {
-            assert!(!map.get(name).unwrap().hidden, "{name} should be visible in global help");
+            assert!(
+                !map.get(name).unwrap().hidden,
+                "{name} should be visible in global help"
+            );
         }
     }
 
@@ -5377,7 +5387,10 @@ mod tests {
         args.insert("field".to_string(), json!("text"));
         args.insert("offset".to_string(), json!("abc"));
         let params = (cmd.tool_params_fn)(&args);
-        assert!(params.get("offset").is_none(), "non-numeric offset should be ignored");
+        assert!(
+            params.get("offset").is_none(),
+            "non-numeric offset should be ignored"
+        );
     }
 
     #[test]
@@ -5388,7 +5401,10 @@ mod tests {
         args.insert("field".to_string(), json!("text"));
         args.insert("limit".to_string(), json!("xyz"));
         let params = (cmd.tool_params_fn)(&args);
-        assert!(params.get("limit").is_none(), "non-numeric limit should be ignored");
+        assert!(
+            params.get("limit").is_none(),
+            "non-numeric limit should be ignored"
+        );
     }
 
     // -------------------------------------------------------------------
@@ -5402,7 +5418,10 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("no-compact".to_string(), json!(true));
         let params = (cmd.tool_params_fn)(&args);
-        assert_eq!(params["compact"], false, "--no-compact should send compact=false");
+        assert_eq!(
+            params["compact"], false,
+            "--no-compact should send compact=false"
+        );
     }
 
     #[test]
@@ -5413,8 +5432,10 @@ mod tests {
         args.insert("no-compact".to_string(), json!(true));
         args.insert("compact".to_string(), json!(true));
         let params = (cmd.tool_params_fn)(&args);
-        assert_eq!(params["compact"], false,
-            "--no-compact should take precedence over --compact");
+        assert_eq!(
+            params["compact"], false,
+            "--no-compact should take precedence over --compact"
+        );
     }
 
     // -------------------------------------------------------------------
@@ -5425,8 +5446,14 @@ mod tests {
     fn test_generate_locator_exists_and_not_hidden() {
         let map = commands_map();
         let cmd = map.get("generate-locator").unwrap();
-        assert!(!cmd.hidden, "generate-locator should not be hidden from help");
-        assert!(!cmd.batch_supported, "generate-locator should not support batch mode");
+        assert!(
+            !cmd.hidden,
+            "generate-locator should not be hidden from help"
+        );
+        assert!(
+            !cmd.batch_supported,
+            "generate-locator should not support batch mode"
+        );
     }
 
     #[test]
@@ -5449,7 +5476,10 @@ mod tests {
     fn test_generate_locator_uses_browser_generate_locator_tool() {
         let map = commands_map();
         let cmd = map.get("generate-locator").unwrap();
-        assert_eq!((cmd.tool_name_fn)(&HashMap::new()), "browser_generate_locator");
+        assert_eq!(
+            (cmd.tool_name_fn)(&HashMap::new()),
+            "browser_generate_locator"
+        );
     }
 
     #[test]
@@ -5721,8 +5751,14 @@ mod tests {
         let cmd = map.get("screenshot").unwrap();
         let has_viewport_opt = cmd.options.iter().any(|o| o.name == "viewport");
         assert!(has_viewport_opt, "screenshot should have --viewport option");
-        let has_v_short = cmd.options.iter().any(|o| o.name == "viewport" && o.short == Some("v"));
-        assert!(has_v_short, "screenshot --viewport should have -v short form");
+        let has_v_short = cmd
+            .options
+            .iter()
+            .any(|o| o.name == "viewport" && o.short == Some("v"));
+        assert!(
+            has_v_short,
+            "screenshot --viewport should have -v short form"
+        );
     }
 
     // ---- crawl command tests ----
@@ -5734,7 +5770,10 @@ mod tests {
         assert!(!cmd.hidden);
         assert_eq!(cmd.args.len(), 1);
         assert_eq!(cmd.args[0].name, "url");
-        assert!(cmd.args[0].optional, "url should be optional when --seed-file is used");
+        assert!(
+            cmd.args[0].optional,
+            "url should be optional when --seed-file is used"
+        );
         assert_eq!(cmd.category, Category::Swarm);
     }
 
@@ -5792,7 +5831,10 @@ mod tests {
         let cmd = map.get("crawl").unwrap();
         let mut args = HashMap::new();
         args.insert("url".to_string(), json!("https://example.com"));
-        args.insert("args".to_string(), json!("-nMaxRetry 5 -lazyFlush -interactLevel FAST"));
+        args.insert(
+            "args".to_string(),
+            json!("-nMaxRetry 5 -lazyFlush -interactLevel FAST"),
+        );
         let params = (cmd.tool_params_fn)(&args);
         let args_str = params["args"].as_str().unwrap_or("");
         assert!(args_str.contains("-nMaxRetry 5 -lazyFlush -interactLevel FAST"));
@@ -5849,7 +5891,10 @@ mod tests {
         let cmd = map.get("crawl").unwrap();
         let mut args = HashMap::new();
         args.insert("url".to_string(), json!("https://example.com"));
-        args.insert("sql".to_string(), json!("SELECT DOM_FIRST_TEXT(DOM, 'h1') FROM DOM_LOAD_AND_SELECT(@url, ':root')"));
+        args.insert(
+            "sql".to_string(),
+            json!("SELECT DOM_FIRST_TEXT(DOM, 'h1') FROM DOM_LOAD_AND_SELECT(@url, ':root')"),
+        );
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(
             params["sql"].as_str().unwrap(),
@@ -5918,7 +5963,9 @@ mod tests {
     #[test]
     fn test_crawl_status_command_exists() {
         let map = commands_map();
-        let cmd = map.get("crawl-status").expect("crawl-status command should exist");
+        let cmd = map
+            .get("crawl-status")
+            .expect("crawl-status command should exist");
         assert!(!cmd.hidden);
         assert_eq!(cmd.args.len(), 1);
         assert_eq!(cmd.args[0].name, "id");
@@ -5929,7 +5976,9 @@ mod tests {
     #[test]
     fn test_crawl_result_command_exists() {
         let map = commands_map();
-        let cmd = map.get("crawl-result").expect("crawl-result command should exist");
+        let cmd = map
+            .get("crawl-result")
+            .expect("crawl-result command should exist");
         assert!(!cmd.hidden);
         assert_eq!(cmd.args.len(), 1);
         assert_eq!(cmd.args[0].name, "id");
@@ -5940,7 +5989,9 @@ mod tests {
     #[test]
     fn test_crawl_cancel_command_exists() {
         let map = commands_map();
-        let cmd = map.get("crawl-cancel").expect("crawl-cancel command should exist");
+        let cmd = map
+            .get("crawl-cancel")
+            .expect("crawl-cancel command should exist");
         assert!(!cmd.hidden);
         assert_eq!(cmd.args.len(), 1);
         assert_eq!(cmd.args[0].name, "id");
@@ -5951,7 +6002,9 @@ mod tests {
     #[test]
     fn test_crawl_clear_command_exists() {
         let map = commands_map();
-        let cmd = map.get("crawl-clear").expect("crawl-clear command should exist");
+        let cmd = map
+            .get("crawl-clear")
+            .expect("crawl-clear command should exist");
         assert!(!cmd.hidden);
         assert!(cmd.args.is_empty());
         assert_eq!(cmd.options.len(), 1);
@@ -5962,7 +6015,9 @@ mod tests {
     #[test]
     fn test_crawl_list_command_exists() {
         let map = commands_map();
-        let cmd = map.get("crawl-list").expect("crawl-list command should exist");
+        let cmd = map
+            .get("crawl-list")
+            .expect("crawl-list command should exist");
         assert!(!cmd.hidden);
         assert!(cmd.args.is_empty());
         assert_eq!(cmd.category, Category::Swarm);
@@ -6182,7 +6237,10 @@ mod tests {
         let map = commands_map();
         let cmd = map.get("wait").unwrap();
         let mut args = HashMap::new();
-        args.insert("fn".to_string(), json!("document.querySelector('.loaded') !== null"));
+        args.insert(
+            "fn".to_string(),
+            json!("document.querySelector('.loaded') !== null"),
+        );
         args.insert("timeout".to_string(), json!("20000"));
 
         let params = (cmd.tool_params_fn)(&args);
@@ -6240,7 +6298,10 @@ mod tests {
         let cmds = commands_map();
         let cmd = cmds.get("attach").unwrap();
         let has_extension = cmd.options.iter().any(|o| o.name == "extension");
-        assert!(has_extension, "attach command should have --extension option");
+        assert!(
+            has_extension,
+            "attach command should have --extension option"
+        );
     }
 
     // ---- CDP command tests ----
@@ -6420,7 +6481,13 @@ mod tests {
     #[test]
     fn test_skill_commands_all_have_skill_category() {
         let cmds = commands_map();
-        for name in &["skill-list", "skill-info", "skill-install", "skill-uninstall", "skill-reload"] {
+        for name in &[
+            "skill-list",
+            "skill-info",
+            "skill-install",
+            "skill-uninstall",
+            "skill-reload",
+        ] {
             let cmd = cmds.get(*name).unwrap();
             assert_eq!(
                 cmd.category.as_str(),
@@ -6471,7 +6538,10 @@ mod tests {
             }
         }
         assert!(tested_count > 0, "Expected some commands to be e2e tested");
-        assert!(excluded_count > 0, "Expected some commands to be e2e excluded");
+        assert!(
+            excluded_count > 0,
+            "Expected some commands to be e2e excluded"
+        );
         assert_eq!(
             tested_count + excluded_count,
             cmds.len(),
@@ -6625,7 +6695,10 @@ mod tests {
         args.insert("text".to_string(), json!("batch fill text"));
 
         let params = (cmd.tool_params_fn)(&args);
-        assert_eq!(params["ref"], "#my-input", "fill tool_params must keep 'ref' key for batch normalisation");
+        assert_eq!(
+            params["ref"], "#my-input",
+            "fill tool_params must keep 'ref' key for batch normalisation"
+        );
         assert_eq!(params["text"], "batch fill text");
     }
 
@@ -6736,7 +6809,10 @@ mod tests {
         let cmd = map.get("experience-save").unwrap();
         let mut args = HashMap::new();
         args.insert("url".to_string(), json!("https://amazon.com/dp/test"));
-        args.insert("trace".to_string(), json!(r#"{"steps":[],"outcome":"success"}"#));
+        args.insert(
+            "trace".to_string(),
+            json!(r#"{"steps":[],"outcome":"success"}"#),
+        );
         args.insert("outcome".to_string(), json!("failure"));
         args.insert("intent".to_string(), json!("buy product"));
         args.insert("task-type".to_string(), json!("extract_product_detail"));
@@ -6871,7 +6947,12 @@ mod tests {
             "experience-deep-learn",
         ] {
             let cmd = map.get(*name).unwrap();
-            assert_eq!(cmd.category.as_str(), "skills", "{} should be in Skills category", name);
+            assert_eq!(
+                cmd.category.as_str(),
+                "skills",
+                "{} should be in Skills category",
+                name
+            );
         }
     }
 

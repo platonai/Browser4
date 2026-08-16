@@ -327,11 +327,8 @@ pub(super) fn test_session_default_errors_on_nonexistent(ctx: &mut E2ECtx) {
     let mock_server = MockBrowser4Server::start();
     ctx.browser4_base_url = mock_server.base_url();
 
-    let result = run_command_expecting_failure(
-        ctx,
-        &["session-default", "nonexistent"],
-        "No session found",
-    );
+    let result =
+        run_command_expecting_failure(ctx, &["session-default", "nonexistent"], "No session found");
     assert_ne!(result.exit_code, 0);
 }
 
@@ -361,8 +358,7 @@ pub(super) fn test_session_default_updates_timestamp(ctx: &mut E2ECtx) {
     // Read the default state and verify the timestamp was refreshed.
     let default_path = state_file_path(&ctx.state_dir, None);
     let raw = fs::read_to_string(&default_path).expect("read default state");
-    let parsed: serde_json::Value =
-        serde_json::from_str(&raw).expect("valid JSON");
+    let parsed: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
     let ts = parsed["lastAccessedAt"]
         .as_str()
         .expect("lastAccessedAt must exist");
@@ -568,8 +564,7 @@ pub(super) fn test_list_stale_session(ctx: &mut E2ECtx) {
         result.stdout
     );
     assert!(
-        result.stdout.contains("Created")
-            && result.stdout.contains("Last Access"),
+        result.stdout.contains("Created") && result.stdout.contains("Last Access"),
         "Expected 'Created' and 'Last Access' column headers:\n{}",
         result.stdout
     );
@@ -610,8 +605,7 @@ pub(super) fn test_list_backend_unreachable(ctx: &mut E2ECtx) {
         result.stdout
     );
     assert!(
-        result.stdout.contains("Created")
-            && result.stdout.contains("Last Access"),
+        result.stdout.contains("Created") && result.stdout.contains("Last Access"),
         "Expected 'Created' and 'Last Access' column headers:\n{}",
         result.stdout
     );
@@ -721,8 +715,7 @@ pub(super) fn test_list_multiple_named_sessions(ctx: &mut E2ECtx) {
         "Expected 'Stale' for scraper:\n{output}"
     );
     assert!(
-        output.contains("Created")
-            && output.contains("Last Access"),
+        output.contains("Created") && output.contains("Last Access"),
         "Expected 'Created' and 'Last Access' column headers:\n{output}"
     );
 }
@@ -1531,7 +1524,9 @@ pub(super) fn test_open_reconnect_warns_when_display_flag_ignored(ctx: &mut E2EC
         first_open.stdout
     );
     assert!(
-        !first_open.stderr.contains("ignored: reconnecting to existing session"),
+        !first_open
+            .stderr
+            .contains("ignored: reconnecting to existing session"),
         "Expected no display-flag warning on the first open:\n{}",
         first_open.stderr
     );
@@ -1546,9 +1541,7 @@ pub(super) fn test_open_reconnect_warns_when_display_flag_ignored(ctx: &mut E2EC
         ],
     );
     assert!(
-        second_open
-            .stdout
-            .contains("Using existing session"),
+        second_open.stdout.contains("Using existing session"),
         "Expected second open to reconnect to the existing session:\n{}",
         second_open.stdout
     );
@@ -1936,7 +1929,9 @@ pub(super) fn test_cdp_command(ctx: &mut E2ECtx) {
     // Open a session first
     let open_result = run_open_command(ctx);
     assert!(
-        open_result.stdout.contains("Session opened: swarm-session-1"),
+        open_result
+            .stdout
+            .contains("Session opened: swarm-session-1"),
         "Expected mocked session open output in:\n{}",
         open_result.stdout
     );
@@ -1969,8 +1964,7 @@ pub(super) fn test_cdp_command(ctx: &mut E2ECtx) {
     // The CLI argument parser catches the missing required <method> arg
     // before the CDP handler runs, so the error mentions the arg, not the
     // handler's error message.
-    let bad_result =
-        run_command_expecting_failure(ctx, &["cdp"], "Missing required argument");
+    let bad_result = run_command_expecting_failure(ctx, &["cdp"], "Missing required argument");
     assert_ne!(bad_result.exit_code, 0);
 
     // Verify the mock server recorded the execute_cdp_command tool calls
@@ -2093,7 +2087,14 @@ pub(super) fn test_eval_await_command(ctx: &mut E2ECtx) {
     );
 
     // eval --await should pass awaitPromise: true through to the MCP tool call
-    let result = run_command(ctx, &["eval", "--await", "new Promise(r => setTimeout(() => r(42), 100))"]);
+    let result = run_command(
+        ctx,
+        &[
+            "eval",
+            "--await",
+            "new Promise(r => setTimeout(() => r(42), 100))",
+        ],
+    );
     assert_eq!(
         strip_snapshot_output(&result.stdout),
         "mock evaluation result"
@@ -2133,10 +2134,7 @@ pub(super) fn test_eval_without_await_omits_flag(ctx: &mut E2ECtx) {
 
     // eval without --await should NOT include awaitPromise in the arguments
     let result = run_command(ctx, &["eval", "document.title"]);
-    assert_eq!(
-        strip_snapshot_output(&result.stdout),
-        "Mock Browser4 Page"
-    );
+    assert_eq!(strip_snapshot_output(&result.stdout), "Mock Browser4 Page");
 
     let tool_calls = mock_server.snapshot().tool_calls;
     let eval_calls: Vec<_> = tool_calls
@@ -2542,10 +2540,7 @@ pub(super) fn test_agent_result_not_null_for_failed_task(ctx: &mut E2ECtx) {
 
     // Verify mock recorded the result query
     let snapshot = mock_server.snapshot();
-    assert_eq!(
-        snapshot.result_queries,
-        vec!["agent-task-1".to_string()]
-    );
+    assert_eq!(snapshot.result_queries, vec!["agent-task-1".to_string()]);
 }
 
 /// Verify that `agent list` shows tracked tasks with correct lifecycle labels
@@ -2745,7 +2740,8 @@ pub(super) fn test_agent_full_lifecycle_with_mock(ctx: &mut E2ECtx) {
     let status_result = run_command(ctx, &["agent", "status", &task_id]);
     let status_output = strip_snapshot_output(&status_result.stdout);
     assert!(
-        status_output.contains("\"statusCode\":200") || status_output.contains("\"statusCode\": 200"),
+        status_output.contains("\"statusCode\":200")
+            || status_output.contains("\"statusCode\": 200"),
         "Status should include integer statusCode 200:\n{}",
         status_output
     );
@@ -2835,10 +2831,7 @@ pub(super) fn test_agent_run_100th_prime(ctx: &mut E2ECtx) {
             ]},
         }),
     );
-    mock_server.set_command_result_response(
-        &task_id,
-        r#"{"summary":"第100个素数是541。"}"#,
-    );
+    mock_server.set_command_result_response(&task_id, r#"{"summary":"第100个素数是541。"}"#);
 
     // ---- Phase 3: agent list (task should appear with completed label) ----
     let list1 = run_command(ctx, &["agent", "list"]);
@@ -2927,24 +2920,15 @@ pub(super) fn test_agent_run_100th_prime(ctx: &mut E2ECtx) {
 
     // ---- Verify mock server recorded all expected interactions ----
     let snapshot = mock_server.snapshot();
-    assert_eq!(
-        snapshot.plain_commands,
-        vec!["给出第100个素数".to_string()]
-    );
+    assert_eq!(snapshot.plain_commands, vec!["给出第100个素数".to_string()]);
     assert!(
-        snapshot
-            .status_queries
-            .iter()
-            .any(|q| q == &task_id),
+        snapshot.status_queries.iter().any(|q| q == &task_id),
         "Expected status queries for task '{}', got {:?}",
         task_id,
         snapshot.status_queries
     );
     assert!(
-        snapshot
-            .result_queries
-            .iter()
-            .any(|q| q == &task_id),
+        snapshot.result_queries.iter().any(|q| q == &task_id),
         "Expected result queries for task '{}', got {:?}",
         task_id,
         snapshot.result_queries
@@ -3021,7 +3005,8 @@ pub(super) fn test_swarm_submission_commands(ctx: &mut E2ECtx) {
         swarm_status_result.stdout
     );
     assert!(
-        swarm_status_payload.contains(r#""isDone": false"#) || swarm_status_payload.contains(r#""isDone":false"#),
+        swarm_status_payload.contains(r#""isDone": false"#)
+            || swarm_status_payload.contains(r#""isDone":false"#),
         "Expected scrape status payload to remain in-progress in:\n{}",
         swarm_status_result.stdout
     );
@@ -3036,13 +3021,13 @@ pub(super) fn test_swarm_submission_commands(ctx: &mut E2ECtx) {
     // The result payload contains resultSet and error, but not isDone
     // (isDone is only present in swarm status, not swarm result).
     assert!(
-        swarm_result_payload
-            .contains("mock.browser4.local/result/swarm-job-42"),
+        swarm_result_payload.contains("mock.browser4.local/result/swarm-job-42"),
         "Expected scrape result payload to contain a resultSet in:\n{}",
         swarm_result_result.stdout
     );
     assert!(
-        swarm_result_payload.contains(r#""error": null"#) || swarm_result_payload.contains(r#""error":null"#),
+        swarm_result_payload.contains(r#""error": null"#)
+            || swarm_result_payload.contains(r#""error":null"#),
         "Expected scrape result payload to have no error in:\n{}",
         swarm_result_result.stdout
     );
@@ -3051,9 +3036,12 @@ pub(super) fn test_swarm_submission_commands(ctx: &mut E2ECtx) {
     assert_eq!(
         snapshot.plain_commands,
         vec![
-            "https://example.com/direct -deadline 2026-03-30T00:00:00Z -expires 1d -refresh -parse".to_string(),
-            "https://example.com/seed-1 -deadline 2026-03-30T00:00:00Z -expires 1d -refresh -parse".to_string(),
-            "https://example.com/seed-2 -deadline 2026-03-30T00:00:00Z -expires 1d -refresh -parse".to_string(),
+            "https://example.com/direct -deadline 2026-03-30T00:00:00Z -expires 1d -refresh -parse"
+                .to_string(),
+            "https://example.com/seed-1 -deadline 2026-03-30T00:00:00Z -expires 1d -refresh -parse"
+                .to_string(),
+            "https://example.com/seed-2 -deadline 2026-03-30T00:00:00Z -expires 1d -refresh -parse"
+                .to_string(),
         ]
     );
     assert!(
@@ -3120,7 +3108,8 @@ pub(super) fn test_swarm_query_commands(ctx: &mut E2ECtx) {
         swarm_status_result.stdout
     );
     assert!(
-        swarm_status_payload.contains(r#""isDone": false"#) || swarm_status_payload.contains(r#""isDone":false"#),
+        swarm_status_payload.contains(r#""isDone": false"#)
+            || swarm_status_payload.contains(r#""isDone":false"#),
         "Expected query status payload to remain in-progress in:\n{}",
         swarm_status_result.stdout
     );
@@ -3135,13 +3124,13 @@ pub(super) fn test_swarm_query_commands(ctx: &mut E2ECtx) {
     // The result payload contains resultSet and error, but not isDone
     // (isDone is only present in swarm status, not swarm result).
     assert!(
-        swarm_result_payload
-            .contains("mock.browser4.local/result/swarm-job-42"),
+        swarm_result_payload.contains("mock.browser4.local/result/swarm-job-42"),
         "Expected query result payload to contain a resultSet in:\n{}",
         swarm_result_result.stdout
     );
     assert!(
-        swarm_result_payload.contains(r#""error": null"#) || swarm_result_payload.contains(r#""error":null"#),
+        swarm_result_payload.contains(r#""error": null"#)
+            || swarm_result_payload.contains(r#""error":null"#),
         "Expected query result payload to have no error in:\n{}",
         swarm_result_result.stdout
     );
@@ -3266,11 +3255,8 @@ pub(super) fn test_swarm_status_validation_missing_id(ctx: &mut E2ECtx) {
 
     // The arg parser catches missing required positional args before the
     // handler runs — verify the CLI rejects `swarm status` with no ID.
-    let failure = run_command_expecting_failure(
-        ctx,
-        &["swarm", "status"],
-        "Missing required argument",
-    );
+    let failure =
+        run_command_expecting_failure(ctx, &["swarm", "status"], "Missing required argument");
     let output = format!("{}\n{}", failure.stdout, failure.stderr);
     assert!(
         output.contains("Missing required argument"),
@@ -3293,11 +3279,8 @@ pub(super) fn test_swarm_result_validation_missing_id(ctx: &mut E2ECtx) {
 
     // The arg parser catches missing required positional args before the
     // handler runs — verify the CLI rejects `swarm result` with no ID.
-    let failure = run_command_expecting_failure(
-        ctx,
-        &["swarm", "result"],
-        "Missing required argument",
-    );
+    let failure =
+        run_command_expecting_failure(ctx, &["swarm", "result"], "Missing required argument");
     let output = format!("{}\n{}", failure.stdout, failure.stderr);
     assert!(
         output.contains("Missing required argument"),
@@ -3363,10 +3346,7 @@ pub(super) fn test_swarm_list_and_clear(ctx: &mut E2ECtx) {
     assert_swarm_session_call(&mock_server);
 
     // Submit a task so there's something to list
-    run_command(
-        ctx,
-        &["swarm", "submit", "https://example.com/list-test"],
-    );
+    run_command(ctx, &["swarm", "submit", "https://example.com/list-test"]);
 
     // List should show the submitted task
     let list_result = run_command(ctx, &["swarm", "list"]);
@@ -3617,9 +3597,7 @@ pub(super) fn test_crawl_command_help_and_validation(ctx: &mut E2ECtx) {
     // help crawl-clear
     let crawl_clear_help = run_command(ctx, &["help", "crawl", "clear"]);
     assert!(
-        crawl_clear_help
-            .stdout
-            .contains("browser4-cli crawl clear"),
+        crawl_clear_help.stdout.contains("browser4-cli crawl clear"),
         "Expected crawl-clear usage in:\n{}",
         crawl_clear_help.stdout
     );
@@ -3627,9 +3605,7 @@ pub(super) fn test_crawl_command_help_and_validation(ctx: &mut E2ECtx) {
     // help crawl-list
     let crawl_list_help = run_command(ctx, &["help", "crawl", "list"]);
     assert!(
-        crawl_list_help
-            .stdout
-            .contains("browser4-cli crawl list"),
+        crawl_list_help.stdout.contains("browser4-cli crawl list"),
         "Expected crawl-list usage in:\n{}",
         crawl_list_help.stdout
     );
@@ -3663,15 +3639,7 @@ pub(super) fn test_crawl_with_seed_file(ctx: &mut E2ECtx) {
     .expect("write seed file failed");
     let seed_file_arg = format!("--seed-file={}", seed_file.to_string_lossy());
 
-    let result = run_command(
-        ctx,
-        &[
-            "crawl",
-            &seed_file_arg,
-            "--background",
-            "--depth=0",
-        ],
-    );
+    let result = run_command(ctx, &["crawl", &seed_file_arg, "--background", "--depth=0"]);
     assert!(
         result.stdout.contains("Crawl task submitted: crawl-job-42"),
         "Expected crawl task submission from seed file in:\n{}",
@@ -3692,7 +3660,12 @@ pub(super) fn test_crawl_with_seed_file(ctx: &mut E2ECtx) {
     );
     let submission = &snapshot.crawl_submissions[0];
     let urls = submission["urls"].as_array().unwrap();
-    assert_eq!(urls.len(), 2, "Expected 2 URLs in submission, got {:?}", urls);
+    assert_eq!(
+        urls.len(),
+        2,
+        "Expected 2 URLs in submission, got {:?}",
+        urls
+    );
     assert_eq!(urls[0].as_str().unwrap(), "https://example.com/seed-page-1");
     assert_eq!(urls[1].as_str().unwrap(), "https://example.com/seed-page-2");
 }
@@ -3788,8 +3761,7 @@ pub(super) fn test_crawl_foreground_with_sql(ctx: &mut E2ECtx) {
     // The mock server result page doesn't have extracted data, so we should
     // see either "No extracted data" or a completion message
     assert!(
-        stdout.contains("No extracted data")
-            || stdout.contains("Crawl completed"),
+        stdout.contains("No extracted data") || stdout.contains("Crawl completed"),
         "Expected completion or no-data message in:\n{}",
         stdout
     );
@@ -3868,11 +3840,8 @@ pub(super) fn test_crawl_status_missing_id(ctx: &mut E2ECtx) {
 
     // The CLI argument parser catches the missing required <id> argument
     // before the handler runs, so the error is "Missing required argument".
-    let result = run_command_expecting_failure(
-        ctx,
-        &["crawl", "status"],
-        "Missing required argument",
-    );
+    let result =
+        run_command_expecting_failure(ctx, &["crawl", "status"], "Missing required argument");
     assert!(
         result.stdout.contains("Missing required argument")
             || result.stderr.contains("Missing required argument"),
@@ -3886,11 +3855,8 @@ pub(super) fn test_crawl_result_missing_id(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     let _mock_server = start_mock_crawl_session(ctx);
 
-    let result = run_command_expecting_failure(
-        ctx,
-        &["crawl", "result"],
-        "Missing required argument",
-    );
+    let result =
+        run_command_expecting_failure(ctx, &["crawl", "result"], "Missing required argument");
     assert!(
         result.stdout.contains("Missing required argument")
             || result.stderr.contains("Missing required argument"),
@@ -3902,11 +3868,8 @@ pub(super) fn test_crawl_cancel_missing_id(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     let _mock_server = start_mock_crawl_session(ctx);
 
-    let result = run_command_expecting_failure(
-        ctx,
-        &["crawl", "cancel"],
-        "Missing required argument",
-    );
+    let result =
+        run_command_expecting_failure(ctx, &["crawl", "cancel"], "Missing required argument");
     assert!(
         result.stdout.contains("Missing required argument")
             || result.stderr.contains("Missing required argument"),
@@ -4276,8 +4239,11 @@ pub(super) fn test_install_speed_test_selects_fastest_mirror(ctx: &mut E2ECtx) {
 
     // Two download servers: one fast, one slow.
     let fast_server = FixtureDownloadServer::start(bundle_bytes.clone(), "v4.10.0");
-    let slow_server =
-        FixtureDownloadServer::start_with_latency(bundle_bytes.clone(), "v4.10.0", Duration::from_secs(2));
+    let slow_server = FixtureDownloadServer::start_with_latency(
+        bundle_bytes.clone(),
+        "v4.10.0",
+        Duration::from_secs(2),
+    );
 
     // Put the SLOW mirror FIRST in the list so we can verify that the
     // speed test overrides simple list-order selection.
@@ -4636,7 +4602,10 @@ pub(super) fn test_snapshot_viewport(ctx: &mut E2ECtx) {
         .last()
         .expect("expected browser_snapshot tool call");
     assert_eq!(
-        snap_call.arguments.get("viewports").and_then(|v| v.as_str()),
+        snap_call
+            .arguments
+            .get("viewports")
+            .and_then(|v| v.as_str()),
         Some("0,2,4"),
         "Expected viewports to be passed through, got: {:?}",
         snap_call.arguments
@@ -4672,7 +4641,10 @@ pub(super) fn test_snapshot_viewport_range(ctx: &mut E2ECtx) {
         .last()
         .expect("expected browser_snapshot tool call");
     assert_eq!(
-        snap_call.arguments.get("viewports").and_then(|v| v.as_str()),
+        snap_call
+            .arguments
+            .get("viewports")
+            .and_then(|v| v.as_str()),
         Some("1-3"),
         "Expected viewports=1-3, got: {:?}",
         snap_call.arguments
@@ -4693,52 +4665,94 @@ pub(super) fn test_snapshot_grep_flags(ctx: &mut E2ECtx) {
 
     // --ignore-case (-i): case-insensitive match
     let result = run_command(ctx, &["snapshot", "grep", "-i", "MOCK"]);
-    assert_eq!(result.exit_code, 0,
-        "expected snapshot-grep -i to succeed:\n{}", result.stderr);
-    assert!(result.stdout.contains("mock snapshot"),
-        "Expected -i MOCK to match 'mock snapshot':\n{}", result.stdout);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot-grep -i to succeed:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stdout.contains("mock snapshot"),
+        "Expected -i MOCK to match 'mock snapshot':\n{}",
+        result.stdout
+    );
 
     // --invert-match (-v): lines NOT matching pattern
     let result = run_command(ctx, &["snapshot", "grep", "-v", "nonexistent-pattern-xyz"]);
-    assert_eq!(result.exit_code, 0,
-        "expected snapshot-grep -v to succeed:\n{}", result.stderr);
-    assert!(result.stdout.contains("mock snapshot"),
-        "Expected -v to print non-matching line:\n{}", result.stdout);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot-grep -v to succeed:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stdout.contains("mock snapshot"),
+        "Expected -v to print non-matching line:\n{}",
+        result.stdout
+    );
 
     // --fixed-strings (-F): literal string match (not regex)
     let result = run_command(ctx, &["snapshot", "grep", "-F", "mock snap"]);
-    assert_eq!(result.exit_code, 0,
-        "expected snapshot-grep -F to succeed:\n{}", result.stderr);
-    assert!(result.stdout.contains("mock snapshot"),
-        "Expected -F 'mock snap' to match:\n{}", result.stdout);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot-grep -F to succeed:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stdout.contains("mock snapshot"),
+        "Expected -F 'mock snap' to match:\n{}",
+        result.stdout
+    );
 
     // -F with regex special chars should treat them literally (no match)
     let result = run_command(ctx, &["snapshot", "grep", "-F", "mock*shot"]);
-    assert_eq!(result.exit_code, 0,
-        "expected snapshot-grep -F with special chars to succeed:\n{}", result.stderr);
-    assert!(!result.stdout.contains("mock snapshot"),
-        "Expected -F 'mock*shot' NOT to match 'mock snapshot' (literal):\n{}", result.stdout);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot-grep -F with special chars to succeed:\n{}",
+        result.stderr
+    );
+    assert!(
+        !result.stdout.contains("mock snapshot"),
+        "Expected -F 'mock*shot' NOT to match 'mock snapshot' (literal):\n{}",
+        result.stdout
+    );
 
     // --word-regexp (-w): whole-word match
     let result = run_command(ctx, &["snapshot", "grep", "-w", "mock"]);
-    assert_eq!(result.exit_code, 0,
-        "expected snapshot-grep -w to succeed:\n{}", result.stderr);
-    assert!(result.stdout.contains("mock snapshot"),
-        "Expected -w mock to match whole word:\n{}", result.stdout);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot-grep -w to succeed:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stdout.contains("mock snapshot"),
+        "Expected -w mock to match whole word:\n{}",
+        result.stdout
+    );
 
     // --word-regexp (-w): partial word should NOT match
     let result = run_command(ctx, &["snapshot", "grep", "-w", "moc"]);
-    assert_eq!(result.exit_code, 0,
-        "expected snapshot-grep -w (no match) to succeed:\n{}", result.stderr);
-    assert!(!result.stdout.contains("mock snapshot"),
-        "Expected -w moc NOT to match 'mock' (partial word):\n{}", result.stdout);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot-grep -w (no match) to succeed:\n{}",
+        result.stderr
+    );
+    assert!(
+        !result.stdout.contains("mock snapshot"),
+        "Expected -w moc NOT to match 'mock' (partial word):\n{}",
+        result.stdout
+    );
 
     // Combined flags: -i -v (invert case-insensitive match)
     let result = run_command(ctx, &["snapshot", "grep", "-i", "-v", "MOCK"]);
-    assert_eq!(result.exit_code, 0,
-        "expected snapshot-grep -i -v to succeed:\n{}", result.stderr);
-    assert!(!result.stdout.contains("mock snapshot"),
-        "Expected -i -v MOCK to exclude matching line:\n{}", result.stdout);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot-grep -i -v to succeed:\n{}",
+        result.stderr
+    );
+    assert!(
+        !result.stdout.contains("mock snapshot"),
+        "Expected -i -v MOCK to exclude matching line:\n{}",
+        result.stdout
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -4766,57 +4780,99 @@ pub(super) fn test_snapshot_grep_unicode(ctx: &mut E2ECtx) {
 
     // Basic Chinese text match — substring of a YAML node value
     let result = run_command(ctx, &["snapshot", "grep", "龙虾节"]);
-    assert_eq!(result.exit_code, 0,
-        "expected snapshot-grep for Chinese text to succeed:\n{}", result.stderr);
-    assert!(result.stdout.contains("武汉龙虾节"),
-        "Expected '龙虾节' to match '武汉龙虾节':\n{}", result.stdout);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot-grep for Chinese text to succeed:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stdout.contains("武汉龙虾节"),
+        "Expected '龙虾节' to match '武汉龙虾节':\n{}",
+        result.stdout
+    );
 
     // Fixed-string match with full Chinese phrase
     let result = run_command(ctx, &["snapshot", "grep", "-F", "不嘬虾，枉夏天"]);
-    assert_eq!(result.exit_code, 0,
-        "expected snapshot-grep -F to succeed for Chinese text:\n{}", result.stderr);
-    assert!(result.stdout.contains("不嘬虾，枉夏天"),
-        "Expected -F for Chinese text to match:\n{}", result.stdout);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot-grep -F to succeed for Chinese text:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stdout.contains("不嘬虾，枉夏天"),
+        "Expected -F for Chinese text to match:\n{}",
+        result.stdout
+    );
 
     // Case-insensitive match (no-op for CJK, but shouldn't break)
     let result = run_command(ctx, &["snapshot", "grep", "-i", "汉口江滩"]);
-    assert_eq!(result.exit_code, 0,
-        "expected snapshot-grep -i for Chinese text to succeed:\n{}", result.stderr);
-    assert!(result.stdout.contains("汉口江滩"),
-        "Expected -i for Chinese text to match:\n{}", result.stdout);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot-grep -i for Chinese text to succeed:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stdout.contains("汉口江滩"),
+        "Expected -i for Chinese text to match:\n{}",
+        result.stdout
+    );
 
     // Text NOT in the snapshot
     let result = run_command(ctx, &["snapshot", "grep", "不存在的文本"]);
-    assert_eq!(result.exit_code, 0,
-        "expected snapshot-grep for absent Chinese text to succeed:\n{}", result.stderr);
-    assert!(!result.stdout.contains("不存在的文本"),
-        "Expected absent Chinese text NOT to match:\n{}", result.stdout);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot-grep for absent Chinese text to succeed:\n{}",
+        result.stderr
+    );
+    assert!(
+        !result.stdout.contains("不存在的文本"),
+        "Expected absent Chinese text NOT to match:\n{}",
+        result.stdout
+    );
 
     // -c (count) mode with Chinese text
     let result = run_command(ctx, &["snapshot", "grep", "-c", "虾"]);
-    assert_eq!(result.exit_code, 0,
-        "expected snapshot-grep -c for Chinese text to succeed:\n{}", result.stderr);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot-grep -c for Chinese text to succeed:\n{}",
+        result.stderr
+    );
     let count: i32 = result.stdout.trim().parse().unwrap_or(-1);
-    assert!(count >= 3,
+    assert!(
+        count >= 3,
         "Expected '虾' to appear at least 3 times (龙虾, 肥肥虾庄, 不嘬虾): got count={}:\n{}",
-        count, result.stdout);
+        count,
+        result.stdout
+    );
 
     // -F with literal Chinese characters containing regex-like patterns
     // (ensures the regex engine doesn't misinterpret CJK chars as regex syntax)
     let result = run_command(ctx, &["snapshot", "grep", "-F", "武汉"]);
-    assert_eq!(result.exit_code, 0,
-        "expected snapshot-grep -F for '武汉' to succeed:\n{}", result.stderr);
-    assert!(result.stdout.contains("武汉龙虾节"),
-        "Expected -F '武汉' to match:\n{}", result.stdout);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot-grep -F for '武汉' to succeed:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stdout.contains("武汉龙虾节"),
+        "Expected -F '武汉' to match:\n{}",
+        result.stdout
+    );
 
     // Count mode should show correct count
     let result = run_command(ctx, &["snapshot", "grep", "-c", "武汉"]);
-    assert_eq!(result.exit_code, 0,
-        "expected snapshot-grep -c for '武汉' to succeed:\n{}", result.stderr);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot-grep -c for '武汉' to succeed:\n{}",
+        result.stderr
+    );
     let count: i32 = result.stdout.trim().parse().unwrap_or(-1);
-    assert!(count >= 2,
+    assert!(
+        count >= 2,
         "Expected '武汉' to appear at least 2 times: got count={}:\n{}",
-        count, result.stdout);
+        count,
+        result.stdout
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -4913,7 +4969,10 @@ pub(super) fn test_htmlsnapshot_get_text(ctx: &mut E2ECtx) {
         scrape_call.arguments
     );
     assert_eq!(
-        scrape_call.arguments.get("selector").and_then(|v| v.as_str()),
+        scrape_call
+            .arguments
+            .get("selector")
+            .and_then(|v| v.as_str()),
         Some("h2"),
         "expected selector=h2 in html_snapshot_scrape arguments, got: {:?}",
         scrape_call.arguments
@@ -4949,7 +5008,10 @@ pub(super) fn test_htmlsnapshot_get_text_default_selector(ctx: &mut E2ECtx) {
     );
     // When no selector is provided, it defaults to ":root"
     assert_eq!(
-        scrape_call.arguments.get("selector").and_then(|v| v.as_str()),
+        scrape_call
+            .arguments
+            .get("selector")
+            .and_then(|v| v.as_str()),
         Some(":root"),
         "expected selector to default to :root, got: {:?}",
         scrape_call.arguments
@@ -4984,7 +5046,10 @@ pub(super) fn test_htmlsnapshot_get_attr(ctx: &mut E2ECtx) {
         scrape_call.arguments
     );
     assert_eq!(
-        scrape_call.arguments.get("attrName").and_then(|v| v.as_str()),
+        scrape_call
+            .arguments
+            .get("attrName")
+            .and_then(|v| v.as_str()),
         Some("class"),
         "expected attrName=class, got: {:?}",
         scrape_call.arguments
@@ -5013,13 +5078,19 @@ pub(super) fn test_htmlsnapshot_get_all(ctx: &mut E2ECtx) {
         .find(|call| call.tool == "html_snapshot_scrape_all")
         .expect("expected html_snapshot_scrape_all tool call");
     assert_eq!(
-        scrape_all_call.arguments.get("field").and_then(|v| v.as_str()),
+        scrape_all_call
+            .arguments
+            .get("field")
+            .and_then(|v| v.as_str()),
         Some("text"),
         "expected field=text, got: {:?}",
         scrape_all_call.arguments
     );
     assert_eq!(
-        scrape_all_call.arguments.get("selector").and_then(|v| v.as_str()),
+        scrape_all_call
+            .arguments
+            .get("selector")
+            .and_then(|v| v.as_str()),
         Some(".product"),
         "expected selector=.product, got: {:?}",
         scrape_all_call.arguments
@@ -5038,9 +5109,15 @@ pub(super) fn test_htmlsnapshot_get_all_offset_limit(ctx: &mut E2ECtx) {
     let result = run_command(
         ctx,
         &[
-            "htmlsnapshot", "get", "all", "text", ".product",
-            "--offset", "2",
-            "--limit", "5",
+            "htmlsnapshot",
+            "get",
+            "all",
+            "text",
+            ".product",
+            "--offset",
+            "2",
+            "--limit",
+            "5",
         ],
     );
     assert_eq!(
@@ -5055,13 +5132,19 @@ pub(super) fn test_htmlsnapshot_get_all_offset_limit(ctx: &mut E2ECtx) {
         .find(|call| call.tool == "html_snapshot_scrape_all")
         .expect("expected html_snapshot_scrape_all tool call");
     assert_eq!(
-        scrape_all_call.arguments.get("offset").and_then(|v| v.as_i64()),
+        scrape_all_call
+            .arguments
+            .get("offset")
+            .and_then(|v| v.as_i64()),
         Some(2),
         "expected offset=2, got: {:?}",
         scrape_all_call.arguments
     );
     assert_eq!(
-        scrape_all_call.arguments.get("limit").and_then(|v| v.as_i64()),
+        scrape_all_call
+            .arguments
+            .get("limit")
+            .and_then(|v| v.as_i64()),
         Some(5),
         "expected limit=5, got: {:?}",
         scrape_all_call.arguments
@@ -5195,7 +5278,15 @@ pub(super) fn test_htmlsnapshot_inspect_with_options(ctx: &mut E2ECtx) {
 
     let result = run_command(
         ctx,
-        &["htmlsnapshot", "inspect", ".product", "--max", "5", "--depth", "3"],
+        &[
+            "htmlsnapshot",
+            "inspect",
+            ".product",
+            "--max",
+            "5",
+            "--depth",
+            "3",
+        ],
     );
     assert_eq!(
         result.exit_code, 0,
@@ -5209,7 +5300,10 @@ pub(super) fn test_htmlsnapshot_inspect_with_options(ctx: &mut E2ECtx) {
         .find(|call| call.tool == "html_snapshot_inspect")
         .expect("expected html_snapshot_inspect tool call");
     assert_eq!(
-        inspect_call.arguments.get("selector").and_then(|v| v.as_str()),
+        inspect_call
+            .arguments
+            .get("selector")
+            .and_then(|v| v.as_str()),
         Some(".product"),
         "expected selector=.product, got: {:?}",
         inspect_call.arguments
@@ -5239,16 +5333,12 @@ pub(super) fn test_htmlsnapshot_error_propagation(ctx: &mut E2ECtx) {
 
     mock_server.queue_tool_failure(
         "html_snapshot_capture",
-        None,       // matches any session
-        None,       // matches any url
+        None, // matches any session
+        None, // matches any url
         "simulated backend failure for html_snapshot_capture",
     );
 
-    let result = run_command_expecting_failure(
-        ctx,
-        &["htmlsnapshot"],
-        "simulated backend failure",
-    );
+    let result = run_command_expecting_failure(ctx, &["htmlsnapshot"], "simulated backend failure");
     assert_ne!(
         result.exit_code, 0,
         "expected htmlsnapshot to fail when backend returns error"
@@ -5307,7 +5397,9 @@ pub(super) fn test_chat_commands(ctx: &mut E2ECtx) {
     // ---- synchronous chat ----
     let chat_result = run_command(ctx, &["chat", "Hello, how are you?"]);
     assert!(
-        chat_result.stdout.contains("Mock chat response for your prompt."),
+        chat_result
+            .stdout
+            .contains("Mock chat response for your prompt."),
         "Expected mock chat response in:\n{}",
         chat_result.stdout
     );
@@ -5336,9 +5428,12 @@ pub(super) fn test_chat_commands(ctx: &mut E2ECtx) {
         .lines()
         .find_map(|line| {
             if line.contains("chat-task-") {
-                line.split("chat-task-")
-                    .nth(1)
-                    .map(|s| format!("chat-task-{}", s.trim().trim_matches(|c: char| !c.is_ascii_digit())))
+                line.split("chat-task-").nth(1).map(|s| {
+                    format!(
+                        "chat-task-{}",
+                        s.trim().trim_matches(|c: char| !c.is_ascii_digit())
+                    )
+                })
             } else {
                 None
             }
@@ -5380,7 +5475,9 @@ pub(super) fn test_e2e_wait_selector(ctx: &mut E2ECtx) {
 
     let open_result = run_open_command(ctx);
     assert!(
-        open_result.stdout.contains("Session opened: swarm-session-1"),
+        open_result
+            .stdout
+            .contains("Session opened: swarm-session-1"),
         "Expected mocked session open output in:\n{}",
         open_result.stdout
     );
@@ -5407,7 +5504,9 @@ pub(super) fn test_e2e_wait_millis(ctx: &mut E2ECtx) {
 
     let open_result = run_open_command(ctx);
     assert!(
-        open_result.stdout.contains("Session opened: swarm-session-1"),
+        open_result
+            .stdout
+            .contains("Session opened: swarm-session-1"),
         "Expected mocked session open output in:\n{}",
         open_result.stdout
     );
@@ -5433,7 +5532,9 @@ pub(super) fn test_e2e_wait_text(ctx: &mut E2ECtx) {
 
     let open_result = run_open_command(ctx);
     assert!(
-        open_result.stdout.contains("Session opened: swarm-session-1"),
+        open_result
+            .stdout
+            .contains("Session opened: swarm-session-1"),
         "Expected mocked session open output in:\n{}",
         open_result.stdout
     );
@@ -5449,8 +5550,14 @@ pub(super) fn test_e2e_wait_text(ctx: &mut E2ECtx) {
     assert_eq!(wait_calls.len(), 1, "expected one wait_for_function call");
     assert_eq!(wait_calls[0].arguments["sessionId"], "swarm-session-1");
     let func = wait_calls[0].arguments["pageFunction"].as_str().unwrap();
-    assert!(func.contains("document.body.innerText.includes"), "expected innerText check");
-    assert!(func.contains("Success"), "expected the target text in the expression");
+    assert!(
+        func.contains("document.body.innerText.includes"),
+        "expected innerText check"
+    );
+    assert!(
+        func.contains("Success"),
+        "expected the target text in the expression"
+    );
     assert_eq!(wait_calls[0].arguments["timeoutMillis"], 30000);
 }
 
@@ -5462,7 +5569,9 @@ pub(super) fn test_e2e_wait_url(ctx: &mut E2ECtx) {
 
     let open_result = run_open_command(ctx);
     assert!(
-        open_result.stdout.contains("Session opened: swarm-session-1"),
+        open_result
+            .stdout
+            .contains("Session opened: swarm-session-1"),
         "Expected mocked session open output in:\n{}",
         open_result.stdout
     );
@@ -5489,7 +5598,9 @@ pub(super) fn test_e2e_wait_load(ctx: &mut E2ECtx) {
 
     let open_result = run_open_command(ctx);
     assert!(
-        open_result.stdout.contains("Session opened: swarm-session-1"),
+        open_result
+            .stdout
+            .contains("Session opened: swarm-session-1"),
         "Expected mocked session open output in:\n{}",
         open_result.stdout
     );
@@ -5519,7 +5630,9 @@ pub(super) fn test_e2e_wait_fn(ctx: &mut E2ECtx) {
 
     let open_result = run_open_command(ctx);
     assert!(
-        open_result.stdout.contains("Session opened: swarm-session-1"),
+        open_result
+            .stdout
+            .contains("Session opened: swarm-session-1"),
         "Expected mocked session open output in:\n{}",
         open_result.stdout
     );

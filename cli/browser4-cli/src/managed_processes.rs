@@ -152,15 +152,57 @@ pub fn shutdown_managed_server_processes(
     timeout_ms: u64,
     poll_interval_ms: u64,
 ) -> ShutdownResult {
+    shutdown_managed_server_processes_matching(
+        force,
+        registry_path,
+        timeout_ms,
+        poll_interval_ms,
+        &|_| true,
+    )
+}
+
+/// Shut down only the managed server processes bound to [port].
+///
+/// Processes registered for other ports are left untouched and stay in the
+/// registry.  Used by the plugin warm-restart path so restarting the server
+/// on one port never disturbs servers started for other sessions.
+pub fn shutdown_managed_server_processes_on_port(
+    force: bool,
+    registry_path: Option<&Path>,
+    port: u16,
+    timeout_ms: u64,
+    poll_interval_ms: u64,
+) -> ShutdownResult {
+    shutdown_managed_server_processes_matching(
+        force,
+        registry_path,
+        timeout_ms,
+        poll_interval_ms,
+        &|p| p.port == port,
+    )
+}
+
+fn shutdown_managed_server_processes_matching(
+    force: bool,
+    registry_path: Option<&Path>,
+    timeout_ms: u64,
+    poll_interval_ms: u64,
+    should_stop: &dyn Fn(&ManagedServerProcess) -> bool,
+) -> ShutdownResult {
     let path = registry_path
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| managed_server_registry_path(None));
 
     let tracked = read_managed_server_processes(Some(&path));
     let mut result = ShutdownResult::default();
-    let mut remaining: Vec<ManagedServerProcess> = Vec::new();
+    let mut registry_after: Vec<ManagedServerProcess> = Vec::new();
 
-    for proc in &tracked {
+    for proc in tracked {
+        if !should_stop(&proc) {
+            registry_after.push(proc);
+            continue;
+        }
+
         let pid = proc.pid;
         if !is_process_running(pid) {
             result.missing_pids.push(pid);
@@ -179,7 +221,8 @@ pub fn shutdown_managed_server_processes(
             if wait_for_exit(pid, timeout_ms, poll_interval_ms) {
                 result.stopped_pids.push(pid);
             } else {
-                remaining.push(proc.clone());
+                registry_after.push(proc);
+                result.remaining_pids.push(pid);
             }
             continue;
         }
@@ -195,12 +238,12 @@ pub fn shutdown_managed_server_processes(
         if wait_for_exit(pid, timeout_ms, poll_interval_ms) {
             result.stopped_pids.push(pid);
         } else {
-            remaining.push(proc.clone());
+            registry_after.push(proc);
+            result.remaining_pids.push(pid);
         }
     }
 
-    write_managed_server_processes(&remaining, &path);
-    result.remaining_pids = remaining.iter().map(|p| p.pid).collect();
+    write_managed_server_processes(&registry_after, &path);
     result
 }
 
@@ -237,7 +280,10 @@ pub fn stop_browser4_server_forcibly() -> ForceStopBrowser4ServerResult {
     if !final_extra.is_empty() {
         bulk_force_stop_browser_processes(&final_extra);
         std::thread::sleep(std::time::Duration::from_millis(2000));
-        result.browser_kill.killed_pids.extend(final_extra.iter().copied());
+        result
+            .browser_kill
+            .killed_pids
+            .extend(final_extra.iter().copied());
         result.browser_kill.killed_pids.sort_unstable();
         result.browser_kill.killed_pids.dedup();
     }
@@ -388,7 +434,10 @@ fn notify_close_all_sessions_before_force_stop(
             match call_close_all_sessions(&client, base_url) {
                 Ok(_) => eprintln!("        Closed sessions on {}", base_url),
                 Err(err) => {
-                    eprintln!("        Server {} unreachable ({}), skipping", base_url, err)
+                    eprintln!(
+                        "        Server {} unreachable ({}), skipping",
+                        base_url, err
+                    )
                 }
             }
         }
@@ -1182,6 +1231,41 @@ mod tests {
     }
 
     #[test]
+    fn test_shutdown_on_port_only_touches_matching_entries() {
+        let tmp = test_temp_dir();
+        let reg_path = tmp.path().join("reg.json");
+
+        // Two stale (non-running) pids on different ports.
+        for (pid, port) in [(99901u32, 8182u16), (99902, 8282)] {
+            register_managed_server_process(
+                ManagedServerProcess {
+                    pid,
+                    base_url: format!("http://localhost:{port}"),
+                    port,
+                    jar_path: "/path/to/Browser4.jar".to_string(),
+                    started_at: "2026-01-01T00:00:00Z".to_string(),
+                },
+                Some(&reg_path),
+            );
+        }
+
+        let result =
+            shutdown_managed_server_processes_on_port(false, Some(&reg_path), 8182, 50, 10);
+
+        // The stale pid on port 8182 is reported missing (not running);
+        // nothing was actually killed.
+        assert_eq!(result.missing_pids, vec![99901]);
+        assert!(result.stopped_pids.is_empty());
+        assert!(result.remaining_pids.is_empty());
+
+        // The entry for port 8282 stays in the registry untouched.
+        let procs = read_managed_server_processes(Some(&reg_path));
+        assert_eq!(procs.len(), 1);
+        assert_eq!(procs[0].port, 8282);
+        assert_eq!(procs[0].pid, 99902);
+    }
+
+    #[test]
     fn test_read_missing_registry() {
         let tmp = test_temp_dir();
         let reg_path = tmp.path().join("missing.json");
@@ -1343,12 +1427,7 @@ mod tests {
         // sleep is skipped — so "sleep" must NOT appear in the event list.
         assert_eq!(
             events.lock().unwrap().as_slice(),
-            [
-                "notify",
-                "browser-kill",
-                "shutdown",
-                "browser-kill",
-            ]
+            ["notify", "browser-kill", "shutdown", "browser-kill",]
         );
     }
 
@@ -1511,9 +1590,7 @@ mod tests {
         // Escape single quotes in the command so we can wrap it in ''
         let escaped = command.replace('\'', "''");
         // [ScriptBlock]::Create('...') throws a parse error for invalid syntax.
-        let wrapper = format!(
-            "$null = [ScriptBlock]::Create('{escaped}')",
-        );
+        let wrapper = format!("$null = [ScriptBlock]::Create('{escaped}')",);
         let output = Command::new("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", &wrapper])
             .output()

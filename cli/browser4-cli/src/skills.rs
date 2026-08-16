@@ -130,13 +130,11 @@ pub fn unpack_skills_to(dest_dir: &std::path::Path) -> Result<usize, String> {
     for f in SKILL_FILES {
         let file_path = dest_dir.join(&f.rel_path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                format!("Failed to create directory {}: {e}", parent.display())
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create directory {}: {e}", parent.display()))?;
         }
-        std::fs::write(&file_path, f.content).map_err(|e| {
-            format!("Failed to write {}: {e}", file_path.display())
-        })?;
+        std::fs::write(&file_path, f.content)
+            .map_err(|e| format!("Failed to write {}: {e}", file_path.display()))?;
         count += 1;
     }
     Ok(count)

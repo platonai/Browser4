@@ -179,8 +179,7 @@ mod tests {
 
     #[test]
     fn test_resolve_output_path_with_relative_path() {
-        let path =
-            resolve_output_path(Some("subdir/my-shot.png"), "screenshot", "png");
+        let path = resolve_output_path(Some("subdir/my-shot.png"), "screenshot", "png");
 
         // Should use the user-supplied path relative to cwd, NOT the snapshot dir
         assert!(
@@ -205,8 +204,7 @@ mod tests {
 
     #[test]
     fn test_resolve_output_path_bare_filename_still_uses_snapshot_dir() {
-        let path =
-            resolve_output_path(Some("bare-file.png"), "screenshot", "png");
+        let path = resolve_output_path(Some("bare-file.png"), "screenshot", "png");
 
         assert!(path.ends_with(snapshot_dir().join("bare-file.png")));
     }

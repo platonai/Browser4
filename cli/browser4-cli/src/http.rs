@@ -489,11 +489,7 @@ pub async fn submit_plain_command(
 
 /// Send a chat message to the AI via the conversations API.
 /// Returns the AI's text response.
-pub async fn chat_with_ai(
-    client: &Client,
-    base_url: &str,
-    prompt: &str,
-) -> Result<String, String> {
+pub async fn chat_with_ai(client: &Client, base_url: &str, prompt: &str) -> Result<String, String> {
     let url = build_endpoint_url(base_url, "/api/conversations");
     let timeout = std::time::Duration::from_secs(timeout_secs_from_env(
         "BROWSER4_CLI_CHAT_TIMEOUT_SECS",
@@ -538,10 +534,8 @@ pub async fn chat_with_ai_async(
     prompt: &str,
 ) -> Result<String, String> {
     let url = build_endpoint_url(base_url, "/api/conversations/async");
-    let timeout = std::time::Duration::from_secs(timeout_secs_from_env(
-        "BROWSER4_CLI_CHAT_TIMEOUT_SECS",
-        30,
-    ));
+    let timeout =
+        std::time::Duration::from_secs(timeout_secs_from_env("BROWSER4_CLI_CHAT_TIMEOUT_SECS", 30));
     let response = client
         .post(&url)
         .header("Content-Type", "text/plain")
@@ -592,7 +586,10 @@ pub async fn get_chat_result(
         .await
         .map_err(|e| {
             if e.is_timeout() {
-                format!("Chat result request timed out after {}s.", timeout.as_secs())
+                format!(
+                    "Chat result request timed out after {}s.",
+                    timeout.as_secs()
+                )
             } else {
                 format!("Failed to get chat result: {e}")
             }
@@ -721,12 +718,7 @@ pub async fn get_swarm_status(
     task_id: &str,
 ) -> Result<String, String> {
     let url = build_endpoint_url(base_url, &format!("/api/swarm/{task_id}/status"));
-    send_rest_request(
-        client
-            .get(url)
-            .timeout(std::time::Duration::from_secs(5)),
-    )
-    .await
+    send_rest_request(client.get(url).timeout(std::time::Duration::from_secs(5))).await
 }
 
 /// Read swarm task result through `SwarmController.getResult(id)`.
@@ -738,7 +730,6 @@ pub async fn get_swarm_result(
     let url = build_endpoint_url(base_url, &format!("/api/swarm/{task_id}/result"));
     send_rest_request(client.get(url)).await
 }
-
 
 fn build_endpoint_url(base_url: &str, path: &str) -> String {
     format!("{}{}", base_url.trim_end_matches('/'), path)
@@ -756,9 +747,7 @@ fn format_http_error(status: reqwest::StatusCode, response_text: &str) -> String
     }
 }
 
-async fn send_rest_request(
-    request: reqwest::RequestBuilder,
-) -> Result<String, String> {
+async fn send_rest_request(request: reqwest::RequestBuilder) -> Result<String, String> {
     let response = request
         .send()
         .await
@@ -821,11 +810,7 @@ pub async fn install_plugin(
 }
 
 /// Remove a plugin by name via `DELETE /api/plugins/{name}`.
-pub async fn remove_plugin(
-    client: &Client,
-    base_url: &str,
-    name: &str,
-) -> Result<String, String> {
+pub async fn remove_plugin(client: &Client, base_url: &str, name: &str) -> Result<String, String> {
     let url = build_endpoint_url(base_url, &format!("/api/plugins/{}", name));
     send_rest_request(client.delete(url)).await
 }
@@ -857,19 +842,13 @@ pub async fn cancel_crawl(
 }
 
 /// Clear all terminal-state crawl tasks via `CrawlController.clearCrawls()`.
-pub async fn clear_crawls(
-    client: &Client,
-    base_url: &str,
-) -> Result<String, String> {
+pub async fn clear_crawls(client: &Client, base_url: &str) -> Result<String, String> {
     let url = build_endpoint_url(base_url, "/api/crawl/clear");
     send_rest_request(client.post(url)).await
 }
 
 /// Clear ALL crawl tasks (including active ones) via `CrawlController.clearAllCrawls()`.
-pub async fn clear_all_crawls(
-    client: &Client,
-    base_url: &str,
-) -> Result<String, String> {
+pub async fn clear_all_crawls(client: &Client, base_url: &str) -> Result<String, String> {
     let url = build_endpoint_url(base_url, "/api/crawl/clear-all");
     send_rest_request(client.post(url)).await
 }
@@ -1474,7 +1453,10 @@ mod tests {
         let status = reqwest::StatusCode::NOT_FOUND;
         let msg = format_http_error(status, "");
         assert!(msg.contains("404"), "should contain status code");
-        assert!(msg.contains("empty response body"), "should mention empty body");
+        assert!(
+            msg.contains("empty response body"),
+            "should mention empty body"
+        );
     }
 
     // -------------------------------------------------------------------
@@ -1567,7 +1549,8 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn test_get_swarm_status_returns_status_json() {
-        let status_json = r#"{"id":"swarm-task-1","statusCode":102,"isDone":false,"status":"Processing"}"#;
+        let status_json =
+            r#"{"id":"swarm-task-1","statusCode":102,"isDone":false,"status":"Processing"}"#;
         let base_url = spawn_swarm_mock_server("/api/swarm/swarm-task-1/status", status_json);
         let client = make_client();
 

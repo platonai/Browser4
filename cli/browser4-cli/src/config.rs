@@ -84,9 +84,12 @@ pub fn config_set_value(config: &mut ConfigStore, key: &str, value: &str) -> Res
     match key {
         "server" => config.server = Some(value.to_string()),
         "timeout" => {
-            let n: u64 = value
-                .parse()
-                .map_err(|_| format!("Invalid timeout value '{}': expected a positive integer (seconds)", value))?;
+            let n: u64 = value.parse().map_err(|_| {
+                format!(
+                    "Invalid timeout value '{}': expected a positive integer (seconds)",
+                    value
+                )
+            })?;
             if n == 0 {
                 return Err(format!(
                     "Invalid timeout value '{}': expected a positive integer (seconds)",
@@ -132,21 +135,30 @@ mod tests {
     fn test_config_set_and_get() {
         let mut c = ConfigStore::default();
         config_set_value(&mut c, "server", "http://localhost:9090").unwrap();
-        assert_eq!(config_value(&c, "server"), Some("http://localhost:9090".to_string()));
+        assert_eq!(
+            config_value(&c, "server"),
+            Some("http://localhost:9090".to_string())
+        );
     }
 
     #[test]
     fn test_config_set_timeout_rejects_non_numeric() {
         let mut c = ConfigStore::default();
         let err = config_set_value(&mut c, "timeout", "abc").unwrap_err();
-        assert!(err.contains("Invalid timeout"), "Expected 'Invalid timeout' in: {err}");
+        assert!(
+            err.contains("Invalid timeout"),
+            "Expected 'Invalid timeout' in: {err}"
+        );
     }
 
     #[test]
     fn test_config_set_timeout_rejects_zero() {
         let mut c = ConfigStore::default();
         let err = config_set_value(&mut c, "timeout", "0").unwrap_err();
-        assert!(err.contains("Invalid timeout"), "Expected 'Invalid timeout' in: {err}");
+        assert!(
+            err.contains("Invalid timeout"),
+            "Expected 'Invalid timeout' in: {err}"
+        );
     }
 
     #[test]
@@ -160,7 +172,10 @@ mod tests {
     fn test_config_set_rejects_unknown_key() {
         let mut c = ConfigStore::default();
         let err = config_set_value(&mut c, "unknown", "value").unwrap_err();
-        assert!(err.contains("Unknown config key"), "Expected 'Unknown config key' in: {err}");
+        assert!(
+            err.contains("Unknown config key"),
+            "Expected 'Unknown config key' in: {err}"
+        );
     }
 
     #[test]
@@ -176,7 +191,10 @@ mod tests {
     fn test_config_delete_rejects_unknown_key() {
         let mut c = ConfigStore::default();
         let err = config_delete_value(&mut c, "nope").unwrap_err();
-        assert!(err.contains("Unknown config key"), "Expected 'Unknown config key' in: {err}");
+        assert!(
+            err.contains("Unknown config key"),
+            "Expected 'Unknown config key' in: {err}"
+        );
     }
 
     #[test]
@@ -186,13 +204,22 @@ mod tests {
         let mut c = ConfigStore::default();
         for key in VALID_CONFIG_KEYS {
             // Set
-            config_set_value(&mut c, key, if *key == "timeout" { "10" } else { "testval" }).unwrap();
+            config_set_value(
+                &mut c,
+                key,
+                if *key == "timeout" { "10" } else { "testval" },
+            )
+            .unwrap();
             // Get
             let val = config_value(&c, key);
             assert!(val.is_some(), "Key '{}' should have a value after set", key);
             // Delete
             config_delete_value(&mut c, key).unwrap();
-            assert!(config_value(&c, key).is_none(), "Key '{}' should be None after delete", key);
+            assert!(
+                config_value(&c, key).is_none(),
+                "Key '{}' should be None after delete",
+                key
+            );
         }
     }
 

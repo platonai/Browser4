@@ -22,7 +22,10 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::managed_processes::{register_managed_server_process, ManagedServerProcess};
+use crate::managed_processes::{
+    register_managed_server_process, shutdown_managed_server_processes_on_port,
+    ManagedServerProcess,
+};
 use crate::state::{
     read_state, resolve_default_state_dir, resolve_runtime_cache_dir, resolve_runtime_data_dir,
 };
@@ -102,6 +105,20 @@ const FORCE_REMOTE_BUNDLE_ENV: &str = "BROWSER4_CLI_FORCE_REMOTE_BUNDLE";
 /// exist.  Useful in development when the source code has changed but cached
 /// artifacts appear up-to-date.
 const FORCE_REBUILD_BUNDLE_ENV: &str = "BROWSER4_CLI_FORCE_REBUILD_BUNDLE";
+/// When set to `1`, `true`, `yes`, or `on`, disables the plugin warm restart:
+/// the CLI will no longer restart a running local server when the contents of
+/// its `plugins/` directory change since the server was started.  Plugins then
+/// only take effect after a manual restart, as before.
+const DISABLE_PLUGIN_WARM_RESTART_ENV: &str = "BROWSER4_CLI_DISABLE_PLUGIN_WARM_RESTART";
+/// Name of the plugins fingerprint store inside the CLI state dir.  Records,
+/// per port, the plugins directory the server was launched with and a
+/// fingerprint of its JAR set at launch time.
+const PLUGINS_FINGERPRINT_FILE_NAME: &str = "server-plugins-fingerprint.json";
+/// Graceful-stop timeout for the plugin warm restart (ms).
+const PLUGIN_WARM_RESTART_STOP_TIMEOUT_MS: u64 = 15_000;
+/// Poll interval while waiting for the old server to exit before a warm
+/// restart (ms).
+const PLUGIN_WARM_RESTART_STOP_POLL_MS: u64 = 250;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeBundleArchiveKind {
@@ -445,10 +462,7 @@ fn mirror_download_url(mirror: &DownloadMirror, tag: Option<&str>, asset_name: &
     match normalize_release_tag(tag) {
         Some(tag) => format!("{base}/download/{tag}/{asset_name}"),
         None => {
-            let latest = mirror
-                .latest_path
-                .as_deref()
-                .unwrap_or("latest/download");
+            let latest = mirror.latest_path.as_deref().unwrap_or("latest/download");
             format!("{base}/{latest}/{asset_name}")
         }
     }
@@ -888,7 +902,12 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     match probe_server_state(&client, base_url).await {
-        ServerState::Ready => return Ok(()),
+        ServerState::Ready => {
+            if plugins_changed_since_server_start(port) {
+                return restart_server_for_plugin_change(base_url, port).await;
+            }
+            return Ok(());
+        }
         ServerState::Starting(_) => {
             return wait_for_server_ready(&client, base_url, EXISTING_SERVER_READY_TIMEOUT, None)
                 .await;
@@ -905,7 +924,12 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
             );
             tokio::time::sleep(Duration::from_secs(3)).await;
             match probe_server_state(&client, base_url).await {
-                ServerState::Ready => return Ok(()),
+                ServerState::Ready => {
+                    if plugins_changed_since_server_start(port) {
+                        return restart_server_for_plugin_change(base_url, port).await;
+                    }
+                    return Ok(());
+                }
                 ServerState::Starting(_) => {
                     return wait_for_server_ready(
                         &client,
@@ -942,6 +966,214 @@ fn extract_port(base_url: &str) -> u16 {
 
 fn print_server_starting_message() {
     eprintln!("Starting Browser4 server (first launch ~10s for JVM + Spring Boot; subsequent starts faster)...");
+}
+
+// ---- Plugins warm restart ----
+//
+// Runtime plugins live in `<server working dir>/plugins/*.jar` and are wired
+// into the Spring context during startup (PluginClasspathEnhancer +
+// AutoConfiguration.imports), so installing or removing a plugin JAR at
+// runtime only takes effect after a restart.  To make that transparent, the
+// CLI fingerprints the plugins directory at launch time and, on later
+// commands, restarts the local server when the fingerprint has changed.  With
+// the trained AOT cache (JEP 483) a restart completes in seconds, so this
+// "warm restart" is cheap enough to happen automatically.
+
+/// A recorded plugins fingerprint for one server port.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PluginsFingerprintEntry {
+    pub port: u16,
+    /// Absolute path of the plugins directory the server was launched with
+    /// (relative to the server working directory).  Recorded so later CLI
+    /// invocations recompute the fingerprint from exactly the same directory,
+    /// regardless of the CLI's own cwd.
+    #[serde(rename = "pluginsDir")]
+    pub plugins_dir: String,
+    /// Fingerprint of the plugin JAR set at server launch time.
+    pub fingerprint: String,
+    #[serde(rename = "recordedAt")]
+    pub recorded_at: String,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct PluginsFingerprintStore {
+    entries: Vec<PluginsFingerprintEntry>,
+}
+
+fn plugins_fingerprint_file() -> PathBuf {
+    resolve_default_state_dir().join(PLUGINS_FINGERPRINT_FILE_NAME)
+}
+
+fn load_plugins_fingerprint_store(path: &Path) -> PluginsFingerprintStore {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<PluginsFingerprintStore>(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn save_plugins_fingerprint_store(store: &PluginsFingerprintStore, path: &Path) {
+    if let Some(dir) = path.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(store) {
+        let _ = fs::write(path, json);
+    }
+}
+
+/// Record the plugins fingerprint for the server just launched on [port].
+///
+/// Called from `start_server` after the server reports ready.  The entry is
+/// keyed by port; an existing entry for the same port is replaced.
+fn record_plugins_fingerprint(port: u16, plugins_dir: &Path) {
+    let path = plugins_fingerprint_file();
+    let mut store = load_plugins_fingerprint_store(&path);
+    store.entries.retain(|e| e.port != port);
+    store.entries.push(PluginsFingerprintEntry {
+        port,
+        plugins_dir: plugins_dir.to_string_lossy().to_string(),
+        fingerprint: compute_plugins_fingerprint(plugins_dir),
+        recorded_at: chrono::Utc::now().to_rfc3339(),
+    });
+    save_plugins_fingerprint_store(&store, &path);
+}
+
+/// Remove the recorded plugins fingerprint for [port] (e.g. when the port is
+/// now owned by a server this CLI did not launch).
+fn clear_plugins_fingerprint(port: u16) {
+    let path = plugins_fingerprint_file();
+    let mut store = load_plugins_fingerprint_store(&path);
+    let before = store.entries.len();
+    store.entries.retain(|e| e.port != port);
+    if store.entries.len() != before {
+        save_plugins_fingerprint_store(&store, &path);
+    }
+}
+
+/// Compute a stable fingerprint over the plugin JARs in [plugins_dir].
+///
+/// Each JAR contributes its file name, size, and modification time; the list
+/// is order-independent (sorted by file name).  A missing directory and an
+/// empty directory produce the same fingerprint — neither contributes any
+/// JAR.  Metadata-based fingerprinting keeps this cheap enough to run before
+/// every command; content changes normally alter size or mtime too.
+fn compute_plugins_fingerprint(plugins_dir: &Path) -> String {
+    let mut jar_keys: Vec<String> = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(plugins_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jar") {
+                continue;
+            }
+            if !path.is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let (size, mtime) = match fs::metadata(&path) {
+                Ok(meta) => (
+                    meta.len(),
+                    meta.modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_nanos())
+                        .unwrap_or(0),
+                ),
+                Err(_) => (0, 0),
+            };
+            jar_keys.push(format!("{name}|{size}|{mtime}"));
+        }
+    }
+
+    jar_keys.sort();
+
+    let mut digest = Sha256::new();
+    digest.update(jar_keys.len().to_le_bytes());
+    for key in &jar_keys {
+        digest.update(key.as_bytes());
+        digest.update([0u8]);
+    }
+
+    digest
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn plugin_warm_restart_disabled() -> bool {
+    matches!(
+        env::var(DISABLE_PLUGIN_WARM_RESTART_ENV)
+            .unwrap_or_default()
+            .to_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// Whether the plugins directory of the server on [port] has changed since
+/// that server was launched by this CLI.
+///
+/// Returns false when there is no recorded entry (e.g. the server was started
+/// externally, or by an older CLI) — servers this CLI did not launch are
+/// never restarted.
+fn plugins_changed_since_server_start(port: u16) -> bool {
+    if plugin_warm_restart_disabled() {
+        return false;
+    }
+
+    let entry = match load_plugins_fingerprint_store(&plugins_fingerprint_file())
+        .entries
+        .into_iter()
+        .find(|e| e.port == port)
+    {
+        Some(entry) => entry,
+        None => return false,
+    };
+
+    let current = compute_plugins_fingerprint(Path::new(&entry.plugins_dir));
+    current != entry.fingerprint
+}
+
+/// Restart the local server on [port] so newly installed/removed plugin JARs
+/// take effect, then wait for the fresh server to become ready.
+///
+/// Only processes registered by this CLI are stopped (see
+/// `shutdown_managed_server_processes_on_port`); if the port is still open
+/// afterwards it is now owned by some other server, and the restart degrades
+/// to a no-op rather than launching onto an occupied port.
+async fn restart_server_for_plugin_change(base_url: &str, port: u16) -> Result<(), String> {
+    eprintln!(
+        "Plugins changed since the server started - restarting Browser4 server to activate them (warm restart)..."
+    );
+
+    let shutdown = shutdown_managed_server_processes_on_port(
+        false,
+        None,
+        port,
+        PLUGIN_WARM_RESTART_STOP_TIMEOUT_MS,
+        PLUGIN_WARM_RESTART_STOP_POLL_MS,
+    );
+    if !shutdown.remaining_pids.is_empty() {
+        return Err(format!(
+            "Browser4 server on port {port} could not be stopped for the plugin warm restart \
+             (pids still running: {:?}). Stop it manually and re-run the command.",
+            shutdown.remaining_pids
+        ));
+    }
+
+    // The managed processes are gone; if the port is still open another
+    // server (started outside this CLI) now owns it.  Leave it alone.
+    if is_local_port_open(base_url) {
+        eprintln!(
+            "Port {port} is still served by a server not started by this CLI; skipping the plugin warm restart."
+        );
+        clear_plugins_fingerprint(port);
+        return Ok(());
+    }
+
+    print_server_starting_message();
+    let launch_spec = resolve_server_launch_spec(port).await?;
+    start_server(&launch_spec, base_url, port).await
 }
 
 pub fn is_local_port_open(base_url: &str) -> bool {
@@ -1482,9 +1714,7 @@ async fn resolve_latest_tag_from_oss_metadata(
 ///
 /// Returns the first successfully resolved `(tag, full_metadata)` pair, or
 /// `None` when all mirrors fail to report their latest version.
-async fn resolve_latest_tag(
-    mirrors: &[DownloadMirror],
-) -> Option<(String, LatestReleaseInfo)> {
+async fn resolve_latest_tag(mirrors: &[DownloadMirror]) -> Option<(String, LatestReleaseInfo)> {
     for mirror in mirrors {
         if !mirror.supports_latest_resolution {
             continue;
@@ -1813,10 +2043,7 @@ fn download_file_blocking(url: &str, target_path: &Path) -> Result<DownloadedFil
 
             // Print the total size up front so the user knows what to expect.
             if let Some(total) = total_size {
-                eprintln!(
-                    "  Downloading {:.1} MB...",
-                    total as f64 / 1_048_576.0
-                );
+                eprintln!("  Downloading {:.1} MB...", total as f64 / 1_048_576.0);
             } else {
                 eprintln!("  Downloading (size unknown)...");
             }
@@ -2847,10 +3074,8 @@ pub async fn install_browser4_runtime(
                 .as_deref()
                 .map(String::from)
                 .unwrap_or_else(|| {
-                    let fallback = format!(
-                        "unknown-{}",
-                        chrono::Utc::now().format("%Y%m%dT%H%M%S")
-                    );
+                    let fallback =
+                        format!("unknown-{}", chrono::Utc::now().format("%Y%m%dT%H%M%S"));
                     eprintln!(
                         "⚠  Could not determine the release version tag (cache-hit path). \
                          Using fallback identifier: {fallback}"
@@ -3023,10 +3248,8 @@ pub async fn install_browser4_runtime(
             let resolved_tag = parse_release_tag_from_url(&downloaded.final_url)
                 .or(requested_tag.clone())
                 .unwrap_or_else(|| {
-                    let fallback = format!(
-                        "unknown-{}",
-                        chrono::Utc::now().format("%Y%m%dT%H%M%S")
-                    );
+                    let fallback =
+                        format!("unknown-{}", chrono::Utc::now().format("%Y%m%dT%H%M%S"));
                     eprintln!(
                         "⚠  Could not determine the release version tag from the download URL. \
                          Using fallback identifier: {fallback}"
@@ -3123,7 +3346,10 @@ fn playwright_chromium_relative_exe_path() -> &'static [&'static str] {
         &["chrome-mac/Chromium.app/Contents/MacOS/Chromium"]
     } else {
         // Linux
-        &["chrome-linux/chrome", "chrome-headless-shell-linux/chrome-headless-shell"]
+        &[
+            "chrome-linux/chrome",
+            "chrome-headless-shell-linux/chrome-headless-shell",
+        ]
     }
 }
 
@@ -3161,14 +3387,8 @@ fn find_browser_in_playwright(
         // Sort descending so newer versions (higher build numbers) are tried
         // first.  Build numbers are monotonic integers.
         version_dirs.sort_by(|a, b| {
-            let a_name = a
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-            let b_name = b
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let a_name = a.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let b_name = b.file_name().and_then(|n| n.to_str()).unwrap_or("");
             // Reverse: higher build number → tried first.
             b_name.cmp(a_name)
         });
@@ -3181,9 +3401,9 @@ fn find_browser_in_playwright(
 
             // Check whether this directory matches one of the requested browser
             // prefixes (e.g. "chromium-1114" matches prefix "chromium").
-            let matches_prefix = browser_prefixes.iter().any(|prefix| {
-                dir_name == *prefix || dir_name.starts_with(&format!("{prefix}-"))
-            });
+            let matches_prefix = browser_prefixes
+                .iter()
+                .any(|prefix| dir_name == *prefix || dir_name.starts_with(&format!("{prefix}-")));
             if !matches_prefix {
                 continue;
             }
@@ -3210,10 +3430,7 @@ fn find_chrome_in_playwright() -> Option<PathBuf> {
 
 /// Locate a Microsoft Edge executable installed by Playwright.
 fn find_edge_in_playwright() -> Option<PathBuf> {
-    find_browser_in_playwright(
-        &["msedge", "edge"],
-        playwright_edge_relative_exe_path(),
-    )
+    find_browser_in_playwright(&["msedge", "edge"], playwright_edge_relative_exe_path())
 }
 
 pub fn find_chrome_executable() -> Option<std::path::PathBuf> {
@@ -4022,10 +4239,7 @@ fn aot_cache_invalidation_key(
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("jar") {
             if let Ok(meta) = entry.metadata() {
-                entries.push((
-                    entry.file_name().to_string_lossy().to_string(),
-                    meta.len(),
-                ));
+                entries.push((entry.file_name().to_string_lossy().to_string(), meta.len()));
             }
         }
     }
@@ -4366,7 +4580,6 @@ fn browser4_root_search_start_dir_from_env() -> Option<PathBuf> {
 }
 
 fn find_browser4_root_from(start: &Path, deep_search: bool) -> Option<PathBuf> {
-
     let start_dir = if start.is_dir() {
         start
     } else {
@@ -4788,9 +5001,7 @@ async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
     eprintln!(
         "Browser4 runtime is not installed yet — downloading now (one-time setup, ~130 MB)..."
     );
-    eprintln!(
-        "Tip: run 'browser4-cli install' beforehand to avoid this download on first use."
-    );
+    eprintln!("Tip: run 'browser4-cli install' beforehand to avoid this download on first use.");
     install_browser4_runtime(None, false).await
 }
 
@@ -4909,6 +5120,12 @@ async fn start_server(
         },
         None,
     );
+
+    // Record the plugins fingerprint so later commands can detect plugin
+    // changes and trigger a warm restart.  The plugins directory is resolved
+    // relative to the server's working directory (the server's PluginService
+    // defaults to `plugins/` under its cwd).
+    record_plugins_fingerprint(port, &launch_working_dir.join("plugins"));
 
     // Detach: we drop the Child handle here. The spawned process continues
     // running independently because we set all stdio to null and call drop().
@@ -7573,10 +7790,7 @@ mod tests {
         fn lock(path: &Path) -> Self {
             let prev = env::var("PLAYWRIGHT_BROWSERS_PATH").ok();
             unsafe {
-                env::set_var(
-                    "PLAYWRIGHT_BROWSERS_PATH",
-                    path.as_os_str(),
-                );
+                env::set_var("PLAYWRIGHT_BROWSERS_PATH", path.as_os_str());
             }
             Self { prev }
         }
@@ -7585,12 +7799,8 @@ mod tests {
     impl Drop for PlaywrightPathGuard {
         fn drop(&mut self) {
             match &self.prev {
-                Some(v) => unsafe {
-                    env::set_var("PLAYWRIGHT_BROWSERS_PATH", v)
-                },
-                None => unsafe {
-                    env::remove_var("PLAYWRIGHT_BROWSERS_PATH")
-                },
+                Some(v) => unsafe { env::set_var("PLAYWRIGHT_BROWSERS_PATH", v) },
+                None => unsafe { env::remove_var("PLAYWRIGHT_BROWSERS_PATH") },
             }
         }
     }
@@ -7671,7 +7881,8 @@ mod tests {
 
         let found = find_chrome_in_playwright();
         assert_eq!(
-            found, Some(expected),
+            found,
+            Some(expected),
             "should prefer the newer version directory (1150 > 1000)"
         );
     }
@@ -7686,7 +7897,8 @@ mod tests {
 
         let found = find_chrome_in_playwright();
         assert_eq!(
-            found, Some(expected),
+            found,
+            Some(expected),
             "should respect PLAYWRIGHT_BROWSERS_PATH env var"
         );
     }
@@ -7727,7 +7939,8 @@ mod tests {
         // Verify the Playwright binary is discoverable on its own.
         let playwright_found = find_chrome_in_playwright();
         assert_eq!(
-            playwright_found, Some(playwright_exe),
+            playwright_found,
+            Some(playwright_exe),
             "Playwright binary should be independently discoverable"
         );
     }
@@ -7738,25 +7951,70 @@ mod tests {
     #[test]
     fn browser_channel_from_str_all_variants() {
         // Chrome variants
-        assert_eq!(BrowserChannel::from_str("chrome"), Some(BrowserChannel::Chrome));
-        assert_eq!(BrowserChannel::from_str("Chrome"), Some(BrowserChannel::Chrome));
-        assert_eq!(BrowserChannel::from_str("CHROME"), Some(BrowserChannel::Chrome));
-        assert_eq!(BrowserChannel::from_str("google-chrome"), Some(BrowserChannel::Chrome));
-        assert_eq!(BrowserChannel::from_str("google chrome"), Some(BrowserChannel::Chrome));
+        assert_eq!(
+            BrowserChannel::from_str("chrome"),
+            Some(BrowserChannel::Chrome)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("Chrome"),
+            Some(BrowserChannel::Chrome)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("CHROME"),
+            Some(BrowserChannel::Chrome)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("google-chrome"),
+            Some(BrowserChannel::Chrome)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("google chrome"),
+            Some(BrowserChannel::Chrome)
+        );
 
-        assert_eq!(BrowserChannel::from_str("chrome-beta"), Some(BrowserChannel::ChromeBeta));
-        assert_eq!(BrowserChannel::from_str("chrome-dev"), Some(BrowserChannel::ChromeDev));
-        assert_eq!(BrowserChannel::from_str("chrome-canary"), Some(BrowserChannel::ChromeCanary));
+        assert_eq!(
+            BrowserChannel::from_str("chrome-beta"),
+            Some(BrowserChannel::ChromeBeta)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("chrome-dev"),
+            Some(BrowserChannel::ChromeDev)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("chrome-canary"),
+            Some(BrowserChannel::ChromeCanary)
+        );
 
         // Edge variants
-        assert_eq!(BrowserChannel::from_str("msedge"), Some(BrowserChannel::MsEdge));
-        assert_eq!(BrowserChannel::from_str("edge"), Some(BrowserChannel::MsEdge));
-        assert_eq!(BrowserChannel::from_str("microsoft-edge"), Some(BrowserChannel::MsEdge));
-        assert_eq!(BrowserChannel::from_str("MsEdge"), Some(BrowserChannel::MsEdge));
+        assert_eq!(
+            BrowserChannel::from_str("msedge"),
+            Some(BrowserChannel::MsEdge)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("edge"),
+            Some(BrowserChannel::MsEdge)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("microsoft-edge"),
+            Some(BrowserChannel::MsEdge)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("MsEdge"),
+            Some(BrowserChannel::MsEdge)
+        );
 
-        assert_eq!(BrowserChannel::from_str("msedge-beta"), Some(BrowserChannel::MsEdgeBeta));
-        assert_eq!(BrowserChannel::from_str("msedge-dev"), Some(BrowserChannel::MsEdgeDev));
-        assert_eq!(BrowserChannel::from_str("msedge-canary"), Some(BrowserChannel::MsEdgeCanary));
+        assert_eq!(
+            BrowserChannel::from_str("msedge-beta"),
+            Some(BrowserChannel::MsEdgeBeta)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("msedge-dev"),
+            Some(BrowserChannel::MsEdgeDev)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("msedge-canary"),
+            Some(BrowserChannel::MsEdgeCanary)
+        );
     }
 
     #[test]
@@ -7824,59 +8082,134 @@ mod tests {
 
     #[test]
     fn channel_from_str_chrome_variants() {
-        assert_eq!(BrowserChannel::from_str("chrome"), Some(BrowserChannel::Chrome));
-        assert_eq!(BrowserChannel::from_str("Chrome"), Some(BrowserChannel::Chrome));
-        assert_eq!(BrowserChannel::from_str("CHROME"), Some(BrowserChannel::Chrome));
-        assert_eq!(BrowserChannel::from_str("google-chrome"), Some(BrowserChannel::Chrome));
-        assert_eq!(BrowserChannel::from_str("google chrome"), Some(BrowserChannel::Chrome));
+        assert_eq!(
+            BrowserChannel::from_str("chrome"),
+            Some(BrowserChannel::Chrome)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("Chrome"),
+            Some(BrowserChannel::Chrome)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("CHROME"),
+            Some(BrowserChannel::Chrome)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("google-chrome"),
+            Some(BrowserChannel::Chrome)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("google chrome"),
+            Some(BrowserChannel::Chrome)
+        );
     }
 
     #[test]
     fn channel_from_str_chrome_beta_variants() {
-        assert_eq!(BrowserChannel::from_str("chrome-beta"), Some(BrowserChannel::ChromeBeta));
-        assert_eq!(BrowserChannel::from_str("google-chrome-beta"), Some(BrowserChannel::ChromeBeta));
+        assert_eq!(
+            BrowserChannel::from_str("chrome-beta"),
+            Some(BrowserChannel::ChromeBeta)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("google-chrome-beta"),
+            Some(BrowserChannel::ChromeBeta)
+        );
     }
 
     #[test]
     fn channel_from_str_chrome_dev_variants() {
-        assert_eq!(BrowserChannel::from_str("chrome-dev"), Some(BrowserChannel::ChromeDev));
-        assert_eq!(BrowserChannel::from_str("google-chrome-dev"), Some(BrowserChannel::ChromeDev));
+        assert_eq!(
+            BrowserChannel::from_str("chrome-dev"),
+            Some(BrowserChannel::ChromeDev)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("google-chrome-dev"),
+            Some(BrowserChannel::ChromeDev)
+        );
     }
 
     #[test]
     fn channel_from_str_chrome_canary_variants() {
-        assert_eq!(BrowserChannel::from_str("chrome-canary"), Some(BrowserChannel::ChromeCanary));
-        assert_eq!(BrowserChannel::from_str("google-chrome-canary"), Some(BrowserChannel::ChromeCanary));
+        assert_eq!(
+            BrowserChannel::from_str("chrome-canary"),
+            Some(BrowserChannel::ChromeCanary)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("google-chrome-canary"),
+            Some(BrowserChannel::ChromeCanary)
+        );
     }
 
     #[test]
     fn channel_from_str_edge_variants() {
-        assert_eq!(BrowserChannel::from_str("msedge"), Some(BrowserChannel::MsEdge));
-        assert_eq!(BrowserChannel::from_str("edge"), Some(BrowserChannel::MsEdge));
-        assert_eq!(BrowserChannel::from_str("EDGE"), Some(BrowserChannel::MsEdge));
-        assert_eq!(BrowserChannel::from_str("microsoft-edge"), Some(BrowserChannel::MsEdge));
-        assert_eq!(BrowserChannel::from_str("microsoft edge"), Some(BrowserChannel::MsEdge));
+        assert_eq!(
+            BrowserChannel::from_str("msedge"),
+            Some(BrowserChannel::MsEdge)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("edge"),
+            Some(BrowserChannel::MsEdge)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("EDGE"),
+            Some(BrowserChannel::MsEdge)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("microsoft-edge"),
+            Some(BrowserChannel::MsEdge)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("microsoft edge"),
+            Some(BrowserChannel::MsEdge)
+        );
     }
 
     #[test]
     fn channel_from_str_edge_beta_variants() {
-        assert_eq!(BrowserChannel::from_str("msedge-beta"), Some(BrowserChannel::MsEdgeBeta));
-        assert_eq!(BrowserChannel::from_str("edge-beta"), Some(BrowserChannel::MsEdgeBeta));
-        assert_eq!(BrowserChannel::from_str("microsoft-edge-beta"), Some(BrowserChannel::MsEdgeBeta));
+        assert_eq!(
+            BrowserChannel::from_str("msedge-beta"),
+            Some(BrowserChannel::MsEdgeBeta)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("edge-beta"),
+            Some(BrowserChannel::MsEdgeBeta)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("microsoft-edge-beta"),
+            Some(BrowserChannel::MsEdgeBeta)
+        );
     }
 
     #[test]
     fn channel_from_str_edge_dev_variants() {
-        assert_eq!(BrowserChannel::from_str("msedge-dev"), Some(BrowserChannel::MsEdgeDev));
-        assert_eq!(BrowserChannel::from_str("edge-dev"), Some(BrowserChannel::MsEdgeDev));
-        assert_eq!(BrowserChannel::from_str("microsoft-edge-dev"), Some(BrowserChannel::MsEdgeDev));
+        assert_eq!(
+            BrowserChannel::from_str("msedge-dev"),
+            Some(BrowserChannel::MsEdgeDev)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("edge-dev"),
+            Some(BrowserChannel::MsEdgeDev)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("microsoft-edge-dev"),
+            Some(BrowserChannel::MsEdgeDev)
+        );
     }
 
     #[test]
     fn channel_from_str_edge_canary_variants() {
-        assert_eq!(BrowserChannel::from_str("msedge-canary"), Some(BrowserChannel::MsEdgeCanary));
-        assert_eq!(BrowserChannel::from_str("edge-canary"), Some(BrowserChannel::MsEdgeCanary));
-        assert_eq!(BrowserChannel::from_str("microsoft-edge-canary"), Some(BrowserChannel::MsEdgeCanary));
+        assert_eq!(
+            BrowserChannel::from_str("msedge-canary"),
+            Some(BrowserChannel::MsEdgeCanary)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("edge-canary"),
+            Some(BrowserChannel::MsEdgeCanary)
+        );
+        assert_eq!(
+            BrowserChannel::from_str("microsoft-edge-canary"),
+            Some(BrowserChannel::MsEdgeCanary)
+        );
     }
 
     #[test]
@@ -7915,4 +8248,164 @@ mod tests {
         assert_eq!(BrowserChannel::MsEdgeCanary.to_string(), "msedge-canary");
     }
 
+    // -------------------------------------------------------------------
+    // Plugins warm restart
+    // -------------------------------------------------------------------
+
+    /// Env guard that isolates the state dir and the plugin warm-restart env
+    /// var for a single test, restoring the previous values on drop.
+    struct WarmRestartEnvGuard {
+        prev_disable: Option<String>,
+        prev_state: Option<String>,
+    }
+
+    impl WarmRestartEnvGuard {
+        fn lock(state_dir: &Path) -> Self {
+            let prev_disable = env::var(DISABLE_PLUGIN_WARM_RESTART_ENV).ok();
+            let prev_state = env::var("BROWSER4_CLI_STATE_DIR").ok();
+            let _ = fs::create_dir_all(state_dir);
+            unsafe {
+                env::set_var("BROWSER4_CLI_STATE_DIR", state_dir.as_os_str());
+                env::remove_var(DISABLE_PLUGIN_WARM_RESTART_ENV);
+            }
+            Self {
+                prev_disable,
+                prev_state,
+            }
+        }
+    }
+
+    impl Drop for WarmRestartEnvGuard {
+        fn drop(&mut self) {
+            match &self.prev_disable {
+                Some(v) => unsafe { env::set_var(DISABLE_PLUGIN_WARM_RESTART_ENV, v) },
+                None => unsafe { env::remove_var(DISABLE_PLUGIN_WARM_RESTART_ENV) },
+            }
+            match &self.prev_state {
+                Some(v) => unsafe { env::set_var("BROWSER4_CLI_STATE_DIR", v) },
+                None => unsafe { env::remove_var("BROWSER4_CLI_STATE_DIR") },
+            }
+        }
+    }
+
+    fn write_test_jar(dir: &Path, name: &str, content: &[u8]) {
+        create_dir_all(dir).unwrap();
+        write(dir.join(name), content).unwrap();
+    }
+
+    #[test]
+    fn plugins_fingerprint_stable_for_unchanged_jars() {
+        let tmp = test_temp_dir();
+        let plugins = tmp.path().join("plugins");
+        write_test_jar(&plugins, "b-plugin.jar", b"bbb");
+        write_test_jar(&plugins, "a-plugin.jar", b"aaa");
+
+        // Order of directory iteration must not matter (sorted by file name).
+        let first = compute_plugins_fingerprint(&plugins);
+        let second = compute_plugins_fingerprint(&plugins);
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 64, "sha256 hex digest expected");
+    }
+
+    #[test]
+    fn plugins_fingerprint_missing_dir_equals_empty_dir() {
+        let tmp = test_temp_dir();
+        let empty = tmp.path().join("plugins");
+        create_dir_all(&empty).unwrap();
+        let missing = tmp.path().join("does-not-exist");
+
+        assert_eq!(
+            compute_plugins_fingerprint(&empty),
+            compute_plugins_fingerprint(&missing)
+        );
+    }
+
+    #[test]
+    fn plugins_fingerprint_changes_on_jar_added_removed_modified() {
+        let tmp = test_temp_dir();
+        let plugins = tmp.path().join("plugins");
+        write_test_jar(&plugins, "a-plugin.jar", b"aaa");
+
+        let base = compute_plugins_fingerprint(&plugins);
+
+        // Added
+        write_test_jar(&plugins, "b-plugin.jar", b"bbb");
+        assert_ne!(compute_plugins_fingerprint(&plugins), base);
+
+        // Removed (back to base set)
+        let _ = fs::remove_file(plugins.join("b-plugin.jar"));
+        assert_eq!(compute_plugins_fingerprint(&plugins), base);
+
+        // Modified (different size; mtime granularity is not relied upon)
+        write_test_jar(&plugins, "a-plugin.jar", b"aaaaaa");
+        assert_ne!(compute_plugins_fingerprint(&plugins), base);
+
+        // Non-jar files are ignored: adding notes.txt must not change the
+        // fingerprint, so removing it again restores the previous value.
+        let before_txt = compute_plugins_fingerprint(&plugins);
+        write_test_jar(&plugins, "notes.txt", b"ignored");
+        assert_eq!(compute_plugins_fingerprint(&plugins), before_txt);
+        let _ = fs::remove_file(plugins.join("notes.txt"));
+        assert_eq!(compute_plugins_fingerprint(&plugins), before_txt);
+    }
+
+    #[test]
+    fn plugins_change_detection_lifecycle() {
+        let tmp = test_temp_dir();
+        let _guard = lock_env_mutex();
+        let _env = WarmRestartEnvGuard::lock(&tmp.path().join("state"));
+
+        let plugins = tmp.path().join("server").join("plugins");
+        write_test_jar(&plugins, "a-plugin.jar", b"aaa");
+
+        // No recorded entry yet: never restart (server may be external).
+        assert!(!plugins_changed_since_server_start(8182));
+
+        record_plugins_fingerprint(8182, &plugins);
+        assert!(!plugins_changed_since_server_start(8182));
+
+        // Other ports are unaffected.
+        assert!(!plugins_changed_since_server_start(8183));
+
+        // Installing a new plugin triggers a restart.
+        write_test_jar(&plugins, "b-plugin.jar", b"bbb");
+        assert!(plugins_changed_since_server_start(8182));
+
+        // Opt-out env var suppresses the restart.
+        unsafe { env::set_var(DISABLE_PLUGIN_WARM_RESTART_ENV, "1") };
+        assert!(!plugins_changed_since_server_start(8182));
+        unsafe { env::remove_var(DISABLE_PLUGIN_WARM_RESTART_ENV) };
+
+        // Clearing the entry disables detection again (external server).
+        clear_plugins_fingerprint(8182);
+        assert!(!plugins_changed_since_server_start(8182));
+    }
+
+    #[test]
+    fn plugins_fingerprint_store_round_trip_and_port_replace() {
+        let tmp = test_temp_dir();
+        let _guard = lock_env_mutex();
+        let _env = WarmRestartEnvGuard::lock(&tmp.path().join("state"));
+
+        let plugins = tmp.path().join("plugins");
+        write_test_jar(&plugins, "a-plugin.jar", b"aaa");
+
+        record_plugins_fingerprint(8182, &plugins);
+        record_plugins_fingerprint(8183, &plugins);
+
+        let store = load_plugins_fingerprint_store(&plugins_fingerprint_file());
+        assert_eq!(store.entries.len(), 2);
+        assert!(store.entries.iter().all(|e| !e.fingerprint.is_empty()));
+
+        // Re-recording the same port replaces, not duplicates.
+        record_plugins_fingerprint(8182, &plugins);
+        let store = load_plugins_fingerprint_store(&plugins_fingerprint_file());
+        assert_eq!(store.entries.len(), 2);
+        assert_eq!(store.entries.iter().filter(|e| e.port == 8182).count(), 1);
+
+        clear_plugins_fingerprint(8183);
+        let store = load_plugins_fingerprint_store(&plugins_fingerprint_file());
+        assert_eq!(store.entries.len(), 1);
+        assert_eq!(store.entries[0].port, 8182);
+    }
 }

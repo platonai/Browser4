@@ -45,7 +45,10 @@ pub enum SessionKind {
 impl SessionKind {
     /// Derive the legacy `is_attached` flag from this kind.
     pub fn is_attached(self) -> bool {
-        matches!(self, SessionKind::CdpAttached | SessionKind::ExtensionAttached)
+        matches!(
+            self,
+            SessionKind::CdpAttached | SessionKind::ExtensionAttached
+        )
     }
 
     /// Derive the legacy `attach_type` string from this kind.
@@ -334,10 +337,7 @@ fn migrate_legacy_kind(state: &mut CliState) {
     // Only migrate if kind is the default AND the legacy fields indicate
     // something different.
     if state.kind == SessionKind::Browser4Launched && state.is_attached {
-        state.kind = SessionKind::from_legacy(
-            state.is_attached,
-            state.attach_type.as_deref(),
-        );
+        state.kind = SessionKind::from_legacy(state.is_attached, state.attach_type.as_deref());
     }
 }
 
@@ -544,7 +544,8 @@ fn write_loop_state_to_dir(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_string_pretty(state).expect("loop state serialization should not fail");
+    let json =
+        serde_json::to_string_pretty(state).expect("loop state serialization should not fail");
     fs::write(path, json)
 }
 
@@ -856,9 +857,7 @@ fn write_loop_history_to_dir(entry: &LoopHistoryEntry, dir: &Path) -> std::io::R
     // Write back as JSONL
     let content: String = entries
         .iter()
-        .map(|e| {
-            serde_json::to_string(e).expect("LoopHistoryEntry serialization should not fail")
-        })
+        .map(|e| serde_json::to_string(e).expect("LoopHistoryEntry serialization should not fail"))
         .collect::<Vec<_>>()
         .join("\n");
     fs::write(path, content)
@@ -911,10 +910,18 @@ pub struct AsyncTaskEntry {
     #[serde(rename = "submittedAt")]
     pub submitted_at: String,
     /// Last known status (empty until first poll).
-    #[serde(rename = "lastStatus", skip_serializing_if = "String::is_empty", default)]
+    #[serde(
+        rename = "lastStatus",
+        skip_serializing_if = "String::is_empty",
+        default
+    )]
     pub last_status: String,
     /// ISO-8601 timestamp when the task was first observed as completed (None until done).
-    #[serde(rename = "completedAt", skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        rename = "completedAt",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     pub completed_at: Option<String>,
 }
 
@@ -953,7 +960,10 @@ pub fn read_async_tasks(state_dir: Option<&std::path::Path>) -> AsyncTaskList {
 }
 
 /// Save an async task list to disk, with fallback on PermissionDenied.
-pub fn write_async_tasks(list: &AsyncTaskList, state_dir: Option<&std::path::Path>) -> std::io::Result<()> {
+pub fn write_async_tasks(
+    list: &AsyncTaskList,
+    state_dir: Option<&std::path::Path>,
+) -> std::io::Result<()> {
     let path = async_tasks_path(state_dir);
 
     match write_async_tasks_to_path(list, &path) {
@@ -998,9 +1008,7 @@ pub fn track_async_task(
 
 /// Remove completed/failed tasks from the tracked list.
 #[allow(dead_code)]
-pub fn prune_async_tasks(
-    state_dir: Option<&std::path::Path>,
-) -> std::io::Result<usize> {
+pub fn prune_async_tasks(state_dir: Option<&std::path::Path>) -> std::io::Result<usize> {
     let mut list = read_async_tasks(state_dir);
     let before = list.tasks.len();
     list.tasks.retain(|entry| {
@@ -1073,9 +1081,25 @@ pub fn format_async_task_list(
     let paginated = limit < total || offset > 0;
 
     // Column widths (capped for readability)
-    let id_w = page.iter().map(|t| t.task_id.len()).max().unwrap_or(8).max(8).min(12);
-    let cmd_w = page.iter().map(|t| t.command.len()).max().unwrap_or(7).max(7);
-    let desc_w = page.iter().map(|t| t.description.len()).max().unwrap_or(11).min(40);
+    let id_w = page
+        .iter()
+        .map(|t| t.task_id.len())
+        .max()
+        .unwrap_or(8)
+        .max(8)
+        .min(12);
+    let cmd_w = page
+        .iter()
+        .map(|t| t.command.len())
+        .max()
+        .unwrap_or(7)
+        .max(7);
+    let desc_w = page
+        .iter()
+        .map(|t| t.description.len())
+        .max()
+        .unwrap_or(11)
+        .min(40);
     let desc_w = desc_w.max(11);
     let status_w = page
         .iter()
@@ -1093,7 +1117,12 @@ pub fn format_async_task_list(
 
     out.push(format!(
         "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {:<time_w$}  {:<time_w$}  {:<status_w$}",
-        "TASK ID", "COMMAND", "DESCRIPTION", "STARTED", "FINISHED", "STATUS",
+        "TASK ID",
+        "COMMAND",
+        "DESCRIPTION",
+        "STARTED",
+        "FINISHED",
+        "STATUS",
         id_w = id_w,
         cmd_w = cmd_w,
         desc_w = desc_w,
@@ -1102,7 +1131,12 @@ pub fn format_async_task_list(
     ));
     out.push(format!(
         "  {:-<id_w$}  {:-<cmd_w$}  {:-<desc_w$}  {:-<time_w$}  {:-<time_w$}  {:-<status_w$}",
-        "", "", "", "", "", "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
         id_w = id_w,
         cmd_w = cmd_w,
         desc_w = desc_w,
@@ -1114,7 +1148,8 @@ pub fn format_async_task_list(
         // Collapse whitespace and replace newlines so the description stays on
         // one line and doesn't break table formatting.  Agent task descriptions
         // can contain embedded \n from multi-line user input.
-        let mut desc = entry.description
+        let mut desc = entry
+            .description
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
@@ -1153,14 +1188,11 @@ pub fn format_async_task_list(
         if remaining > 0 {
             out.push(format!(
                 "\n  ... {} more task(s). Use --offset {} to see the next page.",
-                remaining,
-                showing
+                remaining, showing
             ));
         }
     } else if total > 20 {
-        out.push(
-            "\n  Hint: Use --limit N to paginate large lists.".to_string(),
-        );
+        out.push("\n  Hint: Use --limit N to paginate large lists.".to_string());
     }
 
     out.join("\n")
@@ -1220,7 +1252,11 @@ pub fn summarize_async_tasks(tasks: &[AsyncTaskEntry]) -> String {
 pub fn format_timestamp_display(iso: &str) -> String {
     chrono::DateTime::parse_from_rfc3339(iso)
         .or_else(|_| chrono::DateTime::parse_from_rfc3339(&format!("{}Z", iso)))
-        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
+        .map(|dt| {
+            dt.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        })
         .unwrap_or_else(|_| iso.chars().take(19).collect())
 }
 
@@ -1234,7 +1270,11 @@ pub fn epoch_millis_to_display(millis: i64) -> String {
     let secs = millis / 1000;
     let nanos = ((millis % 1000) * 1_000_000) as u32;
     chrono::DateTime::from_timestamp(secs, nanos)
-        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
+        .map(|dt| {
+            dt.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        })
         .unwrap_or_else(|| "-".to_string())
 }
 
@@ -1595,8 +1635,13 @@ mod tests {
     #[test]
     fn test_track_async_task_adds_entry() {
         let tmp = test_temp_dir();
-        track_async_task("crawl-job-1", "crawl", "https://example.com", Some(tmp.path()))
-            .unwrap();
+        track_async_task(
+            "crawl-job-1",
+            "crawl",
+            "https://example.com",
+            Some(tmp.path()),
+        )
+        .unwrap();
 
         let list = read_async_tasks(Some(tmp.path()));
         assert_eq!(list.tasks.len(), 1);
@@ -1749,13 +1794,20 @@ mod tests {
         // "new" must appear before "old" in the output
         let new_pos = output.find("new").unwrap();
         let old_pos = output.find("old").unwrap();
-        assert!(new_pos < old_pos, "latest task should appear first, but 'new' at {new_pos} is after 'old' at {old_pos}");
+        assert!(
+            new_pos < old_pos,
+            "latest task should appear first, but 'new' at {new_pos} is after 'old' at {old_pos}"
+        );
     }
 
     /// Helper: format a UTC RFC 3339 timestamp as it would appear in local time display.
     fn local_display(utc_rfc3339: &str) -> String {
         chrono::DateTime::parse_from_rfc3339(utc_rfc3339)
-            .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
+            .map(|dt| {
+                dt.with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string()
+            })
             .unwrap_or_else(|_| utc_rfc3339.chars().take(19).collect())
     }
 
@@ -1774,10 +1826,20 @@ mod tests {
         let output = format_async_task_list(&list, None, None);
         // Started column — should show local time
         let expected_started = local_display("2026-07-22T14:00:00+00:00");
-        assert!(output.contains(&expected_started), "expected started time '{}' in output:\n{}", expected_started, output);
+        assert!(
+            output.contains(&expected_started),
+            "expected started time '{}' in output:\n{}",
+            expected_started,
+            output
+        );
         // Finished column — should show the timestamp, not "-"
         let expected_finished = local_display("2026-07-22T14:05:30+00:00");
-        assert!(output.contains(&expected_finished), "expected finished time '{}' in output:\n{}", expected_finished, output);
+        assert!(
+            output.contains(&expected_finished),
+            "expected finished time '{}' in output:\n{}",
+            expected_finished,
+            output
+        );
     }
 
     #[test]
@@ -1795,12 +1857,19 @@ mod tests {
         let output = format_async_task_list(&list, None, None);
         // Started should show local time
         let expected_started = local_display("2026-07-22T16:00:00+00:00");
-        assert!(output.contains(&expected_started), "expected started time '{}' in output:\n{}", expected_started, output);
+        assert!(
+            output.contains(&expected_started),
+            "expected started time '{}' in output:\n{}",
+            expected_started,
+            output
+        );
         // Finished should show "-" for unfinished tasks
         let needle = &expected_started;
         let after_started = &output[output.find(needle).unwrap() + needle.len()..];
-        assert!(after_started.trim().starts_with("-") || after_started.contains("  -  "),
-                "unfinished task should show '-' in FINISHED column");
+        assert!(
+            after_started.trim().starts_with("-") || after_started.contains("  -  "),
+            "unfinished task should show '-' in FINISHED column"
+        );
     }
 
     #[test]
@@ -1914,7 +1983,12 @@ mod tests {
             None,
         );
         let expected = local_display("2026-07-22T12:00:00Z");
-        assert!(output.contains(&expected), "expected local time '{}' in output:\n{}", expected, output);
+        assert!(
+            output.contains(&expected),
+            "expected local time '{}' in output:\n{}",
+            expected,
+            output
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1948,7 +2022,11 @@ mod tests {
 
     #[test]
     fn test_summarize_all_completed() {
-        let tasks = vec![entry("agent", "completed"), entry("crawl", "completed"), entry("swarm", "completed")];
+        let tasks = vec![
+            entry("agent", "completed"),
+            entry("crawl", "completed"),
+            entry("swarm", "completed"),
+        ];
         let result = summarize_async_tasks(&tasks);
         assert!(result.contains("3 total"));
         assert!(result.contains("3 completed"));

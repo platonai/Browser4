@@ -157,7 +157,9 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
 /// The boolean set is used by `parse_raw_args` to avoid consuming the next
 /// argument as a value for boolean flags (e.g. `-i` should not consume
 /// `"search"` in `snapshot grep -i "search"`).
-pub fn build_short_option_map(options: &[crate::commands::OptionDef]) -> (HashMap<String, String>, HashSet<String>) {
+pub fn build_short_option_map(
+    options: &[crate::commands::OptionDef],
+) -> (HashMap<String, String>, HashSet<String>) {
     let mut map = HashMap::new();
     let mut bool_opts = HashSet::new();
     for opt in options {
@@ -613,7 +615,16 @@ mod tests {
         assert_eq!(flags.session_name, None);
         assert_eq!(
             flags.args,
-            vec!["loop", "--count", "2", "--", "-s", "price-watch", "eval", "1+1"]
+            vec![
+                "loop",
+                "--count",
+                "2",
+                "--",
+                "-s",
+                "price-watch",
+                "eval",
+                "1+1"
+            ]
         );
     }
 
@@ -629,10 +640,7 @@ mod tests {
         let flags = parse_global_flags(&argv);
 
         assert_eq!(flags.session_name, None);
-        assert_eq!(
-            flags.args,
-            vec!["loop", "--", "-s=price-watch", "eval"]
-        );
+        assert_eq!(flags.args, vec!["loop", "--", "-s=price-watch", "eval"]);
     }
 
     #[test]
@@ -745,8 +753,12 @@ mod tests {
         .into_iter()
         .collect();
         let bool_opts: HashSet<String> = [
-            "ignore-case", "invert-match", "count", "fixed-strings",
-            "word-regexp", "files-with-matches",
+            "ignore-case",
+            "invert-match",
+            "count",
+            "fixed-strings",
+            "word-regexp",
+            "files-with-matches",
         ]
         .into_iter()
         .map(String::from)
@@ -765,7 +777,11 @@ mod tests {
         let pos = map["_"].as_array().unwrap();
         assert_eq!(pos.len(), 2, "expected 2 positionals: command + pattern");
         assert_eq!(pos[0].as_str(), Some("snapshot-grep"));
-        assert_eq!(pos[1].as_str(), Some("search"), "pattern should be 'search', not consumed by -i");
+        assert_eq!(
+            pos[1].as_str(),
+            Some("search"),
+            "pattern should be 'search', not consumed by -i"
+        );
     }
 
     #[test]
@@ -798,8 +814,9 @@ mod tests {
     fn test_parse_raw_args_short_option_consumes_negative_numeric_value() {
         // `snapshot -v -1` — the negative, scroll-relative viewport index must be
         // consumed as -v's value, not treated as a boolean flag.
-        let short_to_long: HashMap<String, String> =
-            [("v".to_string(), "viewport".to_string())].into_iter().collect();
+        let short_to_long: HashMap<String, String> = [("v".to_string(), "viewport".to_string())]
+            .into_iter()
+            .collect();
         let bool_opts: HashSet<String> = HashSet::new();
 
         let raw = vec!["snapshot".to_string(), "-v".to_string(), "-1".to_string()];
@@ -813,14 +830,19 @@ mod tests {
 
     #[test]
     fn test_parse_raw_args_short_option_consumes_negative_range_and_list() {
-        let short_to_long: HashMap<String, String> =
-            [("v".to_string(), "viewport".to_string())].into_iter().collect();
+        let short_to_long: HashMap<String, String> = [("v".to_string(), "viewport".to_string())]
+            .into_iter()
+            .collect();
         let bool_opts: HashSet<String> = HashSet::new();
 
         for spec in ["-1-3", "-1,2", "-3.5"] {
             let raw = vec!["snapshot".to_string(), "-v".to_string(), spec.to_string()];
             let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
-            assert_eq!(map.get("viewport"), Some(&json!(spec)), "spec {spec} should be consumed as value");
+            assert_eq!(
+                map.get("viewport"),
+                Some(&json!(spec)),
+                "spec {spec} should be consumed as value"
+            );
         }
     }
 
@@ -859,7 +881,9 @@ mod tests {
         raw.insert("_".to_string(), json!(["cmd", "a"]));
         let result = build_command_args(&raw, &[]);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("unexpected positional arguments"));
+        assert!(result
+            .unwrap_err()
+            .contains("unexpected positional arguments"));
     }
 
     #[test]
@@ -1248,11 +1272,9 @@ mod tests {
     #[test]
     fn test_parse_raw_args_repeatable_non_boolean_option_collected_to_array() {
         // -e price -e rating -e stars should produce regexp: ["price", "rating", "stars"]
-        let short_to_long: HashMap<String, String> = [
-            ("e".to_string(), "regexp".to_string()),
-        ]
-        .into_iter()
-        .collect();
+        let short_to_long: HashMap<String, String> = [("e".to_string(), "regexp".to_string())]
+            .into_iter()
+            .collect();
         // -e is NOT boolean — it takes a value
         let bool_opts: HashSet<String> = HashSet::new();
 
@@ -1275,11 +1297,9 @@ mod tests {
     #[test]
     fn test_parse_raw_args_repeatable_boolean_flag_not_collected() {
         // -i -i should still be ignore-case: true (not [true, true])
-        let short_to_long: HashMap<String, String> = [
-            ("i".to_string(), "ignore-case".to_string()),
-        ]
-        .into_iter()
-        .collect();
+        let short_to_long: HashMap<String, String> = [("i".to_string(), "ignore-case".to_string())]
+            .into_iter()
+            .collect();
         let bool_opts: HashSet<String> = ["ignore-case".to_string()].into_iter().collect();
 
         let raw = vec![
@@ -1294,11 +1314,9 @@ mod tests {
     #[test]
     fn test_parse_raw_args_single_non_boolean_option_not_array() {
         // A single -e should still be a string, not an array
-        let short_to_long: HashMap<String, String> = [
-            ("e".to_string(), "regexp".to_string()),
-        ]
-        .into_iter()
-        .collect();
+        let short_to_long: HashMap<String, String> = [("e".to_string(), "regexp".to_string())]
+            .into_iter()
+            .collect();
         let bool_opts: HashSet<String> = HashSet::new();
 
         let raw = vec![

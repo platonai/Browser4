@@ -396,9 +396,16 @@ fn tips_for_command(command: &str) -> &'static [Tip] {
         }
         "select" => TIPS_SELECT,
         "tab-list" | "tab-new" | "tab-close" | "tab-select" => TIPS_TABS,
-        "localstorage-list" | "localstorage-get" | "localstorage-set" | "localstorage-delete"
-        | "localstorage-clear" | "sessionstorage-list" | "sessionstorage-get"
-        | "sessionstorage-set" | "sessionstorage-delete" | "sessionstorage-clear" => TIPS_STORAGE,
+        "localstorage-list"
+        | "localstorage-get"
+        | "localstorage-set"
+        | "localstorage-delete"
+        | "localstorage-clear"
+        | "sessionstorage-list"
+        | "sessionstorage-get"
+        | "sessionstorage-set"
+        | "sessionstorage-delete"
+        | "sessionstorage-clear" => TIPS_STORAGE,
         "state-save" | "state-load" => TIPS_STORAGE,
         "mousemove" | "mousedown" | "mouseup" | "mousewheel" => TIPS_INTERACTION,
         "get" => TIPS_HTMLSNAPSHOT_GET,

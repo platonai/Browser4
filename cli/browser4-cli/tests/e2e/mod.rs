@@ -64,8 +64,8 @@ use std::thread;
 use std::thread::{sleep, JoinHandle};
 use std::time::{Duration, Instant};
 
-pub mod scenarios;
 pub mod constants;
+pub mod scenarios;
 pub use constants::*;
 
 // ---------------------------------------------------------------------------
@@ -691,7 +691,7 @@ impl MockListedSession {
             session_id: session_id.to_string(),
             status: "stopped".to_string(),
             url: "https://mock.browser4.local/current".to_string(),
-            created_at: Some(now - 7200_000), // 2 hours ago
+            created_at: Some(now - 7200_000),      // 2 hours ago
             last_accessed_at: Some(now - 600_000), // 10 min ago
         }
     }
@@ -1503,10 +1503,7 @@ fn mock_browser_tool_text(
     }
 }
 
-fn mock_command_batch_response(
-    arguments: &serde_json::Value,
-    state: &MockBrowser4State,
-) -> String {
+fn mock_command_batch_response(arguments: &serde_json::Value, state: &MockBrowser4State) -> String {
     let mut current_session_id = arguments
         .get("sessionId")
         .and_then(|value| value.as_str())
@@ -2647,11 +2644,7 @@ fn strip_snapshot_output(stdout: &str) -> String {
     without
         .lines()
         .map(str::trim)
-        .filter(|l| {
-            !l.is_empty()
-                && *l != "ensuring server..."
-                && !l.starts_with("✓ ")
-        })
+        .filter(|l| !l.is_empty() && *l != "ensuring server..." && !l.starts_with("✓ "))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -2685,14 +2678,11 @@ fn extract_tab_index(output: &str, url: &str) -> usize {
                 if let Some(tab_url) = tab.get("url").and_then(|v| v.as_str()) {
                     if tab_url == url {
                         // index can be either a JSON number or string
-                        if let Some(idx) = tab
-                            .get("index")
-                            .and_then(|v| {
-                                v.as_u64()
-                                    .map(|n| n as usize)
-                                    .or_else(|| v.as_str().and_then(|s| s.parse::<usize>().ok()))
-                            })
-                        {
+                        if let Some(idx) = tab.get("index").and_then(|v| {
+                            v.as_u64()
+                                .map(|n| n as usize)
+                                .or_else(|| v.as_str().and_then(|s| s.parse::<usize>().ok()))
+                        }) {
                             return idx;
                         }
                         panic!(
@@ -2713,14 +2703,11 @@ fn extract_tab_index(output: &str, url: &str) -> usize {
             if let Some(tab_url) = tab.get("url").and_then(|v| v.as_str()) {
                 if tab_url == url {
                     // index can be either a JSON number or string
-                    if let Some(idx) = tab
-                        .get("index")
-                        .and_then(|v| {
-                            v.as_u64()
-                                .map(|n| n as usize)
-                                .or_else(|| v.as_str().and_then(|s| s.parse::<usize>().ok()))
-                        })
-                    {
+                    if let Some(idx) = tab.get("index").and_then(|v| {
+                        v.as_u64()
+                            .map(|n| n as usize)
+                            .or_else(|| v.as_str().and_then(|s| s.parse::<usize>().ok()))
+                    }) {
                         return idx;
                     }
                     panic!(
@@ -2838,10 +2825,7 @@ fn extract_tab_guid(output: &str, url: &str) -> String {
         }
     }
 
-    panic!(
-        "Could not find tab guid for '{}' in:\n{}",
-        url, output
-    )
+    panic!("Could not find tab guid for '{}' in:\n{}", url, output)
 }
 
 // ---------------------------------------------------------------------------
@@ -3006,15 +2990,13 @@ fn wait_for_crawl_result(
         // Crawl is done when status is "OK" / "SC_OK" or has terminal error
         let status = parsed["status"].as_str().unwrap_or("");
         let is_done = matches!(status, "OK" | "SC_OK");
-        let has_terminal = matches!(
-            status,
-            "SC_REQUEST_TIMEOUT" | "SC_INTERNAL_SERVER_ERROR"
-        );
+        let has_terminal = matches!(status, "SC_REQUEST_TIMEOUT" | "SC_INTERNAL_SERVER_ERROR");
         let has_error_status = parsed["statusCode"]
             .as_i64()
             .map(|s| !(200..400).contains(&s))
             .unwrap_or(false);
-        if parsed["taskId"].as_str() == Some(task_id) && (is_done || has_terminal || has_error_status)
+        if parsed["taskId"].as_str() == Some(task_id)
+            && (is_done || has_terminal || has_error_status)
         {
             ctx.record_step(
                 format!(
@@ -3133,8 +3115,7 @@ fn read_key_events(ctx: &mut E2ECtx) -> Vec<String> {
     );
     // The fixture stores structured objects {type: "down", key: "Shift", ...},
     // not plain strings.  Parse as Vec<Value> and format each as "type:key".
-    let events: Vec<serde_json::Value> =
-        serde_json::from_str(text.trim()).unwrap_or_default();
+    let events: Vec<serde_json::Value> = serde_json::from_str(text.trim()).unwrap_or_default();
     events
         .iter()
         .filter_map(|ev| {
@@ -3263,9 +3244,7 @@ fn wait_for_last_wheel_or_abort<F>(
         }
         thread::sleep(Duration::from_millis(300));
     }
-    panic!(
-        "{failure_message}. Timed out after {timeout_ms}ms.\nLast lastWheel: {last_value:?}"
-    );
+    panic!("{failure_message}. Timed out after {timeout_ms}ms.\nLast lastWheel: {last_value:?}");
 }
 
 /// Poll until `window.__browser4State.keyEvents` has at least
@@ -3291,9 +3270,7 @@ fn wait_for_press_key_events_or_abort(
                 .skip(before_count)
                 .map(String::as_str)
                 .collect();
-            if new_events.iter().any(|e| *e == down)
-                && new_events.iter().any(|e| *e == up)
-            {
+            if new_events.iter().any(|e| *e == down) && new_events.iter().any(|e| *e == up) {
                 ctx.record_step(
                     format!(
                         "wait for press key events for '{}' (timeout={}ms)",
@@ -3635,13 +3612,10 @@ fn save_test_report(
         "failures": failures,
     });
 
-    let payload = serde_json::to_string_pretty(&report)
-        .expect("failed to serialize test-report JSON");
+    let payload =
+        serde_json::to_string_pretty(&report).expect("failed to serialize test-report JSON");
     fs::write(&path, format!("{payload}\n")).unwrap_or_else(|error| {
-        panic!(
-            "failed to write test report to {}: {error}",
-            path.display()
-        )
+        panic!("failed to write test report to {}: {error}", path.display())
     });
 }
 
@@ -4444,9 +4418,7 @@ fn verify_e2e_command_coverage(include_batch_command: bool) {
     let mut overincluded: Vec<&str> = commands
         .iter()
         .filter(|c| {
-            c.e2e_coverage == E2eCoverage::Excluded
-                && c.name != "batch"
-                && tested.contains(c.name)
+            c.e2e_coverage == E2eCoverage::Excluded && c.name != "batch" && tested.contains(c.name)
         })
         .map(|c| c.name)
         .collect();
@@ -4927,9 +4899,13 @@ fn parse_run_options() -> RunOptions {
 
         // --level / -L
         if let Some(value) = match_value_flag_start(&arg, "level", "-L") {
-            let val = if value.is_empty() { args.next().unwrap_or_else(|| {
+            let val = if value.is_empty() {
+                args.next().unwrap_or_else(|| {
                 panic!("Missing value for --level. Use --level=<SMOKE|BASIC|EXTENDED|ALL> or --level <SMOKE|BASIC|EXTENDED|all>")
-            })} else { value };
+            })
+            } else {
+                value
+            };
             max_level = scenarios::ScenarioLevel::from_arg(&val).unwrap_or_else(|error| {
                 panic!("{error}");
             });
@@ -4938,36 +4914,52 @@ fn parse_run_options() -> RunOptions {
 
         // --scenario / -s
         if let Some(value) = match_value_flag_start(&arg, "scenario", "-s") {
-            let val = if value.is_empty() { args.next().unwrap_or_else(|| {
+            let val = if value.is_empty() {
+                args.next().unwrap_or_else(|| {
                 panic!("Missing value for --scenario. Use --scenario=<name|pattern> or --scenario <name|pattern>")
-            })} else { value };
+            })
+            } else {
+                value
+            };
             scenario = Some(val);
             continue;
         }
 
         // --scenario-from / -f
         if let Some(value) = match_value_flag_start(&arg, "scenario-from", "-f") {
-            let val = if value.is_empty() { args.next().unwrap_or_else(|| {
+            let val = if value.is_empty() {
+                args.next().unwrap_or_else(|| {
                 panic!("Missing value for --scenario-from. Use --scenario-from=<name> or --scenario-from <name>")
-            })} else { value };
+            })
+            } else {
+                value
+            };
             scenario_from = Some(val);
             continue;
         }
 
         // --scenario-limit / -n
         if let Some(value) = match_value_flag_start(&arg, "scenario-limit", "-n") {
-            let val = if value.is_empty() { args.next().unwrap_or_else(|| {
+            let val = if value.is_empty() {
+                args.next().unwrap_or_else(|| {
                 panic!("Missing value for --scenario-limit. Use --scenario-limit=<count> or --scenario-limit <count>")
-            })} else { value };
+            })
+            } else {
+                value
+            };
             scenario_limit = Some(parse_scenario_limit(&val));
             continue;
         }
 
         // --group / -g
         if let Some(value) = match_value_flag_start(&arg, "group", "-g") {
-            let val = if value.is_empty() { args.next().unwrap_or_else(|| {
-                panic!("Missing value for --group. Use --group=<name> or --group <name>")
-            })} else { value };
+            let val = if value.is_empty() {
+                args.next().unwrap_or_else(|| {
+                    panic!("Missing value for --group. Use --group=<name> or --group <name>")
+                })
+            } else {
+                value
+            };
             groups.push(val);
             continue;
         }
@@ -5417,9 +5409,15 @@ fn main() {
 
             if run_options.verbose {
                 if let Some(group) = planned_run.scenario.group {
-                    println!("  [verbose] running scenario: {} (group: {})", planned_run.scenario.name, group);
+                    println!(
+                        "  [verbose] running scenario: {} (group: {})",
+                        planned_run.scenario.name, group
+                    );
                 } else {
-                    println!("  [verbose] running scenario: {}", planned_run.scenario.name);
+                    println!(
+                        "  [verbose] running scenario: {}",
+                        planned_run.scenario.name
+                    );
                 }
             }
             let outcome = run_named_scenario(
@@ -5545,7 +5543,9 @@ fn main() {
                     if scenario.level > scenarios::ScenarioLevel::Basic {
                         continue;
                     }
-                    let report = timings.iter().find(|t| t.name == planned_run.display_name());
+                    let report = timings
+                        .iter()
+                        .find(|t| t.name == planned_run.display_name());
                     let Some(report) = report else { continue };
                     let actual_ms = report.total.as_millis() as u64;
                     let threshold_ms = estimate_ms.saturating_mul(2);

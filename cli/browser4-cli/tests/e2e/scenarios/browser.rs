@@ -663,9 +663,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
             "#type-target",
             expected_value,
             5_000,
-            &format!(
-                "Expected #type-target to become '{expected_value}' after press '{key}'"
-            ),
+            &format!("Expected #type-target to become '{expected_value}' after press '{key}'"),
         );
     }
 
@@ -736,7 +734,10 @@ pub(super) fn test_pointer_commands(ctx: &mut E2ECtx) {
 
     // Modifier dblclick: exercises the CDP modifier-bitmask dblclick path.
     // Same platform caveat as modifier click above.
-    run_command(ctx, &["dblclick", "#dblclick-target", "--modifiers", "Shift"]);
+    run_command(
+        ctx,
+        &["dblclick", "#dblclick-target", "--modifiers", "Shift"],
+    );
     assume_wait_for_state(
         ctx,
         |s| s["doubleClickCount"].as_u64() == Some(2),
@@ -809,7 +810,11 @@ pub(super) fn test_eval_await_command(ctx: &mut E2ECtx) {
     // Use --await to resolve a Promise
     let await_result = run_command(
         ctx,
-        &["eval", "--await", "new Promise(resolve => setTimeout(() => resolve('async-done'), 50))"],
+        &[
+            "eval",
+            "--await",
+            "new Promise(resolve => setTimeout(() => resolve('async-done'), 50))",
+        ],
     );
     let trimmed = strip_snapshot_output(&await_result.stdout);
     assert_eq!(
@@ -820,7 +825,11 @@ pub(super) fn test_eval_await_command(ctx: &mut E2ECtx) {
     // Verify --await works with fetch-like patterns (immediate resolve)
     let fetch_result = run_command(
         ctx,
-        &["eval", "--await", "Promise.resolve({status: 200, ok: true})"],
+        &[
+            "eval",
+            "--await",
+            "Promise.resolve({status: 200, ok: true})",
+        ],
     );
     let fetch_trimmed = strip_snapshot_output(&fetch_result.stdout);
     assert!(
@@ -1048,7 +1057,9 @@ pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     // Verify the console command is recognised by the backend (was previously "Unknown tool")
     let console_result = run_command(ctx, &["console", "info"]);
     assert!(
-        !console_result.stderr.contains("Unknown tool: browser_console_messages"),
+        !console_result
+            .stderr
+            .contains("Unknown tool: browser_console_messages"),
         "console command should be recognised by the backend:\n{}",
         console_result.stderr
     );
@@ -1162,18 +1173,14 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
         let deadline = Instant::now() + Duration::from_millis(10_000);
         let mut accepted = false;
         while Instant::now() < deadline {
-            let result =
-                run_command_allowing_failure(ctx, &["dialog-accept", "accepted by cli"]);
+            let result = run_command_allowing_failure(ctx, &["dialog-accept", "accepted by cli"]);
             if result.exit_code == 0 {
                 accepted = true;
                 break;
             }
             thread::sleep(Duration::from_millis(300));
         }
-        assert!(
-            accepted,
-            "Expected dialog-accept to succeed within 10 s"
-        );
+        assert!(accepted, "Expected dialog-accept to succeed within 10 s");
     }
     wait_for_state_or_abort(
         ctx,
@@ -1198,10 +1205,7 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
             }
             thread::sleep(Duration::from_millis(300));
         }
-        assert!(
-            dismissed,
-            "Expected dialog-dismiss to succeed within 10 s"
-        );
+        assert!(dismissed, "Expected dialog-dismiss to succeed within 10 s");
     }
     wait_for_state_or_abort(
         ctx,
@@ -1470,8 +1474,7 @@ pub(super) fn test_cdp_live_command(ctx: &mut E2ECtx) {
     // Test 4: Invalid CDP method should produce an error.
     // The server returns the CDP error as the MCP tool result content,
     // so the CLI prints it. Use allowing_failure since exit code != 0 is expected.
-    let bad_result =
-        run_command_allowing_failure(ctx, &["cdp", "InvalidDomain.invalidMethod"]);
+    let bad_result = run_command_allowing_failure(ctx, &["cdp", "InvalidDomain.invalidMethod"]);
     assert!(
         !bad_result.stdout.is_empty() || !bad_result.stderr.is_empty() || bad_result.exit_code != 0,
         "Invalid CDP method should produce error output or non-zero exit code.\n\
@@ -1544,17 +1547,25 @@ pub(super) fn test_mouse_click_variants(ctx: &mut E2ECtx) {
 
     // ── Modifier clicks ─────────────────────────────────────────────
     // Shift+click
-    run_command(ctx, &["click", "#modifier-click-target", "--modifiers", "Shift"]);
+    run_command(
+        ctx,
+        &["click", "#modifier-click-target", "--modifiers", "Shift"],
+    );
     assume_wait_for_state(
         ctx,
-        |s| s["modifierClick"]["count"].as_u64().unwrap_or(0) >= 1
-            && s["modifierClick"]["shiftKey"].as_bool() == Some(true),
+        |s| {
+            s["modifierClick"]["count"].as_u64().unwrap_or(0) >= 1
+                && s["modifierClick"]["shiftKey"].as_bool() == Some(true)
+        },
         2_000,
         "Expected modifierClick.shiftKey=true after Shift+click",
     );
 
     // Ctrl+click
-    run_command(ctx, &["click", "#modifier-click-target", "--modifiers", "Control"]);
+    run_command(
+        ctx,
+        &["click", "#modifier-click-target", "--modifiers", "Control"],
+    );
     assume_wait_for_state(
         ctx,
         |s| s["modifierClick"]["ctrlKey"].as_bool() == Some(true),
@@ -1563,7 +1574,10 @@ pub(super) fn test_mouse_click_variants(ctx: &mut E2ECtx) {
     );
 
     // Alt+click
-    run_command(ctx, &["click", "#modifier-click-target", "--modifiers", "Alt"]);
+    run_command(
+        ctx,
+        &["click", "#modifier-click-target", "--modifiers", "Alt"],
+    );
     assume_wait_for_state(
         ctx,
         |s| s["modifierClick"]["altKey"].as_bool() == Some(true),
@@ -1674,8 +1688,7 @@ pub(super) fn test_mouse_hover_and_context(ctx: &mut E2ECtx) {
     run_command(ctx, &["hover", "#hover-zone"]);
     assume_wait_for_state(
         ctx,
-        |s| s["hovered"].as_bool() == Some(true)
-            && s["hoverEnterCount"].as_u64().unwrap_or(0) >= 1,
+        |s| s["hovered"].as_bool() == Some(true) && s["hoverEnterCount"].as_u64().unwrap_or(0) >= 1,
         2_000,
         "Expected hovered=true and hoverEnterCount >= 1 after hover",
     );
@@ -1684,8 +1697,9 @@ pub(super) fn test_mouse_hover_and_context(ctx: &mut E2ECtx) {
     run_command(ctx, &["mousemove", "10", "10"]);
     assume_wait_for_state(
         ctx,
-        |s| s["hovered"].as_bool() == Some(false)
-            && s["hoverLeaveCount"].as_u64().unwrap_or(0) >= 1,
+        |s| {
+            s["hovered"].as_bool() == Some(false) && s["hoverLeaveCount"].as_u64().unwrap_or(0) >= 1
+        },
         2_000,
         "Expected hovered=false and hoverLeaveCount >= 1 after moving away",
     );
@@ -1802,8 +1816,10 @@ pub(super) fn test_mouse_low_level_events(ctx: &mut E2ECtx) {
     run_command(ctx, &["mousedown", "left"]);
     wait_for_state_or_abort(
         ctx,
-        |s| s["mouseDownCount"].as_u64().unwrap_or(0) > md_before
-            && s["mouseDownButton"].as_str() == Some("left"),
+        |s| {
+            s["mouseDownCount"].as_u64().unwrap_or(0) > md_before
+                && s["mouseDownButton"].as_str() == Some("left")
+        },
         2_000,
         "Expected mouseDownCount to increment with button=left",
     );
@@ -1815,8 +1831,10 @@ pub(super) fn test_mouse_low_level_events(ctx: &mut E2ECtx) {
     run_command(ctx, &["mouseup", "left"]);
     wait_for_state_or_abort(
         ctx,
-        |s| s["mouseUpCount"].as_u64().unwrap_or(0) > mu_before
-            && s["mouseUpButton"].as_str() == Some("left"),
+        |s| {
+            s["mouseUpCount"].as_u64().unwrap_or(0) > mu_before
+                && s["mouseUpButton"].as_str() == Some("left")
+        },
         2_000,
         "Expected mouseUpCount to increment with button=left",
     );
@@ -1857,35 +1875,53 @@ pub(super) fn test_keyboard_type_and_fill_edge_cases(ctx: &mut E2ECtx) {
     // ── type normal text ────────────────────────────────────────────
     run_command(ctx, &["type", "hello world", "#type-target"]);
     wait_for_dom_value_or_abort(
-        ctx, "#type-target", "hello world", 2_000,
+        ctx,
+        "#type-target",
+        "hello world",
+        2_000,
         "Expected type-target value 'hello world'",
     );
 
     // ── type Unicode ────────────────────────────────────────────────
     run_command(ctx, &["type", "café 北京 🎉", "#type-target"]);
     wait_for_dom_value_or_abort(
-        ctx, "#type-target", "hello worldcafé 北京 🎉", 5_000,
+        ctx,
+        "#type-target",
+        "hello worldcafé 北京 🎉",
+        5_000,
         "Expected type-target to contain Unicode + emoji text",
     );
 
     // ── fill normal text (clears first) ─────────────────────────────
     run_command(ctx, &["fill", "#fill-target", "filled text"]);
     wait_for_dom_value_or_abort(
-        ctx, "#fill-target", "filled text", 2_000,
+        ctx,
+        "#fill-target",
+        "filled text",
+        2_000,
         "Expected fill-target value 'filled text'",
     );
 
     // ── fill with special characters ────────────────────────────────
-    run_command(ctx, &["fill", "#fill-target", "@#$%^&*()[]{}|\\;:'\",.<>/?`~"]);
+    run_command(
+        ctx,
+        &["fill", "#fill-target", "@#$%^&*()[]{}|\\;:'\",.<>/?`~"],
+    );
     wait_for_dom_value_or_abort(
-        ctx, "#fill-target", "@#$%^&*()[]{}|\\;:'\",.<>/?`~", 5_000,
+        ctx,
+        "#fill-target",
+        "@#$%^&*()[]{}|\\;:'\",.<>/?`~",
+        5_000,
         "Expected fill-target to accept all special characters",
     );
 
     // ── fill empty string (clears the field) ────────────────────────
     run_command(ctx, &["fill", "#fill-target", ""]);
     wait_for_dom_value_or_abort(
-        ctx, "#fill-target", "", 2_000,
+        ctx,
+        "#fill-target",
+        "",
+        2_000,
         "Expected fill-target to be empty after fill with empty string",
     );
 
@@ -1904,7 +1940,10 @@ pub(super) fn test_keyboard_type_and_fill_edge_cases(ctx: &mut E2ECtx) {
     // ── fill on textarea ────────────────────────────────────────────
     run_command(ctx, &["fill", "#textarea-target", "line1\nline2\nline3"]);
     wait_for_dom_value_or_abort(
-        ctx, "#textarea-target", "line1\nline2\nline3", 3_000,
+        ctx,
+        "#textarea-target",
+        "line1\nline2\nline3",
+        3_000,
         "Expected textarea to contain multi-line text",
     );
 
@@ -1929,7 +1968,8 @@ pub(super) fn test_keyboard_press_special_keys(ctx: &mut E2ECtx) {
     let val1 = eval_text_for_target(ctx, "element => element.value", "#press-target");
     assert!(
         val1.trim().starts_with("B") || val1.trim().len() < 6,
-        "Expected first char removed by Home+Delete, got: {:?}", val1.trim()
+        "Expected first char removed by Home+Delete, got: {:?}",
+        val1.trim()
     );
 
     // ── Press End then Backspace ────────────────────────────────────
@@ -1939,7 +1979,8 @@ pub(super) fn test_keyboard_press_special_keys(ctx: &mut E2ECtx) {
     let val2 = eval_text_for_target(ctx, "element => element.value", "#press-target");
     assert!(
         val2.trim().len() <= 5,
-        "Expected last char removed by End+Backspace, got: {:?}", val2.trim()
+        "Expected last char removed by End+Backspace, got: {:?}",
+        val2.trim()
     );
 
     // ── Press Escape (page-level, should not error) ─────────────────
@@ -1972,7 +2013,8 @@ pub(super) fn test_keyboard_press_special_keys(ctx: &mut E2ECtx) {
     // After ArrowLeft from end, cursor is between X and Y, so Z should insert between
     assert!(
         val3.trim().contains("XZ") || val3.trim().contains("ZY"),
-        "Expected Z inserted between X and Y after ArrowLeft, got: {:?}", val3.trim()
+        "Expected Z inserted between X and Y after ArrowLeft, got: {:?}",
+        val3.trim()
     );
 
     run_command(ctx, &["close"]);
@@ -2000,14 +2042,20 @@ pub(super) fn test_keyboard_edge_inputs(ctx: &mut E2ECtx) {
     // ── number input ────────────────────────────────────────────────
     run_command(ctx, &["fill", "#number-target", "42"]);
     wait_for_dom_value_or_abort(
-        ctx, "#number-target", "42", 2_000,
+        ctx,
+        "#number-target",
+        "42",
+        2_000,
         "Expected number input to accept '42'",
     );
 
     // ── password input ──────────────────────────────────────────────
     run_command(ctx, &["fill", "#password-target", "s3cr3t!"]);
     wait_for_dom_value_or_abort(
-        ctx, "#password-target", "s3cr3t!", 2_000,
+        ctx,
+        "#password-target",
+        "s3cr3t!",
+        2_000,
         "Expected password input to accept value",
     );
 
@@ -2015,29 +2063,34 @@ pub(super) fn test_keyboard_edge_inputs(ctx: &mut E2ECtx) {
     run_command(ctx, &["fill", "#readonly-target", "new val"]);
     let readonly_val = eval_text_for_target(ctx, "element => element.value", "#readonly-target");
     assert_eq!(
-        readonly_val.trim(), "read-only",
-        "Expected readonly input to retain original value, got: {:?}", readonly_val.trim()
+        readonly_val.trim(),
+        "read-only",
+        "Expected readonly input to retain original value, got: {:?}",
+        readonly_val.trim()
     );
 
     // ── disabled input ──────────────────────────────────────────────
     run_command(ctx, &["fill", "#disabled-target", "new val"]);
-    let disabled_val = eval_text_for_target(
-        ctx, "element => element.value", "#disabled-target"
-    );
+    let disabled_val = eval_text_for_target(ctx, "element => element.value", "#disabled-target");
     assert_eq!(
-        disabled_val.trim(), "disabled",
-        "Expected disabled input to retain original value, got: {:?}", disabled_val.trim()
+        disabled_val.trim(),
+        "disabled",
+        "Expected disabled input to retain original value, got: {:?}",
+        disabled_val.trim()
     );
 
     // ── Contenteditable div ─────────────────────────────────────────
     run_command(ctx, &["fill", "#contenteditable-target", "edited content"]);
     thread::sleep(Duration::from_millis(500));
     let ce_html = eval_text_for_target(
-        ctx, "element => element.innerHTML", "#contenteditable-target"
+        ctx,
+        "element => element.innerHTML",
+        "#contenteditable-target",
     );
     assert!(
         ce_html.contains("edited") || ce_html.contains("content"),
-        "Expected contenteditable to contain 'edited content', got: {:?}", ce_html
+        "Expected contenteditable to contain 'edited content', got: {:?}",
+        ce_html
     );
 
     run_command(ctx, &["close"]);
@@ -2055,11 +2108,14 @@ pub(super) fn test_keyboard_combinations_and_focus(ctx: &mut E2ECtx) {
     thread::sleep(Duration::from_millis(500));
     let focus_events = &read_interactive_state(ctx)["focusEvents"];
     let has_focus = focus_events.as_array().map_or(false, |a| {
-        a.iter().any(|e| e["target"].as_str() == Some("type-target") && e["event"].as_str() == Some("focus"))
+        a.iter().any(|e| {
+            e["target"].as_str() == Some("type-target") && e["event"].as_str() == Some("focus")
+        })
     });
     assert!(
         has_focus,
-        "Expected focus event on type-target after click, focusEvents: {:?}", focus_events
+        "Expected focus event on type-target after click, focusEvents: {:?}",
+        focus_events
     );
 
     // ── Ctrl+A (Select All) via keydown/keyup sequence ──────────────
@@ -2080,12 +2136,18 @@ pub(super) fn test_keyboard_combinations_and_focus(ctx: &mut E2ECtx) {
     );
 
     // ── keyDown/keyUp count tracking ────────────────────────────────
-    let kd_before = read_interactive_state(ctx)["keyDownCount"].as_u64().unwrap_or(0);
+    let kd_before = read_interactive_state(ctx)["keyDownCount"]
+        .as_u64()
+        .unwrap_or(0);
     run_command(ctx, &["keydown", "a"]);
     run_command(ctx, &["keyup", "a"]);
     thread::sleep(Duration::from_millis(300));
-    let kd_after = read_interactive_state(ctx)["keyDownCount"].as_u64().unwrap_or(0);
-    let ku_after = read_interactive_state(ctx)["keyUpCount"].as_u64().unwrap_or(0);
+    let kd_after = read_interactive_state(ctx)["keyDownCount"]
+        .as_u64()
+        .unwrap_or(0);
+    let ku_after = read_interactive_state(ctx)["keyUpCount"]
+        .as_u64()
+        .unwrap_or(0);
     assert!(
         kd_after > kd_before,
         "Expected keyDownCount to increment after keydown 'a'. Before: {kd_before}, After: {kd_after}"
@@ -2102,7 +2164,10 @@ pub(super) fn test_keyboard_combinations_and_focus(ctx: &mut E2ECtx) {
 /// click position, right-click, hover enter/leave, detailed key events.
 pub(super) fn test_interactive_enhanced_tracking(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
     open_resized_interactive_page(ctx);
 
     // ── Click position tracking ─────────────────────────────────────
@@ -2143,11 +2208,15 @@ pub(super) fn test_interactive_enhanced_tracking(ctx: &mut E2ECtx) {
 
     // ── Enhanced key event details ──────────────────────────────────
     let key_events_before = read_interactive_state(ctx)["keyEvents"]
-        .as_array().map(|a| a.len()).unwrap_or(0);
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
     run_command(ctx, &["press", "x", "#type-target"]);
     thread::sleep(Duration::from_millis(500));
     let key_events_after = read_interactive_state(ctx)["keyEvents"]
-        .as_array().map(|a| a.len()).unwrap_or(0);
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
     assert!(
         key_events_after > key_events_before,
         "Expected keyEvents to grow after press 'x'. Before: {key_events_before}, After: {key_events_after}"
@@ -2160,7 +2229,8 @@ pub(super) fn test_interactive_enhanced_tracking(ctx: &mut E2ECtx) {
     if let Some(evt) = last_event {
         assert!(
             evt["key"].is_string() || evt["code"].is_string(),
-            "Expected key events to have 'key' or 'code' field, got: {:?}", evt
+            "Expected key events to have 'key' or 'code' field, got: {:?}",
+            evt
         );
     }
 

@@ -13,8 +13,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::state::{
-    self, clear_state, read_state, write_state, CliState, SessionKind,
-    resolve_default_state_dir,
+    self, clear_state, read_state, resolve_default_state_dir, write_state, CliState, SessionKind,
 };
 
 // ---------------------------------------------------------------------------
