@@ -8,9 +8,9 @@ on:
         required: true
         type: string
       skip_tests:
-        description: 'Skip tests during build'
+        description: 'Skip tests during build (not recommended: Maven Central artifacts are immutable)'
         required: false
-        default: true
+        default: false
         type: boolean
 
 # Prevent concurrent Maven Central releases
@@ -29,6 +29,7 @@ jobs:
   prepare:
     name: Prepare release metadata
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     outputs:
@@ -48,19 +49,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
-            if [ -z "$TAG" ]; then
-              echo "❌ workflow_dispatch requires a tag input"
-              exit 1
-            fi
-            git fetch --tags --force
-            if ! git rev-parse --verify "refs/tags/$TAG" >/dev/null 2>&1; then
-              echo "❌ Tag not found in repository: $TAG"
-              exit 1
-            fi
-          else
-            TAG="${GITHUB_REF#refs/tags/}"
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            echo "❌ workflow_dispatch requires a tag input"
+            exit 1
+          fi
+          git fetch --tags --force
+          if ! git rev-parse --verify "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "❌ Tag not found in repository: $TAG"
+            exit 1
           fi
 
           VERSION="${TAG#v}"
@@ -92,6 +89,7 @@ jobs:
   deploy:
     name: Deploy to Maven Central
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     needs: prepare
     if: needs.prepare.result == 'success'
     permissions:
@@ -179,8 +177,8 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
           cache: maven
           server-id: 'central'
-          server-username: MAVEN_USERNAME
-          server-password: MAVEN_PASSWORD
+          server-username: MAVEN_USERNAME # 指向下面的 env 变量名，不要用 ${{ secrets }} 表达式
+          server-password: MAVEN_PASSWORD # 指向下面的 env 变量名
           gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
         env:
@@ -218,14 +216,18 @@ jobs:
           # Update VERSION file
           version_file.write_text(f"{release_version}\n", encoding="utf-8")
 
-          # Update all pom.xml files
+          # Update all pom.xml files, skipping build outputs and archetype template resources
+          # (archetype-resources/pom.xml uses ${browser4-version} placeholders and must stay untouched)
           updated_files = []
           for pom_file in repo_root.rglob("pom.xml"):
+              rel_path = pom_file.relative_to(repo_root).as_posix()
+              if "/target/" in f"/{rel_path}/" or "archetype-resources" in rel_path:
+                  continue
               original = pom_file.read_text(encoding="utf-8")
               updated = original.replace(snapshot_version, release_version)
               if updated != original:
                   pom_file.write_text(updated, encoding="utf-8", newline="\n")
-                  updated_files.append(str(pom_file.relative_to(repo_root)))
+                  updated_files.append(rel_path)
 
           if not updated_files:
               raise SystemExit(f"No pom.xml files contained snapshot version {snapshot_version}")
@@ -234,8 +236,7 @@ jobs:
           for path in updated_files:
               print(f"  - {path}")
 
-          # Also update browser4-base.version if it references a SNAPSHOT of the same base
-          print(f"✅ Version replacement complete: {snapshot_version} → {release_version}")
+          print(f"Version replacement complete: {snapshot_version} → {release_version}")
           PY
 
       - name: Run Tests (if enabled)
@@ -248,13 +249,8 @@ jobs:
 
       - name: Deploy to Sonatype Central
         if: success() || (steps.tests.outcome == 'skipped')
-        shell: bash
         run: |
           echo "=== Deploying to Maven Central ==="
-          echo ""
-          echo "Activating profiles: deploy, release"
-          echo "Modules: default reactor (21 library modules)"
-          echo ""
           ./mvnw --batch-mode deploy -P deploy,release -DskipTests \
             -Dgpg.passphrase="$GPG_PASSPHRASE" \
             -Dgpg.batch=true \
@@ -278,6 +274,13 @@ jobs:
             echo "| **Tag** | \`${{ needs.prepare.outputs.tag }}\` |"
             echo "| **Prerelease** | ${{ needs.prepare.outputs.is_prerelease }} |"
             echo "| **Status** | ${{ job.status }} |"
+
+            if [ "${{ job.status }}" != "success" ]; then
+              echo ""
+              echo "❌ Deploy did not succeed — artifacts were NOT published. Check the Deploy job logs above."
+              exit 0
+            fi
+
             echo ""
             echo "### 📦 Published Modules (Maven Central)"
             echo ""
@@ -371,6 +374,7 @@ jobs:
   release-summary:
     name: Release Summary
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs:
       - prepare
       - deploy
