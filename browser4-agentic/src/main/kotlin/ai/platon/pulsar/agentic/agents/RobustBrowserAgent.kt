@@ -2,6 +2,7 @@ package ai.platon.pulsar.agentic.agents
 
 import ai.platon.pulsar.chrome.dom.util.DomDebug
 import ai.platon.pulsar.agentic.*
+import ai.platon.pulsar.agentic.inference.RequestTokenLimitExceededException
 import ai.platon.pulsar.agentic.inference.TokenBudgetExceededException
 import ai.platon.pulsar.agentic.inference.detail.*
 import ai.platon.pulsar.agentic.model.ActionDescription
@@ -295,6 +296,11 @@ open class RobustBrowserAgent(
                 // Budget breach is permanent — do not retry (each retry would
                 // throw immediately anyway since the budget is already exceeded).
                 logger.error("🛑 resolve.budget.sid={} msg={}", sid, e.message)
+                return ResolveResult(activeContext, ActResultHelper.failed(e, action = action.action))
+            } catch (e: RequestTokenLimitExceededException) {
+                // Per-request limit breach halts the task: report status and
+                // wait for the user to raise the limit before re-launching.
+                logger.error("🛑 resolve.request-token-limit.sid={} msg={}", sid, e.message)
                 return ResolveResult(activeContext, ActResultHelper.failed(e, action = action.action))
             } catch (e: Exception) {
                 lastError = e

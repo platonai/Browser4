@@ -5,6 +5,7 @@ import ai.platon.pulsar.agentic.event.AgenticEvents
 import ai.platon.pulsar.agentic.inference.AgentMessageList
 import ai.platon.pulsar.agentic.inference.AgentTokenBudget
 import ai.platon.pulsar.agentic.inference.RequestTokenLimiter
+import ai.platon.pulsar.agentic.inference.RequestTokenLimitExceededException
 import ai.platon.pulsar.agentic.inference.TokenBudgetExceededException
 import ai.platon.pulsar.agentic.inference.ToolExposeMode
 import ai.platon.pulsar.agentic.inference.collapseToLegacyString
@@ -132,6 +133,10 @@ open class ContextToAction(
             // error ActionDescription (which would let the agent loop continue
             // stepping and keep burning tokens).
             throw e
+        } catch (e: RequestTokenLimitExceededException) {
+            // Must propagate — the task must stop and report status so the
+            // user can decide whether to raise the limit and re-launch.
+            throw e
         } catch (e: Exception) {
             val errorResponse = ModelResponse("Unknown exception" + e.brief(), ResponseState.OTHER)
             val actionDescription = ActionDescription(
@@ -149,12 +154,13 @@ open class ContextToAction(
 
     @ExperimentalApi
     open suspend fun generateResponseRaw(messages: AgentMessageList, screenshotB64: String? = null): ModelResponse {
-        // Cap per-request token count before dispatching to either LLM path.
-        val truncatedMessages = requestTokenLimiter.truncate(messages)
+        // Halt the task when a single request would exceed the per-request
+        // token limit — no silent truncation, the operator stays in control.
+        requestTokenLimiter.enforce(messages)
         return if (toolExposeMode == ToolExposeMode.TEXT) {
-            generateResponseRawLegacy(truncatedMessages, screenshotB64)
+            generateResponseRawLegacy(messages, screenshotB64)
         } else {
-            generateResponseRawWithLangChain4j(truncatedMessages, screenshotB64)
+            generateResponseRawWithLangChain4j(messages, screenshotB64)
         }.also { response -> accountTokenUsage(response) }
     }
 

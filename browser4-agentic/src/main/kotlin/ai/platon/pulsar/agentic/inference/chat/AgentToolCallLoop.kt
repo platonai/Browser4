@@ -46,7 +46,7 @@ class AgentToolCallLoop(
      * downstream parsing is unchanged).
      */
     suspend fun generate(initialMessages: List<ChatMessage>): ModelResponse {
-        var messages = initialMessages.toMutableList()
+        val messages = initialMessages.toMutableList()
         var response: ChatResponse? = null
         // Accumulate real usage across all rounds — previously only the final
         // response's usage was reported, undercounting consumption by every
@@ -56,9 +56,10 @@ class AgentToolCallLoop(
         var totalTotal = 0
 
         for (iteration in 0 until maxIterations) {
-            // Cap message list before each LLM call — tool results accumulate
-            // and can grow the context beyond the model's limit.
-            messages = requestTokenLimiter.truncate(messages).toMutableList()
+            // Halt the task when the accumulated messages would exceed the
+            // per-request token limit — tool results can grow the context
+            // beyond the model's limit across multi-round loops.
+            requestTokenLimiter.enforce(messages)
 
             val request = ChatRequest.builder()
                 .messages(messages)
