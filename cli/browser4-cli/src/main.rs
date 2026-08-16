@@ -453,6 +453,22 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "code-devtask",
         "code-impact",
         "code-workspace",
+        "errors",
+        "is-visible",
+        "is-enabled",
+        "is-checked",
+        "dialog-status",
+        "scrollintoview",
+        "pushstate",
+        "highlight",
+        "vitals",
+        "web-vitals",
+        "set",
+        "diff-snapshot",
+        "profiles-list",
+        "profiler-start",
+        "profiler-stop",
+        "download",
     ]
     .into()
 }
@@ -5196,6 +5212,280 @@ fn handle_snapshot_clean(args: &Value) -> Result<(), String> {
         }
     }
 
+    Ok(())
+}
+
+/// `diff snapshot [before] [after]` — diff two saved accessibility-tree
+/// snapshots.  With no paths, diffs the two most recent snapshot files.
+fn handle_snapshot_diff(args: &Value) -> Result<(), String> {
+    use std::path::PathBuf;
+    use std::time::SystemTime;
+
+    let before_arg = args
+        .get("before")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let after_arg = args
+        .get("after")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
+    let snap_dir = snapshot::snapshot_dir();
+    if !snap_dir.is_dir() {
+        cli_println!("No snapshot directory found at {}", snap_dir.display());
+        cli_println!("Run a snapshot command first to create snapshot files.");
+        return Ok(());
+    }
+
+    // Resolve the "after" (newer) file: explicit path, else most recent .yml.
+    let after_path: PathBuf = match after_arg {
+        Some(p) => PathBuf::from(p),
+        None => {
+            let mut entries: Vec<(PathBuf, SystemTime)> = std::fs::read_dir(&snap_dir)
+                .map_err(|e| e.to_string())?
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map_or(false, |ext| ext == "yml"))
+                .filter_map(|e| {
+                    let modified = e.metadata().ok()?.modified().ok()?;
+                    Some((e.path(), modified))
+                })
+                .collect();
+            entries.sort_by(|a, b| b.1.cmp(&a.1));
+            match entries.into_iter().next() {
+                Some((path, _)) => path,
+                None => {
+                    cli_println!("No snapshot files found in {}", snap_dir.display());
+                    return Ok(());
+                }
+            }
+        }
+    };
+
+    // Resolve the "before" (older) file: explicit path, else previous snapshot.
+    let before_path: PathBuf = match before_arg {
+        Some(p) => PathBuf::from(p),
+        None => match snapshot_diff::find_previous_snapshot(&after_path) {
+            Some(path) => path,
+            None => {
+                cli_println!(
+                    "No previous snapshot found to diff against: {}",
+                    after_path.display()
+                );
+                return Ok(());
+            }
+        },
+    };
+
+    cli_println!(
+        "{}",
+        snapshot_diff::diff_snapshots(&before_path, &after_path)
+    );
+    Ok(())
+}
+
+/// `profiles list` — list browser profile (context) directories under the
+/// Browser4 data dir: `~/.browser4/browser/chrome/<context>/` (e.g.
+/// `prototype/`, `default/`, `cx.*`).  Mirrors
+/// `ai.platon.pulsar.common.AppPaths.CONTEXT_BASE_DIR`.
+fn handle_profiles_list() -> Result<(), String> {
+    use std::path::PathBuf;
+
+    let Some(home) = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+    else {
+        return Err("Cannot resolve home directory to locate browser profiles.".to_string());
+    };
+    let chrome_base = home.join(".browser4").join("browser").join("chrome");
+    if !chrome_base.is_dir() {
+        cli_println!(
+            "No browser profile directory found at {}",
+            chrome_base.display()
+        );
+        cli_println!(
+            "Profiles are created when the backend launches a browser session; pass --profile <path> to `open` to use a custom profile directory."
+        );
+        return Ok(());
+    }
+
+    let mut dirs: Vec<(String, Option<String>)> = std::fs::read_dir(&chrome_base)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .map(|e| {
+            let path = e.path();
+            let name = e.file_name().to_string_lossy().to_string();
+            // A context dir contains browser data subdirs, e.g. prototype/google-chrome/
+            let browser_data = std::fs::read_dir(&path)
+                .ok()
+                .and_then(|iter| iter.flatten().next())
+                .map(|sub| sub.file_name().to_string_lossy().to_string());
+            (name, browser_data)
+        })
+        .collect();
+    dirs.sort_by(|a, b| a.0.cmp(&b.0));
+
+    cli_println!("Browser profiles under {}:", chrome_base.display());
+    if dirs.is_empty() {
+        cli_println!("  (none yet — profiles are created on first browser launch)");
+    }
+    for (name, browser_data) in dirs {
+        match browser_data {
+            Some(data) => cli_println!("  {} ({})", name, data),
+            None => cli_println!("  {}", name),
+        }
+    }
+    Ok(())
+}
+
+/// `wait --download [--dir <path>] [--timeout <ms>]` — poll the download
+/// directory until no `.crdownload`/`.tmp` files remain and at least one
+/// completed file exists.
+async fn handle_wait_download(tool_params: &Value) -> Result<(), String> {
+    use std::path::PathBuf;
+
+    let dir = tool_params
+        .get("dir")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| "downloads".to_string());
+    let timeout_millis: u64 = tool_params
+        .get("timeout")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(30000);
+
+    let dir_path = PathBuf::from(&dir);
+    if !dir_path.is_dir() {
+        return Err(format!(
+            "Download directory does not exist: {}. Create it or pass --dir <path> (use `download --dir <path>` to configure the browser).",
+            dir_path.display()
+        ));
+    }
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_millis);
+    loop {
+        let mut has_completed_file = false;
+        let mut downloading = false;
+        if let Ok(iter) = std::fs::read_dir(&dir_path) {
+            for entry in iter.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.ends_with(".crdownload")
+                    || name.ends_with(".tmp")
+                    || name.ends_with(".part")
+                {
+                    downloading = true;
+                } else if !name.ends_with(".download") {
+                    has_completed_file = true;
+                }
+            }
+        }
+
+        if has_completed_file && !downloading {
+            cli_println!("Download complete in {}", dir_path.display());
+            let mut names: Vec<String> = std::fs::read_dir(&dir_path)
+                .map_err(|e| e.to_string())?
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect();
+            names.sort();
+            for name in names {
+                cli_println!("  {}", name);
+            }
+            return Ok(());
+        }
+
+        if std::time::Instant::now() >= deadline {
+            return Err(format!(
+                "Timed out after {} ms waiting for a download in {}",
+                timeout_millis,
+                dir_path.display()
+            ));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    }
+}
+
+/// `profiler start` — enable and start the V8 CPU profiler via CDP.
+async fn handle_profiler_start(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let enable_params = json!({ "method": "Profiler.enable", "params": {} });
+    with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let mut params = enable_params.clone();
+        params["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, "execute_cdp_command", params).await }
+    })
+    .await?;
+
+    let start_params = json!({ "method": "Profiler.start", "params": {} });
+    let result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let mut params = start_params.clone();
+        params["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, "execute_cdp_command", params).await }
+    })
+    .await?;
+
+    cli_println!("{}", maybe_pretty_print_json(&result));
+    cli_println!("CPU profiler started. Run `profiler stop` to save the profile.");
+    Ok(())
+}
+
+/// `profiler stop [--file out.cpuprofile]` — stop the V8 CPU profiler and save
+/// the profile as a .cpuprofile file (Chrome DevTools / speedscope compatible).
+async fn handle_profiler_stop(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    use std::path::PathBuf;
+
+    let stop_params = json!({ "method": "Profiler.stop", "params": {} });
+    let result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let mut params = stop_params.clone();
+        params["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, "execute_cdp_command", params).await }
+    })
+    .await?;
+
+    let profile: Value = serde_json::from_str(&result).unwrap_or(Value::String(result.clone()));
+
+    let file_arg = tool_params
+        .get("file")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let out_path: PathBuf = match file_arg {
+        Some(p) => PathBuf::from(p),
+        None => {
+            let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+            PathBuf::from(format!("profiler-{}.cpuprofile", ts))
+        }
+    };
+
+    // Profiler.stop returns {"profile": {...}} — extract the inner object so
+    // the saved file is a bare CPUProfile document.
+    let payload = match &profile {
+        Value::Object(map) => match map.get("profile") {
+            Some(inner @ Value::Object(_)) => {
+                serde_json::to_string_pretty(inner).unwrap_or_else(|_| result.clone())
+            }
+            _ => serde_json::to_string_pretty(&profile).unwrap_or_else(|_| result.clone()),
+        },
+        _ => result.clone(),
+    };
+
+    std::fs::write(&out_path, payload)
+        .map_err(|e| format!("Failed to write {}: {}", out_path.display(), e))?;
+    cli_println!("CPU profile saved to {}", out_path.display());
     Ok(())
 }
 
@@ -16163,6 +16453,56 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
             }
         }
     }
+    // `is visible|enabled|checked <sel>` — agent-browser style assertion commands.
+    if prefix == "is" {
+        let known_subs = ["visible", "enabled", "checked"];
+        if known_subs.contains(&sub.as_str()) {
+            let mut rewritten = vec![format!("is-{}", sub)];
+            rewritten.extend(args[2..].iter().cloned());
+            return Some(rewritten);
+        }
+        return None;
+    }
+    // `window new [url]` — new browser window (tab alias).
+    if prefix == "window" {
+        let known_subs = ["new"];
+        if known_subs.contains(&sub.as_str()) {
+            let mut rewritten = vec![format!("window-{}", sub)];
+            rewritten.extend(args[2..].iter().cloned());
+            return Some(rewritten);
+        }
+        return None;
+    }
+    // `diff snapshot [before] [after]` — diff saved accessibility snapshots.
+    if prefix == "diff" {
+        let known_subs = ["snapshot"];
+        if known_subs.contains(&sub.as_str()) {
+            let mut rewritten = vec![format!("diff-{}", sub)];
+            rewritten.extend(args[2..].iter().cloned());
+            return Some(rewritten);
+        }
+        return None;
+    }
+    // `profiler start|stop [--file ...]` — V8 CPU profiling.
+    if prefix == "profiler" {
+        let known_subs = ["start", "stop"];
+        if known_subs.contains(&sub.as_str()) {
+            let mut rewritten = vec![format!("profiler-{}", sub)];
+            rewritten.extend(args[2..].iter().cloned());
+            return Some(rewritten);
+        }
+        return None;
+    }
+    // `profiles list` — list browser profile directories.
+    if prefix == "profiles" {
+        let known_subs = ["list"];
+        if known_subs.contains(&sub.as_str()) {
+            let mut rewritten = vec![format!("profiles-{}", sub)];
+            rewritten.extend(args[2..].iter().cloned());
+            return Some(rewritten);
+        }
+        return None;
+    }
     let rewritten_command = match prefix {
         "swarm" => format!("swarm-{}", sub),
         "agent" => format!("agent-{}", sub),
@@ -16257,6 +16597,14 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "code-devtask" => Some("code devtask"),
         "code-impact" => Some("code impact"),
         "code-workspace" => Some("code workspace"),
+        "is-visible" => Some("is visible"),
+        "is-enabled" => Some("is enabled"),
+        "is-checked" => Some("is checked"),
+        "window-new" => Some("window new"),
+        "diff-snapshot" => Some("diff snapshot"),
+        "profiler-start" => Some("profiler start"),
+        "profiler-stop" => Some("profiler stop"),
+        "profiles-list" => Some("profiles list"),
         _ => None,
     }
 }
@@ -18428,6 +18776,29 @@ async fn run(
         "snapshot-clean" => {
             handle_snapshot_clean(&tool_params)?;
         }
+        "diff-snapshot" => {
+            handle_snapshot_diff(&tool_params)?;
+        }
+        "profiles-list" => {
+            handle_profiles_list()?;
+        }
+        "profiler-start" => {
+            handle_profiler_start(
+                &client,
+                &base_url,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "profiler-stop" => {
+            handle_profiler_stop(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
         "generate-locator" => {
             handle_generate_locator(
                 &client,
@@ -18437,6 +18808,25 @@ async fn run(
                 global.session_name.as_deref(),
             )
             .await?;
+        }
+        "wait" => {
+            if tool_params
+                .get("download")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                handle_wait_download(&tool_params).await?;
+            } else {
+                handle_tool_command(
+                    &client,
+                    &base_url,
+                    &tool_name,
+                    &tool_params,
+                    false,
+                    global.session_name.as_deref(),
+                )
+                .await?;
+            }
         }
         "click" | "dblclick" => {
             let follow = parsed
@@ -18466,6 +18856,15 @@ async fn run(
             .await?;
         }
         "tab-new" => {
+            handle_tab_new(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "window-new" => {
             handle_tab_new(
                 &client,
                 &base_url,
@@ -19103,6 +19502,67 @@ mod tests {
     #[test]
     fn no_snapshot_commands_include_list() {
         assert!(no_snapshot_commands().contains("list"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_new_gap_fill_commands() {
+        let cmds = no_snapshot_commands();
+        for expected in [
+            "errors",
+            "is-visible",
+            "is-enabled",
+            "is-checked",
+            "dialog-status",
+            "scrollintoview",
+            "pushstate",
+            "highlight",
+            "vitals",
+            "web-vitals",
+            "set",
+            "diff-snapshot",
+            "profiles-list",
+            "profiler-start",
+            "profiler-stop",
+            "download",
+        ] {
+            assert!(cmds.contains(expected), "Missing no-snapshot command: {}", expected);
+        }
+        // Interaction commands keep the post-command snapshot.
+        assert!(!cmds.contains("focus"));
+        assert!(!cmds.contains("key"));
+        assert!(!cmds.contains("keyboard"));
+    }
+
+    #[test]
+    fn handle_profiles_list_scans_browser4_chrome_context_dirs() {
+        // handle_profiles_list reads USERPROFILE (Windows) / HOME (Unix) —
+        // guard the process-wide env so parallel tests don't race.
+        static PROFILES_ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _lock = PROFILES_ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+        let tmp = test_temp_dir();
+        let chrome_base = tmp.path().join(".browser4").join("browser").join("chrome");
+        // prototype context contains a browser data subdir; default has none.
+        std::fs::create_dir_all(chrome_base.join("prototype").join("google-chrome")).unwrap();
+        std::fs::create_dir_all(chrome_base.join("default")).unwrap();
+
+        let prev_userprofile = std::env::var_os("USERPROFILE");
+        let prev_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("USERPROFILE", tmp.path());
+            std::env::set_var("HOME", tmp.path());
+        }
+        let result = handle_profiles_list();
+        match prev_userprofile {
+            Some(v) => unsafe { std::env::set_var("USERPROFILE", v) },
+            None => unsafe { std::env::remove_var("USERPROFILE") },
+        }
+        match prev_home {
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -19890,6 +20350,80 @@ mod tests {
     #[test]
     fn rewrite_prefixed_command_rejects_legacy_co_prefix() {
         assert!(rewrite_prefixed_command(&["co".to_string(), "create".to_string(),]).is_none());
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_is_assertions() {
+        let rewritten = rewrite_prefixed_command(&[
+            "is".to_string(),
+            "visible".to_string(),
+            "#submit".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "is-visible");
+        assert_eq!(rewritten[1], "#submit");
+
+        let rewritten = rewrite_prefixed_command(&["is".to_string(), "enabled".to_string()])
+            .unwrap();
+        assert_eq!(rewritten[0], "is-enabled");
+
+        let rewritten = rewrite_prefixed_command(&["is".to_string(), "checked".to_string()])
+            .unwrap();
+        assert_eq!(rewritten[0], "is-checked");
+
+        // Unknown is-* subcommand is left untouched.
+        assert!(rewrite_prefixed_command(&["is".to_string(), "foobar".to_string()]).is_none());
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_window_new() {
+        let rewritten = rewrite_prefixed_command(&[
+            "window".to_string(),
+            "new".to_string(),
+            "https://example.com".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "window-new");
+        assert_eq!(rewritten[1], "https://example.com");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_diff_snapshot() {
+        let rewritten =
+            rewrite_prefixed_command(&["diff".to_string(), "snapshot".to_string()]).unwrap();
+        assert_eq!(rewritten[0], "diff-snapshot");
+
+        let rewritten = rewrite_prefixed_command(&[
+            "diff".to_string(),
+            "snapshot".to_string(),
+            "before.yml".to_string(),
+            "after.yml".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[1], "before.yml");
+        assert_eq!(rewritten[2], "after.yml");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_profiler_and_profiles() {
+        let rewritten = rewrite_prefixed_command(&["profiler".to_string(), "start".to_string()])
+            .unwrap();
+        assert_eq!(rewritten[0], "profiler-start");
+
+        let rewritten = rewrite_prefixed_command(&[
+            "profiler".to_string(),
+            "stop".to_string(),
+            "--file".to_string(),
+            "out.cpuprofile".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "profiler-stop");
+        assert_eq!(rewritten[1], "--file");
+        assert_eq!(rewritten[2], "out.cpuprofile");
+
+        let rewritten = rewrite_prefixed_command(&["profiles".to_string(), "list".to_string()])
+            .unwrap();
+        assert_eq!(rewritten[0], "profiles-list");
     }
 
     #[test]

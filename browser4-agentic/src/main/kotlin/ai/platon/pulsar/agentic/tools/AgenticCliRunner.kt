@@ -596,6 +596,11 @@ class AgenticCliRunner(
             "browser_load_storage_state" to "load_storage_state",
             "browser_console_messages" to "consoleMessages",
             "browser_console_clear" to "consoleClear",
+            "browser_focus" to "focus",
+            "browser_is_visible" to "is_visible",
+            "browser_is_enabled" to "is_enabled",
+            "browser_is_checked" to "is_checked",
+            "browser_dialog_status" to "dialog_status",
         )
 
         /**
@@ -626,6 +631,11 @@ class AgenticCliRunner(
             "mousewheel" to ToolCall("tab", "mouseWheel", mutableMapOf()),
             "consoleMessages" to ToolCall("tab", "consoleMessages", mutableMapOf()),
             "consoleClear" to ToolCall("tab", "consoleClear", mutableMapOf()),
+            "focus" to ToolCall("tab", "focus", mutableMapOf()),
+            "is_visible" to ToolCall("tab", "isVisible", mutableMapOf()),
+            "is_enabled" to ToolCall("tab", "isEnabled", mutableMapOf()),
+            "is_checked" to ToolCall("tab", "isChecked", mutableMapOf()),
+            "dialog_status" to ToolCall("tab", "dialogStatus", mutableMapOf()),
         )
 
         /**

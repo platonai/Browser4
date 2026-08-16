@@ -269,6 +269,86 @@ class MCPToolControllerTest {
     }
 
     @Test
+    fun `test frontend focus command maps to tab focus`() = runBlocking {
+        mockTool("tab", "focus")
+
+        val request = MCPToolCallRequest(
+            tool = "browser_focus",
+            arguments = mapOf("sessionId" to sessionId, "selector" to "#search")
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+        assertEquals("tab", toolCall.domain)
+        assertEquals("focus", toolCall.method)
+        assertEquals("#search", toolCall.arguments["selector"])
+    }
+
+    @Test
+    fun `test frontend is visible enabled checked commands map to assertions`() = runBlocking {
+        mockTool("tab", "isVisible")
+        mockTool("tab", "isEnabled")
+        mockTool("tab", "isChecked")
+
+        val visible = controller.callTool(
+            MCPToolCallRequest(
+                tool = "browser_is_visible",
+                arguments = mapOf("sessionId" to sessionId, "selector" to "#a")
+            ),
+            response
+        )
+        assertEquals(HttpStatus.OK, visible.statusCode)
+
+        val enabled = controller.callTool(
+            MCPToolCallRequest(
+                tool = "browser_is_enabled",
+                arguments = mapOf("sessionId" to sessionId, "selector" to "#b")
+            ),
+            response
+        )
+        assertEquals(HttpStatus.OK, enabled.statusCode)
+
+        val checked = controller.callTool(
+            MCPToolCallRequest(
+                tool = "browser_is_checked",
+                arguments = mapOf("sessionId" to sessionId, "selector" to "#c")
+            ),
+            response
+        )
+        assertEquals(HttpStatus.OK, checked.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager, Mockito.times(3)).execute(capture(captor))
+        val calls = captor.allValues
+        assertEquals(listOf("isVisible", "isEnabled", "isChecked"), calls.map { it.method })
+        assertEquals(listOf("#a", "#b", "#c"), calls.map { it.arguments["selector"] })
+        assertTrue(calls.all { it.domain == "tab" })
+    }
+
+    @Test
+    fun `test frontend dialog status maps to dialogStatus`() = runBlocking {
+        mockTool("tab", "dialogStatus")
+
+        val request = MCPToolCallRequest(
+            tool = "browser_dialog_status",
+            arguments = mapOf("sessionId" to sessionId)
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+        assertEquals("tab", toolCall.domain)
+        assertEquals("dialogStatus", toolCall.method)
+    }
+
+    @Test
     fun `test frontend type command without ref`() = runBlocking {
         mockTool("tab", "type")
 

@@ -283,6 +283,35 @@ return x
 return document.readyState==='complete'&&s.p===0&&(Date.now()-s.t)>=500
 })()"#;
 
+/// JavaScript expression that injects the `web-vitals` library from the CDN
+/// and reports the Core Web Vitals (LCP, CLS, INP, FCP, TTFB).  Evaluated
+/// with `--await` (awaitPromise).  A 3 s cap avoids hanging on INP, which
+/// only settles after user interaction.
+const VITALS_JS: &str = r#"(async () => {
+    const load = () => new Promise((resolve, reject) => {
+        if (window.webVitals) { resolve(); return; }
+        const s = document.createElement('script');
+        s.src = 'https://unpkg.com/web-vitals@3.5.2/dist/web-vitals.iife.js';
+        s.onload = resolve;
+        s.onerror = () => reject(new Error('Failed to load web-vitals from CDN (network required)'));
+        document.head.appendChild(s);
+    });
+    await load();
+    const { onLCP, onCLS, onINP, onFCP, onTTFB } = window.webVitals;
+    const results = {};
+    await new Promise((resolve) => {
+        let pending = 5;
+        const done = () => { if (--pending === 0) resolve(); };
+        onLCP((m) => { results.LCP = m.value; done(); }, { reportAllChanges: true });
+        onFCP((m) => { results.FCP = m.value; done(); }, { reportAllChanges: true });
+        onCLS((m) => { results.CLS = m.value; done(); }, { reportAllChanges: true });
+        onTTFB((m) => { results.TTFB = m.value; done(); });
+        onINP((m) => { results.INP = m.value; done(); }, { reportAllChanges: true });
+        setTimeout(resolve, 3000);
+    });
+    return JSON.stringify(results);
+})()"#;
+
 // ---------------------------------------------------------------------------
 // Command definitions (static)
 // ---------------------------------------------------------------------------
@@ -820,6 +849,58 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "key",
+            description: "Press a key on the focused element or an optional target ref (alias of press), `a`, `ArrowLeft`",
+            category: Category::Keyboard,
+            hidden: false,
+            batch_supported: true,
+            args: &[
+                ArgDef { name: "key", description: "Name of the key to press or a character to generate, such as `ArrowLeft` or `a`", optional: false },
+                ArgDef { name: "ref", description: "Optional CSS selector or element reference to receive the key press", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "verify", description: "Verify the key press was applied by reading the element value", is_bool: true, short: None },
+                OptionDef { name: "follow", description: "After pressing, detect and follow navigation to new tabs", is_bool: true, short: None },
+                OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_press_key".to_string(),
+            tool_params_fn: |args| {
+                let (key, reference) = resolve_key_and_ref(args);
+                let mut params = json!({ "key": key });
+                if let Some(reference) = reference {
+                    params["ref"] = json!(reference);
+                }
+                params
+            },
+        },
+        CommandDef {
+            name: "keyboard",
+            description: "Press a key on the focused element or an optional target ref (alias of press), `a`, `ArrowLeft`",
+            category: Category::Keyboard,
+            hidden: false,
+            batch_supported: true,
+            args: &[
+                ArgDef { name: "key", description: "Name of the key to press or a character to generate, such as `ArrowLeft` or `a`", optional: false },
+                ArgDef { name: "ref", description: "Optional CSS selector or element reference to receive the key press", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "verify", description: "Verify the key press was applied by reading the element value", is_bool: true, short: None },
+                OptionDef { name: "follow", description: "After pressing, detect and follow navigation to new tabs", is_bool: true, short: None },
+                OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_press_key".to_string(),
+            tool_params_fn: |args| {
+                let (key, reference) = resolve_key_and_ref(args);
+                let mut params = json!({ "key": key });
+                if let Some(reference) = reference {
+                    params["ref"] = json!(reference);
+                }
+                params
+            },
+        },
+        CommandDef {
             name: "type",
             description: "Type text into the focused element or an optional target ref. Passing a ref is recommended for reliable targeting; without a ref, text may go nowhere if no element is currently focused.",
             category: Category::Keyboard,
@@ -1195,11 +1276,15 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "url", description: "Wait until the URL matches this glob pattern", is_bool: false, short: None },
                 OptionDef { name: "load", description: "Wait for page load state: networkidle, domcontentloaded, or load", is_bool: false, short: None },
                 OptionDef { name: "fn", description: "Wait until this JavaScript expression returns true", is_bool: false, short: None },
+                OptionDef { name: "download", description: "Wait until a download in the given directory completes (polls for .crdownload files)", is_bool: true, short: None },
+                OptionDef { name: "dir", description: "Download directory to watch (with --download; default: ./downloads)", is_bool: false, short: None },
                 OptionDef { name: "timeout", description: "Maximum time to wait in milliseconds (default: 30000)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |args| {
-                if get_opt_str(args, "text").is_some() || get_opt_str(args, "fn").is_some() || get_opt_str(args, "load").is_some() {
+                if get_bool(args, "download").unwrap_or(false) {
+                    String::new() // local poll — handled in main.rs
+                } else if get_opt_str(args, "text").is_some() || get_opt_str(args, "fn").is_some() || get_opt_str(args, "load").is_some() {
                     "wait_for_function".to_string()
                 } else if get_opt_str(args, "url").is_some() {
                     "wait_for_page".to_string()
@@ -1210,6 +1295,14 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
             },
             tool_params_fn: |args| {
+                // --download is a local poll handled in main.rs — pass through
+                // dir/timeout verbatim so the handler can read them.
+                if get_bool(args, "download").unwrap_or(false) {
+                    let mut p = json!({ "download": true });
+                    if let Some(d) = get_opt_str(args, "dir") { p["dir"] = json!(d); }
+                    if let Some(t) = get_opt_str(args, "timeout") { p["timeout"] = json!(t); }
+                    return p;
+                }
                 // Resolve --timeout, defaulting to 30 000 ms
                 let timeout_millis: i64 = get_opt_str(args, "timeout")
                     .and_then(|v| v.parse().ok())
@@ -1413,6 +1506,27 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "diff-snapshot",
+            description: "Diff two saved accessibility-tree snapshot files. With one path, diffs it against the previous snapshot; with none, diffs the two most recent snapshots.",
+            category: Category::Snapshot,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "before", description: "First snapshot file path (optional — defaults to the previous snapshot)", optional: true },
+                ArgDef { name: "after", description: "Second snapshot file path (optional — defaults to the most recent snapshot)", optional: true },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded, // filesystem-only, no backend
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                for (k, v) in args {
+                    if k != "_" { p[k] = v.clone(); }
+                }
+                p
+            },
+        },
+        CommandDef {
             name: "eval",
             description: "Evaluate JavaScript expression on page or element. Prefer --file or --stdin on Windows to avoid shell quoting issues. Use --await for async code (fetch, Promises). Use --wait-selector for pages that render content asynchronously (React/SPA). Objects and arrays are serialized as JSON; use --json to JSON-wrap scalar results.",
             category: Category::Core,
@@ -1483,6 +1597,32 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "errors",
+            description: "List console error messages (alias of `console --min-level error`)",
+            category: Category::DevTools,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "clear", description: "Whether to clear the console list", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |args| {
+                if get_bool(args, "clear").unwrap_or(false) {
+                    "browser_console_clear".to_string()
+                } else {
+                    "browser_console_messages".to_string()
+                }
+            },
+            tool_params_fn: |args| {
+                if get_bool(args, "clear").unwrap_or(false) {
+                    json!({})
+                } else {
+                    json!({ "level": "error" })
+                }
+            },
+        },
+        CommandDef {
             name: "cdp",
             description: "Send an arbitrary Chrome DevTools Protocol (CDP) command and print the JSON result. For advanced browser interactions not covered by standard WebDriver commands. CDP method names use dot notation (e.g. \"Page.captureScreenshot\", \"Runtime.evaluate\", \"DOM.getDocument\"). Optional params can be passed as a JSON object via --json.",
             category: Category::DevTools,
@@ -1504,6 +1644,58 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
                 if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
                 p
+            },
+        },
+        CommandDef {
+            name: "profiler-start",
+            description: "Start the V8 CPU profiler (CDP Profiler domain) so the next page interactions are recorded",
+            category: Category::DevTools,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded, // requires live profiling session
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "profiler-stop",
+            description: "Stop the V8 CPU profiler and save the profile as a .cpuprofile file (Chrome DevTools / speedscope compatible)",
+            category: Category::DevTools,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "file", description: "Output .cpuprofile file path (default: profiler-<timestamp>.cpuprofile in the current directory)", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded, // requires live profiling session
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
+                p
+            },
+        },
+        CommandDef {
+            name: "download",
+            description: "Configure the browser to allow downloads into a directory (CDP Browser.setDownloadBehavior). Downloads then land in the given folder instead of the browser default.",
+            category: Category::Network,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "dir", description: "Download directory (default: ./downloads)", is_bool: false, short: None },
+                OptionDef { name: "behavior", description: "Download behavior: allow (default) or deny", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded, // requires real download flow
+            tool_name_fn: |_| "execute_cdp_command".to_string(),
+            tool_params_fn: |args| {
+                let dir = get_opt_str(args, "dir").unwrap_or("downloads");
+                let behavior = get_opt_str(args, "behavior").unwrap_or("allow");
+                json!({
+                    "method": "Browser.setDownloadBehavior",
+                    "params": { "behavior": behavior, "downloadPath": dir },
+                })
             },
         },
         CommandDef {
@@ -1533,6 +1725,245 @@ pub fn all_commands() -> Vec<CommandDef> {
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_handle_dialog".to_string(),
             tool_params_fn: |_| json!({ "accept": false }),
+        },
+        CommandDef {
+            name: "dialog-status",
+            description: "Query whether a native JavaScript dialog (alert/confirm/prompt) is pending and, if so, its type and message",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_dialog_status".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "focus",
+            description: "Focus the element identified by a CSS selector or element reference",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: true,
+            args: &[
+                ArgDef { name: "selector", description: "CSS selector or element reference (e.g. e5, #search, input[name=q])", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_focus".to_string(),
+            tool_params_fn: |args| json!({ "selector": get_str(args, "selector").unwrap_or_default() }),
+        },
+        CommandDef {
+            name: "is-visible",
+            description: "Check whether the element matched by a selector is visible",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "selector", description: "CSS selector or element reference (e.g. e5, #search)", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_is_visible".to_string(),
+            tool_params_fn: |args| json!({ "selector": get_str(args, "selector").unwrap_or_default() }),
+        },
+        CommandDef {
+            name: "is-enabled",
+            description: "Check whether the element matched by a selector is enabled (not disabled and not read-only)",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "selector", description: "CSS selector or element reference (e.g. e5, #submit)", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_is_enabled".to_string(),
+            tool_params_fn: |args| json!({ "selector": get_str(args, "selector").unwrap_or_default() }),
+        },
+        CommandDef {
+            name: "is-checked",
+            description: "Check whether the checkbox or radio matched by a selector is checked",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "selector", description: "CSS selector or element reference (e.g. e5, #agree)", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_is_checked".to_string(),
+            tool_params_fn: |args| json!({ "selector": get_str(args, "selector").unwrap_or_default() }),
+        },
+        CommandDef {
+            name: "scrollintoview",
+            description: "Scroll the element matched by a selector into the center of the viewport",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "selector", description: "CSS selector or element reference (e.g. e5, #results)", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |args| {
+                let selector = get_str(args, "selector").unwrap_or_default();
+                json!({
+                    "expression": "element => { element.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'center' }); return 'scrolled'; }",
+                    "ref": selector,
+                })
+            },
+        },
+        CommandDef {
+            name: "pushstate",
+            description: "Push a new history entry via history.pushState without reloading the page",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "url", description: "The URL to push onto the history stack (relative or absolute)", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |args| {
+                let url = get_str(args, "url").unwrap_or_default();
+                let url_literal = serde_json::to_string(url).unwrap_or_else(|_| format!("\"{}\"", url));
+                json!({
+                    "expression": format!("() => {{ history.pushState({{}}, '', {}); return location.href; }}", url_literal),
+                })
+            },
+        },
+        CommandDef {
+            name: "highlight",
+            description: "Visually highlight the element matched by a selector with an outline overlay and scroll it into view",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "selector", description: "CSS selector or element reference (e.g. e5, #price)", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |args| {
+                let selector = get_str(args, "selector").unwrap_or_default();
+                json!({
+                    "expression": "element => { element.scrollIntoView({ behavior: 'smooth', block: 'center' }); element.style.outline = '3px solid #ff5722'; element.style.outlineOffset = '2px'; return 'highlighted'; }",
+                    "ref": selector,
+                })
+            },
+        },
+        CommandDef {
+            name: "vitals",
+            description: "Measure Core Web Vitals (LCP, CLS, INP, FCP, TTFB) by injecting the web-vitals library. Requires network access to load the library from the CDN.",
+            category: Category::DevTools,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded, // depends on external CDN + real page metrics
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |_| {
+                json!({
+                    "expression": VITALS_JS,
+                    "awaitPromise": true,
+                })
+            },
+        },
+        CommandDef {
+            name: "web-vitals",
+            description: "Measure Core Web Vitals (alias of `vitals`): LCP, CLS, INP, FCP, TTFB",
+            category: Category::DevTools,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded, // same as vitals
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |_| {
+                json!({
+                    "expression": VITALS_JS,
+                    "awaitPromise": true,
+                })
+            },
+        },
+        CommandDef {
+            name: "set",
+            description: "Emulate browser capabilities via Chrome DevTools Protocol: `set geo`, `set offline`, `set headers`, `set media`, or `set device`",
+            category: Category::DevTools,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "mode", description: "What to emulate: geo, offline, headers, media, or device", optional: false },
+                ArgDef { name: "state", description: "For offline: on or off (default: on)", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "lat", description: "Latitude (geo)", is_bool: false, short: None },
+                OptionDef { name: "lon", description: "Longitude (geo)", is_bool: false, short: None },
+                OptionDef { name: "accuracy", description: "Position accuracy in meters (geo, default: 1)", is_bool: false, short: None },
+                OptionDef { name: "json", description: "Headers as a JSON object string, e.g. '{\"X-Api-Key\": \"abc\"}' (headers)", is_bool: false, short: None },
+                OptionDef { name: "color-scheme", description: "Emulated prefers-color-scheme: light, dark, or no-preference (media)", is_bool: false, short: None },
+                OptionDef { name: "width", description: "Viewport width in px (device)", is_bool: false, short: None },
+                OptionDef { name: "height", description: "Viewport height in px (device)", is_bool: false, short: None },
+                OptionDef { name: "dpr", description: "Device scale factor (device, default: 1)", is_bool: false, short: None },
+                OptionDef { name: "mobile", description: "Enable mobile (touch) emulation (device)", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "execute_cdp_command".to_string(),
+            tool_params_fn: |args| {
+                let mode = get_str(args, "mode").unwrap_or_default().to_ascii_lowercase();
+                match mode.as_str() {
+                    "geo" => {
+                        let lat = get_opt_str(args, "lat").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+                        let lon = get_opt_str(args, "lon").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+                        let accuracy = get_opt_str(args, "accuracy").and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0);
+                        json!({
+                            "method": "Emulation.setGeolocationOverride",
+                            "params": { "latitude": lat, "longitude": lon, "accuracy": accuracy },
+                        })
+                    }
+                    "offline" => {
+                        let state = get_str(args, "state").unwrap_or("on").to_ascii_lowercase();
+                        let offline = !matches!(state.as_str(), "off" | "false" | "0");
+                        json!({
+                            "method": "Network.emulateNetworkConditions",
+                            "params": { "offline": offline, "latency": 0, "downloadThroughput": -1, "uploadThroughput": -1 },
+                        })
+                    }
+                    "headers" => {
+                        let headers_json = get_opt_str(args, "json").unwrap_or("{}");
+                        let headers = serde_json::from_str::<Value>(headers_json)
+                            .map(|v| v)
+                            .unwrap_or_else(|_| json!({}));
+                        json!({
+                            "method": "Network.setExtraHTTPHeaders",
+                            "params": { "headers": headers },
+                        })
+                    }
+                    "media" => {
+                        let scheme = get_opt_str(args, "color-scheme").unwrap_or("no-preference");
+                        json!({
+                            "method": "Emulation.setEmulatedMedia",
+                            "params": { "features": [ { "name": "prefers-color-scheme", "value": scheme } ] },
+                        })
+                    }
+                    "device" => {
+                        let width = get_opt_str(args, "width").and_then(|v| v.parse::<i64>().ok()).unwrap_or(390);
+                        let height = get_opt_str(args, "height").and_then(|v| v.parse::<i64>().ok()).unwrap_or(844);
+                        let dpr = get_opt_str(args, "dpr").and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0);
+                        let mobile = get_bool(args, "mobile").unwrap_or(false);
+                        json!({
+                            "method": "Emulation.setDeviceMetricsOverride",
+                            "params": { "width": width, "height": height, "deviceScaleFactor": dpr, "mobile": mobile },
+                        })
+                    }
+                    other => {
+                        // Unknown mode — emit an unusable call so the CLI errors early.
+                        json!({ "method": "", "params": { "mode": other } })
+                    }
+                }
+            },
         },
         CommandDef {
             name: "resize",
@@ -2046,6 +2477,23 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "window-new",
+            description: "Create a new browser window (equivalent to opening a new tab)",
+            category: Category::Tabs,
+            hidden: false,
+            batch_supported: true,
+            args: &[ArgDef { name: "url", description: "The URL to navigate to in the new window", optional: true }],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_tabs".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({ "action": "new" });
+                let url = get_opt_str(args, "url").unwrap_or("about:blank");
+                p["url"] = json!(url);
+                p
+            },
+        },
+        CommandDef {
             name: "tab-close",
             description: "Close a browser tab",
             category: Category::Tabs,
@@ -2115,6 +2563,18 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "verbose", description: "Show full session IDs without truncation", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "profiles-list",
+            description: "List browser profile (context) directories under the Browser4 data dir (~/.browser4/browser/chrome)",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded, // filesystem-only, no backend
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -4178,6 +4638,26 @@ mod tests {
             "experience-query",
             "experience-list",
             "experience-deep-learn",
+            "focus",
+            "is-visible",
+            "is-enabled",
+            "is-checked",
+            "errors",
+            "key",
+            "keyboard",
+            "scrollintoview",
+            "pushstate",
+            "highlight",
+            "vitals",
+            "web-vitals",
+            "set",
+            "window-new",
+            "diff-snapshot",
+            "dialog-status",
+            "profiles-list",
+            "profiler-start",
+            "profiler-stop",
+            "download",
         ] {
             assert!(map.contains_key(*expected), "Missing command: {}", expected);
         }
@@ -4270,6 +4750,232 @@ mod tests {
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["text"], "hello world");
         assert_eq!(params["ref"], "#search");
+    }
+
+    #[test]
+    fn test_focus_params_and_tool_name() {
+        let map = commands_map();
+        let cmd = map.get("focus").unwrap();
+        let mut args = HashMap::new();
+        args.insert("selector".to_string(), json!("#search"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_focus");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["selector"], "#search");
+        assert!(cmd.batch_supported);
+    }
+
+    #[test]
+    fn test_is_commands_tool_names_and_params() {
+        let map = commands_map();
+        let mut args = HashMap::new();
+        args.insert("selector".to_string(), json!("#submit"));
+
+        let cmd = map.get("is-visible").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_is_visible");
+        assert_eq!((cmd.tool_params_fn)(&args)["selector"], "#submit");
+
+        let cmd = map.get("is-enabled").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_is_enabled");
+        assert_eq!((cmd.tool_params_fn)(&args)["selector"], "#submit");
+
+        let cmd = map.get("is-checked").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_is_checked");
+        assert_eq!((cmd.tool_params_fn)(&args)["selector"], "#submit");
+    }
+
+    #[test]
+    fn test_errors_aliases_console_error_level() {
+        let map = commands_map();
+        let cmd = map.get("errors").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_console_messages");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["level"], "error");
+    }
+
+    #[test]
+    fn test_key_keyboard_alias_press() {
+        let map = commands_map();
+        let mut args = HashMap::new();
+        args.insert("_".to_string(), json!(["key", "Enter", "#search"]));
+
+        let cmd = map.get("key").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_press_key");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["key"], "Enter");
+        assert_eq!(params["ref"], "#search");
+
+        let cmd = map.get("keyboard").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_press_key");
+        assert_eq!((cmd.tool_params_fn)(&args)["key"], "Enter");
+    }
+
+    #[test]
+    fn test_scrollintoview_and_highlight_use_evaluate() {
+        let map = commands_map();
+        let mut args = HashMap::new();
+        args.insert("selector".to_string(), json!("#results"));
+
+        let cmd = map.get("scrollintoview").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_evaluate");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["ref"], "#results");
+        assert!(params["expression"].as_str().unwrap().contains("scrollIntoView"));
+
+        let cmd = map.get("highlight").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_evaluate");
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params["expression"].as_str().unwrap().contains("outline"));
+    }
+
+    #[test]
+    fn test_pushstate_params_embed_url() {
+        let map = commands_map();
+        let cmd = map.get("pushstate").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("/products?page=2"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_evaluate");
+        let params = (cmd.tool_params_fn)(&args);
+        let expr = params["expression"].as_str().unwrap();
+        assert!(expr.contains("history.pushState"));
+        assert!(expr.contains("/products?page=2"));
+    }
+
+    #[test]
+    fn test_vitals_and_web_vitals_await_promise() {
+        let map = commands_map();
+        let args = HashMap::new();
+        for name in ["vitals", "web-vitals"] {
+            let cmd = map.get(name).unwrap();
+            assert_eq!((cmd.tool_name_fn)(&args), "browser_evaluate");
+            let params = (cmd.tool_params_fn)(&args);
+            assert_eq!(params["awaitPromise"], true);
+            assert!(params["expression"].as_str().unwrap().contains("web-vitals"));
+        }
+    }
+
+    #[test]
+    fn test_set_geo_params_build_cdp_override() {
+        let map = commands_map();
+        let cmd = map.get("set").unwrap();
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("geo"));
+        args.insert("lat".to_string(), json!("39.9042"));
+        args.insert("lon".to_string(), json!("116.4074"));
+        args.insert("accuracy".to_string(), json!("5"));
+        assert_eq!((cmd.tool_name_fn)(&args), "execute_cdp_command");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], "Emulation.setGeolocationOverride");
+        assert_eq!(params["params"]["latitude"], 39.9042);
+        assert_eq!(params["params"]["longitude"], 116.4074);
+        assert_eq!(params["params"]["accuracy"], 5.0);
+    }
+
+    #[test]
+    fn test_set_offline_params() {
+        let map = commands_map();
+        let cmd = map.get("set").unwrap();
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("offline"));
+        args.insert("state".to_string(), json!("off"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], "Network.emulateNetworkConditions");
+        assert_eq!(params["params"]["offline"], false);
+    }
+
+    #[test]
+    fn test_set_headers_params() {
+        let map = commands_map();
+        let cmd = map.get("set").unwrap();
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("headers"));
+        args.insert("json".to_string(), json!(r#"{"X-Api-Key": "abc"}"#));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], "Network.setExtraHTTPHeaders");
+        assert_eq!(params["params"]["headers"]["X-Api-Key"], "abc");
+    }
+
+    #[test]
+    fn test_set_media_and_device_params() {
+        let map = commands_map();
+        let cmd = map.get("set").unwrap();
+
+        let mut media = HashMap::new();
+        media.insert("mode".to_string(), json!("media"));
+        media.insert("color-scheme".to_string(), json!("dark"));
+        let params = (cmd.tool_params_fn)(&media);
+        assert_eq!(params["method"], "Emulation.setEmulatedMedia");
+        assert_eq!(params["params"]["features"][0]["value"], "dark");
+
+        let mut device = HashMap::new();
+        device.insert("mode".to_string(), json!("device"));
+        device.insert("width".to_string(), json!("390"));
+        device.insert("height".to_string(), json!("844"));
+        device.insert("dpr".to_string(), json!("3"));
+        device.insert("mobile".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&device);
+        assert_eq!(params["method"], "Emulation.setDeviceMetricsOverride");
+        assert_eq!(params["params"]["width"], 390);
+        assert_eq!(params["params"]["deviceScaleFactor"], 3.0);
+        assert_eq!(params["params"]["mobile"], true);
+    }
+
+    #[test]
+    fn test_window_new_mirrors_tab_new() {
+        let map = commands_map();
+        let cmd = map.get("window-new").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_tabs");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["action"], "new");
+        assert_eq!(params["url"], "https://example.com");
+    }
+
+    #[test]
+    fn test_dialog_status_tool_name() {
+        let map = commands_map();
+        let cmd = map.get("dialog-status").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_dialog_status");
+        assert!((cmd.tool_params_fn)(&args).as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_download_params_build_browser_set_download_behavior() {
+        let map = commands_map();
+        let cmd = map.get("download").unwrap();
+        let mut args = HashMap::new();
+        args.insert("dir".to_string(), json!("C:/tmp/dl"));
+        assert_eq!((cmd.tool_name_fn)(&args), "execute_cdp_command");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], "Browser.setDownloadBehavior");
+        assert_eq!(params["params"]["behavior"], "allow");
+        assert_eq!(params["params"]["downloadPath"], "C:/tmp/dl");
+    }
+
+    #[test]
+    fn test_local_only_commands_have_empty_tool_name() {
+        let map = commands_map();
+        let args = HashMap::new();
+        for name in ["diff-snapshot", "profiles-list", "profiler-start"] {
+            let cmd = map.get(name).unwrap();
+            assert!(
+                (cmd.tool_name_fn)(&args).is_empty(),
+                "{} should be a local-only command",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn test_profiler_stop_params_capture_file() {
+        let map = commands_map();
+        let cmd = map.get("profiler-stop").unwrap();
+        let mut args = HashMap::new();
+        args.insert("file".to_string(), json!("out.cpuprofile"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["file"], "out.cpuprofile");
     }
 
     #[test]

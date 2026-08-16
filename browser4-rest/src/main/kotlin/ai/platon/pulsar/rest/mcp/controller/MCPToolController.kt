@@ -134,6 +134,11 @@ class MCPToolController(
             "browser_load_storage_state" to "load_storage_state",
             "browser_console_messages" to "consoleMessages",
             "browser_console_clear" to "consoleClear",
+            "browser_focus" to "focus",
+            "browser_is_visible" to "is_visible",
+            "browser_is_enabled" to "is_enabled",
+            "browser_is_checked" to "is_checked",
+            "browser_dialog_status" to "dialog_status",
         )
 
         private const val CLEAR_SESSION_STORAGE_SCRIPT = """
@@ -1119,6 +1124,11 @@ class MCPToolController(
             "mousewheel" -> return ToolCall("tab", "mouseWheel", args1)
             "consoleMessages" -> return ToolCall("tab", "consoleMessages", args1)
             "consoleClear" -> return ToolCall("tab", "consoleClear", args1)
+            "focus" -> return ToolCall("tab", "focus", args1)
+            "is_visible" -> return ToolCall("tab", "isVisible", args1)
+            "is_enabled" -> return ToolCall("tab", "isEnabled", args1)
+            "is_checked" -> return ToolCall("tab", "isChecked", args1)
+            "dialog_status" -> return ToolCall("tab", "dialogStatus", args1)
         }
 
         // 2. Generic mapping

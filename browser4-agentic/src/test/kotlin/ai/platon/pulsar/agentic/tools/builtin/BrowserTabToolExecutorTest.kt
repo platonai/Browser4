@@ -4,6 +4,8 @@ import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarWebDriver
+import ai.platon.pulsar.chrome.protocol.DialogEvent
+import ai.platon.pulsar.chrome.protocol.DialogHandler
 import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -137,6 +139,65 @@ class BrowserTabToolExecutorTest {
             assertTrue(js.contains("isContentEditable"), "JS must handle contenteditable: $js")
             // maxlength guard still present
             assertTrue(js.contains("maxLength"), "JS must guard maxlength: $js")
+        }
+    }
+
+    @Test
+    fun `isEnabled routes selector through evaluateValue`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            val expectedFn = "function() { return !(this.disabled || this.readOnly); }"
+            `when`(driver.evaluateValue("#submit", expectedFn)).thenReturn(true)
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "isEnabled", mutableMapOf<String, Any?>("selector" to "#submit")),
+                driver
+            )
+
+            assertEquals(true, result.value)
+            verify(driver).evaluateValue("#submit", expectedFn)
+        }
+    }
+
+    @Test
+    fun `dialogStatus reports pending dialog with type and message`() {
+        runBlocking {
+            val driver = Mockito.mock(PulsarWebDriver::class.java)
+            val handler = Mockito.mock(DialogHandler::class.java)
+            `when`(driver.dialogHandler).thenReturn(handler)
+            `when`(handler.hasPendingDialog()).thenReturn(true)
+            `when`(handler.peekPendingDialog())
+                .thenReturn(DialogEvent(message = "Please confirm", type = "confirm"))
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "dialogStatus", mutableMapOf()),
+                driver
+            )
+
+            @Suppress("UNCHECKED_CAST")
+            val map = result.value as Map<String, Any?>
+            assertEquals(true, map["pending"])
+            assertEquals("confirm", map["type"])
+            assertEquals("Please confirm", map["message"])
+        }
+    }
+
+    @Test
+    fun `dialogStatus reports no pending dialog`() {
+        runBlocking {
+            val driver = Mockito.mock(PulsarWebDriver::class.java)
+            val handler = Mockito.mock(DialogHandler::class.java)
+            `when`(driver.dialogHandler).thenReturn(handler)
+            `when`(handler.hasPendingDialog()).thenReturn(false)
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "dialogStatus", mutableMapOf()),
+                driver
+            )
+
+            @Suppress("UNCHECKED_CAST")
+            val map = result.value as Map<String, Any?>
+            assertEquals(false, map["pending"])
         }
     }
 

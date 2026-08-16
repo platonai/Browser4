@@ -27,7 +27,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         // Actions that read page state and can become flaky if executed too soon after mutations/navigation.
         private val DEFAULT_READ_PAGE_STATE_ACTIONS = setOf(
             "waitForSelector", "waitForNavigation", "waitForPage",
-            "exists", "isVisible", "visible", "isHidden", "isChecked",
+            "exists", "isVisible", "visible", "isHidden", "isChecked", "isEnabled",
             "ariaSnapshot", "title", "screenshot",
             "outerHTML", "textContent", "nanoDOMTree",
             "selectFirstTextOrNull", "selectTextAll",
@@ -564,6 +564,14 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 )
             }
 
+            "isEnabled" -> {
+                // No dedicated WebDriver.isEnabled in the pulsar-browser API;
+                // resolve the element with evaluateValue and check disabled/readonly.
+                validateArgs(args, allowed("selector"), setOf("selector"), functionName)
+                val selector = paramString(args, "selector", functionName)!!
+                driver.evaluateValue(selector, "function() { return !(this.disabled || this.readOnly); }")
+            }
+
             // Interactions
             "focus" -> {
                 validateArgs(args, allowed("selector"), setOf("selector"), functionName); driver.focus(
@@ -952,6 +960,23 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
             "dialogDismiss" -> {
                 validateArgs(args, emptySet(), emptySet(), functionName); driver.dialogDismiss()
+            }
+
+            "dialogStatus" -> {
+                validateArgs(args, emptySet(), emptySet(), functionName)
+                val pulsarDriver = driver as? PulsarWebDriver
+                if (pulsarDriver == null) {
+                    mapOf("pending" to false)
+                } else {
+                    val dialogHandler = pulsarDriver.dialogHandler
+                    val pending = dialogHandler.hasPendingDialog()
+                    val dialog = if (pending) dialogHandler.peekPendingDialog() else null
+                    mapOf(
+                        "pending" to pending,
+                        "type" to (dialog?.type ?: ""),
+                        "message" to (dialog?.message ?: "")
+                    )
+                }
             }
 
             "resize" -> {

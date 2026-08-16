@@ -31,5 +31,12 @@ val FRONTEND_TOOL_NAME_ALIASES: Map<String, String> = mapOf(
     "browser_pdf_save" to "pdf",
     "browser_save_storage_state" to "save_storage_state",
     "browser_load_storage_state" to "load_storage_state",
+    "browser_console_messages" to "consoleMessages",
+    "browser_console_clear" to "consoleClear",
+    "browser_focus" to "focus",
+    "browser_is_visible" to "is_visible",
+    "browser_is_enabled" to "is_enabled",
+    "browser_is_checked" to "is_checked",
+    "browser_dialog_status" to "dialog_status",
 )
 

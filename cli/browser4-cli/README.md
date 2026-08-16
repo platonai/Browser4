@@ -43,6 +43,8 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 | Command | Description |
 |---|---|
 | `press <key> [ref]` | Press a key on the focused element or an optional target ref. `--verify`, `--follow` (detect new tabs) |
+| `key <key> [ref]` | Alias of `press` (agent-browser compatibility) |
+| `keyboard <key> [ref]` | Alias of `press` (agent-browser compatibility) |
 | `type <text> [ref]` | Type text into the focused element or an optional target ref |
 | `keydown <key>` | Press a key down on the keyboard |
 | `keyup <key>` | Press a key up on the keyboard |
@@ -73,8 +75,15 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 | `select <ref> <val>` | Select an option in a dropdown |
 | `check <ref>` | Check a checkbox or radio button |
 | `uncheck <ref>` | Uncheck a checkbox or radio button |
+| `focus <selector>` | Focus an element (CSS selector or ref) |
+| `is visible\|enabled\|checked <selector>` | Assert element visibility, enabled-ness, or checked state (`is visible #submit`) |
+| `scrollintoview <selector>` | Scroll an element into the center of the viewport |
+| `pushstate <url>` | Push a history entry via `history.pushState` without reloading |
+| `highlight <selector>` | Outline an element and scroll it into view (debug aid) |
 | `dialog-accept [prompt]` | Accept a dialog |
 | `dialog-dismiss` | Dismiss a dialog |
+| `dialog-status` | Report whether a native JS dialog is pending (type + message) |
+| `errors` | List console errors only (alias of `console --min-level error`) |
 | `resize <w> <h>` | Resize the browser window |
 | `delete-data` | Delete session data |
 | `batch [command...]` | Execute multiple commands in one invocation |
@@ -92,8 +101,36 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 |---|---|
 | `tab-list` | List all tabs with index, GUID, title, and URL |
 | `tab-new [url]` | Create a new tab |
+| `window new [url]` | Create a new browser window (equivalent to a new tab) |
 | `tab-close [index]` | Close a browser tab. Use `--guid <guid>` for GUID-based close |
 | `tab-select <index>` | Select a browser tab. Use `--guid <guid>` for GUID-based select |
+
+### DevTools
+
+| Command | Description |
+|---|---|
+| `cdp <method> [--json <params>]` | Send an arbitrary CDP command |
+| `set geo --lat <lat> --lon <lon> [--accuracy <m>]` | Emulate geolocation (`Emulation.setGeolocationOverride`) |
+| `set offline [on\|off]` | Emulate offline mode (`Network.emulateNetworkConditions`) |
+| `set headers --json '<json>'` | Set extra HTTP headers (`Network.setExtraHTTPHeaders`) |
+| `set media --color-scheme <light\|dark\|no-preference>` | Emulate `prefers-color-scheme` (`Emulation.setEmulatedMedia`) |
+| `set device --width <px> --height <px> [--dpr <n>] [--mobile]` | Emulate device metrics (`Emulation.setDeviceMetricsOverride`) |
+| `vitals`, `web-vitals` | Measure Core Web Vitals (LCP, CLS, INP, FCP, TTFB) via injected web-vitals lib |
+| `profiler start` | Start the V8 CPU profiler (`Profiler.enable` + `Profiler.start`) |
+| `profiler stop [--file out.cpuprofile]` | Stop the profiler and save the `.cpuprofile` file |
+
+### Download
+
+| Command | Description |
+|---|---|
+| `download [--dir <path>] [--behavior allow\|deny]` | Configure the browser download folder (`Browser.setDownloadBehavior`) |
+| `wait --download [--dir <path>] [--timeout <ms>]` | Poll the download directory until a download completes |
+
+### Browsers
+
+| Command | Description |
+|---|---|
+| `profiles list` | List browser profile (context) directories under `~/.browser4/browser/chrome` |
 
 ### Storage
 
@@ -155,6 +192,7 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 | `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from the stored HTML snapshot |
 | `htmlsnapshot grep [OPTIONS] <pattern>` | Search snapshot HTML with regex patterns and grep-style output |
 | `generate-locator <ref>` | Generate a unique CSS selector path for an element |
+| `diff snapshot [before] [after]` | Diff two saved accessibility snapshots (defaults to the two most recent) |
 
 ### Skills
 
