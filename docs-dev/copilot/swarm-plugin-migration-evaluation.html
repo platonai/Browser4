@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Swarm 后端插件化迁移评估</title>
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f7f8fa; --border: #e3e6ea;
+    --text: #1f2328; --muted: #5a6470; --accent: #0969da;
+    --ok: #1a7f37; --warn: #9a6700; --bad: #cf222e;
+  }
+  body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text); margin: 0; line-height: 1.65; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 32px 28px 64px; }
+  h1 { font-size: 26px; border-bottom: 2px solid var(--border); padding-bottom: 12px; }
+  h2 { font-size: 20px; margin-top: 36px; border-left: 4px solid var(--accent); padding-left: 10px; }
+  h3 { font-size: 16px; margin-top: 24px; }
+  .meta { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .verdict { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; margin: 20px 0; }
+  .verdict b { color: var(--accent); }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--panel); }
+  code { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 13px; font-family: Consolas, monospace; }
+  .tag { display: inline-block; font-size: 12px; border-radius: 10px; padding: 1px 9px; margin-right: 6px; }
+  .t-ok { background: #dafbe1; color: var(--ok); }
+  .t-warn { background: #fff8c5; color: var(--warn); }
+  .t-bad { background: #ffebe9; color: var(--bad); }
+  .t-info { background: #ddf4ff; color: var(--accent); }
+  ul { padding-left: 22px; }
+  li { margin: 4px 0; }
+  .small { font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Swarm 后端插件化迁移评估</h1>
+<p class="meta">评估对象：将 <code>swarm</code> 命令的后端实现（browser4-rest）迁入运行时插件 &nbsp;|&nbsp; 2026-08-17 &nbsp;|&nbsp; 基于 Browser4-4.14 代码实查</p>
+
+<div class="verdict">
+<b>结论：可行，但不建议"大爆炸式"整体搬迁。</b><br>
+"swarm 后端"实际是两层：① <b>会话机制层</b>（<code>SessionKind.SWARM</code>、<code>PulsarSessionManager.ensureSwarmSession</code>、<code>AgenticContexts</code>）——被 <code>ScrapeService</code>（crawl）和会话路由共享，<b>必须留在核心</b>；② <b>任务门面层</b>（<code>SwarmController</code> + <code>SwarmService</code> + <code>SwarmToolExecutor</code>，约 600 行 + 4 个测试类）——理论上可搬，但插件注册 <code>@RestController</code> 在本仓库<b>无先例、未验证</b>，且存在对 <code>browser4-rest</code> 内部类的编译依赖，违背现有 PDK 插件只依赖 skeleton/protocol/agentic 的惯例。推荐"<b>接缝提取 → 控制器插件验证 → 门面搬迁</b>"三阶段路径，或采用风险更低的<b>核心保留薄 REST 门面 + 插件承载实现</b>变体。
+</div>
+
+<h2>1. 现状盘点：swarm 后端由什么构成</h2>
+<table>
+<tr><th>组件</th><th>位置</th><th>行数/规模</th><th>可搬性</th></tr>
+<tr><td><code>SwarmController</code>（7 个端点：open / submit / query / count / status / {id}/status / {id}/result）</td><td>browser4-rest</td><td>~144 行</td><td><span class="tag t-warn">条件可搬</span></td></tr>
+<tr><td><code>SwarmService</code>（Caffeine 任务缓存 + JSONL 持久化 + 2 个清理协程）</td><td>browser4-rest</td><td>~273 行</td><td><span class="tag t-warn">条件可搬</span></td></tr>
+<tr><td><code>SwarmToolExecutor</code> + <code>SwarmToolMountConfiguration</code>（MCP/LLM 工具，domain="swarm"）</td><td>browser4-rest</td><td>~135 行</td><td><span class="tag t-ok">可搬</span>（ToolMount 是官方插件挂载点，weather 等插件已在用）</td></tr>
+<tr><td><code>ScrapeHyperlinkFactory</code></td><td>browser4-rest</td><td>~53 行</td><td><span class="tag t-bad">共享</span>——<code>ScrapeService</code>（crawl）同样依赖，不能随 swarm 走；其 import 全部来自 agentic，可下移</td></tr>
+<tr><td><code>SessionKind.SWARM</code> 路由 + <code>PulsarSessionManager.ensureSwarmSession</code></td><td>browser4-rest</td><td>散布</td><td><span class="tag t-bad">必须留核心</span>——<code>ScrapeService</code> 直接用 swarm 会话做分布式抓取；<code>getOrCreateSession</code> 按 <code>SWARM_SESSION_ID</code> 特判路由</td></tr>
+<tr><td><code>AgenticContexts.ensureSwarmSession</code></td><td>browser4-agentic</td><td>—</td><td><span class="tag t-bad">必须留核心</span>（agentic 本就是插件 provided 依赖，无需搬）</td></tr>
+</table>
+<p class="small">CLI 侧（Rust）<code>http.rs</code> 中 4 个函数硬编码 <code>/api/swarm/submit|query|{id}/status|{id}/result</code> 路径，且 <code>submit</code> 依赖<b>裸 UUID 字符串</b>（非 JSON 包裹）响应格式——这是搬迁时必须原样保留的线上契约。</p>
+
+<h2>2. 插件体系能承载什么（实查结论）</h2>
+<ul>
+<li><b>加载机制支持</b>：<code>PluginClasspathEnhancer</code> 在 <code>main()</code>、Spring 启动<b>之前</b>把 <code>plugins/*.jar</code> 挂进 URLClassLoader 并设为 TCCL，Spring Boot 可发现其中的 <code>AutoConfiguration.imports</code>。因此插件 auto-config 里用 <code>@Bean</code> 注册的 <code>@RestController</code>，理论上会被 <code>RequestMappingHandlerMapping</code> 在 context refresh 时正常映射。<b>机制成立。</b></li>
+<li><b>但没有先例</b>：现有 7 个插件（weather/captcha/images/markdown/media/pptx/seo）全部只走 <code>ToolMount</code>（工具执行器）+ 事件挂载，<b>零个</b>注册 REST controller。这条路径未经测试，属新能力开拓，需要 PDK 补文档 + 验证测试。</li>
+<li><b>依赖惯例</b>：插件 pom 对 skeleton/protocol/agentic 全部 <code>provided</code>。而 <code>SwarmService</code> 直接注入 <code>PulsarSessionManager</code>（browser4-rest 类）、用 <code>ScrapeStatusRequest</code>（rest entities）——插件要么新增对 <b>browser4-rest 的 provided 依赖</b>（破坏惯例，且与宿主形成二进制版本耦合），要么先把接缝下移。</li>
+<li><b>manifest <code>dependsOn</code> 不被强制</b>：<code>PluginService</code> 实际只读 name/version/description/autoConfigurationClasses，依赖声明目前纯文档性质。</li>
+<li><b>AOT 影响（Leyden）</b>：插件类不入 AOT cache 是既定形态。搬出后 swarm 相关类启动时按传统路径加载——量级很小（几个类），代价可忽略；同时 browser4-rest 主链路反而略瘦。</li>
+</ul>
+
+<h2>3. 收益 vs 风险</h2>
+<table>
+<tr><th>维度</th><th>评估</th></tr>
+<tr><td>核心瘦身</td><td>browser4-rest 减约 550–800 行 + 2 个单测类。收益真实但有限——会话机制层本来就得留下。</td></tr>
+<tr><td>战略价值</td><td><span class="tag t-info">高</span> "插件可注册 REST 端点"一旦打通，插件生态就能交付服务端能力（不只是工具），与"插件是核心产品决策"的定位一致。swarm 是个不错的试点候选。</td></tr>
+<tr><td>独立演进</td><td>swarm 任务队列（TTL、compact、stale 超时逻辑）迭代频繁，独立发版可减少核心发版节奏压力。</td></tr>
+<tr><td>可选性</td><td>不需要 swarm 的部署可移除插件；但 CLI 的 7 个 <code>swarm-*</code> 命令会得到 404——需要 CLI 侧优雅降级提示（目前直接报错，可接受但需文档化）。</td></tr>
+<tr><td>未验证路径</td><td><span class="tag t-bad">主要风险</span> controller-in-plugin 无先例：类加载器可见性（parent-first，宿主类对插件可见 ✅）、Jackson 对 <code>ScrapeResponse</code>（agentic 类）序列化、Spring MVC 扫描时机，都需 spike 验证。</td></tr>
+<tr><td>测试迁移</td><td><code>SwarmControllerTest</code>、<code>SwarmServicePersistenceTest</code>、<code>SwarmControllerE2ETest</code>、<code>SwarmCrawlFixtureTest</code> 需随迁或改造；CLI/Rust e2e 用 mock server 按 HTTP 黑盒测，路径不变即不受影响；tests-production 的 PS1 压测脚本同理不受影响。</td></tr>
+<tr><td>打包</td><td>browser4-standalone 打包必须把插件 jar 放入 <code>plugins/</code>，否则开箱即坏的 swarm——发布矩阵多一个组合。</td></tr>
+<tr><td>耦合残留</td><td><span class="tag t-warn">抽象渗漏</span>插件实现仍需拿到 swarm 会话（<code>PulsarSessionManager</code> 或等价接口）。若不做接缝提取，插件将编译依赖宿主内部类，宿主每次重构都可能破坏插件二进制兼容。</td></tr>
+</table>
+
+<h2>4. 推荐路径</h2>
+<h3>方案 A（推荐）：三阶段渐进</h3>
+<ul>
+<li><b>阶段 1 — 接缝提取</b>（1–2 天，纯重构零行为变化）：
+  <ul>
+  <li><code>ScrapeHyperlinkFactory</code>、<code>ScrapeStatusRequest</code> 从 browser4-rest 下移到 browser4-agentic（前者 import 已全是 agentic 类，零阻力；ScrapeService 改 import 即可）；</li>
+  <li>在 agentic 定义 <code>SwarmSessionProvider</code> 接口（<code>fun session(): GenericAgenticSession</code>），由 rest 的 <code>PulsarSessionManager</code> 提供实现 bean——插件从此不碰任何 rest 类；</li>
+  <li>验证：现有 4 组 swarm 测试全绿。</li>
+  </ul></li>
+<li><b>阶段 2 — 能力验证</b>（1 天）：写一个 spike 插件注册最简 <code>@RestController</code>（如 <code>/api/hello</code>），跑通 Spring MVC 映射 + REST e2e + AOT cache 启动回归。通过后把"controller 挂载"写入 PDK 文档与 <code>browser4-plugin-archetype</code>。</li>
+<li><b>阶段 3 — 门面搬迁</b>（3–5 天）：新建 <code>browser4-plugins/browser4-swarm</code>，迁 <code>SwarmService</code>/<code>SwarmController</code>/<code>SwarmToolExecutor</code> + 测试；browser4-rest 删除原实现与 <code>SwarmToolMountConfiguration</code>；standalone 打包含插件；CLI 保持路径与响应格式逐字节不变。</li>
+</ul>
+<h3>方案 B（低风险替代）：核心薄门面 + 插件实现</h3>
+<p>REST controller 留在核心作为 ~40 行薄壳，仅做参数校验后委托给 agentic 中定义的 <code>SwarmFacade</code> 接口；插件通过 ToolMount 式注册表提供实现。线上契约、CLI、打包全部不动，插件缺失时返回明确的"swarm 未安装"错误。<b>如果战略目标只是"实现放插件里"而非"端点也放插件里"，这是成本最低、风险最小的形态。</b></p>
+<h3>方案 C（不推荐）：整体大爆炸搬迁</h3>
+<p>一次性把 controller+service+tool 塞进插件。技术上有机会成功，但同时引入未验证的 controller 挂载、rest 编译依赖、测试搬迁、打包变更四类风险，出问题时定位面太大。</p>
+
+<h2>5. 必须保留在核心的清单（搬迁红线）</h2>
+<ul>
+<li><code>SessionKind.SWARM</code> 与 <code>PulsarSessionManager</code> 的 SWARM 路由特判（ConcurrentHashMap 嵌套 computeIfAbsent 的规避逻辑依赖它）；</li>
+<li><code>AgenticContexts.ensureSwarmSession</code>（ScrapeService 的分布式抓取建立在它之上）；</li>
+<li><code>ScrapeHyperlinkFactory</code> 的共享语义（下移到 agentic，而非进插件）；</li>
+<li>REST 路径 <code>/api/swarm/**</code> 与 submit 返回裸 UUID 的契约（若走方案 A 阶段 3，由插件逐字节复刻）。</li>
+</ul>
+
+<p class="small">涉及文件：browser4-rest {SwarmController, SwarmService, SwarmToolExecutor, SwarmToolMountConfiguration, ScrapeHyperlinkFactory, PulsarSessionManager, StartupWarmer(注释)}.kt · browser4-boot {PluginManager, PluginClasspathEnhancer, PluginService}.kt · browser4-plugins/browser4-weather（插件范式样本）· cli/browser4-cli/src/{http,main}.rs</p>
+</div>
+</body>
+</html>
