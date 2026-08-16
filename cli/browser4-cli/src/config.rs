@@ -13,6 +13,18 @@ use crate::state::resolve_default_state_dir;
 /// Allowed keys for `config set` / `config get` / `config delete`.
 pub const VALID_CONFIG_KEYS: &[&str] = &["server", "timeout", "proxy", "session"];
 
+/// Server-side config keys recognized by `config get` / `set` / `delete`.
+///
+/// Unlike the local keys above, these are not stored in `config.json` —
+/// they are routed to the running server's REST API (runtime override,
+/// effective immediately, lost on server restart).
+pub const SERVER_CONFIG_KEYS: &[&str] = &["agent.llm.maxRequestTokens"];
+
+/// True when the key refers to server-side configuration routed to the REST API.
+pub fn is_server_config_key(key: &str) -> bool {
+    SERVER_CONFIG_KEYS.contains(&key)
+}
+
 /// Persistent CLI configuration stored in `~/.browser4/config.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConfigStore {
@@ -62,6 +74,7 @@ pub fn write_config(config: &ConfigStore) -> std::io::Result<()> {
 pub fn config_unknown_key_error(key: &str) -> String {
     let valid = VALID_CONFIG_KEYS
         .iter()
+        .chain(SERVER_CONFIG_KEYS.iter())
         .map(|k| format!("'{}'", k))
         .collect::<Vec<_>>()
         .join(", ");

@@ -169,23 +169,23 @@ Notes:
 - `timeout` must be a positive integer; `0` and unknown keys are rejected with a non-zero exit.
 - `config set server` sets the persistent default; a later `--server` flag or `BROWSER4_CLI_SERVER` still overrides it for that invocation.
 
-### LLM Token Limit
+### LLM Token Limit (server-side config key)
 
-`llm-limit` shows or changes the server-side per-request LLM token limit
-(`agent.llm.maxRequestTokens`, default 500,000). When an agent task exceeds the
-limit it halts with a status report; raising the limit via this command allows
-the task to continue — effective immediately, no server restart.
+`agent.llm.maxRequestTokens` is a **server-side** config key handled by the same
+`config` command family. When an agent task exceeds the limit (default 500,000)
+it halts with a status report; raising the limit this way allows the task to
+continue — a runtime override, effective immediately, no server restart.
 
 ```bash
-browser4-cli llm-limit                  # Show configured / override / effective limit
-browser4-cli llm-limit 800000           # Set a runtime override (tokens per LLM request)
-browser4-cli llm-limit unlimited        # Disable enforcement
-browser4-cli llm-limit reset            # Clear the override, back to config values
+browser4-cli config get agent.llm.maxRequestTokens   # Show configured / override / effective limit
+browser4-cli config set agent.llm.maxRequestTokens 800000  # Raise the limit
+browser4-cli config set agent.llm.maxRequestTokens unlimited # Disable enforcement
+browser4-cli config delete agent.llm.maxRequestTokens      # Clear override, back to config values
 ```
 
 Notes:
-- The override is runtime-only — it is lost on server restart, which falls back to `agent.llm.maxRequestTokens` in the server configuration.
-- Corresponding REST endpoints: `GET/PUT/DELETE /api/system/token-limit`.
+- Unlike local keys, this key is not stored in `config.json` — it routes to the running server's REST API (`GET/PUT/DELETE /api/system/token-limit`), so the server must be up.
+- The override is runtime-only — lost on server restart, which falls back to `agent.llm.maxRequestTokens` in the server configuration.
 
 ### Tab Management
 

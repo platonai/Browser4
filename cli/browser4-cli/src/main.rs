@@ -453,7 +453,6 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "code-devtask",
         "code-impact",
         "code-workspace",
-        "llm-limit",
     ]
     .into()
 }
@@ -3026,12 +3025,18 @@ fn handle_config_list() -> Result<(), String> {
 }
 
 /// Get a single persisted CLI configuration value (`config-get`).
-fn handle_config_get(tool_params: &Value) -> Result<(), String> {
+///
+/// Server-side keys (see `config::SERVER_CONFIG_KEYS`) are routed to the
+/// running server's REST API instead of the local config file.
+async fn handle_config_get(client: &Client, base_url: &str, tool_params: &Value) -> Result<(), String> {
     let key = tool_params
         .get("key")
         .and_then(|v| v.as_str())
         .map(str::trim)
         .unwrap_or("");
+    if config::is_server_config_key(key) {
+        return llm_limit_show(client, base_url).await;
+    }
     if !config::VALID_CONFIG_KEYS.contains(&key) {
         return Err(config::config_unknown_key_error(key));
     }
@@ -3050,7 +3055,11 @@ fn handle_config_get(tool_params: &Value) -> Result<(), String> {
 }
 
 /// Set a persisted CLI configuration value (`config-set`).
-fn handle_config_set(tool_params: &Value) -> Result<(), String> {
+///
+/// Server-side keys (see `config::SERVER_CONFIG_KEYS`) become a runtime
+/// override on the running server — effective immediately, no restart
+/// needed, but lost when the server restarts.
+async fn handle_config_set(client: &Client, base_url: &str, tool_params: &Value) -> Result<(), String> {
     let key = tool_params
         .get("key")
         .and_then(|v| v.as_str())
@@ -3059,7 +3068,16 @@ fn handle_config_set(tool_params: &Value) -> Result<(), String> {
     let value = tool_params
         .get("value")
         .and_then(|v| v.as_str())
+        .map(str::trim)
         .unwrap_or("");
+    if config::is_server_config_key(key) {
+        if value.is_empty() {
+            return Err(format!(
+                "Invalid value for '{key}': expected a token count, 0, or 'unlimited'"
+            ));
+        }
+        return llm_limit_set(client, base_url, value).await;
+    }
     let mut cfg = config::read_config();
     config::config_set_value(&mut cfg, key, value)?;
     config::write_config(&cfg).map_err(|e| format!("Failed to write config: {e}"))?;
@@ -3069,12 +3087,18 @@ fn handle_config_set(tool_params: &Value) -> Result<(), String> {
 }
 
 /// Remove a persisted CLI configuration value (`config-delete`).
-fn handle_config_delete(tool_params: &Value) -> Result<(), String> {
+///
+/// For server-side keys this clears the runtime override on the running
+/// server, falling back to its configuration file values.
+async fn handle_config_delete(client: &Client, base_url: &str, tool_params: &Value) -> Result<(), String> {
     let key = tool_params
         .get("key")
         .and_then(|v| v.as_str())
         .map(str::trim)
         .unwrap_or("");
+    if config::is_server_config_key(key) {
+        return llm_limit_reset(client, base_url).await;
+    }
     let mut cfg = config::read_config();
     config::config_delete_value(&mut cfg, key)?;
     config::write_config(&cfg).map_err(|e| format!("Failed to write config: {e}"))?;
@@ -3083,31 +3107,18 @@ fn handle_config_delete(tool_params: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// Show, set, or reset the server-side per-request LLM token limit
-/// (runtime override for `agent.llm.maxRequestTokens`) via `llm-limit`.
-///
-/// This is the operator's way to allow a halted task to continue after the
-/// per-request token limit was exceeded — no server restart required.
-async fn handle_llm_limit(client: &Client, base_url: &str, tool_params: &Value) -> Result<(), String> {
-    let value = tool_params
-        .get("value")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-
-    let (method, url): (&str, String) = match value {
-        None => ("GET", format!("{base_url}/api/system/token-limit")),
-        Some(v) if v.eq_ignore_ascii_case("reset") => {
-            ("DELETE", format!("{base_url}/api/system/token-limit"))
-        }
-        Some(v) => ("PUT", format!("{base_url}/api/system/token-limit/{v}")),
-    };
-
+/// Call a `/api/system/token-limit` endpoint and return the parsed JSON body.
+async fn llm_limit_call(client: &Client, method: &str, url: &str) -> Result<Value, String> {
     let response = client
-        .request(reqwest::Method::from_bytes(method.as_bytes()).unwrap(), &url)
+        .request(reqwest::Method::from_bytes(method.as_bytes()).unwrap(), url)
         .send()
         .await
-        .map_err(|e| format!("Failed to contact server at {url}: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "Failed to contact server at {url}: {e}\n\
+                 💡 'agent.llm.maxRequestTokens' is a server-side key — the Browser4 server must be running"
+            )
+        })?;
     let status = response.status();
     let body = response
         .text()
@@ -3116,9 +3127,11 @@ async fn handle_llm_limit(client: &Client, base_url: &str, tool_params: &Value) 
     if !status.is_success() {
         return Err(format!("Server returned HTTP {status}: {body}"));
     }
+    serde_json::from_str(&body).map_err(|e| format!("Invalid JSON response: {e}"))
+}
 
-    let parsed: Value =
-        serde_json::from_str(&body).map_err(|e| format!("Invalid JSON response: {e}"))?;
+/// Print the token-limit status returned by the server.
+fn llm_limit_print(parsed: &Value) {
     let configured = parsed.get("configured").and_then(|v| v.as_i64());
     let override_value = parsed.get("override").and_then(|v| v.as_i64());
     let effective = parsed.get("effective").and_then(|v| v.as_i64());
@@ -3145,6 +3158,27 @@ async fn handle_llm_limit(client: &Client, base_url: &str, tool_params: &Value) 
     json_field("override", json!(override_value));
     json_field("effective", json!(effective));
     json_field("unlimited", json!(unlimited));
+}
+
+/// Show the server-side per-request LLM token limit.
+async fn llm_limit_show(client: &Client, base_url: &str) -> Result<(), String> {
+    let parsed = llm_limit_call(client, "GET", &format!("{base_url}/api/system/token-limit")).await?;
+    llm_limit_print(&parsed);
+    Ok(())
+}
+
+/// Set a runtime override for the per-request LLM token limit on the server.
+async fn llm_limit_set(client: &Client, base_url: &str, value: &str) -> Result<(), String> {
+    let parsed =
+        llm_limit_call(client, "PUT", &format!("{base_url}/api/system/token-limit/{value}")).await?;
+    llm_limit_print(&parsed);
+    Ok(())
+}
+
+/// Clear the runtime override, falling back to the server's configuration.
+async fn llm_limit_reset(client: &Client, base_url: &str) -> Result<(), String> {
+    let parsed = llm_limit_call(client, "DELETE", &format!("{base_url}/api/system/token-limit")).await?;
+    llm_limit_print(&parsed);
     Ok(())
 }
 
@@ -17572,16 +17606,13 @@ async fn run(
             handle_config_list()?;
         }
         "config-get" => {
-            handle_config_get(&tool_params)?;
+            handle_config_get(&client, &base_url, &tool_params).await?;
         }
         "config-set" => {
-            handle_config_set(&tool_params)?;
+            handle_config_set(&client, &base_url, &tool_params).await?;
         }
         "config-delete" => {
-            handle_config_delete(&tool_params)?;
-        }
-        "llm-limit" => {
-            handle_llm_limit(&client, &base_url, &tool_params).await?;
+            handle_config_delete(&client, &base_url, &tool_params).await?;
         }
         "install" => {
             handle_install(&tool_params).await?;
