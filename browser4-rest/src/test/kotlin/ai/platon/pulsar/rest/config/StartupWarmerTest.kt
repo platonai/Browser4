@@ -10,13 +10,16 @@ import org.springframework.context.ApplicationContext
 
 /**
  * Verifies [StartupWarmer] touches every bean on the critical path
- * from HTTP request → MCP dispatch → session → browser → fetch → swarm.
+ * from HTTP request → MCP dispatch → session → browser → crawl → swarm.
  *
  * These tests pin the exact bean-name list so that CI catches a regression
  * when a bean is removed from the warmer (or added to the chain without
- * updating the warmer), which would reintroduce "Protocol not found (1600)"
- * errors and stuck swarm worker pools on cold starts with
- * [spring.main.lazy-initialization=true].
+ * updating the warmer), which would reintroduce stuck swarm worker pools on
+ * cold starts with [spring.main.lazy-initialization=true].
+ *
+ * Note: `protocolFactory` / `fetchComponent` are intentionally absent — the
+ * "Protocol not found (1600)" race they were warming against is fixed inside
+ * [ai.platon.pulsar.skeleton.workflow.protocol.ProtocolFactory] itself.
  */
 class StartupWarmerTest {
 
@@ -31,8 +34,6 @@ class StartupWarmerTest {
         "mcpToolController",
         "sessionManager",
         "agenticContext",
-        "protocolFactory",
-        "fetchComponent",
         "crawlService",
         "swarmService",
     )
@@ -63,19 +64,19 @@ class StartupWarmerTest {
         assertEquals(expectedWarmupBeanNames, captor.allValues,
             "Warm-up bean list or order changed — update the test AND the " +
             "StartupWarmer.warmupBeanNames list together, or cold-start " +
-            "\"Protocol not found (1600)\" errors will return.")
+            "stuck swarm worker pools will return.")
     }
 
     @Test
     fun `onReady continues warming after a bean fails`() {
         val context = Mockito.mock(ApplicationContext::class.java)
-        Mockito.`when`(context.getBean("fetchComponent"))
+        Mockito.`when`(context.getBean("crawlService"))
             .thenThrow(RuntimeException("simulated lazy-init failure"))
 
         val warmer = StartupWarmer(context)
         warmer.onReady() // must not throw synchronously
 
-        // All 7 beans must still be attempted — the warm-up must not
+        // All 5 beans must still be attempted — the warm-up must not
         // short-circuit on the first failure.
         val captor = argumentCaptor<String>()
         Mockito.verify(context, timeout(3000).times(expectedWarmupBeanNames.size))

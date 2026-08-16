@@ -35,12 +35,15 @@ class StartupWarmer(
      * each dependency chain before moving to the next.
      *
      * With [spring.main.lazy-initialization=true] the first request that
-     * touches a lazy bean pays the full creation cost — including protocol
-     * handler registration (FetchComponent), browser pool creation
-     * (SwarmService), and crawl infrastructure (CrawlService).  By warming
-     * these eagerly in the background, the first real request finds them
-     * already initialized and avoids "Protocol not found (1600)" errors
-     * and stuck swarm worker pools.
+     * touches a lazy bean pays the full creation cost — including browser pool
+     * creation (SwarmService) and crawl infrastructure (CrawlService).  By
+     * warming these eagerly in the background, the first real request finds
+     * them already initialized and avoids stuck swarm worker pools.
+     *
+     * Note: `protocolFactory` / `fetchComponent` are deliberately NOT warmed
+     * here — their "Protocol not found (1600)" race under lazy initialization
+     * is fixed inside [ai.platon.pulsar.skeleton.workflow.protocol.ProtocolFactory]
+     * via idempotent, thread-safe lazy registration, so they can stay lazy.
      */
     private val warmupBeanNames = listOf(
         // REST layer
@@ -49,11 +52,6 @@ class StartupWarmer(
         "sessionManager",
         // Agentic context (H2 DB init, etc.)
         "agenticContext",
-        // Fetch / protocol layer — ensures protocol handlers are registered
-        // before the first crawl/scrape/swarm request, avoiding race conditions
-        // where FetchComponent reports "Protocol not found (1600)".
-        "protocolFactory",
-        "fetchComponent",
         // Crawl infrastructure
         "crawlService",
         // Swarm infrastructure — forces the swarm browser pool and worker

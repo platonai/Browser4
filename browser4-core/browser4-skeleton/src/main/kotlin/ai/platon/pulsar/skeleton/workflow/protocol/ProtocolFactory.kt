@@ -14,15 +14,39 @@ import java.util.concurrent.atomic.AtomicBoolean
  * implement.
  */
 class ProtocolFactory(
-    protocols: List<Protocol> = emptyList()
+    private val protocols: List<Protocol> = emptyList()
 ) : AutoCloseable {
     private val logger = LoggerFactory.getLogger(ProtocolFactory::class.java)
 
     private val protocolMap: MutableMap<String, Protocol> = ConcurrentHashMap()
+    private val initialized = AtomicBoolean()
     private val closed = AtomicBoolean()
 
-    init {
-        protocolMap.putAll(protocols.associateBy { it.name })
+    /**
+     * Registers the [Protocol] implementations into [protocolMap] on the
+     * first access, instead of in the constructor's `init` block.
+     *
+     * The registration used to live in `init {}`, which breaks under
+     * `spring.main.lazy-initialization=true`: the bean is created as a CGLIB
+     * proxy whose `init` block does not run until the first method call, and
+     * when swarm's concurrent worker pool triggers the first `getProtocol`
+     * from multiple threads, the non-atomic `putAll` races with the reads —
+     * yielding "Protocol not found (1600)" on the first request.
+     *
+     * Registration is guarded by a double-checked lock: exactly one thread
+     * performs the `putAll`, and the `initialized` flag is set only AFTER the
+     * map is fully populated.  The `AtomicBoolean` write carries a volatile
+     * happens-before edge, so any thread that observes `initialized == true`
+     * is guaranteed to see the complete map — eliminating the race where a
+     * thread reads the map while another is still mid-`putAll`.
+     */
+    private fun ensureInitialized() {
+        if (initialized.get()) return
+        synchronized(this) {
+            if (initialized.get()) return
+            protocolMap.putAll(protocols.associateBy { it.name })
+            initialized.set(true)
+        }
     }
 
     /**
@@ -49,6 +73,7 @@ class ProtocolFactory(
      * @return The appropriate [Protocol] implementation for a given [url].
      */
     fun getProtocol(url: String): Protocol? {
+        ensureInitialized()
         val protocolName = StringUtils.substringBefore(url, ":")
         // sub protocol can be supported by main:sub://example.com later
         return protocolMap[protocolName]
