@@ -86,8 +86,9 @@ All files live under `${logging.dir}` (default: `logs/`) with
 
 ### 1.5 Programmatic Logger Configuration
 
-- `PulsarWebDriverCDPTests.kt:22-25` — manipulates Logback logger levels directly
-  via `(LoggerFactory.getLogger(name) as Logger).level = level`
+- Programmatic Logback level changes in tests use
+  `(LoggerFactory.getLogger(name) as Logger).level = level` (e.g. via the shared
+  test `logback-test.xml` resources under `browser4-tests/*/src/test/resources/`)
 - `CodahaleSlf4jReporter.kt` — custom SLF4J reporter for Codahale Metrics;
   maps to TRACE/DEBUG/INFO/WARN/ERROR levels via `LoggerFactory.getLogger("metrics")`
 - `Browser4NativeHints.kt` — registers `logback*.xml` resources for GraalVM

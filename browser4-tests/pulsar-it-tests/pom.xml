@@ -21,60 +21,25 @@
     <artifactId>pulsar-it-tests</artifactId>
     <name>Pulsar IT Tests</name>
 
+    <!--
+        The full integration-test suite has been migrated into the base library
+        (browser4-core modules and pulsar-tests-common). This module is kept as
+        a thin placeholder with a single smoke test so existing build wiring and
+        CI references keep working during the migration.
+    -->
+
     <build>
         <defaultGoal>verify</defaultGoal>
-
-        <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-jar-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>test-jar</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-        </plugins>
     </build>
 
     <dependencies>
-        <!-- Internal Dependencies -->
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-rest</artifactId>
-        </dependency>
-
-        <!-- Ensure browser DOM service & debug utilities are available to tests -->
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-browser</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <!-- MCP functionality for testing -->
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-agentic</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-actuator</artifactId>
-        </dependency>
-
+        <!-- Shared test infrastructure (mock site, launchers) -->
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-tests-common</artifactId>
             <scope>test</scope>
         </dependency>
+
         <!--
         If your build relies on dependency management support from Spring Boot, you should not import
         the junit-bom in your build script since that will result in duplicate

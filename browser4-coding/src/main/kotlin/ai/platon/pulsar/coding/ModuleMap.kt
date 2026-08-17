@@ -45,6 +45,7 @@ object ModuleMap {
         "browser4-plugins/browser4-media",
         "browser4-plugins/browser4-pptx",
         "browser4-plugins/browser4-seo",
+        "browser4-plugins/browser4-weather",
         "browser4-rest",
         "browser4-tests",
         "browser4-tests/browser4-e2e-tests",
@@ -79,8 +80,9 @@ object ModuleMap {
             "browser4-plugins/browser4-captcha", "browser4-plugins/browser4-images",
             "browser4-plugins/browser4-markdown", "browser4-plugins/browser4-media",
             "browser4-plugins/browser4-pptx", "browser4-plugins/browser4-seo",
+            "browser4-plugins/browser4-weather",
             "browser4-rest", "browser4-tests/browser4-e2e-tests",
-            "browser4-tests/pulsar-it-tests", "examples/browser4-examples",
+            "examples/browser4-examples",
         ),
         "browser4-boot" to listOf(
             "browser4-apps/browser4-bundle", "browser4-apps/browser4-standalone", "browser4-rest",
@@ -95,7 +97,6 @@ object ModuleMap {
             "browser4-plugins/browser4-captcha", "browser4-plugins/browser4-images",
             "browser4-plugins/browser4-markdown", "browser4-plugins/browser4-media",
             "browser4-plugins/browser4-pptx", "browser4-rest",
-            "browser4-tests/pulsar-e2e-tests", "browser4-tests/pulsar-it-tests",
         ),
         "browser4-core/browser4-common" to listOf(
             "browser4-agentic", "browser4-core/browser4-browser",
@@ -110,6 +111,7 @@ object ModuleMap {
             "browser4-plugins/browser4-captcha", "browser4-plugins/browser4-images",
             "browser4-plugins/browser4-markdown", "browser4-plugins/browser4-media",
             "browser4-plugins/browser4-pptx", "browser4-plugins/browser4-seo",
+            "browser4-plugins/browser4-weather",
             "browser4-rest", "examples/browser4-examples",
         ),
         "browser4-core/browser4-resources" to listOf(
@@ -126,6 +128,7 @@ object ModuleMap {
             "browser4-plugins/browser4-captcha", "browser4-plugins/browser4-images",
             "browser4-plugins/browser4-markdown", "browser4-plugins/browser4-media",
             "browser4-plugins/browser4-pptx", "browser4-plugins/browser4-seo",
+            "browser4-plugins/browser4-weather",
             "browser4-rest", "examples/browser4-examples",
         ),
         "browser4-pdk" to listOf(
@@ -133,14 +136,11 @@ object ModuleMap {
             "browser4-plugins/browser4-captcha", "browser4-plugins/browser4-images",
             "browser4-plugins/browser4-markdown", "browser4-plugins/browser4-media",
             "browser4-plugins/browser4-pptx", "browser4-plugins/browser4-seo",
+            "browser4-plugins/browser4-weather",
         ),
         "browser4-rest" to listOf(
             "browser4-apps/browser4-bundle", "browser4-apps/browser4-standalone",
             "browser4-tests/browser4-rest-tests",
-            "browser4-tests/pulsar-e2e-tests", "browser4-tests/pulsar-it-tests",
-        ),
-        "browser4-tests/pulsar-it-tests" to listOf(
-            "browser4-tests/browser4-e2e-tests", "browser4-tests/pulsar-e2e-tests",
         ),
         "browser4-tests/pulsar-tests-common" to listOf(
             "browser4-core/browser4-skeleton", "browser4-rest",

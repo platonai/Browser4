@@ -99,11 +99,16 @@ cargo test --test e2e -- --help           # All options
 | Scope | Path |
 |---|---|
 | Unit tests | `src/test/kotlin/...` |
-| Integration | `browser4-tests/pulsar-it-tests/` |
-| E2E | `browser4-tests/pulsar-e2e-tests/` |
+| Integration (migrated to base library; module now smoke-only) | `browser4-tests/pulsar-it-tests/` |
+| E2E (migrated to base library; module now smoke-only) | `browser4-tests/pulsar-e2e-tests/` |
 | REST integration/E2E | `browser4-tests/browser4-rest-tests/` |
 | Shared utilities | `browser4-tests/pulsar-tests-common/` |
 | Rust E2E | `cli/browser4-cli/tests/e2e/` |
+
+> **Note:** The former integration/E2E suites in `pulsar-it-tests` and `pulsar-e2e-tests`
+> have been migrated into the base library (browser4-core modules and
+> `pulsar-tests-common`). Both modules are retained as placeholders with a single
+> smoke test each to keep existing build wiring and CI references working.
 
 ## Code Style
 
