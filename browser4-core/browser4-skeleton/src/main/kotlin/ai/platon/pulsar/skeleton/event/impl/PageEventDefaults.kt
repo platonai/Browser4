@@ -149,6 +149,12 @@ class PageEventHandlersFactory(val conf: ImmutableConfig = ImmutableConfig()) {
             defaultClazz
         }
 
+        // Construct the default handler directly (no reflection) so the common path stays
+        // GraalVM native-image friendly. Reflection is only used for user-configured classes.
+        if (clazz == defaultClazz) {
+            return DefaultPageEventHandlers()
+        }
+
         return clazz.constructors.first { it.parameters.isEmpty() }.newInstance() as PageEventHandlers
     }
 }

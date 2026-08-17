@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.session
 
+import org.eclipse.jetty.websocket.api.Session
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import org.springframework.web.socket.CloseStatus
@@ -113,16 +114,16 @@ class ExtensionWebSocketHandler(
      * This timeout is based on *incoming* data — outbound pings (sent by
      * [startPing]) do not reset it.  Without this, the server closes the
      * WebSocket after 30s of not receiving any message from the extension.
+     *
+     * Jetty is a hard runtime dependency (spring-boot-starter-jetty), so we
+     * type-check the native session directly instead of using reflection —
+     * reflection-based calls would break GraalVM native-image builds.
      */
     private fun configureIdleTimeout(wsSession: WebSocketSession) {
         try {
             val native = (wsSession as? NativeWebSocketSession)?.nativeSession
-            if (native != null) {
-                // Use reflection to avoid a hard compile-time dependency on
-                // Jetty's Session class (the Jetty jar is present at runtime
-                // but we keep the import surface clean).
-                val setIdleTimeout = native.javaClass.getMethod("setIdleTimeout", Duration::class.java)
-                setIdleTimeout.invoke(native, Duration.ofMinutes(5))
+            if (native is Session) {
+                native.setIdleTimeout(Duration.ofMinutes(5))
                 logger.debug("Set idle timeout to 5min on native session | class={}", native.javaClass.simpleName)
             }
         } catch (e: Exception) {

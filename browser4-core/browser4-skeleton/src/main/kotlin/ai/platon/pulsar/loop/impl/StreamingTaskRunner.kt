@@ -43,8 +43,6 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import kotlin.random.Random
-import kotlin.reflect.full.memberProperties
-import kotlin.reflect.jvm.isAccessible
 import kotlin.time.Duration.Companion.milliseconds
 
 private class StreamingCrawlerMetrics {
@@ -314,12 +312,28 @@ open class StreamingTaskRunner(
     }
 
     override fun report() {
+        // Explicit accessors instead of kotlin.reflect memberProperties:
+        // reflection over all properties breaks GraalVM native-image (missing reflection
+        // registrations) and is fragile under obfuscation/refactoring (see docs-dev review).
         val sb = StringBuilder()
-
-        StreamingTaskRunner::class.memberProperties.filter { it.isAccessible }.forEach {
-            sb.append(it.name).append(": ").append(it.get(this)).append("\n")
-        }
-
+        sb.append("id: ").append(id).append("\n")
+        sb.append("name: ").append(name).append("\n")
+        sb.append("jobName: ").append(jobName).append("\n")
+        sb.append("session: ").append(session).append("\n")
+        sb.append("autoClose: ").append(autoClose).append("\n")
+        sb.append("retryDelayPolicy: ").append(retryDelayPolicy).append("\n")
+        sb.append("urls: ").append(urls).append("\n")
+        sb.append("isActive: ").append(isActive).append("\n")
+        sb.append("isIdle: ").append(isIdle).append("\n")
+        sb.append("isOutOfWork: ").append(isOutOfWork).append("\n")
+        sb.append("idleTime: ").append(idleTime).append("\n")
+        sb.append("numBrowserContexts: ").append(numBrowserContexts).append("\n")
+        sb.append("numMaxOpenTabs: ").append(numMaxOpenTabs).append("\n")
+        sb.append("fetchConcurrency: ").append(fetchConcurrency).append("\n")
+        sb.append("concurrency: ").append(concurrency).append("\n")
+        sb.append("fetchTaskTimeout: ").append(fetchTaskTimeout).append("\n")
+        sb.append("outOfWorkTimeout: ").append(outOfWorkTimeout).append("\n")
+        sb.append("isSmartRetryEnabled: ").append(isSmartRetryEnabled).append("\n")
         logger.info(sb.toString())
     }
 
