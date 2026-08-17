@@ -165,3 +165,6 @@ bin/maintenance/state/*.lock
 
 # JVM AOT cache training artifacts (JEP 483)
 *.aot
+
+# CloakBrowser POC outputs (bin/setup-cloakbrowser.ps1)
+/cloakbrowser-poc/
