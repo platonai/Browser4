@@ -2890,6 +2890,29 @@ pub fn all_commands() -> Vec<CommandDef> {
                 params
             },
         },
+        // ---- doctor-status ----
+        CommandDef {
+            name: "doctor-status",
+            description: "Show the aggregated status panel report from the running backend (health, build, runtime, LLM, sessions, browsers, plugins, skills, metrics, logs). Default shows the summary layer; --verbose adds full detail, --section <name> drills into one report, --json emits machine-readable JSON.",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "section", short: None, is_bool: false, description: "Show only one report section in full detail. One of: health, build, runtime, llm, sessions, pulsar-sessions, swarm, url-pool, browsers, drivers, privacy, plugins, skills, metrics, logs" },
+                OptionDef { name: "verbose", short: Some("v"), is_bool: true, description: "Show the full detail layer of every report section (default: summary layer only)" },
+                OptionDef { name: "server", short: None, is_bool: false, description: "Server URL to check (defaults to saved or http://127.0.0.1:8182)" },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(section) = get_opt_str(args, "section") { params["section"] = json!(section); }
+                if let Some(true) = get_bool(args, "verbose") { params["verbose"] = json!(true); }
+                if let Some(server) = get_opt_str(args, "server") { params["server"] = json!(server); }
+                params
+            },
+        },
         // ---- Agent ----
         CommandDef {
             name: "extract",
@@ -5900,6 +5923,29 @@ mod tests {
         assert!(option_names.contains(&"log-filter"));
         assert!(option_names.contains(&"metric-filter"));
         let args: HashMap<String, Value> = HashMap::new();
+        assert!((cmd.tool_name_fn)(&args).is_empty());
+    }
+
+    #[test]
+    fn test_doctor_status_command_defined() {
+        let map = commands_map();
+        let cmd = map
+            .get("doctor-status")
+            .expect("doctor-status command must exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.category, Category::Browsers);
+        assert!(!cmd.batch_supported);
+        assert_eq!(cmd.args.len(), 0);
+        let option_names: Vec<&str> = cmd.options.iter().map(|o| o.name).collect();
+        assert!(option_names.contains(&"section"));
+        assert!(option_names.contains(&"verbose"));
+        assert!(option_names.contains(&"server"));
+        let mut args = HashMap::new();
+        args.insert("section".to_string(), json!("skills"));
+        args.insert("verbose".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["section"], "skills");
+        assert_eq!(params["verbose"], true);
         assert!((cmd.tool_name_fn)(&args).is_empty());
     }
 

@@ -375,6 +375,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "doctor",
         "doctor-log",
         "doctor-metrics",
+        "doctor-status",
         "help",
         "eval",
         "generate-locator",
@@ -15697,6 +15698,38 @@ async fn handle_doctor(
         }
     }
 
+    // ---- Skills (conditional) ----
+    cli_println!("");
+    cli_println!("-- Skills --");
+    let skills_url = format!("{base_url}/api/skills");
+    match get_json(client, &skills_url).await {
+        Ok(skills) => {
+            if let Some(items) = skills.as_array() {
+                if items.is_empty() {
+                    cli_println!("  No skills registered.");
+                } else {
+                    let names: Vec<&str> = items
+                        .iter()
+                        .filter_map(|s| s.get("name").and_then(|v| v.as_str()))
+                        .collect();
+                    if names.is_empty() {
+                        cli_println!("  {} skill(s) registered.", items.len());
+                    } else {
+                        cli_println!("  {} skill(s): {}", items.len(), names.join(", "));
+                    }
+                }
+                json_field("skills", skills);
+            } else {
+                cli_println!("  (skills report unavailable)");
+                json_field("skills", json!(null));
+            }
+        }
+        Err(e) => {
+            cli_println!("  (server not running or skills unavailable: {})", e);
+            json_field("skills", json!(null));
+        }
+    }
+
     // ---- Backend Logs (conditional, shown only with --verbose) ----
     if verbose {
         let log_file = args
@@ -15820,7 +15853,7 @@ async fn handle_doctor(
 
     if !verbose {
         cli_println!("");
-        cli_println!("💡 Tip: Use 'doctor --verbose' to include logs and metrics inline, or use 'doctor log' / 'doctor metrics' subcommands for more control.");
+        cli_println!("💡 Tip: Use 'doctor --verbose' to include logs and metrics inline, 'doctor status' for the full status panel report (sessions, browsers, plugins, skills, metrics), or 'doctor log' / 'doctor metrics' subcommands for more control.");
     }
 
     // ---- Destructive Repairs (--fix) ----
@@ -15833,6 +15866,667 @@ async fn handle_doctor(
     } else {
         cli_println!("");
         cli_println!("💡 Tip: Run 'browser4-cli doctor --fix' to auto-repair common issues (reinstall Chrome, purge old state, clean temp files).");
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// `doctor status` — the aggregated status panel report, layered.
+// Layer 1 (default): one summary line per report section.
+// Layer 2 (--verbose): per-section detail (session/plugin/skill lists, reports).
+// Layer 3 (--section <name>): a single section in full detail.
+// --json emits the raw `/api/system/status` document (all layers) for machines.
+// ---------------------------------------------------------------------------
+
+/// Map user-facing section names to JSON keys in `/api/system/status`.
+fn status_section_key(section: &str) -> Option<&'static str> {
+    match section {
+        "health" => Some("health"),
+        "build" => Some("build"),
+        "runtime" => Some("runtime"),
+        "llm" => Some("llm"),
+        "sessions" => Some("sessions"),
+        "pulsar-sessions" => Some("pulsarSessions"),
+        "swarm" => Some("swarm"),
+        "url-pool" => Some("urlPool"),
+        "browsers" => Some("browsers"),
+        "drivers" => Some("drivers"),
+        "privacy" => Some("privacy"),
+        "plugins" => Some("plugins"),
+        "skills" => Some("skills"),
+        "metrics" => Some("metrics"),
+        "logs" => Some("logs"),
+        _ => None,
+    }
+}
+
+fn all_status_section_names() -> &'static str {
+    "health, build, runtime, llm, sessions, pulsar-sessions, swarm, url-pool, browsers, drivers, privacy, plugins, skills, metrics, logs"
+}
+
+fn fmt_uptime_human(seconds: u64) -> String {
+    let h = seconds / 3600;
+    let m = (seconds % 3600) / 60;
+    let s = seconds % 60;
+    if h > 0 {
+        format!("{}h {}m {}s", h, m, s)
+    } else if m > 0 {
+        format!("{}m {}s", m, s)
+    } else {
+        format!("{}s", s)
+    }
+}
+
+/// Append `  key: value` (— for null/empty) to a text line buffer.
+fn push_kv(lines: &mut Vec<String>, key: &str, value: &Value) {
+    match value {
+        Value::Null => lines.push(format!("  {}: —", key)),
+        Value::String(s) if s.is_empty() => lines.push(format!("  {}: —", key)),
+        Value::String(s) => lines.push(format!("  {}: {}", key, s)),
+        other => lines.push(format!("  {}: {}", key, other)),
+    }
+}
+
+fn push_section_header(lines: &mut Vec<String>, title: &str) {
+    lines.push(String::new());
+    lines.push(format!("-- {} --", title));
+}
+
+fn render_health(
+    lines: &mut Vec<String>,
+    overall_status: Option<&Value>,
+    health_obj: Option<&Value>,
+    timestamp: Option<&Value>,
+    _verbose: bool,
+) {
+    push_section_header(lines, "Health");
+    // The overall status lives at the top level of the report; when rendering
+    // the health section alone, fall back to the health object's `check`.
+    let status_str = overall_status.and_then(|v| v.as_str()).unwrap_or_else(|| {
+        match health_obj
+            .and_then(|v| v.get("check"))
+            .and_then(|v| v.as_str())
+        {
+            Some("UP") => "healthy",
+            Some(other) => other,
+            None => "unknown",
+        }
+    });
+    if status_str == "healthy" {
+        lines.push("  ✓ healthy".to_string());
+    } else {
+        lines.push(format!("  ✗ {}", status_str));
+    }
+    if let Some(ts) = timestamp.and_then(|v| v.as_str()) {
+        lines.push(format!("  timestamp: {}", ts));
+    }
+    if let Some(health) = health_obj.and_then(|v| v.as_object()) {
+        for (k, v) in health {
+            push_kv(lines, k, v);
+        }
+    }
+}
+
+fn render_build(lines: &mut Vec<String>, build: Option<&Value>, verbose: bool) {
+    push_section_header(lines, "Build");
+    match build {
+        Some(Value::Object(b)) => {
+            push_kv(lines, "version", b.get("version").unwrap_or(&Value::Null));
+            push_kv(lines, "git commit", b.get("gitCommitIdAbbrev").unwrap_or(&Value::Null));
+            push_kv(lines, "branch", b.get("gitBranch").unwrap_or(&Value::Null));
+            push_kv(lines, "commit time", b.get("gitCommitTime").unwrap_or(&Value::Null));
+            if verbose {
+                for (k, v) in b {
+                    if !["version", "gitCommitIdAbbrev", "gitBranch", "gitCommitTime"]
+                        .contains(&k.as_str())
+                    {
+                        push_kv(lines, k, v);
+                    }
+                }
+            }
+        }
+        _ => lines.push("  (unavailable)".to_string()),
+    }
+}
+
+fn render_runtime(lines: &mut Vec<String>, runtime: Option<&Value>, verbose: bool) {
+    push_section_header(lines, "Runtime");
+    match runtime {
+        Some(Value::Object(r)) => {
+            if let Some(uptime) = r.get("uptimeSeconds").and_then(|v| v.as_u64()) {
+                lines.push(format!("  uptime: {}", fmt_uptime_human(uptime)));
+            }
+            push_kv(lines, "processors", r.get("processors").unwrap_or(&Value::Null));
+            if let Some(load) = r.get("systemLoadAverage") {
+                if load.as_f64().map(|f| f >= 0.0).unwrap_or(false) {
+                    lines.push(format!("  load avg: {:.2}", load.as_f64().unwrap_or(0.0)));
+                }
+            }
+            if let Some(mem) = r.get("memory").and_then(|v| v.as_object()) {
+                let used_percent = mem
+                    .get("heapUsedPercent")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let used = mem.get("heapUsed").and_then(|v| v.as_u64()).unwrap_or(0);
+                let max = mem.get("heapMax").and_then(|v| v.as_u64()).unwrap_or(0);
+                lines.push(format!(
+                    "  heap: {}% used ({} / {} bytes)",
+                    used_percent, used, max
+                ));
+                if verbose {
+                    for (k, v) in mem {
+                        if !["heapUsedPercent", "heapUsed", "heapMax"].contains(&k.as_str()) {
+                            push_kv(lines, k, v);
+                        }
+                    }
+                }
+            }
+        }
+        _ => lines.push("  (unavailable)".to_string()),
+    }
+}
+
+fn render_llm(lines: &mut Vec<String>, llm: Option<&Value>, verbose: bool) {
+    push_section_header(lines, "LLM");
+    match llm {
+        Some(Value::Object(l)) => {
+            let configured = l.get("configured").and_then(|v| v.as_bool()).unwrap_or(false);
+            if configured {
+                lines.push("  ✓ configured".to_string());
+                if let Some(detected) = l.get("detectedVia").and_then(|v| v.as_str()) {
+                    lines.push(format!("  detected via: {}", detected));
+                }
+                if verbose {
+                    if let Some(vars) = l.get("foundEnvVars").and_then(|v| v.as_array()) {
+                        let names: Vec<&str> = vars.iter().filter_map(|v| v.as_str()).collect();
+                        if !names.is_empty() {
+                            lines.push(format!("  env vars: {}", names.join(", ")));
+                        }
+                    }
+                    if let Some(props) = l.get("foundProperties").and_then(|v| v.as_array()) {
+                        let names: Vec<&str> = props.iter().filter_map(|v| v.as_str()).collect();
+                        if !names.is_empty() {
+                            lines.push(format!("  properties: {}", names.join(", ")));
+                        }
+                    }
+                }
+            } else if let Some(message) = l.get("message").and_then(|v| v.as_str()) {
+                lines.push("  ✗ not configured".to_string());
+                for line in message.lines() {
+                    lines.push(format!("    {}", line));
+                }
+            } else {
+                lines.push("  ✗ not configured".to_string());
+            }
+        }
+        _ => lines.push("  (unavailable)".to_string()),
+    }
+}
+
+fn render_sessions(lines: &mut Vec<String>, sessions: Option<&Value>, verbose: bool) {
+    push_section_header(lines, "Sessions");
+    match sessions {
+        Some(Value::Object(s)) => {
+            let total = s.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
+            let mut parts = vec![format!("total: {}", total)];
+            if let Some(by_status) = s.get("byStatus").and_then(|v| v.as_object()) {
+                let mut statuses: Vec<(&String, &Value)> = by_status.iter().collect();
+                statuses.sort_by(|a, b| a.0.cmp(b.0));
+                for (k, v) in statuses {
+                    parts.push(format!("{}: {}", k, v));
+                }
+            }
+            lines.push(format!("  {}", parts.join(", ")));
+            if verbose {
+                if let Some(items) = s.get("items").and_then(|v| v.as_array()) {
+                    for it in items {
+                        if let Some(obj) = it.as_object() {
+                            let id = obj.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                            let kind = obj.get("kind").and_then(|v| v.as_str()).unwrap_or("?");
+                            let status = obj.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+                            let active = obj.get("active").and_then(|v| v.as_bool()).unwrap_or(false);
+                            let url = obj.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                            lines.push(format!(
+                                "  {} [{}] {} active={} url={}",
+                                id,
+                                kind,
+                                status,
+                                if active { "yes" } else { "no" },
+                                url
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        _ => lines.push("  (unavailable)".to_string()),
+    }
+}
+
+fn render_pulsar_sessions(lines: &mut Vec<String>, ps: Option<&Value>, verbose: bool) {
+    push_section_header(lines, "Pulsar Sessions");
+    match ps {
+        Some(Value::Object(p)) => {
+            let total = p.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
+            lines.push(format!("  total: {}", total));
+            if verbose {
+                if let Some(items) = p.get("items").and_then(|v| v.as_array()) {
+                    for it in items {
+                        if let Some(obj) = it.as_object() {
+                            let id = obj
+                                .get("managedSessionId")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?");
+                            let label = obj.get("label").and_then(|v| v.as_str()).unwrap_or("");
+                            let active = obj
+                                .get("isActive")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            let loop_running = obj
+                                .get("mainLoopRunning")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            lines.push(format!(
+                                "  {} label={} active={} mainLoop={}",
+                                id,
+                                label,
+                                if active { "yes" } else { "no" },
+                                if loop_running { "running" } else { "stopped" }
+                            ));
+                            if let Some(report) = obj.get("mainLoopReport").and_then(|v| v.as_str()) {
+                                for line in report.lines() {
+                                    lines.push(format!("    {}", line));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        _ => lines.push("  (unavailable)".to_string()),
+    }
+}
+
+fn render_swarm(lines: &mut Vec<String>, swarm: Option<&Value>, verbose: bool) {
+    push_section_header(lines, "Swarm");
+    match swarm {
+        Some(Value::Object(sw)) => {
+            match sw.get("session") {
+                Some(Value::Object(s)) => {
+                    lines.push(format!(
+                        "  session: {} (status: {})",
+                        s.get("id").and_then(|v| v.as_str()).unwrap_or("?"),
+                        s.get("status").and_then(|v| v.as_str()).unwrap_or("?")
+                    ));
+                    if verbose {
+                        push_kv(lines, "active", s.get("active").unwrap_or(&Value::Null));
+                        push_kv(lines, "url", s.get("url").unwrap_or(&Value::Null));
+                    }
+                }
+                _ => lines.push("  session: none".to_string()),
+            }
+            if let Some(tasks) = sw.get("tasks").and_then(|v| v.as_object()) {
+                let total = tasks.get("total").unwrap_or(&Value::Null);
+                let done = tasks.get("done").unwrap_or(&Value::Null);
+                let running = tasks.get("running").unwrap_or(&Value::Null);
+                lines.push(format!(
+                    "  tasks: total={} done={} running={}",
+                    total, done, running
+                ));
+            }
+        }
+        _ => lines.push("  (unavailable)".to_string()),
+    }
+}
+
+fn render_url_pool(lines: &mut Vec<String>, url_pool: Option<&Value>, verbose: bool) {
+    push_section_header(lines, "URL Pool");
+    match url_pool {
+        Some(Value::Object(up)) => {
+            push_kv(lines, "pool id", up.get("id").unwrap_or(&Value::Null));
+            push_kv(lines, "total", up.get("totalCount").unwrap_or(&Value::Null));
+            push_kv(lines, "real-time", up.get("realTime").unwrap_or(&Value::Null));
+            push_kv(lines, "delay", up.get("delay").unwrap_or(&Value::Null));
+            if verbose {
+                if let Some(caches) = up.get("caches").and_then(|v| v.as_object()) {
+                    let mut names: Vec<String> = caches
+                        .values()
+                        .filter_map(|c| c.get("name").and_then(|n| n.as_str()))
+                        .map(|n| n.to_string())
+                        .collect();
+                    names.sort();
+                    if !names.is_empty() {
+                        lines.push(format!("  caches: {}", names.join(", ")));
+                    }
+                }
+            }
+        }
+        _ => lines.push("  (unavailable)".to_string()),
+    }
+}
+
+fn render_browsers(lines: &mut Vec<String>, browsers: Option<&Value>, verbose: bool) {
+    push_section_header(lines, "Browsers");
+    match browsers {
+        Some(Value::Object(b)) => {
+            let total = b.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
+            let tabs = b.get("tabTotal").and_then(|v| v.as_u64()).unwrap_or(0);
+            lines.push(format!("  {} browser(s), {} tab(s)", total, tabs));
+            if verbose {
+                if let Some(items) = b.get("items").and_then(|v| v.as_array()) {
+                    for it in items {
+                        if let Some(obj) = it.as_object() {
+                            let id = obj.get("sessionId").and_then(|v| v.as_str()).unwrap_or("?");
+                            let has_browser = obj
+                                .get("hasBrowser")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            let has_driver = obj
+                                .get("hasDriver")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            let tab_count = obj
+                                .get("tabCount")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            let url = obj.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                            lines.push(format!(
+                                "  {} browser={} driver={} tabs={} url={}",
+                                id,
+                                if has_browser { "open" } else { "—" },
+                                if has_driver { "bound" } else { "—" },
+                                tab_count,
+                                url
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        _ => lines.push("  (unavailable)".to_string()),
+    }
+}
+
+fn render_text_report(lines: &mut Vec<String>, report_text: Option<&Value>, title: &str, _verbose: bool) {
+    push_section_header(lines, title);
+    match report_text {
+        Some(Value::Object(r)) => match r.get("report") {
+            Some(Value::String(text)) if !text.is_empty() => {
+                for line in text.lines() {
+                    lines.push(format!("  {}", line));
+                }
+            }
+            _ => lines.push("  (no report)".to_string()),
+        },
+        _ => lines.push("  (unavailable)".to_string()),
+    }
+}
+
+fn render_plugins(lines: &mut Vec<String>, plugins: Option<&Value>, verbose: bool) {
+    push_section_header(lines, "Plugins");
+    match plugins {
+        Some(Value::Object(p)) => {
+            let total = p.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
+            let loaded = p.get("loaded").and_then(|v| v.as_u64()).unwrap_or(0);
+            let enabled = p.get("enabled").and_then(|v| v.as_u64()).unwrap_or(0);
+            let warnings = p.get("warnings").and_then(|v| v.as_u64()).unwrap_or(0);
+            let blocked = p.get("blocked").and_then(|v| v.as_u64()).unwrap_or(0);
+            lines.push(format!(
+                "  total: {} (loaded: {}, enabled: {}, warnings: {}, blocked: {})",
+                total, loaded, enabled, warnings, blocked
+            ));
+            if verbose {
+                if let Some(items) = p.get("items").and_then(|v| v.as_array()) {
+                    for it in items {
+                        if let Some(obj) = it.as_object() {
+                            let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                            let version = obj
+                                .get("version")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?");
+                            let sdk = obj
+                                .get("sdkVersion")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?");
+                            let status = if obj
+                                .get("loaded")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false)
+                            {
+                                "loaded"
+                            } else {
+                                "not loaded"
+                            };
+                            let verdict = obj
+                                .get("compatibility")
+                                .and_then(|v| v.get("verdict"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown");
+                            lines.push(format!(
+                                "  {} v{} (sdk {}) [{}] compatibility: {}",
+                                name, version, sdk, status, verdict
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        _ => lines.push("  (unavailable)".to_string()),
+    }
+}
+
+fn render_skills(lines: &mut Vec<String>, skills: Option<&Value>, verbose: bool) {
+    push_section_header(lines, "Skills");
+    match skills {
+        Some(Value::Object(s)) => {
+            let total = s.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
+            let mut parts = vec![format!("total: {}", total)];
+            if let Some(by_origin) = s.get("byOrigin").and_then(|v| v.as_object()) {
+                let mut origins: Vec<(&String, &Value)> = by_origin.iter().collect();
+                origins.sort_by(|a, b| a.0.cmp(b.0));
+                for (k, v) in origins {
+                    parts.push(format!("{}: {}", k, v));
+                }
+            }
+            lines.push(format!("  {}", parts.join(", ")));
+            if verbose {
+                if let Some(items) = s.get("items").and_then(|v| v.as_array()) {
+                    for it in items {
+                        if let Some(obj) = it.as_object() {
+                            let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                            let id = obj.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                            let version = obj
+                                .get("version")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?");
+                            let origin_kind = obj
+                                .get("originKind")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?");
+                            let origin = obj.get("origin").and_then(|v| v.as_str()).unwrap_or("");
+                            lines.push(format!(
+                                "  {} ({}) v{} [{}] {}",
+                                name, id, version, origin_kind, origin
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        _ => lines.push("  (unavailable)".to_string()),
+    }
+}
+
+fn render_metrics(lines: &mut Vec<String>, metrics: Option<&Value>, verbose: bool) {
+    push_section_header(lines, "Metrics");
+    match metrics {
+        Some(Value::Object(m)) => {
+            let total = m.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
+            lines.push(format!("  total: {}", total));
+            if verbose {
+                for k in ["gauges", "counters", "meters", "histograms", "timers"] {
+                    if let Some(v) = m.get(k) {
+                        lines.push(format!("  {}: {}", k, v));
+                    }
+                }
+            }
+        }
+        _ => lines.push("  (unavailable)".to_string()),
+    }
+}
+
+fn render_logs(lines: &mut Vec<String>, logs: Option<&Value>, verbose: bool) {
+    push_section_header(lines, "Log Files");
+    match logs {
+        Some(Value::Object(l)) => {
+            let count = l.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+            push_kv(lines, "directory", l.get("directory").unwrap_or(&Value::Null));
+            lines.push(format!("  count: {}", count));
+            if verbose {
+                if let Some(files) = l.get("files").and_then(|v| v.as_array()) {
+                    for f in files {
+                        if let Some(obj) = f.as_object() {
+                            let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                            let size = obj
+                                .get("sizeHuman")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?");
+                            lines.push(format!("  {} ({})", name, size));
+                        }
+                    }
+                }
+            }
+        }
+        _ => lines.push("  (unavailable)".to_string()),
+    }
+}
+
+/// Build the human-readable line buffer for the whole report.
+/// `verbose` toggles between the summary layer (default) and the detail layer.
+fn build_status_report_lines(report: &Value, verbose: bool) -> Vec<String> {
+    let mut lines = Vec::new();
+    render_health(
+        &mut lines,
+        report.get("status"),
+        report.get("health"),
+        report.get("timestamp"),
+        verbose,
+    );
+    render_build(&mut lines, report.get("build"), verbose);
+    render_runtime(&mut lines, report.get("runtime"), verbose);
+    render_llm(&mut lines, report.get("llm"), verbose);
+    render_sessions(&mut lines, report.get("sessions"), verbose);
+    render_pulsar_sessions(&mut lines, report.get("pulsarSessions"), verbose);
+    render_swarm(&mut lines, report.get("swarm"), verbose);
+    render_url_pool(&mut lines, report.get("urlPool"), verbose);
+    render_browsers(&mut lines, report.get("browsers"), verbose);
+    render_text_report(&mut lines, report.get("drivers"), "Driver Pools", verbose);
+    render_text_report(&mut lines, report.get("privacy"), "Privacy Contexts", verbose);
+    render_plugins(&mut lines, report.get("plugins"), verbose);
+    render_skills(&mut lines, report.get("skills"), verbose);
+    render_metrics(&mut lines, report.get("metrics"), verbose);
+    render_logs(&mut lines, report.get("logs"), verbose);
+    lines
+}
+
+/// Build the human-readable line buffer for a single section (full detail).
+fn build_status_section_lines(sec: &str, value: &Value) -> Vec<String> {
+    let mut lines = Vec::new();
+    match sec {
+        "health" => render_health(&mut lines, None, Some(value), None, true),
+        "build" => render_build(&mut lines, Some(value), true),
+        "runtime" => render_runtime(&mut lines, Some(value), true),
+        "llm" => render_llm(&mut lines, Some(value), true),
+        "sessions" => render_sessions(&mut lines, Some(value), true),
+        "pulsar-sessions" => render_pulsar_sessions(&mut lines, Some(value), true),
+        "swarm" => render_swarm(&mut lines, Some(value), true),
+        "url-pool" => render_url_pool(&mut lines, Some(value), true),
+        "browsers" => render_browsers(&mut lines, Some(value), true),
+        "drivers" => render_text_report(&mut lines, Some(value), "Driver Pools", true),
+        "privacy" => render_text_report(&mut lines, Some(value), "Privacy Contexts", true),
+        "plugins" => render_plugins(&mut lines, Some(value), true),
+        "skills" => render_skills(&mut lines, Some(value), true),
+        "metrics" => render_metrics(&mut lines, Some(value), true),
+        "logs" => render_logs(&mut lines, Some(value), true),
+        _ => lines.push(format!("  (unknown section: {})", sec)),
+    }
+    lines
+}
+
+/// `doctor status` — access every report on the status panel
+/// (`/api/system/status`) from the doctor command.
+async fn handle_doctor_status(
+    client: &Client,
+    base_url: &str,
+    args: &HashMap<String, Value>,
+) -> Result<(), String> {
+    let verbose = args
+        .get("verbose")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let section = args
+        .get("section")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    cli_println!("Browser4 Status Panel Report");
+    cli_println!("============================");
+    cli_println!("");
+    cli_println!("Source: {}/api/system/status", base_url);
+
+    let status_url = format!("{base_url}/api/system/status");
+    let report = match get_json(client, &status_url).await {
+        Ok(report) => report,
+        Err(e) => {
+            cli_println!("");
+            cli_println!("Cannot reach {}: {}", status_url, e);
+            cli_println!("Start the backend first, then retry.");
+            json_field("status_report", json!(null));
+            return Ok(());
+        }
+    };
+
+    // Machine-readable mode: emit the raw document (all layers). When a
+    // section was requested, also emit that section slice.
+    json_field("status_report", report.clone());
+    if let Some(ref sec) = section {
+        if let Some(key) = status_section_key(sec) {
+            if let Some(value) = report.get(key) {
+                json_field("status_report_section", value.clone());
+            }
+        }
+    }
+
+    let lines = if let Some(sec) = &section {
+        let key = match status_section_key(sec) {
+            Some(key) => key,
+            None => {
+                cli_println!("");
+                cli_println!("Unknown section: {}", sec);
+                cli_println!("Available sections: {}", all_status_section_names());
+                return Ok(());
+            }
+        };
+        match report.get(key) {
+            Some(value) => build_status_section_lines(sec, value),
+            None => {
+                cli_println!("");
+                cli_println!("Section '{}' is not present in the status report.", sec);
+                return Ok(());
+            }
+        }
+    } else {
+        build_status_report_lines(&report, verbose)
+    };
+
+    for line in lines {
+        cli_println!("{}", line);
+    }
+
+    if !verbose && section.is_none() {
+        cli_println!("");
+        cli_println!("💡 Tip: Use 'doctor status --verbose' for full detail, 'doctor status --section <name>' to drill into one report, 'doctor status --json' for machine-readable JSON.");
     }
 
     Ok(())
@@ -16369,6 +17063,7 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "doctor"
         && command != "doctor-log"
         && command != "doctor-metrics"
+        && command != "doctor-status"
         && command != "agent-list"
         && command != "crawl-list"
         && command != "swarm-list"
@@ -16525,7 +17220,7 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
     }
     // "doctor" works standalone (doctor) AND as a prefix (doctor log).
     if prefix == "doctor" {
-        let known_subs = ["log", "metrics"];
+        let known_subs = ["log", "metrics", "status"];
         if known_subs.contains(&sub.as_str()) {
             let rest: Vec<String> = args[2..].iter().cloned().collect();
             // Handle `doctor log <name> grep <pattern> [grep-options]`:
@@ -16663,6 +17358,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "htmlsnapshot-inspect" => Some("htmlsnapshot inspect"),
         "doctor-log" => Some("doctor log"),
         "doctor-metrics" => Some("doctor metrics"),
+        "doctor-status" => Some("doctor status"),
         "experience-save" => Some("experience save"),
         "experience-query" => Some("experience query"),
         "experience-list" => Some("experience list"),
@@ -18210,6 +18906,9 @@ async fn run(
         "doctor-metrics" => {
             handle_doctor_metrics(&client, &base_url, &parsed).await?;
         }
+        "doctor-status" => {
+            handle_doctor_status(&client, &base_url, &parsed).await?;
+        }
         "delete-data" => {
             handle_delete_data(&client, &base_url, global.session_name.as_deref()).await?;
         }
@@ -19595,6 +20294,11 @@ mod tests {
     }
 
     #[test]
+    fn no_snapshot_commands_include_doctor_status() {
+        assert!(no_snapshot_commands().contains("doctor-status"));
+    }
+
+    #[test]
     fn no_snapshot_commands_include_state_save() {
         assert!(no_snapshot_commands().contains("state-save"));
     }
@@ -20157,6 +20861,11 @@ mod tests {
     }
 
     #[test]
+    fn should_not_ensure_server_for_doctor_status() {
+        assert!(!should_ensure_server_running("doctor-status"));
+    }
+
+    #[test]
     fn should_not_ensure_server_for_config_commands() {
         assert!(!should_ensure_server_running("config"));
         assert!(!should_ensure_server_running("config-list"));
@@ -20465,6 +21174,21 @@ mod tests {
     }
 
     #[test]
+    fn rewrite_prefixed_command_supports_doctor_status() {
+        let rewritten = rewrite_prefixed_command(&[
+            "doctor".to_string(),
+            "status".to_string(),
+            "--verbose".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "doctor-status");
+        assert_eq!(rewritten[1], "--verbose");
+
+        // Unknown doctor subcommands fall through to the bare `doctor` command.
+        assert!(rewrite_prefixed_command(&["doctor".to_string(), "foo".to_string()]).is_none());
+    }
+
+    #[test]
     fn rewrite_prefixed_command_supports_config_subcommands() {
         let rewritten = rewrite_prefixed_command(&[
             "config".to_string(),
@@ -20683,6 +21407,10 @@ mod tests {
         assert_eq!(
             preferred_spaced_command_form("config-delete"),
             Some("config delete")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("doctor-status"),
+            Some("doctor status")
         );
         // Bare `config` is a valid standalone command, not a spaced form.
         assert_eq!(preferred_spaced_command_form("config"), None);
@@ -24470,5 +25198,313 @@ mod tests {
             .output()
             .expect("run self");
         assert!(!output.status.success());
+    }
+
+    // -----------------------------------------------------------------------
+    // doctor status tests (status panel report, layered)
+    // -----------------------------------------------------------------------
+
+    /// Representative `/api/system/status` payload used by the mock server
+    /// and the pure renderer tests.
+    const STATUS_REPORT_SAMPLE: &str = r#"{
+      "status": "healthy",
+      "timestamp": "2026-08-19T10:00:00Z",
+      "health": {"contextActive": true, "check": "UP"},
+      "build": {"version": "4.14.0-SNAPSHOT", "gitCommitIdAbbrev": "abc1234", "gitBranch": "4.14.x"},
+      "runtime": {"uptimeSeconds": 3661, "processors": 8, "systemLoadAverage": 0.5,
+        "memory": {"heapUsed": 1048576, "heapCommitted": 2097152, "heapMax": 4194304, "heapUsedPercent": 25, "nonHeapUsed": 3145728}},
+      "llm": {"configured": true, "detectedVia": "config_file", "foundEnvVars": ["OPENROUTER_API_KEY"], "foundProperties": [], "message": null},
+      "sessions": {"total": 2, "byStatus": {"active": 2},
+        "items": [
+          {"id": "s1", "status": "active", "kind": "BROWSER4_LAUNCHED", "url": "https://example.com", "active": true},
+          {"id": "s2", "status": "active", "kind": "BROWSER4_LAUNCHED", "url": "", "active": true}
+        ]},
+      "pulsarSessions": {"total": 1,
+        "items": [{"managedSessionId": "s1", "label": "default", "isActive": true, "mainLoopRunning": true, "mainLoopReport": "loop ok"}]},
+      "swarm": {"session": null, "tasks": {"total": 0, "done": 0, "running": 0}},
+      "urlPool": {"id": "pool-1", "totalCount": 10, "realTime": 3, "delay": 2, "caches": {}},
+      "browsers": {"total": 1, "tabTotal": 2,
+        "items": [{"sessionId": "s1", "sessionStatus": "active", "active": true, "url": "https://example.com", "hasBrowser": true, "hasDriver": true, "tabCount": 2}]},
+      "drivers": {"report": "pool report"},
+      "privacy": {"report": "privacy report"},
+      "plugins": {"total": 1, "loaded": 1, "enabled": 1, "warnings": 0, "blocked": 0,
+        "items": [{"fileName": "p.jar", "name": "browser4-wordcount", "version": "1.0.0", "sdkVersion": "4.14.0", "loaded": true, "enabled": true,
+          "compatibility": {"verdict": "compatible", "reason": null}, "fileSizeHuman": "1.0 KB"}]},
+      "skills": {"total": 2, "byOrigin": {"classpath": 1, "programmatic": 1},
+        "items": [
+          {"id": "browser4-cli", "name": "Browser4 CLI", "version": "1.0.0", "description": "Automates browser interactions", "tags": ["browser"], "originKind": "classpath", "origin": "classpath:skills/browser4-cli"},
+          {"id": "web-scraping", "name": "Web Scraping", "version": "1.0.0", "description": "Extract data", "tags": [], "originKind": "programmatic", "origin": null}
+        ]},
+      "metrics": {"total": 10, "gauges": 4, "counters": 2, "meters": 1, "histograms": 1, "timers": 2},
+      "logs": {"directory": "logs", "exists": true, "count": 2,
+        "files": [{"name": "pulsar.log", "size": 100, "sizeHuman": "100 B", "lastModified": 0}, {"name": "pulsar.m.log", "size": 200, "sizeHuman": "200 B", "lastModified": 0}]}
+    }"#;
+
+    fn sample_status_report() -> Value {
+        serde_json::from_str(STATUS_REPORT_SAMPLE).expect("sample status report parses")
+    }
+
+    fn status_args(section: Option<&str>, verbose: bool) -> HashMap<String, Value> {
+        let mut args = HashMap::new();
+        if let Some(s) = section {
+            args.insert("section".to_string(), json!(s));
+        }
+        if verbose {
+            args.insert("verbose".to_string(), json!(true));
+        }
+        args
+    }
+
+    /// Reset the thread-local JSON mode after a JSON-mode test, even on panic.
+    struct JsonModeGuard;
+
+    impl Drop for JsonModeGuard {
+        fn drop(&mut self) {
+            JSON_OUTPUT.with(|cell| *cell.borrow_mut() = None);
+            JSON_MODE.with(|cell| *cell.borrow_mut() = false);
+        }
+    }
+
+    fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        tokio::runtime::Runtime::new().unwrap().block_on(future)
+    }
+
+    /// Spawn a one-shot TCP mock server answering with [body] and [status_line].
+    fn spawn_status_mock_server(status_line: &'static str, body: &'static str) -> String {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind status mock server");
+        let addr = listener.local_addr().expect("read status mock addr");
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept status mock connection");
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .ok();
+            let mut buffer = [0_u8; 8192];
+            let _ = stream.read(&mut buffer);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_line,
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        });
+        format!("http://{}", addr)
+    }
+
+    #[test]
+    fn status_section_key_maps_all_sections() {
+        assert_eq!(status_section_key("health"), Some("health"));
+        assert_eq!(status_section_key("build"), Some("build"));
+        assert_eq!(status_section_key("runtime"), Some("runtime"));
+        assert_eq!(status_section_key("llm"), Some("llm"));
+        assert_eq!(status_section_key("sessions"), Some("sessions"));
+        assert_eq!(status_section_key("pulsar-sessions"), Some("pulsarSessions"));
+        assert_eq!(status_section_key("swarm"), Some("swarm"));
+        assert_eq!(status_section_key("url-pool"), Some("urlPool"));
+        assert_eq!(status_section_key("browsers"), Some("browsers"));
+        assert_eq!(status_section_key("drivers"), Some("drivers"));
+        assert_eq!(status_section_key("privacy"), Some("privacy"));
+        assert_eq!(status_section_key("plugins"), Some("plugins"));
+        assert_eq!(status_section_key("skills"), Some("skills"));
+        assert_eq!(status_section_key("metrics"), Some("metrics"));
+        assert_eq!(status_section_key("logs"), Some("logs"));
+        assert_eq!(status_section_key("bogus"), None);
+    }
+
+    #[test]
+    fn build_status_report_lines_summary_layer() {
+        let report = sample_status_report();
+        let lines = build_status_report_lines(&report, false);
+        let text = lines.join("\n");
+
+        // Summary layer: every section header with its summary line.
+        assert!(text.contains("-- Health --"));
+        assert!(text.contains("✓ healthy"));
+        assert!(text.contains("-- Build --"));
+        assert!(text.contains("version: 4.14.0-SNAPSHOT"));
+        assert!(text.contains("-- Runtime --"));
+        assert!(text.contains("uptime: 1h 1m 1s"));
+        assert!(text.contains("heap: 25% used"));
+        assert!(text.contains("-- LLM --"));
+        assert!(text.contains("✓ configured"));
+        assert!(text.contains("-- Sessions --"));
+        assert!(text.contains("total: 2, active: 2"));
+        assert!(text.contains("-- Pulsar Sessions --"));
+        assert!(text.contains("-- Swarm --"));
+        assert!(text.contains("session: none"));
+        assert!(text.contains("-- URL Pool --"));
+        assert!(text.contains("-- Browsers --"));
+        assert!(text.contains("1 browser(s), 2 tab(s)"));
+        assert!(text.contains("-- Driver Pools --"));
+        assert!(text.contains("pool report"));
+        assert!(text.contains("-- Privacy Contexts --"));
+        assert!(text.contains("privacy report"));
+        assert!(text.contains("-- Plugins --"));
+        assert!(text.contains("total: 1 (loaded: 1, enabled: 1, warnings: 0, blocked: 0)"));
+        assert!(text.contains("-- Skills --"));
+        assert!(text.contains("total: 2, classpath: 1, programmatic: 1"));
+        assert!(text.contains("-- Metrics --"));
+        assert!(text.contains("total: 10"));
+        assert!(text.contains("-- Log Files --"));
+        assert!(text.contains("count: 2"));
+
+        // Detail layer must NOT leak into the summary layer.
+        assert!(!text.contains("BROWSER4_LAUNCHED"), "session items must stay hidden");
+        assert!(
+            !text.contains("browser4-cli (browser4-cli)"),
+            "skill items must stay hidden"
+        );
+        assert!(
+            !text.contains("pulsar.log (100 B)"),
+            "log file items must stay hidden"
+        );
+    }
+
+    #[test]
+    fn build_status_report_lines_verbose_layer_adds_details() {
+        let report = sample_status_report();
+        let lines = build_status_report_lines(&report, true);
+        let text = lines.join("\n");
+
+        assert!(text.contains("s1 [BROWSER4_LAUNCHED] active active=yes url=https://example.com"));
+        assert!(text.contains("s1 label=default active=yes mainLoop=running"));
+        assert!(text.contains("loop ok"));
+        assert!(text.contains("browser=open driver=bound tabs=2"));
+        assert!(
+            text.contains("browser4-wordcount v1.0.0 (sdk 4.14.0) [loaded] compatibility: compatible")
+        );
+        assert!(
+            text.contains("Browser4 CLI (browser4-cli) v1.0.0 [classpath] classpath:skills/browser4-cli")
+        );
+        assert!(text.contains("pulsar.log (100 B)"));
+        assert!(text.contains("pulsar.m.log (200 B)"));
+        // Summary lines remain present.
+        assert!(text.contains("total: 2, classpath: 1, programmatic: 1"));
+    }
+
+    #[test]
+    fn build_status_section_lines_drills_into_skills() {
+        let report = sample_status_report();
+        let lines = build_status_section_lines("skills", report.get("skills").unwrap());
+        let text = lines.join("\n");
+
+        assert!(text.contains("-- Skills --"));
+        assert!(text.contains("total: 2, classpath: 1, programmatic: 1"));
+        assert!(
+            text.contains("Browser4 CLI (browser4-cli) v1.0.0 [classpath] classpath:skills/browser4-cli")
+        );
+        assert!(text.contains("Web Scraping (web-scraping) v1.0.0 [programmatic]"));
+        // Other sections must not appear.
+        assert!(!text.contains("-- Sessions --"));
+        assert!(!text.contains("-- Plugins --"));
+    }
+
+    #[test]
+    fn handle_doctor_status_json_mode_emits_raw_document() {
+        let base_url = spawn_status_mock_server("200 OK", STATUS_REPORT_SAMPLE);
+        let client = Client::new();
+
+        json_init();
+        let _guard = JsonModeGuard;
+        let result = block_on(handle_doctor_status(
+            &client,
+            &base_url,
+            &status_args(None, false),
+        ));
+        let output = json_finish();
+
+        assert!(result.is_ok());
+        let output = output.expect("json output accumulated");
+        let report = output.get("status_report").expect("status_report field");
+        assert_eq!(report.get("status").and_then(|v| v.as_str()), Some("healthy"));
+        let skills = report.get("skills").expect("skills section");
+        assert_eq!(skills.get("total").and_then(|v| v.as_u64()), Some(2));
+        let items = skills.get("items").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items[0].get("originKind").and_then(|v| v.as_str()),
+            Some("classpath")
+        );
+    }
+
+    #[test]
+    fn handle_doctor_status_json_mode_section_slice() {
+        let base_url = spawn_status_mock_server("200 OK", STATUS_REPORT_SAMPLE);
+        let client = Client::new();
+
+        json_init();
+        let _guard = JsonModeGuard;
+        let result = block_on(handle_doctor_status(
+            &client,
+            &base_url,
+            &status_args(Some("skills"), false),
+        ));
+        let output = json_finish();
+
+        assert!(result.is_ok());
+        let output = output.expect("json output accumulated");
+        let section = output
+            .get("status_report_section")
+            .expect("section slice field");
+        assert_eq!(section.get("total").and_then(|v| v.as_u64()), Some(2));
+    }
+
+    #[test]
+    fn handle_doctor_status_reports_unreachable_server() {
+        let base_url = spawn_status_mock_server("500 Internal Server Error", r#"{"error":"boom"}"#);
+        let client = Client::new();
+
+        json_init();
+        let _guard = JsonModeGuard;
+        let result = block_on(handle_doctor_status(
+            &client,
+            &base_url,
+            &status_args(None, false),
+        ));
+        let output = json_finish();
+
+        assert!(result.is_ok(), "unreachable server must not be a hard error");
+        let output = output.expect("json output accumulated");
+        assert_eq!(
+            output.get("status_report").and_then(|v| v.as_null()),
+            Some(())
+        );
+    }
+
+    #[test]
+    fn handle_doctor_status_unknown_section_is_reported() {
+        let base_url = spawn_status_mock_server("200 OK", STATUS_REPORT_SAMPLE);
+        let client = Client::new();
+
+        // Text mode: unknown section must return Ok and not panic.
+        let result = block_on(handle_doctor_status(
+            &client,
+            &base_url,
+            &status_args(Some("bogus"), false),
+        ));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn handle_doctor_status_verbose_flag_reaches_renderer() {
+        let base_url = spawn_status_mock_server("200 OK", STATUS_REPORT_SAMPLE);
+        let client = Client::new();
+
+        json_init();
+        let _guard = JsonModeGuard;
+        let result = block_on(handle_doctor_status(
+            &client,
+            &base_url,
+            &status_args(None, true),
+        ));
+        let output = json_finish();
+
+        assert!(result.is_ok());
+        // Verbose still emits the full raw document for machines.
+        let output = output.expect("json output accumulated");
+        assert!(output.contains_key("status_report"));
     }
 }

@@ -41,6 +41,7 @@ pub fn public_command_name(name: &str) -> &str {
         "webdb-normalize" => "webdb normalize",
         "doctor-log" => "doctor log",
         "doctor-metrics" => "doctor metrics",
+        "doctor-status" => "doctor status",
         "experience-save" => "experience save",
         "experience-query" => "experience query",
         "experience-list" => "experience list",

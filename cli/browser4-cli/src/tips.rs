@@ -428,6 +428,7 @@ fn is_suppressed_command(command: &str) -> bool {
             | "doctor"
             | "doctor-log"
             | "doctor-metrics"
+            | "doctor-status"
             | "stop"
             | "status"
             | "kill-all"
