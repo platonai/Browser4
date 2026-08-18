@@ -64,6 +64,7 @@ RUN apk update && apk upgrade && \
 # -Xmx (the native image supports a subset of JVM flags).
 ENV JAVA_OPTS="-Xms2G -Xmx10G -XX:+UseG1GC" \
     OPENROUTER_API_KEY=${OPENROUTER_API_KEY} \
+    ORCAROUTER_API_KEY=${ORCAROUTER_API_KEY} \
     PROXY_ROTATION_URL=${PROXY_ROTATION_URL} \
     BROWSER_CONTEXT_MODE=DEFAULT \
     BROWSER_CONTEXT_NUMBER=2 \

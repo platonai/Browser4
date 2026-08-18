@@ -124,6 +124,7 @@ class DoctorController(
     fun llmStatus(): ResponseEntity<Map<String, Any?>> {
         val envKeyNames = listOf(
             "OPENROUTER_API_KEY",
+            "ORCAROUTER_API_KEY",
             "DEEPSEEK_API_KEY",
             "VOLCENGINE_API_KEY",
             "OPENAI_API_KEY",
@@ -132,6 +133,7 @@ class DoctorController(
         val propertyKeyNames = listOf(
             "llm.api.key",
             "openrouter.api.key",
+            "orcarouter.api.key",
             "volcengine.api.key",
             "deepseek.api.key",
             "openai.api.key",
@@ -161,7 +163,7 @@ class DoctorController(
         } else {
             "LLM is not configured, you can only use non-LLM commands. " +
                 "X-SQL is still available. " +
-                "It is highly recommended to set OPENROUTER_API_KEY or other LLM keys to enable LLM features."
+                "It is highly recommended to set OPENROUTER_API_KEY, ORCAROUTER_API_KEY or other LLM keys to enable LLM features."
         }
 
         return ResponseEntity.ok(
@@ -174,7 +176,7 @@ class DoctorController(
                 },
                 "foundEnvVars" to foundEnvVars,
                 "foundProperties" to foundProperties,
-                "keyPrefixes" to listOf("OPENROUTER", "DEEPSEEK", "VOLCENGINE", "OPENAI"),
+                "keyPrefixes" to listOf("OPENROUTER", "ORCAROUTER", "DEEPSEEK", "VOLCENGINE", "OPENAI"),
                 "message" to message,
             )
         )
