@@ -1,6 +1,8 @@
 package ai.platon.pulsar.rest.session
 
+import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarBrowser
+import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.chrome.protocol.transport.ExtensionChromeService
 import ai.platon.pulsar.chrome.protocol.transport.ExtensionMessageSender
 import ai.platon.pulsar.common.B4Constants.BROWSER_PROFILE_MODE
@@ -236,6 +238,17 @@ class PulsarSessionManager(
         }
 
         if (checkHealthyBlocking(session).isOK) {
+            return markSessionActive(session)
+        }
+
+        // The browser process may be perfectly healthy while only the driver
+        // link (the CDP connection to the backend tab) is dead — e.g. the
+        // machine slept and the websocket died, or the backend tab was closed.
+        // Rebind a fresh driver to the SAME browser instance first: the Chrome
+        // profile (cookies, manual logins) is preserved, so the session comes
+        // back where it was instead of as a fresh anonymous browser.
+        if (recoverLostDriverLink(session)) {
+            logger.info("Recovered session {} by rebinding a new driver to the same browser", sessionId)
             return markSessionActive(session)
         }
 
@@ -724,6 +737,53 @@ class PulsarSessionManager(
                 }
             }
         }!!
+    }
+
+    /**
+     * Tries to recover a session whose browser process is healthy but whose
+     * driver link (the CDP connection to the browser's backend tab) is lost —
+     * e.g. after the machine slept and the websocket died, or the backend tab
+     * was closed.
+     *
+     * Recovery creates a fresh driver on the SAME [Browser] instance and binds
+     * it to the session, so the Chrome profile (cookies, manual logins) is
+     * preserved. The stale driver is unbound but its tab is left open — it may
+     * be the user's visible page. Returns true when the replacement driver
+     * reports healthy; the caller then proceeds with the normal
+     * recreate-with-fresh-profile path otherwise.
+     */
+    private fun recoverLostDriverLink(session: ManagedSession): Boolean {
+        val agenticSession = session.agenticSession
+        val browser = agenticSession.boundBrowser ?: return false
+        val staleDriver = agenticSession.boundDriver ?: return false
+
+        // Browser itself is dead → the normal recreate path applies.
+        if (!browser.healthy().isOK) return false
+        // Driver link is fine → nothing to recover.
+        if (runBlocking { staleDriver.healthy() }.isOK) return false
+
+        return runCatching {
+            // Plain field read on the stale driver — no CDP call, so this
+            // cannot hang on the dead link. The new tab opens at the last
+            // known URL to mirror what the user was looking at.
+            val lastUrl = (staleDriver as? PulsarWebDriver)?.navigateUrl
+            val rawDriver = browser.newDriver(lastUrl ?: "about:blank")
+            val replacement = when (rawDriver) {
+                is Browser4WebDriver -> rawDriver
+                is PulsarWebDriver -> Browser4WebDriver.from(rawDriver)
+                else -> rawDriver
+            }
+
+            // Unbind the stale driver before binding the replacement so
+            // boundDriver (the first WebDriver bean) resolves to the new one.
+            agenticSession.unbindDriver(staleDriver)
+            agenticSession.bindDriver(replacement)
+
+            runBlocking { replacement.healthy().isOK }
+        }.getOrElse { e ->
+            logger.warn("Failed to recover driver link for session {}: {}", session.sessionId, e.message)
+            false
+        }
     }
 
     private fun markSessionActive(session: ManagedSession): ManagedSession {

@@ -351,6 +351,46 @@ class PulsarSessionManagerTest {
         )
     }
 
+    @Test
+    fun sessionWithLostDriverLinkIsRecoveredWithoutRecreatingBrowser() {
+        // Regression guard for issue #571: when the browser process is healthy
+        // but the driver link (backend tab connection) is lost — e.g. after
+        // machine sleep killed the CDP websocket — the session must rebind a
+        // fresh driver to the SAME browser (preserving the Chrome profile,
+        // cookies and manual logins) instead of recreating the session with a
+        // fresh anonymous profile.
+        val browser = Mockito.mock(Browser::class.java)
+        Mockito.`when`(browser.healthy()).thenReturn(CheckState(0, "Browser is healthy"))
+
+        val replacementDriver = Mockito.mock(WebDriver::class.java)
+        runBlocking {
+            Mockito.`when`(replacementDriver.healthy()).thenReturn(CheckState(0, "WebDriver is healthy"))
+        }
+        Mockito.`when`(browser.newDriver(Mockito.anyString())).thenReturn(replacementDriver)
+
+        val staleDriver = Mockito.mock(WebDriver::class.java)
+        runBlocking {
+            Mockito.`when`(staleDriver.healthy()).thenReturn(
+                CheckState(503, "WebDriver is not open - the connection to the backend tab is lost")
+            )
+        }
+
+        val agenticSession = mockAgenticSession(isActive = true, browser = browser, driver = staleDriver)
+        Mockito.doReturn(agenticSession)
+            .`when`(agenticContext)
+            .createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
+
+        val session = sessionManager.getOrCreateSession(mapOf("sessionId" to "recover-driver-link"))
+
+        assertSame(agenticSession, session.agenticSession,
+            "Session must not be recreated when the driver link can be recovered on the same browser")
+        assertEquals("active", session.status)
+        verify(browser).newDriver(Mockito.anyString())
+        verify(agenticContext, times(1)).createSession(
+            Mockito.any(PulsarSettings::class.java) ?: PulsarSettings()
+        )
+    }
+
     private fun mockAgenticSession(
         isActive: Boolean = true,
         browser: Browser? = null,
