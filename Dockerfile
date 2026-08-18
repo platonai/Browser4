@@ -1,5 +1,8 @@
 # Stage 1: Build stage
-FROM maven:3.9.9-eclipse-temurin-25-alpine AS builder
+# maven:3.9.9-eclipse-temurin-25-alpine does not exist on Docker Hub (3.9.x
+# gained temurin-25 tags starting at 3.9.11); 3.9.16 is the latest 3.9.x with
+# the temurin-25-alpine variant.
+FROM maven:3.9.16-eclipse-temurin-25-alpine AS builder
 
 # Set working directory
 WORKDIR /build
