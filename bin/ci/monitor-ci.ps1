@@ -18,6 +18,13 @@
     3. Streams the workflow logs in real time.
     4. Reports the final conclusion (success/failure) and exits with the same code.
 
+    On failure, by default the script does NOT call an AI agent to analyze the
+    failure. It extracts minimal error diagnostics from the failed logs and
+    prints them to the console so a human can review them. Pass -Agent auto
+    (or a pinned backend name) to opt in: the script then creates a coworker
+    task in 1ready/ and dispatches it via `b4w.ps1 coworker fix` so an AI
+    agent analyzes and fixes the failure.
+
     Requires: gh CLI authenticated with the repo, and pwsh (PowerShell Core).
 
 .PARAMETER PreReleaseVersion
@@ -33,20 +40,43 @@
     Skip interactive `gh run watch` and poll with `gh run list` / `gh run view` instead.
     Useful on CI or non-interactive terminals.
 
+.PARAMETER Agent
+    On workflow failure, dispatch the failure to an AI agent for analysis and
+    fixing. Values: auto (resolve the backend via coworker/scripts/workers/
+    agent.ps1: claude, kimi, codex, dsh, or gh copilot), or a specific backend
+    name (claude, kimi, codex, dsh, copilot). Without this flag the script
+    only prints extracted error diagnostics and never invokes an AI agent.
+    A pinned backend overrides $env:BROWSER4_AGENT for this invocation.
+
 .EXAMPLE
     .\bin\ci\monitor-ci.ps1
     .\bin\ci\monitor-ci.ps1 -NoWatch
     .\bin\ci\monitor-ci.ps1 -PreReleaseVersion rc -PollIntervalSeconds 10
+    .\bin\ci\monitor-ci.ps1 -NoWatch -Agent auto       # dispatch failures to an AI agent
 #>
 
 param(
     [string]$PreReleaseVersion = "ci",
     [string]$remote = "origin",
     [int]$PollIntervalSeconds = 5,
-    [switch]$NoWatch
+    [switch]$NoWatch,
+    [ValidateSet('auto', 'claude', 'kimi', 'codex', 'dsh', 'copilot')]
+    [string]$Agent = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+# Failure analysis is opt-in via -Agent. By default no AI agent is invoked:
+# the script extracts and prints error diagnostics, then exits non-zero.
+# Passing -Agent (auto or a pinned backend name) creates a coworker task and
+# dispatches `b4w.ps1 coworker fix` to analyze and fix the failure.
+
+# -Agent auto leaves the backend to the normal resolution chain (config.psd1
+# order); a pinned name overrides it via $env:BROWSER4_AGENT, the canonical
+# override honored first by the coworker agent resolution.
+if ($Agent -and $Agent -ne 'auto') {
+    $env:BROWSER4_AGENT = $Agent
+}
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Shared helpers: workflow-failure → coworker task dispatch
@@ -487,8 +517,12 @@ $hintSection
 
 <#
 .SYNOPSIS
-    When a workflow fails, extract errors from failed job logs, create a
-    coworker task, and dispatch it via b4w.ps1 coworker fix.
+    When a workflow fails, extract errors from failed job logs, print them to
+    the console, and — only when -Agent is passed — create a coworker task and
+    dispatch it via b4w.ps1 coworker fix.
+
+    By default (no -Agent) the script does NOT call an AI agent: it prints the
+    extracted error diagnostics so a human can review them, then returns.
 #>
 function Invoke-WorkflowFailureHandler {
     param(
@@ -499,12 +533,13 @@ function Invoke-WorkflowFailureHandler {
         [Parameter(Mandatory = $true)]
         [string]$Tag,
         [Parameter(Mandatory = $true)]
-        [string]$RepoRoot
+        [string]$RepoRoot,
+        [string]$Agent = ""
     )
 
     Write-Host ""
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Yellow
-    Write-Host "  Workflow FAILED — extracting errors for coworker" -ForegroundColor Yellow
+    Write-Host "  Workflow FAILED — extracting error diagnostics" -ForegroundColor Yellow
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Yellow
 
     # 1. Fetch failed job logs
@@ -517,7 +552,7 @@ function Invoke-WorkflowFailureHandler {
         Write-Host "  Trying job summary fallback..." -ForegroundColor DarkGray
         $rawLogs = gh run view $RunId --json jobs 2>&1
         if (-not $rawLogs) {
-            Write-Host "  No log data available. Coworker task will contain the workflow metadata only." -ForegroundColor Yellow
+            Write-Host "  No log data available." -ForegroundColor Yellow
             $rawLogs = @("(No failed logs available — use `gh run view $RunId --web` to inspect the run)")
         }
     }
@@ -527,7 +562,27 @@ function Invoke-WorkflowFailureHandler {
     $errors = Extract-MinimalErrors -LogLines $rawLogs
     Write-Host "  Extracted ~$(([regex]::Matches($errors, '══ block')).Count) distinct error block(s)" -ForegroundColor DarkGray
 
-    # 3. Create coworker task
+    # 3. Print the diagnostics so a human can review the failure
+    Write-Host ""
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Yellow
+    Write-Host "  ERROR DIAGNOSTICS (run $RunId, tag $Tag)" -ForegroundColor Yellow
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Yellow
+    Write-Host $errors
+    Write-Host "───────────────────────────────────────────────────────────" -ForegroundColor DarkGray
+    Write-Host "  Full logs: gh run view $RunId --log-failed   |   Web: gh run view $RunId --web" -ForegroundColor DarkGray
+
+    # 4. AI agent dispatch — opt-in only (default: no agent)
+    if (-not $Agent) {
+        Write-Host ""
+        Write-Host "  No agent analysis requested (default). Review the error diagnostics above." -ForegroundColor DarkGray
+        Write-Host "  To dispatch an AI agent next time, pass -Agent auto (or a backend name):" -ForegroundColor DarkGray
+        Write-Host "    .\bin\ci\monitor-ci.ps1 -Agent auto" -ForegroundColor DarkGray
+        return
+    }
+
+    Write-Host "  Agent dispatch requested (-Agent $Agent) — creating coworker task..." -ForegroundColor Cyan
+
+    # 5. Create coworker task
     $taskPath = New-CoworkerFailureTask -WorkflowName $WorkflowName -Tag $Tag -RunId $RunId -Errors $errors -RepoRoot $RepoRoot
 
     if (-not $taskPath -or -not (Test-Path $taskPath)) {
@@ -535,7 +590,7 @@ function Invoke-WorkflowFailureHandler {
         return
     }
 
-    # 4. Dispatch to coworker fix
+    # 6. Dispatch to coworker fix
     $b4wScript = Join-Path $RepoRoot "b4w.ps1"
     if (Test-Path $b4wScript) {
         Write-Host "`nDispatching to coworker: b4w.ps1 coworker fix -Path '$taskPath'" -ForegroundColor Cyan
@@ -690,6 +745,6 @@ if ($LASTEXITCODE -ne 0) {
 if ($finalConclusion -eq "success") {
     exit 0
 } else {
-    Invoke-WorkflowFailureHandler -RunId $run.databaseId -WorkflowName $workflowFile -Tag $tag -RepoRoot $repoRoot
+    Invoke-WorkflowFailureHandler -RunId $run.databaseId -WorkflowName $workflowFile -Tag $tag -RepoRoot $repoRoot -Agent $Agent
     exit 1
 }
