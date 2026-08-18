@@ -104,9 +104,10 @@ object ModuleGraph {
     /**
      * The standard repository scan: walk [root] for real module pom.xml files
      * (relative module dir → content). Skips `target/`, maven-archetype template
-     * poms (`archetype-resources/`), and docs trees (`docs/`, `docs-dev/`) which
-     * are not reactor modules. The repo-root aggregator pom is keyed as
-     * `browser4` (its artifact id).
+     * poms (`archetype-resources/`), docs trees (`docs/`, `docs-dev/`), and the
+     * gitignored `.test-sessions/` scratch dir (test-session logs, coworker temp
+     * files) which are not reactor modules. The repo-root aggregator pom is
+     * keyed as `browser4` (its artifact id).
      */
     fun scanPoms(root: java.nio.file.Path): Map<String, String> {
         val poms = mutableMapOf<String, String>()
@@ -116,6 +117,7 @@ object ModuleGraph {
                 .filter { !it.toString().contains("archetype-resources") }
                 .filter { !it.toString().contains("\\docs\\") && !it.toString().contains("/docs/") &&
                     !it.toString().contains("\\docs-dev\\") && !it.toString().contains("/docs-dev/") }
+                .filter { !it.toString().contains("\\.test-sessions\\") && !it.toString().contains("/.test-sessions/") }
                 .forEach { pom ->
                     val rel = root.relativize(pom.parent).toString().replace('\\', '/')
                     poms[if (rel.isEmpty()) "browser4" else rel] = java.nio.file.Files.readString(pom)

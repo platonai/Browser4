@@ -71,14 +71,14 @@ class DevTaskPlannerTest {
     @Test
     @DisplayName("knownModules drives normalization against the live graph")
     fun knownModulesParam() {
-        // Default static snapshot does not know a hypothetical weather plugin.
-        val defaultPlan = DevTaskPlanner.plan("add a tool in browser4-weather")
+        // Default static snapshot does not know a hypothetical widgets plugin.
+        val defaultPlan = DevTaskPlanner.plan("add a tool in browser4-widgets")
         assertTrue(defaultPlan.modules.isEmpty(), "unknown module must not resolve by default: ${defaultPlan.modules}")
 
         // With the LIVE module list (e.g. from ModuleGraph), the mention resolves.
-        val live = ModuleMap.MODULES + "browser4-plugins/browser4-weather"
-        val plan = DevTaskPlanner.plan("add a tool in browser4-weather", knownModules = live)
-        assertTrue("browser4-plugins/browser4-weather" in plan.modules,
+        val live = ModuleMap.MODULES + "browser4-plugins/browser4-widgets"
+        val plan = DevTaskPlanner.plan("add a tool in browser4-widgets", knownModules = live)
+        assertTrue("browser4-plugins/browser4-widgets" in plan.modules,
             "mention must normalize against knownModules: ${plan.modules}")
     }
 
