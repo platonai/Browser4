@@ -1923,16 +1923,39 @@ async fn handle_open(
                 }
                 post_command_snapshot(client, base_url, &session_id).await;
 
-                // Headed launches should show a visible window. If the browser
-                // process is alive but no window exists, surface a clear
-                // warning instead of letting the user think nothing happened.
+                // Headed launches should show a visible window. Diagnose the
+                // Browser4-managed browser state instead of guessing from any
+                // chrome window on the system: the user's own browser must not
+                // mask a missing headed window, and a headed session that was
+                // launched headless (display-mode regression) must be called out.
                 let headed = tool_params
                     .get("headed")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
                 if headed {
-                    let (found, has_window) = crate::daemon::browser_window_visibility();
-                    if found && !has_window {
+                    // The first window can appear a moment after navigation
+                    // settles — brief retries avoid false warnings on slow
+                    // cold starts.
+                    let mut state = crate::daemon::browser4_window_state();
+                    for _ in 0..5 {
+                        if !state.found_browser || state.headed_window_visible {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        state = crate::daemon::browser4_window_state();
+                    }
+
+                    if state.found_browser && !state.headed_browser {
+                        cli_println!(
+                            "⚠  Browser4 started the session in HEADLESS mode even though --headed was requested."
+                        );
+                        cli_println!(
+                            "   The browser is functional, but no window will appear. Close it with 'close'"
+                        );
+                        cli_println!(
+                            "   and retry 'open --headed' once; if this persists it is a display-mode bug."
+                        );
+                    } else if state.headed_browser && !state.headed_window_visible {
                         cli_println!(
                             "⚠  Browser4 started a headed browser process, but no visible window was detected."
                         );

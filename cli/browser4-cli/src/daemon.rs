@@ -3654,44 +3654,88 @@ fn probe_cdp_port(port: u16) -> bool {
     }
 }
 
-/// Detect whether a Browser4-managed Chrome (a chrome process launched with
-/// `--remote-debugging-port`) has a visible top-level window.
+/// Window-state snapshot of Browser4-managed Chrome processes.
 ///
-/// Returns `(found_browser, has_window)`. `found_browser` is true when at least
-/// one debugging-enabled chrome process exists; `has_window` is true when any of
-/// them owns a visible main window (`MainWindowHandle != 0`). A headed launch
-/// that ends with `found_browser=true, has_window=false` means the browser
-/// process is alive but its window never appeared — the classic silent
-/// no-window failure. Headless browsers never have a window, so callers should
-/// only consult this for headed sessions.
-pub fn browser_window_visibility() -> (bool, bool) {
+/// Unlike a generic "any chrome has a window" check, this only looks at
+/// chrome processes that Browser4 actually launched: command lines carrying
+/// `--remote-debugging-port` AND the `PULSAR_CHROME` user-data-dir marker.
+/// The user's own everyday Chrome/Edge is never counted, so a missing headed
+/// window is not masked by unrelated browser windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Browser4WindowState {
+    /// At least one Browser4-managed chrome process is alive.
+    pub found_browser: bool,
+    /// At least one Browser4-managed chrome process runs WITHOUT `--headless`.
+    /// A headed session whose launch regressed to headless (the
+    /// createBoundDriver display-mode bug) shows up as found_browser=true,
+    /// headed_browser=false.
+    pub headed_browser: bool,
+    /// A headed Browser4 chrome process owns a visible main window.
+    pub headed_window_visible: bool,
+}
+
+/// Detect the window state of Browser4-managed Chrome processes.
+///
+/// Returns `(found_browser, headed_browser, headed_window_visible)` semantics
+/// via [Browser4WindowState]:
+/// - `found_browser=false` — nothing to diagnose; callers stay silent.
+/// - `found_browser=true, headed_browser=false` — the browser runs headless
+///   even though the session asked for headed mode (launch-mode regression).
+/// - `headed_browser=true, headed_window_visible=false` — the classic silent
+///   no-window failure: process alive, navigation works, window never appeared.
+pub fn browser4_window_state() -> Browser4WindowState {
     #[cfg(target_os = "windows")]
     {
-        // Find debugging-enabled chrome processes and check each one's
-        // MainWindowHandle via PowerShell. Get-Process exposes MainWindowHandle
-        // directly; -IncludeUserName is unnecessary, plain listing suffices.
-        let ps = "Get-Process chrome -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1 -ExpandProperty MainWindowHandle";
+        // Enumerate Browser4-managed chrome processes only (debug port +
+        // PULSAR_CHROME profile marker), and for each report:
+        //   PID|headless(0|1)|hasVisibleMainWindow(0|1)
+        let ps = r#"Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
+            Where-Object { $_.CommandLine -notmatch '--type=' -and $_.CommandLine -match '--remote-debugging-port' -and $_.CommandLine -match 'PULSAR_CHROME' } |
+            ForEach-Object {
+                $p = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
+                $headless = if ($_.CommandLine -match '--headless') { '1' } else { '0' }
+                $hwnd = if ($p -and $p.MainWindowHandle -ne 0) { '1' } else { '0' }
+                "$($_.ProcessId)|$headless|$hwnd"
+            }"#;
         let out = std::process::Command::new("powershell")
             .args(["-NoProfile", "-Command", ps])
             .output();
-        let visible = match out {
-            Ok(o) => o.status.success() && !o.stdout.is_empty(),
-            Err(_) => false,
-        };
 
-        // Any chrome with remote debugging? Reuse the process scan.
-        let has_debug_chrome = if let Some(port) = find_debug_port_in_running_processes("chrome") {
-            port != 0
-        } else {
-            false
+        let mut state = Browser4WindowState {
+            found_browser: false,
+            headed_browser: false,
+            headed_window_visible: false,
         };
-
-        (has_debug_chrome, visible)
+        if let Ok(o) = out {
+            if o.status.success() {
+                for line in String::from_utf8_lossy(&o.stdout).lines() {
+                    let mut parts = line.trim().split('|');
+                    let (Some(_pid), Some(headless), Some(hwnd)) =
+                        (parts.next(), parts.next(), parts.next())
+                    else {
+                        continue;
+                    };
+                    state.found_browser = true;
+                    if headless != "1" {
+                        state.headed_browser = true;
+                        if hwnd == "1" {
+                            state.headed_window_visible = true;
+                        }
+                    }
+                }
+            }
+        }
+        state
     }
     #[cfg(not(target_os = "windows"))]
     {
-        // No portable window-visibility check on Unix; report unknown.
-        (false, true)
+        // No portable window-visibility check on Unix; report "unknown" in a
+        // way that never triggers the headed-window warning.
+        Browser4WindowState {
+            found_browser: false,
+            headed_browser: false,
+            headed_window_visible: true,
+        }
     }
 }
 
