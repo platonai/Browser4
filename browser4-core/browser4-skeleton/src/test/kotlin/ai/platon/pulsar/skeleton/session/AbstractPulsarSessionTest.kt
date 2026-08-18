@@ -1,5 +1,6 @@
 package ai.platon.pulsar.skeleton.session
 
+import ai.platon.pulsar.common.Runtimes
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_DISPLAY_MODE
 import ai.platon.pulsar.common.config.VolatileConfig
@@ -69,7 +70,10 @@ class AbstractPulsarSessionTest {
     fun `headed capability sets GUI display mode on the session config`() {
         val sessionConfig = VolatileConfig(false)
         PulsarSettings.parse(mapOf("headed" to true)).overrideConfiguration(sessionConfig)
-        assertEquals("GUI", sessionConfig[BROWSER_DISPLAY_MODE])
+        // GUI is the requested mode; environments without GUI support
+        // (e.g. CI/Docker) fall back to HEADLESS by design.
+        val expected = if (Runtimes.hasOnlyHeadlessBrowser()) "HEADLESS" else "GUI"
+        assertEquals(expected, sessionConfig[BROWSER_DISPLAY_MODE])
     }
 
     @Test
@@ -81,9 +85,21 @@ class AbstractPulsarSessionTest {
 
     @Test
     fun `explicit displayMode capability takes priority over headed flag`() {
-        val sessionConfig = VolatileConfig(false)
-        PulsarSettings.parse(mapOf("displayMode" to "GUI", "headed" to false)).overrideConfiguration(sessionConfig)
-        assertEquals("GUI", sessionConfig[BROWSER_DISPLAY_MODE])
+        val byDisplayMode = VolatileConfig(false)
+        PulsarSettings.parse(mapOf("displayMode" to "GUI", "headed" to false)).overrideConfiguration(byDisplayMode)
+        val byHeadedTrue = VolatileConfig(false)
+        PulsarSettings.parse(mapOf("headed" to true)).overrideConfiguration(byHeadedTrue)
+        val byHeadedFalse = VolatileConfig(false)
+        PulsarSettings.parse(mapOf("headed" to false)).overrideConfiguration(byHeadedFalse)
+
+        // displayMode (GUI) overrides the headed=false flag: it must resolve to
+        // the same mode as headed=true — GUI wherever the environment supports
+        // it, otherwise the GUI fallback (HEADLESS in CI/Docker).
+        assertEquals(byHeadedTrue[BROWSER_DISPLAY_MODE], byDisplayMode[BROWSER_DISPLAY_MODE])
+        assertEquals("HEADLESS", byHeadedFalse[BROWSER_DISPLAY_MODE])
+        if (!Runtimes.hasOnlyHeadlessBrowser()) {
+            assertEquals("GUI", byDisplayMode[BROWSER_DISPLAY_MODE])
+        }
     }
 
     @Test
