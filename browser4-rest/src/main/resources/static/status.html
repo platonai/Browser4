@@ -84,6 +84,8 @@
   <span id="serverTime" class="sub"></span>
   <div class="linkbar">
     <a href="/api/system/status" target="_blank">Raw JSON</a>
+    <a href="/pages.html" target="_blank">Page screenshots</a>
+    <a href="/api/skills" target="_blank">Skills</a>
     <a href="/api/doctor/metrics" target="_blank">Metrics</a>
     <a href="/api/doctor/log-files" target="_blank">Log files</a>
   </div>
@@ -148,6 +150,16 @@
 </div>
 
 <div class="grid">
+  <div class="card" style="grid-column: 1 / -1;"><h2>Skills (<span id="skillCount">0</span>)</h2>
+    <div class="chips" id="skillChips" style="margin-bottom: 6px;"></div>
+    <table><thead><tr><th>Name</th><th>ID</th><th>Version</th><th>Origin</th><th>Tags</th></tr></thead>
+    <tbody id="skillRows"></tbody></table>
+    <div class="empty" id="skillEmpty" style="display:none;">No skills registered.</div>
+    <details style="margin-top: 8px;"><summary>Show descriptions</summary><pre id="skillDescriptions" style="margin-top: 6px;">…</pre></details>
+  </div>
+</div>
+
+<div class="grid">
   <div class="card"><h2>Driver Pools</h2><pre id="driversPre">…</pre></div>
   <div class="card"><h2>Privacy Contexts</h2>
     <details><summary>Show report</summary><pre id="privacyPre">…</pre></details>
@@ -155,9 +167,11 @@
 </div>
 
 <footer>
-  Status panel — aggregated from <code>/api/system/status</code>. Individual endpoints:
-  <code>/api/system/health</code>, <code>/api/system/build</code>, <code>/api/doctor/llm-status</code>,
-  <code>/api/doctor/metrics</code>, <code>/api/doctor/logs</code>.
+  Status panel — aggregated from <code>/api/system/status</code> (includes build, runtime, LLM,
+  sessions, browsers, plugins, skills, metrics, logs). Individual endpoints:
+  <code>/api/system/health</code>, <code>/api/system/build</code>, <code>/api/skills</code>,
+  <code>/api/doctor/llm-status</code>, <code>/api/doctor/metrics</code>, <code>/api/doctor/logs</code>.
+  From the CLI, the same reports are available via <code>browser4-cli doctor status</code>.
 </footer>
 
 <script>
@@ -454,6 +468,66 @@ function renderPlugins(p) {
   }
 }
 
+function renderSkills(s) {
+  el("skillCount").textContent = String(s.total);
+  const chips = el("skillChips");
+  chips.textContent = "";
+  const byOrigin = s.byOrigin || {};
+  for (const [kind, n] of Object.entries(byOrigin)) {
+    if (n > 0) {
+      const c = document.createElement("span");
+      c.className = "chip";
+      c.textContent = kind + ": " + n;
+      chips.appendChild(c);
+    }
+  }
+  const rows = el("skillRows");
+  rows.textContent = "";
+  const empty = el("skillEmpty");
+  empty.style.display = s.total === 0 ? "" : "none";
+  for (const it of (s.items || [])) {
+    const tr = document.createElement("tr");
+    const cell = (text, color) => {
+      const td = document.createElement("td");
+      td.textContent = text === null || text === undefined || text === "" ? "—" : String(text);
+      if (color) td.style.color = color;
+      return td;
+    };
+    tr.appendChild(cell(it.name));
+    tr.appendChild(cell(it.id));
+    tr.appendChild(cell(it.version));
+    tr.appendChild(cell(it.originKind, it.originKind === "programmatic" ? "var(--yellow)" : "var(--muted)"));
+    const tags = document.createElement("td");
+    if (it.tags && it.tags.length) {
+      for (const t of it.tags) {
+        const b = document.createElement("span");
+        b.className = "badge";
+        b.textContent = t;
+        b.style.marginRight = "4px";
+        tags.appendChild(b);
+      }
+    } else {
+      tags.textContent = "—";
+    }
+    tr.appendChild(tags);
+    rows.appendChild(tr);
+  }
+  const descs = el("skillDescriptions");
+  descs.textContent = "";
+  for (const it of (s.items || [])) {
+    if (!it.description) continue;
+    const h = document.createElement("div");
+    h.style.cssText = "margin-top:8px;font-weight:600;color:var(--muted);";
+    h.textContent = it.id + " (v" + (it.version || "?") + ")";
+    descs.appendChild(h);
+    const p = document.createElement("div");
+    p.textContent = it.description;
+    p.style.marginTop = "2px";
+    descs.appendChild(p);
+  }
+  if (!descs.textContent) descs.textContent = "(no descriptions)";
+}
+
 function renderBrowsers(b) {
   el("browserCount").textContent = String(b.total);
   el("tabTotal").textContent = String(b.tabTotal);
@@ -684,6 +758,7 @@ async function refresh() {
     renderUrlPool(data.urlPool || {});
     renderBrowsers(data.browsers || { total: 0, tabTotal: 0, items: [] });
     renderPlugins(data.plugins || { total: 0, loaded: 0, enabled: 0, warnings: 0, blocked: 0, items: [] });
+    renderSkills(data.skills || { total: 0, byOrigin: {}, items: [] });
     el("driversPre").textContent = (data.drivers && data.drivers.report) ? data.drivers.report : "(no driver pools)";
     el("privacyPre").textContent = (data.privacy && data.privacy.report) ? data.privacy.report : "(no privacy contexts)";
     renderLogs(data.logs || { exists: false, directory: "?", files: [] });

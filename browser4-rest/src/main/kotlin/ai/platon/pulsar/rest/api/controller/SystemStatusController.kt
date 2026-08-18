@@ -1,9 +1,12 @@
 package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.agentic.context.AgenticContext
+import ai.platon.pulsar.agentic.skills.DefinitionBackedSkill
+import ai.platon.pulsar.agentic.skills.SkillRegistry
 import ai.platon.pulsar.api.AbstractWebDriver
 import ai.platon.pulsar.boot.plugin.PluginCompatibility
 import ai.platon.pulsar.boot.plugin.PluginService
+import ai.platon.pulsar.boot.skill.SkillService
 import ai.platon.pulsar.browser.privacy.PrivacyManager
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
@@ -51,6 +54,7 @@ class SystemStatusController(
     val privacyManager: PrivacyManager,
     val agenticContext: AgenticContext,
     val pluginService: PluginService,
+    val skillService: SkillService,
     val scrapeService: ScrapeService,
     val gitProperties: GitProperties? = null,
     @Value("\${logging.dir:logs}") private val loggingDir: String = "logs",
@@ -78,6 +82,7 @@ class SystemStatusController(
             "drivers" to mapOf("report" to driverPoolManager.buildStatusString(verbose = true)),
             "privacy" to mapOf("report" to privacyManager.buildStatusString()),
             "plugins" to pluginsInfo(),
+            "skills" to skillsInfo(),
             "metrics" to metricsSummary(),
             "logs" to logFilesInfo(),
         )
@@ -423,6 +428,50 @@ class SystemStatusController(
             "blocked" to items.count { verdictOf(it) == "blocked" },
             "items" to items,
         )
+    }
+
+    /**
+     * Registered skill report — a summary layer (total + origin distribution:
+     * classpath / filesystem / programmatic) plus one item per registered skill
+     * (id, name, version, description, tags, origin). All in-memory registry
+     * reads, no file I/O, so it is safe for the auto-refreshing status panel.
+     */
+    private fun skillsInfo(): Map<String, Any?> {
+        return try {
+            val registry = SkillRegistry.instance
+            val originBySkillId = registry.getAll().associate { skill ->
+                skill.metadata.id to (skill as? DefinitionBackedSkill)?.origin
+            }
+            val items = skillService.listSkills().map { s ->
+                val origin = originBySkillId[s.id]
+                // Build the origin string explicitly: the data-class subclasses
+                // of Origin override toString(), so `origin?.toString()` would
+                // yield `Classpath(resourceBase=...)` instead of a readable path.
+                val (originKind, originString) = when (origin) {
+                    is DefinitionBackedSkill.Origin.Classpath ->
+                        "classpath" to "classpath:${origin.resourceBase}"
+                    is DefinitionBackedSkill.Origin.FileSystem ->
+                        "filesystem" to "filesystem:${origin.directory}"
+                    null -> "programmatic" to null
+                }
+                mapOf(
+                    "id" to s.id,
+                    "name" to s.name,
+                    "version" to s.version,
+                    "description" to s.description,
+                    "tags" to s.tags.toList(),
+                    "originKind" to originKind,
+                    "origin" to originString,
+                )
+            }
+            mapOf(
+                "total" to items.size,
+                "byOrigin" to items.groupingBy { it["originKind"] as String }.eachCount(),
+                "items" to items,
+            )
+        } catch (e: Exception) {
+            mapOf("error" to (e.message ?: "query failed"))
+        }
     }
 
     private fun readVersion(): String? {

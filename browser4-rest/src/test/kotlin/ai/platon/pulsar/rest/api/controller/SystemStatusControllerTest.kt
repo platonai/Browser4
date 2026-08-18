@@ -2,10 +2,15 @@ package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.context.AgenticContext
+import ai.platon.pulsar.agentic.skills.DefinitionBackedSkill
+import ai.platon.pulsar.agentic.skills.SkillContext
+import ai.platon.pulsar.agentic.skills.SkillDefinition
+import ai.platon.pulsar.agentic.skills.SkillRegistry
 import ai.platon.pulsar.api.AbstractBrowser
 import ai.platon.pulsar.api.AbstractWebDriver
 import ai.platon.pulsar.boot.plugin.PluginInfo
 import ai.platon.pulsar.boot.plugin.PluginService
+import ai.platon.pulsar.boot.skill.SkillService
 import ai.platon.pulsar.browser.privacy.PrivacyManager
 import ai.platon.pulsar.common.collect.DelayUrl
 import ai.platon.pulsar.common.collect.UrlCache
@@ -47,6 +52,7 @@ class SystemStatusControllerTest {
         active: Boolean = true,
         sessions: List<ManagedSession> = emptyList(),
         pluginInfos: List<PluginInfo> = emptyList(),
+        skillSummaries: List<SkillRegistry.SkillSummary> = emptyList(),
         loggingDir: String = "logs",
         urlPool: UrlPool? = null,
         taskLoops: TaskLoops? = null,
@@ -72,13 +78,15 @@ class SystemStatusControllerTest {
         val agenticContext = Mockito.mock(AgenticContext::class.java)
         val pluginService = Mockito.mock(PluginService::class.java)
         Mockito.`when`(pluginService.listPlugins()).thenReturn(pluginInfos)
+        val skillService = Mockito.mock(SkillService::class.java)
+        Mockito.`when`(skillService.listSkills()).thenReturn(skillSummaries)
         val scrapeService = Mockito.mock(ScrapeService::class.java)
         if (scrapeSummary != null) {
             Mockito.`when`(scrapeService.summary()).thenReturn(scrapeSummary)
         }
         return SystemStatusController(
             session, sessionManager, driverPoolManager, privacyManager, agenticContext,
-            pluginService, scrapeService,
+            pluginService, skillService, scrapeService,
             loggingDir = loggingDir,
         )
     }
@@ -496,5 +504,101 @@ class SystemStatusControllerTest {
         @Suppress("UNCHECKED_CAST")
         val up = result["urlPool"] as Map<String, Any?>
         assertTrue(up.containsKey("error"))
+    }
+
+    @Test
+    fun `status handles empty skill list`() {
+        val result = controller(skillSummaries = emptyList()).status()
+
+        @Suppress("UNCHECKED_CAST")
+        val skills = result["skills"] as Map<String, Any?>
+        assertEquals(0, skills["total"])
+        @Suppress("UNCHECKED_CAST")
+        val byOrigin = skills["byOrigin"] as Map<String, Int>
+        assertTrue(byOrigin.isEmpty())
+        @Suppress("UNCHECKED_CAST")
+        val items = skills["items"] as List<*>
+        assertTrue(items.isEmpty())
+    }
+
+    @Test
+    fun `status reports skills with origin classification`() = runBlocking {
+        val registry = SkillRegistry.instance
+        val context = SkillContext(sessionId = "status-test")
+        val classpathSkill = DefinitionBackedSkill(
+            definition(
+                id = "status-test-classpath",
+                name = "Status Test Classpath",
+            ),
+            DefinitionBackedSkill.Origin.Classpath("skills/status-test-classpath"),
+        )
+        val fileSystemSkill = DefinitionBackedSkill(
+            definition(
+                id = "status-test-filesystem",
+                name = "Status Test Filesystem",
+            ),
+            DefinitionBackedSkill.Origin.FileSystem(Path.of("/skills/status-test-filesystem")),
+        )
+        try {
+            registry.register(classpathSkill, context)
+            registry.register(fileSystemSkill, context)
+
+            val summaries = listOf(
+                SkillRegistry.SkillSummary(
+                    id = "status-test-classpath",
+                    name = "Status Test Classpath",
+                    description = "A classpath-backed test skill",
+                    version = "1.0.0",
+                    tags = setOf("test"),
+                ),
+                SkillRegistry.SkillSummary(
+                    id = "status-test-filesystem",
+                    name = "Status Test Filesystem",
+                    description = "A filesystem-backed test skill",
+                    version = "2.0.0",
+                    tags = setOf("test", "local"),
+                ),
+            )
+
+            val result = controller(skillSummaries = summaries).status()
+
+            @Suppress("UNCHECKED_CAST")
+            val skills = result["skills"] as Map<String, Any?>
+            assertEquals(2, skills["total"])
+            @Suppress("UNCHECKED_CAST")
+            val byOrigin = skills["byOrigin"] as Map<String, Int>
+            assertEquals(1, byOrigin["classpath"])
+            assertEquals(1, byOrigin["filesystem"])
+            @Suppress("UNCHECKED_CAST")
+            val items = skills["items"] as List<Map<String, Any?>>
+            val first = items.first { it["id"] == "status-test-classpath" }
+            assertEquals("Status Test Classpath", first["name"])
+            assertEquals("1.0.0", first["version"])
+            assertEquals("A classpath-backed test skill", first["description"])
+            assertEquals("classpath", first["originKind"])
+            assertEquals("classpath:skills/status-test-classpath", first["origin"])
+            @Suppress("UNCHECKED_CAST")
+            assertEquals(listOf("test"), first["tags"])
+            val second = items.first { it["id"] == "status-test-filesystem" }
+            assertEquals("filesystem", second["originKind"])
+            assertEquals(Path.of("/skills/status-test-filesystem").toString(), (second["origin"] as String).removePrefix("filesystem:"))
+        } finally {
+            registry.unregister("status-test-classpath", context)
+            registry.unregister("status-test-filesystem", context)
+        }
+    }
+
+    private fun definition(id: String, name: String): SkillDefinition {
+        return SkillDefinition(
+            skillId = id,
+            name = name,
+            version = "1.0.0",
+            author = "status-test",
+            tags = setOf("test"),
+            description = "Test skill $id",
+            dependencies = emptyList(),
+            parameters = emptyMap(),
+            examples = emptyList(),
+        )
     }
 }
