@@ -41,7 +41,7 @@ class ExperienceToolExecutorTest {
     inner class FastSave {
         @Test
         @DisplayName("saves trace and returns stats with intent classification")
-        fun testSaveSuccess() = runBlocking {
+        fun testSaveSuccess(): Unit = runBlocking {
             val trace = ExecutionTrace(
                 url = "https://amazon.com/dp/test-product",
                 taskType = "extract_product_detail",
@@ -130,7 +130,7 @@ class ExperienceToolExecutorTest {
     inner class IntentQuery {
         @Test
         @DisplayName("cold start returns P5 with intent")
-        fun testColdStart() = runBlocking {
+        fun testColdStart(): Unit = runBlocking {
             val result = executor.callFunctionOn(
                 domain = "experience", functionName = "query",
                 args = mapOf("url" to "https://unknown.com/page", "intent" to "extract data"),

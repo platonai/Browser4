@@ -777,10 +777,10 @@ class CodingToolExecutorTest {
         }
 
         @Test
-        @DisplayName("getToolSpecs returns 47 registered specs")
+        @DisplayName("getToolSpecs returns 49 registered specs")
         fun testToolSpecsCount() {
             val specs = executor.getToolSpecs()
-            assertEquals(47, specs.size)
+            assertEquals(49, specs.size)
         }
 
         @Test
@@ -798,7 +798,8 @@ class CodingToolExecutorTest {
                 "diagnostics", "symbols", "references", "lspServers",
                 "runCode", "runCodeLanguages",
                 "mvnBuild", "scaffoldFromExample", "scaffoldFlow", "ktSymbols", "ktReferences", "ktInheritance",
-                "impact", "trapCheck", "devTask", "moduleGraph", "protect"
+                "impact", "trapCheck", "devTask", "moduleGraph", "protect",
+                "tokenStats", "estimateTokens"
             )
             assertEquals(expectedMethods, specs.keys)
         }
