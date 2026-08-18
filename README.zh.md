@@ -285,6 +285,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | `doctor` | 运行诊断：构建信息、LLM 状态、陈旧 daemon 清理、可选修复。支持 `--verbose` 与 `--fix`。 |
 | `doctor log [name]` | 列出、查看、tail 或 grep 后端日志文件。支持 `--tail`、grep 风格参数，以及 `doctor log <name> grep <pattern>`。 |
 | `doctor metrics [filter]` | 列出、过滤或 grep 后端指标。支持 `doctor metrics grep <pattern>`。 |
+| `doctor status [--section <name>] [--verbose]` | 在终端分层显示状态面板聚合报告：默认显示概要层，`--verbose` 显示完整明细，`--section` 钻取单个报告（health、build、runtime、llm、sessions、pulsar-sessions、swarm、url-pool、browsers、drivers、privacy、plugins、skills、metrics、logs），`--json` 输出机器可读 JSON。 |
 | `delete-data` | 删除会话数据。 |
 | `install` | 安装 Browser4 运行时 bundle。支持 `--tag <version>` 与 `--force`。 |
 | `upgrade` | 升级 CLI / 运行时 bundle。支持 `--tag <version>` 与 `--force`。 |
@@ -296,6 +297,7 @@ browser4-cli attach --cdp chrome
 browser4-cli doctor --verbose
 browser4-cli doctor log server.log --tail
 browser4-cli doctor metrics grep request
+browser4-cli doctor status --section skills --verbose
 ```
 
 **Web 状态面板：** 在浏览器打开 `http://127.0.0.1:8182/status` 即可查看实时仪表盘
@@ -305,8 +307,16 @@ browser4-cli doctor metrics grep request
 明细，数据来自 `GET /api/system/tabs`——驱动池、插件（加载/启用状态与 SDK 兼容性）、
 指标、日志文件；自动刷新，可用 `?refresh=<ms>` 调整间隔）。面板数据来自聚合端点
 `GET /api/system/status`；原有单个端点（`/api/system/health`、`/api/system/build`、
-`/api/doctor/llm-status`、`/api/doctor/metrics`、`/api/doctor/log-files`、`/api/plugins`）
-继续可用。`browser4-cli plugin-list` 也会报告每个已安装插件的加载/启用状态与 SDK 版本。
+`/api/doctor/llm-status`、`/api/doctor/metrics`、`/api/doctor/log-files`、`/api/plugins`、
+`/api/skills`）继续可用。`browser4-cli plugin-list` 也会报告每个已安装插件的加载/启用状态与
+SDK 版本；同样的报告也可以在终端中通过 `browser4-cli doctor status` 分层查看。
+
+**页面截图：** 打开 `http://127.0.0.1:8182/pages.html` 可以网格形式查看所有会话中打开的网页。
+每个会话的活动页自动截图（点击截图可重新截取）；非活动页显示占位图，点击后截取展示；
+SWARM 会话的所有页面仅显示占位图。截图采用**异步加载**——后端在后台截取（截取中返回
+`202 Accepted` + `Retry-After`，完成后返回缓存的 `image/png`），面板不会阻塞等待截图。
+由 `GET /api/pages` 与 `GET /api/pages/{sessionId}/{guid}/screenshot.png` 提供数据
+（`?refresh=1` 强制重新截取）。
 
 #### 导航
 

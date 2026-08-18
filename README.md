@@ -266,6 +266,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | `doctor` | Run diagnostics: build info, LLM status, stale daemon cleanup, optional repair. Supports `--verbose` and `--fix`. |
 | `doctor log [name]` | List, view, tail, or grep backend log files. Supports `--tail`, grep-style flags, and `doctor log <name> grep <pattern>`. |
 | `doctor metrics [filter]` | List, filter, or grep backend metrics. Supports `doctor metrics grep <pattern>`. |
+| `doctor status [--section <name>] [--verbose]` | Print the aggregated status panel report in the terminal: summary layer by default, full detail with `--verbose`, one report with `--section` (health, build, runtime, llm, sessions, pulsar-sessions, swarm, url-pool, browsers, drivers, privacy, plugins, skills, metrics, logs), machine-readable JSON with `--json`. |
 | `delete-data` | Delete session data. |
 | `install` | Install the Browser4 runtime bundle. Supports `--tag <version>` and `--force`. |
 | `upgrade` | Upgrade the CLI/runtime bundle. Supports `--tag <version>` and `--force`. |
@@ -277,6 +278,7 @@ browser4-cli attach --cdp chrome
 browser4-cli doctor --verbose
 browser4-cli doctor log server.log --tail
 browser4-cli doctor metrics grep request
+browser4-cli doctor status --section skills --verbose
 ```
 
 **Web status panel:** open `http://127.0.0.1:8182/status` in a browser for a live dashboard
@@ -285,11 +287,21 @@ context and main-loop state, **swarm** — swarm session plus task summary, **UR
 queued/real-time/delay counts per priority cache, browsers & open tabs — per-session
 browser/driver binding and tab counts, with on-demand live tab details via
 `GET /api/system/tabs` — driver pools, plugins: load/enable state and SDK compatibility,
+**skills**: registered skills with origin (classpath/filesystem/programmatic),
 metrics, log files; auto-refreshes, set `?refresh=<ms>` to change the interval). The panel
 is backed by the aggregated `GET /api/system/status` endpoint; the individual endpoints
 (`/api/system/health`, `/api/system/build`, `/api/doctor/llm-status`, `/api/doctor/metrics`,
-`/api/doctor/log-files`, `/api/plugins`) remain available. `browser4-cli plugin-list` also
-reports load/enable state and SDK version for every installed plugin.
+`/api/doctor/log-files`, `/api/plugins`, `/api/skills`) remain available. `browser4-cli plugin-list` also
+reports load/enable state and SDK version for every installed plugin; the same reports can be
+read from the terminal with `browser4-cli doctor status`.
+
+**Page screenshots:** open `http://127.0.0.1:8182/pages.html` for a grid of every open page
+across sessions. The active tab of each session is captured automatically (click a screenshot
+to re-capture it); inactive tabs show a placeholder that captures on click. Swarm sessions only
+show placeholders. Screenshots load **asynchronously** — the backend captures in the background
+(`202 Accepted` with `Retry-After` while capturing, cached `image/png` when ready), so the panel
+never blocks on a capture. Backed by `GET /api/pages` and
+`GET /api/pages/{sessionId}/{guid}/screenshot.png` (`?refresh=1` forces a new capture).
 
 #### Navigation
 
