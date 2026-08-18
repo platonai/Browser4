@@ -78,7 +78,7 @@ class PulsarSessionManager(
         }
 
         val session = sessions.computeIfAbsent(sessionId) {
-            ManagedSession(sessionId, agenticSession, normalizedCapabilities)
+            ManagedSession(sessionId, agenticSession, normalizedCapabilities, kind = SessionKind.SWARM)
         }
 
         return session
@@ -262,7 +262,11 @@ class PulsarSessionManager(
         }
     }
 
-    private fun createManagedSession(sessionId: String, capabilities: Map<String, String?>): ManagedSession {
+    private fun createManagedSession(
+        sessionId: String,
+        capabilities: Map<String, String?>,
+        kind: SessionKind = SessionKind.BROWSER4_LAUNCHED,
+    ): ManagedSession {
         val settings = PulsarSettings.parse(capabilities)
         val agenticSession = agenticContext.createSession(settings)
 
@@ -270,6 +274,7 @@ class PulsarSessionManager(
             sessionId = sessionId,
             agenticSession = agenticSession,
             capabilities = capabilities,
+            kind = kind,
             status = if (agenticSession.isActive) "active" else "stopped"
         ).also {
             logger.info("Created session {} with capabilities: {}", sessionId, capabilities)
@@ -332,8 +337,11 @@ class PulsarSessionManager(
             normalizedEndpoint, verification.browser, verification.pageTargetCount
         )
 
+        // Mark the session CDP_ATTACHED (non-owned) so resolveHealthySession
+        // never silently recreates it with a fresh Browser4-launched Chrome —
+        // that would sever the link to the user's browser and lose its profile.
         val session = sessions.computeIfAbsent(sessionId) {
-            createManagedSession(sessionId, normalizedCapabilities)
+            createManagedSession(sessionId, normalizedCapabilities, SessionKind.CDP_ATTACHED)
         }
 
         // Bind the external browser to the session

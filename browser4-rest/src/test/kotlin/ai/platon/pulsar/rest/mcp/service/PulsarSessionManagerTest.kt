@@ -7,11 +7,13 @@ import ai.platon.pulsar.agentic.context.AgenticContexts
 import ai.platon.pulsar.agentic.context.GenericAgenticContext
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.rest.session.PulsarSessionManager
+import ai.platon.pulsar.rest.session.SessionKind
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.api.Browser
 import ai.platon.pulsar.api.WebDriver
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.chrome.protocol.transport.ExtensionMessageSender
+import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.*
@@ -23,6 +25,7 @@ import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
 import org.mockito.MockitoAnnotations
 import org.springframework.context.support.GenericApplicationContext
+import java.net.InetSocketAddress
 
 class PulsarSessionManagerTest {
     @Mock
@@ -349,6 +352,47 @@ class PulsarSessionManagerTest {
         verify(agenticContext, times(2)).createSession(
             Mockito.any(PulsarSettings::class.java) ?: PulsarSettings()
         )
+    }
+
+    @Test
+    fun attachedSessionIsMarkedCdpAttachedAndNotRecreated() {
+        // Regression guard for the attach flow: `attach --cdp` sessions must be
+        // marked CDP_ATTACHED (non-owned) so resolveHealthySession never
+        // silently recreates them with a fresh Browser4-launched Chrome.
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/json/version") { ex ->
+            val body = """{"Browser":"Chrome/Test","webSocketDebuggerUrl":"ws://127.0.0.1:0/devtools/browser/x"}"""
+            ex.responseHeaders.add("Content-Type", "application/json")
+            ex.sendResponseHeaders(200, body.toByteArray().size.toLong())
+            ex.responseBody.use { it.write(body.toByteArray()) }
+        }
+        server.createContext("/json") { ex ->
+            val body = """[{"id":"t1","type":"page","url":"https://example.com"}]"""
+            ex.responseHeaders.add("Content-Type", "application/json")
+            ex.sendResponseHeaders(200, body.toByteArray().size.toLong())
+            ex.responseBody.use { it.write(body.toByteArray()) }
+        }
+        server.start()
+        try {
+            val port = server.address.port
+            val info = sessionManager.createAttachedSession(cdpEndpoint = "http://127.0.0.1:$port")
+
+            val session = sessionManager.getSession(info.sessionId)
+            requireNotNull(session)
+            assertEquals(SessionKind.CDP_ATTACHED, session.kind,
+                "Attach-created sessions must be CDP_ATTACHED (non-owned)")
+            assertFalse(session.ownsBrowser,
+                "CDP-attached sessions do not own their browser")
+
+            // Re-fetching must return the same session — never a recreation.
+            val fetched = sessionManager.getOrCreateSession(info.sessionId)
+            assertSame(session, fetched, "Attached session must never be recreated")
+            verify(agenticContext, times(1)).createSession(
+                Mockito.any(PulsarSettings::class.java) ?: PulsarSettings()
+            )
+        } finally {
+            server.stop(0)
+        }
     }
 
     @Test
