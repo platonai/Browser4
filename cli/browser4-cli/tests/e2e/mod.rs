@@ -1499,6 +1499,23 @@ fn mock_browser_tool_text(
             .custom_browser_snapshot_response
             .clone()
             .unwrap_or_else(|| "mock snapshot".to_string()),
+        "browser_tabs" => {
+            let action = arguments
+                .get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            match action {
+                "new" => {
+                    r#"{"guid":"mock-tab-guid-1","index":0,"url":"about:blank","title":"Mock Tab"}"#
+                        .to_string()
+                }
+                "list" => {
+                    r#"[{"index":0,"guid":"mock-tab-guid-1","url":"about:blank","title":"Mock Tab","active":true}]"#
+                        .to_string()
+                }
+                _ => "mock response for browser_tabs".to_string(),
+            }
+        }
         other => format!("mock response for {other}"),
     }
 }
@@ -3967,6 +3984,14 @@ fn create_e2e_test_resources() -> E2ETestResources {
         "BROWSER4_SERVER_OPTS".to_string(),
         "-Dapp.name=browser4-test".to_string(),
     ));
+    // Skip JVM AOT cache training (JEP 483/515): on a fresh runtime bundle the
+    // one-time training run can take ~2 minutes, blowing past the CLI command
+    // timeout on the very first CLI-managed server start.  e2e tests do not
+    // benchmark startup, so launch without AOT acceleration.
+    extra_env.push((
+        "BROWSER4_CLI_DISABLE_AOT_CACHE".to_string(),
+        "1".to_string(),
+    ));
 
     E2ETestResources {
         _temp_dir: temp_dir,
@@ -4357,6 +4382,20 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         // webdb commands
         "webdb-export",
         "webdb-normalize",
+        // test_mock_agent_browser_command_gaps
+        "dialog-status",
+        "errors",
+        "focus",
+        "is-visible",
+        "is-enabled",
+        "is-checked",
+        "key",
+        "keyboard",
+        "scrollintoview",
+        "pushstate",
+        "highlight",
+        "set",
+        "window-new",
     ]
     .into();
 

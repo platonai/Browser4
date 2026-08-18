@@ -37,8 +37,13 @@ pub(super) fn test_session_lifecycle(ctx: &mut E2ECtx) {
         "Expected missing-session close message in output:\n{}",
         combined_output
     );
+    let bin_name = cli_binary()
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "browser4-cli".to_string());
+    let guidance = format!("run `{bin_name} open <url>` to start a new session.");
     assert!(
-        combined_output.contains("run `browser4-cli open <url>` to start a new session."),
+        combined_output.contains(&guidance),
         "Expected missing-session guidance in output:\n{}",
         combined_output
     );
@@ -1267,6 +1272,27 @@ pub(super) fn test_mousewheel(ctx: &mut E2ECtx) {
     run_command(ctx, &["close"]);
 }
 
+/// Poll `tab-list --json` until [expected] appears in the stripped output or
+/// [deadline] passes, returning `(raw, stripped)` from the last snapshot.
+fn poll_tab_list_until(
+    ctx: &mut E2ECtx,
+    expected: &str,
+    deadline: Instant,
+) -> (String, String) {
+    let mut raw = String::new();
+    let mut output = String::new();
+    while Instant::now() < deadline {
+        let check = run_command(ctx, &["tab-list", "--json"]);
+        raw = check.stdout.clone();
+        output = strip_snapshot_output(&check.stdout);
+        if output.contains(expected) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    (raw, output)
+}
+
 pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     run_command(
@@ -1294,14 +1320,18 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
 
     // ── 2. Create a second tab — verify both appear ──────────────────
     run_command(ctx, &["tab-new", &other_url]);
-    let two_tab_output = strip_snapshot_output(&run_command(ctx, &["tab-list", "--json"]).stdout);
+    // A freshly created tab can briefly report a provisional URL (e.g.
+    // chrome-error://chromewebdata/) while its first navigation is still
+    // committing under load, so poll instead of asserting the first snapshot.
+    let two_tab_deadline = Instant::now() + Duration::from_millis(5_000);
+    let (two_tab_raw, two_tab_output) = poll_tab_list_until(ctx, &other_url, two_tab_deadline);
     assert!(
         two_tab_output.contains(&interactive_url),
         "Expected interactive URL still present after tab-new:\n{two_tab_output}"
     );
     assert!(
         two_tab_output.contains(&other_url),
-        "Expected other URL present after tab-new:\n{two_tab_output}"
+        "Expected other URL present after tab-new:\n{two_tab_output}\nRaw stdout:\n{two_tab_raw}"
     );
 
     // ── 3. tab-select by GUID ────────────────────────────────────────
@@ -1319,14 +1349,15 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
 
     // ── 4. Create a third tab — verify all three present ─────────────
     run_command(ctx, &["tab-new", &form_url]);
-    let three_tab_output = strip_snapshot_output(&run_command(ctx, &["tab-list", "--json"]).stdout);
+    let three_tab_deadline = Instant::now() + Duration::from_millis(5_000);
+    let (_three_tab_raw, three_tab_output) = poll_tab_list_until(ctx, &form_url, three_tab_deadline);
     assert!(
         three_tab_output.contains(&interactive_url),
         "Expected interactive URL in three-tab list"
     );
     assert!(
         three_tab_output.contains(&other_url),
-        "Expected other URL in three-tab list"
+        "Expected other URL in three-tab list:\n{three_tab_output}"
     );
     assert!(
         three_tab_output.contains(&form_url),

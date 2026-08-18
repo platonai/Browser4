@@ -1740,10 +1740,13 @@ pub(super) fn test_goto_opens_session_when_missing_or_inactive(ctx: &mut E2ECtx)
         "Expected goto to refresh the saved session when the backend marks it inactive:\n{}",
         second_goto.stdout
     );
+    let bin_name = cli_binary()
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "browser4-cli".to_string());
+    let manual_recovery_guidance = format!("run `{bin_name} open` to create or refresh the session first.");
     assert!(
-        !second_goto
-            .stdout
-            .contains("run `browser4-cli open` to create or refresh the session first."),
+        !second_goto.stdout.contains(&manual_recovery_guidance),
         "Expected goto to refresh automatically instead of printing manual recovery guidance:\n{}",
         second_goto.stdout
     );
@@ -2257,6 +2260,193 @@ pub(super) fn test_press_command_uses_direct_tool_dispatch(ctx: &mut E2ECtx) {
             .iter()
             .all(|call| call.tool != "browser_evaluate"),
         "press should not synthesize browser_evaluate calls: {tool_calls:?}"
+    );
+}
+
+/// Covers the agent-browser A/B-tier command-gap fills that ship as plain
+/// MCP tool calls through the generic dispatch path:
+/// `dialog-status`, `errors`, `focus`, `is-visible`, `is-enabled`,
+/// `is-checked`, `key`, `keyboard`, `scrollintoview`, `pushstate`,
+/// `highlight`, `set`, and `window-new`.  Each command is exercised against
+/// the mock backend and its recorded tool call is verified.
+pub(super) fn test_agent_browser_command_gaps(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result
+            .stdout
+            .contains("Session opened: swarm-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    // ── 1. dialog-status ──────────────────────────────────────────────
+    let dialog_status = run_command(ctx, &["dialog-status"]);
+    assert_eq!(
+        strip_snapshot_output(&dialog_status.stdout),
+        "mock response for browser_dialog_status"
+    );
+
+    // ── 2. errors (console error listing alias) ───────────────────────
+    let errors = run_command(ctx, &["errors"]);
+    assert_eq!(
+        strip_snapshot_output(&errors.stdout),
+        "mock response for browser_console_messages"
+    );
+
+    // ── 3. focus ──────────────────────────────────────────────────────
+    let focus = run_command(ctx, &["focus", "#search"]);
+    assert_eq!(
+        strip_snapshot_output(&focus.stdout),
+        "mock response for browser_focus"
+    );
+
+    // ── 4-6. is-visible / is-enabled / is-checked ────────────────────
+    // These commands are exposed in spaced form (`is visible <sel>`).
+    let is_visible = run_command(ctx, &["is", "visible", "#submit"]);
+    assert_eq!(
+        strip_snapshot_output(&is_visible.stdout),
+        "mock response for browser_is_visible"
+    );
+
+    let is_enabled = run_command(ctx, &["is", "enabled", "#submit"]);
+    assert_eq!(
+        strip_snapshot_output(&is_enabled.stdout),
+        "mock response for browser_is_enabled"
+    );
+
+    let is_checked = run_command(ctx, &["is", "checked", "#agree"]);
+    assert_eq!(
+        strip_snapshot_output(&is_checked.stdout),
+        "mock response for browser_is_checked"
+    );
+
+    // ── 7-8. key / keyboard (press aliases) ───────────────────────────
+    let key = run_command(ctx, &["key", "Enter"]);
+    assert_eq!(
+        strip_snapshot_output(&key.stdout),
+        "mock response for browser_press_key"
+    );
+
+    let keyboard = run_command(ctx, &["keyboard", "Tab"]);
+    assert_eq!(
+        strip_snapshot_output(&keyboard.stdout),
+        "mock response for browser_press_key"
+    );
+
+    // ── 9. scrollintoview (synthesizes browser_evaluate) ──────────────
+    let scrollintoview = run_command(ctx, &["scrollintoview", "#results"]);
+    assert_eq!(
+        strip_snapshot_output(&scrollintoview.stdout),
+        "mock evaluation result"
+    );
+
+    // ── 10. pushstate (synthesizes browser_evaluate) ──────────────────
+    let pushstate = run_command(ctx, &["pushstate", "/new-path"]);
+    assert_eq!(
+        strip_snapshot_output(&pushstate.stdout),
+        "mock evaluation result"
+    );
+
+    // ── 11. highlight (synthesizes browser_evaluate) ──────────────────
+    let highlight = run_command(ctx, &["highlight", "#price"]);
+    assert_eq!(
+        strip_snapshot_output(&highlight.stdout),
+        "mock evaluation result"
+    );
+
+    // ── 12. set (CDP emulation) ───────────────────────────────────────
+    let set_geo = run_command(
+        ctx,
+        &["set", "geo", "--lat=37.7749", "--lon=-122.4194"],
+    );
+    assert!(
+        set_geo.stdout.contains("Emulation.setGeolocationOverride"),
+        "set geo should call Emulation.setGeolocationOverride, got:\n{}",
+        set_geo.stdout
+    );
+    assert!(
+        set_geo.stdout.contains("mock-cdp-result"),
+        "set geo output should contain mock-cdp-result, got:\n{}",
+        set_geo.stdout
+    );
+
+    // ── 13. window-new (browser_tabs "new" action) ────────────────────
+    let window_new = run_command(
+        ctx,
+        &["window", "new", "https://mock.browser4.local/two"],
+    );
+    assert!(
+        window_new.stdout.contains("Created tab with GUID: mock-tab-guid-1"),
+        "window-new should report the mocked tab GUID, got:\n{}",
+        window_new.stdout
+    );
+
+    // ── Verify recorded tool calls ────────────────────────────────────
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let names: Vec<&str> = tool_calls.iter().map(|call| call.tool.as_str()).collect();
+
+    for tool in [
+        "browser_dialog_status",
+        "browser_console_messages",
+        "browser_focus",
+        "browser_is_visible",
+        "browser_is_enabled",
+        "browser_is_checked",
+        "browser_press_key",
+        "browser_evaluate",
+        "execute_cdp_command",
+        "browser_tabs",
+    ] {
+        assert!(
+            names.contains(&tool),
+            "expected recorded tool call {tool}, got: {names:?}"
+        );
+    }
+
+    // press-key aliases (key + keyboard) each issue their own call.
+    let press_calls = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_press_key")
+        .count();
+    assert_eq!(press_calls, 2, "expected key + keyboard press calls, got {press_calls}");
+
+    // evaluate-backed commands: scrollintoview, pushstate, highlight.
+    let evaluate_calls = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_evaluate")
+        .count();
+    assert_eq!(
+        evaluate_calls, 3,
+        "expected scrollintoview+pushstate+highlight evaluate calls, got {evaluate_calls}"
+    );
+
+    // window-new drives the full tab lifecycle: new → list → select.
+    let tabs_calls = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_tabs")
+        .count();
+    assert_eq!(
+        tabs_calls, 3,
+        "expected browser_tabs new+list+select calls, got {tabs_calls}"
+    );
+
+    // Geo emulation params reach the backend.
+    let cdp_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "execute_cdp_command")
+        .collect();
+    assert_eq!(cdp_calls.len(), 1, "expected one execute_cdp_command call");
+    assert_eq!(cdp_calls[0].arguments["method"], "Emulation.setGeolocationOverride");
+    let params = &cdp_calls[0].arguments["params"];
+    assert!(
+        (params["latitude"].as_f64().unwrap_or(0.0) - 37.7749).abs() < 1e-9,
+        "expected latitude 37.7749, got: {}",
+        params
     );
 }
 
