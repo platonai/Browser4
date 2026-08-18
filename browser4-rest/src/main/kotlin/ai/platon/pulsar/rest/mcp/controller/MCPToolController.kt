@@ -417,12 +417,19 @@ class MCPToolController(
         }
     }
 
-    private fun handleListSessions(): ResponseEntity<MCPToolCallResponse> {
+    private suspend fun handleListSessions(): ResponseEntity<MCPToolCallResponse> {
         val sessions = sessionManager.getAllSessions().map { s ->
+            // Report real health: the in-memory status may be stale (e.g. the
+            // browser process died without an explicit close).  Clients
+            // (CLI `session list`, open-reuse decisions) rely on `healthy` to
+            // distinguish "reuse" from "refresh".  A failed check reports
+            // unhealthy rather than failing the whole listing.
+            val healthy = runCatching { sessionManager.checkHealthy(s).isOK }.getOrDefault(false)
             mapOf<String, Any>(
                 "sessionId" to s.sessionId,
                 "url" to (s.url ?: ""),
                 "status" to s.status,
+                "healthy" to healthy,
                 "kind" to s.kind.name,
                 "ownsBrowser" to s.ownsBrowser,
                 "createdAt" to s.createdAt,

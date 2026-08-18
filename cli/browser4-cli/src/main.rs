@@ -1197,13 +1197,7 @@ async fn get_or_create_navigation_session(
                 "Closing existing session {} — starting fresh (--fresh).",
                 existing_id
             );
-            let _ = call_tool(
-                client,
-                base_url,
-                "close_session",
-                json!({ "sessionId": existing_id }),
-            )
-            .await;
+            warn_if_session_close_failed(client, base_url, &existing_id).await;
             invalidate_session(&state, base_url, session_name);
             let capabilities = build_open_session_capabilities(tool_params);
             let new_id =
@@ -1973,13 +1967,7 @@ async fn handle_open(
                 // The browser context was not ready yet (BrowserProtocol initialization race).
                 // Or the reused saved session no longer has a usable browser tab.
                 // Close the failed session, create a fresh one, and retry navigation.
-                let _ = call_tool(
-                    client,
-                    base_url,
-                    "close_session",
-                    json!({ "sessionId": session_id }),
-                )
-                .await;
+                warn_if_session_close_failed(client, base_url, &session_id).await;
                 invalidate_session(&state, base_url, session_name);
                 let capabilities = build_open_session_capabilities(tool_params);
                 let retry_id =
@@ -2077,13 +2065,7 @@ async fn handle_goto(
                 ));
             }
 
-            let _ = call_tool(
-                client,
-                base_url,
-                "close_session",
-                json!({ "sessionId": session_id }),
-            )
-            .await;
+            warn_if_session_close_failed(client, base_url, &session_id).await;
             invalidate_session(&state, base_url, session_name);
             let capabilities = build_open_session_capabilities(tool_params);
             let retry_id =
@@ -2395,6 +2377,30 @@ async fn verify_click_navigation(
     }
 }
 
+/// Best-effort close of an existing backend session.
+///
+/// Reports a warning when the backend cannot confirm the close, so the user
+/// knows the backend session (and its browser) may still be alive.  Such
+/// orphaned sessions are reaped by the backend after its idle timeout.
+async fn warn_if_session_close_failed(client: &Client, base_url: &str, session_id: &str) {
+    if let Err(err) = call_tool(
+        client,
+        base_url,
+        "close_session",
+        json!({ "sessionId": session_id }),
+    )
+    .await
+    {
+        eprintln!(
+            "⚠  Warning: the backend could not confirm closing session {}: {}",
+            session_id, err
+        );
+        eprintln!(
+            "   The session may still be running — retry `close` or use `close-all` to clean up."
+        );
+    }
+}
+
 async fn handle_close(
     client: &Client,
     base_url: &str,
@@ -2412,14 +2418,9 @@ async fn handle_close(
     };
     json_field("session_id", json!(&session_id));
     let is_attached = state.is_attached;
-    // Ignore errors — session might already be closed
-    let _ = call_tool(
-        client,
-        base_url,
-        "close_session",
-        json!({ "sessionId": session_id }),
-    )
-    .await;
+    // Ignore errors — session might already be closed (the warning is printed
+    // by warn_if_session_close_failed so the user is not left in the dark).
+    warn_if_session_close_failed(client, base_url, &session_id).await;
     clear_state(None, session_name);
     if is_attached {
         if state.attach_type.as_deref() == Some("extension") {
@@ -3960,6 +3961,10 @@ fn count_tracked_sessions() -> usize {
 struct BackendSessionRecord {
     session_id: String,
     status: Option<String>,
+    /// Real health as reported by the backend (`list_sessions` runs a health
+    /// check).  `None` when the backend does not report it (older backends or
+    /// string-array responses) — treated as healthy for backward compat.
+    healthy: Option<bool>,
     created_at: Option<i64>,
     last_accessed_at: Option<i64>,
 }
@@ -3973,7 +3978,9 @@ fn list_session_status(
             .iter()
             .find(|record| record.session_id == session_id)
             .map(|record| {
-                if session_status_is_active(record.status.as_deref()) {
+                if record.healthy.unwrap_or(true)
+                    && session_status_is_active(record.status.as_deref())
+                {
                     "Active"
                 } else {
                     "Stale"
@@ -4077,6 +4084,7 @@ fn parse_backend_session_records(result: &str) -> Vec<BackendSessionRecord> {
                             .map(|session_id| BackendSessionRecord {
                                 session_id: session_id.to_string(),
                                 status: Some("active".to_string()),
+                                healthy: None,
                                 created_at: None,
                                 last_accessed_at: None,
                             })
@@ -4091,6 +4099,9 @@ fn parse_backend_session_records(result: &str) -> Vec<BackendSessionRecord> {
                                             .get("status")
                                             .and_then(|value| value.as_str())
                                             .map(str::to_string),
+                                        healthy: entry
+                                            .get("healthy")
+                                            .and_then(|value| value.as_bool()),
                                         created_at: entry.get("createdAt").and_then(|v| v.as_i64()),
                                         last_accessed_at: entry
                                             .get("lastAccessedAt")
@@ -4112,7 +4123,9 @@ fn session_status_is_active(status: Option<&str>) -> bool {
 
 fn session_is_active_in_records(records: &[BackendSessionRecord], session_id: &str) -> bool {
     records.iter().any(|record| {
-        record.session_id == session_id && session_status_is_active(record.status.as_deref())
+        record.session_id == session_id
+            && record.healthy.unwrap_or(true)
+            && session_status_is_active(record.status.as_deref())
     })
 }
 
@@ -20847,12 +20860,14 @@ mod tests {
             BackendSessionRecord {
                 session_id: "session-1".to_string(),
                 status: Some("active".to_string()),
+                healthy: None,
                 created_at: None,
                 last_accessed_at: None,
             },
             BackendSessionRecord {
                 session_id: "session-2".to_string(),
                 status: Some("stopped".to_string()),
+                healthy: None,
                 created_at: None,
                 last_accessed_at: None,
             },
@@ -20861,6 +20876,52 @@ mod tests {
         assert_eq!(list_session_status(Some(&records), "session-1"), "Active");
         assert_eq!(list_session_status(Some(&records), "session-2"), "Stale");
         assert_eq!(list_session_status(Some(&records), "missing"), "Stale");
+    }
+
+    #[test]
+    fn list_session_status_marks_unhealthy_backend_sessions_stale() {
+        // The backend now reports real health; an "active" session whose
+        // browser died must be shown as Stale so `open` refreshes it.
+        let records = vec![
+            BackendSessionRecord {
+                session_id: "session-1".to_string(),
+                status: Some("active".to_string()),
+                healthy: Some(false),
+                created_at: None,
+                last_accessed_at: None,
+            },
+            BackendSessionRecord {
+                session_id: "session-2".to_string(),
+                status: Some("active".to_string()),
+                healthy: Some(true),
+                created_at: None,
+                last_accessed_at: None,
+            },
+        ];
+
+        assert_eq!(list_session_status(Some(&records), "session-1"), "Stale");
+        assert_eq!(list_session_status(Some(&records), "session-2"), "Active");
+        assert_eq!(
+            list_session_next_open_action(Some(&records), "session-1"),
+            "Refresh"
+        );
+        assert_eq!(
+            list_session_next_open_action(Some(&records), "session-2"),
+            "Reuse"
+        );
+        assert!(!session_is_active_in_records(&records, "session-1"));
+        assert!(session_is_active_in_records(&records, "session-2"));
+    }
+
+    #[test]
+    fn session_is_active_treats_missing_healthy_field_as_healthy() {
+        // Backward compat: backends without the `healthy` field (or plain
+        // string-array listings) must keep the old status-based behavior.
+        let records = r#"[{"sessionId":"session-1","status":"active"}]"#;
+        assert!(session_is_active(records, "session-1"));
+
+        let records = r#"["session-1"]"#;
+        assert!(session_is_active(records, "session-1"));
     }
 
     #[test]
@@ -20874,12 +20935,14 @@ mod tests {
             BackendSessionRecord {
                 session_id: "session-1".to_string(),
                 status: Some("active".to_string()),
+                healthy: None,
                 created_at: None,
                 last_accessed_at: None,
             },
             BackendSessionRecord {
                 session_id: "session-2".to_string(),
                 status: Some("stopped".to_string()),
+                healthy: None,
                 created_at: None,
                 last_accessed_at: None,
             },
@@ -21092,6 +21155,7 @@ mod tests {
         let records = vec![BackendSessionRecord {
             session_id: "s1".to_string(),
             status: Some("active".to_string()),
+            healthy: None,
             created_at: None,
             last_accessed_at: None,
         }];
@@ -21103,6 +21167,7 @@ mod tests {
         let records = vec![BackendSessionRecord {
             session_id: "s1".to_string(),
             status: Some("stopped".to_string()),
+            healthy: None,
             created_at: None,
             last_accessed_at: None,
         }];
@@ -21114,6 +21179,7 @@ mod tests {
         let records = vec![BackendSessionRecord {
             session_id: "s1".to_string(),
             status: Some("active".to_string()),
+            healthy: None,
             created_at: None,
             last_accessed_at: None,
         }];

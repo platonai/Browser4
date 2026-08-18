@@ -23,6 +23,7 @@ import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
 import org.mockito.MockitoAnnotations
 import org.springframework.context.support.GenericApplicationContext
+import java.time.Duration
 
 class PulsarSessionManagerTest {
     @Mock
@@ -349,6 +350,59 @@ class PulsarSessionManagerTest {
         verify(agenticContext, times(2)).createSession(
             Mockito.any(PulsarSettings::class.java) ?: PulsarSettings()
         )
+    }
+
+    @Test
+    fun deleteSessionByDisplayNameResolvesToUuid() {
+        val session = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-delete-by-name"))
+
+        // Deleting by display name must resolve to the UUID and actually
+        // remove the session — closing by name must not silently "fail".
+        assertTrue(sessionManager.deleteSession("team-delete-by-name"))
+        assertNull(sessionManager.getSession("team-delete-by-name"))
+        assertNull(sessionManager.getSession(session.sessionId))
+    }
+
+    @Test
+    fun reapIdleSessionsReapsOnlyIdleNonDefaultSessions() {
+        // A manager with a short idle timeout so the reaper logic is
+        // testable without waiting hours.
+        val manager = PulsarSessionManager(agenticContext, Duration.ofMillis(50))
+
+        // The default session is never reaped.
+        val defaultSession = manager.getOrCreateSession(null)
+        // The shared swarm session is never reaped.
+        val swarmSession = manager.ensureSwarmSession()
+        // Named session A: created and then left idle.
+        val idleSession = manager.getOrCreateSession(mapOf("sessionId" to "team-idle"))
+        // Named session B: created now, accessed again right before the sweep.
+        val freshSession = manager.getOrCreateSession(mapOf("sessionId" to "team-fresh"))
+
+        Thread.sleep(120)
+
+        // Touch the fresh session after the idle window has elapsed.
+        manager.getSession("team-fresh")
+
+        val reaped = manager.reapIdleSessions()
+
+        assertEquals(1, reaped, "Only the idle named session should be reaped")
+        assertNotNull(manager.getSession(defaultSession.sessionId), "Default session must never be reaped")
+        assertNotNull(manager.getSession(swarmSession.sessionId), "Swarm session must never be reaped")
+        assertNull(manager.getSession(idleSession.sessionId), "Idle named session should be reaped")
+        assertNotNull(manager.getSession(freshSession.sessionId), "Recently accessed session should be kept")
+    }
+
+    @Test
+    fun reapIdleSessionsKeepsAttachedSessions() {
+        // Attached (CDP / extension) sessions reference external browsers —
+        // the idle reaper must never tear them down implicitly.
+        val info = sessionManager.createExtensionAttachedSession(channel = "chrome")
+
+        Thread.sleep(120)
+
+        assertEquals(0, sessionManager.reapIdleSessions())
+        assertNotNull(sessionManager.getSession(info.sessionId),
+            "Extension-attached session must not be reaped")
     }
 
     private fun mockAgenticSession(

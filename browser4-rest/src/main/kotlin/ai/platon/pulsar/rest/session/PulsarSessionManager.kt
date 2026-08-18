@@ -26,22 +26,100 @@ import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 /**
  * Manages AgenticSession-backed browser sessions and their lifecycle.
  *
  * This component is framework-agnostic and can be wired manually or exposed
  * through an external dependency injection container.
+ *
+ * # Session lifecycle
+ *
+ * - Sessions live **in memory only** — a backend restart loses every session
+ *   (clients detect this via `list_sessions` and recreate on next use).
+ * - Non-default sessions that have not been accessed for longer than
+ *   [idleSessionTimeout] (default 4 hours) are reaped automatically by an
+ *   internal idle reaper.  The default session, the shared swarm session and
+ *   all attached (CDP / extension) sessions are **never** reaped.
+ * - Unhealthy Browser4-launched sessions are recreated transparently on the
+ *   next access (same session ID, fresh browser); attached sessions are never
+ *   recreated implicitly.
  */
 class PulsarSessionManager(
-    val agenticContext: AgenticContext
+    val agenticContext: AgenticContext,
+    /** Idle timeout after which non-default sessions are reaped. */
+    private val idleSessionTimeout: Duration = DEFAULT_IDLE_SESSION_TIMEOUT,
 ) : Closeable {
     private val logger = LoggerFactory.getLogger(PulsarSessionManager::class.java)
+
+    /**
+     * Reaps non-default sessions that have been idle for longer than
+     * [idleSessionTimeout].
+     *
+     * The default session (the CLI's unnamed slot) is never reaped so
+     * `open`-without-`-s` keeps reusing it across invocations.  The shared
+     * swarm session is kept by design (it is shared across requests), and
+     * attached (CDP / extension) sessions are kept because their browser is
+     * external — tearing it down implicitly would sever the user's real
+     * browser connection.
+     *
+     * @return the number of sessions reaped.
+     */
+    fun reapIdleSessions(): Int {
+        val now = System.currentTimeMillis()
+        val defaultSessionId = displayNameToSessionId[DEFAULT_SESSION_ID]
+        val idleCandidates = sessions.entries.filter { (sessionId, session) ->
+            !sessionId.equals(SWARM_SESSION_ID, ignoreCase = true) &&
+                sessionId != defaultSessionId &&
+                session.kind == SessionKind.BROWSER4_LAUNCHED &&
+                now - session.lastAccessedAt > idleSessionTimeout.toMillis()
+        }
+        idleCandidates.forEach { (sessionId, session) ->
+            logger.info(
+                "Reaping idle session {} (idle for {} min, timeout {} min)",
+                sessionId,
+                (now - session.lastAccessedAt) / 60_000,
+                idleSessionTimeout.toMinutes()
+            )
+            deleteSession(sessionId)
+        }
+        if (idleCandidates.isNotEmpty()) {
+            logger.info("Reaped {} idle session(s)", idleCandidates.size)
+        }
+        return idleCandidates.size
+    }
 
     private val sessions = ConcurrentHashMap<String, ManagedSession>()
 
     /** Maps display names (e.g. "DEFAULT") to UUID-based session IDs for consistent reuse. */
     private val displayNameToSessionId = ConcurrentHashMap<String, String>()
+
+    /**
+     * Periodic idle-session reaper.  Runs on a daemon thread so it never
+     * blocks JVM shutdown; stopped in [shutdown].
+     */
+    private val idleReaperExecutor: ScheduledExecutorService =
+        Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "pulsar-session-idle-reaper").apply { isDaemon = true }
+        }
+
+    init {
+        // Scan for idle sessions periodically.  The initial delay avoids doing
+        // pointless work right after startup (nothing can be idle yet).
+        idleReaperExecutor.scheduleWithFixedDelay(
+            {
+                runCatching { reapIdleSessions() }.onFailure { e ->
+                    logger.warn("Idle session reaper failed: {}", e.message, e)
+                }
+            },
+            IDLE_REAP_INITIAL_DELAY_MINUTES,
+            IDLE_REAP_INTERVAL_MINUTES,
+            TimeUnit.MINUTES
+        )
+    }
 
     /**
      * The swarm session is a special session that used for swarm use cases. It is created on demand and shared
@@ -76,7 +154,7 @@ class PulsarSessionManager(
         }
 
         val session = sessions.computeIfAbsent(sessionId) {
-            ManagedSession(sessionId, agenticSession, normalizedCapabilities)
+            ManagedSession(sessionId, agenticSession, normalizedCapabilities, kind = SessionKind.SWARM)
         }
 
         return session
@@ -201,6 +279,22 @@ class PulsarSessionManager(
             return markSessionActive(session)
         }
 
+        // Extension-attached session whose WebSocket has disconnected.
+        // Do NOT fall through to the non-owned/health paths — an extension
+        // session without a connected WebSocket must stay inactive (and must
+        // never be recreated as a Browser4-CDP session, which would silently
+        // replace the extension-backed browser with a fresh Chrome the CLI
+        // still displays as "Extension").
+        if (extensionSessionIds.contains(sessionId)) {
+            markSessionInactive(session)
+            logger.info(
+                "Extension-attached session {} is disconnected — keeping as inactive " +
+                "(will not recreate as Browser4-CDP). Re-run attach --extension to reconnect.",
+                sessionId
+            )
+            return session
+        }
+
         // Sessions that do NOT own their browser must never be recreated by
         // Browser4 — that would launch a new browser instance, severing the
         // link to the user's existing browser.
@@ -220,21 +314,6 @@ class PulsarSessionManager(
             return session
         }
 
-        // Extension-attached session whose WebSocket has disconnected.
-        // Do NOT fall through to recreateUnhealthySession — that would
-        // silently replace the extension-backed session with a fresh
-        // Browser4-launched Chrome, making the CLI show "Extension" in
-        // its list while actually driving a different browser.
-        if (extensionSessionIds.contains(sessionId)) {
-            markSessionInactive(session)
-            logger.info(
-                "Extension-attached session {} is disconnected — keeping as inactive " +
-                "(will not recreate as Browser4-CDP). Re-run attach --extension to reconnect.",
-                sessionId
-            )
-            return session
-        }
-
         if (checkHealthyBlocking(session).isOK) {
             return markSessionActive(session)
         }
@@ -249,7 +328,11 @@ class PulsarSessionManager(
         }
     }
 
-    private fun createManagedSession(sessionId: String, capabilities: Map<String, String?>): ManagedSession {
+    private fun createManagedSession(
+        sessionId: String,
+        capabilities: Map<String, String?>,
+        kind: SessionKind = SessionKind.BROWSER4_LAUNCHED,
+    ): ManagedSession {
         val settings = PulsarSettings.parse(capabilities)
         val agenticSession = agenticContext.createSession(settings)
 
@@ -257,6 +340,7 @@ class PulsarSessionManager(
             sessionId = sessionId,
             agenticSession = agenticSession,
             capabilities = capabilities,
+            kind = kind,
             status = if (agenticSession.isActive) "active" else "stopped"
         ).also {
             logger.info("Created session {} with capabilities: {}", sessionId, capabilities)
@@ -320,7 +404,7 @@ class PulsarSessionManager(
         )
 
         val session = sessions.computeIfAbsent(sessionId) {
-            createManagedSession(sessionId, normalizedCapabilities)
+            createManagedSession(sessionId, normalizedCapabilities, SessionKind.CDP_ATTACHED)
         }
 
         // Bind the external browser to the session
@@ -350,6 +434,15 @@ class PulsarSessionManager(
      * Accepts `http://host:port`, `ws://host:port/path`, and bare `host:port`.
      */
     companion object {
+        /** Default idle timeout before a non-default session is reaped. */
+        val DEFAULT_IDLE_SESSION_TIMEOUT: Duration = Duration.ofHours(4)
+
+        /** Delay before the first idle-session scan after manager startup (minutes). */
+        private const val IDLE_REAP_INITIAL_DELAY_MINUTES = 30L
+
+        /** Interval between idle-session scans (minutes). */
+        private const val IDLE_REAP_INTERVAL_MINUTES = 30L
+
         fun normalizeCdpEndpoint(endpoint: String, port: Int): String {
             val trimmed = endpoint.trim()
             return when {
@@ -502,7 +595,7 @@ class PulsarSessionManager(
 
         // Create the managed session (without a bound browser yet).
         val session = sessions.computeIfAbsent(sessionId) {
-            createManagedSession(sessionId, normalizedCapabilities)
+            createManagedSession(sessionId, normalizedCapabilities, SessionKind.EXTENSION_ATTACHED)
         }
 
         // Track this session as extension-attached so resolveHealthySession
@@ -839,11 +932,17 @@ class PulsarSessionManager(
     /**
      * Deletes a session and cleans up resources.
      *
-     * @param sessionId The session identifier.
+     * The session ID may be a display name (e.g. "team-a") or the resolved
+     * UUID — both are accepted, mirroring [getSession].
+     *
+     * @param sessionId The session identifier (display name or UUID).
      * @return True if the session was deleted, false if not found.
      */
     fun deleteSession(sessionId: String): Boolean {
-        val session = sessions.remove(sessionId) ?: return false
+        // Resolve display names to their UUID, matching getSession.  Without
+        // this, closing by display name silently "fails" and leaks the session.
+        val resolvedId = displayNameToSessionId.getOrDefault(sessionId, sessionId)
+        val session = sessions.remove(resolvedId) ?: return false
 
         try {
             val pulsarSession = session.agenticSession
@@ -852,7 +951,7 @@ class PulsarSessionManager(
             // logger.info("---------------------DELETE MANAGED SESSION BEGIN----------------------------")
             logger.info(
                 "---- Deleting session `{}`, closing pulsar session #{} {}",
-                sessionId, pulsarSession.id, pulsarSession.display
+                resolvedId, pulsarSession.id, pulsarSession.display
             )
 
             // Close session
@@ -864,19 +963,19 @@ class PulsarSessionManager(
                 pulsarSession.context.browserManager.closeBrowser(browser)
             }
 
-            logger.info("---- Deleted session `{}` and released resources", sessionId)
+            logger.info("---- Deleted session `{}` and released resources", resolvedId)
             // logger.info("----------------------DELETE MANAGED SESSION END---------------------------")
         } catch (e: Exception) {
-            logger.error("Error closing session {}: {}", sessionId, e.message, e)
+            logger.error("Error closing session {}: {}", resolvedId, e.message, e)
         }
 
         // Clean up extension-related resources for this session
-        extensionBrowsers.remove(sessionId)?.close()
-        pendingExtensionConnections.remove(sessionId)
-        extensionSessionIds.remove(sessionId)
+        extensionBrowsers.remove(resolvedId)?.close()
+        pendingExtensionConnections.remove(resolvedId)
+        extensionSessionIds.remove(resolvedId)
 
         // Clean up the display-name mapping if this session was a default session
-        displayNameToSessionId.values.remove(sessionId)
+        displayNameToSessionId.values.remove(resolvedId)
 
         return true
     }
@@ -907,6 +1006,7 @@ class PulsarSessionManager(
      * Closes all active sessions managed by this instance.
      */
     fun shutdown() {
+        idleReaperExecutor.shutdownNow()
         logger.info("Shutting down SessionManager, closing {} active sessions", sessions.size)
         sessions.keys.toList().forEach { sessionId ->
             deleteSession(sessionId)
