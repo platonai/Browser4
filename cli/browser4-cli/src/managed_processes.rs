@@ -797,13 +797,14 @@ fn find_browser4_server_processes() -> Vec<u32> {
     #[cfg(windows)]
     {
         use std::process::Command;
+        // Enumerate java/javaw processes and let `is_browser4_server_process`
+        // decide using the (argfile-expanded) command line.  The server is
+        // launched via `@argfile` when the enumerated classpath is too long for
+        // the Windows CreateProcess command-line limit, so matching must not
+        // rely on the main class appearing in the raw CommandLine string.
         let ps_command = r#"
             Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-                Where-Object {
-                    $_.Name -match '^(java|javaw)\.exe$' -and
-                    -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
-                    $_.CommandLine -match '(?i)(Browser4\.jar|\bBrowser4LauncherKt\b|\bBrowser4BundleApplicationKt\b|\bBrowser4StandaloneApplicationKt\b)'
-                } |
+                Where-Object { $_.Name -match '^(java|javaw)\.exe$' } |
                 Select-Object -ExpandProperty ProcessId
         "#;
         if let Ok(output) = Command::new("powershell")
@@ -812,6 +813,7 @@ fn find_browser4_server_processes() -> Vec<u32> {
         {
             pids.extend(parse_pid_list(&output.stdout));
         }
+        pids.retain(|&pid| is_browser4_server_process(pid));
     }
 
     pids.sort_unstable();
@@ -1046,9 +1048,37 @@ fn process_command_line(pid: u32) -> Option<String> {
         if command_line.is_empty() {
             None
         } else {
-            Some(command_line)
+            Some(expand_windows_argfile(command_line))
         }
     }
+}
+
+/// Java launchers can move the whole JVM command line into an `@argfile`
+/// (JDK 9+ launcher feature) to stay under the Windows CreateProcess 32,767
+/// character limit.  `Win32_Process.CommandLine` then only exposes the
+/// `@path` token, so marker-based process matching (e.g. the Browser4 main
+/// class) would miss the process entirely.  Append the referenced file's
+/// tokens to the command line so downstream matching sees the real arguments.
+fn expand_windows_argfile(command_line: String) -> String {
+    let mut expanded = String::new();
+    for raw_token in command_line.split_whitespace() {
+        let token = raw_token.trim_matches('"');
+        if let Some(argfile) = token.strip_prefix('@') {
+            if let Ok(content) = fs::read_to_string(argfile) {
+                for line in content.lines() {
+                    let line = line.trim();
+                    if !line.is_empty() {
+                        expanded.push_str(line);
+                        expanded.push(' ');
+                    }
+                }
+                continue;
+            }
+        }
+        expanded.push_str(raw_token);
+        expanded.push(' ');
+    }
+    expanded.trim_end().to_string()
 }
 
 fn parse_pid_list(stdout: &[u8]) -> Vec<u32> {
@@ -1205,6 +1235,36 @@ mod tests {
             .prefix("managed-")
             .tempdir_in(&root)
             .unwrap()
+    }
+
+    #[test]
+    fn test_expand_windows_argfile_reads_java_argfile() {
+        let tmp = test_temp_dir();
+        let argfile = tmp.path().join("java-args.txt");
+        fs::write(
+            &argfile,
+            "-cp\nC:\\browser4\\lib\\*\nai.platon.pulsar.chrome.Browser4BundleApplicationKt\n--server.port=15411\n",
+        )
+        .unwrap();
+
+        let command_line = format!("\"C:\\java\\bin\\java.exe\" @{}", argfile.display());
+        let expanded = expand_windows_argfile(command_line);
+
+        assert!(
+            expanded.contains("Browser4BundleApplicationKt"),
+            "main class must be visible after argfile expansion: {expanded}"
+        );
+        assert!(expanded.contains("-cp"));
+        assert!(expanded.contains("--server.port=15411"));
+        assert!(expanded.starts_with("\"C:\\java\\bin\\java.exe\""));
+    }
+
+    #[test]
+    fn test_expand_windows_argfile_ignores_missing_argfile() {
+        let command_line = r#""C:\java\bin\java.exe" @C:\missing\java-args.txt"#.to_string();
+        let expanded = expand_windows_argfile(command_line);
+        assert!(expanded.contains("@C:\\missing\\java-args.txt"));
+        assert!(!expanded.contains("Browser4BundleApplicationKt"));
     }
 
     #[test]

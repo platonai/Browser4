@@ -110,6 +110,12 @@ const FORCE_REBUILD_BUNDLE_ENV: &str = "BROWSER4_CLI_FORCE_REBUILD_BUNDLE";
 /// its `plugins/` directory change since the server was started.  Plugins then
 /// only take effect after a manual restart, as before.
 const DISABLE_PLUGIN_WARM_RESTART_ENV: &str = "BROWSER4_CLI_DISABLE_PLUGIN_WARM_RESTART";
+/// When set to `1`, `true`, `yes`, or `on`, disables the JVM AOT cache
+/// (JEP 483/515) training step and skips attaching any trained cache when
+/// launching the server.  Useful in CI / test harnesses where a one-time
+/// multi-minute training run on a fresh runtime bundle would blow past
+/// command timeouts; the server then starts without AOT acceleration.
+const DISABLE_AOT_CACHE_ENV: &str = "BROWSER4_CLI_DISABLE_AOT_CACHE";
 /// Name of the plugins fingerprint store inside the CLI state dir.  Records,
 /// per port, the plugins directory the server was launched with and a
 /// fingerprint of its JAR set at launch time.
@@ -1103,6 +1109,18 @@ fn compute_plugins_fingerprint(plugins_dir: &Path) -> String {
 fn plugin_warm_restart_disabled() -> bool {
     matches!(
         env::var(DISABLE_PLUGIN_WARM_RESTART_ENV)
+            .unwrap_or_default()
+            .to_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// Whether JVM AOT cache training/attachment is explicitly disabled via
+/// `BROWSER4_CLI_DISABLE_AOT_CACHE`.  Mirrors [`plugin_warm_restart_disabled`].
+fn aot_cache_disabled() -> bool {
+    matches!(
+        env::var(DISABLE_AOT_CACHE_ENV)
             .unwrap_or_default()
             .to_lowercase()
             .as_str(),
@@ -4270,6 +4288,12 @@ fn aot_cache_invalidation_key(
 /// pre-loads classes seen on the main classpath, so plugin classes simply load
 /// normally and are not cached.
 fn ensure_aot_cache_trained(runtime: &InstalledBrowser4Runtime) {
+    // Explicit opt-out (e.g. CI / e2e harness): start without AOT acceleration
+    // instead of paying the one-time training cost on a fresh runtime bundle.
+    if aot_cache_disabled() {
+        return;
+    }
+
     // Respect an explicit user-provided AOT configuration.
     if let Ok(raw) = std::env::var(BROWSER4_SERVER_OPTS_ENV) {
         if raw.contains("-XX:AOTCache") {
@@ -4411,7 +4435,7 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
     // Attach the trained AOT cache when present.  The JVM silently falls back
     // to a normal start if the cache is stale or incompatible.
     let cache_file = aot_cache_file();
-    if cache_file.is_file() {
+    if !aot_cache_disabled() && cache_file.is_file() {
         jvm_opts.push(format!("-XX:AOTCache={}", cache_file.display()));
     }
 
@@ -5938,6 +5962,24 @@ mod tests {
         runtime2.tag = "v4.14.0".to_string();
         let k4 = aot_cache_invalidation_key(&runtime2, &opts).unwrap();
         assert_ne!(k1, k4, "a version bump must change the key");
+    }
+
+    #[test]
+    fn test_aot_cache_disabled_flag() {
+        let _guard = lock_env_mutex();
+        let saved = env::var(DISABLE_AOT_CACHE_ENV).ok();
+        for value in ["1", "true", "yes", "on", "TRUE", "On"] {
+            unsafe { env::set_var(DISABLE_AOT_CACHE_ENV, value) };
+            assert!(aot_cache_disabled(), "flag value {value:?} should disable AOT cache");
+        }
+        for value in ["", "0", "false", "off", "no"] {
+            unsafe { env::set_var(DISABLE_AOT_CACHE_ENV, value) };
+            assert!(!aot_cache_disabled(), "flag value {value:?} should not disable AOT cache");
+        }
+        match saved {
+            Some(v) => unsafe { env::set_var(DISABLE_AOT_CACHE_ENV, v) },
+            None => unsafe { env::remove_var(DISABLE_AOT_CACHE_ENV) },
+        }
     }
 
     #[test]
