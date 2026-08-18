@@ -114,7 +114,7 @@ htmlsnapshot, attach, named sessions, auto-diff).
 |-----------|--------|----------|
 | `session-management.md` | Wikipedia, HN | Open named sessions, switch between them, list/close all |
 | `snapshot-mastery.md` | Wikipedia | Full/interactive/scoped/depth-limited snapshots, auto-diff, grep with all flags |
-| `headed-window-visibility.md` | example.com | Headed session boundary: window must appear, or the CLI must warn (browser alive without a visible window); headless must never warn |
+| `headed-window-visibility.md` | example.com | Headed session: the visible window must show the requested page (CDP target != about:blank), never a separate headless instance; headless must stay windowless; CLI warns only when a headed process lacks a window |
 | `html-snapshot-extraction.md` | books.toscrape.com | Capture HTML snapshot, get single/all values, export, summary, grep |
 | `x-sql-query-methods.md` | books.toscrape.com | X-SQL via inline, @file, stdin, and base64; inspect for selector discovery |
 | `htmlsnapshot-inspect-discovery.md` | books.toscrape.com | HTML snapshot inspection and selector discovery workflow |

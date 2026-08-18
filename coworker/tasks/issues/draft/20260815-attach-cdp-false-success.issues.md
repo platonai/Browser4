@@ -187,7 +187,7 @@ The snapshot output is produced without evidence the target browser served it, r
 |---|---|---|---|---|
 | 1 | Critical | attach --cdp | False success: no CDP verification, navigation lands on wrong instance | ✅ Fixed |
 | 2 | High | daemon/launch | Random `--remote-debugging-port=0` makes CDP port undiscoverable | ✅ Fixed |
-| 3 | High | headed launch | Visible window may silently not appear (MainWindowHandle=0) | ⏳ Deferred |
+| 3 | High | headed launch | Visible window may silently not appear (MainWindowHandle=0) | ✅ Fixed |
 | 4 | Medium | startup wait | open can hang past actual success on slow first launch | ⏳ Deferred |
 | 5 | Medium | attach snapshot | post_command_snapshot prints misleading page header after attach | ✅ Fixed (with #1) |
 
@@ -203,4 +203,4 @@ The snapshot output is produced without evidence the target browser served it, r
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (#3, #4 — see Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 
-Notes: #3 (headed window visibility) and #4 (open hang on slow first launch) are deferred; #3 requires pulsar-browser-level launch verification, #4 is a CLI wait-path polish. Both are documented with repro steps above.
+Notes: #3 (headed window visibility) is fixed in `AbstractPulsarSession.createBoundDriver` — sessions with an explicit display mode now launch their browser with the session's own settings (`BrowserSettings(sessionConfig)`) instead of the server-wide config, which defaults to `browser.display.mode=HEADLESS` (browser4-resources `config/application.properties`) and silently ignored `headed=true` from `open --headed`. Verified end-to-end: `open --headed` now navigates a visible headed window; `open --headless` still launches headless. #4 is deferred; it is a CLI wait-path polish (open can hang past actual success on slow first launch).

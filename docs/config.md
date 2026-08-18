@@ -181,6 +181,13 @@ docker run -d -p 8182:8182 `
     * `HEADLESS`: Runs without a graphical window.
     * `SUPERVISED`: Linux-only; uses Xvfb for headless GUI simulation.
 
+  > **Session-level override wins:** when a session is created with an explicit
+  > display mode (e.g. `open --headed` / `open --headless` sets the `headed`
+  > capability, or an explicit `displayMode` capability), the session's choice
+  > is honored by the browser launch — see
+  > `AbstractPulsarSession.createBoundDriver`. The server-level default above
+  > only applies to sessions created without a display preference.
+
 * **`browser.enabled`** *(default: `true`)*
   Enables the built-in `browser4-browser` runtime plugin wiring.
   Set `browser.enabled=false` to disable browser runtime beans.
