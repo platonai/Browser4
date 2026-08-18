@@ -14,7 +14,7 @@ import ai.platon.pulsar.rest.api.TestHelper
 import ai.platon.pulsar.rest.api.common.MockEcServerTestBase
 import ai.platon.pulsar.rest.api.config.MockEcServerConfiguration
 import ai.platon.pulsar.test.server.MockServerPorts
-import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
+import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeStatusRequest
 import org.junit.jupiter.api.Assumptions
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName

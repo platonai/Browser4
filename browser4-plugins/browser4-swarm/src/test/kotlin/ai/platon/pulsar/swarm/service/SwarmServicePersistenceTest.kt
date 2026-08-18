@@ -1,16 +1,20 @@
-package ai.platon.pulsar.rest.api.service
+package ai.platon.pulsar.swarm.service
 
 import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
+import ai.platon.pulsar.agentic.tools.advanced.crawl.SwarmSessionProvider
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
-import ai.platon.pulsar.rest.session.PulsarSessionManager
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
-import org.mockito.Mockito
 import java.nio.file.Files
 import java.nio.file.Path
 
+/**
+ * Persistence tests for [SwarmService], moved from browser4-rest together
+ * with the implementation. Session access is never exercised — the provider
+ * throws if the code under test accidentally touches it.
+ */
 class SwarmServicePersistenceTest {
 
     private val objectMapper = pulsarObjectMapper()
@@ -20,7 +24,7 @@ class SwarmServicePersistenceTest {
     // -----------------------------------------------------------------
 
     @Test
-    fun `restoreFromDisk loads tasks from JSONL file`(@TempDir tempDir: Path) {
+    fun restoreFromDiskLoadsTasksFromJsonlFile(@TempDir tempDir: Path) {
         val jsonlPath = tempDir.resolve("swarm-tasks.jsonl")
         val task1 = ScrapeResponse(id = "t1", statusCode = 201, pageStatusCode = 200)
             .apply { lastModifiedTime = null; startedTime = null; finishTime = null }
@@ -33,7 +37,7 @@ class SwarmServicePersistenceTest {
             objectMapper.writeValueAsString(task2) + "\n"
         )
 
-        val service = TestableSwarmService(tempDir)
+        val service = newService()
         invokeRestore(service, tempDir)
 
         assertEquals(2, service.responseCache.estimatedSize(), "should have 2 restored entries")
@@ -48,14 +52,14 @@ class SwarmServicePersistenceTest {
     }
 
     @Test
-    fun `restoreFromDisk handles missing file gracefully`(@TempDir tempDir: Path) {
-        val service = TestableSwarmService(tempDir)
+    fun restoreFromDiskHandlesMissingFileGracefully(@TempDir tempDir: Path) {
+        val service = newService()
         assertDoesNotThrow { invokeRestore(service, tempDir) }
         assertEquals(0, service.responseCache.estimatedSize())
     }
 
     @Test
-    fun `restoreFromDisk skips corrupt lines`(@TempDir tempDir: Path) {
+    fun restoreFromDiskSkipsCorruptLines(@TempDir tempDir: Path) {
         val jsonlPath = tempDir.resolve("swarm-tasks.jsonl")
         val task = ScrapeResponse(id = "good", statusCode = 200, pageStatusCode = 200)
             .apply { lastModifiedTime = null; startedTime = null; finishTime = null }
@@ -67,7 +71,7 @@ class SwarmServicePersistenceTest {
             objectMapper.writeValueAsString(task) + "\n"
         )
 
-        val service = TestableSwarmService(tempDir)
+        val service = newService()
         invokeRestore(service, tempDir)
 
         assertEquals(1, service.responseCache.estimatedSize())
@@ -75,12 +79,12 @@ class SwarmServicePersistenceTest {
     }
 
     @Test
-    fun `restoreFromDisk empty file returns zero tasks`(@TempDir tempDir: Path) {
+    fun restoreFromDiskEmptyFileReturnsZeroTasks(@TempDir tempDir: Path) {
         val jsonlPath = tempDir.resolve("swarm-tasks.jsonl")
         Files.createDirectories(tempDir)
         Files.writeString(jsonlPath, "")
 
-        val service = TestableSwarmService(tempDir)
+        val service = newService()
         invokeRestore(service, tempDir)
 
         assertEquals(0, service.responseCache.estimatedSize())
@@ -91,7 +95,7 @@ class SwarmServicePersistenceTest {
     // -----------------------------------------------------------------
 
     @Test
-    fun `restoreFromDisk rebuilds status index`(@TempDir tempDir: Path) {
+    fun restoreFromDiskRebuildsStatusIndex(@TempDir tempDir: Path) {
         val jsonlPath = tempDir.resolve("swarm-tasks.jsonl")
         val task1 = ScrapeResponse(id = "i1", statusCode = 201, pageStatusCode = 200)
             .apply { lastModifiedTime = null; startedTime = null; finishTime = null }
@@ -107,7 +111,7 @@ class SwarmServicePersistenceTest {
             objectMapper.writeValueAsString(task3) + "\n"
         )
 
-        val service = TestableSwarmService(tempDir)
+        val service = newService()
         invokeRestore(service, tempDir)
 
         assertEquals(1, getStatusIndexCount(service, 201), "should have 1 task with status 201")
@@ -118,6 +122,15 @@ class SwarmServicePersistenceTest {
     // Helpers
     // -----------------------------------------------------------------
 
+    /** A service whose session provider must never be called in these tests. */
+    private fun newService(): SwarmService {
+        return SwarmService(
+            SwarmSessionProvider {
+                throw UnsupportedOperationException("Session access is not expected in persistence tests")
+            }
+        )
+    }
+
     /** Points the service at a temp directory then calls restoreFromDisk. */
     private fun invokeRestore(service: SwarmService, tempDir: Path) {
         // Redirect JsonlPersistence to temp dir
@@ -125,7 +138,7 @@ class SwarmServicePersistenceTest {
         fileField.isAccessible = true
         fileField.set(service.persistence, tempDir.resolve("swarm-tasks.jsonl"))
 
-        // restoreFromDisk is @PostConstruct, call it via reflection
+        // restoreFromDisk is @EventListener, call it via reflection
         val method = SwarmService::class.java.getDeclaredMethod("restoreFromDisk")
         method.isAccessible = true
         method.invoke(service)
@@ -141,9 +154,4 @@ class SwarmServicePersistenceTest {
         val mm = index as org.apache.commons.collections4.MultiValuedMap<Int, String>
         return mm[statusCode]?.size ?: 0
     }
-
-    /** Minimal subclass to provide the mocked session manager. */
-    private class TestableSwarmService(tempDir: Path) : SwarmService(
-        Mockito.mock(PulsarSessionManager::class.java)
-    )
 }

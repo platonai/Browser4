@@ -6,12 +6,16 @@ import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
+import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeStatusRequest
+import ai.platon.pulsar.agentic.tools.advanced.crawl.SwarmFacade
+import ai.platon.pulsar.agentic.tools.advanced.crawl.SwarmFacadeRegistry
 import ai.platon.pulsar.rest.session.ManagedSession
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
-import ai.platon.pulsar.rest.api.service.SwarmService
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.mockito.Mockito
@@ -21,12 +25,28 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
 
 class SwarmControllerTest {
+
+    private val facade: SwarmFacade = Mockito.mock(SwarmFacade::class.java)
+
+    @BeforeEach
+    fun registerFacade() {
+        SwarmFacadeRegistry.instance.register(facade)
+    }
+
+    @AfterEach
+    fun unregisterFacade() {
+        SwarmFacadeRegistry.instance.unregister()
+    }
+
+    private fun newController(sessionManager: PulsarSessionManager): SwarmController {
+        return SwarmController(sessionManager)
+    }
+
     @Test
     fun openReturnsSafeSessionResponse() {
         val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
-        val swarmService = Mockito.mock(SwarmService::class.java)
         val agenticSession = Mockito.mock(AgenticSession::class.java)
-        val controller = SwarmController(sessionManager, swarmService)
+        val controller = newController(sessionManager)
         val capabilities = mapOf("profileMode" to "TEMPORARY")
         val managedSession = ManagedSession(
             sessionId = SWARM_SESSION_ID,
@@ -58,29 +78,27 @@ class SwarmControllerTest {
     @Test
     fun submitWithBlankPayloadThrowsIllegalArgumentException() {
         val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
-        val swarmService = Mockito.mock(SwarmService::class.java)
-        val controller = SwarmController(sessionManager, swarmService)
+        val controller = newController(sessionManager)
 
         val exception = assertThrows<IllegalArgumentException> {
             controller.submit("   ")
         }
         assertEquals("Request body must be a non-blank URL or X-SQL", exception.message)
-        verify(swarmService, never()).submit(any<ScrapeRequest>())
+        verify(facade, never()).submit(any<ScrapeRequest>())
     }
 
     @Test
     fun submitWithValidUrlReturnsUuid() {
         val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
-        val swarmService = Mockito.mock(SwarmService::class.java)
-        val controller = SwarmController(sessionManager, swarmService)
+        val controller = newController(sessionManager)
 
-        Mockito.`when`(swarmService.submit(any<ScrapeRequest>())).thenReturn("mock-uuid")
+        Mockito.`when`(facade.submit(any<ScrapeRequest>())).thenReturn("mock-uuid")
 
         val result = controller.submit("https://example.com")
 
         assertEquals("mock-uuid", result)
         val captor = argumentCaptor<ScrapeRequest>()
-        verify(swarmService).submit(captor.capture())
+        verify(facade).submit(captor.capture())
         assertEquals(
             "select dom_base_uri(dom) as url from load_and_select('https://example.com', ':root')",
             captor.firstValue.sql
@@ -90,13 +108,23 @@ class SwarmControllerTest {
     @Test
     fun submitWithInvalidSqlThrowsIllegalArgumentException() {
         val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
-        val swarmService = Mockito.mock(SwarmService::class.java)
-        val controller = SwarmController(sessionManager, swarmService)
+        val controller = newController(sessionManager)
 
         assertThrows<IllegalArgumentException> {
             controller.submit("DROP TABLE users")
         }
-        verify(swarmService, never()).submit(any<ScrapeRequest>())
+        verify(facade, never()).submit(any<ScrapeRequest>())
+    }
+
+    @Test
+    fun submitWithoutFacadeThrowsSwarmNotInstalled() {
+        val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
+        val controller = newController(sessionManager)
+        SwarmFacadeRegistry.instance.unregister()
+
+        assertThrows<SwarmNotInstalledException> {
+            controller.submit("https://example.com")
+        }
     }
 
     // -----------------------------------------------------------------
@@ -104,29 +132,27 @@ class SwarmControllerTest {
     // -----------------------------------------------------------------
 
     @Test
-    fun countWithStatusCodeDelegatesToService() {
+    fun countWithStatusCodeDelegatesToFacade() {
         val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
-        val swarmService = Mockito.mock(SwarmService::class.java)
-        val controller = SwarmController(sessionManager, swarmService)
+        val controller = newController(sessionManager)
 
-        Mockito.`when`(swarmService.count(200)).thenReturn(5)
+        Mockito.`when`(facade.count(200)).thenReturn(5)
 
         val result = controller.count(200)
         assertEquals(5, result)
-        verify(swarmService).count(200)
+        verify(facade).count(200)
     }
 
     @Test
-    fun countWithDefaultDelegatesToService() {
+    fun countWithDefaultDelegatesToFacade() {
         val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
-        val swarmService = Mockito.mock(SwarmService::class.java)
-        val controller = SwarmController(sessionManager, swarmService)
+        val controller = newController(sessionManager)
 
-        Mockito.`when`(swarmService.count(0)).thenReturn(10)
+        Mockito.`when`(facade.count(0)).thenReturn(10)
 
         val result = controller.count()
         assertEquals(10, result)
-        verify(swarmService).count(0)
+        verify(facade).count(0)
     }
 
     // -----------------------------------------------------------------
@@ -136,28 +162,26 @@ class SwarmControllerTest {
     @Test
     fun statusWithBlankUuidThrowsIllegalArgumentException() {
         val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
-        val swarmService = Mockito.mock(SwarmService::class.java)
-        val controller = SwarmController(sessionManager, swarmService)
+        val controller = newController(sessionManager)
 
         val exception = assertThrows<IllegalArgumentException> {
             controller.status("   ")
         }
         assertEquals("uuid must not be blank", exception.message)
-        verify(swarmService, never()).getStatus(any())
+        verify(facade, never()).getStatus(any())
     }
 
     @Test
-    fun statusDelegatesToService() {
+    fun statusDelegatesToFacade() {
         val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
-        val swarmService = Mockito.mock(SwarmService::class.java)
-        val controller = SwarmController(sessionManager, swarmService)
+        val controller = newController(sessionManager)
 
         val expectedResponse = ScrapeResponse("task-1", ResourceStatus.SC_OK, ProtocolStatusCodes.SC_OK)
-        Mockito.`when`(swarmService.getStatus(any())).thenReturn(expectedResponse)
+        Mockito.`when`(facade.getStatus(any<ScrapeStatusRequest>())).thenReturn(expectedResponse)
 
         val result = controller.status("task-1")
         assertEquals(expectedResponse, result)
-        verify(swarmService).getStatus(any())
+        verify(facade).getStatus(any())
     }
 
     // -----------------------------------------------------------------
@@ -167,28 +191,26 @@ class SwarmControllerTest {
     @Test
     fun getStatusWithBlankIdThrowsIllegalArgumentException() {
         val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
-        val swarmService = Mockito.mock(SwarmService::class.java)
-        val controller = SwarmController(sessionManager, swarmService)
+        val controller = newController(sessionManager)
 
         val exception = assertThrows<IllegalArgumentException> {
             controller.getStatus("   ")
         }
         assertEquals("id must not be blank", exception.message)
-        verify(swarmService, never()).getStatus(any())
+        verify(facade, never()).getStatus(any())
     }
 
     @Test
-    fun getStatusDelegatesToService() {
+    fun getStatusDelegatesToFacade() {
         val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
-        val swarmService = Mockito.mock(SwarmService::class.java)
-        val controller = SwarmController(sessionManager, swarmService)
+        val controller = newController(sessionManager)
 
         val expectedResponse = ScrapeResponse("task-2", ResourceStatus.SC_OK, ProtocolStatusCodes.SC_OK)
-        Mockito.`when`(swarmService.getStatus(any())).thenReturn(expectedResponse)
+        Mockito.`when`(facade.getStatus(any<ScrapeStatusRequest>())).thenReturn(expectedResponse)
 
         val result = controller.getStatus("task-2")
         assertEquals(expectedResponse, result)
-        verify(swarmService).getStatus(any())
+        verify(facade).getStatus(any())
     }
 
     // -----------------------------------------------------------------
@@ -198,27 +220,25 @@ class SwarmControllerTest {
     @Test
     fun getResultWithBlankIdThrowsIllegalArgumentException() {
         val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
-        val swarmService = Mockito.mock(SwarmService::class.java)
-        val controller = SwarmController(sessionManager, swarmService)
+        val controller = newController(sessionManager)
 
         val exception = assertThrows<IllegalArgumentException> {
             controller.getResult("   ")
         }
         assertEquals("id must not be blank", exception.message)
-        verify(swarmService, never()).getStatus(any())
+        verify(facade, never()).getStatus(any())
     }
 
     @Test
     fun getResultDelegatesToGetStatus() {
         val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
-        val swarmService = Mockito.mock(SwarmService::class.java)
-        val controller = SwarmController(sessionManager, swarmService)
+        val controller = newController(sessionManager)
 
         val expectedResponse = ScrapeResponse("task-3", ResourceStatus.SC_OK, ProtocolStatusCodes.SC_OK)
-        Mockito.`when`(swarmService.getStatus(any())).thenReturn(expectedResponse)
+        Mockito.`when`(facade.getStatus(any<ScrapeStatusRequest>())).thenReturn(expectedResponse)
 
         val result = controller.getResult("task-3")
         assertEquals(expectedResponse, result)
-        verify(swarmService).getStatus(any())
+        verify(facade).getStatus(any())
     }
 }

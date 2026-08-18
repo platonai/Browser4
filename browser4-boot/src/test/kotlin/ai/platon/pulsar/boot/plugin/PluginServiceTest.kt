@@ -33,6 +33,7 @@ class PluginServiceTest {
         fileName: String = "test-plugin-1.0.0.jar",
         name: String = "test-plugin",
         version: String = "1.0.0",
+        defaultEnabled: Boolean = true,
         autoConfigurationClasses: List<String> = listOf("java.lang.String"),
     ): Path {
         val manifestJson = """
@@ -41,6 +42,7 @@ class PluginServiceTest {
                 "version": "$version",
                 "description": "Test plugin for unit tests",
                 "dependsOn": ["browser4-skeleton"],
+                "defaultEnabled": $defaultEnabled,
                 "autoConfigurationClasses": [${autoConfigurationClasses.joinToString(", ") { "\"$it\"" }}]
             }
         """.trimIndent()
@@ -153,6 +155,52 @@ class PluginServiceTest {
                 result[0].loaded,
                 "Plugin should be reported as loaded when its auto-config beans exist in context"
             )
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `listPlugins reports default-enabled and effective enabled state`() {
+        val dir = createTempPluginDir()
+        try {
+            createPluginJar(dir, "default-on-1.0.0.jar", name = "default-on")
+            createPluginJar(dir, "opt-in-1.0.0.jar", name = "opt-in", defaultEnabled = false)
+
+            val service = PluginService(mockAppContext(), dir)
+            val result = service.listPlugins()
+
+            val defaultOn = result.find { it.fileName == "default-on-1.0.0.jar" }
+            assertNotNull(defaultOn)
+            assertTrue(defaultOn!!.defaultEnabled)
+            assertTrue(defaultOn.enabled)
+
+            val optIn = result.find { it.fileName == "opt-in-1.0.0.jar" }
+            assertNotNull(optIn)
+            assertFalse(optIn!!.defaultEnabled, "opt-in plugin should report defaultEnabled=false")
+            assertFalse(optIn.enabled, "opt-in plugin should not be enabled without an explicit override")
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `listPlugins applies explicit enable override to opt-in plugin`() {
+        val dir = createTempPluginDir()
+        try {
+            createPluginJar(dir, "opt-in-1.0.0.jar", name = "opt-in", defaultEnabled = false)
+
+            val service = PluginService(
+                mockAppContext(),
+                dir,
+                PluginLoadPolicy(enableAll = false, enabledNames = setOf("opt-in"), disabledNames = emptySet())
+            )
+            val result = service.listPlugins()
+
+            val optIn = result.find { it.fileName == "opt-in-1.0.0.jar" }
+            assertNotNull(optIn)
+            assertFalse(optIn!!.defaultEnabled)
+            assertTrue(optIn.enabled, "explicit enable should activate the opt-in plugin")
         } finally {
             dir.toFile().deleteRecursively()
         }

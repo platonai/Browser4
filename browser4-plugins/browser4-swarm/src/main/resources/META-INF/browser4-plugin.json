@@ -1,0 +1,7 @@
+{
+  "name": "browser4-swarm",
+  "version": "1.0.0",
+  "description": "Swarm task backend: async X-SQL/URL scraping with task store, JSONL persistence and MCP/LLM tools",
+  "dependsOn": ["browser4-skeleton", "browser4-protocol", "browser4-agentic"],
+  "autoConfigurationClasses": ["ai.platon.pulsar.swarm.config.SwarmAutoConfiguration"]
+}

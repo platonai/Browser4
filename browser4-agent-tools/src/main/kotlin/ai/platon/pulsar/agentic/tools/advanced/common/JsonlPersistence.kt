@@ -13,7 +13,7 @@ import kotlin.reflect.KClass
  * Each entry is serialised as a single line of JSON and appended to a file.
  * On startup, the file is replayed to restore in-memory state.
  *
- * Used by [ai.platon.pulsar.rest.api.service.SwarmService],
+ * Used by [ai.platon.pulsar.swarm.service.SwarmService] (browser4-swarm plugin),
  * [ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner],
  * and [ai.platon.pulsar.rest.api.service.CrawlService] so that async task
  * statuses survive server restarts.

@@ -32,6 +32,6 @@
         <module>browser4-markdown</module>
         <module>browser4-seo</module>
         <module>browser4-weather</module>
+        <module>browser4-swarm</module>
     </modules>
 </project>
-

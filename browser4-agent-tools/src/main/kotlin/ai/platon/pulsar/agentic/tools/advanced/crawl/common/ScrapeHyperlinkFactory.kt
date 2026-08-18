@@ -1,18 +1,15 @@
-package ai.platon.pulsar.rest.api.service
+package ai.platon.pulsar.agentic.tools.advanced.crawl.common
 
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.GenericAgenticSession
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
-import ai.platon.pulsar.agentic.tools.advanced.crawl.common.DegenerateXSQLScrapeHyperlink
-import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
-import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeHyperlink
-import ai.platon.pulsar.agentic.tools.advanced.crawl.common.XSQLScrapeHyperlink
 
 /**
  * Creates [ScrapeHyperlink] instances with the shared logic for X-SQL vs degenerate
  * hyperlink selection and onLoaded event registration.
  *
- * Extracted from [ScrapeService] and [SwarmService] to eliminate duplication.
+ * Shared by the crawl backend (`ScrapeService`) and the swarm backend
+ * (`browser4-swarm` plugin) to eliminate duplication.
  */
 object ScrapeHyperlinkFactory {
 

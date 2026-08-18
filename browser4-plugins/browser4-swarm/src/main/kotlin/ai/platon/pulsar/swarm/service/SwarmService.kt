@@ -1,37 +1,51 @@
-package ai.platon.pulsar.rest.api.service
+package ai.platon.pulsar.swarm.service
 
 import ai.platon.pulsar.agentic.GenericAgenticSession
 import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
 import ai.platon.pulsar.agentic.tools.advanced.crawl.QueryRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
+import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeStatusRequest
+import ai.platon.pulsar.agentic.tools.advanced.crawl.SwarmFacade
+import ai.platon.pulsar.agentic.tools.advanced.crawl.SwarmSessionProvider
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeHyperlink
-import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
-import ai.platon.pulsar.rest.session.PulsarSessionManager
+import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeHyperlinkFactory
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
-import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
 import com.github.benmanes.caffeine.cache.Cache
 import com.github.benmanes.caffeine.cache.Caffeine
 import jakarta.annotation.PreDestroy
-import org.springframework.boot.context.event.ApplicationReadyEvent
-import org.springframework.context.event.EventListener
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import org.apache.commons.collections4.MultiMapUtils
 import org.slf4j.LoggerFactory
-import org.springframework.stereotype.Service
+import org.springframework.boot.context.event.ApplicationReadyEvent
+import org.springframework.context.event.EventListener
 import java.nio.file.Path
 import java.time.Instant
 
-@Service
-class SwarmService(
-    private val sessionManager: PulsarSessionManager
-) {
+/**
+ * Swarm task backend: submits X-SQL/URL scrape tasks against the shared swarm
+ * session and tracks their status/results.
+ *
+ * Moved from browser4-rest into the `browser4-swarm` plugin. The swarm session
+ * is consumed through [SwarmSessionProvider] so this class never depends on
+ * REST module classes.
+ */
+open class SwarmService(
+    private val sessionProvider: SwarmSessionProvider,
+) : SwarmFacade {
 
     private val logger = LoggerFactory.getLogger(SwarmService::class.java)
 
-    val session get() = sessionManager.ensureSwarmSession().agenticSession
+    val session: GenericAgenticSession get() = sessionProvider.session()
 
     /**
      * The response status index, the key is the status code, the value is the response's id.
@@ -204,16 +218,12 @@ class SwarmService(
     /**
      * Submit a scraping task
      * */
-    fun submit(request: ScrapeRequest): String {
+    override fun submit(request: ScrapeRequest): String {
         val hyperlink = createScrapeHyperlink(request)
         responseCache.put(hyperlink.uuid, hyperlink.response)
         hyperlink.response.id = hyperlink.uuid
         persistence.append(hyperlink.response)
-        val s = session
-        require(s is GenericAgenticSession) {
-            "Expected GenericAgenticSession but got ${s::class.simpleName} (uuid=${s.uuid})"
-        }
-        s.submit(hyperlink)
+        session.submit(hyperlink)
         logger.debug("Swarm task submitted: {} sql={}", hyperlink.uuid, request.sql)
         return hyperlink.uuid
     }
@@ -221,15 +231,15 @@ class SwarmService(
     /**
      * Submit a scraping task
      * */
-    fun submit(request: QueryRequest): String {
-        return submit(ScrapeRequest(request.toSQL()))
+    override fun submit(query: QueryRequest): String {
+        return submit(ScrapeRequest(query.toSQL()))
     }
 
     /**
      * Get the response.  Does NOT cache NOT_FOUND results — only returns a
      * placeholder if the task ID is genuinely unknown.
      * */
-    fun getStatus(request: ScrapeStatusRequest): ScrapeResponse {
+    override fun getStatus(request: ScrapeStatusRequest): ScrapeResponse {
         return responseCache.getIfPresent(request.id) ?: run {
             logger.warn("Swarm task not found: {}", request.id)
             ScrapeResponse(request.id, ResourceStatus.SC_NOT_FOUND, ProtocolStatusCodes.SC_NOT_FOUND)
@@ -239,7 +249,7 @@ class SwarmService(
     /**
      * Get the response count by status code
      * */
-    fun count(statusCode: Int): Int {
+    override fun count(statusCode: Int): Int {
         return when (statusCode) {
             0 -> responseCache.estimatedSize().toInt()
             else -> responseStatusIndex[statusCode]?.size ?: 0

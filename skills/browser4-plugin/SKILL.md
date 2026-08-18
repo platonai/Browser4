@@ -401,11 +401,18 @@ Two mandatory resource files in every plugin JAR:
   "version": "4.12.0-rc.1",
   "description": "A Browser4 plugin that provides custom page processing functionality",
   "dependsOn": ["browser4-protocol", "browser4-agentic"],
+  "defaultEnabled": true,
   "autoConfigurationClasses": [
     "ai.platon.pulsar.myfeature.config.MyFeatureAutoConfiguration"
   ]
 }
 ```
+
+`defaultEnabled` decides which loading category the plugin belongs to:
+
+- `true` (default) — **default-loaded**: the plugin activates automatically.
+- `false` — **opt-in / default-disabled**: the plugin is skipped unless explicitly
+  enabled with `browser4.plugins.enable=<name>` or `browser4.plugins.enable-all=true`.
 
 **`src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`** (single line):
 
@@ -485,12 +492,53 @@ PluginManager: Found X Browser4Plugin bean(s)
 
 ---
 
+## Plugin Loading: Default vs Opt-in
+
+Every plugin belongs to one of two loading categories, declared in the manifest:
+
+| Category | `defaultEnabled` | Behavior |
+|---|---|---|
+| Default-loaded | `true` (default) | Activated automatically at startup, unless explicitly disabled |
+| Opt-in (default-disabled) | `false` | **Not** activated at startup, unless explicitly enabled |
+
+The effective decision is made by `PluginLoadPolicy` at two levels:
+
+1. **Classpath** — `PluginClasspathEnhancer` only adds enabled plugins to the
+   classloader before Spring starts (applies to the standalone `plugins/`
+   directory; this is the hard gate).
+2. **Runtime** — `PluginManager` skips mount wiring / `onStartup` for plugins
+   whose beans reach the Spring context via the JVM classpath (e.g. the bundle's
+   `plugins/*` wildcard). Tools, event handlers, and swarm facades of disabled
+   plugins are not registered.
+
+Explicit overrides (system property, env var, or `application.properties`):
+
+| Property / env var | Effect |
+|---|---|
+| `browser4.plugins.enable` / `BROWSER4_PLUGINS_ENABLE` | Comma-separated plugin names to force-enable |
+| `browser4.plugins.disable` / `BROWSER4_PLUGINS_DISABLE` | Comma-separated plugin names to force-disable |
+| `browser4.plugins.enable-all` / `BROWSER4_PLUGINS_ENABLE_ALL` | `true` → activate every plugin unless explicitly disabled |
+
+`disable` always wins over `enable`. Opt-in plugins still ship in the `plugins/`
+directory and show up in `plugin list` / `GET /api/plugins` with
+`defaultEnabled: false, enabled: false` until enabled.
+
+```bash
+# Activate a specific opt-in plugin
+browser4-rest --browser4.plugins.enable=browser4-myfeature
+
+# Or enable everything
+browser4-rest --browser4.plugins.enable-all=true
+```
+
+---
+
 ## File Reference
 
 | File | Required | Purpose |
 |------|----------|---------|
 | `pom.xml` | Yes | Maven build with `browser4-pdk` parent; all Browser4 deps in `provided` scope |
-| `src/main/resources/META-INF/browser4-plugin.json` | Yes | Plugin manifest: name, version, description, dependsOn, autoConfigurationClasses |
+| `src/main/resources/META-INF/browser4-plugin.json` | Yes | Plugin manifest: name, version, description, dependsOn, defaultEnabled, autoConfigurationClasses |
 | `src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` | Yes | Single line: FQN of the `@AutoConfiguration` class |
 | `config/<Feature>AutoConfiguration.kt` | Yes | Spring `@AutoConfiguration` — implements `PluginMount` sub-interfaces and defines beans |
 | `config/<Feature>Config.kt` | Common | Configuration data class read from Properties/Config |
@@ -530,6 +578,7 @@ Key source files to read for patterns and examples:
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | Plugin not loaded at startup; no "registered plugin" log | `browser4-plugin.json` missing, malformed, or JAR not in the plugins directory | Verify JAR is in the configured plugins directory; verify JSON is valid; verify `autoConfigurationClasses` FQN matches |
+| Plugin skipped as "default-disabled (opt-in)" | Manifest has `defaultEnabled: false` and no explicit enable override | Enable with `browser4.plugins.enable=<name>` or `browser4.plugins.enable-all=true`, or set `defaultEnabled: true` |
 | `ClassNotFoundException` for Browser4 API classes | Dependency scope is `compile` instead of `provided` | Change all `browser4-*` and Spring Boot deps to `<scope>provided</scope>` |
 | Mount point handlers never fire | Auto-configuration class doesn't implement the correct `PluginMount` interface, or `AutoConfiguration.imports` file is missing/wrong | Verify `AutoConfiguration.imports` contains the exact FQN; verify the auto-config class implements the mount interface |
 | `BeanCreationException` at startup | A bean dependency is missing or circular | Check bean constructor args; ensure `@Lazy` on the auto-config class |

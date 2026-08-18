@@ -42,6 +42,11 @@
 "swarm 后端"实际是两层：① <b>会话机制层</b>（<code>SessionKind.SWARM</code>、<code>PulsarSessionManager.ensureSwarmSession</code>、<code>AgenticContexts</code>）——被 <code>ScrapeService</code>（crawl）和会话路由共享，<b>必须留在核心</b>；② <b>任务门面层</b>（<code>SwarmController</code> + <code>SwarmService</code> + <code>SwarmToolExecutor</code>，约 600 行 + 4 个测试类）——理论上可搬，但插件注册 <code>@RestController</code> 在本仓库<b>无先例、未验证</b>，且存在对 <code>browser4-rest</code> 内部类的编译依赖，违背现有 PDK 插件只依赖 skeleton/protocol/agentic 的惯例。推荐"<b>接缝提取 → 控制器插件验证 → 门面搬迁</b>"三阶段路径，或采用风险更低的<b>核心保留薄 REST 门面 + 插件承载实现</b>变体。
 </div>
 
+<div class="verdict" style="border-color:#1a7f37;background:#f0fff4;">
+<b>实施状态（2026-08-19）：方案 B 已落地。</b><br>
+核心保留薄 <code>SwarmController</code>（7 个端点路径与裸 UUID 契约不变），通过 agent-tools 中的 <code>SwarmFacade</code> SPI + <code>SwarmFacadeRegistry</code>（ToolMount 式）委托；实现迁入新插件 <code>browser4-plugins/browser4-swarm</code>（<code>SwarmService</code>/<code>SwarmToolExecutor</code>/<code>SwarmAutoConfiguration</code>，<code>@ConditionalOnBean(SwarmSessionProvider)</code> 保证无宿主 bean 时优雅退避）。共享的 <code>ScrapeStatusRequest</code>/<code>ScrapeHyperlinkFactory</code> 下移到 browser4-agent-tools；会话仍由 rest 的 <code>SwarmSessionProviderConfiguration</code> 以 <code>SwarmSessionProvider</code> 接口提供给插件。插件缺失时返回 <code>503 {"error":"Swarm not installed"}</code>。验证：插件持久化测试 5/5、<code>SwarmControllerTest</code> 13/13、<code>SwarmControllerE2ETest</code> 5/5（含真实浏览器抓取）全部通过。
+</div>
+
 <h2>1. 现状盘点：swarm 后端由什么构成</h2>
 <table>
 <tr><th>组件</th><th>位置</th><th>行数/规模</th><th>可搬性</th></tr>

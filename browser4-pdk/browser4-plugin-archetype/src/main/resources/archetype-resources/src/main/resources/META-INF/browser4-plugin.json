@@ -3,6 +3,7 @@
   "version": "${version}",
   "description": "${pluginDescription}",
   "dependsOn": ["browser4-skeleton", "browser4-browser"],
+  "defaultEnabled": true,
   "autoConfigurationClasses": [
     "${package}.config.PluginAutoConfiguration"
   ]

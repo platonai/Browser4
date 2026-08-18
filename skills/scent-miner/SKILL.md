@@ -1,3 +1,10 @@
+---
+name: scent-miner
+title: "WebMiner — Convert Detail Web Pages into Interactive Views"
+description: "Groups similar web pages together and produces an interactive HTML report with clusters of related pages, plus Excel spreadsheets for analysis. Use when the user wants to cluster downloaded HTML files, convert detail web pages into interactive views, or analyze a folder of web pages locally."
+tier: procedure
+---
+
 # WebMiner — Convert Detail Web Pages into Interactive Views
 
 WebMiner groups similar web pages together and produces an interactive HTML

@@ -33,10 +33,6 @@ data class PromptRequest constructor(
     var actions: List<String>? = null
 )
 
-data class ScrapeStatusRequest(
-    val id: String,
-)
-
 data class SessionResponse(
     var sessionId: String,
     var status: String? = null,

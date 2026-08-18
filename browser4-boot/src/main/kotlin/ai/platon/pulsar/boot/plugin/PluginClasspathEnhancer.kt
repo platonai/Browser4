@@ -1,9 +1,11 @@
 package ai.platon.pulsar.boot.plugin
 
+import ai.platon.pulsar.skeleton.plugin.PluginManifest
 import org.slf4j.LoggerFactory
 import java.net.URLClassLoader
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.jar.JarFile
 
 /**
  * Enhances the classpath with JARs from the [pluginsDir] directory before
@@ -13,6 +15,10 @@ import java.nio.file.Path
  * URLClassLoader that includes all plugin JAR files, parented to the current
  * thread-context classloader, so that Spring Boot can discover
  * `AutoConfiguration.imports` files inside those JARs.
+ *
+ * Only plugins that are enabled by the [PluginLoadPolicy] are added —
+ * `defaultEnabled: false` (opt-in) plugins are skipped unless explicitly
+ * enabled via `browser4.plugins.enable` / `browser4.plugins.enable-all`.
  *
  * Usage:
  * ```
@@ -45,18 +51,24 @@ object PluginClasspathEnhancer {
             return
         }
 
-        val jarUrls = Files.list(pluginDir)
+        val jars = Files.list(pluginDir)
             .filter { it.toString().endsWith(".jar") }
             .sorted()
-            .map { it.toUri().toURL() }
             .toList()
 
-        if (jarUrls.isEmpty()) {
-            logger.debug("No plugin JARs found in {}", pluginDir.toAbsolutePath())
+        val policy = PluginLoadPolicy.fromSystem()
+        val selected = selectJars(jars, policy)
+
+        if (selected.isEmpty()) {
+            logger.debug("No loadable plugin JARs found in {}", pluginDir.toAbsolutePath())
             return
         }
 
-        logger.info("Found {} plugin JAR(s) in {}", jarUrls.size, pluginDir.toAbsolutePath())
+        val jarUrls = selected.map { it.toUri().toURL() }
+        logger.info(
+            "Found {} plugin JAR(s) in {} ({} total, {} skipped by load policy)",
+            jarUrls.size, pluginDir.toAbsolutePath(), jars.size, jars.size - selected.size
+        )
         jarUrls.forEach { url ->
             logger.info("  + {}", url.file.split("/").last())
         }
@@ -68,6 +80,34 @@ object PluginClasspathEnhancer {
         Thread.currentThread().contextClassLoader = loader
 
         logger.info("Plugin classpath enhanced ({} JARs)", jarUrls.size)
+    }
+
+    /**
+     * Applies the [PluginLoadPolicy]: default-disabled (opt-in) plugins are
+     * excluded unless explicitly enabled. JARs without a plugin manifest are
+     * loaded as-is for backward compatibility.
+     */
+    internal fun selectJars(jars: List<Path>, policy: PluginLoadPolicy): List<Path> {
+        return jars.filter { jar ->
+            val manifest = runCatching {
+                JarFile(jar.toFile()).use { PluginManifest.fromJar(it) }
+            }.getOrNull()
+
+            when {
+                manifest == null -> {
+                    logger.debug("JAR without plugin manifest: {} (loaded as-is)", jar.fileName)
+                    true
+                }
+                policy.isEnabled(manifest) -> true
+                else -> {
+                    logger.info(
+                        "Skipping plugin '{}' ({}): {}",
+                        manifest.name, jar.fileName, policy.disabledReason(manifest)
+                    )
+                    false
+                }
+            }
+        }
     }
 
     /**

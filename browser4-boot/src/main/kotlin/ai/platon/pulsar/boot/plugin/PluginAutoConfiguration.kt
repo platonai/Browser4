@@ -25,6 +25,10 @@ class PluginAutoConfiguration {
 
     @Bean(name = ["pluginService"])
     fun pluginService(applicationContext: ApplicationContext): PluginService {
-        return PluginService(applicationContext, Path.of("plugins"))
+        return PluginService(
+            applicationContext,
+            Path.of("plugins"),
+            PluginLoadPolicy.fromEnvironment(applicationContext.environment)
+        )
     }
 }

@@ -892,6 +892,28 @@ $libJarCount = (Get-ChildItem -Path $libDirectory -File -Filter '*.jar' | Measur
 Write-Host "Collected $libJarCount jars in lib/" -ForegroundColor Green
 
 # --------------------------------------------------------------------------
+# Bundle the browser4-swarm plugin (the swarm REST facade is a thin shell that
+# delegates to this plugin; without it /api/swarm/** returns 503).
+# --------------------------------------------------------------------------
+$localRepo = if ($env:MAVEN_REPO_LOCAL) {
+    $env:MAVEN_REPO_LOCAL
+} else {
+    $homeDir = if ($env:HOME) { $env:HOME } else { $env:USERPROFILE }
+    [System.IO.Path]::Combine($homeDir, '.m2', 'repository')
+}
+$swarmGroupDir = [System.IO.Path]::Combine($localRepo, 'ai', 'platon', 'pulsar', 'browser4-swarm')
+$swarmJar = Get-ChildItem -Path $swarmGroupDir -Recurse -File -Filter 'browser4-swarm-*.jar' -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -notmatch 'sources|javadoc' } |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+if ($swarmJar) {
+    Copy-Item -LiteralPath $swarmJar.FullName -Destination (Join-Path $pluginsDirectory $swarmJar.Name) -Force
+    Write-Host "  + Plugin: $($swarmJar.Name)" -ForegroundColor Green
+} else {
+    Write-Warning "browser4-swarm plugin JAR not found in the local Maven repo ($swarmGroupDir). Swarm REST endpoints will return 503 until the plugin is installed."
+}
+
+# --------------------------------------------------------------------------
 # Clean up unnecessary JARs from the runtime bundle.
 # These removals are a safety net: the POM exclusions should prevent most of
 # these from appearing, but runtime-scoped native classifiers and compiler

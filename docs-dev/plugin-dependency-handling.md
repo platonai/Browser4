@@ -213,9 +213,11 @@ plugins/
 ```
 
 **Problems with this approach:**
-- `PluginClasspathEnhancer` treats every `.jar` in `plugins/` as a plugin. The
-  dependency JARs don't have `browser4-plugin.json` manifests, causing warning
-  logs and potential `PluginService` errors.
+- `PluginClasspathEnhancer` treats every `.jar` in `plugins/` as a plugin, then
+  applies `PluginLoadPolicy`: plugins with `defaultEnabled: false` (opt-in) are
+  skipped unless explicitly enabled via `browser4.plugins.enable` /
+  `browser4.plugins.enable-all`. Dependency JARs without `browser4-plugin.json`
+  manifests cause warning logs and potential `PluginService` errors.
 - Ordering is brittle — no guarantee `pdfbox` loads before `my-plugin` unless
   filenames sort correctly.
 - Version conflicts with the bundle are unresolved (parent classloader wins).

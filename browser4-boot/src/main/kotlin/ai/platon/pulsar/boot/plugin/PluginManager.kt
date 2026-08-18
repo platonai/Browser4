@@ -2,6 +2,8 @@ package ai.platon.pulsar.boot.plugin
 
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.ToolMount
+import ai.platon.pulsar.agentic.tools.advanced.crawl.SwarmFacadeMount
+import ai.platon.pulsar.agentic.tools.advanced.crawl.SwarmFacadeRegistry
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.protocol.browser.emulator.BrowserResponseHandler
 import ai.platon.pulsar.protocol.browser.emulator.util.PageSnifferMount
@@ -10,11 +12,14 @@ import ai.platon.pulsar.skeleton.plugin.BrowseEventMount
 import ai.platon.pulsar.skeleton.plugin.Browser4Plugin
 import ai.platon.pulsar.skeleton.plugin.CrawlEventMount
 import ai.platon.pulsar.skeleton.plugin.LoadEventMount
+import ai.platon.pulsar.skeleton.plugin.PluginManifest
 import ai.platon.pulsar.skeleton.plugin.PluginMount
 import jakarta.annotation.PreDestroy
 import org.springframework.boot.ApplicationArguments
 import org.springframework.boot.ApplicationRunner
 import org.springframework.context.ApplicationContext
+import java.nio.file.Path
+import java.util.jar.JarFile
 
 /**
  * Discovers and activates all plugins after the Spring context is fully initialized.
@@ -29,6 +34,7 @@ import org.springframework.context.ApplicationContext
  * - [BrowseEventMount] → `PulsarEventBus.pageEventHandlers.browseEventHandlers` (16 hooks)
  * - [CrawlEventMount] → `PulsarEventBus.pageEventHandlers.crawlEventHandlers` (2 hooks)
  * - [ToolMount] → [CustomToolRegistry]
+ * - [SwarmFacadeMount] → [SwarmFacadeRegistry]
  * - [PageSnifferMount] → [BrowserResponseHandler.pageCategorySniffer]
  */
 class PluginManager(
@@ -37,6 +43,7 @@ class PluginManager(
 
     private val logger = getLogger(PluginManager::class)
     private val plugins = mutableListOf<Browser4Plugin>()
+    private val loadPolicy = PluginLoadPolicy.fromEnvironment(applicationContext.environment)
 
     override fun run(args: ApplicationArguments) {
         logger.info("--- PluginManager: scanning for plugins ---")
@@ -57,6 +64,13 @@ class PluginManager(
         logger.info("Found {} Browser4Plugin bean(s)", pluginBeans.size)
 
         pluginBeans.values.forEach { plugin ->
+            if (!loadPolicy.isEnabled(plugin.manifest)) {
+                logger.info(
+                    "  - Skipping disabled plugin '{}': {}",
+                    plugin.manifest.name, loadPolicy.disabledReason(plugin.manifest)
+                )
+                return@forEach
+            }
             plugins.add(plugin)
             logger.info("  - {} v{}", plugin.manifest.name, plugin.manifest.version)
             plugin.onStartup()
@@ -86,6 +100,15 @@ class PluginManager(
         val pageHandlers = PulsarEventBus.pageEventHandlers
 
         for (mount in mounts) {
+            val manifest = pluginManifestOf(mount)
+            if (manifest != null && !loadPolicy.isEnabled(manifest)) {
+                logger.info(
+                    "  - Skipping mounts from disabled plugin '{}': {}",
+                    manifest.name, loadPolicy.disabledReason(manifest)
+                )
+                continue
+            }
+
             // Use independent `if` checks rather than a `when` expression so that
             // beans implementing multiple mount interfaces (e.g. BrowseEventMount
             // AND ToolMount) are wired into every matching integration point.
@@ -138,6 +161,15 @@ class PluginManager(
                 wireToolMount(mount)
             }
 
+            // --- Swarm facade mount ---
+            if (mount is SwarmFacadeMount) {
+                val facade = mount.getSwarmFacade()
+                if (facade != null) {
+                    SwarmFacadeRegistry.instance.register(facade)
+                    logger.info("  + Registered swarm facade: {}", facade.javaClass.simpleName)
+                }
+            }
+
             // --- Page sniffer mount ---
             if (mount is PageSnifferMount) {
                 wirePageSnifferMount(mount)
@@ -171,5 +203,27 @@ class PluginManager(
         } catch (e: Exception) {
             logger.warn("  ! Failed to register page sniffers: {}", e.message)
         }
+    }
+
+    /**
+     * Resolves the plugin manifest that declared the given bean, or null when
+     * the bean comes from core (no plugin JAR code source). Works for both
+     * classpath modes: `plugins/` jars loaded via [PluginClasspathEnhancer]
+     * (URLClassLoader) and jars on the JVM classpath (bundle wildcard).
+     */
+    private fun pluginManifestOf(bean: Any): PluginManifest? {
+        var clazz = bean.javaClass
+        // Unwrap Spring CGLIB proxies (e.g. SwarmAutoConfiguration$$SpringCGLIB$$0)
+        while (clazz.name.contains("\$\$SpringCGLIB\$\$") || clazz.name.contains("\$\$EnhancerBySpringCGLIB\$\$")) {
+            clazz = clazz.superclass ?: return null
+        }
+        val location = clazz.protectionDomain?.codeSource?.location ?: return null
+        val jarPath = runCatching { Path.of(location.toURI()) }.getOrNull() ?: return null
+        if (!jarPath.fileName.toString().endsWith(".jar")) {
+            return null
+        }
+        return runCatching {
+            JarFile(jarPath.toFile()).use { PluginManifest.fromJar(it) }
+        }.getOrNull()
     }
 }

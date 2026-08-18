@@ -1,12 +1,12 @@
-package ai.platon.pulsar.agent.tool
+package ai.platon.pulsar.swarm.tools
 
 import ai.platon.pulsar.agentic.model.ToolSpec
-import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.QueryRequest
+import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
+import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeStatusRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
-import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
-import ai.platon.pulsar.rest.api.service.SwarmService
+import ai.platon.pulsar.swarm.service.SwarmService
 import kotlin.reflect.KClass
 
 /**

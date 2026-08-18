@@ -143,6 +143,12 @@
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
+                <artifactId>browser4-agent-tools</artifactId>
+                <version>4.13.6-SNAPSHOT</version>
+            </dependency>
+
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
                 <artifactId>browser4-boot</artifactId>
                 <version>4.13.6-SNAPSHOT</version>
             </dependency>

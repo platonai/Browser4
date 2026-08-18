@@ -25,9 +25,13 @@ import kotlin.io.path.*
 class PluginService(
     private val applicationContext: ApplicationContext,
     private val pluginDir: Path = Path.of("plugins"),
+    private val loadPolicy: PluginLoadPolicy? = null,
 ) {
 
     private val logger = getLogger(PluginService::class)
+
+    private val effectivePolicy: PluginLoadPolicy
+        get() = loadPolicy ?: PluginLoadPolicy.fromSystem()
 
     // ---- Query ----
 
@@ -119,6 +123,13 @@ class PluginService(
             installed.fileName,
             installed.fileSize
         )
+        if (!manifest.defaultEnabled) {
+            logger.info(
+                "  Plugin '{}' is default-disabled (opt-in). Enable it with " +
+                    "-Dbrowser4.plugins.enable={} or browser4.plugins.enable-all=true, then restart.",
+                manifest.name, manifest.name
+            )
+        }
 
         return installed
     }
@@ -188,6 +199,8 @@ class PluginService(
             path = jarPath.toAbsolutePath().toString(),
             manifest = manifest,
             loaded = loaded,
+            defaultEnabled = manifest?.defaultEnabled ?: true,
+            enabled = manifest?.let(effectivePolicy::isEnabled) ?: true,
         )
     }
 

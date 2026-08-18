@@ -17,6 +17,15 @@ data class PluginManifest(
     val description: String = "",
     @field:JsonProperty("dependsOn")
     val dependsOn: List<String> = emptyList(),
+    /**
+     * Whether the plugin is loaded automatically at startup.
+     *
+     * - `true` (default): default-loaded — activated unless explicitly disabled.
+     * - `false`: opt-in — NOT activated unless explicitly enabled
+     *   (`browser4.plugins.enable=<name>` or `browser4.plugins.enable-all=true`).
+     */
+    @field:JsonProperty("defaultEnabled")
+    val defaultEnabled: Boolean = true,
     @field:JsonProperty("autoConfigurationClasses")
     val autoConfigurationClasses: List<String> = emptyList(),
 ) {
