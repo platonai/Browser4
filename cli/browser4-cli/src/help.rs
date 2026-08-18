@@ -53,6 +53,44 @@ pub fn public_command_name(name: &str) -> &str {
         "config-get" => "config get",
         "config-set" => "config set",
         "config-delete" => "config delete",
+        // Families migrated to spaced form after the initial mapping was
+        // written. Help must show the spaced form the CLI accepts — the flat
+        // form is rejected with a "use the spaced form" redirect hint.
+        "chat-result" => "chat result",
+        "code-append" => "code append",
+        "code-changes" => "code changes",
+        "code-copy" => "code copy",
+        "code-delete" => "code delete",
+        "code-devtask" => "code devtask",
+        "code-diff" => "code diff",
+        "code-glob" => "code glob",
+        "code-grep" => "code grep",
+        "code-impact" => "code impact",
+        "code-list" => "code list",
+        "code-mkdir" => "code mkdir",
+        "code-move" => "code move",
+        "code-mvn" => "code mvn",
+        "code-read" => "code read",
+        "code-replace" => "code replace",
+        "code-run" => "code run",
+        "code-scaffold" => "code scaffold",
+        "code-shell" => "code shell",
+        "code-stat" => "code stat",
+        "code-validate" => "code validate",
+        "code-workspace" => "code workspace",
+        "code-write" => "code write",
+        "diff-snapshot" => "diff snapshot",
+        "is-checked" => "is checked",
+        "is-enabled" => "is enabled",
+        "is-visible" => "is visible",
+        "profiler-start" => "profiler start",
+        "profiler-stop" => "profiler stop",
+        "profiles-list" => "profiles list",
+        "skills-get" => "skills get",
+        "skills-list" => "skills list",
+        "skills-path" => "skills path",
+        "skills-unpack" => "skills unpack",
+        "window-new" => "window new",
         _ => name,
     }
 }
@@ -3553,5 +3591,53 @@ mod tests {
             .iter()
             .any(|o| o["name"] == "depth");
         assert!(has_depth, "crawl should have a --depth option");
+    }
+
+    #[test]
+    fn test_public_command_name_maps_spaced_families() {
+        // Every flat form rejected by the CLI (with a redirect hint) must be
+        // advertised in help with its spaced form, never the flat form.
+        assert_eq!(public_command_name("code-read"), "code read");
+        assert_eq!(public_command_name("code-write"), "code write");
+        assert_eq!(public_command_name("code-scaffold"), "code scaffold");
+        assert_eq!(public_command_name("code-shell"), "code shell");
+        assert_eq!(public_command_name("code-workspace"), "code workspace");
+        assert_eq!(public_command_name("code-devtask"), "code devtask");
+        assert_eq!(public_command_name("code-impact"), "code impact");
+        assert_eq!(public_command_name("code-changes"), "code changes");
+        assert_eq!(public_command_name("code-validate"), "code validate");
+        assert_eq!(public_command_name("code-mvn"), "code mvn");
+        assert_eq!(public_command_name("chat-result"), "chat result");
+        assert_eq!(public_command_name("skills-list"), "skills list");
+        assert_eq!(public_command_name("skills-get"), "skills get");
+        assert_eq!(public_command_name("skills-path"), "skills path");
+        assert_eq!(public_command_name("skills-unpack"), "skills unpack");
+        assert_eq!(public_command_name("is-visible"), "is visible");
+        assert_eq!(public_command_name("is-enabled"), "is enabled");
+        assert_eq!(public_command_name("is-checked"), "is checked");
+        assert_eq!(public_command_name("window-new"), "window new");
+        assert_eq!(public_command_name("diff-snapshot"), "diff snapshot");
+        assert_eq!(public_command_name("profiler-start"), "profiler start");
+        assert_eq!(public_command_name("profiler-stop"), "profiler stop");
+        assert_eq!(public_command_name("profiles-list"), "profiles list");
+    }
+
+    #[test]
+    fn test_public_command_name_prefix_help_matches_code() {
+        // `--help code` prefix matching relies on the spaced public names
+        // still starting with the requested prefix.
+        for name in [
+            "code-changes",
+            "code-read",
+            "code-write",
+            "code-scaffold",
+            "code-workspace",
+        ] {
+            assert!(
+                public_command_name(name).starts_with("code"),
+                "{} should keep the 'code' prefix",
+                name
+            );
+        }
     }
 }

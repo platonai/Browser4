@@ -20661,6 +20661,27 @@ mod tests {
     }
 
     #[test]
+    fn rejected_flat_forms_have_spaced_public_names() {
+        // Any command whose flat form is rejected with a "use the spaced
+        // form instead" hint must be advertised in help with its spaced
+        // name. Otherwise help displays a form the CLI refuses to run
+        // (e.g. code-scaffold shown by `--help code` but rejected).
+        let cmd_map = commands_map();
+        for (name, _) in &cmd_map {
+            if preferred_spaced_command_form(name).is_some() {
+                let public = public_command_name(name);
+                assert!(
+                    public.contains(' '),
+                    "flat form '{}' is rejected but help shows it as '{}' — \
+                     add a spaced mapping to public_command_name",
+                    name,
+                    public
+                );
+            }
+        }
+    }
+
+    #[test]
     fn preferred_prefixed_group_form_maps_legacy_and_bare_prefixes() {
         assert_eq!(
             preferred_prefixed_group_form("agent"),
