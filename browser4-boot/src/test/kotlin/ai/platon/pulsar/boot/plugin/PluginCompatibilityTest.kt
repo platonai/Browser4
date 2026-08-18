@@ -1,5 +1,6 @@
 package ai.platon.pulsar.boot.plugin
 
+import ai.platon.pulsar.skeleton.plugin.Browser4Version
 import ai.platon.pulsar.skeleton.plugin.PluginManifest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertInstanceOf
