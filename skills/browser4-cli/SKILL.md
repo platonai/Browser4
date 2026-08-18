@@ -283,6 +283,7 @@ browser4-cli -s ext-session tab-select 0
 | `profiler start`, `profiler stop` | V8 CPU profiling via CDP | Profile page interactions and save `.cpuprofile` (Chrome DevTools / speedscope compatible) | — |
 | `profiles list` | List browser profile directories | See what profiles exist under `~/.browser4/browser/chrome` before `open --profile` | — |
 | `config` | Persistent CLI defaults (server, timeout, proxy, session) | Set default server URL, timeout, proxy, or session name. See §Configuration. | — |
+| `status`, `doctor`, `doctor log`, `doctor metrics` | Server health & diagnostics | Check server version/health, LLM config, tail/grep backend logs, browse metrics. `status` also prints the web status panel URL (`http://<server>:8182/status`) — a live dashboard of health, sessions, Pulsar sessions (SDK identity/context/main loop), swarm (session + task summary), URL pool (queued/real-time/delay counts), browsers & open tabs (per-session tab counts, on-demand live tab details), driver pools, plugins (load/enable state, SDK compatibility), JVM, metrics and log files (auto-refreshes; `?refresh=<ms>` changes the interval). | — |
 
 ### Refreshing This Skill
 

@@ -14098,25 +14098,38 @@ async fn handle_plugin_list(client: &reqwest::Client, base_url: &str) -> Result<
                 .get("fileName")
                 .and_then(|v| v.as_str())
                 .unwrap_or("?");
-            let status = if plugin
+            let loaded = plugin
                 .get("loaded")
                 .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-            {
-                "loaded"
-            } else {
-                "inactive (restart required)"
+                .unwrap_or(false);
+            let enabled = plugin
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let status = match (loaded, enabled) {
+                (true, true) => "loaded",
+                (true, false) => "loaded (disabled override)",
+                (false, true) => "inactive (restart required)",
+                (false, false) => "disabled",
             };
             let manifest = plugin.get("manifest");
             let version = manifest
                 .and_then(|m| m.get("version"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("-");
+            let sdk = manifest
+                .and_then(|m| m.get("sdkVersion"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("-");
             let desc = manifest
                 .and_then(|m| m.get("description"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            cli_println!("  {:<36} v{:<12} {}  {}", name, version, status, desc);
+            cli_println!(
+                "  {:<36} v{:<10} sdk {:<10} {:<28} {}",
+                name, version, sdk, status, desc
+            );
         }
     } else {
         cli_println!("{}", response);
@@ -15452,6 +15465,11 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
         }
     }
     json_field("health", json!(health));
+
+    // Point the user at the web status panel — available whenever the backend
+    // is reachable, regardless of health.
+    cli_println!("Status panel: {}/status", base_url);
+    json_field("status_panel", json!(format!("{base_url}/status")));
 
     // Version comparison: use the live server version if available; fall back
     // to the installed bundle only when the server is unreachable.

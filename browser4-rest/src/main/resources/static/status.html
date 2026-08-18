@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Browser4 — System Status</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #1a2129;
+    --panel2: #202a35;
+    --border: #2c3a48;
+    --text: #d7e1ea;
+    --muted: #8ba0b0;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --blue: #58a6ff;
+    --mono: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 600; }
+  .pill {
+    display: inline-block; padding: 3px 12px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; border: 1px solid var(--border);
+  }
+  .pill.ok { color: var(--green); border-color: var(--green); }
+  .pill.bad { color: var(--red); border-color: var(--red); }
+  .sub { color: var(--muted); font-size: 12px; }
+  .linkbar { margin-left: auto; display: flex; gap: 14px; font-size: 12px; }
+  .linkbar a { color: var(--blue); text-decoration: none; }
+  .linkbar a:hover { text-decoration: underline; }
+  #banner { display: none; margin: 12px 0; padding: 10px 14px; border-radius: 8px;
+    background: #3a1d1d; border: 1px solid var(--red); color: #ffb3b0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-top: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .card h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.6px; }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 4px 12px; font-size: 13px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-family: var(--mono); font-size: 12.5px; word-break: break-all; }
+  .bar { height: 8px; background: var(--panel2); border-radius: 4px; overflow: hidden; margin-top: 8px; }
+  .bar > div { height: 100%; background: var(--blue); border-radius: 4px; transition: width 0.4s; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px;
+    font-weight: 600; border: 1px solid var(--border); color: var(--muted); }
+  .badge.on { color: var(--green); border-color: var(--green); }
+  .badge.off { color: var(--red); border-color: var(--red); }
+  .badge.warn { color: var(--yellow); border-color: var(--yellow); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font-family: var(--mono); font-size: 12px; padding: 2px 10px; border-radius: 6px;
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text); }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 6px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: 4px 8px;
+    border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 5px 8px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 12px; }
+  tr:last-child td { border-bottom: none; }
+  pre { margin: 0; padding: 10px; background: #0b0f13; border: 1px solid var(--border); border-radius: 8px;
+    font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; word-break: break-all;
+    max-height: 260px; overflow: auto; color: #b8c7d4; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  .empty { color: var(--muted); font-size: 12.5px; padding: 8px 0; }
+  button {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 12px; font-size: 12px; cursor: pointer;
+  }
+  button:hover { border-color: var(--blue); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .status-dot.ok { background: var(--green); }
+  .status-dot.bad { background: var(--red); }
+  .status-dot.warn { background: var(--yellow); }
+  footer { margin-top: 18px; color: var(--muted); font-size: 11.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Browser4 — System Status</h1>
+  <span id="statusPill" class="pill">…</span>
+  <span id="serverTime" class="sub"></span>
+  <div class="linkbar">
+    <a href="/api/system/status" target="_blank">Raw JSON</a>
+    <a href="/api/doctor/metrics" target="_blank">Metrics</a>
+    <a href="/api/doctor/log-files" target="_blank">Log files</a>
+  </div>
+</header>
+<div class="sub" id="refreshNote">Auto-refresh: 5s</div>
+
+<div id="banner"></div>
+
+<div class="grid">
+  <div class="card"><h2>Build</h2><dl class="kv" id="buildCard"></dl></div>
+  <div class="card"><h2>Runtime</h2><dl class="kv" id="runtimeCard"></dl></div>
+  <div class="card"><h2>JVM Memory</h2><dl class="kv" id="memoryCard"></dl>
+    <div class="bar"><div id="heapBar"></div></div></div>
+  <div class="card"><h2>LLM</h2><dl class="kv" id="llmCard"></dl></div>
+  <div class="card"><h2>Metrics</h2><dl class="kv" id="metricsCard"></dl></div>
+  <div class="card"><h2>Log Files</h2><div id="logsCard"></div></div>
+</div>
+
+<div class="grid">
+  <div class="card" style="grid-column: 1 / -1;"><h2>Sessions (<span id="sessionCount">0</span>)</h2>
+    <div class="chips" id="sessionChips" style="margin-bottom: 6px;"></div>
+    <table><thead><tr><th>ID</th><th>Kind</th><th>Status</th><th>Active</th><th>URL</th><th>Created</th><th>Last Accessed</th></tr></thead>
+    <tbody id="sessionRows"></tbody></table>
+    <div class="empty" id="sessionEmpty" style="display:none;">No sessions.</div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card" style="grid-column: 1 / -1;"><h2>Browsers &amp; Tabs (<span id="browserCount">0</span> browsers, <span id="tabTotal">0</span> tabs)</h2>
+    <table><thead><tr><th>Session</th><th>Status</th><th>Browser</th><th>Driver</th><th>Tabs</th><th>URL</th></tr></thead>
+    <tbody id="browserRows"></tbody></table>
+    <div class="empty" id="browserEmpty" style="display:none;">No browsers open.</div>
+    <div style="margin-top: 10px;">
+      <button id="tabDetailBtn" type="button">Load tab details</button>
+      <span id="tabDetailState" class="sub"></span>
+    </div>
+    <div id="tabDetails"></div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card" style="grid-column: 1 / -1;"><h2>Pulsar Sessions (<span id="psCount">0</span>)</h2>
+    <table><thead><tr><th>Session</th><th>SDK ID</th><th>UUID</th><th>Label</th><th>Active</th><th>Context</th><th>Main Loop</th></tr></thead>
+    <tbody id="psRows"></tbody></table>
+    <div class="empty" id="psEmpty" style="display:none;">No sessions.</div>
+    <details style="margin-top: 8px;"><summary>Show main loop report</summary><pre id="psReport" style="margin-top: 6px;">…</pre></details>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card"><h2>Swarm</h2><div id="swarmCard"></div></div>
+  <div class="card"><h2>URL Pool</h2><div id="urlPoolCard"></div></div>
+</div>
+
+<div class="grid">
+  <div class="card" style="grid-column: 1 / -1;"><h2>Plugins (<span id="pluginCount">0</span>)</h2>
+    <div class="chips" id="pluginChips" style="margin-bottom: 6px;"></div>
+    <table><thead><tr><th>Name</th><th>Version</th><th>SDK</th><th>Status</th><th>Compatibility</th><th>Size</th></tr></thead>
+    <tbody id="pluginRows"></tbody></table>
+    <div class="empty" id="pluginEmpty" style="display:none;">No plugins installed.</div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card"><h2>Driver Pools</h2><pre id="driversPre">…</pre></div>
+  <div class="card"><h2>Privacy Contexts</h2>
+    <details><summary>Show report</summary><pre id="privacyPre">…</pre></details>
+  </div>
+</div>
+
+<footer>
+  Status panel — aggregated from <code>/api/system/status</code>. Individual endpoints:
+  <code>/api/system/health</code>, <code>/api/system/build</code>, <code>/api/doctor/llm-status</code>,
+  <code>/api/doctor/metrics</code>, <code>/api/doctor/logs</code>.
+</footer>
+
+<script>
+"use strict";
+
+const REFRESH_MS = clampRefresh(new URLSearchParams(location.search).get("refresh"));
+const el = (id) => document.getElementById(id);
+
+function clampRefresh(raw) {
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1000) return 5000;
+  return Math.min(n, 60000);
+}
+
+function kv(parent, key, value) {
+  const dt = document.createElement("dt");
+  dt.textContent = key;
+  const dd = document.createElement("dd");
+  if (value === null || value === undefined || value === "") {
+    dd.textContent = "—";
+    dd.style.color = "var(--muted)";
+  } else {
+    dd.textContent = String(value);
+  }
+  parent.append(dt, dd);
+}
+
+function fmtBytes(n) {
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = n, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return v.toFixed(1) + " " + units[i];
+}
+
+function fmtUptime(s) {
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return h + "h " + m + "m " + sec + "s";
+}
+
+function fmtTime(ms) {
+  if (!ms) return "—";
+  const d = new Date(ms);
+  const pad = (x) => String(x).padStart(2, "0");
+  return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+    " " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+}
+
+function fmtLocal(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleTimeString() + " " + d.toLocaleDateString();
+}
+
+function renderBuild(b) {
+  const card = el("buildCard");
+  card.textContent = "";
+  kv(card, "Version", b.version);
+  kv(card, "Git commit", b.gitCommitIdAbbrev);
+  kv(card, "Branch", b.gitBranch);
+  kv(card, "Commit time", fmtLocal(b.gitCommitTime));
+}
+
+function renderRuntime(r) {
+  const card = el("runtimeCard");
+  card.textContent = "";
+  kv(card, "Uptime", fmtUptime(r.uptimeSeconds));
+  kv(card, "Processors", r.processors);
+  kv(card, "Load avg", r.systemLoadAverage == null || r.systemLoadAverage < 0 ? "—" : r.systemLoadAverage.toFixed(2));
+  kv(card, "Threads", r.threadCount);
+}
+
+function renderMemory(m) {
+  const card = el("memoryCard");
+  card.textContent = "";
+  kv(card, "Heap used", fmtBytes(m.heapUsed) + " / " + fmtBytes(m.heapMax));
+  kv(card, "Heap committed", fmtBytes(m.heapCommitted));
+  kv(card, "Non-heap used", fmtBytes(m.nonHeapUsed));
+  kv(card, "Heap %", m.heapUsedPercent + "%");
+  const bar = el("heapBar");
+  bar.style.width = Math.min(100, m.heapUsedPercent) + "%";
+  bar.style.background = m.heapUsedPercent > 90 ? "var(--red)" : m.heapUsedPercent > 70 ? "var(--yellow)" : "var(--blue)";
+}
+
+function renderLlm(l) {
+  const card = el("llmCard");
+  card.textContent = "";
+  const configured = !!l.configured;
+  const badge = document.createElement("dd");
+  const span = document.createElement("span");
+  span.className = "badge " + (configured ? "on" : "off");
+  span.textContent = configured ? "CONFIGURED" : "NOT CONFIGURED";
+  badge.appendChild(span);
+  const dt = document.createElement("dt");
+  dt.textContent = "Configured";
+  card.append(dt, badge);
+  kv(card, "Detected via", l.detectedVia);
+  if (l.message) {
+    const dd = document.createElement("dd");
+    dd.textContent = l.message;
+    dd.style.color = "var(--yellow)";
+    card.append(document.createElement("dt"), dd);
+  }
+}
+
+function renderMetrics(m) {
+  const card = el("metricsCard");
+  card.textContent = "";
+  kv(card, "Total", m.total);
+  kv(card, "Gauges", m.gauges);
+  kv(card, "Counters", m.counters);
+  kv(card, "Meters", m.meters);
+  kv(card, "Histograms", m.histograms);
+  kv(card, "Timers", m.timers);
+}
+
+function renderSessions(s) {
+  el("sessionCount").textContent = String(s.total);
+  const chips = el("sessionChips");
+  chips.textContent = "";
+  const byStatus = s.byStatus || {};
+  const order = ["active", "paused", "stopped", "disconnected", "unhealthy"];
+  for (const k of order) {
+    if (byStatus[k]) {
+      const c = document.createElement("span");
+      c.className = "chip";
+      c.textContent = k + ": " + byStatus[k];
+      chips.appendChild(c);
+    }
+  }
+  const rows = el("sessionRows");
+  rows.textContent = "";
+  const empty = el("sessionEmpty");
+  empty.style.display = s.total === 0 ? "" : "none";
+  for (const it of (s.items || [])) {
+    const tr = document.createElement("tr");
+    const cell = (text, cls) => {
+      const td = document.createElement("td");
+      td.textContent = text;
+      if (cls) td.className = cls;
+      return td;
+    };
+    tr.appendChild(cell(shortId(it.id)));
+    tr.appendChild(cell(it.kind));
+    const statusTd = document.createElement("td");
+    const dot = document.createElement("span");
+    dot.className = "status-dot " + statusColor(it.status);
+    statusTd.appendChild(dot);
+    statusTd.appendChild(document.createTextNode(it.status));
+    tr.appendChild(statusTd);
+    const activeTd = document.createElement("td");
+    activeTd.textContent = it.active ? "yes" : "no";
+    activeTd.style.color = it.active ? "var(--green)" : "var(--muted)";
+    tr.appendChild(activeTd);
+    tr.appendChild(cell(it.url || "—"));
+    tr.appendChild(cell(fmtTime(it.createdAt)));
+    tr.appendChild(cell(fmtTime(it.lastAccessedAt)));
+    rows.appendChild(tr);
+  }
+}
+
+function shortId(id) {
+  if (!id) return "—";
+  return id.length > 12 ? id.slice(0, 12) + "…" : id;
+}
+
+function statusColor(status) {
+  switch (status) {
+    case "active": return "ok";
+    case "paused": return "warn";
+    case "unhealthy": case "stopped": case "disconnected": return "bad";
+    default: return "warn";
+  }
+}
+
+function renderLogs(l) {
+  const card = el("logsCard");
+  card.textContent = "";
+  if (!l.exists) {
+    const div = document.createElement("div");
+    div.className = "empty";
+    div.textContent = "Log directory not found: " + l.directory;
+    card.appendChild(div);
+    return;
+  }
+  if (!l.files || l.files.length === 0) {
+    const div = document.createElement("div");
+    div.className = "empty";
+    div.textContent = "No .log files in " + l.directory;
+    card.appendChild(div);
+    return;
+  }
+  const table = document.createElement("table");
+  const head = document.createElement("thead");
+  const hr = document.createElement("tr");
+  for (const h of ["Name", "Size", "Modified"]) {
+    const th = document.createElement("th");
+    th.textContent = h;
+    hr.appendChild(th);
+  }
+  head.appendChild(hr);
+  table.appendChild(head);
+  const body = document.createElement("tbody");
+  for (const f of l.files) {
+    const tr = document.createElement("tr");
+    const name = document.createElement("td");
+    const a = document.createElement("a");
+    a.href = "/api/doctor/logs?file=" + encodeURIComponent(f.name.replace(/\.log$/, ""));
+    a.target = "_blank";
+    a.style.color = "var(--blue)";
+    a.textContent = f.name;
+    name.appendChild(a);
+    tr.appendChild(name);
+    const size = document.createElement("td");
+    size.textContent = f.sizeHuman;
+    tr.appendChild(size);
+    const mod = document.createElement("td");
+    mod.textContent = fmtTime(f.lastModified);
+    tr.appendChild(mod);
+    body.appendChild(tr);
+  }
+  table.appendChild(body);
+  card.appendChild(table);
+}
+
+function renderPlugins(p) {
+  el("pluginCount").textContent = String(p.total);
+  const chips = el("pluginChips");
+  chips.textContent = "";
+  const parts = [
+    ["loaded", p.loaded], ["enabled", p.enabled],
+    ["warnings", p.warnings], ["blocked", p.blocked],
+  ];
+  for (const [label, n] of parts) {
+    if (n > 0) {
+      const c = document.createElement("span");
+      c.className = "chip";
+      c.style.color = label === "blocked" ? "var(--red)"
+        : label === "warnings" ? "var(--yellow)" : "";
+      c.textContent = label + ": " + n;
+      chips.appendChild(c);
+    }
+  }
+  const rows = el("pluginRows");
+  rows.textContent = "";
+  const empty = el("pluginEmpty");
+  empty.style.display = p.total === 0 ? "" : "none";
+  for (const it of (p.items || [])) {
+    const tr = document.createElement("tr");
+    const name = document.createElement("td");
+    name.textContent = it.name || it.fileName || "?";
+    tr.appendChild(name);
+    const version = document.createElement("td");
+    version.textContent = it.version || "—";
+    tr.appendChild(version);
+    const sdk = document.createElement("td");
+    sdk.textContent = it.sdkVersion || "—";
+    tr.appendChild(sdk);
+    const status = document.createElement("td");
+    const badge = (text, on) => {
+      const b = document.createElement("span");
+      b.className = "badge " + (on ? "on" : "off");
+      b.textContent = text;
+      status.appendChild(b);
+      status.appendChild(document.createTextNode(" "));
+    };
+    badge(it.loaded ? "loaded" : "not loaded", it.loaded);
+    badge(it.enabled ? "enabled" : "disabled", it.enabled);
+    tr.appendChild(status);
+    const comp = document.createElement("td");
+    const verdict = it.compatibility ? it.compatibility.verdict : null;
+    if (!verdict) {
+      comp.textContent = "—";
+    } else {
+      const b = document.createElement("span");
+      b.className = "badge " +
+        (verdict === "compatible" ? "on" : verdict === "warn" ? "warn" : "off");
+      b.textContent = verdict;
+      comp.appendChild(b);
+      if (it.compatibility.reason) {
+        const r = document.createElement("div");
+        r.style.color = "var(--yellow)";
+        r.style.fontSize = "11px";
+        r.style.marginTop = "2px";
+        r.textContent = it.compatibility.reason;
+        comp.appendChild(r);
+      }
+    }
+    tr.appendChild(comp);
+    const size = document.createElement("td");
+    size.textContent = it.fileSizeHuman || "—";
+    tr.appendChild(size);
+    rows.appendChild(tr);
+  }
+}
+
+function renderBrowsers(b) {
+  el("browserCount").textContent = String(b.total);
+  el("tabTotal").textContent = String(b.tabTotal);
+  const rows = el("browserRows");
+  rows.textContent = "";
+  const empty = el("browserEmpty");
+  empty.style.display = b.total === 0 ? "" : "none";
+  for (const it of (b.items || [])) {
+    const tr = document.createElement("tr");
+    const cell = (text, color) => {
+      const td = document.createElement("td");
+      td.textContent = text;
+      if (color) td.style.color = color;
+      return td;
+    };
+    tr.appendChild(cell(shortId(it.sessionId)));
+    const st = document.createElement("td");
+    const dot = document.createElement("span");
+    dot.className = "status-dot " + statusColor(it.sessionStatus);
+    st.appendChild(dot);
+    st.appendChild(document.createTextNode(it.sessionStatus));
+    tr.appendChild(st);
+    tr.appendChild(cell(it.hasBrowser ? "open" : "—", it.hasBrowser ? "var(--green)" : "var(--muted)"));
+    tr.appendChild(cell(it.hasDriver ? "bound" : "—", it.hasDriver ? "var(--green)" : "var(--muted)"));
+    tr.appendChild(cell(it.tabCount === null || it.tabCount === undefined ? "—" : String(it.tabCount)));
+    tr.appendChild(cell(it.url || "—"));
+    rows.appendChild(tr);
+  }
+}
+
+async function loadTabDetails() {
+  const btn = el("tabDetailBtn");
+  const state = el("tabDetailState");
+  btn.disabled = true;
+  state.textContent = "loading…";
+  try {
+    const resp = await fetch("/api/system/tabs", { cache: "no-store" });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const data = await resp.json();
+    renderTabDetails(data.items || []);
+    state.textContent = "updated " + new Date().toLocaleTimeString();
+  } catch (e) {
+    state.textContent = "failed: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderTabDetails(items) {
+  const box = el("tabDetails");
+  box.textContent = "";
+  for (const s of items) {
+    const h = document.createElement("div");
+    h.style.cssText = "margin-top:10px;font-weight:600;font-size:12.5px;color:var(--muted);";
+    h.textContent = shortId(s.sessionId) + " — " + (s.tabCount || 0) + " tabs" +
+      (s.error ? " (" + s.error + ")" : "");
+    box.appendChild(h);
+    if (!s.tabs || !s.tabs.length) continue;
+    const table = document.createElement("table");
+    const thead = document.createElement("thead");
+    const hr = document.createElement("tr");
+    for (const c of ["#", "GUID", "Title", "URL", "Active"]) {
+      const th = document.createElement("th");
+      th.textContent = c;
+      hr.appendChild(th);
+    }
+    thead.appendChild(hr);
+    table.appendChild(thead);
+    const tbody = document.createElement("tbody");
+    for (const t of s.tabs) {
+      const tr = document.createElement("tr");
+      const idx = document.createElement("td");
+      idx.textContent = String(t.index);
+      tr.appendChild(idx);
+      const g = document.createElement("td");
+      g.textContent = t.guid || "?";
+      tr.appendChild(g);
+      const ti = document.createElement("td");
+      ti.textContent = t.title || "—";
+      tr.appendChild(ti);
+      const u = document.createElement("td");
+      if (t.url) {
+        const a = document.createElement("a");
+        a.href = t.url;
+        a.target = "_blank";
+        a.textContent = t.url;
+        a.style.color = "var(--blue)";
+        a.style.wordBreak = "break-all";
+        u.appendChild(a);
+      } else {
+        u.textContent = "—";
+      }
+      tr.appendChild(u);
+      const act = document.createElement("td");
+      act.textContent = t.active ? "yes" : "no";
+      act.style.color = t.active ? "var(--green)" : "var(--muted)";
+      tr.appendChild(act);
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    box.appendChild(table);
+  }
+}
+
+function renderPulsarSessions(ps) {
+  el("psCount").textContent = String(ps.total);
+  const rows = el("psRows");
+  rows.textContent = "";
+  const empty = el("psEmpty");
+  empty.style.display = ps.total === 0 ? "" : "none";
+  el("psReport").textContent = "(no report)";
+  for (const it of (ps.items || [])) {
+    const tr = document.createElement("tr");
+    const cell = (text, color) => {
+      const td = document.createElement("td");
+      td.textContent = text === null || text === undefined || text === "" ? "—" : String(text);
+      if (color) td.style.color = color;
+      return td;
+    };
+    tr.appendChild(cell(shortId(it.managedSessionId)));
+    tr.appendChild(cell(it.id));
+    tr.appendChild(cell(it.uuid ? it.uuid.slice(0, 8) + "…" : "—"));
+    tr.appendChild(cell(it.label));
+    tr.appendChild(cell(it.isActive ? "yes" : "no", it.isActive ? "var(--green)" : "var(--muted)"));
+    tr.appendChild(cell("ctx#" + it.contextId + (it.contextActive ? "" : " (inactive)")));
+    tr.appendChild(cell(it.mainLoopRunning ? "running" : "stopped",
+      it.mainLoopRunning ? "var(--green)" : "var(--muted)"));
+    rows.appendChild(tr);
+    if (it.mainLoopReport) {
+      el("psReport").textContent = it.mainLoopReport;
+    }
+  }
+}
+
+function renderSwarm(sw) {
+  const card = el("swarmCard");
+  card.textContent = "";
+  if (!sw.session) {
+    const div = document.createElement("div");
+    div.className = "empty";
+    div.textContent = "No swarm session.";
+    card.appendChild(div);
+  } else {
+    const dl = document.createElement("dl");
+    dl.className = "kv";
+    kv(dl, "Session", sw.session.id);
+    kv(dl, "Status", sw.session.status);
+    kv(dl, "Active", sw.session.active ? "yes" : "no");
+    kv(dl, "URL", sw.session.url);
+    card.appendChild(dl);
+  }
+  if (sw.tasks) {
+    const chips = document.createElement("div");
+    chips.className = "chips";
+    chips.style.marginTop = "8px";
+    for (const [label, n] of [["total", sw.tasks.total], ["done", sw.tasks.done], ["running", sw.tasks.running]]) {
+      const c = document.createElement("span");
+      c.className = "chip";
+      c.textContent = label + ": " + (n === undefined ? "—" : n);
+      chips.appendChild(c);
+    }
+    card.appendChild(chips);
+  }
+}
+
+function renderUrlPool(up) {
+  const card = el("urlPoolCard");
+  card.textContent = "";
+  if (up.error) {
+    const div = document.createElement("div");
+    div.className = "empty";
+    div.textContent = up.error;
+    card.appendChild(div);
+    return;
+  }
+  const dl = document.createElement("dl");
+  dl.className = "kv";
+  kv(dl, "Pool ID", up.id);
+  kv(dl, "Total", up.totalCount);
+  kv(dl, "Real-time", up.realTime);
+  kv(dl, "Delay", up.delay);
+  kv(dl, "Context", "ctx#" + up.contextId + (up.contextActive ? "" : " (inactive)"));
+  card.appendChild(dl);
+  const caches = up.caches || {};
+  const chips = document.createElement("div");
+  chips.className = "chips";
+  chips.style.marginTop = "8px";
+  for (const [prio, c] of Object.entries(caches)) {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.textContent = (c.name || "p" + prio) + ": " + c.size;
+    chips.appendChild(chip);
+  }
+  card.appendChild(chips);
+}
+
+function setBanner(text) {
+  const b = el("banner");
+  if (text) {
+    b.textContent = text;
+    b.style.display = "block";
+  } else {
+    b.style.display = "none";
+  }
+}
+
+async function refresh() {
+  try {
+    const resp = await fetch("/api/system/status", { cache: "no-store" });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const data = await resp.json();
+    setBanner(null);
+
+    const ok = data.status === "healthy";
+    const pill = el("statusPill");
+    pill.textContent = ok ? "HEALTHY" : "UNHEALTHY";
+    pill.className = "pill " + (ok ? "ok" : "bad");
+    el("serverTime").textContent = "server time: " + fmtLocal(data.timestamp);
+
+    renderBuild(data.build || {});
+    renderRuntime(data.runtime || {});
+    renderMemory((data.runtime || {}).memory || {});
+    renderLlm(data.llm || {});
+    renderMetrics(data.metrics || {});
+    renderSessions(data.sessions || { total: 0, byStatus: {}, items: [] });
+    renderPulsarSessions(data.pulsarSessions || { total: 0, items: [] });
+    renderSwarm(data.swarm || {});
+    renderUrlPool(data.urlPool || {});
+    renderBrowsers(data.browsers || { total: 0, tabTotal: 0, items: [] });
+    renderPlugins(data.plugins || { total: 0, loaded: 0, enabled: 0, warnings: 0, blocked: 0, items: [] });
+    el("driversPre").textContent = (data.drivers && data.drivers.report) ? data.drivers.report : "(no driver pools)";
+    el("privacyPre").textContent = (data.privacy && data.privacy.report) ? data.privacy.report : "(no privacy contexts)";
+    renderLogs(data.logs || { exists: false, directory: "?", files: [] });
+  } catch (e) {
+    const pill = el("statusPill");
+    pill.textContent = "UNREACHABLE";
+    pill.className = "pill bad";
+    el("serverTime").textContent = "";
+    setBanner("Cannot reach /api/system/status (" + e.message + "). Is the Browser4 backend running?");
+  }
+}
+
+el("refreshNote").textContent = "Auto-refresh: " + (REFRESH_MS / 1000) + "s (set ?refresh=<ms> to change)";
+el("tabDetailBtn").addEventListener("click", loadTabDetails);
+refresh();
+setInterval(refresh, REFRESH_MS);
+</script>
+</body>
+</html>

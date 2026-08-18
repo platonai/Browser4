@@ -262,7 +262,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | `close-all` | Close all sessions without stopping the backend. |
 | `kill-all` | Force-stop the backend and Browser4-managed browser processes. |
 | `stop` | Gracefully stop the Browser4 server. |
-| `status` | Show server version, port, and health. |
+| `status` | Show server version, port, health, and the web status panel URL (`http://<server>:8182/status`). |
 | `doctor` | Run diagnostics: build info, LLM status, stale daemon cleanup, optional repair. Supports `--verbose` and `--fix`. |
 | `doctor log [name]` | List, view, tail, or grep backend log files. Supports `--tail`, grep-style flags, and `doctor log <name> grep <pattern>`. |
 | `doctor metrics [filter]` | List, filter, or grep backend metrics. Supports `doctor metrics grep <pattern>`. |
@@ -278,6 +278,18 @@ browser4-cli doctor --verbose
 browser4-cli doctor log server.log --tail
 browser4-cli doctor metrics grep request
 ```
+
+**Web status panel:** open `http://127.0.0.1:8182/status` in a browser for a live dashboard
+(health, version, JVM/runtime, LLM config, sessions, **Pulsar sessions** — SDK identity,
+context and main-loop state, **swarm** — swarm session plus task summary, **URL pool** —
+queued/real-time/delay counts per priority cache, browsers & open tabs — per-session
+browser/driver binding and tab counts, with on-demand live tab details via
+`GET /api/system/tabs` — driver pools, plugins: load/enable state and SDK compatibility,
+metrics, log files; auto-refreshes, set `?refresh=<ms>` to change the interval). The panel
+is backed by the aggregated `GET /api/system/status` endpoint; the individual endpoints
+(`/api/system/health`, `/api/system/build`, `/api/doctor/llm-status`, `/api/doctor/metrics`,
+`/api/doctor/log-files`, `/api/plugins`) remain available. `browser4-cli plugin-list` also
+reports load/enable state and SDK version for every installed plugin.
 
 #### Navigation
 

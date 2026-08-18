@@ -250,6 +250,20 @@ class ScrapeService(
         }
     }
 
+    /**
+     * A lightweight swarm task summary for status reporting.
+     *
+     * @return total/done/running counts of all tracked swarm responses.
+     */
+    fun summary(): Map<String, Int> {
+        val all = responseCache.values
+        return mapOf(
+            "total" to all.size,
+            "done" to all.count { it.isDone },
+            "running" to all.count { !it.isDone },
+        )
+    }
+
     private fun createScrapeHyperlink(
         request: ScrapeRequest,
         agenticSession: AgenticSession

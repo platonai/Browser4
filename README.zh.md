@@ -281,7 +281,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | `close-all` | 关闭所有会话，但不停止后端。 |
 | `kill-all` | 强制停止后端以及 Browser4 管理的浏览器进程。 |
 | `stop` | 优雅停止 Browser4 服务。 |
-| `status` | 显示服务版本、端口和健康状态。 |
+| `status` | 显示服务版本、端口、健康状态，以及 Web 状态面板地址（`http://<server>:8182/status`）。 |
 | `doctor` | 运行诊断：构建信息、LLM 状态、陈旧 daemon 清理、可选修复。支持 `--verbose` 与 `--fix`。 |
 | `doctor log [name]` | 列出、查看、tail 或 grep 后端日志文件。支持 `--tail`、grep 风格参数，以及 `doctor log <name> grep <pattern>`。 |
 | `doctor metrics [filter]` | 列出、过滤或 grep 后端指标。支持 `doctor metrics grep <pattern>`。 |
@@ -297,6 +297,16 @@ browser4-cli doctor --verbose
 browser4-cli doctor log server.log --tail
 browser4-cli doctor metrics grep request
 ```
+
+**Web 状态面板：** 在浏览器打开 `http://127.0.0.1:8182/status` 即可查看实时仪表盘
+（健康状态、版本、JVM/运行时、LLM 配置、会话、**Pulsar 会话**——SDK 身份、上下文与主循环
+状态、**swarm**——swarm 会话及任务汇总、**URL 池**——按优先级缓存的排队/实时/延迟数量、
+浏览器与打开的标签页——每个会话的浏览器/驱动绑定与标签页数量，可点击按需加载实时标签页
+明细，数据来自 `GET /api/system/tabs`——驱动池、插件（加载/启用状态与 SDK 兼容性）、
+指标、日志文件；自动刷新，可用 `?refresh=<ms>` 调整间隔）。面板数据来自聚合端点
+`GET /api/system/status`；原有单个端点（`/api/system/health`、`/api/system/build`、
+`/api/doctor/llm-status`、`/api/doctor/metrics`、`/api/doctor/log-files`、`/api/plugins`）
+继续可用。`browser4-cli plugin-list` 也会报告每个已安装插件的加载/启用状态与 SDK 版本。
 
 #### 导航
 
