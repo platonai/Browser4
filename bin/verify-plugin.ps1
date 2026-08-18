@@ -4,6 +4,14 @@
 # Validates that a built plugin JAR has the correct structure for deployment.
 #
 # Usage: .\verify-plugin.ps1 <path-to-plugin.jar>
+#
+# Checks:
+#   [PASS/FAIL] META-INF/browser4-plugin.json exists
+#   [PASS/FAIL] AutoConfiguration.imports exists
+#   [PASS/FAIL] Thin JAR (no embedded dependency JARs)
+#   [PASS/FAIL] Contains compiled .class files
+#   [PASS/WARN] sdkVersion declared in browser4-plugin.json
+#   [PASS/WARN] Browser4-Plugin-Version in MANIFEST.MF
 # =============================================================================
 
 param(
@@ -87,6 +95,58 @@ if ($classCount -gt 0) {
     Pass "Compiled classes: $classCount .class file(s) found"
 } else {
     Fail "Compiled classes: NO .class files found"
+}
+
+# ---------------------------------------------------------------------------
+# Check 5: sdkVersion declared in browser4-plugin.json (host compat check)
+# ---------------------------------------------------------------------------
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip = $null
+$sdkVersion = $null
+try {
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($JarPath)
+    $entry = $zip.GetEntry("META-INF/browser4-plugin.json")
+    if ($entry) {
+        $reader = New-Object System.IO.StreamReader($entry.Open(), [System.Text.Encoding]::UTF8)
+        try { $manifestJson = $reader.ReadToEnd() } finally { $reader.Dispose() }
+        $match = [regex]::Match($manifestJson, '"sdkVersion"\s*:\s*"([^"]*)"')
+        if ($match.Success) { $sdkVersion = $match.Groups[1].Value }
+    }
+} catch {
+    Warn "Could not read browser4-plugin.json content: $($_.Exception.Message)"
+} finally {
+    if ($zip) { $zip.Dispose() }
+}
+
+if ($sdkVersion) {
+    Pass "sdkVersion: $sdkVersion declared"
+} else {
+    Warn "sdkVersion: not declared — host will load on best-effort (pre-4.14 plugins are exempt)"
+}
+
+# ---------------------------------------------------------------------------
+# Check 6: Browser4-Plugin-Version in MANIFEST.MF (SDK version fallback)
+# ---------------------------------------------------------------------------
+$mfSdkVersion = $null
+try {
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($JarPath)
+    $entry = $zip.GetEntry("META-INF/MANIFEST.MF")
+    if ($entry) {
+        $reader = New-Object System.IO.StreamReader($entry.Open(), [System.Text.Encoding]::UTF8)
+        try { $mfContent = $reader.ReadToEnd() } finally { $reader.Dispose() }
+        $mfMatch = [regex]::Match($mfContent, 'Browser4-Plugin-Version:\s*([^\r\n]+)')
+        if ($mfMatch.Success) { $mfSdkVersion = $mfMatch.Groups[1].Value.Trim() }
+    }
+} catch {
+    Warn "Could not read MANIFEST.MF: $($_.Exception.Message)"
+} finally {
+    if ($zip) { $zip.Dispose() }
+}
+
+if ($mfSdkVersion) {
+    Pass "MANIFEST.MF Browser4-Plugin-Version: $mfSdkVersion"
+} else {
+    Warn "MANIFEST.MF Browser4-Plugin-Version: not set — SDK version falls back to plugin.json sdkVersion"
 }
 
 # ---------------------------------------------------------------------------

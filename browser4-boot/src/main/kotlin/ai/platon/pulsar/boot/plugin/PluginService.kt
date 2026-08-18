@@ -102,6 +102,18 @@ class PluginService(
                     "missing META-INF/browser4-plugin.json"
             )
 
+        // Refuse plugins that require a newer SDK than the running host
+        when (val verdict = PluginCompatibility.check(manifest)) {
+            is PluginCompatibility.Blocked -> throw IllegalArgumentException(
+                "Cannot install '${manifest.name}' (${source.fileName}): ${verdict.reason}"
+            )
+            is PluginCompatibility.Warn -> logger.warn(
+                "Installing '{}' with compatibility warning: {}",
+                manifest.name, verdict.reason
+            )
+            is PluginCompatibility.Compatible -> Unit
+        }
+
         // Ensure the target directory exists
         Files.createDirectories(pluginDir)
 

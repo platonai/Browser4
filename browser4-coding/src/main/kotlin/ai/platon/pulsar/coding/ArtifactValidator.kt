@@ -247,6 +247,13 @@ object ArtifactValidator {
                 "No 'autoConfigurationClasses' — PluginService cannot detect the plugin as loaded by bean presence", fileName)
         }
 
+        // sdkVersion (since 4.14): new plugins should declare the SDK they were
+        // built against; the host uses it for compatibility checks.
+        if (!trimmed.contains(Regex(""""sdkVersion"\s*:"""))) {
+            issues += ValidationIssue(Severity.WARNING,
+                "No 'sdkVersion' — host cannot verify SDK compatibility (plugins built before 4.14 are exempt)", fileName)
+        }
+
         // dependsOn is part of the real manifest schema
         if (!trimmed.contains(Regex(""""dependsOn"\s*:"""))) {
             issues += ValidationIssue(Severity.INFO, "No 'dependsOn' — plugin JAR will not declare its dependencies", fileName)

@@ -12,6 +12,9 @@ package ai.platon.pulsar.coding
  * 4. **Module registration** — every `<module>` in the default `<modules>` block
  *    resolves to a real directory; and every on-disk module directory is
  *    registered somewhere in the root pom (so `-am` reactor builds can find it).
+ * 5. **Plugin SDK versions** — every in-repo `browser4-plugin.json` declares
+ *    `sdkVersion` equal to VERSION, so bundled plugins always match the SDK
+ *    they are built with.
  *
  * Pure string/regex analysis plus an existence callback — zero dependencies,
  * no network, no Maven invocation. Testable without a real checkout.
@@ -22,6 +25,8 @@ object RepoConsistencyCheck {
     private val MODULE_TAG = Regex("""<module>([^<]+)</module>""")
     private val ROOT_VERSION = Regex("""<artifactId>browser4</artifactId>\s*<version>([^<]+)</version>""")
     private val BOM_VERSION = Regex("""<artifactId>browser4-dependencies</artifactId>\s*<version>([^<]+)</version>""")
+    private val MANIFEST_NAME = Regex(""""name"\s*:\s*"([^"]+)"""")
+    private val SDK_VERSION_TAG = Regex(""""sdkVersion"\s*:\s*"([^"]*)"""")
 
     /**
      * Run the consistency checks.
@@ -32,6 +37,8 @@ object RepoConsistencyCheck {
      * @param moduleExists callback: does the module directory exist on disk?
      * @param onDiskModuleDirs top-level module directories found on disk
      *   (containing a pom.xml), checked for registration
+     * @param pluginManifestContents contents of every in-repo
+     *   `META-INF/browser4-plugin.json`, checked for `sdkVersion` == VERSION
      */
     fun check(
         versionContent: String?,
@@ -39,6 +46,7 @@ object RepoConsistencyCheck {
         bomPom: String?,
         moduleExists: (String) -> Boolean = { true },
         onDiskModuleDirs: List<String> = emptyList(),
+        pluginManifestContents: List<String> = emptyList(),
     ): ValidationResult {
         val issues = mutableListOf<ValidationIssue>()
 
@@ -115,7 +123,42 @@ object RepoConsistencyCheck {
             }
         }
 
+        // --- Plugin SDK versions must match VERSION ---
+        pluginManifestContents.forEach { content ->
+            val pluginName = MANIFEST_NAME.find(content)?.groupValues?.get(1) ?: "unknown"
+            val declared = SDK_VERSION_TAG.find(content)?.groupValues?.get(1)
+            when {
+                // Unresolved archetype template placeholders (${pluginName}, ${browser4-version})
+                // are exempt — they only exist in the archetype's template resources.
+                declared?.contains("\${") == true -> Unit
+                declared == null -> issues += ValidationIssue(
+                    Severity.ERROR,
+                    "Plugin manifest '$pluginName' is missing 'sdkVersion' — the host cannot verify SDK compatibility"
+                )
+                version.isNotBlank() && declared != version -> issues += ValidationIssue(
+                    Severity.ERROR,
+                    "Plugin '$pluginName' sdkVersion '$declared' does not match VERSION '$version'"
+                )
+            }
+        }
+
         return ValidationResult.of(issues)
+    }
+
+    /**
+     * Whether [path] is an in-repo plugin manifest worth scanning: a file named
+     * `browser4-plugin.json` that is NOT inside build output (`target/`) or
+     * hidden directories (`.git`, `.worktrees`, `.claude`, ...). Hidden dirs
+     * may hold other branches' checkouts (worktrees) whose manifests must not
+     * be judged against this checkout's VERSION.
+     */
+    fun isPluginManifestPath(path: java.nio.file.Path): Boolean {
+        if (!java.nio.file.Files.isRegularFile(path)) return false
+        if (path.fileName.toString() != "browser4-plugin.json") return false
+        return path.none { segment ->
+            val name = segment.toString()
+            name == "target" || name.startsWith(".")
+        }
     }
 
     /**

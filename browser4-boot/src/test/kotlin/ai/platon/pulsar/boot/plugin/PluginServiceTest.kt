@@ -34,12 +34,14 @@ class PluginServiceTest {
         name: String = "test-plugin",
         version: String = "1.0.0",
         defaultEnabled: Boolean = true,
+        sdkVersion: String? = null,
         autoConfigurationClasses: List<String> = listOf("java.lang.String"),
     ): Path {
+        val sdkField = sdkVersion?.let { "\n                \"sdkVersion\": \"$it\"," } ?: ""
         val manifestJson = """
             {
                 "name": "$name",
-                "version": "$version",
+                "version": "$version",$sdkField
                 "description": "Test plugin for unit tests",
                 "dependsOn": ["browser4-skeleton"],
                 "defaultEnabled": $defaultEnabled,
@@ -313,6 +315,62 @@ class PluginServiceTest {
             assertTrue(
                 ex.message!!.contains("browser4-plugin.json"),
                 "Error message should mention missing manifest"
+            )
+        } finally {
+            pluginDir.toFile().deleteRecursively()
+            stagingDir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `installPlugin rejects plugins requiring a newer SDK than the host`() {
+        val pluginDir = createTempPluginDir()
+        val stagingDir = createTempPluginDir()
+        try {
+            val futureJar = createPluginJar(
+                stagingDir, "future-plugin-1.0.0.jar",
+                name = "future-plugin", sdkVersion = "9.0.0"
+            )
+            val service = PluginService(mockAppContext(), pluginDir)
+
+            val ex = assertThrows<IllegalArgumentException> {
+                service.installPlugin(futureJar)
+            }
+            assertTrue(
+                ex.message!!.contains("Cannot install"),
+                "Error message should explain the refusal"
+            )
+            assertTrue(
+                ex.message!!.contains("9.0.0"),
+                "Error message should name the required SDK version"
+            )
+            assertFalse(
+                Files.exists(pluginDir.resolve("future-plugin-1.0.0.jar")),
+                "Incompatible JAR must not be copied into the plugin dir"
+            )
+        } finally {
+            pluginDir.toFile().deleteRecursively()
+            stagingDir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `installPlugin accepts plugins built with an older same-major SDK`() {
+        val pluginDir = createTempPluginDir()
+        val stagingDir = createTempPluginDir()
+        try {
+            val legacyJar = createPluginJar(
+                stagingDir, "legacy-plugin-1.0.0.jar",
+                name = "legacy-plugin", sdkVersion = "4.10.0"
+            )
+            val service = PluginService(mockAppContext(), pluginDir)
+
+            val info = service.installPlugin(legacyJar)
+
+            assertEquals("legacy-plugin", info.manifest?.name)
+            assertTrue(
+                Files.exists(pluginDir.resolve("legacy-plugin-1.0.0.jar")),
+                "Same-major-SDK plugin should install and load on a best-effort basis"
             )
         } finally {
             pluginDir.toFile().deleteRecursively()

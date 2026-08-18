@@ -238,6 +238,75 @@ class CodingToolExecutorTest {
         }
 
         @Test
+        @DisplayName("read with startLine/endLine routes to fs.readFileLines")
+        fun testReadWithLineRange() = runBlocking {
+            coEvery { fs.readFileLines(any(), any(), any()) } returns "lines 5-15"
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "read",
+                arguments = mutableMapOf("path" to "src/main.kt", "startLine" to "5", "endLine" to "15")
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            coVerify { fs.readFileLines("src/main.kt", 5, 15) }
+            assertEquals("lines 5-15", result.value)
+        }
+
+        @Test
+        @DisplayName("scaffold plugin maps 'name' to pluginName")
+        fun testScaffoldPluginNameMapping() = runBlocking {
+            coEvery { fs.readFile(any()) } returns ""
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "scaffold",
+                arguments = mutableMapOf(
+                    "type" to "plugin",
+                    "name" to "browser4-pageinfo",
+                    "domain" to "pageinfo",
+                    "basePackage" to "ai.platon.pulsar.pageinfo",
+                    "toolMethod" to "extractPageInfo",
+                    "toolDescription" to "Extract page info"
+                )
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            val output = result.value.toString()
+            assertTrue(output.contains("=== File: pom.xml ==="))
+            assertTrue(output.contains("<artifactId>browser4-pageinfo</artifactId>"))
+            assertTrue(output.contains("PageinfoAutoConfiguration"))
+        }
+
+        @Test
+        @DisplayName("scaffoldToDir writes scaffold files into the workspace dir")
+        fun testScaffoldToDirWritesFiles() = runBlocking {
+            coEvery { fs.readFile(any()) } returns ""
+            coEvery { fs.writeFile(any(), any()) } returns "written"
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "scaffoldToDir",
+                arguments = mutableMapOf(
+                    "type" to "plugin",
+                    "dir" to "browser4-plugins/browser4-wordcount",
+                    "name" to "browser4-wordcount",
+                    "domain" to "wordcount",
+                    "basePackage" to "ai.platon.pulsar.wordcount",
+                    "toolMethod" to "countWords",
+                    "toolDescription" to "Count words"
+                )
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            val output = result.value.toString()
+            assertTrue(output.contains("✓ Scaffolded plugin into browser4-plugins/browser4-wordcount"), output)
+            assertTrue(output.contains("browser4-plugins/browser4-wordcount/pom.xml"), output)
+            coVerify { fs.writeFile("browser4-plugins/browser4-wordcount/pom.xml", any()) }
+            coVerify { fs.writeFile(match { it.endsWith("META-INF/browser4-plugin.json") }, any()) }
+        }
+
+        @Test
         @DisplayName("write calls fs.writeFile with path and content")
         fun testWrite() = runBlocking {
             coEvery { fs.writeFile(any(), any()) } returns "written"
@@ -741,7 +810,8 @@ class CodingToolExecutorTest {
                 "toolsDetect", "projectType",
                 "read", "readLines", "write", "append", "replace", "delete", "mkdir",
                 "copy", "move", "listDir", "glob", "grep", "stat", "diff",
-                "changeSummary", "languages", "workspaceRoot"
+                "changeSummary", "languages", "workspaceRoot",
+                "scaffold", "scaffoldToDir",
             )
 
             methods.forEach { method ->
@@ -777,10 +847,10 @@ class CodingToolExecutorTest {
         }
 
         @Test
-        @DisplayName("getToolSpecs returns 49 registered specs")
+        @DisplayName("getToolSpecs returns 50 registered specs")
         fun testToolSpecsCount() {
             val specs = executor.getToolSpecs()
-            assertEquals(49, specs.size)
+            assertEquals(50, specs.size)
         }
 
         @Test
@@ -793,7 +863,7 @@ class CodingToolExecutorTest {
                 "read", "readLines", "write", "append", "replace", "delete", "mkdir",
                 "copy", "move", "listDir", "glob", "grep", "stat", "diff",
                 "changeSummary", "languages", "workspaceRoot",
-                "scaffold", "validate",
+                "scaffold", "scaffoldToDir", "validate",
                 "replaceRegex", "editLines", "insertAfter", "revert",
                 "diagnostics", "symbols", "references", "lspServers",
                 "runCode", "runCodeLanguages",

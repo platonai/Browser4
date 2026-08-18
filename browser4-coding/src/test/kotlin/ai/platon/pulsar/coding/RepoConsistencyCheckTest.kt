@@ -138,4 +138,111 @@ class RepoConsistencyCheckTest {
         // The profile-scoped module is not validated for existence.
         assertFalse(result.issues.any { it.message.contains("browser4-never-existed") }, "issues: ${result.issues}")
     }
+
+    // ---- Plugin SDK versions ----
+
+    private fun pluginManifest(name: String, sdkVersion: String?): String {
+        val sdkField = sdkVersion?.let { "\"sdkVersion\": \"$it\"," } ?: ""
+        return """
+            {
+              "name": "$name",
+              "version": "1.0.0",
+              $sdkField
+              "dependsOn": ["browser4-skeleton"]
+            }
+        """.trimIndent()
+    }
+
+    @Test
+    @DisplayName("plugin manifest with sdkVersion matching VERSION passes")
+    fun pluginSdkVersionMatches() {
+        val result = RepoConsistencyCheck.check(
+            version, rootPom, bomPom,
+            pluginManifestContents = listOf(pluginManifest("browser4-a", version), pluginManifest("browser4-b", version)))
+        assertTrue(result.valid, "issues: ${result.issues}")
+        assertFalse(result.issues.any { it.message.contains("sdkVersion") }, "issues: ${result.issues}")
+    }
+
+    @Test
+    @DisplayName("plugin manifest missing sdkVersion is an error")
+    fun pluginSdkVersionMissing() {
+        val result = RepoConsistencyCheck.check(
+            version, rootPom, bomPom,
+            pluginManifestContents = listOf(pluginManifest("browser4-a", null)))
+        assertFalse(result.valid)
+        assertTrue(
+            result.issues.any { it.severity == Severity.ERROR && it.message.contains("browser4-a") && it.message.contains("sdkVersion") },
+            "issues: ${result.issues}"
+        )
+    }
+
+    @Test
+    @DisplayName("plugin manifest sdkVersion mismatching VERSION is an error")
+    fun pluginSdkVersionMismatch() {
+        val result = RepoConsistencyCheck.check(
+            version, rootPom, bomPom,
+            pluginManifestContents = listOf(pluginManifest("browser4-a", "4.12.0")))
+        assertFalse(result.valid)
+        assertTrue(
+            result.issues.any { it.message.contains("does not match VERSION") },
+            "issues: ${result.issues}"
+        )
+    }
+
+    @Test
+    @DisplayName("archetype template placeholders are exempt from the sdkVersion check")
+    fun pluginSdkVersionTemplatePlaceholdersExempt() {
+        val template = """
+            {
+              "name": "${'$'}{pluginName}",
+              "version": "${'$'}{version}",
+              "sdkVersion": "${'$'}{browser4-version}",
+              "dependsOn": ["browser4-skeleton"]
+            }
+        """.trimIndent()
+        val result = RepoConsistencyCheck.check(
+            version, rootPom, bomPom,
+            pluginManifestContents = listOf(template))
+        assertTrue(result.valid, "template placeholders must not fail governance: ${result.issues}")
+    }
+
+    // ---- isPluginManifestPath ----
+
+    private fun writeManifest(dir: java.nio.file.Path, relPath: String): java.nio.file.Path {
+        val file = dir.resolve(relPath)
+        file.parent.toFile().mkdirs()
+        java.nio.file.Files.writeString(file, """{"name": "x", "version": "1.0.0"}""")
+        return file
+    }
+
+    @Test
+    @DisplayName("isPluginManifestPath accepts manifests outside target and hidden dirs")
+    fun isPluginManifestPathAcceptsSourceManifests() {
+        val dir = java.nio.file.Files.createTempDirectory("repo-consistency-")
+        try {
+            val pluginJson = writeManifest(dir, "browser4-plugins/browser4-seo/src/main/resources/META-INF/browser4-plugin.json")
+            assertTrue(RepoConsistencyCheck.isPluginManifestPath(pluginJson))
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    @DisplayName("isPluginManifestPath rejects build output and hidden dirs")
+    fun isPluginManifestPathRejectsTargetAndHiddenDirs() {
+        val dir = java.nio.file.Files.createTempDirectory("repo-consistency-")
+        try {
+            assertFalse(RepoConsistencyCheck.isPluginManifestPath(
+                writeManifest(dir, "browser4-pageinfo/target/classes/META-INF/browser4-plugin.json")))
+            assertFalse(RepoConsistencyCheck.isPluginManifestPath(
+                writeManifest(dir, ".worktrees/other-branch/browser4-plugins/browser4-seo/src/main/resources/META-INF/browser4-plugin.json")))
+            assertFalse(RepoConsistencyCheck.isPluginManifestPath(
+                writeManifest(dir, ".git/objects/browser4-plugin.json")))
+            // A non-manifest file name is rejected regardless of location.
+            assertFalse(RepoConsistencyCheck.isPluginManifestPath(
+                writeManifest(dir, "browser4-plugins/browser4-seo/src/main/resources/META-INF/other.json")))
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
+    }
 }

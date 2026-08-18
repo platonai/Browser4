@@ -30,9 +30,18 @@ class RepoConsistencyE2ETest {
 
         val onDiskModuleDirs = Files.list(root).use { stream ->
             stream.filter { Files.isDirectory(it) }
+                .filter { !it.fileName.toString().startsWith(".") }
                 .filter { Files.isRegularFile(it.resolve("pom.xml")) }
                 .map { root.relativize(it).toString().replace('\\', '/') }
                 .sorted()
+                .toList()
+        }
+
+        // Every in-repo plugin manifest outside build output (target/) and
+        // hidden dirs (.git, .worktrees, ...).
+        val pluginManifestContents = Files.walk(root).use { stream ->
+            stream.filter { RepoConsistencyCheck.isPluginManifestPath(it) }
+                .map { Files.readString(it) }
                 .toList()
         }
 
@@ -42,6 +51,7 @@ class RepoConsistencyE2ETest {
             bomPom = bomPom,
             moduleExists = { Files.isDirectory(root.resolve(it)) },
             onDiskModuleDirs = onDiskModuleDirs,
+            pluginManifestContents = pluginManifestContents,
         )
         assertTrue(result.valid, "live repo should be internally consistent, issues: ${result.issues}")
     }

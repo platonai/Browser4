@@ -15,6 +15,17 @@ data class PluginManifest(
     val version: String,
     @field:JsonProperty("description")
     val description: String = "",
+    /**
+     * The Browser4 SDK version this plugin was compiled against
+     * (e.g. `4.14.0`), used by the host to decide compatibility.
+     *
+     * Plugins built before 4.14 (which did not declare this field) fall back
+     * to the JAR's `Browser4-Plugin-Version` manifest attribute; when neither
+     * is present the host treats the plugin as "unknown SDK" and loads it on
+     * a best-effort basis.
+     */
+    @field:JsonProperty("sdkVersion")
+    val sdkVersion: String = "",
     @field:JsonProperty("dependsOn")
     val dependsOn: List<String> = emptyList(),
     /**
@@ -33,17 +44,36 @@ data class PluginManifest(
         private const val MANIFEST_PATH = "META-INF/browser4-plugin.json"
 
         /**
+         * JAR manifest attribute written by the plugin archetype/PDK with the
+         * Browser4 SDK version the plugin was built against.
+         */
+        private const val MANIFEST_SDK_VERSION_ATTR = "Browser4-Plugin-Version"
+
+        /**
          * Attempts to read the plugin manifest from the given JAR file.
+         *
+         * When the JSON manifest does not declare [sdkVersion], falls back to
+         * the JAR's `Browser4-Plugin-Version` MANIFEST.MF attribute so plugins
+         * built before the sdkVersion field existed still carry their SDK
+         * version.
          *
          * @return the parsed manifest, or null if the JAR does not contain a manifest.
          */
         fun fromJar(jarFile: JarFile): PluginManifest? {
             val entry = jarFile.getJarEntry(MANIFEST_PATH) ?: return null
-            return jarFile.getInputStream(entry).use { stream ->
+            val manifest = jarFile.getInputStream(entry).use { stream ->
                 InputStreamReader(stream).use { reader ->
                     pulsarObjectMapper().readValue(reader, PluginManifest::class.java)
                 }
             }
+            if (manifest.sdkVersion.isBlank()) {
+                val declared = jarFile.manifest?.mainAttributes?.getValue(MANIFEST_SDK_VERSION_ATTR)
+                    ?.takeIf { it.isNotBlank() }
+                if (declared != null) {
+                    return manifest.copy(sdkVersion = declared)
+                }
+            }
+            return manifest
         }
     }
 }

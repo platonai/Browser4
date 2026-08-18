@@ -32,6 +32,23 @@ class ArtifactScaffoldsTest {
     }
 
     @Test
+    @DisplayName("pluginScaffold pom includes test dependencies")
+    fun pluginScaffoldPomHasTestDeps() {
+        val result = ArtifactScaffolds.pluginScaffold(
+            pluginName = "browser4-seo",
+            domain = "seo",
+            basePackage = "ai.platon.pulsar.seo",
+            toolMethod = "extractMeta",
+            toolDescription = "Extract SEO metadata from the page"
+        )
+
+        val pom = result["pom.xml"]!!
+        assertTrue(pom.contains("kotlin-test-junit5"), "kotlin-test-junit5 missing: $pom")
+        assertTrue(pom.contains("spring-boot-starter-test"), "spring-boot-starter-test missing: $pom")
+        assertTrue(pom.contains("<scope>test</scope>"), "test scope missing: $pom")
+    }
+
+    @Test
     @DisplayName("pluginScaffold build.ps1 verifies JAR structure")
     fun pluginScaffoldBuildScript() {
         val result = ArtifactScaffolds.pluginScaffold(
@@ -121,6 +138,7 @@ class ArtifactScaffoldsTest {
         val json = result["src/main/resources/META-INF/browser4-plugin.json"]!!
         assertTrue(json.contains("\"name\": \"test-plugin\""))
         assertTrue(json.contains("\"version\""))
+        assertTrue(json.contains("\"sdkVersion\": \"4.14.0-SNAPSHOT\""), "sdkVersion must match the current SDK: $json")
         assertTrue(json.contains("\"dependsOn\""))
         assertTrue(json.contains("\"autoConfigurationClasses\""))
         assertTrue(json.contains("ai.platon.pulsar.test.config.TestPluginAutoConfiguration"))

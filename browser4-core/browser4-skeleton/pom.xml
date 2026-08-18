@@ -222,4 +222,25 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <resources>
+            <!-- Filter ${project.version} into browser4-version.properties so the
+                 runtime host version (Browser4Version) tracks the repo version. -->
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>META-INF/browser4-version.properties</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>META-INF/browser4-version.properties</exclude>
+                </excludes>
+            </resource>
+        </resources>
+    </build>
 </project>

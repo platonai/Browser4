@@ -10,6 +10,8 @@
 # Checks:
 #   [PASS/FAIL] META-INF/browser4-plugin.json exists and is valid JSON
 #   [PASS/FAIL] autoConfigurationClasses field is non-empty
+#   [PASS/WARN] sdkVersion declared (host SDK compatibility check)
+#   [PASS/WARN] Browser4-Plugin-Version in MANIFEST.MF (SDK fallback)
 #   [PASS/FAIL] AutoConfiguration.imports exists and is non-empty
 #   [PASS/FAIL] Plugin JAR is thin (no embedded dependency JARs)
 #   [PASS/FAIL] Kotlin classes compiled to Java 17 bytecode
@@ -96,11 +98,40 @@ if jar tf "$JAR" | grep -q "META-INF/browser4-plugin.json"; then
         else
             warn "autoConfigurationClasses: empty — ensure AutoConfiguration.imports is present"
         fi
+
+        # Check sdkVersion (since 4.14) — the host compares it against its own
+        # version to decide compatibility. Pre-4.14 plugins legitimately lack it.
+        SDK_VERSION=""
+        if command -v python3 &> /dev/null; then
+            SDK_VERSION=$(echo "$MANIFEST" | python3 -c "import json,sys; print(json.load(sys.stdin).get('sdkVersion',''))" 2>/dev/null || true)
+        fi
+        if [ -z "$SDK_VERSION" ]; then
+            SDK_VERSION=$(echo "$MANIFEST" | grep '"sdkVersion"' | head -1 | sed 's/.*"sdkVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+        fi
+        if [ -n "$SDK_VERSION" ]; then
+            pass "sdkVersion: $SDK_VERSION declared"
+        else
+            warn "sdkVersion: not declared — host will load on best-effort (pre-4.14 plugins are exempt)"
+        fi
     else
         fail "META-INF/browser4-plugin.json: found but could not read content"
     fi
 else
     fail "META-INF/browser4-plugin.json: NOT FOUND — every plugin JAR must contain this file"
+fi
+
+# ---------------------------------------------------------------------------
+# Check 2b: Browser4-Plugin-Version in MANIFEST.MF (fallback SDK version source)
+# ---------------------------------------------------------------------------
+if jar tf "$JAR" | grep -q "META-INF/MANIFEST.MF"; then
+    (cd "$TMPDIR" && jar xf "$JAR" "META-INF/MANIFEST.MF" 2>/dev/null) || true
+    MF_FILE="$TMPDIR/META-INF/MANIFEST.MF"
+    if [ -f "$MF_FILE" ] && grep -q "Browser4-Plugin-Version" "$MF_FILE"; then
+        MF_SDK=$(grep "Browser4-Plugin-Version" "$MF_FILE" | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')
+        pass "MANIFEST.MF Browser4-Plugin-Version: $MF_SDK"
+    else
+        warn "MANIFEST.MF Browser4-Plugin-Version: not set — SDK version falls back to plugin.json sdkVersion"
+    fi
 fi
 
 # ---------------------------------------------------------------------------

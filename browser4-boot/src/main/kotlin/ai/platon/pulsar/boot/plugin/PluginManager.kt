@@ -71,8 +71,27 @@ class PluginManager(
                 )
                 return@forEach
             }
+
+            // Defense in depth for plugins on the main classpath (bundled
+            // plugins bypass PluginClasspathEnhancer): refuse beans whose
+            // declared SDK is newer than the host.
+            when (val verdict = PluginCompatibility.check(plugin.manifest)) {
+                is PluginCompatibility.Blocked -> {
+                    logger.error(
+                        "  - Skipping incompatible plugin '{}': {}",
+                        plugin.manifest.name, verdict.reason
+                    )
+                    return@forEach
+                }
+                is PluginCompatibility.Warn -> logger.warn(
+                    "  - Plugin '{}' compatibility warning: {}",
+                    plugin.manifest.name, verdict.reason
+                )
+                is PluginCompatibility.Compatible -> Unit
+            }
+
             plugins.add(plugin)
-            logger.info("  - {} v{}", plugin.manifest.name, plugin.manifest.version)
+            logger.info("  - {} v{} (sdk {})", plugin.manifest.name, plugin.manifest.version, plugin.manifest.sdkVersion)
             plugin.onStartup()
         }
 
@@ -107,6 +126,26 @@ class PluginManager(
                     manifest.name, loadPolicy.disabledReason(manifest)
                 )
                 continue
+            }
+
+            // Same defense in depth as the Browser4Plugin bean loop below:
+            // bundled plugins bypass PluginClasspathEnhancer, so refuse mounts
+            // whose declared SDK is newer than the host.
+            if (manifest != null) {
+                when (val verdict = PluginCompatibility.check(manifest)) {
+                    is PluginCompatibility.Blocked -> {
+                        logger.error(
+                            "  - Skipping mounts from incompatible plugin '{}': {}",
+                            manifest.name, verdict.reason
+                        )
+                        continue
+                    }
+                    is PluginCompatibility.Warn -> logger.warn(
+                        "  - Mounts from plugin '{}' with compatibility warning: {}",
+                        manifest.name, verdict.reason
+                    )
+                    is PluginCompatibility.Compatible -> Unit
+                }
             }
 
             // Use independent `if` checks rather than a `when` expression so that

@@ -17,13 +17,19 @@ This guide shows you how to create, build, and deploy a Browser4 plugin as a sta
 mvn archetype:generate \
   -DarchetypeGroupId=ai.platon.pulsar \
   -DarchetypeArtifactId=browser4-plugin-archetype \
-  -DarchetypeVersion=4.12.0-rc.1 \
+  -DarchetypeVersion=4.13.7 \
+  -Dbrowser4-version=4.13.7 \
   -DgroupId=com.example \
   -DartifactId=my-browser4-plugin \
   -Dpackage=com.example.myplugin \
   -DpluginName="My Browser4 Plugin" \
   -DpluginDescription="A custom Browser4 plugin"
 ```
+
+> `-Dbrowser4-version` selects the SDK version the plugin is built against;
+> it feeds the generated `sdkVersion` manifest field and the
+> `Browser4-Plugin-Version` JAR attribute. Use the same major version as your
+> Browser4 host so the plugin passes the host's compatibility check.
 
 **Option B: Manual Setup**
 
@@ -33,7 +39,7 @@ Create a `pom.xml` with the Browser4 PDK as parent:
 <parent>
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4-pdk</artifactId>
-    <version>4.12.0-rc.1</version>
+    <version>4.13.7</version>
     <relativePath/>
 </parent>
 ```
@@ -121,6 +127,7 @@ Every plugin JAR must contain this file at `META-INF/browser4-plugin.json`:
 {
   "name": "my-browser4-plugin",
   "version": "1.0.0",
+  "sdkVersion": "4.14.0",
   "description": "A custom Browser4 plugin",
   "dependsOn": ["browser4-skeleton", "browser4-browser"],
   "autoConfigurationClasses": [
@@ -132,10 +139,16 @@ Every plugin JAR must contain this file at `META-INF/browser4-plugin.json`:
 | Field | Required | Description |
 |---|---|---|
 | `name` | Yes | Unique plugin identifier |
-| `version` | Yes | Plugin version |
+| `version` | Yes | Plugin version (the plugin's own release version) |
+| `sdkVersion` | Yes (4.14+) | Browser4 SDK version the plugin was compiled against (e.g. `4.14.0`) — the host uses it for compatibility checks |
 | `description` | No | Human-readable description |
 | `dependsOn` | No | List of Browser4 modules this plugin depends on |
 | `autoConfigurationClasses` | No | Spring Boot auto-configuration classes |
+
+> **Note:** plugins built before 4.14 have no `sdkVersion`. The loader falls
+> back to the JAR's `Browser4-Plugin-Version` MANIFEST.MF attribute (written by
+> the archetype/PDK), and treats plugins with neither as "unknown SDK" —
+> loaded on a best-effort basis.
 
 ### Browser4Plugin Interface
 
@@ -411,6 +424,47 @@ PluginManager: Found X Browser4Plugin bean(s)
   - my-plugin v1.0.0
 ```
 
+## SDK Versioning and Compatibility
+
+### Compatibility contract
+
+The plugin SDK (`browser4-pdk` parent POM + `browser4-pdk-bom`) follows
+semantic versioning together with the Browser4 host:
+
+- **Within the same major version** (e.g. all `4.x`), the SDK API is
+  binary-compatible: a plugin built against `4.12.0` keeps working on a
+  `4.14.0` host without recompilation.
+- **Only a major version bump** (e.g. `5.0.0`) may break compatibility, and it
+  ships with a migration guide.
+
+### How the host checks compatibility
+
+At startup (`PluginClasspathEnhancer`) and at install time
+(`PluginService.installPlugin`), the host compares the plugin's `sdkVersion`
+against its own version (`Browser4Version`, injected from the repo `VERSION`
+file at build time):
+
+| Plugin `sdkVersion` | Host behavior |
+|---|---|
+| same major as host | loads normally |
+| older major (legacy plugin) | loads with a warning — old plugins stay usable |
+| **newer major than host** | **refused with a clear error** — rebuild with the matching SDK or upgrade Browser4 |
+| missing / unparseable | loads with a warning (best-effort, pre-4.14 plugins) |
+
+The same check runs for plugins on the main classpath (`PluginManager`).
+
+### Keeping your plugin in sync
+
+- Scaffold new plugins with the archetype (`-Dbrowser4-version=<version>`)
+  so `sdkVersion`, the `Browser4-Plugin-Version` MANIFEST.MF attribute, and the
+  PDK parent version are set consistently.
+- Declare `sdkVersion` in `browser4-plugin.json` **and** keep the JAR's
+  `Browser4-Plugin-Version` attribute (both are read; JSON wins).
+- Run `bin/verify-plugin.ps1` (or `.sh`) before deploying — it reports both
+  SDK version sources.
+- In-repo plugins are governed: `coding.validate(type="repo-consistency")`
+  fails when a bundled plugin's `sdkVersion` does not match the repo `VERSION`.
+
 ## Troubleshooting
 
 ### Plugin not appearing in `/api/plugins`
@@ -433,8 +487,11 @@ PluginManager: Found X Browser4Plugin bean(s)
 
 ### NoSuchMethodError or ClassNotFoundException
 
-- The plugin was compiled against a different version of Browser4 than the host
-- Rebuild with the matching `browser4-pdk` version
+- The plugin was compiled against a different major version of Browser4 than
+  the host. Since 4.14 the host detects this at startup/install time and
+  refuses the plugin with a clear message — check the startup logs for
+  "Skipping incompatible plugin" or the install error.
+- Rebuild with the matching `browser4-pdk` version (`-Dbrowser4-version=<host version>`)
 - Or reinstall the matching Browser4 version
 
 ## Best Practices
@@ -444,6 +501,6 @@ PluginManager: Found X Browser4Plugin bean(s)
 3. **Use `@ConditionalOnProperty`** to make plugin features toggleable
 4. **Prefer `@Lazy`** for plugin beans to avoid startup issues
 5. **Test with the verification script** before deploying
-6. **Version your plugin** to match the Browser4 version it targets
+6. **Version your plugin** to match the Browser4 version it targets — declare `sdkVersion` and keep it in sync with the PDK parent version
 7. **Use `provided` scope** for all framework dependencies
 8. **Do not bundle Spring Boot** — plugins are extensions, not standalone applications

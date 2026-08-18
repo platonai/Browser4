@@ -581,6 +581,31 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "For js: provide name, purpose ('extract'|'inject'|'interact'). " +
                 "For script: provide name, scriptType ('build'|'deploy'|'run'), shell ('ps1'|'bash')."
         )
+        toolSpec["scaffoldToDir"] = ToolSpec(
+            domain = domain, method = "scaffoldToDir",
+            arguments = listOf(
+                ToolSpec.Arg("type", "String"),
+                ToolSpec.Arg("dir", "String"),
+                ToolSpec.Arg("pluginName", "String", "null"),
+                ToolSpec.Arg("name", "String", "null"),
+                ToolSpec.Arg("domain", "String", "null"),
+                ToolSpec.Arg("basePackage", "String", "null"),
+                ToolSpec.Arg("toolMethod", "String", "null"),
+                ToolSpec.Arg("toolDescription", "String", "null"),
+                ToolSpec.Arg("description", "String", "null"),
+                ToolSpec.Arg("triggers", "String", "null"),
+                ToolSpec.Arg("tools", "String", "null"),
+                ToolSpec.Arg("purpose", "String", "null"),
+                ToolSpec.Arg("scriptType", "String", "null"),
+                ToolSpec.Arg("shell", "String", "null"),
+            ),
+            returnType = "String",
+            description = "Generate a scaffold (see scaffold) AND write every generated file directly into the " +
+                "workspace under the given dir (relative to the workspace root, e.g. dir=\"browser4-plugins/" +
+                "browser4-wordcount\"). Multi-file types (plugin) are fully supported; for single-content types " +
+                "use scaffold. This is the reliable way for agents to materialize a new plugin without " +
+                "copy-pasting scaffold output."
+        )
         toolSpec["validate"] = ToolSpec(
             domain = domain, method = "validate",
             arguments = listOf(
@@ -709,8 +734,19 @@ class CodingToolExecutor : AbstractToolExecutor() {
 
             // --- File System ---
             "read" -> {
-                validateArgs(args, allowed = setOf("path"), required = setOf("path"), functionName)
-                fs.readFile(paramString(args, "path", functionName)!!)
+                validateArgs(args, allowed = setOf("path", "startLine", "endLine"), required = setOf("path"), functionName)
+                val path = paramString(args, "path", functionName)!!
+                val startLine = paramInt(args, "startLine", functionName, required = false, default = null)
+                val endLine = paramInt(args, "endLine", functionName, required = false, default = null)
+                if (startLine != null || endLine != null) {
+                    fs.readFileLines(
+                        path = path,
+                        startLine = startLine ?: 1,
+                        endLine = endLine ?: -1,
+                    )
+                } else {
+                    fs.readFile(path)
+                }
             }
             "readLines" -> {
                 validateArgs(args, allowed = setOf("path", "startLine", "endLine"), required = setOf("path"), functionName)
@@ -1192,6 +1228,11 @@ class CodingToolExecutor : AbstractToolExecutor() {
                         params["pdkVersion"] = versionFile.trim()
                     }
                 }
+                // The CLI (and the LLM prompt) use "name"; the plugin template reads
+                // "pluginName". Map it so `code scaffold plugin --name X` names the plugin.
+                if (type == "plugin" && !params.containsKey("pluginName") && params.containsKey("name")) {
+                    params["pluginName"] = params["name"]!!
+                }
                 val result = ArtifactScaffolds.scaffold(type, params)
                 if (result.size == 1 && result.containsKey("_content")) {
                     result["_content"]!!
@@ -1199,6 +1240,41 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     result.entries.joinToString("\n\n") { (path, content) ->
                         "=== File: $path ===\n$content"
                     }
+                }
+            }
+            "scaffoldToDir" -> {
+                val allowed = setOf("type", "dir", "pluginName", "name", "domain", "basePackage",
+                    "toolMethod", "toolDescription", "description",
+                    "triggers", "tools", "purpose", "scriptType", "shell")
+                validateArgs(args, allowed = allowed, required = setOf("type", "dir"), functionName)
+                val type = paramString(args, "type", functionName)!!
+                val dir = paramString(args, "dir", functionName)!!
+                val params = args.filterKeys { it !in setOf("type", "dir") }
+                    .mapValues { it.value?.toString() ?: "" }
+                    .filterValues { it.isNotEmpty() }
+                    .toMutableMap()
+                // Same defaults as scaffold: pdk version from VERSION, name → pluginName.
+                if (type == "plugin" && !params.containsKey("pdkVersion")) {
+                    val versionFile = fs.readFile("VERSION")
+                    if (!versionFile.startsWith("Error:") && versionFile.isNotBlank()) {
+                        params["pdkVersion"] = versionFile.trim()
+                    }
+                }
+                if (type == "plugin" && !params.containsKey("pluginName") && params.containsKey("name")) {
+                    params["pluginName"] = params["name"]!!
+                }
+                val files = ArtifactScaffolds.scaffold(type, params)
+                if (files.size == 1 && files.containsKey("_content")) {
+                    "scaffoldToDir materializes multi-file artifacts only (plugin). " +
+                        "For type '$type' use scaffold to get the content."
+                } else {
+                    val written = mutableListOf<String>()
+                    for ((relPath, content) in files) {
+                        val target = "$dir/${relPath.removePrefix("/")}"
+                        fs.writeFile(target, content)
+                        written += target
+                    }
+                    "✓ Scaffolded $type into $dir (${written.size} files):\n${written.joinToString("\n")}"
                 }
             }
             "validate" -> {
@@ -1338,9 +1414,11 @@ class CodingToolExecutor : AbstractToolExecutor() {
 
     /**
      * `validate(type="repo-consistency")`: check the repo-governance invariants
-     * against the live workspace — VERSION vs root pom vs BOM versions, and
-     * module registration (registered modules exist; on-disk module dirs are
-     * registered). Zero dependencies; reads three files + directory listing.
+     * against the live workspace — VERSION vs root pom vs BOM versions, module
+     * registration (registered modules exist; on-disk module dirs are
+     * registered), and plugin SDK versions (every in-repo plugin manifest
+     * declares sdkVersion == VERSION). Zero dependencies; reads a few files +
+     * directory listings.
      */
     private suspend fun repoConsistencyReport(fs: CodingAgentFileSystem): String {
         val versionContent = fs.readFile("VERSION").takeUnless { it.startsWith("Error:") }
@@ -1348,14 +1426,26 @@ class CodingToolExecutor : AbstractToolExecutor() {
         val bomPom = fs.readFile("browser4-dependencies/pom.xml").takeUnless { it.startsWith("Error:") }
 
         val root = fs.workspaceRoot
-        val onDiskModuleDirs = withContext(Dispatchers.IO) {
-            Files.list(root).use { stream ->
+        val (onDiskModuleDirs, pluginManifestContents) = withContext(Dispatchers.IO) {
+            val moduleDirs = Files.list(root).use { stream ->
                 stream.filter { Files.isDirectory(it) }
+                    .filter { !it.fileName.toString().startsWith(".") }
                     .filter { Files.isRegularFile(it.resolve("pom.xml")) }
                     .map { root.relativize(it).toString().replace('\\', '/') }
                     .sorted()
                     .toList()
             }
+            // Every in-repo plugin manifest outside build output (target/) and
+            // hidden dirs (.git, .worktrees, .claude, ...) — other branches'
+            // checkouts must not be scanned.
+            val manifests = runCatching {
+                Files.walk(root).use { stream ->
+                    stream.filter { RepoConsistencyCheck.isPluginManifestPath(it) }
+                        .map { Files.readString(it) }
+                        .toList()
+                }
+            }.getOrDefault(emptyList())
+            moduleDirs to manifests
         }
 
         val result = RepoConsistencyCheck.check(
@@ -1364,6 +1454,7 @@ class CodingToolExecutor : AbstractToolExecutor() {
             bomPom = bomPom,
             moduleExists = { m -> fs.exists(m) },
             onDiskModuleDirs = onDiskModuleDirs,
+            pluginManifestContents = pluginManifestContents,
         )
         return result.format()
     }

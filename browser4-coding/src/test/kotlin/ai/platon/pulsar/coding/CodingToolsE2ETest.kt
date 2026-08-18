@@ -83,9 +83,16 @@ class CodingToolsE2ETest {
         val versionContent = Files.readString(root.resolve("VERSION"))
         val rootPom = Files.readString(root.resolve("pom.xml"))
         val bomPom = Files.readString(root.resolve("browser4-dependencies/pom.xml"))
+        val pluginManifestContents = Files.walk(root).use { stream ->
+            stream.filter { RepoConsistencyCheck.isPluginManifestPath(it) }
+                .map { Files.readString(it) }
+                .toList()
+        }
         val result = RepoConsistencyCheck.check(
             versionContent, rootPom, bomPom,
-            moduleExists = { Files.isDirectory(root.resolve(it)) })
+            moduleExists = { Files.isDirectory(root.resolve(it)) },
+            pluginManifestContents = pluginManifestContents,
+        )
         assertTrue(result.valid, "live repo must be consistent: ${result.issues}")
     }
 

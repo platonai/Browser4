@@ -440,10 +440,15 @@ The `dependsOn` field serves as documentation and a future enforcement point:
 {
   "name": "browser4-images",
   "version": "4.12.0-rc.1",
+  "sdkVersion": "4.14.0-SNAPSHOT",
   "dependsOn": ["browser4-protocol", "browser4-agentic"],
   "autoConfigurationClasses": ["ai.platon.pulsar.images.config.ImageAutoConfiguration"]
 }
 ```
+
+The `sdkVersion` field (since 4.14) lets the host verify that the plugin was
+built against a compatible SDK — same major version loads (older plugins stay
+usable), a newer major is refused with a clear error.
 
 ### 6. Test against the actual bundle
 

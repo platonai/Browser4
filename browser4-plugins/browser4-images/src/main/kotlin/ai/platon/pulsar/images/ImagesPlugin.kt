@@ -41,6 +41,7 @@ open class ImagesPlugin(
     override val manifest: PluginManifest = PluginManifest(
         name = "browser4-images",
         version = "4.12.0-rc.1",
+        sdkVersion = "4.14.0-SNAPSHOT",
         description = "Image detection and bulk download for Browser4",
         dependsOn = listOf("browser4-protocol", "browser4-agentic"),
         autoConfigurationClasses = listOf(

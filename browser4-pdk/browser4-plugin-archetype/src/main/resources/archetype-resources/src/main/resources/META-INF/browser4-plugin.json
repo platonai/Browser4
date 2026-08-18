@@ -1,6 +1,7 @@
 {
   "name": "${pluginName}",
   "version": "${version}",
+  "sdkVersion": "${browser4-version}",
   "description": "${pluginDescription}",
   "dependsOn": ["browser4-skeleton", "browser4-browser"],
   "defaultEnabled": true,

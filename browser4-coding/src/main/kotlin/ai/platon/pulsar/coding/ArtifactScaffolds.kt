@@ -75,7 +75,7 @@ object ArtifactScaffolds {
         basePackage: String,
         toolMethod: String,
         toolDescription: String,
-        pdkVersion: String = "4.13.6-SNAPSHOT"
+        pdkVersion: String = "4.14.0-SNAPSHOT"
     ): Map<String, String> {
         // Match the ecosystem naming convention: real plugins strip the "browser4-"
         // prefix for class names (browser4-seo -> SeoConfig/SeoAutoConfiguration/SeoToolExecutor).
@@ -92,7 +92,7 @@ object ArtifactScaffolds {
             "pom.xml" to pluginPom(pluginName, pdkVersion),
             "build.ps1" to pluginBuildScript(pluginName, basePackage, autoConfigClass, toolExecutorClass, jsFile),
             "src/main/resources/META-INF/browser4-plugin.json" to
-                pluginJson(pluginName, toolDescription, autoConfigFqn),
+                pluginJson(pluginName, toolDescription, autoConfigFqn, pdkVersion),
             "src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports" to
                 autoConfigFqn,
             "src/main/resources/$jsFile" to
@@ -321,22 +321,35 @@ object ArtifactScaffolds {
                     <artifactId>kotlinx-coroutines-core</artifactId>
                     <scope>provided</scope>
                 </dependency>
+                <!-- Testing (versions managed by browser4-pdk-bom via kotlin-bom / spring-boot-dependencies) -->
+                <dependency>
+                    <groupId>org.jetbrains.kotlin</groupId>
+                    <artifactId>kotlin-test-junit5</artifactId>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-starter-test</artifactId>
+                    <scope>test</scope>
+                </dependency>
             </dependencies>
         </project>
     """.trimIndent()
 
     /**
      * Generate `META-INF/browser4-plugin.json` matching the real [ai.platon.pulsar.skeleton.plugin.PluginManifest]
-     * contract: name (artifact id), version, description, dependsOn, autoConfigurationClasses.
+     * contract: name (artifact id), version, sdkVersion, description, dependsOn, autoConfigurationClasses.
      */
     private fun pluginJson(
         pluginName: String,
         description: String,
-        autoConfigFqn: String
+        autoConfigFqn: String,
+        sdkVersion: String,
     ): String = """
         {
           "name": "$pluginName",
           "version": "1.0.0",
+          "sdkVersion": "$sdkVersion",
           "description": "${description.replace("\"", "\\\"")}",
           "dependsOn": ["browser4-skeleton", "browser4-protocol", "browser4-agentic"],
           "autoConfigurationClasses": ["$autoConfigFqn"]

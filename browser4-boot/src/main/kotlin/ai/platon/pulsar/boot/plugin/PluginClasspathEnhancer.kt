@@ -1,5 +1,6 @@
 package ai.platon.pulsar.boot.plugin
 
+import ai.platon.pulsar.skeleton.plugin.Browser4Version
 import ai.platon.pulsar.skeleton.plugin.PluginManifest
 import org.slf4j.LoggerFactory
 import java.net.URLClassLoader
@@ -86,8 +87,16 @@ object PluginClasspathEnhancer {
      * Applies the [PluginLoadPolicy]: default-disabled (opt-in) plugins are
      * excluded unless explicitly enabled. JARs without a plugin manifest are
      * loaded as-is for backward compatibility.
+     *
+     * Plugins whose SDK major version is newer than the host's are excluded
+     * with an error log (they cannot work against older hosts); older-SDK
+     * plugins are kept with a warning.
      */
-    internal fun selectJars(jars: List<Path>, policy: PluginLoadPolicy): List<Path> {
+    internal fun selectJars(
+        jars: List<Path>,
+        policy: PluginLoadPolicy,
+        hostVersion: String = Browser4Version.version,
+    ): List<Path> {
         return jars.filter { jar ->
             val manifest = runCatching {
                 JarFile(jar.toFile()).use { PluginManifest.fromJar(it) }
@@ -98,13 +107,29 @@ object PluginClasspathEnhancer {
                     logger.debug("JAR without plugin manifest: {} (loaded as-is)", jar.fileName)
                     true
                 }
-                policy.isEnabled(manifest) -> true
-                else -> {
+                !policy.isEnabled(manifest) -> {
                     logger.info(
                         "Skipping plugin '{}' ({}): {}",
                         manifest.name, jar.fileName, policy.disabledReason(manifest)
                     )
                     false
+                }
+                else -> when (val verdict = PluginCompatibility.check(manifest, hostVersion)) {
+                    is PluginCompatibility.Blocked -> {
+                        logger.error(
+                            "Skipping incompatible plugin '{}' ({}): {}",
+                            manifest.name, jar.fileName, verdict.reason
+                        )
+                        false
+                    }
+                    is PluginCompatibility.Warn -> {
+                        logger.warn(
+                            "Loading plugin '{}' ({}) with compatibility warning: {}",
+                            manifest.name, jar.fileName, verdict.reason
+                        )
+                        true
+                    }
+                    is PluginCompatibility.Compatible -> true
                 }
             }
         }

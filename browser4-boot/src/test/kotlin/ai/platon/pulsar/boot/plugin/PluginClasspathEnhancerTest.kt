@@ -59,17 +59,48 @@ class PluginClasspathEnhancerTest {
         assertEquals(listOf(optInJar), selected)
     }
 
+    @Test
+    fun `selectJars excludes plugins requiring a newer SDK major`() {
+        val futureJar = createPluginJar("future-1.0.0.jar", "future-plugin", sdkVersion = "9.0.0")
+        val currentJar = createPluginJar("current-1.0.0.jar", "current-plugin", sdkVersion = "4.14.0")
+
+        val selected = PluginClasspathEnhancer.selectJars(
+            listOf(futureJar, currentJar),
+            PluginLoadPolicy(enableAll = false, enabledNames = emptySet(), disabledNames = emptySet()),
+            hostVersion = "4.14.0",
+        )
+
+        assertEquals(listOf(currentJar), selected)
+    }
+
+    @Test
+    fun `selectJars keeps plugins built with an older or same-major SDK`() {
+        val oldJar = createPluginJar("legacy-1.0.0.jar", "legacy-plugin", sdkVersion = "3.9.0")
+        val sameMajorJar = createPluginJar("same-1.0.0.jar", "same-plugin", sdkVersion = "4.12.0")
+        val noSdkJar = createPluginJar("nosdk-1.0.0.jar", "nosdk-plugin")
+
+        val selected = PluginClasspathEnhancer.selectJars(
+            listOf(oldJar, sameMajorJar, noSdkJar),
+            PluginLoadPolicy(enableAll = false, enabledNames = emptySet(), disabledNames = emptySet()),
+            hostVersion = "4.14.0",
+        )
+
+        assertEquals(listOf(oldJar, sameMajorJar, noSdkJar), selected)
+    }
+
     // ---- Helpers ----
 
     private fun createPluginJar(
         fileName: String,
         name: String,
         defaultEnabled: Boolean = true,
+        sdkVersion: String? = null,
     ): Path {
+        val sdkField = sdkVersion?.let { "\n                \"sdkVersion\": \"$it\"," } ?: ""
         val manifestJson = """
             {
                 "name": "$name",
-                "version": "1.0.0",
+                "version": "1.0.0",$sdkField
                 "defaultEnabled": $defaultEnabled,
                 "autoConfigurationClasses": ["java.lang.String"]
             }

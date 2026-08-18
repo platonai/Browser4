@@ -1,6 +1,7 @@
 {
   "name": "browser4-weather",
   "version": "1.0.0",
+  "sdkVersion": "4.14.0-SNAPSHOT",
   "description": "Fetch the current weather for the active page",
   "dependsOn": ["browser4-skeleton", "browser4-protocol", "browser4-agentic"],
   "autoConfigurationClasses": ["ai.platon.pulsar.weather.config.WeatherAutoConfiguration"]
