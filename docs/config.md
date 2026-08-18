@@ -150,7 +150,8 @@ docker run -d -p 8182:8182 `
   Defines how the user data directory is assigned for each browser instance.
 
   - `DEFAULT`: Uses the default Browser4-managed user data directory.
-  - `SYSTEM_DEFAULT`: Uses the system's default browser profile (e.g., your personal Chrome/Edge profile).
+  - `SYSTEM_DEFAULT` ⚠️ **[Deprecated]**: Uses the system's default browser profile (e.g., your personal Chrome/Edge profile).
+    - Not supported by Chrome ≥ 143 (see [Browser4 issue #162](https://github.com/platonai/Browser4/issues/162)). To reuse system browser state, use `attach` + `state-save`/`state-load` instead — see [browser-state-import.md](../skills/browser4-cli/references/browser-state-import.md).
   - `PROTOTYPE` **[Advanced]**: Uses a predefined prototype user data directory.
     - All `SEQUENTIAL` and `TEMPORARY` modes inherit from this prototype.
   - `SEQUENTIAL` **[Advanced]**: Selects a user data directory from a managed pool to enable sequential isolation.
@@ -190,10 +191,21 @@ docker run -d -p 8182:8182 `
 | Mode           | Description                                                                 | User Data Directory Behavior                             | Use Case            |
 |----------------|-----------------------------------------------------------------------------|-----------------------------------------------------------|---------------------|
 | `DEFAULT`      | Uses the Browser4-managed default profile.                                 | Shared across Pulsar sessions (not your system browser).  | General purpose     |
-| `SYSTEM_DEFAULT` | Uses the system browser's default profile.                                | Shares your daily-used browser profile.                   | For quick integration or debugging with real session data |
+| `SYSTEM_DEFAULT` ⚠️ | **[Deprecated]** Uses the system browser's default profile.               | Shares your daily-used browser profile.                   | **Not supported by Chrome ≥ 143** — use attach + state-save/state-load |
 | `PROTOTYPE` ⚠️ | **[Advanced]** Uses a predefined prototype profile.                         | Acts as the base for `SEQUENTIAL` and `TEMPORARY`.        | Controlled state inheritance |
 | `SEQUENTIAL` ⚠️ | **[Advanced]** Picks a profile from a pool sequentially.                   | Rotates through a pool of pre-initialized directories.     | Avoid session reuse in batch runs |
 | `TEMPORARY` ⚠️  | **[Advanced]** Creates a new, isolated profile for each browser instance. | Discarded after session ends.                             | Maximum isolation / stateless crawling |
+
+---
+
+### Reusing state from the system browser
+
+To copy your system Chrome/Edge state (cookies + localStorage, or a full
+profile) into a Browser4-managed browser, see
+[browser-state-import.md](../skills/browser4-cli/references/browser-state-import.md).
+The supported flow is: `attach --extension` (or `attach --cdp`) →
+`state-save <file>` → `open --fresh` → `state-load <file>`. The
+`SYSTEM_DEFAULT` profile mode is deprecated and does not work with Chrome ≥ 143.
 
 ---
 

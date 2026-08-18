@@ -739,6 +739,7 @@ Organized by task — follow the link that matches what you're trying to do:
 
 **Manage browser state:**
 [storage-state.md](references/storage-state.md) — cookies, localStorage, sessionStorage, state save/load
+[browser-state-import.md](references/browser-state-import.md) — copy system browser state (cookies, localStorage, or full profile) into Browser4-managed sessions
 [webdb.md](references/webdb.md) — export cached pages, normalize URLs for database lookups
 [attach.md](references/attach.md) — connect to existing Chrome/Edge via CDP
 

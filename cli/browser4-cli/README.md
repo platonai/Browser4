@@ -154,6 +154,12 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 | `sessionstorage-delete <key>` | Delete a sessionStorage entry |
 | `sessionstorage-clear` | Clear sessionStorage |
 
+To reuse your **system browser's** logged-in state in a Browser4-managed
+session: `attach --extension` (or `attach --cdp`) → `state-save <file>` →
+`open --fresh` → `state-load <file>`. Full-profile copies (history, passwords,
+extensions) are also possible via `open --profile` or PROTOTYPE mode. See
+[browser-state-import.md](../../skills/browser4-cli/references/browser-state-import.md).
+
 ### Agent
 
 | Command | Description |
