@@ -84,6 +84,26 @@ runs:
         MAVEN_CMD=$([ -f "./mvnw" ] && echo "./mvnw" || echo "mvn")
         echo "MAVEN_CMD=$MAVEN_CMD" >> $GITHUB_ENV
 
+        # Provide a virtual display on headless CI runners. Pulsar's
+        # BrowserSettings.withGUI degrades to HEADLESS by design when the host
+        # has no GUI support, so GUI display-mode tests need a real X display.
+        if [ -z "${DISPLAY:-}" ]; then
+          if command -v Xvfb &> /dev/null; then
+            Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp > /tmp/xvfb.log 2>&1 &
+            echo "DISPLAY=:99" >> $GITHUB_ENV
+            # Wait for the X socket so later steps can connect right away
+            for _ in $(seq 1 20); do
+              [ -S /tmp/.X11-unix/X99 ] && break
+              sleep 0.25
+            done
+            echo "✅ Started Xvfb on :99"
+          else
+            echo "⚠️ Xvfb not installed; GUI display-mode tests will fall back to headless"
+          fi
+        else
+          echo "✅ DISPLAY already set: $DISPLAY"
+        fi
+
         # Create test results directory
         mkdir -p test-results
 

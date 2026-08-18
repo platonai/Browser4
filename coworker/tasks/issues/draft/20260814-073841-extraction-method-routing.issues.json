@@ -1,0 +1,266 @@
+{
+  "meta": {
+    "date": "20260814-084525",
+    "mode": "production",
+    "scenario": "extraction-method-routing",
+    "source": "20260814-073841-extraction-method-routing.full.md"
+  },
+  "background": {
+    "executionContext": "**Preparation**\n- Verified cwd = `D:\\workspace\\Browser4\\Browser4-4.13`; created `./.test-sessions/`.\n- Ran `browser4-cli help` (full command map) and saved `--help-json` to `.test-sessions/help-json.json`.\n- Downloaded and read the complete `https://browser4.io/SKILL.md` (45 KB) plus the local reference docs that govern the scenario: `htmlsnapshot.md`, `x-sql.md`, `x-sql-dom-functions.md`, `crawl.md`, `agent.md`.\n- `browser4-cli status` → backend UP; confirmed MockSite HTTP 200 on :18080; `browser4-cli doctor` → \"LLM is configured\" (DeepSeek via `~/.browser4/config/conf-enabled/application-private.properties`).\n\n**AC1** — `goto form-filling.html` → `snapshot -i --stdout` (obtained refs e2–e9, e14, e16, e17, e172) → `fill e2 \"Ada\"`, `fill e3 \"Lovelace\"`, `fill e4 \"ada@example.com\"`, `select e5 \"jp\"`, `select e8 \"advanced\"`, `check e14`, `check e16`, `fill e9 \"…\"`, `check e17`, `click e172` → `htmlsnapshot` → `get text \"#result-data\"`. Workaround: my first selector `.result-data` (from the AX label) returned \"No elements matched\"; the element is an ID (`#result-data`), corrected via `htmlsnapshot grep`.\n\n**AC2/AC3** — `goto` detail page → `htmlsnapshot` → `get text \"#productTitle\"`; `goto` listing page → `htmlsnapshot` → `get all text \"[class*='product-title']\"`.\n\n**AC4** — Verified card markup with `htmlsnapshot grep \"product-card\"`; wrote `ac4-query.sql` under `.test-sessions/`; ran `htmlsnapshot query \"http://localhost:18080/ec/b?node=1292115012\" --sql \"@.test-sessions/ac4-query.sql\"` (quoting the `@` path per PowerShell guidance). Note: `DOM_FIRST_HREF(DOM, 'a.product-link')` returned absolute URLs.\n\n**AC5** — `goto interactive-1.html`; wrote `ac5-eval.js`; ran `eval --file .test-sessions/ac5-eval.js --json`; cross-checked counts with `htmlsnapshot` capture + `get all attr button class` + `grep \"<form\"`.\n\n**AC6** — `goto /ec/dp/B0E000002`; ran `extract \"…as JSON.\" --stdout` (~69 s); verified title/price/rating/features via `htmlsnapshot get text`.\n\n**AC7** — Wrote `ac7-seed.txt` (5 URLs) and `ac7-query.sql`; ran `crawl --seed-file \".test-sessions/ac7-seed.txt\" --depth 0 --sql \"@.test-sessions/ac7-query.sql\" --format table --refresh`; verified the 5-row table.\n\n**Key decisions:** used the documented `--sql @file` / `eval --file` patterns to avoid PowerShell quoting; followed the \"interact → re-snapshot → extract\" loop exactly as SKILL.md prescribes (refs stayed valid across sequential fills on this static form); treated `extract`'s output as valid once cross-checked against the live DOM.\n\n**Workarounds required:** only the selector form correction in AC1 (`.result-data` → `#result-data`).\n\njson\n{\n  \"issues\": [\n    {\n      \"title\": \"SKILL.md copy-paste template `htmlsnapshot get text <css> --all` returns only the first match, not all matches\",\n      \"severity\": \"Medium\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"On a listing page with multiple matches run: browser4-cli htmlsnapshot; then browser4-cli htmlsnapshot get text \\\"[class*='product-title']\\\" --all. Compare with browser4-cli htmlsnapshot get all text \\\"[class*='product-title']\\\".\",\n      \"expected\": \"Following the SKILL.md §1 Copy-Paste Template (`htmlsnapshot get text \\\"<css-selector>\\\" --all`) should return all matching product titles, as a first-time user would reasonably infer from the template.\",\n      \"actual\": \"`get text ... --all` returns only the first match (e.g. \\\"4K OLED TV 55\\\"); the full list of 6 titles is only returned by `get all text ...`. `--all` merely disables output pagination; it does not switch to querySelectorAll semantics.\",\n      \"rootCause\": \"The SKILL.md quick-start template conflates the `--all` pagination flag with the `get all` variant. The underlying command semantics are correct and correctly documented in references/htmlsnapshot.md; only the top-level SKILL.md template (and web copy) is wrong. A user copying the template gets silently incomplete data.\",\n      \"codePointer\": \"skills/browser4-cli/SKILL.md (section 1 Copy-Paste Template); web SKILL.md at browser4.io/SKILL.md\",\n      \"suggestion\": \"- Replace `htmlsnapshot get text \\\"<css-selector>\\\" --all` in the template with `htmlsnapshot get all text \\\"<css-selector>\\\"`\\n- Add a one-line note under the template distinguishing `get` (first match) from `get all` (querySelectorAll)\\n- Consider making the CLI print a hint when `--all` is used with `get` alone (e.g. 'Use get all <field> for all matches')\"\n    },\n    {\n      \"title\": \"`htmlsnapshot get` exits 0 when the selector matches nothing, contradicting the documented non-zero exit\",\n      \"severity\": \"Medium\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"browser4-cli htmlsnapshot get text \\\"zzz-no-such-element-xyz\\\"; echo $LASTEXITCODE  (also verifiable with `&& echo PASS` in bash)\",\n      \"expected\": \"Non-zero exit code when the CSS selector matches nothing, as stated in references/htmlsnapshot.md Error Handling: \\\"htmlsnapshot get exits non-zero when the CSS selector matches nothing or an element ref (e5) is passed.\\\"\",\n      \"actual\": \"Exit code is 0. The CLI prints a helpful \\\"No elements matched\\\" message but returns success, so scripts/CI pipelines treat empty extraction as success (silent failure). Control commands do propagate exit codes correctly (e.g. `config set timeout 0` exits 1, unknown command exits 2), so this is specific to the empty-result path.\",\n      \"rootCause\": \"handle_html_snapshot_get computes `empty_result` and prints guidance but returns Ok(()) from the command handler; no error/exit code is produced for the no-match case. Only invalid selectors/refs and backend failures produce non-zero exits.\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs:5913 (handle_html_snapshot_get, empty_result branch around line 5996)\",\n      \"suggestion\": \"- Return a non-zero exit (e.g. 2) when `empty_result` is true for `get`/`get all`, while still printing the guidance text\\n- Add a machine-readable `--json` field like `\\\"matched\\\": false` so scripts can distinguish no-match from success\\n- Update references/htmlsnapshot.md only if the behavior is intentionally kept as exit 0, and document the discrepancy\"\n    },\n    {\n      \"title\": \"`extract --stdout` prints the raw internal ExtractResult envelope instead of the extracted content\",\n      \"severity\": \"Medium\",\n      \"category\": \"Product\",\n      \"reproduction\": \"browser4-cli extract \\\"Return the product title, displayed price, rating, and the top three feature bullets as JSON.\\\" --stdout\",\n      \"expected\": \"Per `browser4-cli help extract`: \\\"--stdout Print extracted content directly to stdout.\\\" The output should be the extracted JSON (`{\\\"title\\\": ..., \\\"price\\\": ..., ...}`), directly consumable by scripts.\",\n      \"actual\": \"Stdout contains the backend envelope: {\\\"type\\\":\\\"ai.platon.pulsar.agentic.ExtractResult\\\",\\\"description\\\":\\\"<escaped JSON>\\\",\\\"inputToken\\\":...,\\\"outputToken\\\":...,\\\"inferenceTimeMillis\\\":...}. The requested JSON is double-encoded inside `description`, and the embedded metadata reports `\\\"completed\\\":false` even though extraction succeeded — confusing and wrong for direct consumption.\",\n      \"rootCause\": \"handle_extract passes the raw server response through as `content` and, in raw mode, `println!(\\\"{}\\\", content)` prints that envelope verbatim. No client-side unwrapping of the ExtractResult `description` field is performed, and the empty-extraction detector looks for `completed:false` at paths that this envelope shape does not match.\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs:5363 (handle_extract, raw branch around line 5478)\",\n      \"suggestion\": \"- In `--stdout`/`--raw` mode, unwrap `ExtractResult.description` and print the actual extracted payload\\n- Optionally also print a one-line metadata summary to stderr instead of stdout so stdout stays clean for piping\\n- Fix the empty-extraction detector to recognize the ExtractResult envelope shape (description containing metadata.completed=false)\"\n  ],\n    },\n    {\n      \"title\": \"`extract --stdout` still writes a timestamped file into the workspace `.browser4-cli/snapshot/` directory\",\n  \"assessment\": {\n      \"severity\": \"Low\",\n    \"completionStatus\": \"Successful — all 7 acceptance criteria passed using only the released browser4-cli 4.13.4 binary against the production backend; the usability evaluation was completed alongside the task.\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run browser4-cli extract \\\"...\\\" --stdout, then check Get-ChildItem .browser4-cli/snapshot/extract-*.txt (a new file with the same content is created).\",\n    \"successRate\": \"100% — all scenario steps (AC1–AC7) completed and verified; no environment blockers (LLM key was configured, MockSite and backend were up).\",\n      \"expected\": \"With `--stdout`, no file should be written — help text says \\\"Output is saved to a timestamped file by default. Use --stdout (or --raw) to print to stdout instead.\\\"\",\n    \"issuesFound\": 8,\n      \"actual\": \"A file `.browser4-cli/snapshot/extract-<timestamp>.txt` is always created regardless of `--stdout`/`--raw`, because `save_snapshot` is called unconditionally. This wrote to the repository working tree during the evaluation (git-ignored, but still workspace pollution).\",\n      \"rootCause\": \"handle_extract always calls `save_snapshot(&out_path, content)` before checking the raw flag; the raw flag only controls whether content is also printed to stdout.\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs:5448 (handle_extract, unconditional save_snapshot call)\",\n      \"suggestion\": \"- Skip `save_snapshot` when `--stdout`/`--raw`/`--filename` is provided (or document that extraction always archives)\\n- When `--filename` is provided, write only to that path instead of also writing to the snapshot dir\\n- Surface the saved path in non-stdout mode so users know where archives land\"\n    \"majorBlockers\": \"None. The task was fully executable with documented commands; issues found are documentation inaccuracies, silent-failure/exit-code behavior, extract output envelope noise, and an undocumented workspace output directory — all workaroundable.\",\n    },\n    {\n      \"title\": \"Snapshot/screenshot/extract outputs go to a hardcoded workspace-relative `.browser4-cli/snapshot/` dir that is undocumented and not redirected by BROWSER4_CLI_STATE_DIR\",\n      \"severity\": \"Medium\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"Run any `snapshot`, `screenshot`, or `extract` command from a repo checkout; observe files created under <cwd>/.browser4-cli/snapshot/ even though session state lives in ~/.browser4. Attempt to redirect with $env:BROWSER4_CLI_STATE_DIR — snapshot output location does not change.\",\n    \"mostConfusingAspects\": \"For a first-time user: (1) the SKILL.md template `get text ... --all` looks like it returns all matches but returns only the first; (2) `extract --stdout` prints an internal ExtractResult envelope instead of the requested JSON; (3) `htmlsnapshot query` dumps a large JSON envelope by default and the readable `--format table` is only discoverable via --help; (4) command outputs silently accumulate in an undocumented `./.browser4-cli/snapshot/` directory; (5) `htmlsnapshot get` returning exit 0 on no match makes empty results indistinguishable from success in scripts.\",\n      \"expected\": \"The documentation (SKILL.md, `browser4-cli help`) explains where command outputs are stored and provides a way to redirect them; the described fallback is `./.browser4-cli-state`, but outputs should follow the state/runtime dir or an env override.\",\n    \"mostValuableImprovements\": \"Fix the SKILL.md copy-paste template and document `--format`/`--result-only` for query; make `htmlsnapshot get` exit non-zero on no-match; make `extract --stdout` print clean unwrapped content and stop writing an archive file; document (or redirect via env var) the `.browser4-cli/snapshot/` output directory.\",\n      \"actual\": \"The snapshot/screenshot/extract output directory is hardcoded to `./.browser4-cli/snapshot/` relative to the current working directory (snapshot.rs SNAPSHOT_DIR), independent of BROWSER4_CLI_STATE_DIR. The docs only mention `.browser4-cli-state` as the workspace fallback for state, and never document `.browser4-cli/snapshot/`. In a source checkout this accumulates snapshot/extract files in the repo tree (mitigated only by .gitignore lines 131–134).\",\n    \"usabilityRating\": 7\n      \"rootCause\": \"snapshot_dir() builds the path from a hardcoded constant [\\\".browser4-cli\\\", \\\"snapshot\\\"] relative to CWD; no env var or config key overrides it, and the SKILL.md/help docs don't mention it.\",\n  }\n      \"codePointer\": \"cli/browser4-cli/src/snapshot.rs:16 (snapshot_dir(), SNAPSHOT_DIR at line 9)\",\n      \"suggestion\": \"- Document `.browser4-cli/snapshot/` in SKILL.md and `help` (alongside `snapshot clean`), and/or honor BROWSER4_CLI_STATE_DIR for snapshot outputs\\n- Add an env var (e.g. BROWSER4_CLI_SNAPSHOT_DIR) or `config set snapshot-dir <path>` override\\n- Consider defaulting outputs to the state dir (~/.browser4/snapshot) instead of CWD-relative paths, which is safer for source-tree usage\"\n    },\n    {\n      \"title\": \"SKILL.md §4a claims `htmlsnapshot get text article` \\\"auto-discovers content\\\", but `article` is a plain tag selector\",\n      \"severity\": \"Low\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"On a page without an <article> tag (e.g. MockSite product page): browser4-cli htmlsnapshot; browser4-cli htmlsnapshot get text \\\"article\\\" → \\\"No elements matched\\\".\",\n      \"expected\": \"Either the command should auto-discover the main content as the decision tree implies, or the docs should not describe `article` as auto-discovery.\",\n      \"actual\": \"The command simply runs querySelector('article'); on MockSite pages there are no <article> elements, so it returns an empty result with exit 0. Auto-discovery is a separate feature of `htmlsnapshot inspect`, not of `get text article`.\",\n      \"rootCause\": \"The §4a decision tree line \\\"Don't know the right CSS selector? → htmlsnapshot get text article (auto-discovers content)\\\" is a misleading simplification; no auto-discovery exists in the get path.\",\n      \"codePointer\": \"skills/browser4-cli/SKILL.md (section 4a decision tree); references/htmlsnapshot.md (get command docs)\",\n      \"suggestion\": \"- Replace the decision-tree line with `htmlsnapshot inspect` (which genuinely auto-discovers recurring patterns) or clarify that `article` is just an example tag selector\\n- Add a note that `get text` accepts any CSS selector and that `inspect`/`summary` are the discovery tools\"\n    },\n    {\n      \"title\": \"`htmlsnapshot query` default output is a raw JSON envelope and the human-readable `--format table` / `--result-only` flags are absent from the main documentation\",\n      \"severity\": \"Low\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"browser4-cli htmlsnapshot query \\\"http://localhost:18080/ec/b?node=1292115012\\\" --sql \\\"@query.sql\\\" → full JSON envelope with id/statusCode/timestamps; only `browser4-cli htmlsnapshot query --help` reveals --format table and --result-only.\",\n      \"expected\": \"The primary docs (SKILL.md §4e, references/htmlsnapshot.md Query section) should mention the output format options so a first-time user knows a readable table output exists; or the default should be human-readable.\",\n      \"actual\": \"SKILL.md and htmlsnapshot.md describe `query` without any output-format flags; the user gets a noisy machine envelope by default and must discover `--help` to find `--format table`. The task instructions themselves only specified the envelope path, so the scenario still succeeded, but the readable option was effectively hidden.\",\n      \"rootCause\": \"Documentation lag: the `--format`/`--result-only` options exist in help.rs/commands.rs but were not added to SKILL.md or the htmlsnapshot reference.\",\n      \"codePointer\": \"skills/browser4-cli/references/htmlsnapshot.md (Query section); skills/browser4-cli/SKILL.md (4e X-SQL Quickstart)\",\n}\n      \"suggestion\": \"- Document `--format json|csv|table` and `--result-only` in the htmlsnapshot.md Query section and SKILL.md §4e\\n- Add a table-format example to the X-SQL quickstart so the default envelope doesn't surprise first-time users\\n- Consider making `--format table` the default when stdout is a TTY\"\n```\n    },\n\n**Overall assessment:** The task succeeded at 100% — every documented workflow in §4a executed correctly on the first or second try, and the core loop (snapshot → interact → re-snapshot → extract) held up well on the MockSite fixtures. Usability is good but not great: the biggest friction is documentation that misleads (the `--all` template, the \"auto-discovery\" claim, the exit-code contract, hidden query format flags) plus `extract` output that isn't what `--stdout` promises. Fixing the top four issues would make first-run experience markedly smoother; none of them block the documented extraction paths.\n      \"title\": \"First-run `goto` prints \\\"No active session — creating a new one.\\\" on stderr after the successful output, appearing contradictory\",\ntokens used\n      \"severity\": \"Low\",\n116,249\n      \"category\": \"UX\",\n      \"reproduction\": \"In a fresh CLI environment, run: browser4-cli goto \\\"http://localhost:18080/generated/form-filling.html\\\" and observe message ordering.\",\n      \"expected\": \"Session creation status should appear before/with the \\\"Session opened: ...\\\" and navigation output so the messages are coherent.\",\n      \"actual\": \"The stderr message \\\"No active session — creating a new one.\\\" is emitted before session creation in code, but appears after the \\\"Session opened\\\"/\\\"Navigated to\\\"/snapshot-path output in the captured console due to stdout/stderr stream buffering, making it look like the CLI first navigated and then created a session.\",\n      \"rootCause\": \"eprintln! at main.rs:1252 writes to stderr (unbuffered) while session/navigation messages go through stdout buffering; in the captured output the stderr line surfaces last. The message itself is correct and intended.\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs:1252 (eprintln! \\\"No active session — creating a new one.\\\")\",\n      \"suggestion\": \"- Route the session-creation notice through the same stdout printing path used for \\\"Session opened\\\" so ordering is deterministic\\n- Or merge the messages: \\\"No active session — creating a new one (id …)\\\" emitted as a single stdout line before navigation output\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Successful — all 7 acceptance criteria passed using only the released browser4-cli 4.13.4 binary against the production backend; the usability evaluation was completed alongside the task.\",\n    \"successRate\": \"100% — all scenario steps (AC1–AC7) completed and verified; no environment blockers (LLM key was configured, MockSite and backend were up).\",\n    \"issuesFound\": 8,\n    \"majorBlockers\": \"None. The task was fully executable with documented commands; issues found are documentation inaccuracies, silent-failure/exit-code behavior, extract output envelope noise, and an undocumented workspace output directory — all workaroundable.\",\n    \"mostConfusingAspects\": \"For a first-time user: (1) the SKILL.md template `get text ... --all` looks like it returns all matches but returns only the first; (2) `extract --stdout` prints an internal ExtractResult envelope instead of the requested JSON; (3) `htmlsnapshot query` dumps a large JSON envelope by default and the readable `--format table` is only discoverable via --help; (4) command outputs silently accumulate in an undocumented `./.browser4-cli/snapshot/` directory; (5) `htmlsnapshot get` returning exit 0 on no match makes empty results indistinguishable from success in scripts.\",\n    \"mostValuableImprovements\": \"Fix the SKILL.md copy-paste template and document `--format`/`--result-only` for query; make `htmlsnapshot get` exit non-zero on no-match; make `extract --stdout` print clean unwrapped content and stop writing an archive file; document (or redirect via env var) the `.browser4-cli/snapshot/` output directory.\",\n    \"usabilityRating\": 7\n  }\n}\n```\n\n**Overall assessment:** The task succeeded at 100% — every documented workflow in §4a executed correctly on the first or second try, and the core loop (snapshot → interact → re-snapshot → extract) held up well on the MockSite fixtures. Usability is good but not great: the biggest friction is documentation that misleads (the `--all` template, the \"auto-discovery\" claim, the exit-code contract, hidden query format flags) plus `extract` output that isn't what `--stdout` promises. Fixing the top four issues would make first-run experience markedly smoother; none of them block the documented extraction paths.",
+    "task": "All 7 acceptance criteria passed end-to-end against the released `browser4-cli` 4.13.4 (backend v4.13.4-SNAPSHOT at localhost:18182, MockSite on localhost:18080, DeepSeek configured on the backend for `extract`):\n\n- **AC1 — Interact first, then extract:** Filled First Name, Last Name, Email, Country (jp), Experience level (advanced), checked the Testing and newsletter checkboxes, filled Comments, agreed to terms, and submitted. A fresh `htmlsnapshot` after submit followed by `htmlsnapshot get text \"#result-data\"` returned the post-submit JSON payload containing every entered value (`firstName: Ada`, `lastName: Lovelace`, `email: ada@example.com`, `country: jp`, `topics: [automation, testing]`, `newsletterOptIn: true`, `experienceLevel: advanced`, comments). ✓\n- **AC2 — Static page, one field:** `htmlsnapshot get text \"#productTitle\"` on `/ec/dp/B0E000001` returned `4K OLED TV 55`. ✓\n- **AC3 — One field, all matches:** `htmlsnapshot get all text \"[class*='product-title']\"` on the Electronics listing returned all 6 product titles, not just the first. ✓\n- **AC4 — Correlated multi-field rows:** An X-SQL query using `DOM_LOAD_AND_SELECT(@url, 'div[class*=\"product-card\"]')` with `DOM_BASE_URI`, `DOM_FIRST_TEXT` (title/price), and `DOM_FIRST_HREF` (detail link) returned 6 rows with title, price, and detail URL correctly aligned per card. ✓\n- **AC5 — Dynamic/complex page logic:** `eval --file ac5-eval.js --json` returned a structured object (`pageTitle`, `buttonCount: 2`, `linkCount: 0`, `formCount: 0`, 5 headings), each value verified against the live page. ✓\n- **AC6 — Natural-language extraction:** `extract \"Return the product title, displayed price, rating, and the top three feature bullets as JSON.\" --stdout` returned title/price/rating matching the page exactly; the page only contains 2 feature bullets, so the extraction was faithful. ✓\n- **AC7 — High-volume extraction:** `crawl --seed-file` (5 product URLs) `--depth 0 --sql @ac7-query.sql --format table --refresh` produced 5 rows, one per seed URL, each with correct URL/title/price. ✓\n\nAll scratch files (query SQL, JS, seed list, help JSON, SKILL copy) were created under `./.test-sessions/` (git-ignored). No repo files were modified; the worktree changes shown by `git status` (a modified `common.ps1` and coworker draft files) pre-date this session."
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "SKILL.md copy-paste template `htmlsnapshot get text <css> --all` returns only the first match, not all matches",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "On a listing page with multiple matches run: browser4-cli htmlsnapshot; then browser4-cli htmlsnapshot get text \"[class*='product-title']\" --all. Compare with browser4-cli htmlsnapshot get all text \"[class*='product-title']\".",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Following the SKILL.md §1 Copy-Paste Template (`htmlsnapshot get text \"<css-selector>\" --all`) should return all matching product titles, as a first-time user would reasonably infer from the template.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "`get text ... --all` returns only the first match (e.g. \"4K OLED TV 55\"); the full list of 6 titles is only returned by `get all text ...`. `--all` merely disables output pagination; it does not switch to querySelectorAll semantics.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The SKILL.md quick-start template conflates the `--all` pagination flag with the `get all` variant. The underlying command semantics are correct and correctly documented in references/htmlsnapshot.md; only the top-level SKILL.md template (and web copy) is wrong. A user copying the template gets silently incomplete data.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "skills/browser4-cli/SKILL.md (section 1 Copy-Paste Template); web SKILL.md at browser4.io/SKILL.md",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Replace `htmlsnapshot get text \"<css-selector>\" --all` in the template with `htmlsnapshot get all text \"<css-selector>\"`\n- Add a one-line note under the template distinguishing `get` (first match) from `get all` (querySelectorAll)\n- Consider making the CLI print a hint when `--all` is used with `get` alone (e.g. 'Use get all <field> for all matches')",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "`htmlsnapshot get` exits 0 when the selector matches nothing, contradicting the documented non-zero exit",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "browser4-cli htmlsnapshot get text \"zzz-no-such-element-xyz\"; echo $LASTEXITCODE  (also verifiable with `&& echo PASS` in bash)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Non-zero exit code when the CSS selector matches nothing, as stated in references/htmlsnapshot.md Error Handling: \"htmlsnapshot get exits non-zero when the CSS selector matches nothing or an element ref (e5) is passed.\"",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Exit code is 0. The CLI prints a helpful \"No elements matched\" message but returns success, so scripts/CI pipelines treat empty extraction as success (silent failure). Control commands do propagate exit codes correctly (e.g. `config set timeout 0` exits 1, unknown command exits 2), so this is specific to the empty-result path.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "handle_html_snapshot_get computes `empty_result` and prints guidance but returns Ok(()) from the command handler; no error/exit code is produced for the no-match case. Only invalid selectors/refs and backend failures produce non-zero exits.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:5913 (handle_html_snapshot_get, empty_result branch around line 5996)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Return a non-zero exit (e.g. 2) when `empty_result` is true for `get`/`get all`, while still printing the guidance text\n- Add a machine-readable `--json` field like `\"matched\": false` so scripts can distinguish no-match from success\n- Update references/htmlsnapshot.md only if the behavior is intentionally kept as exit 0, and document the discrepancy",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "`extract --stdout` prints the raw internal ExtractResult envelope instead of the extracted content",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "browser4-cli extract \"Return the product title, displayed price, rating, and the top three feature bullets as JSON.\" --stdout",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Per `browser4-cli help extract`: \"--stdout Print extracted content directly to stdout.\" The output should be the extracted JSON (`{\"title\": ..., \"price\": ..., ...}`), directly consumable by scripts.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Stdout contains the backend envelope: {\"type\":\"ai.platon.pulsar.agentic.ExtractResult\",\"description\":\"<escaped JSON>\",\"inputToken\":...,\"outputToken\":...,\"inferenceTimeMillis\":...}. The requested JSON is double-encoded inside `description`, and the embedded metadata reports `\"completed\":false` even though extraction succeeded — confusing and wrong for direct consumption.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "handle_extract passes the raw server response through as `content` and, in raw mode, `println!(\"{}\", content)` prints that envelope verbatim. No client-side unwrapping of the ExtractResult `description` field is performed, and the empty-extraction detector looks for `completed:false` at paths that this envelope shape does not match.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:5363 (handle_extract, raw branch around line 5478)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- In `--stdout`/`--raw` mode, unwrap `ExtractResult.description` and print the actual extracted payload\n- Optionally also print a one-line metadata summary to stderr instead of stdout so stdout stays clean for piping\n- Fix the empty-extraction detector to recognize the ExtractResult envelope shape (description containing metadata.completed=false)",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "Snapshot/screenshot/extract outputs go to a hardcoded workspace-relative `.browser4-cli/snapshot/` dir that is undocumented and not redirected by BROWSER4_CLI_STATE_DIR",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "Run any `snapshot`, `screenshot`, or `extract` command from a repo checkout; observe files created under <cwd>/.browser4-cli/snapshot/ even though session state lives in ~/.browser4. Attempt to redirect with $env:BROWSER4_CLI_STATE_DIR — snapshot output location does not change.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The documentation (SKILL.md, `browser4-cli help`) explains where command outputs are stored and provides a way to redirect them; the described fallback is `./.browser4-cli-state`, but outputs should follow the state/runtime dir or an env override.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The snapshot/screenshot/extract output directory is hardcoded to `./.browser4-cli/snapshot/` relative to the current working directory (snapshot.rs SNAPSHOT_DIR), independent of BROWSER4_CLI_STATE_DIR. The docs only mention `.browser4-cli-state` as the workspace fallback for state, and never document `.browser4-cli/snapshot/`. In a source checkout this accumulates snapshot/extract files in the repo tree (mitigated only by .gitignore lines 131–134).",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "snapshot_dir() builds the path from a hardcoded constant [\".browser4-cli\", \"snapshot\"] relative to CWD; no env var or config key overrides it, and the SKILL.md/help docs don't mention it.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/snapshot.rs:16 (snapshot_dir(), SNAPSHOT_DIR at line 9)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Document `.browser4-cli/snapshot/` in SKILL.md and `help` (alongside `snapshot clean`), and/or honor BROWSER4_CLI_STATE_DIR for snapshot outputs\n- Add an env var (e.g. BROWSER4_CLI_SNAPSHOT_DIR) or `config set snapshot-dir <path>` override\n- Consider defaulting outputs to the state dir (~/.browser4/snapshot) instead of CWD-relative paths, which is safer for source-tree usage",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 5,
+      "title": "`extract --stdout` still writes a timestamped file into the workspace `.browser4-cli/snapshot/` directory",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run browser4-cli extract \"...\" --stdout, then check Get-ChildItem .browser4-cli/snapshot/extract-*.txt (a new file with the same content is created).",
+          "label": "Reproduction"
+        },
+        {
+          "body": "With `--stdout`, no file should be written — help text says \"Output is saved to a timestamped file by default. Use --stdout (or --raw) to print to stdout instead.\"",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "A file `.browser4-cli/snapshot/extract-<timestamp>.txt` is always created regardless of `--stdout`/`--raw`, because `save_snapshot` is called unconditionally. This wrote to the repository working tree during the evaluation (git-ignored, but still workspace pollution).",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "handle_extract always calls `save_snapshot(&out_path, content)` before checking the raw flag; the raw flag only controls whether content is also printed to stdout.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:5448 (handle_extract, unconditional save_snapshot call)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Skip `save_snapshot` when `--stdout`/`--raw`/`--filename` is provided (or document that extraction always archives)\n- When `--filename` is provided, write only to that path instead of also writing to the snapshot dir\n- Surface the saved path in non-stdout mode so users know where archives land",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 6,
+      "title": "SKILL.md §4a claims `htmlsnapshot get text article` \"auto-discovers content\", but `article` is a plain tag selector",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "On a page without an <article> tag (e.g. MockSite product page): browser4-cli htmlsnapshot; browser4-cli htmlsnapshot get text \"article\" → \"No elements matched\".",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Either the command should auto-discover the main content as the decision tree implies, or the docs should not describe `article` as auto-discovery.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The command simply runs querySelector('article'); on MockSite pages there are no <article> elements, so it returns an empty result with exit 0. Auto-discovery is a separate feature of `htmlsnapshot inspect`, not of `get text article`.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The §4a decision tree line \"Don't know the right CSS selector? → htmlsnapshot get text article (auto-discovers content)\" is a misleading simplification; no auto-discovery exists in the get path.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "skills/browser4-cli/SKILL.md (section 4a decision tree); references/htmlsnapshot.md (get command docs)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Replace the decision-tree line with `htmlsnapshot inspect` (which genuinely auto-discovers recurring patterns) or clarify that `article` is just an example tag selector\n- Add a note that `get text` accepts any CSS selector and that `inspect`/`summary` are the discovery tools",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 7,
+      "title": "`htmlsnapshot query` default output is a raw JSON envelope and the human-readable `--format table` / `--result-only` flags are absent from the main documentation",
+      "severity": "Low",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "browser4-cli htmlsnapshot query \"http://localhost:18080/ec/b?node=1292115012\" --sql \"@query.sql\" → full JSON envelope with id/statusCode/timestamps; only `browser4-cli htmlsnapshot query --help` reveals --format table and --result-only.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The primary docs (SKILL.md §4e, references/htmlsnapshot.md Query section) should mention the output format options so a first-time user knows a readable table output exists; or the default should be human-readable.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "SKILL.md and htmlsnapshot.md describe `query` without any output-format flags; the user gets a noisy machine envelope by default and must discover `--help` to find `--format table`. The task instructions themselves only specified the envelope path, so the scenario still succeeded, but the readable option was effectively hidden.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Documentation lag: the `--format`/`--result-only` options exist in help.rs/commands.rs but were not added to SKILL.md or the htmlsnapshot reference.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "skills/browser4-cli/references/htmlsnapshot.md (Query section); skills/browser4-cli/SKILL.md (4e X-SQL Quickstart)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Document `--format json|csv|table` and `--result-only` in the htmlsnapshot.md Query section and SKILL.md §4e\n- Add a table-format example to the X-SQL quickstart so the default envelope doesn't surprise first-time users\n- Consider making `--format table` the default when stdout is a TTY",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}

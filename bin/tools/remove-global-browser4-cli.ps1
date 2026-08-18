@@ -57,7 +57,7 @@ are still detected.
   can be inspected after uninstall.
 #>
 
-[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+[CmdletBinding()]
 param(
     [switch]$DryRun,
     [switch]$FailIfRemaining
@@ -131,7 +131,8 @@ function Invoke-ExternalCommand
     param(
         [string]$Executable,
         [string[]]$Arguments,
-        [switch]$IgnoreExitCode
+        [switch]$IgnoreExitCode,
+        [int]$TimeoutSeconds = 60
     )
 
     $stdoutFile = [System.IO.Path]::GetTempFileName()
@@ -156,22 +157,40 @@ function Invoke-ExternalCommand
         }
         '.ps1'
         {
-            $invokerExecutable = Join-Path $PSHOME 'powershell.exe'
+            # Windows PowerShell 5.1 only ships powershell.exe; PS 7 ships pwsh.
+            # On Unix there is no powershell.exe — use the pwsh binary next to $PSHOME.
+            if ($IsWindows -or $env:OS -eq 'Windows_NT')
+            {
+                $invokerExecutable = Join-Path $PSHOME 'powershell.exe'
+            }
+            else
+            {
+                $invokerExecutable = Join-Path $PSHOME 'pwsh'
+            }
             $invokerArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Executable) + @($Arguments)
             break
         }
     }
 
+    $timedOut = $false
     try
     {
         $process = Start-Process `
             -FilePath $invokerExecutable `
             -ArgumentList $invokerArguments `
             -NoNewWindow `
-            -Wait `
             -PassThru `
             -RedirectStandardOutput $stdoutFile `
             -RedirectStandardError $stderrFile
+
+        # Bound the wait: a stalled package manager (network hang, prompt)
+        # must not block the cleanup forever.  On timeout, kill the tree.
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000))
+        {
+            $timedOut = $true
+            $process.Kill($true) | Out-Null
+            $process.WaitForExit(5000) | Out-Null
+        }
 
         $stdout = if (Test-Path -LiteralPath $stdoutFile)
         {
@@ -197,18 +216,25 @@ function Invoke-ExternalCommand
         Remove-Item -LiteralPath $stderrFile -Force -ErrorAction SilentlyContinue
     }
 
-    $exitCode = if ($null -ne $process) { [int]$process.ExitCode } else { 0 }
+    $exitCode = if ($timedOut) { -2 } elseif ($null -ne $process) { [int]$process.ExitCode } else { 0 }
     $output = (@($stdout, $stderr) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.TrimEnd() }) -join [Environment]::NewLine
     $output = $output.Trim()
 
+    if ($timedOut)
+    {
+        $output = ($output + "`n[timed out after ${TimeoutSeconds}s; process killed]").Trim()
+    }
+
     if (-not $IgnoreExitCode -and $exitCode -ne 0)
     {
-        throw "Command failed (exit code $exitCode): $Executable $($Arguments -join ' ')`n$output"
+        $timeoutNote = if ($timedOut) { ' (timed out)' } else { '' }
+        throw "Command failed$timeoutNote (exit code $exitCode): $Executable $($Arguments -join ' ')`n$output"
     }
 
     return [PSCustomObject]@{
         ExitCode = [int]$exitCode
         Output = $output
+        TimedOut = $timedOut
     }
 }
 
@@ -221,7 +247,15 @@ function Get-FirstNonEmptyLine
         return $null
     }
 
-    return $Text -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
+    # Skip tool noise such as pnpm's "warning package.json: No license
+    # field" (printed to stderr and merged into the output) that would
+    # otherwise be mistaken for the actual result line.
+    return $Text -split "`r?`n" |
+        Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_) -and
+            $_ -notmatch '^\s*(warning|npm warn)\b'
+        } |
+        Select-Object -First 1
 }
 
 function Get-MessageOrDefault
@@ -380,7 +414,7 @@ function Remove-GlobalNodePackage
         return
     }
 
-    if ($DryRun -or -not $PSCmdlet.ShouldProcess("$Manager global package $packageName", 'Uninstall'))
+    if ($DryRun)
     {
         Add-Result -Manager $Manager -Status 'Planned' -Message "Would uninstall from $packagePath."
         return
@@ -435,7 +469,7 @@ function Remove-CargoPackage
         return
     }
 
-    if ($DryRun -or -not $PSCmdlet.ShouldProcess('cargo global crate browser4-cli', 'Uninstall'))
+    if ($DryRun)
     {
         Add-Result -Manager 'cargo' -Status 'Planned' -Message 'Would run cargo uninstall browser4-cli.'
         return

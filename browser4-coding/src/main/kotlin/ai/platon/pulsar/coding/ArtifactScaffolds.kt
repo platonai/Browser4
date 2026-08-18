@@ -29,7 +29,7 @@ object ArtifactScaffolds {
             basePackage = params["basePackage"] ?: "ai.platon.pulsar.my",
             toolMethod = params["toolMethod"] ?: "doAction",
             toolDescription = params["toolDescription"] ?: "Performs an action",
-            pdkVersion = params["pdkVersion"] ?: "4.13.4-SNAPSHOT"
+            pdkVersion = params["pdkVersion"] ?: "4.13.6-SNAPSHOT"
         )
         "skill" -> mapOf("_content" to skillScaffold(
             name = params["name"] ?: "my-skill",
@@ -75,7 +75,7 @@ object ArtifactScaffolds {
         basePackage: String,
         toolMethod: String,
         toolDescription: String,
-        pdkVersion: String = "4.13.4-SNAPSHOT"
+        pdkVersion: String = "4.13.6-SNAPSHOT"
     ): Map<String, String> {
         // Match the ecosystem naming convention: real plugins strip the "browser4-"
         // prefix for class names (browser4-seo -> SeoConfig/SeoAutoConfiguration/SeoToolExecutor).
@@ -774,4 +774,3 @@ object ArtifactScaffolds {
         return pascal.replaceFirstChar { it.lowercase() }
     }
 }
-

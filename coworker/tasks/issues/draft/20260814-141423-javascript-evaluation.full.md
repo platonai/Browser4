@@ -1,0 +1,93 @@
+# A. Task Result
+
+The task completed successfully. All 8 steps of the eval-workflow scenario were executed against `http://localhost:18080/generated/interactive-1.html` ("Interactive Single Page") and every evaluation method produced correct, mutually consistent output:
+
+| Step | Method | Result |
+|---|---|---|
+| 2. Interactive snapshot | `snapshot -i --stdout` | Discovered refs: `e2479` (h1 heading), `e2466` (textbox), `e2467` (combobox), `e2528` (button), etc. |
+| 3. Simple expression | `eval "document.title"` | `Interactive Single Page` |
+| 4. JSON metadata | `eval --json '({url, title, linkCount})'` | `url=http://localhost:18080/generated/interactive-1.html`, `title=Interactive Single Page`, `linkCount=0` |
+| 5. File script | `eval --file .test-sessions/page_info.js` | `{"images":0,"links":0,"anchors":0,"forms":0}` |
+| 6. Stdin pipe | `echo '...' \| ./b4w.ps1 eval --stdin` | All 5 headings in document order |
+| 7. Element-scoped | `eval "element => element.textContent" --ref e2479` | `Welcome to the Interactive Page`; positional-ref form (`tagName` → `H1`) also works |
+| 8. Verification | Cross-checked against `page-info`, snapshot, and raw HTML (curl) | All values consistent: 0 images / 0 links / 0 forms / 5 headings confirmed in raw HTML; title & URL match `page-info` and `goto` output |
+
+The documented `--ref` arrow-function requirement was verified: the non-arrow form returns `null` with a diagnostic hint (though the hint's suggested fix is buggy — see Issue 2). `console.log` output is indeed not captured (as documented); only the returned value is shown.
+
+# B. Execution Trace
+
+**Commands used** (all via `./b4w.ps1` from the repo root):
+`help`, `eval --help`, `goto`, `snapshot -i --stdout`, `eval "document.title"`, `eval --json '({...})'`, `eval --file`, `eval --stdin` (piped), `eval --ref` (arrow + non-arrow + positional-ref variants), `eval --json` scalar tests, `page-info`, plus `curl` against the MockSite fixture for ground-truth verification.
+
+**Major steps:**
+1. Verified `pwd` = repo root; ran `./b4w.ps1 help` (fast, comprehensive); read `skills/browser4-cli/SKILL.md` in full; confirmed MockSite responds 200 on :18080.
+2. Navigated to the target page (reused an existing DEFAULT session with 2 tabs — reported transparently).
+3. Captured `snapshot -i --stdout` — clean, ref-labeled output.
+4. Ran each eval variant in order, testing documented behaviors on the side (null-result diagnostics, scalar wrapping, console.log capture).
+5. Cross-verified every result against the raw fixture HTML fetched with curl (grep counts) and `page-info`.
+
+**Decisions/workarounds:** None required — every documented workflow worked on the first attempt. Temp files (`page_info.js`, `interactive-1.raw.html`) were kept in `.test-sessions/` as required.
+
+**Investigation performed for findings:** Read `cli/browser4-cli/src/main.rs` around the `browser_evaluate` result-handling block (~lines 5084–5160) and the goto summary printer (~line 1059) to establish root causes; located the "Did you mean" format string at main.rs:5108.
+
+# C. Issues Found + D. Overall Assessment
+
+```json
+{
+  "issues": [
+    {
+      "title": "eval --json envelope stringifies scalars and double-encodes objects, contradicting documented JSON typing",
+      "severity": "Medium",
+      "category": "Product",
+      "reproduction": "./b4w.ps1 eval --json \"document.links.length\"  →  output.result is the string \"0\" (not number 0).\n./b4w.ps1 eval --json '({url: document.URL, title: document.title, linkCount: 0})'  →  output.result is a JSON-encoded string containing JSON (double encoding).\n./b4w.ps1 eval --json \"document.querySelector('.nope')\"  →  output.result is the string \"null\" (not JSON null).",
+      "expected": "Per `eval --help`: \"--json … strings get quoted, numbers/booleans/null pass through\" and \"Objects and arrays are serialized as JSON\". A machine consumer should see \"result\":0, \"result\":null, and a nested object — not stringified/unparseable-typed values.",
+      "actual": "The JSON envelope's `output.result` field always holds the raw backend result as a plain string: numbers become \"0\", null becomes \"null\", and object expressions become a string whose value is itself JSON — requiring a second parse and manual type coercion, and making 0 vs \"0\" indistinguishable.",
+      "rootCause": "In the browser_evaluate result handler, the human-readable --json path parses `result` via serde_json::from_str before printing, but the envelope is built with `json_field(\"result\", json!(&result))` using the unparsed raw string, so typed JSON values never reach the envelope. The help text describes the parsing path's semantics, not the envelope's.",
+      "codePointer": "cli/browser4-cli/src/main.rs — browser_evaluate result-handling block around lines 5147–5160 (`json_field(\"result\", json!(&result))`); help text at cli/browser4-cli/src/help.rs:600",
+      "suggestion": "- Parse the result with serde_json::from_str before embedding it in the envelope (same logic as the human-readable path) and fall back to a plain string only when parsing fails, so scalars keep their JSON types and objects are nested\n- If string-only `result` is intentional API design, update help.rs/SKILL.md to state it explicitly and document the double-parse requirement for object results\n- Add an e2e/unit test asserting the envelope type of a number result, a null result, and an object result"
+    },
+    {
+      "title": "eval null-diagnostic \"Did you mean\" tip suggests a broken expression (double `element.` prefix)",
+      "severity": "Medium",
+      "category": "UX",
+      "reproduction": "./b4w.ps1 eval \"element.textContent\" --ref e2479\nOutput tip: Did you mean: eval \"element => element.element.textContent\" --ref …?\nThat suggested expression also returns null (element.element is undefined), so following the tool's own advice fails again.",
+      "expected": "The tip should suggest the correct form: eval \"element => element.textContent\" --ref e2479",
+      "actual": "The suggestion is `element => element.element.textContent` — the user's expression is blindly prefixed with `element.`, even when it already starts with `element.`.",
+      "rootCause": "The eprintln format string at main.rs:5108 always prepends `element.` to the user's expression: \"Did you mean: eval \\\"element => element.{}\\\" --ref …?\" with `expression` as the only argument. No check for whether the expression already starts with `element.` (or contains a bare property path).",
+      "codePointer": "cli/browser4-cli/src/main.rs — null-diagnostic eprintln in the browser_evaluate handler, around lines 5100–5112",
+      "suggestion": "- If the expression already starts with `element.`, suggest `element => {expression}`; otherwise suggest `element => element.{expression}`\n- Alternatively, extract the property name after the first `element.` and build the suggestion from the correct template\n- Add a unit test covering the exact repro (expression `element.textContent` with --ref) asserting the suggested text contains `element => element.textContent`"
+    },
+    {
+      "title": "Duplicate result printed for null/empty eval results in human-readable mode",
+      "severity": "Low",
+      "category": "UX",
+      "reproduction": "./b4w.ps1 eval \"document.querySelector('.does-not-exist')\"\nOutput contains the result twice:\nnull\n💡 Expression returned null.\n...\nnull",
+      "expected": "The result should be printed exactly once.",
+      "actual": "`null` (and similarly `\"\"` for empty-string results) is printed twice — once by the null-aware block, once by the general print path.",
+      "rootCause": "The null/empty-aware block (main.rs ~5084) prints \"null\"/\"\\\"\\\"\" via cli_println, and then control falls through to the generic `else { cli_println!(\"{}\", maybe_pretty_print_json(&result)); }` branch which prints the same value again. In --json mode the envelope is not corrupted (cli_println is suppressed), so the defect is cosmetic but confusing in interactive use.",
+      "codePointer": "cli/browser4-cli/src/main.rs — browser_evaluate result handler, null-aware block ~5084 and fall-through print ~5158",
+      "suggestion": "- Print the result in exactly one place (e.g. skip the generic print when the null/empty block already printed)\n- Consider exiting non-zero or emitting a distinct machine-detectable marker when an eval expression evaluates to null, so shell scripts relying on exit codes can detect 'no result' (currently exit code is 0)"
+    },
+    {
+      "title": "goto prints a hardcoded tip on every navigation despite documented 'tips suppressed by default' behavior",
+      "severity": "Low",
+      "category": "Documentation",
+      "reproduction": "Run ./b4w.ps1 goto <any url> twice. Each time stderr prints:\n💡 Tip: Try `htmlsnapshot get text \"h1\"` to extract the page heading, or `htmlsnapshot inspect` to discover CSS selectors\nwithout passing --show-tip / -tip.",
+      "expected": "Per the global options help (\"-tip, --show-tip  show a relevant tip on stderr after each command\") and SKILL.md §Output Modes (\"Tips are suppressed by default; use this flag to enable them\"), no tip should appear unless --show-tip is passed.",
+      "actual": "A hardcoded tip is emitted on every goto regardless of the --show-tip flag, making the documented tip-on/off semantics inconsistent (goto tips always on; other commands' rotating tips off).",
+      "rootCause": "The page-summary printer after goto contains an unconditional `if !json_active() { eprintln!(\"💡 Tip: …\") }` that does not consult `show_tip_active()`, so the tip bypasses the documented opt-in mechanism.",
+      "codePointer": "cli/browser4-cli/src/main.rs — page-summary/tip emission around line 1059 (unconditional eprintln in the post-goto summary block)",
+      "suggestion": "- Gate the tip on show_tip_active() so it honors the documented flag, or\n- Keep it as an onboarding hint but show it only once per session (first goto) and update SKILL.md/help to document the exception, or\n- Move this specific hint into the rotating tips::show_tip system so it is consistent with all other tips"
+    }
+  ],
+  "assessment": {
+    "completionStatus": "Successful — all 8 task steps completed; every eval method (inline, --json, --file, --stdin, --ref) returned correct results, cross-verified against raw HTML and page-info.",
+    "successRate": "100% — no step required a workaround; all documented eval workflows worked on the first attempt.",
+    "issuesFound": 4,
+    "majorBlockers": "",
+    "mostConfusingAspects": "1) The --json envelope's type behavior: numbers come back as strings and objects are double-encoded, contrary to the help text's promise that numbers 'pass through' — a machine consumer must re-parse and coerce. 2) The diagnostic tip for the #1 documented eval --ref mistake (non-arrow expression) suggests a fix that is itself broken (element.element.textContent), which would send a first-time user in circles.",
+    "mostValuableImprovements": "1) Embed parsed (typed) JSON values in the eval --json envelope instead of raw strings. 2) Fix the 'Did you mean' suggestion generator to not double-prefix `element.`. 3) Make the goto tip respect --show-tip (or document the exception).",
+    "usabilityRating": 8
+  }
+}
+```

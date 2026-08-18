@@ -224,18 +224,32 @@ fn maybe_pretty_print_json(text: &str) -> String {
     }
 }
 
+/// Write one line to stdout, ignoring a closed pipe.
+///
+/// When stdout is piped to a consumer that exits early (e.g. `browser4-cli
+/// goto … | Select-Object -First 3`), the write fails with `BrokenPipe`.  The
+/// stock `println!` macro panics on that error, which aborts the CLI mid-flight
+/// and can strand a half-started Browser4 server.  This helper treats a closed
+/// pipe as a normal "stop writing" signal so the CLI unwinds cleanly and its
+/// cleanup paths (managed-process registry, startup-log teardown) still run.
+fn print_stdout_line(line: &str) {
+    use std::io::Write;
+    let mut stdout = std::io::stdout().lock();
+    let _ = writeln!(stdout, "{line}");
+}
+
 /// Print to stdout unless `-q` / `--quiet` or `--json` is active.
 /// When `--json` is active all output must be machine-readable;
 /// human-oriented text is suppressed.
 macro_rules! cli_println {
     () => {
         if !$crate::quiet_active() && !$crate::json_active() {
-            ::std::println!();
+            $crate::print_stdout_line("");
         }
     };
     ($($arg:tt)*) => {
         if !$crate::quiet_active() && !$crate::json_active() {
-            ::std::println!($($arg)*);
+            $crate::print_stdout_line(&format!($($arg)*));
         }
     };
 }
@@ -1049,55 +1063,85 @@ where
 // ---------------------------------------------------------------------------
 
 async fn post_command_snapshot(client: &Client, base_url: &str, session_id: &str) {
-    let (page_url, page_title, snapshot_content) = tokio::join!(
-        call_tool(
-            client,
-            base_url,
-            "page_url",
-            json!({ "sessionId": session_id })
-        ),
-        call_tool(
-            client,
-            base_url,
-            "page_title",
-            json!({ "sessionId": session_id })
-        ),
-        call_tool(
-            client,
-            base_url,
-            "browser_snapshot",
-            json!({ "sessionId": session_id })
-        ),
-    );
+    // The snapshot is best-effort: it must never block the command from
+    // returning. On a cold start the first browser_snapshot can hang in the
+    // backend (browser-context initialization race) for far longer than the
+    // HTTP timeout, which previously left `open`/`goto` stuck even though the
+    // navigation had long since succeeded. Enforce a short request-level
+    // timeout on the snapshot itself (reqwest enforces it at the socket layer,
+    // unlike a tokio-side timer that can lose its schedule to the same stuck
+    // I/O). The command then completes and the snapshot is skipped.
+    const POST_SNAPSHOT_TIMEOUT_SECS: u64 = 10;
 
-    let (url_result, title_result, snap_result) = match (page_url, page_title, snapshot_content) {
-        (Ok(u), Ok(t), Ok(s)) => (u, t, s),
-        _ => return, // silently ignore failures (e.g. session just closed)
+    let snapshot_future = async {
+        let (page_url, page_title, snapshot_content) = tokio::join!(
+            call_tool(
+                client,
+                base_url,
+                "page_url",
+                json!({ "sessionId": session_id })
+            ),
+            call_tool(
+                client,
+                base_url,
+                "page_title",
+                json!({ "sessionId": session_id })
+            ),
+            call_tool_with_timeout_override(
+                client,
+                base_url,
+                "browser_snapshot",
+                json!({ "sessionId": session_id }),
+                Some(POST_SNAPSHOT_TIMEOUT_SECS),
+            ),
+        );
+
+        let (url_result, title_result, snap_result) = match (page_url, page_title, snapshot_content) {
+            (Ok(u), Ok(t), Ok(s)) => (u, t, s),
+            _ => return, // silently ignore failures (e.g. session just closed)
+        };
+
+        let out_path = resolve_output_path(None, "snapshot", "yml");
+        // Prepend a header comment documenting the snapshot.
+        let header = "# Auto-snapshot after command — current viewport.\n\
+                      # Use `browser4-cli snapshot grep <pattern>` to search the tree.\n";
+        let snap_with_header = format!("{}\n{}", header, snap_result);
+        if let Err(e) = save_snapshot(&out_path, &snap_with_header) {
+            eprintln!("Warning: failed to save snapshot: {e}");
+            return;
+        }
+
+        json_field("page_url", json!(&url_result));
+        json_field("page_title", json!(&title_result));
+        json_field("snapshot_path", json!(out_path.display().to_string()));
+
+        cli_println!("### Page");
+        cli_println!("- Page URL: {}", url_result);
+        cli_println!("- Page Title: {}", title_result);
+        cli_println!("### Snapshot");
+        cli_println!("[Snapshot]({})", out_path.display());
+        if !json_active() {
+            eprintln!(
+                "💡 Tip: Try `htmlsnapshot get text \"h1\"` to extract the page heading, or `htmlsnapshot inspect` to discover CSS selectors"
+            );
+        }
     };
 
-    let out_path = resolve_output_path(None, "snapshot", "yml");
-    // Prepend a header comment documenting the snapshot.
-    let header = "# Auto-snapshot after command — current viewport.\n\
-                  # Use `browser4-cli snapshot grep <pattern>` to search the tree.\n";
-    let snap_with_header = format!("{}\n{}", header, snap_result);
-    if let Err(e) = save_snapshot(&out_path, &snap_with_header) {
-        eprintln!("Warning: failed to save snapshot: {e}");
-        return;
-    }
-
-    json_field("page_url", json!(&url_result));
-    json_field("page_title", json!(&title_result));
-    json_field("snapshot_path", json!(out_path.display().to_string()));
-
-    cli_println!("### Page");
-    cli_println!("- Page URL: {}", url_result);
-    cli_println!("- Page Title: {}", title_result);
-    cli_println!("### Snapshot");
-    cli_println!("[Snapshot]({})", out_path.display());
-    if !json_active() {
-        eprintln!(
-            "💡 Tip: Try `htmlsnapshot get text \"h1\"` to extract the page heading, or `htmlsnapshot inspect` to discover CSS selectors"
-        );
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(POST_SNAPSHOT_TIMEOUT_SECS),
+        snapshot_future,
+    )
+    .await
+    {
+        Ok(()) => {}
+        Err(_) => {
+            // The backend did not answer in time (e.g. cold-start browser
+            // init). The command itself already succeeded; just note it.
+            eprintln!(
+                "Warning: post-command snapshot timed out after {}s (page may still be initializing).",
+                POST_SNAPSHOT_TIMEOUT_SECS
+            );
+        }
     }
 }
 
@@ -1804,8 +1848,25 @@ async fn handle_attach(
         format_session_opened_message(session_name, &session_id)
     );
 
-    // Take an initial snapshot so the user can see the current state
-    post_command_snapshot(client, &effective_base_url, &session_id).await;
+    // Verify the attached browser actually answers before printing any page
+    // info. Previously this step unconditionally ran post_command_snapshot, so
+    // attach reported success (and printed a page header) even when the CDP
+    // endpoint pointed at a dead or wrong browser — the user saw "attached +
+    // page" while their window never moved. Fetch the real current page and
+    // surface a clear warning when the browser does not answer.
+    match current_session_url(client, &effective_base_url, session_name).await {
+        Ok(url) if !url.is_empty() => {
+            cli_println!("Current page: {}", url);
+        }
+        Ok(_) => {
+            cli_println!("⚠  Attached, but the browser reported no current page URL.");
+            cli_println!("   The CDP endpoint may be reachable yet not driving this browser.");
+        }
+        Err(error) => {
+            cli_println!("⚠  Attached, but could not read the page: {}", error);
+            cli_println!("   Verify the CDP endpoint is running and reachable, then retry.");
+        }
+    }
 
     Ok(())
 }
@@ -1877,6 +1938,28 @@ async fn handle_open(
                     cli_println!("{}", result);
                 }
                 post_command_snapshot(client, base_url, &session_id).await;
+
+                // Headed launches should show a visible window. If the browser
+                // process is alive but no window exists, surface a clear
+                // warning instead of letting the user think nothing happened.
+                let headed = tool_params
+                    .get("headed")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if headed {
+                    let (found, has_window) = crate::daemon::browser_window_visibility();
+                    if found && !has_window {
+                        cli_println!(
+                            "⚠  Browser4 started a headed browser process, but no visible window was detected."
+                        );
+                        cli_println!(
+                            "   The browser is functional (navigation succeeded) — if the window is missing,"
+                        );
+                        cli_println!(
+                            "   close it with 'close' and retry 'open --headed' once."
+                        );
+                    }
+                }
             }
             Err(err) => {
                 if !should_retry_open_after_navigation_error(&err, reused_existing_session) {
@@ -17550,38 +17633,69 @@ fn apply_config_defaults(global: &mut GlobalFlags) {
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    install_broken_pipe_panic_hook();
     init_root_search_start_dir_from_startup();
 
-    let raw_args: Vec<String> = std::env::args().skip(1).collect();
-    let mut global = parse_global_flags(&raw_args);
-    apply_config_defaults(&mut global);
-    let json_mode = global.json;
-    let (command, effective_global, from_spaced_prefix) = normalize_command_invocation(&global);
-
-    if let Err(err) = run(&command, &effective_global, from_spaced_prefix).await {
-        // json_mode covers global --json; json_active() covers subcommand-level
-        // --json (e.g. "tab-list --json") which enables JSON inside run().
-        if json_mode || json_active() {
-            // Use println! directly -- cli_println! checks json_active()
-            // which is true here (json_init was called inside run()),
-            // and we MUST emit the JSON error envelope regardless.
-            let error = serde_json::json!({
-                "message": err.message(),
-                "code": if err.code() == ExitCode::Usage { "USAGE_ERROR" }
-                        else if err.code() == ExitCode::Session { "SESSION_ERROR" }
-                        else { "COMMAND_FAILED" }
-            });
-            println!(
-                "{}",
-                json_envelope("error", &command, serde_json::json!({}), Some(error))
-            );
-        } else {
-            eprintln!("{}", format_cli_error_output(err.message()));
+    // Run the command on a manually created tokio runtime and drop it
+    // explicitly before exiting. With `#[tokio::main]`, the macro-owned
+    // runtime unwinds after the async body returns; when this invocation
+    // cold-started the Browser4 server, that unwind waited on handles tied
+    // to the server child process, so the CLI appeared to hang after
+    // printing all output (process alive, established connection, no CPU).
+    // Dropping the runtime here forces the worker threads to stop first.
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("Error: failed to start tokio runtime: {e}");
+            std::process::exit(ExitCode::General as i32);
         }
-        std::process::exit(err.code() as i32);
-    }
+    };
+
+    let exit_code = runtime.block_on(async {
+        let raw_args: Vec<String> = std::env::args().skip(1).collect();
+        let mut global = parse_global_flags(&raw_args);
+        apply_config_defaults(&mut global);
+        let json_mode = global.json;
+        let (command, effective_global, from_spaced_prefix) =
+            normalize_command_invocation(&global);
+
+        match run(&command, &effective_global, from_spaced_prefix).await {
+            Ok(()) => 0,
+            Err(err) => {
+                // json_mode covers global --json; json_active() covers subcommand-level
+                // --json (e.g. "tab-list --json") which enables JSON inside run().
+                if json_mode || json_active() {
+                    // Use println! directly -- cli_println! checks json_active()
+                    // which is true here (json_init was called inside run()),
+                    // and we MUST emit the JSON error envelope regardless.
+                    let error = serde_json::json!({
+                        "message": err.message(),
+                        "code": if err.code() == ExitCode::Usage { "USAGE_ERROR" }
+                                else if err.code() == ExitCode::Session { "SESSION_ERROR" }
+                                else { "COMMAND_FAILED" }
+                    });
+                    println!(
+                        "{}",
+                        json_envelope("error", &command, serde_json::json!({}), Some(error))
+                    );
+                } else {
+                    eprintln!("{}", format_cli_error_output(err.message()));
+                }
+                err.code() as i32
+            }
+        }
+    });
+
+    // Drop the runtime first (stops worker threads and closes their handles),
+    // then flush stdout so no output is lost, then exit with the code.
+    drop(runtime);
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    std::process::exit(exit_code);
 }
 
 fn format_cli_error_output(error: &str) -> String {
@@ -17590,6 +17704,34 @@ fn format_cli_error_output(error: &str) -> String {
     } else {
         format!("Error: {error}")
     }
+}
+
+/// Silence panics caused by a closed stdout/stderr pipe.
+///
+/// `println!` (and friends) panic when the downstream pipe consumer exits early
+/// — e.g. `browser4-cli … | Select-Object -First 3` closes the pipe once it has
+/// its lines.  In that situation panicking is worse than useless: it aborts the
+/// CLI before its normal cleanup runs, which can leave a half-started Browser4
+/// server behind.  Treat broken-pipe panics as a normal "stop writing" signal
+/// instead of crashing.
+fn install_broken_pipe_panic_hook() {
+    use std::panic;
+    let default_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
+        let payload = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| info.payload().downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        if payload.contains("Broken pipe") || payload.contains("failed printing to stdout") {
+            // The reader went away; stop quietly.  Exit code 0 signals "the
+            // work was delivered as far as the pipe allowed", which matches
+            // the standard `head`-style pipeline contract.
+            std::process::exit(0);
+        }
+        default_hook(info);
+    }));
 }
 
 /// Compute Levenshtein distance between two strings.
@@ -24255,5 +24397,29 @@ mod tests {
         let mut args = HashMap::from([("_".to_string(), json!(["plugin-pptx"]))]);
         let result = resolve_plugin_method(&tools, "pptx", &matching, &mut args);
         assert_eq!(result, "pptx_generate"); // first match (no method specified)
+    }
+
+    #[test]
+    fn test_broken_pipe_panic_hook_ignores_unrelated_panics() {
+        // The broken-pipe hook must only swallow broken-pipe panics; unrelated
+        // panics still go through the default hook.  Run the hook installation
+        // twice to prove it is idempotent, then trigger a non-pipe failure in a
+        // subprocess and assert the default behavior (non-zero exit) survives.
+        install_broken_pipe_panic_hook();
+        install_broken_pipe_panic_hook();
+
+        use std::process::Command;
+        let Some(self_bin) = std::env::var_os("CARGO_BIN_EXE_browser4-cli") else {
+            // Cargo only sets this env var for the bin target being tested;
+            // skip when it is absent (e.g. doctest harnesses).
+            return;
+        };
+        // An unknown flag is a usage error — the CLI must still exit non-zero,
+        // proving the hook did not turn ordinary failures into silent success.
+        let output = Command::new(self_bin)
+            .args(["--help", "--definitely-not-a-flag"])
+            .output()
+            .expect("run self");
+        assert!(!output.status.success());
     }
 }

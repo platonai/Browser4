@@ -212,7 +212,7 @@ function Get-FunctionsFromScript {
 Write-Host "Source : $MonitorScriptPath" -ForegroundColor DarkGray
 
 $funcText = Get-FunctionsFromScript -ScriptPath $MonitorScriptPath `
-    -FunctionNames @('ConvertTo-LogLines', 'Parse-GitHubLogLine', 'Extract-MinimalErrors', 'New-CoworkerFailureTask')
+    -FunctionNames @('ConvertTo-LogLines', 'Parse-GitHubLogLine', 'Get-FailingTestNames', 'Extract-MinimalErrors', 'New-CoworkerFailureTask', 'Invoke-PostReleaseVersionBump')
 
 Invoke-Expression $funcText
 
@@ -246,6 +246,29 @@ Assert-Returns -Label 'CLL null: empty' -Actual $cllNull.Count -Expected 0
 $cllEmbedded = ConvertTo-LogLines -RawLogs @("a`nb", 'c')
 Assert-Returns -Label 'CLL embedded newline: returns string[]' -Actual ($cllEmbedded -is [string[]]) -Expected $true
 Assert-Returns -Label 'CLL embedded newline: splits to 3 lines' -Actual $cllEmbedded.Count -Expected 3
+
+# ===================================================================
+# TESTS: Get-FailingTestNames
+# ===================================================================
+Write-Host "━━━ Get-FailingTestNames: formats & dedup ━━━" -ForegroundColor Cyan
+
+$ftLines = @(
+    'test test_e2e_session_lifecycle ... FAILED',
+    'test test_e2e_batch_compile_empty ... ok',
+    'test result: FAILED. 10 passed; 2 failed',
+    '--- FAIL: TestGoFoo',
+    'test_e2e_crawl_depth => FAILED',
+    'test test_e2e_session_lifecycle ... FAILED'   # duplicate
+)
+$ftNames = Get-FailingTestNames -LogLines $ftLines
+Assert-Returns -Label 'FTN: returns string[]' -Actual ($ftNames -is [string[]]) -Expected $true
+Assert-Returns -Label 'FTN: captures Rust FAILED' -Actual ($ftNames -contains 'test_e2e_session_lifecycle') -Expected $true
+Assert-Returns -Label 'FTN: captures Go FAIL' -Actual ($ftNames -contains 'TestGoFoo') -Expected $true
+Assert-Returns -Label 'FTN: captures e2e => FAILED' -Actual ($ftNames -contains 'test_e2e_crawl_depth') -Expected $true
+Assert-Returns -Label 'FTN: dedupes (3 unique)' -Actual $ftNames.Count -Expected 3
+
+$ftEmpty = Get-FailingTestNames -LogLines @('all ok', 'nothing failed')
+Assert-Returns -Label 'FTN: empty input -> empty array' -Actual ($ftEmpty.Count -eq 0 -and $ftEmpty -is [string[]]) -Expected $true
 
 # ===================================================================
 # TESTS: Extract-MinimalErrors
@@ -539,6 +562,118 @@ try {
     Remove-Item $taskPath -Force -ErrorAction SilentlyContinue
 } finally {
     Remove-Item $tempRepoRoot2 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ===================================================================
+# TESTS: Invoke-PostReleaseVersionBump
+# ===================================================================
+Write-Host "━━━ Invoke-PostReleaseVersionBump: setup temp git repo ━━━" -ForegroundColor Cyan
+
+function New-BumpTestRepo {
+    param([string]$VersionFileContent)
+    $repo = Join-Path ([System.IO.Path]::GetTempPath()) "b4-test-bump-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -Path $repo -ItemType Directory -Force | Out-Null
+    # Minimal version-bearing file set that mirrors the real repo layout
+    New-Item -Path (Join-Path $repo 'cli\browser4-cli') -ItemType Directory -Force | Out-Null
+    Set-Content -Path (Join-Path $repo 'VERSION') -Value $VersionFileContent -NoNewline -Encoding UTF8
+    Set-Content -Path (Join-Path $repo 'pom.xml') -Value @'
+<project>
+  <version>4.13.5-SNAPSHOT</version>
+  <scm><tag>v4.13.5</tag></scm>
+</project>
+'@ -Encoding UTF8
+    Set-Content -Path (Join-Path $repo 'cli\package.json') -Value '{ "name": "browser4-cli", "version": "4.13.5" }' -Encoding UTF8
+    $cargoToml = @'
+[package]
+name = "browser4-cli"
+version = "4.13.5"
+'@
+    Set-Content -Path (Join-Path $repo 'cli\browser4-cli\Cargo.toml') -Value $cargoToml -Encoding UTF8
+    $cargoLock = @'
+[[package]]
+name = "browser4-cli"
+version = "4.13.5"
+'@
+    Set-Content -Path (Join-Path $repo 'cli\browser4-cli\Cargo.lock') -Value $cargoLock -Encoding UTF8
+
+    git -C $repo init -q
+    git -C $repo config user.email 'test@example.com'
+    git -C $repo config user.name 'Test'
+    git -C $repo add -A
+    git -C $repo commit -qm 'initial'
+    return $repo
+}
+
+$bumpRepo = New-BumpTestRepo -VersionFileContent '4.13.5-SNAPSHOT'
+try {
+    Write-Host "━━━ Invoke-PostReleaseVersionBump: SNAPSHOT patch bump ━━━" -ForegroundColor Cyan
+
+    Invoke-PostReleaseVersionBump -RepoRoot $bumpRepo -Remote origin -SkipPush
+
+    $newVersion = (Get-Content (Join-Path $bumpRepo 'VERSION') -Raw).Trim()
+    Assert-Returns -Label 'Bump: VERSION 4.13.5-SNAPSHOT -> 4.13.6-SNAPSHOT' -Actual $newVersion -Expected '4.13.6-SNAPSHOT'
+
+    $pom = Get-Content (Join-Path $bumpRepo 'pom.xml') -Raw
+    Assert-ContainsString -Label 'Bump: pom.xml version updated' -Haystack $pom -Needle '<version>4.13.6-SNAPSHOT</version>'
+    Assert-ContainsString -Label 'Bump: pom.xml scm tag updated' -Haystack $pom -Needle '<tag>v4.13.6</tag>'
+
+    $pj = Get-Content (Join-Path $bumpRepo 'cli\package.json') -Raw
+    Assert-ContainsString -Label 'Bump: package.json version updated' -Haystack $pj -Needle '"version": "4.13.6"'
+
+    $cargo = Get-Content (Join-Path $bumpRepo 'cli\browser4-cli\Cargo.toml') -Raw
+    Assert-ContainsString -Label 'Bump: Cargo.toml version updated' -Haystack $cargo -Needle 'version = "4.13.6"'
+
+    $lock = Get-Content (Join-Path $bumpRepo 'cli\browser4-cli\Cargo.lock') -Raw
+    Assert-ContainsString -Label 'Bump: Cargo.lock version updated' -Haystack $lock -Needle 'version = "4.13.6"'
+
+    $log = git -C $bumpRepo log --oneline -1
+    Assert-ContainsString -Label 'Bump: commit message' -Haystack $log -Needle 'Auto-bump version to 4.13.6-SNAPSHOT'
+
+    $status = git -C $bumpRepo status --porcelain
+    Assert-Returns -Label 'Bump: working tree clean after commit' -Actual ($null -eq $status -or $status.Count -eq 0) -Expected $true
+} finally {
+    Remove-Item $bumpRepo -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "━━━ Invoke-PostReleaseVersionBump: non-SNAPSHOT VERSION ━━━" -ForegroundColor Cyan
+
+$bumpRepo2 = New-BumpTestRepo -VersionFileContent '4.13.5'
+try {
+    Invoke-PostReleaseVersionBump -RepoRoot $bumpRepo2 -Remote origin -SkipPush
+
+    $newVersion = (Get-Content (Join-Path $bumpRepo2 'VERSION') -Raw).Trim()
+    Assert-Returns -Label 'Bump non-SNAPSHOT: 4.13.5 -> 4.13.6-SNAPSHOT' -Actual $newVersion -Expected '4.13.6-SNAPSHOT'
+} finally {
+    Remove-Item $bumpRepo2 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "━━━ Invoke-PostReleaseVersionBump: unparseable VERSION skipped ━━━" -ForegroundColor Cyan
+
+$bumpRepo3 = New-BumpTestRepo -VersionFileContent 'not-a-version'
+try {
+    Invoke-PostReleaseVersionBump -RepoRoot $bumpRepo3 -Remote origin -SkipPush
+
+    $newVersion = (Get-Content (Join-Path $bumpRepo3 'VERSION') -Raw).Trim()
+    Assert-Returns -Label 'Bump bad version: VERSION untouched' -Actual $newVersion -Expected 'not-a-version'
+
+    $commitCount = (git -C $bumpRepo3 rev-list --count HEAD)
+    Assert-Returns -Label 'Bump bad version: no extra commit' -Actual $commitCount -Expected '1'
+} finally {
+    Remove-Item $bumpRepo3 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "━━━ Invoke-PostReleaseVersionBump: dirty tree skipped ━━━" -ForegroundColor Cyan
+
+$bumpRepo4 = New-BumpTestRepo -VersionFileContent '4.13.5-SNAPSHOT'
+try {
+    Set-Content -Path (Join-Path $bumpRepo4 'untracked.txt') -Value 'dirty' -Encoding UTF8
+
+    Invoke-PostReleaseVersionBump -RepoRoot $bumpRepo4 -Remote origin -SkipPush
+
+    $newVersion = (Get-Content (Join-Path $bumpRepo4 'VERSION') -Raw).Trim()
+    Assert-Returns -Label 'Bump dirty tree: VERSION untouched' -Actual $newVersion -Expected '4.13.5-SNAPSHOT'
+} finally {
+    Remove-Item $bumpRepo4 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # ===================================================================

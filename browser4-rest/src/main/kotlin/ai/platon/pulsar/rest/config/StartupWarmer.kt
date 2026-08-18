@@ -29,7 +29,7 @@ class StartupWarmer(
 
     /**
      * Bean names covering the critical path from HTTP request →
-     * MCP dispatch → session → browser → fetch.
+     * MCP dispatch → session → browser.
      *
      * Order matters: beans are touched in sequence so Spring resolves
      * each dependency chain before moving to the next.
@@ -39,12 +39,14 @@ class StartupWarmer(
      * eagerly in the background keeps the primary scenario (CLI browser
      * automation via MCP dispatch) fast on the first command after boot.
      *
-     * The fetch/protocol layer stays on the warm-up list because scrape
-     * requests depend on registered protocol handlers — skipping it would
-     * reintroduce "Protocol not found (1600)" errors on cold starts.
+     * The fetch/protocol layer is intentionally NOT warmed: the
+     * "Protocol not found (1600)" race it used to guard against is fixed
+     * inside [ai.platon.pulsar.skeleton.workflow.protocol.ProtocolFactory]
+     * via idempotent, thread-safe lazy registration, so those beans can
+     * stay lazy.
      *
      * Crawl ([crawlService]) and swarm ([swarmService]) infrastructure are
-     * deliberately NOT warmed: they are non-primary scenarios with heavy
+     * also NOT warmed: they are non-primary scenarios with heavy
      * initialization (browser pools, worker pools), and their first request
      * can tolerate the lazy-creation cost.  They fall back to plain lazy
      * initialization on first use.
@@ -56,11 +58,6 @@ class StartupWarmer(
         "sessionManager",
         // Agentic context (H2 DB init, etc.)
         "agenticContext",
-        // Fetch / protocol layer — ensures protocol handlers are registered
-        // before the first scrape request, avoiding race conditions where
-        // FetchComponent reports "Protocol not found (1600)".
-        "protocolFactory",
-        "fetchComponent",
     )
 
     @EventListener(ApplicationReadyEvent::class)

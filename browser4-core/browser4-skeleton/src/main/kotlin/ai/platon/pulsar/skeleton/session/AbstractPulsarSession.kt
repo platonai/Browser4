@@ -1,12 +1,15 @@
 package ai.platon.pulsar.skeleton.session
 
 import ai.platon.pulsar.api.Browser
+import ai.platon.pulsar.api.BrowserId
+import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.AppPaths.WEB_CACHE_DIR
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_MODE
+import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_DISPLAY_MODE
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.common.urls.PlainUrl
 import ai.platon.pulsar.common.urls.URLUtils
@@ -61,6 +64,22 @@ abstract class AbstractPulsarSession(
         // Keep existing page/document cache counters
         val pageCacheHits = AtomicLong()
         val documentCacheHits = AtomicLong()
+
+        /**
+         * Resolve the [BrowserId] for a [BrowserProfileMode], mirroring the
+         * mapping inside pulsar's `AbstractBrowserFactory.launch(profileMode)`.
+         *
+         * Kept in sync with the upstream mapping so that launching with
+         * session-level settings ([BrowserSettings]) uses the same browser
+         * profile the legacy `launch(mode)` path would have chosen.
+         */
+        internal fun browserIdFor(mode: BrowserProfileMode): BrowserId = when (mode) {
+            BrowserProfileMode.SYSTEM_DEFAULT -> BrowserId.SYSTEM_DEFAULT
+            BrowserProfileMode.DEFAULT -> BrowserId.DEFAULT
+            BrowserProfileMode.PROTOTYPE -> BrowserId.PROTOTYPE
+            BrowserProfileMode.SEQUENTIAL -> BrowserId.NEXT_SEQUENTIAL
+            BrowserProfileMode.TEMPORARY -> BrowserId.RANDOM_TEMP
+        }
     }
 
     private val logger = LoggerFactory.getLogger(AbstractPulsarSession::class.java)
@@ -210,7 +229,21 @@ abstract class AbstractPulsarSession(
     override fun createBoundDriver(): WebDriver {
         synchronized(context) {
             val mode = BrowserProfileMode.fromString(sessionConfig[BROWSER_CONTEXT_MODE])
-            val driver = context.browserManager.launch(mode).newDriver() as PulsarWebDriver
+            val browser = if (sessionConfig[BROWSER_DISPLAY_MODE] != null) {
+                // The session explicitly requested a display mode (e.g.
+                // `headed=true` from `open --headed`). The context-level browser
+                // manager launches with the server-wide configuration, which
+                // defaults to HEADLESS (see browser4-resources
+                // config/application.properties) and would silently ignore the
+                // session's choice. Launch with the session's own settings so
+                // the requested display mode actually reaches Chrome.
+                context.browserManager.launch(browserIdFor(mode), BrowserSettings(sessionConfig))
+            } else {
+                // No explicit display mode on the session — keep the legacy
+                // launch path so server-level defaults apply unchanged.
+                context.browserManager.launch(mode)
+            }
+            val driver = browser.newDriver() as PulsarWebDriver
             // Swap in Browser4WebDriver so every session uses the extension
             // point — enables typeSafe(), pressSafe(), fillSafe(), and
             // click(button) regardless of session type.

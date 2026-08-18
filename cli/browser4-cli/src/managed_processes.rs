@@ -261,29 +261,17 @@ pub fn stop_browser4_server_forcibly() -> ForceStopBrowser4ServerResult {
         || notify_close_all_sessions_before_force_stop(Some(&registry_path), Some(&state_dir)),
         kill_all_browsers,
         || stop_browser4_server_with_fallback_force_kill(),
-        || sleep(std::time::Duration::from_secs(5)),
+        || sleep(std::time::Duration::from_secs(2)),
     );
 
     // Final verification: catch processes that respawned or were slow to
     // materialise during the grace period.  Any stragglers are killed and
     // folded into the result.
-    #[cfg_attr(not(windows), allow(unused_mut))]
-    let mut final_extra = find_unique_pulsar_browser_processes();
-    #[cfg(windows)]
-    {
-        // On Windows also run the exhaustive per-PID sweep to catch
-        // processes the primary CIM filter skipped.
-        final_extra.extend(find_browser4_chrome_processes_exhaustive());
-        final_extra.sort_unstable();
-        final_extra.dedup();
-    }
+    let final_extra = find_unique_pulsar_browser_processes();
     if !final_extra.is_empty() {
         bulk_force_stop_browser_processes(&final_extra);
-        std::thread::sleep(std::time::Duration::from_millis(2000));
-        result
-            .browser_kill
-            .killed_pids
-            .extend(final_extra.iter().copied());
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        result.browser_kill.killed_pids.extend(final_extra.iter().copied());
         result.browser_kill.killed_pids.sort_unstable();
         result.browser_kill.killed_pids.dedup();
     }
@@ -520,7 +508,11 @@ fn call_close_all_sessions(
 pub fn kill_all_browsers() -> BrowserKillResult {
     const KILL_TIMEOUT_MS: u64 = 30_000;
     const WAIT_BETWEEN_SWEEPS_MS: u64 = 250;
-    const WAIT_AFTER_KILL_MS: u64 = 2_000;
+    // `taskkill /F /T` returns immediately and most processes die within a few
+    // hundred ms.  Waiting a full 2s per PID made a 8-browser kill spend ~16s
+    // just polling; the post-sweep and final verification already catch any
+    // stragglers, so a short wait here is sufficient.
+    const WAIT_AFTER_KILL_MS: u64 = 500;
 
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_millis(KILL_TIMEOUT_MS);
@@ -540,9 +532,7 @@ pub fn kill_all_browsers() -> BrowserKillResult {
         // that a staggered per-PID approach can leave behind).
         bulk_force_stop_browser_processes(&pids);
 
-        for pid in &pids {
-            let _ = wait_for_exit(*pid, WAIT_AFTER_KILL_MS, 100);
-        }
+        wait_for_exit_all(&pids, WAIT_AFTER_KILL_MS, 100);
 
         if start.elapsed() >= timeout {
             break;
@@ -557,24 +547,15 @@ pub fn kill_all_browsers() -> BrowserKillResult {
     // Final exhaustive sweep to catch any stragglers.
     result.remaining_pids = find_unique_pulsar_browser_processes();
 
-    // If anything is left, try one more aggressive sweep + kill cycle.
+    // If anything is left, try one more aggressive kill cycle.
     if !result.remaining_pids.is_empty() {
-        #[cfg(windows)]
-        {
-            // Exhaustive per-PID WMI query — catches processes the primary
-            // CIM filter skipped due to null CommandLine.
-            let stragglers = find_browser4_chrome_processes_exhaustive();
-            if !stragglers.is_empty() {
-                bulk_force_stop_browser_processes(&stragglers);
-                for pid in &stragglers {
-                    let _ = wait_for_exit(*pid, 2_000, 100);
-                }
-                result.killed_pids.extend(stragglers);
-                result.killed_pids.sort_unstable();
-                result.killed_pids.dedup();
-                result.remaining_pids = find_unique_pulsar_browser_processes();
-            }
-        }
+        let stragglers = std::mem::take(&mut result.remaining_pids);
+        bulk_force_stop_browser_processes(&stragglers);
+        wait_for_exit_all(&stragglers, 500, 100);
+        result.killed_pids.extend(stragglers);
+        result.killed_pids.sort_unstable();
+        result.killed_pids.dedup();
+        result.remaining_pids = find_unique_pulsar_browser_processes();
     }
 
     result
@@ -624,14 +605,6 @@ fn bulk_force_stop_browser_processes(pids: &[u32]) {
 fn find_unique_pulsar_browser_processes() -> Vec<u32> {
     let mut pids = find_pulsar_browser_processes();
     pids.extend(find_browser_processes_from_markers());
-
-    #[cfg(windows)]
-    {
-        // Exhaustive fallback: Get-Process + per-PID WMI queries.  Catches
-        // renderer / GPU / utility children that the primary CIM filter
-        // bypassed because CommandLine was null there but available here.
-        pids.extend(find_browser4_chrome_processes_exhaustive());
-    }
 
     pids.sort_unstable();
     pids.dedup();
@@ -822,7 +795,7 @@ fn find_browser4_server_processes() -> Vec<u32> {
 }
 
 fn force_kill_all_browser4_server_processes() -> ServerKillResult {
-    const WAIT_AFTER_KILL_MS: u64 = 2_000;
+    const WAIT_AFTER_KILL_MS: u64 = 500;
     const WAIT_POLL_MS: u64 = 100;
 
     let pids = find_browser4_server_processes();
@@ -886,9 +859,15 @@ fn find_pulsar_browser_processes() -> Vec<u32> {
         //   - Command-line paths containing "browser4" (catches renderer, GPU,
         //     and utility subprocesses that inherit the user-data-dir but not
         //     the PULSAR_CHROME variable).
+        //
+        // A single unfiltered query returns Name AND CommandLine for every
+        // process in one WMI round-trip (~1s).  This replaces the former
+        // `-Filter "Name = ..."` query PLUS a per-PID exhaustive sweep (which
+        // together took tens of seconds) with one call that covers both.
         let ps_command = r#"
-            Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe' OR Name = 'chromium.exe' OR Name = 'msedge.exe'" -ErrorAction SilentlyContinue |
+            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
                 Where-Object {
+                    $_.Name -in @('chrome.exe','chromium.exe','msedge.exe') -and
                     -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
                     (
                         $_.CommandLine -match 'PULSAR_CHROME' -or
@@ -909,30 +888,35 @@ fn find_pulsar_browser_processes() -> Vec<u32> {
     pids
 }
 
-/// Exhaustive fallback sweep: use `Get-Process` to enumerate every
-/// chrome/chromium/msedge process, then query each PID individually for its
-/// command line.  This avoids the `Get-CimInstance -Filter` path where
-/// `CommandLine` can be null for some processes on Windows.
+/// Exhaustive fallback sweep: enumerate every chrome/chromium/msedge process
+/// and match their command lines against Browser4 markers.
 ///
-/// Combined with the broader path matching (browser4 in user-data-dir), this
-/// catches renderer / GPU / utility children that the primary sweep missed.
+/// A single unfiltered `Get-CimInstance Win32_Process` returns Name AND
+/// CommandLine for all processes in one WMI round-trip (~1s for hundreds of
+/// processes).  Querying each PID individually (`-Filter "ProcessId = $pid"`)
+/// is O(N) WMI round-trips and was measured at ~52s for 55 browser processes,
+/// so we avoid that path entirely.
+///
+/// This is now equivalent to `find_pulsar_browser_processes` (both do a single
+/// unfiltered query), and the production paths use that function directly.
+/// Kept for tests and as an explicit named fallback.
 #[cfg(windows)]
+#[allow(dead_code)]
 fn find_browser4_chrome_processes_exhaustive() -> Vec<u32> {
     use std::process::Command;
 
     let ps_command = r#"
-        $pids = Get-Process -Name chrome, chromium, msedge -ErrorAction SilentlyContinue |
-                Select-Object -ExpandProperty Id
-        foreach ($pid in $pids) {
-            $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId = $pid" -ErrorAction SilentlyContinue).CommandLine
-            if ($cmd -and (
-                $cmd -match 'PULSAR_CHROME' -or
-                $cmd -match 'browser4[\\/]browser[\\/]chrome' -or
-                $cmd -match 'browser4-apps'
-            )) {
-                $pid
-            }
-        }
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -in @('chrome.exe','chromium.exe','msedge.exe') -and
+                -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
+                (
+                    $_.CommandLine -match 'PULSAR_CHROME' -or
+                    $_.CommandLine -match 'browser4[\\/]browser[\\/]chrome' -or
+                    $_.CommandLine -match 'browser4-apps'
+                )
+            } |
+            Select-Object -ExpandProperty ProcessId
     "#;
 
     let mut pids: Vec<u32> = match Command::new("powershell")
@@ -1218,6 +1202,58 @@ fn wait_for_exit(pid: u32, timeout_ms: u64, poll_interval_ms: u64) -> bool {
         std::thread::sleep(poll);
     }
     !is_process_running(pid)
+}
+
+/// Snapshot all running PIDs in a single `tasklist` invocation.
+///
+/// `wait_for_exit` launches a fresh `tasklist /FI "PID eq ..."` process per PID
+/// per poll, which made an 8-browser kill spend seconds just in `tasklist`
+/// startup.  One full snapshot + in-memory lookup collapses that to a single
+/// `tasklist` call per poll cycle.
+#[cfg(windows)]
+fn running_pids_snapshot() -> std::collections::HashSet<u32> {
+    use std::process::Command;
+    let mut set = std::collections::HashSet::new();
+    if let Ok(output) = Command::new("tasklist").args(["/FO", "CSV", "/NH"]).output() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            // Format: "image.exe","1234","Console","1","123,456 K"
+            let mut parts = line.split(',');
+            if let Some(pid_part) = parts.nth(1) {
+                if let Ok(pid) = pid_part.trim().trim_matches('"').parse::<u32>() {
+                    set.insert(pid);
+                }
+            }
+        }
+    }
+    set
+}
+
+/// Wait until all the given PIDs have exited, polling a single full-process
+/// snapshot each cycle instead of one `tasklist` per PID.
+fn wait_for_exit_all(pids: &[u32], timeout_ms: u64, poll_interval_ms: u64) {
+    if pids.is_empty() {
+        return;
+    }
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_millis(timeout_ms);
+    let poll = std::time::Duration::from_millis(poll_interval_ms);
+    #[cfg(windows)]
+    {
+        while start.elapsed() < timeout {
+            let running = running_pids_snapshot();
+            if !pids.iter().any(|p| running.contains(p)) {
+                return;
+            }
+            std::thread::sleep(poll);
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        for pid in pids {
+            let _ = wait_for_exit(*pid, timeout_ms, poll_interval_ms);
+        }
+    }
 }
 
 #[cfg(test)]

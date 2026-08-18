@@ -288,17 +288,39 @@ function Invoke-WebMiner {
 
     Write-Host '[WebMiner] Launching ...' -ForegroundColor DarkGray
 
-    # Ensure PowerShell decodes Java's UTF-8 output correctly
-    $prevOutputEncoding = [Console]::OutputEncoding
-    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-
+    # Launch Java with redirected streams and re-emit them afterwards.  A plain
+    # `& $javaExe @javaArgs` call drops the JAR's stdout when the script's own
+    # output is redirected (e.g. `webminer.ps1 all ... *> log`), leaving users
+    # with no pipeline progress or output paths.  Explicit capture guarantees
+    # the JAR's stdout/stderr are forwarded no matter how the script output is
+    # consumed.
     $javaExe = Join-Path $Java17Home "bin\$JavaExeName"
-    try {
-        & $javaExe @javaArgs
-    } finally {
-        [Console]::OutputEncoding = $prevOutputEncoding
-    }
-    return $LASTEXITCODE
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $javaExe
+    foreach ($a in $javaArgs) { $psi.ArgumentList.Add($a) }
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+    $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+    $psi.CreateNoWindow = $true
+
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    # Read both streams concurrently to avoid pipe deadlocks.
+    $outTask = $proc.StandardOutput.ReadToEndAsync()
+    $errTask = $proc.StandardError.ReadToEndAsync()
+    $proc.WaitForExit()
+    $stdout = $outTask.Result
+    $stderr = $errTask.Result
+    # Re-emit through the information stream.  Write-Host is NOT captured by the
+    # caller's `$exitCode = Invoke-WebMiner ...` assignment (only the success
+    # stream is), so the JAR output reaches the console AND any `*> log`
+    # redirection, while the function's return value stays a plain exit code.
+    if ($stdout) { Write-Host $stdout }
+    if ($stderr) { Write-Host $stderr }
+    $exitCode = $proc.ExitCode
+    $proc.Dispose()
+    return $exitCode
 }
 
 # ==================================================================

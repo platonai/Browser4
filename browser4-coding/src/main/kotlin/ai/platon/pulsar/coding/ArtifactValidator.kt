@@ -281,7 +281,7 @@ object ArtifactValidator {
             if (content.contains("\${revision}")) {
                 issues += ValidationIssue(Severity.ERROR,
                     "Parent <version> uses \${revision} which is not defined in this repository — " +
-                        "use a literal version like 4.13.4-SNAPSHOT", fileName)
+                        "use a literal version like 4.13.6-SNAPSHOT", fileName)
             }
             if (!content.contains("<version>")) {
                 issues += ValidationIssue(Severity.WARNING, "Parent <version> missing — Maven cannot resolve the parent", fileName)
@@ -685,4 +685,3 @@ object ArtifactValidator {
         }
     }
 }
-
