@@ -396,6 +396,38 @@ class PulsarSessionManagerTest {
     }
 
     @Test
+    fun sessionWithLostDriverLinkIsRecoveredViaInPlaceDriverReconnect() {
+        // pulsar 4.11.5+: the driver can reconnect to the same tab in place.
+        // Recovery must prefer that over creating a new driver on the browser.
+        val browser = Mockito.mock(Browser::class.java)
+        Mockito.`when`(browser.healthy()).thenReturn(CheckState(0, "Browser is healthy"))
+
+        val staleDriver = Mockito.mock(WebDriver::class.java)
+        runBlocking {
+            Mockito.`when`(staleDriver.healthy()).thenReturn(
+                CheckState(503, "WebDriver is not open - the connection to the backend tab is lost")
+            )
+            Mockito.`when`(staleDriver.reconnect()).thenReturn(true)
+        }
+
+        val agenticSession = mockAgenticSession(isActive = true, browser = browser, driver = staleDriver)
+        Mockito.doReturn(agenticSession)
+            .`when`(agenticContext)
+            .createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
+
+        val session = sessionManager.getOrCreateSession(mapOf("sessionId" to "reconnect-driver-inplace"))
+
+        assertSame(agenticSession, session.agenticSession,
+            "Session must not be recreated when the driver can reconnect in place")
+        assertEquals("active", session.status)
+        // The same driver/tab was reconnected — no new driver must be created.
+        Mockito.verify(browser, Mockito.never()).newDriver(Mockito.anyString())
+        verify(agenticContext, times(1)).createSession(
+            Mockito.any(PulsarSettings::class.java) ?: PulsarSettings()
+        )
+    }
+
+    @Test
     fun sessionWithLostDriverLinkIsRecoveredWithoutRecreatingBrowser() {
         // Regression guard for issue #571: when the browser process is healthy
         // but the driver link (backend tab connection) is lost — e.g. after
@@ -417,6 +449,9 @@ class PulsarSessionManagerTest {
             Mockito.`when`(staleDriver.healthy()).thenReturn(
                 CheckState(503, "WebDriver is not open - the connection to the backend tab is lost")
             )
+            // In-place reconnect unsupported (returns false) — recovery must
+            // fall back to binding a fresh driver on the same browser.
+            Mockito.`when`(staleDriver.reconnect()).thenReturn(false)
         }
 
         val agenticSession = mockAgenticSession(isActive = true, browser = browser, driver = staleDriver)

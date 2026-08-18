@@ -753,12 +753,15 @@ class PulsarSessionManager(
      * e.g. after the machine slept and the websocket died, or the backend tab
      * was closed.
      *
-     * Recovery creates a fresh driver on the SAME [Browser] instance and binds
-     * it to the session, so the Chrome profile (cookies, manual logins) is
-     * preserved. The stale driver is unbound but its tab is left open — it may
-     * be the user's visible page. Returns true when the replacement driver
-     * reports healthy; the caller then proceeds with the normal
-     * recreate-with-fresh-profile path otherwise.
+     * Recovery prefers an in-place [WebDriver.reconnect] of the SAME driver
+     * (same tab — pulsar 4.11.5+ re-establishes the CDP link and re-enables
+     * the protocol agents). When that is not supported or fails, a fresh
+     * driver is created on the SAME [Browser] instance and bound to the
+     * session, so the Chrome profile (cookies, manual logins) is preserved
+     * either way. The stale driver is unbound but its tab is left open — it
+     * may be the user's visible page. Returns true when recovery succeeds;
+     * the caller then proceeds with the normal recreate-with-fresh-profile
+     * path otherwise.
      */
     private fun recoverLostDriverLink(session: ManagedSession): Boolean {
         val agenticSession = session.agenticSession
@@ -771,6 +774,12 @@ class PulsarSessionManager(
         if (runBlocking { staleDriver.healthy() }.isOK) return false
 
         return runCatching {
+            // Preferred: reconnect the SAME driver (and the same tab) in place.
+            if (runBlocking { staleDriver.reconnect() }) {
+                return@runCatching true
+            }
+
+            // Fallback: bind a fresh driver on the SAME browser instance.
             // Plain field read on the stale driver — no CDP call, so this
             // cannot hang on the dead link. The new tab opens at the last
             // known URL to mirror what the user was looking at.
