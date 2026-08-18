@@ -25,6 +25,11 @@ pub struct ManagedServerProcess {
     pub jar_path: String,
     #[serde(rename = "startedAt")]
     pub started_at: String,
+    /// Runtime version tag the server was launched with (e.g. "local" for a
+    /// source-built bundle, "v4.13.5" for an installed release).  Absent for
+    /// entries written by older CLI versions.
+    #[serde(rename = "version", skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -83,6 +88,17 @@ pub fn remove_managed_server_process(pid: u32, registry_path: Option<&Path>) {
         .filter(|e| e.pid != pid)
         .collect();
     write_managed_server_processes(&remaining, &path);
+}
+
+/// Version tag recorded for the most recently registered managed server on
+/// [port].  Returns `None` when the port has no registry entry or the entry
+/// predates the version field (older CLI).
+pub fn recorded_server_version(port: u16, registry_path: Option<&Path>) -> Option<String> {
+    read_managed_server_processes(registry_path)
+        .into_iter()
+        .rev()
+        .find(|p| p.port == port)
+        .and_then(|p| p.version)
 }
 
 /// Clear all managed server processes from the registry.
@@ -1314,16 +1330,54 @@ mod tests {
             port: 8182,
             jar_path: "/path/to/Browser4.jar".to_string(),
             started_at: "2026-01-01T00:00:00Z".to_string(),
+            version: Some("v4.13.5".to_string()),
         };
 
         register_managed_server_process(proc.clone(), Some(&reg_path));
         let procs = read_managed_server_processes(Some(&reg_path));
         assert_eq!(procs.len(), 1);
         assert_eq!(procs[0].pid, 12345);
+        assert_eq!(procs[0].version.as_deref(), Some("v4.13.5"));
+        assert_eq!(
+            recorded_server_version(8182, Some(&reg_path)).as_deref(),
+            Some("v4.13.5")
+        );
 
         remove_managed_server_process(12345, Some(&reg_path));
         let procs = read_managed_server_processes(Some(&reg_path));
         assert!(procs.is_empty());
+    }
+
+    #[test]
+    fn test_recorded_server_version_roundtrip_and_fallback() {
+        let tmp = test_temp_dir();
+        let reg_path = tmp.path().join("reg.json");
+
+        // Entries without a version field (older CLI) deserialize as None.
+        let legacy = r#"{"processes":[{"pid":111,"baseUrl":"http://localhost:8182","port":8182,"jarPath":"/j","startedAt":"2026-01-01T00:00:00Z"}]}"#;
+        std::fs::write(&reg_path, legacy).unwrap();
+        assert_eq!(recorded_server_version(8182, Some(&reg_path)), None);
+        assert_eq!(recorded_server_version(8282, Some(&reg_path)), None);
+
+        // Re-registering on the same port appends; the newest entry wins.
+        for version in ["v4.13.4", "local"] {
+            register_managed_server_process(
+                ManagedServerProcess {
+                    pid: 222,
+                    base_url: "http://localhost:8182".to_string(),
+                    port: 8182,
+                    jar_path: "/j".to_string(),
+                    started_at: "2026-01-01T00:00:00Z".to_string(),
+                    version: Some(version.to_string()),
+                },
+                Some(&reg_path),
+            );
+        }
+        assert_eq!(
+            recorded_server_version(8182, Some(&reg_path)).as_deref(),
+            Some("local")
+        );
+        assert_eq!(recorded_server_version(9999, Some(&reg_path)), None);
     }
 
     #[test]
@@ -1340,6 +1394,7 @@ mod tests {
                     port,
                     jar_path: "/path/to/Browser4.jar".to_string(),
                     started_at: "2026-01-01T00:00:00Z".to_string(),
+                    version: Some("local".to_string()),
                 },
                 Some(&reg_path),
             );
@@ -1380,6 +1435,7 @@ mod tests {
             port: 8182,
             jar_path: "/tmp/Browser4.jar".to_string(),
             started_at: "2026-01-01T00:00:00Z".to_string(),
+            version: None,
         };
         register_managed_server_process(proc, Some(&reg_path));
         assert!(reg_path.exists());
@@ -1476,6 +1532,7 @@ mod tests {
                 port: 8182,
                 jar_path: "/path/to/Browser4.jar".to_string(),
                 started_at: "2026-01-01T00:00:00Z".to_string(),
+                version: None,
             },
             Some(&reg_path),
         );

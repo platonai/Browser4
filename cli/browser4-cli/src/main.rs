@@ -13347,7 +13347,7 @@ async fn handle_loop(
     // Ensure the server is running before loop execution.
     // (Loop control-flow commands like --list / --stop return early above
     // without reaching here, so the server is only started when needed.)
-    ensure_server_running(base_url).await?;
+    ensure_server_running(base_url, should_enforce_server_version(global)).await?;
 
     // --- build the mode label ---
     let mode_label = if parsed.is_subcommand {
@@ -16328,6 +16328,14 @@ async fn handle_doctor_metrics(
     Ok(())
 }
 
+/// Whether the CLI may restart a running localhost server whose version no
+/// longer matches the version this CLI would launch.  Disabled when the user
+/// explicitly chose the server via `--server` or the config file — an
+/// explicitly targeted server is the user's choice, not the CLI's to replace.
+fn should_enforce_server_version(global: &args::GlobalFlags) -> bool {
+    global.server_url.is_none() && crate::config::read_config().server.is_none()
+}
+
 fn should_ensure_server_running(command: &str) -> bool {
     command != "close"
         && command != "disconnect"
@@ -17457,7 +17465,7 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
         }
     }
 
-    ensure_server_running(&base_url).await?;
+    ensure_server_running(&base_url, should_enforce_server_version(global)).await?;
     let client = make_client();
     let compiled =
         compile_batch_request(&commands, bail, &base_url, global.session_name.as_deref())?;
@@ -17953,7 +17961,7 @@ async fn run(
                 } else {
                     "" // bare "plugin" — list all
                 };
-                ensure_server_running(&base_url).await?;
+                ensure_server_running(&base_url, should_enforce_server_version(global)).await?;
                 let client = make_client();
                 return handle_dynamic_plugin_command(&client, &base_url, domain, global).await;
             }
@@ -17996,7 +18004,7 @@ async fn run(
             ));
         }
         // Ensure the server is running before dispatching to act
-        ensure_server_running(&base_url).await?;
+        ensure_server_running(&base_url, should_enforce_server_version(global)).await?;
         let client = make_client();
         handle_act(&client, &base_url, &description).await?;
         return Ok(());
@@ -18068,7 +18076,7 @@ async fn run(
                 ),
             ));
         }
-        ensure_server_running(&base_url).await?;
+        ensure_server_running(&base_url, should_enforce_server_version(global)).await?;
     }
 
     let client = make_client();
@@ -19776,6 +19784,7 @@ mod tests {
                     port: 9444,
                     jar_path: "browser4.jar".to_string(),
                     started_at: "2026-04-17T00:00:00Z".to_string(),
+                    version: None,
                 },
                 ManagedServerProcess {
                     pid: 2,
@@ -19783,6 +19792,7 @@ mod tests {
                     port: 9222,
                     jar_path: "browser4.jar".to_string(),
                     started_at: "2026-04-17T00:00:01Z".to_string(),
+                    version: Some("v4.13.5".to_string()),
                 },
             ],
         );

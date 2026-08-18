@@ -23,8 +23,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::managed_processes::{
-    register_managed_server_process, shutdown_managed_server_processes_on_port,
-    ManagedServerProcess,
+    recorded_server_version, register_managed_server_process,
+    shutdown_managed_server_processes_on_port, ManagedServerProcess,
 };
 use crate::state::{
     read_state, resolve_default_state_dir, resolve_runtime_cache_dir, resolve_runtime_data_dir,
@@ -886,10 +886,105 @@ pub fn init_root_search_start_dir_from_startup() {
     }
 }
 
-/// Ensure the Browser4 server is running, starting it if necessary.
-///
-/// Only acts on `localhost` / `127.0.0.1` URLs.
-pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
+/// The runtime version tag the CLI would launch for a fresh localhost server:
+/// `"local"` when a repository checkout with a bundle module is detected (the
+/// source-built bundle is preferred there), otherwise the installed runtime's
+/// `current.tag` (e.g. `"v4.13.5"`).  Returns `None` when no version can be
+/// determined (no checkout, no installed runtime) — callers then skip the
+/// version check and reuse whatever server is running.
+fn expected_runtime_tag() -> Option<String> {
+    if !should_force_remote_bundle() {
+        if let Some(root) = find_browser4_root() {
+            if root.join("browser4-apps").join("browser4-bundle").is_dir() {
+                return Some("local".to_string());
+            }
+        }
+    }
+    read_current_tag()
+}
+
+/// Canonicalize a runtime version string for comparison:
+/// - `"v4.13.5"` → `"4.13.5"` (release tags)
+/// - `"local"`, `"4.13.6-SNAPSHOT"`, `""` → `"local"` (source-built bundle)
+fn canonical_runtime_version(tag: &str) -> String {
+    let trimmed = tag.trim().to_ascii_lowercase();
+    let without_v = trimmed.strip_prefix('v').unwrap_or(&trimmed).to_string();
+    if without_v.is_empty()
+        || without_v == "local"
+        || without_v.contains("-snapshot")
+        || without_v.contains("-dev")
+    {
+        "local".to_string()
+    } else {
+        without_v
+    }
+}
+
+/// `true` when the running server's version differs from the version this CLI
+/// would launch, after canonicalization (release tags compare exactly; any
+/// source-built marker — "local", "-SNAPSHOT" — compares equal to "local").
+fn server_version_mismatch(actual: &str, expected: &str) -> bool {
+    canonical_runtime_version(actual) != canonical_runtime_version(expected)
+}
+
+/// Probe the version reported by a running server via `GET /api/system/build`.
+/// Returns `None` when the endpoint is missing or unparseable — older or
+/// non-Browser4 servers — so the caller can fall back to reusing the server.
+async fn probe_server_version(client: &Client, base_url: &str) -> Option<String> {
+    let url = format!("{}/api/system/build", base_url.trim_end_matches('/'));
+    let response = client.get(&url).send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body: serde_json::Value = response.json().await.ok()?;
+    body.get("version").and_then(|v| v.as_str()).map(String::from)
+}
+
+/// Version of the server currently running on [port]: the version recorded in
+/// the managed process registry when the CLI launched it, falling back to an
+/// HTTP probe for servers the CLI did not launch (or launched before the
+/// version field existed).
+async fn running_server_version(client: &Client, base_url: &str, port: u16) -> Option<String> {
+    if let Some(recorded) = recorded_server_version(port, None) {
+        return Some(recorded);
+    }
+    probe_server_version(client, base_url).await
+}
+
+/// Decide what to do with an existing, ready server: check for plugin
+/// fingerprint changes, then (when enforcement is active) check that the
+/// running backend matches the version this CLI would launch and restart it
+/// on the same port when it does not.
+async fn on_existing_server_ready(
+    client: &Client,
+    base_url: &str,
+    port: u16,
+    enforce_version: bool,
+) -> Result<(), String> {
+    if plugins_changed_since_server_start(port) {
+        return restart_server_for_plugin_change(base_url, port).await;
+    }
+
+    if enforce_version {
+        if let Some(expected) = expected_runtime_tag() {
+            if let Some(actual) = running_server_version(client, base_url, port).await {
+                if server_version_mismatch(&actual, &expected) {
+                    return restart_server_for_version_change(base_url, port, &actual, &expected)
+                        .await;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Ensure a Browser4 server is running at [base_url], starting one when the
+/// port is free.  When [enforce_version] is set (the URL was not explicitly
+/// chosen by the user), a running server whose version differs from the
+/// version this CLI would launch is restarted on the same port so the CLI
+/// never talks to a stale backend by accident.
+pub async fn ensure_server_running(base_url: &str, enforce_version: bool) -> Result<(), String> {
     // Skip remote servers
     if !base_url.contains("localhost") && !base_url.contains("127.0.0.1") {
         return Ok(());
@@ -913,10 +1008,7 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
 
     match probe_server_state(&client, base_url).await {
         ServerState::Ready => {
-            if plugins_changed_since_server_start(port) {
-                return restart_server_for_plugin_change(base_url, port).await;
-            }
-            return Ok(());
+            return on_existing_server_ready(&client, base_url, port, enforce_version).await;
         }
         ServerState::Starting(_) => {
             return wait_for_server_ready(&client, base_url, EXISTING_SERVER_READY_TIMEOUT, None)
@@ -935,10 +1027,7 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
             tokio::time::sleep(Duration::from_secs(3)).await;
             match probe_server_state(&client, base_url).await {
                 ServerState::Ready => {
-                    if plugins_changed_since_server_start(port) {
-                        return restart_server_for_plugin_change(base_url, port).await;
-                    }
-                    return Ok(());
+                    return on_existing_server_ready(&client, base_url, port, enforce_version).await;
                 }
                 ServerState::Starting(_) => {
                     return wait_for_server_ready(
@@ -1164,9 +1253,41 @@ fn plugins_changed_since_server_start(port: u16) -> bool {
 /// afterwards it is now owned by some other server, and the restart degrades
 /// to a no-op rather than launching onto an occupied port.
 async fn restart_server_for_plugin_change(base_url: &str, port: u16) -> Result<(), String> {
-    eprintln!(
-        "Plugins changed since the server started - restarting Browser4 server to activate them (warm restart)..."
-    );
+    restart_server_on_port(
+        base_url,
+        port,
+        "Plugins changed since the server started - restarting Browser4 server to activate them (warm restart)...",
+    )
+    .await
+}
+
+/// Restart the local server on [port] because the running backend's version
+/// no longer matches the version this CLI would launch (e.g. the installed
+/// release is running while the CLI now prefers the source-built local
+/// bundle).  Same stop-and-relaunch semantics as the plugin warm restart.
+async fn restart_server_for_version_change(
+    base_url: &str,
+    port: u16,
+    actual: &str,
+    expected: &str,
+) -> Result<(), String> {
+    restart_server_on_port(
+        base_url,
+        port,
+        &format!(
+            "Server on port {} is running version {}, but this CLI expects {} — \
+             restarting it to match (the current browser session will be stopped).",
+            port, actual, expected
+        ),
+    )
+    .await
+}
+
+/// Shared stop-and-relaunch used by the plugin warm restart and the
+/// version-drift restart: stop the managed server on [port], verify the port
+/// is free, then launch a fresh server on the same port.
+async fn restart_server_on_port(base_url: &str, port: u16, reason: &str) -> Result<(), String> {
+    eprintln!("{reason}");
 
     let shutdown = shutdown_managed_server_processes_on_port(
         false,
@@ -1177,7 +1298,7 @@ async fn restart_server_for_plugin_change(base_url: &str, port: u16) -> Result<(
     );
     if !shutdown.remaining_pids.is_empty() {
         return Err(format!(
-            "Browser4 server on port {port} could not be stopped for the plugin warm restart \
+            "Browser4 server on port {port} could not be stopped for the restart \
              (pids still running: {:?}). Stop it manually and re-run the command.",
             shutdown.remaining_pids
         ));
@@ -1187,7 +1308,7 @@ async fn restart_server_for_plugin_change(base_url: &str, port: u16) -> Result<(
     // server (started outside this CLI) now owns it.  Leave it alone.
     if is_local_port_open(base_url) {
         eprintln!(
-            "Port {port} is still served by a server not started by this CLI; skipping the plugin warm restart."
+            "Port {port} is still served by a server not started by this CLI; skipping the restart."
         );
         clear_plugins_fingerprint(port);
         return Ok(());
@@ -1229,6 +1350,11 @@ struct ServerLaunchSpec {
     working_dir: PathBuf,
     registry_target: PathBuf,
     description: String,
+    /// Runtime version tag of the launched backend ("local" for a source-built
+    /// bundle, "v4.13.5" for an installed release).  Recorded in the managed
+    /// process registry so later invocations can detect version drift between
+    /// the running server and the version this CLI would launch.
+    version: Option<String>,
 }
 
 struct PreparedLaunchCommand {
@@ -4574,6 +4700,7 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
             program_display,
             port
         ),
+        version: Some(runtime.tag.clone()),
     }
 }
 
@@ -5264,6 +5391,7 @@ async fn start_server(
             // Keep the legacy registry field populated for backward compatibility.
             jar_path: launch_spec.registry_target.to_string_lossy().to_string(),
             started_at: chrono::Utc::now().to_rfc3339(),
+            version: launch_spec.version.clone(),
         },
         None,
     );
@@ -5969,6 +6097,7 @@ mod tests {
             working_dir: PathBuf::from("."),
             registry_target: PathBuf::from("registry-target"),
             description: String::from("desc"),
+            version: Some("local".to_string()),
         }
     }
 
@@ -6068,6 +6197,50 @@ mod tests {
         drop(listener);
 
         assert!(!is_local_port_open(&format!("http://127.0.0.1:{port}")));
+    }
+
+    #[test]
+    fn test_canonical_runtime_version_normalizes_tags() {
+        assert_eq!(canonical_runtime_version("v4.13.5"), "4.13.5");
+        assert_eq!(canonical_runtime_version("4.13.5"), "4.13.5");
+        assert_eq!(canonical_runtime_version("local"), "local");
+        assert_eq!(canonical_runtime_version("LOCAL"), "local");
+        assert_eq!(canonical_runtime_version("4.13.6-SNAPSHOT"), "local");
+        assert_eq!(canonical_runtime_version(""), "local");
+        assert_eq!(canonical_runtime_version("  v4.13.5  "), "4.13.5");
+    }
+
+    #[test]
+    fn test_server_version_mismatch_detects_stale_backend() {
+        // The trap that started this: CLI prefers the source build while an
+        // installed release is still running.
+        assert!(server_version_mismatch("v4.13.5", "local"));
+        // Release vs release: exact version matters.
+        assert!(server_version_mismatch("v4.13.5", "v4.13.6"));
+        assert!(!server_version_mismatch("v4.13.5", "4.13.5"));
+        // Any source-built marker compares equal to "local".
+        assert!(!server_version_mismatch("4.13.6-SNAPSHOT", "local"));
+        assert!(!server_version_mismatch("local", "4.14.0-SNAPSHOT"));
+        // Same version is never a mismatch.
+        assert!(!server_version_mismatch("v4.13.5", "v4.13.5"));
+    }
+
+    #[test]
+    fn test_expected_runtime_tag_prefers_local_bundle_in_checkout() {
+        // Mirrors expected_runtime_tag(): inside a checkout with a bundle
+        // module the expected tag is "local", otherwise the installed tag.
+        if std::env::var("BROWSER4_CLI_FORCE_REMOTE_BUNDLE").as_deref() == Ok("1") {
+            assert_eq!(expected_runtime_tag(), read_current_tag());
+            return;
+        }
+        let root = find_browser4_root();
+        if let Some(root) = &root {
+            if root.join("browser4-apps").join("browser4-bundle").is_dir() {
+                assert_eq!(expected_runtime_tag().as_deref(), Some("local"));
+                return;
+            }
+        }
+        assert_eq!(expected_runtime_tag(), read_current_tag());
     }
 
     #[test]
