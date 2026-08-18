@@ -64,6 +64,7 @@ class MCPToolControllerE2ETest {
         controller = MCPToolController(sessionManager)
         registeredToolSpecs.clear()
 
+        `when`(sessionManager.getOrRecoverSession(sessionId)).thenReturn(managedSession)
         `when`(sessionManager.getSession(sessionId)).thenReturn(managedSession)
         `when`(managedSession.agenticSession).thenReturn(agenticSession)
         `when`(agenticSession.companionAgent).thenReturn(basicBrowserAgent)

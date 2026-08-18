@@ -428,7 +428,7 @@ class MCPToolController(
             mapOf<String, Any>(
                 "sessionId" to s.sessionId,
                 "url" to (s.url ?: ""),
-                "status" to s.status,
+                "status" to s.status.wire,
                 "healthy" to healthy,
                 "kind" to s.kind.name,
                 "ownsBrowser" to s.ownsBrowser,
@@ -452,7 +452,7 @@ class MCPToolController(
 
     private suspend fun handleDeleteSessionData(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
-        val managed = sessionManager.getSession(sessionId)
+        val managed = sessionManager.getOrRecoverSession(sessionId)
             ?: return ResponseEntity.ok(errorResponse("Session not found: $sessionId"))
 
         managed.withLock {
@@ -913,7 +913,7 @@ class MCPToolController(
             val sessionId = args["sessionId"]?.toString()
                 ?: request.arguments?.get("sessionId")?.toString()
             if (sessionId != null) {
-                val managed = sessionManager.getSession(sessionId)
+                val managed = sessionManager.getOrRecoverSession(sessionId)
                 if (managed != null) {
                     try {
                         managed.driver
@@ -931,7 +931,7 @@ class MCPToolController(
             val sessionId = args["sessionId"]?.toString()
                 ?: request.arguments?.get("sessionId")?.toString()
             if (sessionId != null) {
-                sessionManager.getSession(sessionId) ?: Any()
+                sessionManager.getOrRecoverSession(sessionId) ?: Any()
             } else {
                 Any()
             }
@@ -971,7 +971,7 @@ class MCPToolController(
 
     private suspend fun executeAgentToolText(toolName: String, args: Map<String, Any?>): String {
         val sessionId = requireSessionId(args)
-        val managed = sessionManager.getSession(sessionId)
+        val managed = sessionManager.getOrRecoverSession(sessionId)
             ?: throw IllegalArgumentException("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId")
 
         val agent = managed.agenticSession.companionAgent as? BasicBrowserAgent
@@ -1036,7 +1036,7 @@ class MCPToolController(
     private suspend fun dispatchToAgentToolExecutor(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
         val normalizedRequest = normalizeFrontendToolCall(request.tool, request.arguments ?: emptyMap())
         val sessionId = requireSessionId(normalizedRequest.arguments)
-        val managed = sessionManager.getSession(sessionId)
+        val managed = sessionManager.getOrRecoverSession(sessionId)
             ?: return ResponseEntity.ok(errorResponse("Session not found: $sessionId"))
 
         val agent = managed.agenticSession.companionAgent as? BasicBrowserAgent

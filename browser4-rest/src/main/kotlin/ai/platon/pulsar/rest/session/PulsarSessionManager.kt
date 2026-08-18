@@ -15,6 +15,7 @@ import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_MODE
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.core.api.PulsarSettings
 import kotlinx.coroutines.runBlocking
 import org.slf4j.LoggerFactory
@@ -23,6 +24,9 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.time.Duration
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -52,6 +56,12 @@ class PulsarSessionManager(
     val agenticContext: AgenticContext,
     /** Idle timeout after which non-default sessions are reaped. */
     private val idleSessionTimeout: Duration = DEFAULT_IDLE_SESSION_TIMEOUT,
+    /**
+     * Optional file for persisting the display-name → session-id mapping
+     * across backend restarts.  When null, the mapping is in-memory only
+     * (default for tests); when set, every mapping change is written through.
+     */
+    private val registryFile: Path? = null,
 ) : Closeable {
     private val logger = LoggerFactory.getLogger(PulsarSessionManager::class.java)
 
@@ -107,6 +117,8 @@ class PulsarSessionManager(
         }
 
     init {
+        // Restore the display-name mapping across restarts (best effort).
+        loadSessionRegistry()
         // Scan for idle sessions periodically.  The initial delay avoids doing
         // pointless work right after startup (nothing can be idle yet).
         idleReaperExecutor.scheduleWithFixedDelay(
@@ -119,6 +131,52 @@ class PulsarSessionManager(
             IDLE_REAP_INTERVAL_MINUTES,
             TimeUnit.MINUTES
         )
+    }
+
+    // ------------------------------------------------------------------
+    // Display-name registry persistence
+    // ------------------------------------------------------------------
+
+    /**
+     * Loads the display-name → session-id mapping from [registryFile], if
+     * configured.  Restored entries whose sessions no longer exist are simply
+     * reused (same UUID) the next time the display name is opened — the UUID
+     * identity is preserved even though the browser state is gone.
+     */
+    private fun loadSessionRegistry() {
+        val file = registryFile ?: return
+        runCatching {
+            if (Files.exists(file)) {
+                val raw = Files.readString(file)
+                val parsed = pulsarObjectMapper().readValue(raw, Map::class.java)
+                parsed.forEach { (key, value) ->
+                    val name = key?.toString()?.takeIf { it.isNotBlank() } ?: return@forEach
+                    val sessionId = value?.toString()?.takeIf { it.isNotBlank() } ?: return@forEach
+                    displayNameToSessionId.putIfAbsent(name, sessionId)
+                }
+                logger.info("Loaded {} display-name mappings from session registry {}", displayNameToSessionId.size, file)
+            }
+        }.onFailure { e ->
+            logger.warn("Failed to load session registry from {}: {}", file, e.message)
+        }
+    }
+
+    /**
+     * Writes the display-name → session-id mapping to [registryFile] (atomic
+     * temp-file + rename).  Best effort — a failed write is logged, never
+     * thrown, so session operations are not blocked by disk issues.
+     */
+    private fun persistSessionRegistry() {
+        val file = registryFile ?: return
+        runCatching {
+            file.parent?.let(Files::createDirectories)
+            val json = pulsarObjectMapper().writeValueAsString(displayNameToSessionId)
+            val tmp = file.resolveSibling("${file.fileName}.tmp")
+            Files.writeString(tmp, json)
+            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING)
+        }.onFailure { e ->
+            logger.warn("Failed to persist session registry to {}: {}", file, e.message)
+        }
     }
 
     /**
@@ -341,7 +399,7 @@ class PulsarSessionManager(
             agenticSession = agenticSession,
             capabilities = capabilities,
             kind = kind,
-            status = if (agenticSession.isActive) "active" else "stopped"
+            status = if (agenticSession.isActive) SessionStatus.ACTIVE else SessionStatus.STOPPED
         ).also {
             logger.info("Created session {} with capabilities: {}", sessionId, capabilities)
         }
@@ -598,6 +656,13 @@ class PulsarSessionManager(
             createManagedSession(sessionId, normalizedCapabilities, SessionKind.EXTENSION_ATTACHED)
         }
 
+        // An extension session is not usable until the extension connects via
+        // WebSocket — mark it stopped up front (onExtensionConnected flips it
+        // to ACTIVE).  Previously this state was derived lazily by the health
+        // check inside getSession; with pure-lookup getSession it must be set
+        // here explicitly.
+        session.status = SessionStatus.STOPPED
+
         // Track this session as extension-attached so resolveHealthySession
         // never silently recreates it as an ordinary Browser4-CDP session.
         extensionSessionIds.add(sessionId)
@@ -643,7 +708,7 @@ class PulsarSessionManager(
 
         // Bind the browser to the agentic session.
         managedSession.agenticSession.bindBrowser(browser)
-        managedSession.status = "active"
+        managedSession.status = SessionStatus.ACTIVE
         extensionBrowsers[sessionId] = extChrome
 
         // Create and bind a driver from the extension browser in a background
@@ -715,8 +780,8 @@ class PulsarSessionManager(
 
         // Mark the session as stopped so health checks reflect the state.
         sessions[sessionId]?.let { session ->
-            if (session.status != "stopped") {
-                session.status = "stopped"
+            if (session.status != SessionStatus.STOPPED) {
+                session.status = SessionStatus.STOPPED
             }
         }
     }
@@ -800,8 +865,8 @@ class PulsarSessionManager(
             when {
                 existingSession == null -> createManagedSession(sessionId, capabilities)
                 checkHealthyBlocking(existingSession).isOK -> {
-                    if (!existingSession.status.equals("active", ignoreCase = true)) {
-                        existingSession.status = "active"
+                    if (existingSession.status != SessionStatus.ACTIVE) {
+                        existingSession.status = SessionStatus.ACTIVE
                     }
                     existingSession
                 }
@@ -820,14 +885,14 @@ class PulsarSessionManager(
     }
 
     private fun markSessionActive(session: ManagedSession): ManagedSession {
-        if (!session.status.equals("active", ignoreCase = true)) {
-            session.status = "active"
+        if (session.status != SessionStatus.ACTIVE) {
+            session.status = SessionStatus.ACTIVE
         }
         return session
     }
 
     private fun markSessionInactive(session: ManagedSession) {
-        session.status = "stopped"
+        session.status = SessionStatus.STOPPED
     }
 
     private fun normalizeCapabilities(
@@ -850,9 +915,7 @@ class PulsarSessionManager(
             ) -> generateDefaultSessionId()
 
             requestedSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> SWARM_SESSION_ID
-            else -> displayNameToSessionId.computeIfAbsent(requestedSessionId) {
-                UUID.randomUUID().toString()
-            }
+            else -> resolveOrCreateDisplayNameMapping(requestedSessionId)
         }
 
         val requestedProfileMode = BrowserProfileMode.fromString(
@@ -892,18 +955,62 @@ class PulsarSessionManager(
      * session instead of creating a new one each time.
      */
     private fun generateDefaultSessionId(): String {
-        return displayNameToSessionId.computeIfAbsent(DEFAULT_SESSION_ID) {
-            UUID.randomUUID().toString()
-        }
+        return resolveOrCreateDisplayNameMapping(DEFAULT_SESSION_ID)
     }
 
     /**
-     * Retrieves a session by ID.
+     * Resolves a display name to its stable UUID, creating (and persisting)
+     * the mapping on first use.
      *
-     * @param sessionId The session identifier.
+     * Note: this must NOT persist from inside `ConcurrentHashMap.computeIfAbsent`
+     * — the mapping function runs *before* the entry is inserted, so a
+     * snapshot taken there would miss the new mapping.
+     */
+    private fun resolveOrCreateDisplayNameMapping(name: String): String {
+        displayNameToSessionId[name]?.let { return it }
+        val newId = UUID.randomUUID().toString()
+        val raced = displayNameToSessionId.putIfAbsent(name, newId)
+        if (raced == null) {
+            persistSessionRegistry()
+            return newId
+        }
+        return raced
+    }
+
+    /**
+     * Retrieves a session by ID — **pure lookup**, no side effects.
+     *
+     * Unlike [getOrRecoverSession], this never creates the default session on
+     * demand and never runs health checks / recreation.  Use it for read-only
+     * paths (listing, readiness checks) where a stale or missing session must
+     * surface as-is instead of being silently repaired.
+     *
+     * @param sessionId The session identifier (display name or UUID).
      * @return The managed session, or null if not found.
      */
     fun getSession(sessionId: String): ManagedSession? {
+        val resolvedId = displayNameToSessionId.getOrDefault(sessionId, sessionId)
+        val session = sessions[resolvedId]
+        if (session == null) {
+            logger.debug("getSession: {} not found in sessions (resolvedId={})", sessionId, resolvedId)
+        }
+        session?.lastAccessedAt = System.currentTimeMillis()
+        return session
+    }
+
+    /**
+     * Retrieves a session for use, recovering it when needed.
+     *
+     * Full previous [getSession] semantics: resolves display names, creates
+     * the default session on demand, runs a health check and transparently
+     * recreates unhealthy Browser4-launched sessions (same session ID, fresh
+     * browser).  Use this on execution paths where a command must succeed
+     * against a live browser.
+     *
+     * @param sessionId The session identifier (display name or UUID).
+     * @return The managed session (possibly recreated), or null if not found.
+     */
+    fun getOrRecoverSession(sessionId: String): ManagedSession? {
         val resolvedId = displayNameToSessionId.getOrDefault(sessionId, sessionId)
         val session = if (resolvedId != sessionId) {
             // Look up by resolved UUID
@@ -913,7 +1020,7 @@ class PulsarSessionManager(
                     existingSession.capabilities ?: mapOf(SESSION_ID_CAPABILITY to existingSession.sessionId)
                 )
                 resolveHealthySession(resolvedId, normalizedCapabilities, existingSession)
-            }.also { if (it == null) logger.warn("getSession: resolvedId={} not found in sessions (displayName path, input={})", resolvedId, sessionId) }
+            }.also { if (it == null) logger.warn("getOrRecoverSession: resolvedId={} not found in sessions (displayName path, input={})", resolvedId, sessionId) }
         } else if (sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true)) {
             getOrCreateSession(mapOf(SESSION_ID_CAPABILITY to DEFAULT_SESSION_ID))
         } else {
@@ -923,7 +1030,7 @@ class PulsarSessionManager(
                     existingSession.capabilities ?: mapOf(SESSION_ID_CAPABILITY to existingSession.sessionId)
                 )
                 resolveHealthySession(sessionId, normalizedCapabilities, existingSession)
-            }.also { if (it == null) logger.warn("getSession: sessionId={} not found in sessions (direct path). known keys={}", sessionId, sessions.keys().toList().take(10)) }
+            }.also { if (it == null) logger.warn("getOrRecoverSession: sessionId={} not found in sessions (direct path). known keys={}", sessionId, sessions.keys().toList().take(10)) }
         }
         session?.lastAccessedAt = System.currentTimeMillis()
         return session
@@ -975,7 +1082,9 @@ class PulsarSessionManager(
         extensionSessionIds.remove(resolvedId)
 
         // Clean up the display-name mapping if this session was a default session
-        displayNameToSessionId.values.remove(resolvedId)
+        if (displayNameToSessionId.values.remove(resolvedId)) {
+            persistSessionRegistry()
+        }
 
         return true
     }

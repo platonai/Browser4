@@ -5,8 +5,10 @@
 `PulsarSessionManager` 对会话的生命周期管理。
 
 > **修复状态（2026-07-22）**：P1、P2、P4、P5（原子写部分）、P6、P7、P8 已修复；
-> P3 为设计权衡保留（自动健康恢复）；P5 的进程间锁部分、P9 的浏览器实测待后续。
-> 修复详情见文末「5. 修复记录」。
+> **第二轮重构（2026-07-22）**：P3 已根治（getSession 读写分离）、P7 已根治（注册表持久化）、
+> status 魔法字符串 → SessionStatus 枚举、CLI 遗留字段统一走 SessionKind 并拆分大函数。
+> 剩余：P5 的进程间锁部分、P9 的浏览器实测待后续。
+> 修复详情见文末「5. 修复记录」与「6. 重构记录」。
 
 ## 1. 会话管理链路总览
 
@@ -166,4 +168,18 @@ AgenticSession（browser4-agentic / core）──► PulsarBrowser / PulsarWebDr
 
 **新增测试**：`PulsarSessionManagerTest`（reapIdleSessions 仅回收空闲命名会话、默认/SWARM/刚访问保留、attached 不回收；deleteSession 按显示名删除）、`MCPToolControllerTest`（list 的 healthy true/false）、`main.rs`（healthy=false 显示 Stale/Refresh、healthy 缺失向后兼容）。
 
-**保留项**：P3（每次调用健康检查+静默重建是自动恢复机制的核心，改动风险大）；P5 的跨进程锁（涉及所有 CLI 命令，建议单独一轮处理）；P9（需真实浏览器验证 `attach --cdp` 后 `close` 是否误杀外部浏览器——本轮已通过 kind 修复降低误杀路径，但行为仍需实测）。
+**保留项**：P5 的跨进程锁（涉及所有 CLI 命令，建议单独一轮处理）；P9（需真实浏览器验证 `attach --cdp` 后 `close` 是否误杀外部浏览器——已通过 kind 修复降低误杀路径，但行为仍需实测）。
+
+## 6. 重构记录（2026-07-22，第二轮）
+
+| 重构 | 内容 | 文件 |
+|---|---|---|
+| SessionStatus 枚举 | `ManagedSession.status` 从魔法字符串改为 `SessionStatus` 枚举（ACTIVE/PAUSED/STOPPED/DISCONNECTED/UNHEALTHY），`wire` 保持小写协议格式（MCP/CLI 兼容），`fromWire` 容错解析；全部 `equals("active")` 改为枚举比较 | `SessionStatus.kt`（新增）、`ManagedSession.kt`、`PulsarSessionManager.kt`、`Models.kt` |
+| getSession 读写分离（P3 根治） | `getSession()` 变**纯查询**（解析显示名→查 map→返回，不创建、不健康检查、不重建）；新增 `getOrRecoverSession()` 保留完整旧语义（DEFAULT 按需创建 + 健康检查 + 不健康会话同 UUID 重建）；执行路径（工具调度/deleteSessionData/webdb/html_snapshot）改用 `getOrRecoverSession`，只读路径（check_session_ready）保持 `getSession`；extension 未连接状态改为创建时显式 STOPPED（不再依赖查询时健康检查推导） | `PulsarSessionManager.kt`、`MCPToolController.kt`、`WebDbToolExecutor.kt`、`HTMLSnapshotToolExecutor.kt` |
+| 注册表持久化（P7 根治） | `displayNameToSessionId` 映射落盘（构造参数 `registryFile`，默认 `~/.browser4/session-registry.json`，测试传 null 不持久化）：启动加载（`loadSessionRegistry`），新增映射/删除映射时原子写（`persistSessionRegistry`，tmp+rename）；`resolveOrCreateDisplayNameMapping()` 用 `putIfAbsent` 避免 `computeIfAbsent` 在条目插入前快照的陷阱；后端重启后命名会话与 DEFAULT 保持同 UUID（浏览器状态仍丢失，但身份稳定） | `PulsarSessionManager.kt`、`CommandServiceConfig.kt` |
+| CLI kind 统一 | `main.rs` 全部 `state.is_attached` / `state.attach_type` 读取改为 `state.kind`（`kind.is_attached()` / `kind == SessionKind::ExtensionAttached`）；attach 写入改为设 `kind`（ExtensionAttached/CdpAttached），`create_session` 重置为 `Browser4Launched`；`is_attached`/`attach_type` 降级为纯序列化兼容（write 时同步、读后迁移） | `main.rs` |
+| 大函数拆分 | `get_or_create_navigation_session`（200+ 行）拆出 `create_fresh_session()`（新建会话+打印，4 处复用）与 `resolve_attached_session_id()`（attached 会话健康校验/自愈/报错，60 行）；行为完全不变 | `main.rs` |
+
+**新增/更新测试**：`PulsarSessionManagerTest`（getSession 纯查询不创建/不恢复、getOrRecoverSession 恢复语义、注册表跨重启持久化、删除后映射清除）、`MCPToolControllerTest`/`MCPToolControllerE2ETest`/`MCPToolControllerExperienceE2ETest`（stub 切换 getOrRecoverSession）、`SwarmControllerTest`（枚举 status）、`main.rs`（kind 断言）。
+
+**验证**：CLI `cargo test --bin browser4-cli` 1088 passed；browser4-rest 全量 266 tests passed；所有测试目标编译通过。

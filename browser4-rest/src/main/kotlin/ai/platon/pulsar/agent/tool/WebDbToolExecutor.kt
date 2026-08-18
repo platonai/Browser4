@@ -74,7 +74,7 @@ class WebDbToolExecutor(
         val outputDir = paramString(args, "outputDir", "export", required = false)?.takeIf { it.isNotBlank() }
             ?: throw IllegalArgumentException("Missing required parameter 'outputDir' for webdb export")
 
-        val managed = sessionManager.getSession(sessionId)
+        val managed = sessionManager.getOrRecoverSession(sessionId)
             ?: throw IllegalArgumentException("Session not found: $sessionId")
 
         return managed.withLock {
@@ -110,7 +110,7 @@ class WebDbToolExecutor(
         val url = paramString(args, "url", "normalize", required = false)?.takeIf { it.isNotBlank() }
             ?: throw IllegalArgumentException("Missing required parameter 'url' for webdb normalize")
 
-        val managed = sessionManager.getSession(sessionId)
+        val managed = sessionManager.getOrRecoverSession(sessionId)
             ?: throw IllegalArgumentException("Session not found: $sessionId")
 
         return managed.withLock {
