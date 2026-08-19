@@ -191,11 +191,20 @@ interface PerceptiveAgent : AutoCloseable {
     val processTrace: List<ProcessTrace>
 
     /**
+     * The execution session id of the most recent [run] call, or null when the agent
+     * has not run yet. Each run starts a new execution session; all [AgentState]s
+     * collected during that run carry this id so callers can build task-scoped views
+     * of the accumulated [stateHistory].
+     */
+    val lastRunSessionId: String? get() = null
+
+    /**
      * High-level problem resolution entry. Implementations should construct an [ActionOptions]
      * from the raw problem string and delegate to [run] with the options.
      *
      * @param task The user goal or instruction to fulfill.
-     * @return The final action result produced by the agent.
+     * @return The history of THIS run: a detached snapshot containing only the states
+     * collected for this task, scoped by the run's execution session.
      */
     @MCP
     suspend fun run(task: String): AgentHistory
@@ -206,7 +215,8 @@ interface PerceptiveAgent : AutoCloseable {
      * should record structured traces while keeping [stateHistory] focused on executed tool actions only.
      *
      * @param action The action options describing the user goal and context.
-     * @return The final action result for the resolution attempt.
+     * @return The history of THIS run: a detached snapshot containing only the states
+     * collected for this task, scoped by the run's execution session.
      */
     suspend fun run(action: ActionOptions): AgentHistory
 

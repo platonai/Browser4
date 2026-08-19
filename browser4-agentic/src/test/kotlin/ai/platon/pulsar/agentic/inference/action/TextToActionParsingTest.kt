@@ -11,7 +11,7 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 
 private class TestableTextToAction(conf: ImmutableConfig) : TextToAction(conf) {
-    val agentState = AgentState(1, "", BrowserUseState.DUMMY)
+    val agentState = AgentState(1, "", browserUseState = BrowserUseState.DUMMY)
     fun parse(response: ModelResponse): ActionDescription = modelResponseToActionDescription("", agentState, response)
 }
 

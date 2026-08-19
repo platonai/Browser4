@@ -68,8 +68,7 @@ open class RobustBrowserAgent(
      */
     override suspend fun run(task: String): AgentHistory {
         val opts = ActionOptions(action = task)
-        run(opts)
-        return stateHistory
+        return run(opts)
     }
 
     /**
@@ -78,11 +77,18 @@ open class RobustBrowserAgent(
      * stateHistory focused on executed tool actions only.
      *
      * @param action The action options containing the user's goal and configuration
-     * @return Agent history with executed actions
+     * @return The history of THIS run: a detached snapshot scoped by the run's execution session,
+     * so callers never see other runs' states and later trims of the shared history cannot
+     * mutate this result.
      * @throws CancellationException if the agent is closed or the operation is canceled
      */
     override suspend fun run(action: ActionOptions): AgentHistory {
+        _lastRunSessionId = null
         onWillRun(action)
+
+        // The first context created below starts this run's execution session; all
+        // contexts (and their agent states) of this run share that session id.
+        val contextCountBefore = stateManager.contexts.size
 
         try {
             val ctx = agentScope.coroutineContext.minusKey(Job)
@@ -95,9 +101,10 @@ open class RobustBrowserAgent(
             throw e
         } finally {
             stateManager.writeAllProcessTrace()
+            _lastRunSessionId = stateManager.contexts.getOrNull(contextCountBefore)?.sessionId
         }
 
-        return stateHistory
+        return stateHistory.snapshotFor(_lastRunSessionId)
     }
 
     /**
@@ -585,6 +592,11 @@ open class RobustBrowserAgent(
             it.nextSuggestions = action.nextSuggestions
             it.actionDescription = action
         }
+
+        // Persist the completed state to the state audit stream. Without this, the final
+        // "isComplete/summary" snapshot never reached state-history.jsonl — the last line
+        // written there was the pre-completion state from updateAgentState.
+        stateManager.writeAgentState(context.agentState, context.sessionId)
 
         logger.info("✅ task.complete sid={} step={} complete={}", sid.take(8), step, true)
         stateManager.addTrace(context.agentState, event = "complete", message = "#${step} complete")

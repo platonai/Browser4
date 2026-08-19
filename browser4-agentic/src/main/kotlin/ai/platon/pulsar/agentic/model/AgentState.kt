@@ -13,8 +13,14 @@ data class AgentState constructor(
     // The user instruction
     var instruction: String,
     // The current browser use state
+    // The default is only used for Jackson round-tripping of persisted states
+    // (e.g. agent task JSONL); production code always passes a real snapshot.
     @JsonIgnore
-    var browserUseState: BrowserUseState,
+    var browserUseState: BrowserUseState = BrowserUseState.DUMMY,
+    // The execution session this state belongs to. Every run() starts a new session;
+    // states of different runs carry different ids so the shared agent history can be
+    // sliced into per-task views.
+    var sessionId: String? = null,
     // A simple description
     var description: String? = null,
     // The last event, for identify purpose only
@@ -38,7 +44,8 @@ data class AgentState constructor(
     var isComplete: Boolean? = null,
     // timestamp
     var timestamp: Instant = Instant.now(),
-    // The last exception if any
+    // The last exception if any. Set by AgentStateManager when the underlying
+    // tool execution failed (forwarded from DetailedActResult.exception).
     var exception: Exception? = null,
 
     // AI: completion summary

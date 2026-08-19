@@ -65,6 +65,14 @@ open class BasicBrowserAgent(
     override val stateHistory: AgentHistory get() = stateManager.stateHistory
     override val processTrace: List<ProcessTrace> get() = stateManager.processTrace
 
+    /**
+     * The execution session id of the most recent [run] call. Each run starts a new
+     * execution session; states collected during the run carry this id (see
+     * [AgentState.sessionId]), allowing task-scoped views of the shared history.
+     */
+    protected var _lastRunSessionId: String? = null
+    override val lastRunSessionId: String? get() = _lastRunSessionId
+
     init {
         Files.createDirectories(baseDir)
 
@@ -89,7 +97,12 @@ open class BasicBrowserAgent(
     }
 
     override suspend fun run(action: ActionOptions): AgentHistory {
+        _lastRunSessionId = null
         onWillRun(action)
+
+        // The first context created below starts this run's execution session; all
+        // contexts (and their agent states) of this run share that session id.
+        val contextCountBefore = stateManager.contexts.size
 
         var result = act(action)
 
@@ -100,7 +113,10 @@ open class BasicBrowserAgent(
 
         onDidRun(action, result)
 
-        return stateHistory
+        _lastRunSessionId = stateManager.contexts.getOrNull(contextCountBefore)?.sessionId
+        // Return a detached, task-scoped snapshot so callers never see other runs' states
+        // and later trims of the shared history cannot mutate this result.
+        return stateHistory.snapshotFor(_lastRunSessionId)
     }
 
     override suspend fun run(task: String): AgentHistory {

@@ -2,7 +2,6 @@ package ai.platon.pulsar.agentic.model
 
 import ai.platon.pulsar.agentic.ActResult
 import ai.platon.pulsar.agentic.ObserveResult
-import ai.platon.pulsar.agentic.common.AgentPaths
 import ai.platon.pulsar.api.model.MergedDOMTreeNode
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.serialize.json.Pson
@@ -10,7 +9,6 @@ import ai.platon.pulsar.external.ModelResponse
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonIncludeProperties
 import org.apache.commons.lang3.StringUtils
-import java.nio.file.Path
 import java.time.Instant
 
 const val ROOT_COMMAND = "browser4-cli"
@@ -267,7 +265,6 @@ data class ObserveElement constructor(
 @JsonIncludeProperties("states")
 data class AgentHistory(
     val states: MutableList<AgentState> = mutableListOf(),
-    val path: Path = AgentPaths.AGENT_BASE_DIR.resolve("agent-state-${Instant.now().toEpochMilli()}.jsonl")
 ) {
     val size get() = states.size
 
@@ -291,8 +288,21 @@ data class AgentHistory(
     fun firstOrNull() = states.firstOrNull()
     fun lastOrNull() = states.lastOrNull()
 
-    fun persist() {
-        MessageWriter.writeOnce(path, Pson.toJson(this))
+    /**
+     * The states collected during the given execution session. The agent keeps one
+     * accumulated history across runs; [AgentState.sessionId] lets callers slice it
+     * into per-task views.
+     */
+    fun statesFor(sessionId: String?): List<AgentState> = states.filter { it.sessionId == sessionId }
+
+    /**
+     * A detached, task-scoped copy of this history: only the states of [sessionId] are kept,
+     * and the returned list is independent of the live agent history (later trims or appends
+     * of the source history cannot mutate it).
+     */
+    fun snapshotFor(sessionId: String?): AgentHistory {
+        if (sessionId == null) return AgentHistory()
+        return AgentHistory(statesFor(sessionId).toMutableList())
     }
 
     override fun toString(): String {
