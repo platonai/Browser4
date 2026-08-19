@@ -37,18 +37,6 @@ tab.delay(millis: Long)
 browser.switchTab(tabId: String): Int
 browser.closeTab(tabId: String)
 
-// domain: fs
-fs.writeString(filename: String, content: String)
-fs.readString(filename: String): String
-fs.append(filename: String, content: String)
-fs.replaceContent(filename: String, oldStr: String, newStr: String): String
-fs.fileExists(filename: String): String
-fs.getFileInfo(filename: String): String
-fs.deleteFile(filename: String): String
-fs.copyFile(source: String, dest: String): String
-fs.moveFile(source: String, dest: String): String
-fs.listFiles(): String
-
 // domain: agent
 agent.extract(instruction: String, schema: String): String // Extract data with given JSON schema
 agent.summarize(instruction: String?, selector: String?): String // Extract textContent and generate a summary
@@ -74,8 +62,15 @@ system.help(domain: String, method: String): String        // get help for a too
      * The set of domain names that already have their tool specs hardcoded in
      * [TOOL_CALL_SPECIFICATION].  Used by [ToolCallSpecificationRenderer] to decide
      * which dynamically-registered domain specs are supplementary vs. duplicates.
+     *
+     * NOTE: the legacy `fs` domain (fs.writeString etc.) is intentionally NOT
+     * listed/advertised here — its executor is deprecated and unregistered, so
+     * advertising it only makes agents attempt calls that fail with
+     * "Unsupported receiver class".  Agents must use the `coding.*` tools
+     * (coding.read/write/append/replace/listDir/glob/grep/...) instead, which
+     * operate on the configurable coding workspace.
      */
-    val BUILTIN_DOMAINS_IN_SPEC: Set<String> = setOf("tab", "browser", "fs", "agent", "system")
+    val BUILTIN_DOMAINS_IN_SPEC: Set<String> = setOf("tab", "browser", "agent", "system")
 
     /**
      * Domains whose actions directly interact with the browser page and may change its visual state.

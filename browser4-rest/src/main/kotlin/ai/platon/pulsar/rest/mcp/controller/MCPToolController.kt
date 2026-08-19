@@ -10,6 +10,7 @@ import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.CodingToolExecutor
 import ai.platon.pulsar.coding.CodingAgentShell
 import ai.platon.pulsar.coding.CodingAgentFileSystem
+import ai.platon.pulsar.coding.CodingWorkspace
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.brief
@@ -209,14 +210,15 @@ class MCPToolController(
      */
     private val standaloneCodingShell: CodingAgentShell by lazy {
         CodingAgentShell(
-            baseDir = Paths.get(System.getProperty("user.dir")),
-            allowDestructive = System.getProperty("browser4.agent.allowDestructive", "true") != "false",
+            baseDir = CodingWorkspace.workspaceRoot,
+            allowDestructive = CodingWorkspace.allowDestructive,
         )
     }
     private val standaloneCodingFs: CodingAgentFileSystem by lazy {
         CodingAgentFileSystem(
-            workspaceRoot = Paths.get(System.getProperty("user.dir")),
-            allowDestructive = System.getProperty("browser4.agent.allowDestructive", "true") != "false",
+            workspaceRoot = CodingWorkspace.workspaceRoot,
+            allowExternalAccess = CodingWorkspace.allowExternalAccess,
+            allowDestructive = CodingWorkspace.allowDestructive,
         )
     }
     private val standaloneCodingTarget: CodingToolExecutor.Target by lazy {

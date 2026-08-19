@@ -77,6 +77,19 @@
                 <scope>import</scope>
             </dependency>
 
+            <!--
+                Local override: pulsar-browser 4.11.5-SNAPSHOT carries the upstream fix
+                for browserUseState throwing NPE when invoked on a torn-down driver
+                (invokeOnPage may return null after a failed health check; the old `!!`
+                crashed agent sessions that reuse a driver whose browser was closed).
+                Revert to ${browser4-base.version} once the fix is released.
+            -->
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>pulsar-browser</artifactId>
+                <version>4.11.5-SNAPSHOT</version>
+            </dependency>
+
             <dependency>
                 <groupId>org.jetbrains.kotlinx</groupId>
                 <artifactId>kotlinx-coroutines-bom</artifactId>

@@ -28,7 +28,13 @@ data class AgentConfig(
     val maxRetries: Int = 3,
     val baseRetryDelayMs: Long = 1_000,
     val maxRetryDelayMs: Long = 30_000,
-    val consecutiveNoOpLimit: Int = 5,
+    /**
+     * Abort after N consecutive steps without actionable tool calls.
+     * Configurable via `-Dbrowser4.agent.noop.limit=<n>` — long coding
+     * chains (compile-fix-test loops) benefit from a higher tolerance.
+     */
+    val consecutiveNoOpLimit: Int =
+        System.getProperty("browser4.agent.noop.limit", "5").toInt().coerceAtLeast(1),
     val actionGenerationTimeoutMs: Long = 30_000,
     val screenshotCaptureTimeoutMs: Long = 5_000,
     val enableStructuredLogging: Boolean = false,

@@ -6,6 +6,7 @@ import ai.platon.pulsar.agentic.common.AgentFileSystem
 import ai.platon.pulsar.agentic.common.AgentShell
 import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingAgentShell
+import ai.platon.pulsar.coding.CodingWorkspace
 import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.skills.SkillContext
 import ai.platon.pulsar.agentic.skills.SkillRegistry
@@ -43,17 +44,18 @@ class AgentToolManager constructor(
 
     /** Enhanced coding shell for dev tools (git, cargo, mvn, npm, etc.) */
     val codingShell: CodingAgentShell = CodingAgentShell(
-        baseDir = baseDir,
+        baseDir = CodingWorkspace.workspaceRoot,
         // Independent/multi-tenant deployments can tighten defaults via system property:
         // -Dbrowser4.agent.allowDestructive=false denies rm/del/mv/cp/kill etc.
-        allowDestructive = System.getProperty("browser4.agent.allowDestructive", "true") != "false",
+        allowDestructive = CodingWorkspace.allowDestructive,
     )
     /** Enhanced coding file system for full filesystem access */
     val codingFs: CodingAgentFileSystem = CodingAgentFileSystem(
-        workspaceRoot = baseDir,
+        workspaceRoot = CodingWorkspace.workspaceRoot,
         // Same tightening switch; note delete() additionally hard-protects the
         // workspace root and VCS directories regardless of this flag.
-        allowDestructive = System.getProperty("browser4.agent.allowDestructive", "true") != "false",
+        allowExternalAccess = CodingWorkspace.allowExternalAccess,
+        allowDestructive = CodingWorkspace.allowDestructive,
     )
     /** Composite target for the coding domain */
     val codingTarget: CodingToolExecutor.Target by lazy {
