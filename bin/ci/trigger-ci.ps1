@@ -16,7 +16,11 @@
 
 .DESCRIPTION
     1. Verifies the local VERSION equals the latest GitHub release patch + 1,
-       aborting with a confirmation prompt if it does not.
+       aborting with a confirmation prompt if it does not. The check is
+       branch-aware: on version branches (X.Y.x) it compares against the latest
+       release on the same X.Y line only, and a line with no stable release yet
+       (e.g. a fresh minor branch like 4.14.x before any 4.14 release) skips
+       the patch+1 check instead of aborting against an unrelated older line.
     2. Detects the current git branch.
     3. If the branch matches X.Y.x (e.g. 4.12.x), uses X.Y as the version prefix
        and the patch from the current VERSION file, then searches for existing
@@ -55,44 +59,91 @@ Set-Location $repoRoot
 # 0. Verify local version is the latest GitHub release patch + 1
 # ═══════════════════════════════════════════════════════════════════
 
-# Resolve the latest stable GitHub release tag (gh CLI first, then git tags).
-$latestRelease = $null
-try {
-    $ghTags = @(gh release list --limit 100 --json tagName 2>$null | ConvertFrom-Json | ForEach-Object { $_.tagName })
-    $latestRelease = $ghTags | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } | Select-Object -First 1
-} catch { }
+# Resolve stable release tags (gh CLI first, then git tags). When a major.minor
+# line is given (e.g. "4.14" on branch 4.14.x), only releases on that line count.
+function Get-LatestStableRelease {
+    param([string]$MajorMinor = '')
 
-if (-not $latestRelease) {
-    $latestRelease = @(git tag --sort=-v:refname 2>$null |
-        Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
-        Select-Object -First 1) -join ''
+    $releaseTags = @()
+    try {
+        $releaseTags = @(gh release list --limit 100 --json tagName 2>$null | ConvertFrom-Json | ForEach-Object { $_.tagName })
+    } catch { }
+
+    if ($releaseTags.Count -eq 0) {
+        $releaseTags = @(git tag --sort=-v:refname 2>$null)
+    }
+
+    if ($MajorMinor) {
+        $linePattern = "^v?$([regex]::Escape($MajorMinor))\.\d+$"
+        return @($releaseTags | Where-Object { $_ -match $linePattern } | Select-Object -First 1)
+    }
+    return @($releaseTags | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } | Select-Object -First 1)
 }
 
 $localSnapshot = Get-Content "$repoRoot\VERSION" -TotalCount 1
 $localVersion = ($localSnapshot -replace '-SNAPSHOT', '').Trim()
 
-if ($latestRelease -and $latestRelease -match '^v?(\d+)\.(\d+)\.(\d+)$') {
-    $expectedVersion = "$($matches[1]).$($matches[2]).$([int]$matches[3] + 1)"
-    if ($localVersion -ne $expectedVersion) {
-        Write-Warning "Local VERSION '$localVersion' is not latest release '$latestRelease' patch + 1 (expected '$expectedVersion')."
+# Version branches (X.Y.x) must be validated against the same X.Y release line:
+# comparing 4.14.x against the latest 4.13.x release would demand "4.13.8" and
+# abort a legitimately-new minor line. A line with no stable releases yet skips
+# the patch+1 check. The VERSION file must still share the branch's major.minor.
+$branch = git rev-parse --abbrev-ref HEAD 2>$null
+$branchMajorMinor = if ($branch -match '^(\d+)\.(\d+)\.x$') { "$($matches[1]).$($matches[2])" } else { '' }
+
+if ($branchMajorMinor) {
+    $localParts = $localVersion -split '\.'
+    if ($localParts.Count -ge 2 -and "$($localParts[0]).$($localParts[1])" -ne $branchMajorMinor) {
+        Write-Warning "Local VERSION '$localVersion' major.minor does not match branch '$branch' ('$branchMajorMinor')."
         try { $answer = Read-Host "Continue anyway? [y/N]" } catch { $answer = '' }
         if ($answer -notmatch '^[Yy]$') {
-            Write-Error "Aborted: local VERSION '$localVersion' does not equal latest release '$latestRelease' patch + 1 ('$expectedVersion')."
+            Write-Error "Aborted: local VERSION '$localVersion' is out of sync with branch '$branch'."
             exit 1
         }
-        Write-Host "Continuing despite version mismatch (user confirmed)."
+        Write-Host "Continuing despite major.minor mismatch (user confirmed)."
     } else {
-        Write-Host "Local VERSION '$localVersion' matches latest release '$latestRelease' patch + 1."
+        $latestRelease = Get-LatestStableRelease -MajorMinor $branchMajorMinor
+        if (-not $latestRelease) {
+            Write-Host "No stable release yet for line $branchMajorMinor — skipping the patch+1 check (new minor line)."
+        } elseif ($latestRelease -match '^v?(\d+)\.(\d+)\.(\d+)$') {
+            $expectedVersion = "$($matches[1]).$($matches[2]).$([int]$matches[3] + 1)"
+            if ($localVersion -ne $expectedVersion) {
+                Write-Warning "Local VERSION '$localVersion' is not latest '$branchMajorMinor' release '$latestRelease' patch + 1 (expected '$expectedVersion')."
+                try { $answer = Read-Host "Continue anyway? [y/N]" } catch { $answer = '' }
+                if ($answer -notmatch '^[Yy]$') {
+                    Write-Error "Aborted: local VERSION '$localVersion' does not equal latest '$branchMajorMinor' release '$latestRelease' patch + 1 ('$expectedVersion')."
+                    exit 1
+                }
+                Write-Host "Continuing despite version mismatch (user confirmed)."
+            } else {
+                Write-Host "Local VERSION '$localVersion' matches latest '$branchMajorMinor' release '$latestRelease' patch + 1."
+            }
+        }
     }
 } else {
-    Write-Warning "Could not determine the latest stable release (got '$latestRelease'); skipping the patch+1 check."
+    $latestRelease = Get-LatestStableRelease
+    if ($latestRelease -and $latestRelease -match '^v?(\d+)\.(\d+)\.(\d+)$') {
+        $expectedVersion = "$($matches[1]).$($matches[2]).$([int]$matches[3] + 1)"
+        if ($localVersion -ne $expectedVersion) {
+            Write-Warning "Local VERSION '$localVersion' is not latest release '$latestRelease' patch + 1 (expected '$expectedVersion')."
+            try { $answer = Read-Host "Continue anyway? [y/N]" } catch { $answer = '' }
+            if ($answer -notmatch '^[Yy]$') {
+                Write-Error "Aborted: local VERSION '$localVersion' does not equal latest release '$latestRelease' patch + 1 ('$expectedVersion')."
+                exit 1
+            }
+            Write-Host "Continuing despite version mismatch (user confirmed)."
+        } else {
+            Write-Host "Local VERSION '$localVersion' matches latest release '$latestRelease' patch + 1."
+        }
+    } else {
+        Write-Warning "Could not determine the latest stable release (got '$latestRelease'); skipping the patch+1 check."
+    }
 }
 
 # ═══════════════════════════════════════════════════════════════════
 # 1. Determine version prefix from current branch
 # ═══════════════════════════════════════════════════════════════════
 
-$branch = git rev-parse --abbrev-ref HEAD 2>$null
+# $branch was already resolved in step 0 (branch-aware version check).
 $branchBased = $false
 
 if ($branch -match '^(\d+)\.(\d+)\.x$') {
