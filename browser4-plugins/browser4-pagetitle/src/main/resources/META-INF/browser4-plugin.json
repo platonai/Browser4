@@ -1,0 +1,8 @@
+{
+  "name": "browser4-pagetitle",
+  "version": "1.0.0",
+  "sdkVersion": "4.14.0-SNAPSHOT",
+  "description": "Get the current page title URL and meta description",
+  "dependsOn": ["browser4-skeleton", "browser4-protocol", "browser4-agentic"],
+  "autoConfigurationClasses": ["ai.platon.pulsar.pagetitle.config.PagetitleAutoConfiguration"]
+}

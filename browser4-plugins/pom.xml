@@ -34,5 +34,6 @@
         <module>browser4-weather</module>
         <module>browser4-swarm</module>
             <module>browser4-headings</module>
+            <module>browser4-pagetitle</module>
     </modules>
 </project>
