@@ -219,7 +219,7 @@ class PagesController(
             mapOf(
                 "sessionId" to s.sessionId,
                 "kind" to s.kind.name,
-                "sessionStatus" to s.status,
+                "sessionStatus" to s.status.wire,
                 "tabIndex" to index,
                 "guid" to wd.guid,
                 "title" to title,

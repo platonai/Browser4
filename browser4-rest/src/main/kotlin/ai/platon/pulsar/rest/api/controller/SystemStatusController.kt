@@ -157,7 +157,7 @@ class SystemStatusController(
         val items = sessionManager.getAllSessions().map { s ->
             mapOf(
                 "id" to s.sessionId,
-                "status" to s.status,
+                "status" to s.status.wire,
                 "kind" to s.kind.name,
                 "url" to s.url,
                 "active" to s.agenticSession.isActive,
@@ -219,7 +219,7 @@ class SystemStatusController(
             "session" to swarmSession?.let { s ->
                 mapOf(
                     "id" to s.sessionId,
-                    "status" to s.status,
+                    "status" to s.status.wire,
                     "active" to s.agenticSession.isActive,
                     "url" to s.url,
                     "createdAt" to s.createdAt,
@@ -269,7 +269,7 @@ class SystemStatusController(
             }
             mapOf(
                 "sessionId" to s.sessionId,
-                "sessionStatus" to s.status,
+                "sessionStatus" to s.status.wire,
                 "active" to s.agenticSession.isActive,
                 "url" to s.url,
                 "hasBrowser" to (browser != null),
@@ -334,11 +334,11 @@ class SystemStatusController(
                         )
                     }
                 }
-                mapOf("sessionId" to s.sessionId, "status" to s.status, "tabCount" to tabs.size, "tabs" to tabs)
+                mapOf("sessionId" to s.sessionId, "status" to s.status.wire, "tabCount" to tabs.size, "tabs" to tabs)
             } catch (e: Exception) {
                 mapOf(
                     "sessionId" to s.sessionId,
-                    "status" to s.status,
+                    "status" to s.status.wire,
                     "error" to (e.message ?: "query failed"),
                     "tabCount" to 0,
                     "tabs" to emptyList<Any>(),
