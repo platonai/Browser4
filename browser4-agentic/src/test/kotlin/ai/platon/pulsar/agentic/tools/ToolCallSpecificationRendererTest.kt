@@ -281,9 +281,15 @@ class ToolCallSpecificationRendererTest {
         assertTrue(rendered.contains(""""domain": "browser""""), "Should contain browser domain")
         assertTrue(rendered.contains(""""method": "switchTab""""), "Should contain switchTab method")
 
-        // Should include built-in fs tools
-        assertTrue(rendered.contains(""""domain": "fs""""), "Should contain fs domain")
-        assertTrue(rendered.contains(""""method": "writeString""""), "Should contain writeString method")
+        // Should include built-in agent tools
+        assertTrue(rendered.contains(""""domain": "agent""""), "Should contain agent domain")
+        assertTrue(rendered.contains(""""method": "extract""""), "Should contain extract method")
+
+        // The legacy fs domain was intentionally removed from the built-in spec
+        // (its executor is deprecated and unregistered; agents use coding.*
+        // instead) — it must NOT be advertised to the LLM.
+        assertFalse(rendered.contains(""""domain": "fs""""), "Should NOT contain legacy fs domain")
+        assertFalse(rendered.contains(""""method": "writeString""""), "Should NOT contain legacy fs.writeString")
     }
 
     @Test
@@ -362,9 +368,14 @@ class ToolCallSpecificationRendererTest {
         val browserTools = specs.filter { it.domain == "browser" }
         assertTrue(browserTools.isNotEmpty(), "Should include browser tools")
 
-        // Should include fs domain tools
+        // Should include agent domain tools
+        val agentTools = specs.filter { it.domain == "agent" }
+        assertTrue(agentTools.isNotEmpty(), "Should include agent tools")
+
+        // The legacy fs domain is intentionally not advertised (deprecated
+        // executor; agents use coding.* instead) — it must not parse either.
         val fsTools = specs.filter { it.domain == "fs" }
-        assertTrue(fsTools.isNotEmpty(), "Should include fs tools")
+        assertTrue(fsTools.isEmpty(), "Should NOT include legacy fs tools")
     }
 
     @Test
