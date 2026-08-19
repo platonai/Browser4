@@ -1,0 +1,9 @@
+{
+  "name": "browser4-pageinfo",
+  "version": "1.0.0",
+  "sdkVersion": "4.14.0-SNAPSHOT",
+  "description": "Extract page title, URL and meta tags via browser-side JavaScript",
+  "dependsOn": ["browser4-skeleton", "browser4-protocol", "browser4-agentic"],
+  "autoConfigurationClasses": ["ai.platon.pulsar.pageinfo.config.PageInfoAutoConfiguration"]
+}
+
