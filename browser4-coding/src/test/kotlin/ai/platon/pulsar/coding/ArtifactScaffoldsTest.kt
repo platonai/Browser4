@@ -183,7 +183,7 @@ class ArtifactScaffoldsTest {
     }
 
     @Test
-    @DisplayName("pluginScaffold Config extends ImmutableConfig")
+    @DisplayName("pluginScaffold Config is a data class with fromConfig factory")
     fun pluginScaffoldConfigStructure() {
         val result = ArtifactScaffolds.pluginScaffold(
             pluginName = "browser4-seo",
@@ -194,8 +194,13 @@ class ArtifactScaffoldsTest {
         )
 
         val configFile = result.entries.find { it.key.endsWith("SeoConfig.kt") }!!.value
-        assertTrue(configFile.contains("ImmutableConfig"))
-        assertTrue(configFile.contains("MutableConfig"))
+        // Regression: a Config bean extending ImmutableConfig made the host's
+        // type-based getBean(ImmutableConfig::class.java) ambiguous. The plugin
+        // Config must be a plain data class read via fromConfig().
+        assertTrue(configFile.contains("data class SeoConfig"), "must be a data class: $configFile")
+        assertTrue(configFile.contains("fromConfig(conf: ImmutableConfig)"), "must expose fromConfig: $configFile")
+        assertTrue(configFile.contains("PREFIX = \"seo.\""), "prefix must use the domain: $configFile")
+        assertFalse(configFile.contains(") : ImmutableConfig("), "must NOT extend ImmutableConfig: $configFile")
     }
 
     // --- Skill scaffold ---
@@ -311,6 +316,24 @@ class ArtifactScaffoldsTest {
 
         assertTrue(result.size > 1)
         assertTrue(result.containsKey("pom.xml"))
+    }
+
+    @Test
+    @DisplayName("scaffold dispatch defaults pdkVersion to the current project version")
+    fun scaffoldDispatchPluginDefaultPdkVersion() {
+        // Regression: a stale hardcoded fallback (4.13.6-SNAPSHOT) produced
+        // plugins that could not resolve the browser4-pdk parent from the repo.
+        val result = ArtifactScaffolds.scaffold("plugin", mapOf(
+            "pluginName" to "test-plugin",
+            "domain" to "test",
+            "basePackage" to "ai.platon.pulsar.test",
+            "toolMethod" to "doTest",
+            "toolDescription" to "Test"
+        ))
+
+        val pom = result["pom.xml"]!!
+        assertTrue(pom.contains("<version>4.14.0-SNAPSHOT</version>"), "pom must reference the current pdk version: $pom")
+        assertFalse(pom.contains("4.13.6"), "stale pdk version leaked: $pom")
     }
 
     @Test

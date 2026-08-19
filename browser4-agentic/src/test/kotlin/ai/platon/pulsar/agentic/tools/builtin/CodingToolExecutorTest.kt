@@ -307,6 +307,62 @@ class CodingToolExecutorTest {
         }
 
         @Test
+        @DisplayName("scaffoldToDir registers the module in the aggregator pom and verifies when asked")
+        fun testScaffoldToDirRegistersModuleAndVerifies() = runBlocking {
+            coEvery { fs.readFile(any()) } returnsMany listOf(
+                "", // VERSION (unreadable)
+                "<modules>\n    </modules>" // browser4-plugins/pom.xml
+            )
+            coEvery { fs.writeFile(any(), any()) } returns "✓ Wrote 10 chars"
+            coEvery { fs.resolvePathString(any()) } returns "/workspace/browser4-plugins/browser4-wordcount"
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "scaffoldToDir",
+                arguments = mutableMapOf(
+                    "type" to "plugin",
+                    "dir" to "browser4-plugins/browser4-wordcount",
+                    "name" to "browser4-wordcount",
+                    "domain" to "wordcount",
+                    "basePackage" to "ai.platon.pulsar.wordcount",
+                    "toolMethod" to "countWords",
+                    "toolDescription" to "Count words",
+                    "verify" to "true"
+                )
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            val output = result.value.toString()
+            assertTrue(output.contains("✓ Scaffolded plugin into browser4-plugins/browser4-wordcount"), output)
+            // The new module is appended to the browser4-plugins aggregator pom.
+            coVerify { fs.writeFile("browser4-plugins/pom.xml", match { it.contains("<module>browser4-wordcount</module>") }) }
+            assertTrue(output.contains("✓ Registered module browser4-wordcount in browser4-plugins/pom.xml"), output)
+            // verify=true runs the plugin validator and appends its report.
+            assertTrue(output.contains("--- Plugin validation ---"), output)
+        }
+
+        @Test
+        @DisplayName("scaffold with verify does not treat verify as a template param")
+        fun testScaffoldAcceptsVerifyFlag() = runBlocking {
+            coEvery { fs.readFile(any()) } returns ""
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "scaffold",
+                arguments = mutableMapOf(
+                    "type" to "skill",
+                    "name" to "demo",
+                    "verify" to "true"
+                )
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            val output = result.value.toString()
+            // The skill scaffold is returned as single content, verify is ignored.
+            assertTrue(output.contains("name: demo"), output)
+        }
+
+        @Test
         @DisplayName("write calls fs.writeFile with path and content")
         fun testWrite() = runBlocking {
             coEvery { fs.writeFile(any(), any()) } returns "written"

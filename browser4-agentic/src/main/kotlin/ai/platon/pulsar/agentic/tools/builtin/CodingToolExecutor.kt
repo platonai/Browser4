@@ -1214,10 +1214,10 @@ class CodingToolExecutor : AbstractToolExecutor() {
             "scaffold" -> {
                 val allowed = setOf("type", "pluginName", "domain", "basePackage",
                     "toolMethod", "toolDescription", "pdkVersion", "name", "description",
-                    "triggers", "tools", "purpose", "scriptType", "shell")
+                    "triggers", "tools", "purpose", "scriptType", "shell", "verify")
                 validateArgs(args, allowed = allowed, required = setOf("type"), functionName)
                 val type = paramString(args, "type", functionName)!!
-                val params = args.filterKeys { it != "type" }
+                val params = args.filterKeys { it !in setOf("type", "verify") }
                     .mapValues { it.value?.toString() ?: "" }
                     .filterValues { it.isNotEmpty() }
                     .toMutableMap()
@@ -1245,11 +1245,12 @@ class CodingToolExecutor : AbstractToolExecutor() {
             "scaffoldToDir" -> {
                 val allowed = setOf("type", "dir", "pluginName", "name", "domain", "basePackage",
                     "toolMethod", "toolDescription", "description",
-                    "triggers", "tools", "purpose", "scriptType", "shell")
+                    "triggers", "tools", "purpose", "scriptType", "shell", "verify")
                 validateArgs(args, allowed = allowed, required = setOf("type", "dir"), functionName)
                 val type = paramString(args, "type", functionName)!!
                 val dir = paramString(args, "dir", functionName)!!
-                val params = args.filterKeys { it !in setOf("type", "dir") }
+                val verify = paramBool(args, "verify", functionName, required = false, default = false) ?: false
+                val params = args.filterKeys { it !in setOf("type", "dir", "verify") }
                     .mapValues { it.value?.toString() ?: "" }
                     .filterValues { it.isNotEmpty() }
                     .toMutableMap()
@@ -1274,7 +1275,37 @@ class CodingToolExecutor : AbstractToolExecutor() {
                         fs.writeFile(target, content)
                         written += target
                     }
-                    "✓ Scaffolded $type into $dir (${written.size} files):\n${written.joinToString("\n")}"
+                    val sb = StringBuilder(
+                        "✓ Scaffolded $type into $dir (${written.size} files):\n${written.joinToString("\n")}"
+                    )
+                    if (type == "plugin") {
+                        // Register the new module in the browser4-plugins aggregator
+                        // pom so `mvn -pl browser4-plugins/<name> ...` resolves it.
+                        val normalizedDir = dir.replace('\\', '/').trimEnd('/')
+                        val module = normalizedDir.substringAfterLast('/')
+                        if (normalizedDir.startsWith("browser4-plugins/") && module.isNotBlank()) {
+                            val aggregator = fs.readFile("browser4-plugins/pom.xml")
+                            if (!aggregator.startsWith("Error:") && !aggregator.contains("<module>$module</module>")) {
+                                val updated = aggregator.replace(
+                                    "</modules>",
+                                    "        <module>$module</module>\n    </modules>"
+                                )
+                                if (updated != aggregator) {
+                                    val writeResult = fs.writeFile("browser4-plugins/pom.xml", updated)
+                                    if (writeResult.startsWith("✓")) {
+                                        sb.append("\n✓ Registered module $module in browser4-plugins/pom.xml")
+                                    }
+                                }
+                            }
+                        }
+                        if (verify) {
+                            val resolved = fs.resolvePathString(dir)
+                                ?: throw IllegalArgumentException("Path not allowed: $dir")
+                            sb.append("\n\n--- Plugin validation ---\n")
+                            sb.append(ArtifactValidator.validatePlugin(resolved).format())
+                        }
+                    }
+                    sb.toString()
                 }
             }
             "validate" -> {

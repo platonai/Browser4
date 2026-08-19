@@ -4422,7 +4422,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "code-scaffold",
-            description: "Generate a scaffold template for a Browser4 plugin, skill, JS script, or shell script. type: 'plugin' | 'skill' | 'js' | 'script'.",
+            description: "Generate a scaffold template for a Browser4 plugin, skill, JS script, or shell script. type: 'plugin' | 'skill' | 'js' | 'script'. Use --dir to materialize the files into a directory (plugin type).",
             category: Category::Code,
             hidden: true,
             batch_supported: false,
@@ -4430,6 +4430,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "type", description: "Scaffold type: 'plugin' | 'skill' | 'js' | 'script'", optional: false },
             ],
             options: &[
+                OptionDef { name: "dir", description: "Materialize the scaffold into this directory (plugin type only; e.g. browser4-plugins/browser4-myplugin)", is_bool: false, short: None },
                 OptionDef { name: "name", description: "Plugin name (for plugin), skill name (for skill), or script name (for js/script)", is_bool: false, short: None },
                 OptionDef { name: "domain", description: "Tool domain (for plugin)", is_bool: false, short: None },
                 OptionDef { name: "package", description: "Base package (for plugin)", is_bool: false, short: None },
@@ -4440,13 +4441,20 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "purpose", description: "JS script purpose: 'extract' | 'inject' | 'interact'", is_bool: false, short: None },
                 OptionDef { name: "script-type", description: "Script type: 'build' | 'deploy' | 'run'", is_bool: false, short: None },
                 OptionDef { name: "shell", description: "Shell type for scripts: 'ps1' | 'bash'", is_bool: false, short: None },
-                OptionDef { name: "verify", description: "Run validation after scaffolding", is_bool: true, short: None },
+                OptionDef { name: "verify", description: "Run validation after scaffolding (with --dir)", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Excluded,
-            tool_name_fn: |_| "coding_scaffold".to_string(),
+            tool_name_fn: |args| {
+                if get_opt_str(args, "dir").is_some() {
+                    "coding_scaffoldToDir".to_string()
+                } else {
+                    "coding_scaffold".to_string()
+                }
+            },
             tool_params_fn: |args| {
                 let scaffold_type = get_str(args, "type").unwrap_or_default();
                 let mut p = json!({ "type": scaffold_type });
+                if let Some(v) = get_opt_str(args, "dir") { p["dir"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "name") { p["name"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "domain") { p["domain"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "package") { p["basePackage"] = json!(v); }
@@ -4613,6 +4621,63 @@ mod tests {
                 cmd.name
             );
         }
+    }
+
+    #[test]
+    fn test_code_scaffold_prints_template_without_dir() {
+        let map = commands_map();
+        let cmd = map.get("code-scaffold").unwrap();
+        let mut args = HashMap::new();
+        args.insert("type".to_string(), json!("plugin"));
+        args.insert("name".to_string(), json!("browser4-demo"));
+        args.insert("domain".to_string(), json!("demo"));
+
+        // Without --dir the scaffold is printed to stdout (coding_scaffold).
+        assert_eq!((cmd.tool_name_fn)(&args), "coding_scaffold");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["type"], "plugin");
+        assert_eq!(params["name"], "browser4-demo");
+        assert_eq!(params["domain"], "demo");
+        assert!(params.get("dir").is_none());
+    }
+
+    #[test]
+    fn test_code_scaffold_materializes_to_dir_with_verify() {
+        let map = commands_map();
+        let cmd = map.get("code-scaffold").unwrap();
+        let mut args = HashMap::new();
+        args.insert("type".to_string(), json!("plugin"));
+        args.insert("name".to_string(), json!("browser4-demo"));
+        args.insert("dir".to_string(), json!("browser4-plugins/browser4-demo"));
+        args.insert("package".to_string(), json!("ai.platon.pulsar.demo"));
+        args.insert("method".to_string(), json!("doAction"));
+        args.insert("desc".to_string(), json!("Demo plugin"));
+        args.insert("verify".to_string(), json!(true));
+
+        // With --dir the CLI materializes files via coding_scaffoldToDir.
+        assert_eq!((cmd.tool_name_fn)(&args), "coding_scaffoldToDir");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["type"], "plugin");
+        assert_eq!(params["dir"], "browser4-plugins/browser4-demo");
+        assert_eq!(params["basePackage"], "ai.platon.pulsar.demo");
+        assert_eq!(params["toolMethod"], "doAction");
+        assert_eq!(params["toolDescription"], "Demo plugin");
+        assert_eq!(params["verify"], true);
+    }
+
+    #[test]
+    fn test_code_scaffold_skill_uses_scaffold_tool() {
+        let map = commands_map();
+        let cmd = map.get("code-scaffold").unwrap();
+        let mut args = HashMap::new();
+        args.insert("type".to_string(), json!("skill"));
+        args.insert("name".to_string(), json!("my-skill"));
+        args.insert("triggers".to_string(), json!("hello,world"));
+
+        assert_eq!((cmd.tool_name_fn)(&args), "coding_scaffold");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["type"], "skill");
+        assert_eq!(params["triggers"], "hello,world");
     }
 
     #[test]

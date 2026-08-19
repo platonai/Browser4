@@ -12,12 +12,14 @@ const AGENT_REQUEST_TIMEOUT_SECS: u64 = 180;
 const SNAPSHOT_REQUEST_TIMEOUT_SECS: u64 = 60;
 const BATCH_REQUEST_TIMEOUT_SECS: u64 = 120;
 const CRAWL_REQUEST_TIMEOUT_SECS: u64 = 600;
+const CODING_REQUEST_TIMEOUT_SECS: u64 = 600;
 const CRAWL_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_CRAWL_TIMEOUT_SECS";
 const DEFAULT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_HTTP_TIMEOUT_SECS";
 const NAVIGATION_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS";
 const TEXT_INPUT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_INPUT_TIMEOUT_SECS";
 const SNAPSHOT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_SNAPSHOT_TIMEOUT_SECS";
 const AGENT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_AGENT_TIMEOUT_SECS";
+const CODING_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_CODING_TIMEOUT_SECS";
 const ACT_REQUEST_TIMEOUT_SECS: u64 = 60;
 const ACT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_ACT_TIMEOUT_SECS";
 /// Env var set by the CLI when the user passes `--timeout <seconds>`.
@@ -85,6 +87,21 @@ fn snapshot_request_timeout() -> std::time::Duration {
         SNAPSHOT_REQUEST_TIMEOUT_ENV,
         SNAPSHOT_REQUEST_TIMEOUT_SECS,
     ))
+}
+
+/// Long-running self-development coding tools (Maven builds, dev tasks).
+/// Maven reactor builds (`mvn -pl X -am`) routinely take minutes, so the
+/// HTTP budget must match the server-side build timeout, not the 30s
+/// default request timeout.
+fn coding_request_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(timeout_secs_from_env(
+        CODING_REQUEST_TIMEOUT_ENV,
+        CODING_REQUEST_TIMEOUT_SECS,
+    ))
+}
+
+fn is_coding_tool(tool: &str) -> bool {
+    matches!(tool, "coding_mvnBuild" | "coding_devTask" | "coding_runCode")
 }
 
 fn is_navigation_tool(tool: &str) -> bool {
@@ -158,6 +175,8 @@ fn timeout_for_tool(tool: &str) -> std::time::Duration {
         agent_request_timeout()
     } else if is_snapshot_tool(tool) {
         snapshot_request_timeout()
+    } else if is_coding_tool(tool) {
+        coding_request_timeout()
     } else {
         default_request_timeout()
     }
@@ -1149,6 +1168,24 @@ mod tests {
         // Agent tools use their own 180s default when the env var is not set
         assert_eq!(timeout_for_tool("agent_extract").as_secs(), 180);
         assert_eq!(timeout_for_tool("agent_summarize").as_secs(), 180);
+    }
+
+    #[test]
+    fn test_coding_tools_get_long_request_timeout() {
+        let _env_lock = TIMEOUT_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _env_guard = TimeoutEnvGuard::set_all("3", "7", "11");
+
+        // Maven builds / dev tasks routinely take minutes — the HTTP budget
+        // must not be the 30s default (regression: `code mvn` timed out at 30s).
+        assert_eq!(timeout_for_tool("coding_mvnBuild").as_secs(), 600);
+        assert_eq!(timeout_for_tool("coding_devTask").as_secs(), 600);
+        assert_eq!(timeout_for_tool("coding_runCode").as_secs(), 600);
+        // Other coding tools (fast file ops) keep the default budget.
+        assert_eq!(timeout_for_tool("coding_read").as_secs(), 3);
+        assert_eq!(timeout_for_tool("coding_scaffoldToDir").as_secs(), 3);
+        assert_eq!(timeout_for_tool("coding_validate").as_secs(), 3);
     }
 
     #[test]

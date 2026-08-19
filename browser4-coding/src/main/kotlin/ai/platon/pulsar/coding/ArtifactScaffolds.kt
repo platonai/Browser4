@@ -29,7 +29,9 @@ object ArtifactScaffolds {
             basePackage = params["basePackage"] ?: "ai.platon.pulsar.my",
             toolMethod = params["toolMethod"] ?: "doAction",
             toolDescription = params["toolDescription"] ?: "Performs an action",
-            pdkVersion = params["pdkVersion"] ?: "4.13.6-SNAPSHOT"
+            // Keep in sync with the repo VERSION file; CodingToolExecutor reads
+            // VERSION first and only falls back here when the file is unavailable.
+            pdkVersion = params["pdkVersion"] ?: "4.14.0-SNAPSHOT"
         )
         "skill" -> mapOf("_content" to skillScaffold(
             name = params["name"] ?: "my-skill",
@@ -98,7 +100,7 @@ object ArtifactScaffolds {
             "src/main/resources/$jsFile" to
                 jsResourceTemplate(domain, toolMethod, toolDescription),
             "src/main/kotlin/$packagePath/config/$configClass.kt" to
-                pluginConfig(basePackage, configClass),
+                pluginConfig(basePackage, configClass, domain),
             "src/main/kotlin/$packagePath/config/$autoConfigClass.kt" to
                 pluginAutoConfig(basePackage, autoConfigClass, toolExecutorClass, serviceClass, configClass, pluginName, domain),
             "src/main/kotlin/$packagePath/service/$serviceClass.kt" to
@@ -356,21 +358,31 @@ object ArtifactScaffolds {
         }
     """.trimIndent()
 
-    private fun pluginConfig(basePackage: String, configClass: String): String = """
+    private fun pluginConfig(basePackage: String, configClass: String, domain: String): String = """
         package $basePackage.config
 
         import ai.platon.pulsar.common.config.ImmutableConfig
-        import ai.platon.pulsar.common.config.MutableConfig
 
         /**
          * Configuration for the plugin.
          *
-         * Define config properties with the [MutableConfig] prefix mechanism:
-         * ```kotlin
-         * val myProp: String get() = conf.getWithDefault("${"$"}{prefix}.my-prop", "default")
-         * ```
+         * NOTE: this is a plain data class (NOT an ImmutableConfig subclass) —
+         * registering an ImmutableConfig subclass as a Spring bean would make
+         * the host's type-based `getBean(ImmutableConfig::class.java)` ambiguous.
+         * Read properties from [ImmutableConfig] with the plugin prefix instead.
          */
-        class $configClass(config: MutableConfig) : ImmutableConfig(config)
+        data class $configClass(
+            /** Whether the plugin is enabled */
+            val enabled: Boolean = true,
+        ) {
+            companion object {
+                private const val PREFIX = "$domain."
+
+                fun fromConfig(conf: ImmutableConfig): $configClass = $configClass(
+                    enabled = conf.getBoolean(PREFIX + "enabled", true),
+                )
+            }
+        }
     """.trimIndent()
 
     private fun pluginAutoConfig(
@@ -426,7 +438,7 @@ object ArtifactScaffolds {
 
                 @Bean(name = ["$configBean"])
                 @ConditionalOnMissingBean(name = ["$configBean"])
-                open fun ${camel}Config(config: MutableConfig) = $configClass(config)
+                open fun ${camel}Config(config: MutableConfig) = $configClass.fromConfig(config)
 
                 @Bean(name = ["$serviceBean"])
                 @ConditionalOnMissingBean(name = ["$serviceBean"])
