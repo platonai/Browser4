@@ -1304,6 +1304,9 @@ class CodingToolExecutor : AbstractToolExecutor() {
                             sb.append("\n\n--- Plugin validation ---\n")
                             sb.append(ArtifactValidator.validatePlugin(resolved).format())
                         }
+                        // Keep the static ModuleMap snapshot in sync so ModuleMapDriftE2ETest
+                        // and `validate repo-consistency` stay green for the new module.
+                        syncModuleMapForNewPlugin(fs, module, sb)
                     }
                     sb.toString()
                 }
@@ -1451,6 +1454,42 @@ class CodingToolExecutor : AbstractToolExecutor() {
      * declares sdkVersion == VERSION). Zero dependencies; reads a few files +
      * directory listings.
      */
+    /**
+     * Keep the static [ModuleMap] snapshot consistent when a new plugin module is
+     * scaffolded: insert the module into MODULES (unique anchor line) and instruct the
+     * agent to complete the DEPENDENTS reverse edges (the scaffolded plugin's pom
+     * depends on skeleton/protocol/agentic and parent pdk). `validate repo-consistency`
+     * reports any remaining drift as an error, closing the loop.
+     */
+    private suspend fun syncModuleMapForNewPlugin(fs: CodingAgentFileSystem, module: String, sb: StringBuilder) {
+        val mapPath = "browser4-coding/src/main/kotlin/ai/platon/pulsar/coding/ModuleMap.kt"
+        val content = fs.readFile(mapPath)
+        if (content.startsWith("Error:") || content.isBlank()) {
+            sb.append("\n⚠ Could not auto-sync ModuleMap.kt (unreadable) — run `validate repo-consistency` after adding the module manually.")
+            return
+        }
+        val entry = "browser4-plugins/$module"
+        if (content.contains("\"$entry\"")) {
+            sb.append("\n✓ ModuleMap.MODULES already contains $entry")
+            return
+        }
+        val anchor = "\"browser4-plugins\",\n"
+        if (!content.contains(anchor)) {
+            sb.append("\n⚠ ModuleMap.kt anchor not found — add $entry to ModuleMap.MODULES manually.")
+            return
+        }
+        val updated = content.replace(anchor, anchor + "        \"$entry\",\n")
+        val writeResult = fs.writeFile(mapPath, updated)
+        if (writeResult.startsWith("✓")) {
+            sb.append("\n✓ Synced ModuleMap.MODULES with $entry")
+            sb.append("\n⚠ Also add \"$entry\" to the DEPENDENTS lists of browser4-agentic, " +
+                "browser4-core/browser4-protocol, browser4-core/browser4-skeleton, browser4-pdk " +
+                "(the scaffolded plugin depends on them) — `validate repo-consistency` flags any drift.")
+        } else {
+            sb.append("\n⚠ ModuleMap sync failed: $writeResult")
+        }
+    }
+
     private suspend fun repoConsistencyReport(fs: CodingAgentFileSystem): String {
         val versionContent = fs.readFile("VERSION").takeUnless { it.startsWith("Error:") }
         val rootPom = fs.readFile("pom.xml").takeUnless { it.startsWith("Error:") }
@@ -1479,6 +1518,17 @@ class CodingToolExecutor : AbstractToolExecutor() {
             moduleDirs to manifests
         }
 
+        // Live module topology from the real poms — cross-checked against the
+        // static ModuleMap snapshot (MODULES + DEPENDENTS) so module drift fails
+        // validation instead of silently corrupting devTask planning.
+        val liveGraph = runCatching {
+            ModuleGraph.build(ModuleGraph.scanPoms(root))
+        }.getOrNull()
+        val liveModules = liveGraph?.nodes?.keys?.sorted() ?: emptyList()
+        val liveDependentsOf: (String) -> Set<String> = { m ->
+            liveGraph?.nodes?.filterValues { it.dependencies.contains(m) }?.keys?.toSet() ?: emptySet()
+        }
+
         val result = RepoConsistencyCheck.check(
             versionContent = versionContent,
             rootPom = rootPom,
@@ -1486,6 +1536,10 @@ class CodingToolExecutor : AbstractToolExecutor() {
             moduleExists = { m -> fs.exists(m) },
             onDiskModuleDirs = onDiskModuleDirs,
             pluginManifestContents = pluginManifestContents,
+            staticModuleMap = ModuleMap.MODULES,
+            liveModuleDirs = liveModules,
+            staticDependents = ModuleMap.DEPENDENTS,
+            liveDependentsOf = liveDependentsOf,
         )
         return result.format()
     }

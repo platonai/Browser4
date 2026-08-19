@@ -3010,11 +3010,23 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "task", description: "Natural language task for the agent to execute", optional: false }],
-            options: &[],
+            options: &[
+                OptionDef { name: "wait", description: "Block until the agent task completes (max 10 minutes)", is_bool: true, short: None },
+                OptionDef { name: "noop-limit", description: "Override the consecutive no-op abort threshold (default: 5; long coding tasks benefit from 8-10)", is_bool: false, short: None },
+            ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "command_run".to_string(),
             tool_params_fn: |args| {
-                json!({ "task": get_str(args, "task").unwrap_or_default() })
+                let mut p = json!({ "task": get_str(args, "task").unwrap_or_default() });
+                if get_bool(args, "wait").unwrap_or(false) {
+                    p["wait"] = json!(true);
+                }
+                if let Some(n) = get_opt_str(args, "noop-limit") {
+                    if let Ok(limit) = n.parse::<i64>() {
+                        p["noopLimit"] = json!(limit);
+                    }
+                }
+                p
             },
         },
         CommandDef {

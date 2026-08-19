@@ -138,7 +138,8 @@ class UserCommandExecutor(
      */
     suspend fun executePlainCommand(
         sessionId: String,
-        plainCommand: String
+        plainCommand: String,
+        noopLimit: Int? = null
     ): CommandStatus {
         if (plainCommand.isBlank()) {
             return CommandStatus.failed(ResourceStatus.SC_BAD_REQUEST)
@@ -149,7 +150,7 @@ class UserCommandExecutor(
             val eventHandlers = PageEventHandlersFactory.create()
             ensurePageVisitor(sessionId).visit(request, eventHandlers).toCommandStatus()
         } else {
-            ensureAgentRunner(sessionId).execute(plainCommand).toCommandStatus()
+            ensureAgentRunner(sessionId).execute(plainCommand, noopLimit = noopLimit).toCommandStatus()
         }
     }
 
@@ -165,7 +166,8 @@ class UserCommandExecutor(
      */
     suspend fun submitPlainCommand(
         sessionId: String,
-        plainCommand: String
+        plainCommand: String,
+        noopLimit: Int? = null
     ): String {
         val command = plainCommand.trim()
 
@@ -195,7 +197,7 @@ class UserCommandExecutor(
             submitPageVisitCommand(sessionId, request, eventHandlers)
         } else {
             // 4. Free-form agent command
-            submitAgentTask(sessionId, command)
+            submitAgentTask(sessionId, command, noopLimit)
         }
     }
 
@@ -222,12 +224,13 @@ class UserCommandExecutor(
 
     fun submitAgentTask(
         sessionId: String,
-        plainCommand: String
+        plainCommand: String,
+        noopLimit: Int? = null
     ): String {
         val status = ensureAgentRunner(sessionId).create()
         taskOwner[status.id] = "agent"
-        logger.info("Submitting agent task {} (session={})", status.id, sessionId)
-        commanderScope.launch { ensureAgentRunner(sessionId).execute(plainCommand, status) }
+        logger.info("Submitting agent task {} (session={}, noopLimit={})", status.id, sessionId, noopLimit)
+        commanderScope.launch { ensureAgentRunner(sessionId).execute(plainCommand, status, noopLimit) }
         return status.id
     }
 

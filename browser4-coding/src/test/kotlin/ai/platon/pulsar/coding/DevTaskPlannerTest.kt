@@ -34,6 +34,49 @@ class DevTaskPlannerTest {
     }
 
     @Test
+    @DisplayName("browser4-plugin.json is extracted whole, not truncated to .js")
+    fun jsonFileNotTruncatedToJs() {
+        val plan = DevTaskPlanner.plan("update the manifest browser4-plugin.json of browser4-plugins/browser4-pagetitle")
+        assertTrue(plan.files.any { it.endsWith("browser4-plugin.json") },
+            "full .json name expected, got: ${plan.files}")
+        assertFalse(plan.files.any { it.endsWith("browser4-plugin.js") },
+            ".js truncation must not happen: ${plan.files}")
+    }
+
+    @Test
+    @DisplayName("unknown browser4-plugins/<name> mention is a new plugin module with a scaffold step")
+    fun newPluginModuleDetection() {
+        val plan = DevTaskPlanner.plan("创建新插件 browser4-plugins/browser4-wordcount，实现 getWordCount 工具")
+        assertTrue("browser4-plugins/browser4-wordcount" in plan.newPluginModules,
+            "new plugin modules: ${plan.newPluginModules}")
+        val scaffold = plan.steps.firstOrNull { it.tool == "coding.scaffoldToDir" }
+        assertNotNull(scaffold, "scaffold step expected: ${plan.steps}")
+        assertEquals("browser4-plugins/browser4-wordcount", scaffold!!.args["dir"])
+        // The build step targets the NEW module.
+        assertTrue(plan.steps.any { it.tool == "coding.mvnBuild" && it.command.contains("browser4-wordcount") },
+            "mvnBuild should target the new module: ${plan.steps}")
+    }
+
+    @Test
+    @DisplayName("existing plugin mention is not treated as new")
+    fun existingPluginNotNew() {
+        val plan = DevTaskPlanner.plan("fix a test in browser4-plugins/browser4-pagetitle")
+        assertTrue(plan.newPluginModules.isEmpty(),
+            "existing module must not be flagged as new: ${plan.newPluginModules}")
+    }
+
+    @Test
+    @DisplayName("test class binds to its owning module via camelCase→kebab matching")
+    fun testClassOwningModuleBinding() {
+        val plan = DevTaskPlanner.plan("补充 PagetitleConfigTest 用例")
+        assertTrue(plan.testClasses.contains("PagetitleConfigTest"), "testClasses: ${plan.testClasses}")
+        val testStep = plan.steps.firstOrNull { it.tool == "coding.shell" && it.command.contains("-Dtest=") }
+        assertNotNull(testStep, "test step expected: ${plan.steps}")
+        assertTrue(testStep!!.command.contains("-pl browser4-plugins/browser4-pagetitle"),
+            "test must run in the owning module, got: ${testStep.command}")
+    }
+
+    @Test
     @DisplayName("CLI task includes cargo steps and the CLI crate")
     fun cliTaskPlan() {
         val plan = DevTaskPlanner.plan("add a new browser4-cli command with a batch test in cli/browser4-cli/src/commands.rs")

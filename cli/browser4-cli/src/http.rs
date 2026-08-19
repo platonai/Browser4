@@ -497,13 +497,26 @@ pub async fn submit_plain_command(
     command: &str,
     async_mode: bool,
 ) -> Result<String, String> {
-    call_tool(
-        client,
-        base_url,
-        "command_run",
-        serde_json::json!({ "command": command, "async": async_mode }),
-    )
-    .await
+    submit_plain_command_with_options(client, base_url, command, async_mode, serde_json::json!({}))
+        .await
+}
+
+/// Like [submit_plain_command], but merges `extra` fields into the `command_run`
+/// tool payload (e.g. `noopLimit` for `agent run --noop-limit`).
+pub async fn submit_plain_command_with_options(
+    client: &Client,
+    base_url: &str,
+    command: &str,
+    async_mode: bool,
+    extra: serde_json::Value,
+) -> Result<String, String> {
+    let mut payload = serde_json::json!({ "command": command, "async": async_mode });
+    if let Some(obj) = extra.as_object() {
+        for (k, v) in obj {
+            payload[k] = v.clone();
+        }
+    }
+    call_tool(client, base_url, "command_run", payload).await
 }
 
 /// Send a chat message to the AI via the conversations API.

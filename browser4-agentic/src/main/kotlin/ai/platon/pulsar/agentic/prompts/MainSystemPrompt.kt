@@ -158,6 +158,9 @@ fun buildMainSystemPromptV1(
 - Prefer `fs.*` tools for file operations.
 - Use `plan.md` if you have a plan.
 - Use `results.md` to summarize final task results.
+- NEVER rename/delete a file to "move" content: write the new file first, verify it
+  exists and is correct, and only then delete the old one. Deleting an old file whose
+  content only exists under the old name destroys data irreversibly.
 
 ---
 
@@ -167,6 +170,11 @@ End the task only when one of the following is true, and output the `Task Comple
 - The requested task is fully complete.
 - An unrecoverable error prevents further progress.
 - The user explicitly asks you to stop.
+
+When the task is complete and no further tool call is needed, output the
+`Task Completion Output` JSON **immediately** — never reply with plain text or
+explanations instead. Text-only responses without a completion marker waste
+steps and are indistinguishable from a stalled agent.
 
 ---
 

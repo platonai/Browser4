@@ -60,7 +60,8 @@ use http::{
     call_tool, call_tool_with_result, call_tool_with_timeout_override, cancel_crawl,
     clear_all_crawls, clear_crawls, crawl_request_timeout, get_command_result, get_command_status,
     get_crawl_result, get_crawl_status, get_swarm_result, get_swarm_status, is_stale_session_error,
-    make_client, submit_batch_commands, submit_crawl, submit_plain_command, submit_swarm_payload,
+    make_client, submit_batch_commands, submit_crawl, submit_plain_command,
+    submit_plain_command_with_options, submit_swarm_payload,
     submit_swarm_query, CallToolResult,
 };
 use managed_processes::{
@@ -9601,7 +9602,20 @@ async fn handle_agent_run(
         return Err("Task description is required.".to_string());
     }
 
-    let result = submit_plain_command(client, base_url, task, true).await?;
+    // Optional per-task no-op threshold (long coding chains benefit from 8-10).
+    let noop_limit = tool_params.get("noopLimit").and_then(|v| v.as_i64());
+    let result = if let Some(n) = noop_limit {
+        submit_plain_command_with_options(
+            client,
+            base_url,
+            task,
+            true,
+            serde_json::json!({ "noopLimit": n }),
+        )
+        .await?
+    } else {
+        submit_plain_command(client, base_url, task, true).await?
+    };
 
     // The async response is a task ID (possibly JSON-quoted)
     let task_id = result.trim().trim_matches('"').to_string();
@@ -9641,7 +9655,22 @@ async fn handle_agent_run(
                 .unwrap_or("");
 
             match process_state {
-                "done" => {
+                // Successful terminal states: "done" (legacy sync path) and
+                // "completed" (StatefulAgentRunner's done+OK state).
+                "done" | "completed" => {
+                    let status_code = parsed
+                        .get("statusCode")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(200);
+                    let failure_reason = parsed
+                        .get("failureReason")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    if status_code >= 400 || failure_reason.is_some() {
+                        let message = failure_reason
+                            .unwrap_or_else(|| format!("Agent task failed with status code {status_code}"));
+                        return Err(format!("Agent task failed: {message}"));
+                    }
                     let result_text = get_command_result(client, base_url, &task_id).await?;
                     cli_println!("Agent completed in {:.1}s:", start.elapsed().as_secs_f64());
                     cli_println!("{}", result_text);

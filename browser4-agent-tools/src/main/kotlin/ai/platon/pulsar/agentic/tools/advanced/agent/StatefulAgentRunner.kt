@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agentic.tools.advanced.agent
 
 import ai.platon.pulsar.agentic.AgenticSession
+import ai.platon.pulsar.agentic.agents.RobustBrowserAgent
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.detail.DefaultServerSideAgentEventHandlers
 import ai.platon.pulsar.agentic.model.AgentHistory
@@ -141,9 +142,9 @@ open class StatefulAgentRunner(
      * @param plainCommand The plain text command for the agent to execute.
      * @return AgentStatus containing the execution result.
      */
-    suspend fun execute(plainCommand: String): AgentTaskStatus {
+    suspend fun execute(plainCommand: String, noopLimit: Int? = null): AgentTaskStatus {
         val status = create()
-        execute(plainCommand, status)
+        execute(plainCommand, status, noopLimit)
         return status
     }
 
@@ -162,15 +163,25 @@ open class StatefulAgentRunner(
      * cancelled in the finally block, and the scope suspends until it terminates.
      * Multiple commands can run concurrently without cross-talk between SSE streams.
      */
-    suspend fun execute(plainCommand: String, status: AgentTaskStatus) {
+    suspend fun execute(plainCommand: String, status: AgentTaskStatus, noopLimit: Int? = null) {
         runMutex.withLock {
-            executeSerialized(plainCommand, status)
+            executeSerialized(plainCommand, status, noopLimit)
         }
     }
 
-    private suspend fun executeSerialized(plainCommand: String, status: AgentTaskStatus) {
+    private suspend fun executeSerialized(plainCommand: String, status: AgentTaskStatus, noopLimit: Int? = null) {
         try {
             status.refresh(ResourceStatus.SC_PROCESSING)
+
+            // Per-task noop tolerance (e.g. `agent run --noop-limit 10`): long coding chains
+            // benefit from a higher limit than the default. A null value resets any stale
+            // override left over from a previous task.
+            (session.companionAgent as? RobustBrowserAgent)?.let {
+                it.noopLimitOverride = noopLimit
+                if (noopLimit != null) {
+                    logger.info("Agent task {} (session={}): noop limit overridden to {}", status.id, session.uuid, noopLimit)
+                }
+            }
 
             // Create and wire up ServerSideAgentEventHandlers for this command
             val serverSideAgentEventHandlers = DefaultServerSideAgentEventHandlers()
@@ -266,12 +277,22 @@ open class StatefulAgentRunner(
         // getting results for the right task (prevents cross-talk confusion).
         status.submittedTask = plainCommand
 
-        // A session reuses its bound driver across tasks. If a previous task (or a
-        // close-all) shut the browser down, the driver points at a dead browser and
-        // the agent would fail every step (DOM settle timeout, browserUseState
-        // degradation, zero-step runs). Reset the bound driver/browser so a fresh
-        // browser is created for this task.
-        ensureSessionDriverHealthy()
+        // Pure coding tasks (file ops / build) don't need a browser page. Switch the
+        // agent into coding mode: no driver health check, no search-engine navigation,
+        // no screenshots — those page steps were the source of the 30s DOM timeouts
+        // that killed coding runs.
+        val codingMode = CodingTaskDetector.detect(plainCommand)
+        (agent as? RobustBrowserAgent)?.codingMode = codingMode
+        if (codingMode) {
+            logger.info("Agent task {} (session={}): coding mode — skipping driver health check and page navigation", status.id, session.uuid)
+        } else {
+            // A session reuses its bound driver across tasks. If a previous task (or a
+            // close-all) shut the browser down, the driver points at a dead browser and
+            // the agent would fail every step (DOM settle timeout, browserUseState
+            // degradation, zero-step runs). Reset the bound driver/browser so a fresh
+            // browser is created for this task.
+            ensureSessionDriverHealthy()
+        }
 
         // Set agent history reference to allow real-time state tracking
         status.agentHistory = agent.stateHistory

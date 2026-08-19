@@ -89,16 +89,21 @@ open class ContextToAction(
     /**
      * Tracks whether the configured chat model supports vision (image) input.
      * null = unknown, true = supports images, false = text-only.
-     * Lazily determined on first image-bearing request; cached thereafter to avoid
-     * wasted retries against text-only models (e.g., DeepSeek).
+     * The default comes from the configured model name: known text-only families
+     * (deepseek, o1/o3 reasoning models) reject `image_url` content, so screenshots
+     * are skipped from the very first step instead of burning the chat model layer's
+     * retries (3 attempts) on an image-bearing call that is doomed to fail.
+     * For unknown models the value stays optimistic and is lazily corrected by a
+     * failed image-bearing call; cached thereafter.
      */
-    private val modelSupportsVision = AtomicBoolean(true)
+    private val modelSupportsVision = AtomicBoolean(defaultVisionSupport(metricsModelName))
 
     /**
      * Set to true once we have made an actual image-bearing call and got a definitive
-     * answer; before that, modelSupportsVision is an optimistic default.
+     * answer; before that, modelSupportsVision is an optimistic default (or a
+     * model-name-based prediction, which already counts as resolved).
      */
-    private var visionCapabilityResolved = false
+    private var visionCapabilityResolved = !modelSupportsVision.get()
 
     /**
      * Returns true if the model is known or assumed to support vision (image) input.
@@ -388,6 +393,29 @@ open class ContextToAction(
             cause = cause.cause
         }
         return false
+    }
+
+    companion object {
+        /**
+         * Model-name prefixes known to reject `image_url` content (text-only families).
+         * Screenshots are skipped from the first step for these, so no image-bearing
+         * request (and its retry storm) is ever sent to them.
+         */
+        private val TEXT_ONLY_MODEL_PREFIXES = listOf("deepseek", "o1", "o3")
+
+        /**
+         * Initial vision-support guess from the configured model name. Known text-only
+         * families resolve to false immediately; anything else stays optimistic (true)
+         * and is corrected lazily by a failed image-bearing call. `-Dbrowser4.agent.vision.enabled=false`
+         * force-disables vision regardless of model.
+         */
+        private fun defaultVisionSupport(modelName: String?): Boolean {
+            if (System.getProperty("browser4.agent.vision.enabled", "true").toBoolean() == false) {
+                return false
+            }
+            val name = modelName?.lowercase()?.trim() ?: return true
+            return TEXT_ONLY_MODEL_PREFIXES.none { name.startsWith(it) }
+        }
     }
 
     private fun onWillGenerate(context: ExecutionContext, messages: AgentMessageList) {

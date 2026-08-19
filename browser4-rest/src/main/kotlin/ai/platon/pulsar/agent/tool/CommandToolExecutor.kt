@@ -41,11 +41,13 @@ class CommandToolExecutor(
             arguments = listOf(
                 ToolSpec.Arg("command", "String", null),
                 ToolSpec.Arg("async", "Boolean", "true"),
+                ToolSpec.Arg("noopLimit", "Int", null),
             ),
             returnType = "String",
             description = "Execute a plain command (URL, instruction, or agent task). " +
                     "When async=true (default), returns a task ID immediately. " +
-                    "When async=false, blocks until done and returns the CommandStatus as JSON."
+                    "When async=false, blocks until done and returns the CommandStatus as JSON. " +
+                    "noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks."
         )
 
         toolSpec["status"] = ToolSpec(
@@ -82,21 +84,22 @@ class CommandToolExecutor(
         }
 
         return when (functionName) {
-            // command.run(command: String, async?: Boolean = true)
+            // command.run(command: String, async?: Boolean = true, noopLimit?: Int = null)
             "run" -> {
                 validateArgs(
                     args,
-                    allowed = setOf("command", "async"),
+                    allowed = setOf("command", "async", "noopLimit"),
                     required = setOf("command"),
                     functionName
                 )
                 val sessionId = paramString(args, "sessionId", functionName, default = DEFAULT_SESSION_ID)!!
                 val command = paramString(args, "command", functionName)!!
                 val isAsync = paramBool(args, "async", functionName, required = false, default = true) ?: true
+                val noopLimit = paramInt(args, "noopLimit", functionName, required = false, default = null)
                 if (isAsync) {
-                    service.submitPlainCommand(sessionId, command)
+                    service.submitPlainCommand(sessionId, command, noopLimit)
                 } else {
-                    val status = service.executePlainCommand(sessionId, command)
+                    val status = service.executePlainCommand(sessionId, command, noopLimit)
                     pulsarObjectMapper().writeValueAsString(status)
                 }
             }

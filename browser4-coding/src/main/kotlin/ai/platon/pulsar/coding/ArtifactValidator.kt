@@ -216,6 +216,33 @@ object ArtifactValidator {
             }
         }
 
+        // --- Semantic checks: unimplemented scaffold stubs ---
+        // Structure-only validation passes scaffold stubs — flag obvious placeholders
+        // so "validate ✓" no longer masks a plugin whose tools are still unimplemented
+        // (observed in production: a stub JS returning {url, data:{}} passed validation
+        // while the plugin was functionally empty).
+        val stubMarker = Regex(
+            """(?i)(TODO\s*:?\s*implement|not\s+implemented|NotImplementedError|UnsupportedOperationException|\bFIXME\b|\bplaceholder\b|\bstub\b)"""
+        )
+        val emptyDataReturn = Regex("""data\s*:\s*\{\s*\}""")
+        dir.walkTopDown()
+            .filter { it.isFile && it.extension in setOf("kt", "js", "ts") }
+            .forEach { file ->
+                val rel = file.relativeTo(dir).path
+                val content = runCatching { file.readText() }.getOrDefault("")
+                val marker = stubMarker.find(content)
+                if (marker != null) {
+                    issues += ValidationIssue(Severity.WARNING,
+                        "Possible unimplemented scaffold stub — '${marker.value}' found; implement or remove before shipping",
+                        rel)
+                }
+                if (file.extension == "js" && emptyDataReturn.containsMatchIn(content)) {
+                    issues += ValidationIssue(Severity.WARNING,
+                        "JS returns an empty data object ({}) — the tool likely returns no real payload yet",
+                        rel)
+                }
+            }
+
         return ValidationResult.of(issues)
     }
 

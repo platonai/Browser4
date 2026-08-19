@@ -39,6 +39,14 @@ object RepoConsistencyCheck {
      *   (containing a pom.xml), checked for registration
      * @param pluginManifestContents contents of every in-repo
      *   `META-INF/browser4-plugin.json`, checked for `sdkVersion` == VERSION
+     * @param staticModuleMap the static [ModuleMap.MODULES] snapshot (optional);
+     *   when provided together with [liveModuleDirs], modules found in the live
+     *   pom scan but missing from the snapshot are reported as errors (drift)
+     * @param liveModuleDirs module directories found in the live pom scan (optional)
+     * @param staticDependents the static [ModuleMap.DEPENDENTS] snapshot (optional)
+     * @param liveDependentsOf reverse-edge lookup on the live pom graph: returns the
+     *   modules that directly depend on [String] (optional); when both are provided,
+     *   per-module reverse edges are compared as sets in both directions
      */
     fun check(
         versionContent: String?,
@@ -47,6 +55,10 @@ object RepoConsistencyCheck {
         moduleExists: (String) -> Boolean = { true },
         onDiskModuleDirs: List<String> = emptyList(),
         pluginManifestContents: List<String> = emptyList(),
+        staticModuleMap: List<String> = emptyList(),
+        liveModuleDirs: List<String> = emptyList(),
+        staticDependents: Map<String, List<String>> = emptyMap(),
+        liveDependentsOf: ((String) -> Set<String>)? = null,
     ): ValidationResult {
         val issues = mutableListOf<ValidationIssue>()
 
@@ -139,6 +151,38 @@ object RepoConsistencyCheck {
                     Severity.ERROR,
                     "Plugin '$pluginName' sdkVersion '$declared' does not match VERSION '$version'"
                 )
+            }
+        }
+
+        // --- ModuleMap snapshot ↔ live pom graph (drift check) ---
+        // Mirrors ModuleMapDriftE2ETest: every real module must exist in the static
+        // ModuleMap.MODULES snapshot, otherwise devTask planning / impact analysis
+        // operate on stale topology.
+        if (staticModuleMap.isNotEmpty() && liveModuleDirs.isNotEmpty()) {
+            val missing = liveModuleDirs.filter { it !in staticModuleMap }.sorted()
+            missing.forEach { dir ->
+                issues += ValidationIssue(
+                    Severity.ERROR,
+                    "ModuleMap.MODULES is missing '$dir' — sync browser4-coding/src/main/kotlin/" +
+                        "ai/platon/pulsar/coding/ModuleMap.kt (ModuleMapDriftE2ETest fails on drift)"
+                )
+            }
+        }
+
+        // --- ModuleMap.DEPENDENTS reverse-edge drift ---
+        // Both directions as sets: live dependents of each live module must match the
+        // static snapshot (and vice versa — static keys with no live module are reported).
+        if (staticDependents.isNotEmpty() && liveDependentsOf != null && liveModuleDirs.isNotEmpty()) {
+            (liveModuleDirs + staticDependents.keys).distinct().sorted().forEach { m ->
+                val live = liveDependentsOf(m)
+                val static = staticDependents[m].orEmpty().toSet()
+                if (live != static) {
+                    issues += ValidationIssue(
+                        Severity.ERROR,
+                        "ModuleMap.DEPENDENTS[$m] drifted: live={${live.sorted().joinToString(", ")}} " +
+                            "static={${static.sorted().joinToString(", ")}} — sync ModuleMap.kt"
+                    )
+                }
             }
         }
 

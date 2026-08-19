@@ -58,6 +58,13 @@ open class BasicBrowserAgent(
     val baseDir: Path get() = _baseDir
     val logDir: Path get() = _logDir
 
+    /**
+     * Coding mode: the task operates on repository files/build with no browser page
+     * needed. Overridden by [RobustBrowserAgent]; when true, page navigation and
+     * screenshots are skipped so pure coding tasks don't pay browser overhead.
+     */
+    open val codingMode: Boolean get() = false
+
     protected val pageStateTracker = PageStateTracker(session, config)
     protected val stateManager by lazy { AgentStateManager(this, pageStateTracker) }
 
@@ -659,8 +666,15 @@ open class BasicBrowserAgent(
             // (or on the first step when no previous action exists), to reduce token usage.
             // Additionally, skip screenshots when the model is known to not support vision
             // (e.g., text-only models like DeepSeek) to avoid API errors.
-            val lastActionDomain = context.agentState.prevState?.actionDomain
-            val needsScreenshot = ToolSpecification.isBrowserInteraction(lastActionDomain)
+            // NOTE: the first step (step <= 1) is handled explicitly because a null previous
+            // domain now means "no tool call was attempted" — which is NOT a browser
+            // interaction — while the very first step still deserves an initial screenshot.
+            // Coding mode skips screenshots entirely: the task works on files, not pages.
+            val prevState = context.agentState.prevState
+            val lastActionDomain = prevState?.actionDomain
+            val needsScreenshot = !codingMode &&
+                (context.agentState.step <= 1 ||
+                ToolSpecification.isBrowserInteraction(lastActionDomain))
             val screenshotB64 = if (needsScreenshot && cta.isVisionSupported) activeDriver.screenshot() else null
             val context = context.copy(screenshotB64 = screenshotB64)
 

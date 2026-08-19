@@ -34,6 +34,25 @@ open class RobustBrowserAgent(
     private val logger = getLogger(RobustBrowserAgent::class)
     private val slogger = StructuredAgentLogger(logger, config)
 
+    /**
+     * Per-task override for [AgentConfig.consecutiveNoOpLimit], set by
+     * [ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner] when the caller
+     * passes a noop limit with the task (e.g. `agent run --noop-limit 10`). Long coding
+     * chains (compile-fix-test loops) benefit from a higher tolerance than the default.
+     */
+    @Volatile
+    var noopLimitOverride: Int? = null
+
+    private val noopLimit: Int get() = (noopLimitOverride ?: config.consecutiveNoOpLimit).coerceAtLeast(1)
+
+    /**
+     * Coding mode override (see [BasicBrowserAgent.codingMode]): set by
+     * [ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner] when the task is
+     * detected as a pure coding task. Skips the search-engine navigation and screenshots.
+     */
+    @Volatile
+    override var codingMode: Boolean = false
+
     private val closed = AtomicBoolean(false)
     val isClosed: Boolean get() = closed.get()
 
@@ -328,6 +347,7 @@ open class RobustBrowserAgent(
     ): ResolveResult {
         initializeResolution(initContext, attempt)
         var consecutiveNoOps = 0
+        var lastStopReason: StopReason? = null
         var context = initContext
         val startTime = Instant.now()
         try {
@@ -336,25 +356,40 @@ open class RobustBrowserAgent(
             while (!isClosed && context.step < config.maxSteps) {
                 val stepResult: StepProcessingResult
                 try {
-                    context = prepareStep(action, context, consecutiveNoOps)
+                    val prepared = prepareStep(action, context, consecutiveNoOps)
+                    context = prepared.context
+                    consecutiveNoOps = prepared.noOps
 
-                    stepResult = step(action, context, consecutiveNoOps)
+                    if (prepared.stop) {
+                        // The page state froze despite repeated browser interactions —
+                        // the loop stops here without executing another act.
+                        stepResult = StepProcessingResult(context, consecutiveNoOps, true, StopReason.NOOP_LIMIT)
+                    } else {
+                        stepResult = step(action, context, consecutiveNoOps)
 
-                    require(stepResult.context.step == context.step) { "Step check failed" }
-                    require(stepResult.context.agentState.actionDescription != null) { "Check failed: stepResult.context.agentState.actionDescription != null" }
+                        require(stepResult.context.step == context.step) { "Step check failed" }
+                        require(stepResult.context.agentState.actionDescription != null) { "Check failed: stepResult.context.agentState.actionDescription != null" }
 
-                    context = stepResult.context
-                    consecutiveNoOps = stepResult.consecutiveNoOps
+                        context = stepResult.context
+                        consecutiveNoOps = stepResult.consecutiveNoOps
+                    }
                 } finally {
                     stateManager.addToHistory(context.agentState)
                 }
 
                 if (stepResult.shouldStop) {
+                    lastStopReason = stepResult.stopReason
                     break
                 }
             }
 
-            val actResult = buildFinalActResult(initContext.instruction, context, startTime)
+            // The loop exited without an explicit completion: it hit the no-op limit or
+            // maxSteps while the task was still unfinished — report it as a failure rather
+            // than letting the final summary mask an abnormal termination.
+            val stopReason = lastStopReason
+                ?: if (context.step >= config.maxSteps) StopReason.MAX_STEPS else null
+
+            val actResult = buildFinalActResult(initContext.instruction, context, startTime, stopReason)
 
             return ResolveResult(context, actResult)
         } catch (e: CancellationException) {
@@ -380,20 +415,21 @@ open class RobustBrowserAgent(
 
         if (actResult.isComplete) {
             onTaskCompletion(actResult, context)
-            return StepProcessingResult(context, consecutiveNoOps, true)
+            return StepProcessingResult(context, consecutiveNoOps, true, StopReason.COMPLETED)
         }
 
         if (!actResult.isSuccess) {
-            // Only count failures of browser-interaction actions as no-ops.
-            // Non-browser actions (fs, agent, system) can fail for reasons
-            // unrelated to page state and should not trigger no-op detection.
+            // Only count failures of actual browser-interaction tool calls as no-ops.
+            // A failed act WITHOUT a tool call (e.g. the model returned plain text while
+            // reasoning, or a non-browser tool like fs/cli/coding failed) is a legitimate
+            // intermediate state in reasoning-heavy tasks — counting it as a no-op is what
+            // killed coding agents with "noop.stop limit=5" mid-task.
             val lastToolCall = actResult.detail?.actionDescription?.toolCall
-            val lastDomain = lastToolCall?.domain
-            if (ToolSpecification.isBrowserInteraction(lastDomain)) {
+            if (lastToolCall != null && ToolSpecification.isBrowserInteraction(lastToolCall.domain)) {
                 consecutiveNoOps++
                 val stop = handleConsecutiveNoOps(consecutiveNoOps, actResult, context)
                 if (stop) {
-                    return StepProcessingResult(context, consecutiveNoOps, true)
+                    return StepProcessingResult(context, consecutiveNoOps, true, StopReason.NOOP_LIMIT)
                 }
             }
         }
@@ -406,10 +442,10 @@ open class RobustBrowserAgent(
 
     private suspend fun prepareStep(
         action: ActionOptions, ctxIn: ExecutionContext, noOpsIn: Int
-    ): ExecutionContext {
+    ): PrepareStepResult {
         val context = buildExecutionContextForStep(action, "step", ctxIn)
 
-        val prevAgentState = context.prevAgentState ?: return context
+        val prevAgentState = context.prevAgentState ?: return PrepareStepResult(context, noOpsIn, false)
         require(prevAgentState == ctxIn.agentState)
 
         val prevBrowserUseState = prevAgentState.browserUseState
@@ -423,14 +459,26 @@ open class RobustBrowserAgent(
         }
         val prevDomain = prevToolCall?.domain
 
+        var consecutiveNoOps = noOpsIn
         if (ToolSpecification.isBrowserInteraction(prevDomain)) {
             // Only browser-interaction actions can change the WebPage state
-            var consecutiveNoOps = noOpsIn
             val unchangedCount = pageStateTracker.checkStateChange(prevBrowserUseState)
             if (unchangedCount >= 3) {
                 logger.info("⚠️ loop.warn sid={} step={} unchangedSteps={} lastTool={}",
                     sid, step, unchangedCount, prevToolCall?.pseudoExpression)
                 consecutiveNoOps++
+                if (consecutiveNoOps >= noopLimit) {
+                    // The page state froze despite repeated browser actions — treat it as a
+                    // deadlock and stop the loop. The counter now flows back to the run loop
+                    // (previously this increment was computed but never propagated).
+                    val synthetic = ActResult(
+                        message = "Page state unchanged for $unchangedCount consecutive steps",
+                        action = action.action,
+                        exception = IllegalStateException("Page state unchanged for $unchangedCount steps")
+                    )
+                    val stop = handleConsecutiveNoOps(consecutiveNoOps, synthetic, context)
+                    return PrepareStepResult(context, consecutiveNoOps, stop)
+                }
             }
             logger.info("▶️ step.exec sid={} step={}/{} noOps={} lastTool={}",
                 sid, step, config.maxSteps, consecutiveNoOps, prevToolCall?.pseudoExpression)
@@ -440,7 +488,7 @@ open class RobustBrowserAgent(
             logger.debug("🧩 dom={}", DomDebug.summarizeStr(prevBrowserUseState.domState, 5))
         }
 
-        return context
+        return PrepareStepResult(context, consecutiveNoOps, false)
     }
 
     protected fun lastExecutedToolCall(context: ExecutionContext) =
@@ -452,7 +500,7 @@ open class RobustBrowserAgent(
     ): ExecutionContext {
         val driver = activeDriver
         val url = driver.url()
-        if (url.isBlank() || url == "about:blank") {
+        if (!codingMode && (url.isBlank() || url == "about:blank")) {
             val searchURL = SearchEngineSelector.selectBest()
             driver.navigate(searchURL)
         }
@@ -539,9 +587,9 @@ open class RobustBrowserAgent(
         )
         logger.info("🕒 noop sid={} step={} consecutive={} toolCall={} | result={}",
             context.sid, step, consecutiveNoOps, expression, result)
-        if (consecutiveNoOps >= config.consecutiveNoOpLimit) {
+        if (consecutiveNoOps >= noopLimit) {
             logger.info("⛔ noop.stop sid={} step={} limit={} toolCall={}",
-                context.sid, step, config.consecutiveNoOpLimit, expression)
+                context.sid, step, noopLimit, expression)
             return true
         }
         if (isClosed) {
@@ -613,18 +661,27 @@ open class RobustBrowserAgent(
     // ─── Final act result & summary ───────────────────────────────────────────
 
     private suspend fun buildFinalActResult(
-        instruction: String, cxtIn: ExecutionContext, startTime: Instant
+        instruction: String, cxtIn: ExecutionContext, startTime: Instant, stopReason: StopReason? = null
     ): ActResult {
         val executionTime = Duration.between(startTime, Instant.now())
 
-        logger.info("✅ agent.done sid={} steps={} dur={}", cxtIn.sid, cxtIn.step, executionTime)
+        logger.info("✅ agent.done sid={} steps={} dur={} stopReason={}", cxtIn.sid, cxtIn.step, executionTime, stopReason)
 
         val result = generateFinalSummary(instruction, cxtIn)
 
         val summary = result.modelResponse
         val context = result.context
         val ok = summary.state != ResponseState.OTHER
-        val exception = if (ok) null else IllegalStateException("ResponseState: OTHER")
+        val exception = when {
+            // The loop terminated abnormally (no-op limit / max steps) while the task was
+            // NOT complete: report failure so supervisors can distinguish success from abort.
+            stopReason != null && stopReason != StopReason.COMPLETED -> IllegalStateException(
+                "Agent loop stopped abnormally: $stopReason at step ${cxtIn.step}"
+            )
+
+            ok -> null
+            else -> IllegalStateException("ResponseState: OTHER")
+        }
 
         return ActResult(
             message = summary.content,

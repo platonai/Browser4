@@ -87,9 +87,12 @@ system.help(domain: String, method: String): String        // get help for a too
      * webpage and therefore do not require fresh screenshots or page-state comparisons.
      */
     fun isBrowserInteraction(domain: String?): Boolean {
-        // Default to true for safety: ensures screenshots are captured when the domain is
-        // unknown or on the first step where no previous action exists.
-        if (domain.isNullOrBlank()) return true
+        // A null/blank domain means "no tool call was attempted" (e.g. the model returned
+        // plain text, or the previous state had no action at all). That cannot be a browser
+        // interaction: it does not change the page, must not count as a no-op, and does not
+        // require a fresh screenshot. Callers that need the "first step / unknown domain"
+        // safety (e.g. initial screenshot) must handle it explicitly.
+        if (domain.isNullOrBlank()) return false
         return BROWSER_INTERACTION_DOMAINS.contains(domain.lowercase())
     }
 }

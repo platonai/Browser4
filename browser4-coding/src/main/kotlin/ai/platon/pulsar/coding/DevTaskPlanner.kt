@@ -31,10 +31,15 @@ object DevTaskPlanner {
         val driverFiles: List<String>,
         /** Test class names mentioned in the task (FooTest / FooTests), for -Dtest scoping. */
         val testClasses: List<String>,
+        /** `browser4-plugins/<name>` mentions that are NOT in the known module list — new modules to scaffold. */
+        val newPluginModules: List<String>,
         val steps: List<PlanStep>,
     )
 
-    private val FILE_PATTERN = Regex("""[\w./\\-]+\.(?:kt|kts|rs|java|scala|groovy|js|jsx|ts|tsx|py|go|rb|php|swift|sh|bash|ps1|md|json|xml|yaml|yml|toml|properties|sql|gradle|proto|h)""")
+    // Extension alternatives sorted longest-first so `json` wins over `js`; the
+    // trailing (?![\w]) prevents matching a prefix of a longer token
+    // (e.g. "browser4-plugin.json" must yield "browser4-plugin.json", not ".js").
+    private val FILE_PATTERN = Regex("""[\w./\\-]+\.(?:json|kt|kts|rs|java|scala|groovy|js|jsx|ts|tsx|py|go|rb|php|swift|sh|bash|ps1|md|xml|yaml|yml|toml|properties|sql|gradle|proto|h)(?![\w])""")
     private val CODING_TOOL_PATTERN = Regex("""coding\.([a-zA-Z]+)""")
     // FooTest / FooTests (uppercase start; bare "Test" in prose does not match).
     private val TEST_CLASS_PATTERN = Regex("""\b([A-Z][A-Za-z0-9]*(?:Test|Tests))\b""")
@@ -55,17 +60,19 @@ object DevTaskPlanner {
         val files = FILE_PATTERN.findAll(task).map { it.value.replace('\\', '/') }
             .distinct().toList()
         val modules = inferModules(task, files, knownModules)
+        val newPluginModules = inferNewPluginModules(task, knownModules)
         val driverFiles = files.filter { it.contains("/browser4-browser/") || it.endsWith("PulsarWebDriver.kt") }
         val testClasses = TEST_CLASS_PATTERN.findAll(task).map { it.groupValues[1] }
             .filter { it != "Test" }.distinct().toList()
-        val steps = buildSteps(task, modules, files, driverFiles, testClasses)
+        val steps = buildSteps(task, modules, files, driverFiles, testClasses, newPluginModules, knownModules)
 
         return DevPlan(
-            summary = summarize(task, modules, files, driverFiles, testClasses),
+            summary = summarize(task, modules, files, driverFiles, testClasses, newPluginModules),
             modules = modules,
             files = files,
             driverFiles = driverFiles,
             testClasses = testClasses,
+            newPluginModules = newPluginModules,
             steps = steps,
         )
     }
@@ -111,6 +118,32 @@ object DevTaskPlanner {
         }
     }
 
+    /** `browser4-plugins/<name>` mentions that do NOT exist in [knownModules] — new modules to scaffold. */
+    private fun inferNewPluginModules(task: String, knownModules: List<String>): List<String> {
+        return Regex("""browser4-plugins/browser4-[\w-]+""")
+            .findAll(task).map { it.value }.distinct()
+            .filter { it !in knownModules }
+            .sorted()
+            .toList()
+    }
+
+    /**
+     * Best-effort mapping of a test class to the module that owns it, by matching
+     * the class prefix against module basenames (PagetitleConfigTest →
+     * browser4-plugins/browser4-pagetitle, PulsarWebDriverTest →
+     * browser4-core/browser4-browser). Module short names strip the `browser4-`
+     * prefix and hyphens, so camelCase class prefixes compare against kebab-case
+     * module names. Returns null when no module matches.
+     */
+    private fun inferModuleForTestClass(testClass: String, knownModules: List<String>): String? {
+        val prefix = testClass.removeSuffix("Tests").removeSuffix("Test").lowercase()
+        if (prefix.length < 4) return null
+        fun shortName(module: String): String =
+            module.substringAfterLast('/').lowercase().removePrefix("browser4-").replace("-", "")
+        return knownModules.firstOrNull { prefix.contains(shortName(it)) && shortName(it).length >= 4 }
+            ?: knownModules.firstOrNull { shortName(it).contains(prefix) && prefix.length >= 4 }
+    }
+
     // ==================== planning ====================
 
     private fun buildSteps(
@@ -119,9 +152,22 @@ object DevTaskPlanner {
         files: List<String>,
         driverFiles: List<String>,
         testClasses: List<String>,
+        newPluginModules: List<String>,
+        knownModules: List<String>,
     ): List<PlanStep> {
         val steps = mutableListOf<PlanStep>()
         var order = 1
+
+        // 0. New plugin modules: scaffold first — the rest of the plan (build/test/
+        //    validate) then applies to the new module.
+        newPluginModules.forEach { plugin ->
+            val pluginName = plugin.substringAfterLast('/')
+            steps += PlanStep(order++, "coding.scaffoldToDir",
+                "Scaffold the new plugin module $pluginName (skeleton files, aggregator pom registration, ModuleMap sync)",
+                "coding.scaffoldToDir(type=\"plugin\", dir=\"$plugin\", name=\"$pluginName\", pluginName=\"$pluginName\", verify=true)",
+                mapOf("type" to "plugin", "dir" to plugin, "name" to pluginName,
+                    "pluginName" to pluginName, "verify" to "true"))
+        }
 
         // 1. Locate the code the task touches.
         val readPath = files.firstOrNull()
@@ -132,7 +178,7 @@ object DevTaskPlanner {
         }
 
         // 2. Impact analysis — which module owns the change and who depends on it.
-        val impactPath = files.firstOrNull() ?: modules.firstOrNull()
+        val impactPath = files.firstOrNull() ?: modules.firstOrNull() ?: newPluginModules.firstOrNull()
         if (impactPath != null) {
             steps += PlanStep(order++, "coding.impact",
                 "Assess the blast radius: owning module, transitive dependents, suggested test commands",
@@ -142,7 +188,7 @@ object DevTaskPlanner {
         // 3. Compile check of the affected module (or cargo for the CLI crate).
         //    Prefer the most specific (deepest-path) module so the build targets
         //    the leaf (e.g. browser4-plugins/browser4-seo) over its aggregator.
-        val mavenModule = modules.filter { it != ModuleMap.CLI_CRATE }
+        val mavenModule = (modules + newPluginModules).filter { it != ModuleMap.CLI_CRATE }
             .maxByOrNull { it.count { c -> c == '/' } }
         if (mavenModule != null) {
             steps += PlanStep(order++, "coding.mvnBuild",
@@ -159,12 +205,18 @@ object DevTaskPlanner {
 
         // 4. Smallest-scope test for the affected module. When the task names a
         //    test class (FooTest), scope with -Dtest=... instead of the whole suite.
-        if (mavenModule != null) {
+        //    Name-based module binding runs ONLY when the task carries no explicit
+        //    module signal — an explicit module mention (e.g. "in browser4-agentic/src/test")
+        //    is the ground truth and must win over guesswork from the class name.
+        val bindingCandidates = if (modules.isEmpty()) knownModules else emptyList()
+        val testClassBound = testClasses.firstNotNullOfOrNull { inferModuleForTestClass(it, bindingCandidates) }
+        val testTarget = testClassBound ?: mavenModule
+        if (testTarget != null) {
             val testClassArg = testClasses.joinToString(",")
-            val command = ModuleMap.mavenTestCommand(mavenModule, testClassArg.ifBlank { null })
+            val command = ModuleMap.mavenTestCommand(testTarget, testClassArg.ifBlank { null })
             steps += PlanStep(order++, "coding.shell",
                 if (testClassArg.isBlank()) "Run the module's smallest relevant test scope"
-                else "Run the named test class(es) ($testClassArg) — smallest scope",
+                else "Run the named test class(es) ($testClassArg) in their owning module — smallest scope",
                 "coding.shell(command=\"$command\")",
                 mapOf("command" to command))
         }
@@ -176,9 +228,9 @@ object DevTaskPlanner {
                 "coding.trapCheck(path=\"$file\")", mapOf("path" to file))
         }
 
-        // 6. Repo governance: versions and module registration stay consistent.
+        // 6. Repo governance: versions, module registration AND ModuleMap sync stay consistent.
         steps += PlanStep(order++, "coding.validate",
-            "Verify repo governance (VERSION vs root pom vs BOM vs module registration)",
+            "Verify repo governance (VERSION vs root pom vs BOM vs module registration vs ModuleMap snapshot)",
             "coding.validate(type=\"repo-consistency\")",
             mapOf("type" to "repo-consistency"))
 
@@ -194,9 +246,11 @@ object DevTaskPlanner {
     private fun summarize(
         task: String, modules: List<String>, files: List<String>,
         driverFiles: List<String>, testClasses: List<String>,
+        newPluginModules: List<String>,
     ): String {
         val parts = mutableListOf<String>()
         if (modules.isNotEmpty()) parts.add("modules: ${modules.joinToString(", ")}")
+        if (newPluginModules.isNotEmpty()) parts.add("new plugin modules: ${newPluginModules.joinToString(", ")}")
         if (files.isNotEmpty()) parts.add("files: ${files.joinToString(", ")}")
         if (testClasses.isNotEmpty()) parts.add("tests: ${testClasses.joinToString(", ")}")
         if (driverFiles.isNotEmpty()) parts.add("⚠ browser-driver code involved (CDP pitfalls apply)")

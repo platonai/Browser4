@@ -8,6 +8,7 @@ import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 import java.nio.file.*
 import java.nio.file.attribute.BasicFileAttributes
+import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.io.path.*
@@ -55,6 +56,13 @@ class CodingAgentFileSystem(
     companion object {
         const val MAX_READ_SIZE_BYTES = 5 * 1024 * 1024L // 5 MB
         const val MAX_GLOB_RESULTS = 10_000
+
+        /**
+         * Upper bound for [listDir] recursion. The requested [listDir.maxDepth] is honored
+         * up to this bound; anything beyond is capped and reported in the output instead of
+         * being silently truncated (agents must not believe a deep listing was complete).
+         */
+        const val MAX_LIST_DIR_DEPTH = 32
 
         /**
          * Default cap on the number of characters returned to the LLM context by
@@ -132,6 +140,7 @@ class CodingAgentFileSystem(
         val existed: Boolean,
         val content: String?,
         val checksum: Long,
+        val trackedAtMillis: Long = System.currentTimeMillis(),
     )
 
     private val snapshots = ConcurrentHashMap<Path, FileSnapshot>()
@@ -623,8 +632,12 @@ class CodingAgentFileSystem(
         if (!resolved.isDirectory()) return errorResult("Not a directory: $path")
 
         return try {
+            // Honor the requested depth up to a generous bound; if the caller asked for more,
+            // tell them in the output rather than silently walking only 5 levels.
+            val effectiveDepth = maxDepth.coerceAtLeast(1).coerceAtMost(MAX_LIST_DIR_DEPTH)
+            val depthCapped = maxDepth > MAX_LIST_DIR_DEPTH
             val entries: List<Path> = withContext(Dispatchers.IO) {
-                Files.walk(resolved, maxDepth.coerceIn(1, 5))
+                Files.walk(resolved, effectiveDepth)
                     .filter { it != resolved }
                     .sorted()
                     .toList()
@@ -633,7 +646,8 @@ class CodingAgentFileSystem(
             if (entries.isEmpty()) return "Directory is empty: $path"
 
             buildString {
-                appendLine("Contents of $path (${entries.size} entries):")
+                val capNote = if (depthCapped) " (depth capped at $MAX_LIST_DIR_DEPTH)" else ""
+                appendLine("Contents of $path (${entries.size} entries)$capNote:")
                 for (entry in entries) {
                     val relPath = resolved.relativize(entry)
                     val prefix = if (entry.isDirectory()) "📁" else "📄"
@@ -658,17 +672,20 @@ class CodingAgentFileSystem(
         val globPart: String
 
         if (pattern.contains("**") || pattern.contains("*")) {
-            // Find the last non-wildcard directory as base. Split on '/' and '\\'
-            // manually — Path.of() rejects wildcard characters on Windows.
+            // Find the FIRST wildcard segment: everything before it is the base directory.
+            // Split on '/' and '\\' manually — Path.of() rejects wildcard characters on Windows.
+            // (The previous implementation took the LAST non-wildcard segment and then built the
+            // base from all parts up to and including it, which pulled wildcard segments into
+            // Path.resolve() → "Illegal char <*>" on Windows.)
             val allParts = pattern.replace('\\', '/').split('/').filter { it.isNotEmpty() }
-            val lastNonWildcard = allParts.indexOfLast { !it.contains("*") && !it.contains("?") }
-            baseDir = if (lastNonWildcard >= 0) {
-                canonicalRoot.resolve(allParts.take(lastNonWildcard + 1).joinToString("/"))
+            val firstWildcard = allParts.indexOfFirst { it.contains("*") || it.contains("?") }
+            baseDir = if (firstWildcard > 0) {
+                canonicalRoot.resolve(allParts.take(firstWildcard).joinToString("/"))
             } else {
                 canonicalRoot
             }
-            globPart = if (lastNonWildcard >= 0) {
-                allParts.drop(lastNonWildcard + 1).joinToString("/")
+            globPart = if (firstWildcard >= 0) {
+                allParts.drop(firstWildcard).joinToString("/")
             } else {
                 allParts.joinToString("/")
             }
@@ -681,6 +698,14 @@ class CodingAgentFileSystem(
 
         return try {
             val pathMatcher = FileSystems.getDefault().getPathMatcher("glob:$globPart")
+            // JDK glob semantics: "**/*" requires at least one directory level, so it silently
+            // misses files directly under the base dir. Add a second matcher with the leading
+            // "**/" stripped ("**" matches zero or more directories) to catch root-level files.
+            val rootLevelMatcher = if (globPart.startsWith("**/")) {
+                FileSystems.getDefault().getPathMatcher("glob:${globPart.removePrefix("**/")}")
+            } else {
+                null
+            }
             val results = mutableListOf<Path>()
 
             withContext(Dispatchers.IO) {
@@ -694,7 +719,10 @@ class CodingAgentFileSystem(
 
                     override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
                         val rel = baseDir.relativize(file)
-                        if (pathMatcher.matches(rel) || pathMatcher.matches(file.fileName)) {
+                        if (pathMatcher.matches(rel) ||
+                            (rootLevelMatcher != null && rootLevelMatcher.matches(rel)) ||
+                            pathMatcher.matches(file.fileName)
+                        ) {
                             results.add(file)
                             if (results.size >= maxResults) return FileVisitResult.TERMINATE
                         }
@@ -872,12 +900,26 @@ class CodingAgentFileSystem(
 
     /**
      * Get change summary since tracking started.
+     *
+     * Change tracking lives on this filesystem instance. Long-lived shared instances
+     * (e.g. the session-less standalone coding shell) accumulate entries from every
+     * caller, so a [maxAge] window (default 24h) filters out stale noise from other
+     * callers/earlier sessions; hidden entries are counted and reported so agents know
+     * the listing is windowed. `diff`/`revert` still see snapshots of any age.
      */
-    fun changeSummary(): String {
+    fun changeSummary(maxAge: Duration = Duration.ofHours(24)): String {
         if (snapshots.isEmpty()) return "No changes tracked."
+        val cutoff = System.currentTimeMillis() - maxAge.toMillis()
+        val recent = snapshots.values.filter { it.trackedAtMillis >= cutoff }
+        val hidden = snapshots.size - recent.size
+        if (recent.isEmpty()) {
+            return "No changes tracked in the last ${maxAge.toHours()}h ($hidden older snapshot(s) hidden)."
+        }
         return buildString {
-            appendLine("Changes tracked: ${changeCounter.get()} operations on ${snapshots.size} files")
-            for ((path, snap) in snapshots) {
+            appendLine("Changes tracked: ${changeCounter.get()} operations on ${recent.size} files" +
+                if (hidden > 0) " (${hidden} older snapshot(s) hidden — age > ${maxAge.toHours()}h)" else "")
+            for (snap in recent.sortedBy { it.path.toString() }) {
+                val path = snap.path
                 val current = try {
                     if (path.exists()) Files.readString(path) else "(deleted)"
                 } catch (_: Exception) { "(unreadable)" }
