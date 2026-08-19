@@ -12,7 +12,9 @@ import ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner
 import ai.platon.pulsar.rest.session.ManagedSession
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.rest.session.SessionKind
+import ai.platon.pulsar.rest.session.SessionStatus
 import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 // DTO classes are defined in ai.platon.pulsar.rest.mcp.controller (top-level in MCPToolController.kt)
 // and are available without explicit import since the test is in the same package.
@@ -62,7 +64,9 @@ class MCPToolControllerTest {
         MockitoAnnotations.openMocks(this)
         controller = MCPToolController(sessionManager)
 
-        // Setup session structure
+        // Setup session structure — tool execution paths use the recovery
+        // lookup, so stub it (and the pure lookup for read-only paths).
+        `when`(sessionManager.getOrRecoverSession(sessionId)).thenReturn(managedSession)
         `when`(sessionManager.getSession(sessionId)).thenReturn(managedSession)
         `when`(managedSession.agenticSession).thenReturn(agenticSession)
         `when`(agenticSession.companionAgent).thenReturn(basicBrowserAgent)
@@ -126,19 +130,40 @@ class MCPToolControllerTest {
         `when`(sessionManager.getAllSessions()).thenReturn(listOf(managedSession))
         `when`(managedSession.sessionId).thenReturn(sessionId)
         `when`(managedSession.url).thenReturn("https://example.com")
-        `when`(managedSession.status).thenReturn("active")
+        `when`(managedSession.status).thenReturn(SessionStatus.ACTIVE)
         `when`(managedSession.kind).thenReturn(SessionKind.BROWSER4_LAUNCHED)
         `when`(managedSession.ownsBrowser).thenReturn(true)
         `when`(managedSession.createdAt).thenReturn(1720000000000L)
         `when`(managedSession.lastAccessedAt).thenReturn(1720086400000L)
+        `when`(sessionManager.checkHealthy(managedSession)).thenReturn(CheckState(0))
 
         val result = controller.callTool(request, response)
 
         assertEquals(HttpStatus.OK, result.statusCode)
         assertTrue(result.body!!.content[0].text.contains(sessionId))
         assertTrue(result.body!!.content[0].text.contains("https://example.com"))
+        assertTrue(result.body!!.content[0].text.contains(""""healthy":true"""))
         assertTrue(result.body!!.content[0].text.contains(""""createdAt":1720000000000"""))
         assertTrue(result.body!!.content[0].text.contains(""""lastAccessedAt":1720086400000"""))
+    }
+
+    @Test
+    fun `test list sessions reports unhealthy when health check fails`() = runBlocking {
+        val request = MCPToolCallRequest(tool = "list_sessions")
+        `when`(sessionManager.getAllSessions()).thenReturn(listOf(managedSession))
+        `when`(managedSession.sessionId).thenReturn(sessionId)
+        `when`(managedSession.url).thenReturn("https://example.com")
+        `when`(managedSession.status).thenReturn(SessionStatus.ACTIVE)
+        `when`(managedSession.kind).thenReturn(SessionKind.BROWSER4_LAUNCHED)
+        `when`(managedSession.ownsBrowser).thenReturn(true)
+        `when`(managedSession.createdAt).thenReturn(1720000000000L)
+        `when`(managedSession.lastAccessedAt).thenReturn(1720086400000L)
+        `when`(sessionManager.checkHealthy(managedSession)).thenReturn(CheckState(-1))
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.content[0].text.contains(""""healthy":false"""))
     }
 
     @Test

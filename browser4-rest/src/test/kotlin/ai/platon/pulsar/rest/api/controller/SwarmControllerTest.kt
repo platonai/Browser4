@@ -11,6 +11,7 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.SwarmFacade
 import ai.platon.pulsar.agentic.tools.advanced.crawl.SwarmFacadeRegistry
 import ai.platon.pulsar.rest.session.ManagedSession
 import ai.platon.pulsar.rest.session.PulsarSessionManager
+import ai.platon.pulsar.rest.session.SessionStatus
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import org.junit.jupiter.api.AfterEach
@@ -56,7 +57,7 @@ class SwarmControllerTest {
                 PROFILE_MODE_CAPABILITY to "TEMPORARY",
                 "custom" to "value",
             ),
-            status = "active",
+            status = SessionStatus.ACTIVE,
             createdAt = 1L,
             lastAccessedAt = 2L,
         )

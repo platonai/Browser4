@@ -71,8 +71,12 @@ runs:
         docker ps -a --filter "name=${{ inputs.container_name }}" || true
 
         echo ""
-        echo "📋 Container logs (last 10 lines):"
-        docker logs --tail 10 "${{ inputs.container_name }}" 2>&1 || true
+        echo "📋 Container state (docker inspect):"
+        docker inspect "${{ inputs.container_name }}" --format 'State: {{.State.Status}} (exit code {{.State.ExitCode}}, error: {{.State.Error}})' 2>&1 || true
+
+        echo ""
+        echo "📋 Container logs (full, capped at 300 lines):"
+        docker logs --tail 300 "${{ inputs.container_name }}" 2>&1 || true
 
         echo "status=failed" >> $GITHUB_OUTPUT
         echo "::endgroup::"

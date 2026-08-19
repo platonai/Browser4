@@ -837,11 +837,10 @@ async fn create_session(
     new_state.active_selector = None;
     new_state.last_mouse_position = None;
     // New sessions created via open_session are Browser4-managed, never
-    // attached.  Clear any leftover attachment flags so the CLI does not
-    // misrepresent the connection type in `list` (e.g. showing "Extension"
-    // for what is actually a fresh Browser4-CDP browser).
-    new_state.is_attached = false;
-    new_state.attach_type = None;
+    // attached.  Reset the kind so the CLI does not misrepresent the
+    // connection type in `list` (e.g. showing "Extension" for what is
+    // actually a fresh Browser4-CDP browser).
+    new_state.kind = crate::state::SessionKind::Browser4Launched;
     new_state.cdp_endpoint = None;
     new_state.browser_channel = None;
     new_state.created_at = Some(Utc::now().to_rfc3339());
@@ -1169,7 +1168,7 @@ async fn get_or_create_navigation_session(
         // don't reuse it — create a new regular Browser4 session instead.
         // Save the attached session's state under the session ID as a
         // named session so it can still be targeted with -s <sessionId>.
-        if force_new_session && state.is_attached {
+        if force_new_session && state.kind.is_attached() {
             // Persist the attached session under its own session ID
             // so it can be listed and targeted with -s <sessionId>.
             let mut attached_state = state.clone();
@@ -1182,12 +1181,8 @@ async fn get_or_create_navigation_session(
             );
             cli_println!("Use '-s {}' to target the attached session.", existing_id);
 
-            let capabilities = build_open_session_capabilities(tool_params);
-            let new_id =
-                create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
-            cli_println!("{}", format_session_opened_message(session_name, &new_id));
             reused_existing_session = false;
-            new_id
+            create_fresh_session(client, base_url, &state, session_name, tool_params).await?
         } else if tool_params.get("fresh").and_then(Value::as_bool) == Some(true) {
             // `--fresh` explicitly overrides session reuse: close the
             // existing session so its tabs, cookies, and location state
@@ -1198,92 +1193,27 @@ async fn get_or_create_navigation_session(
                 "Closing existing session {} — starting fresh (--fresh).",
                 existing_id
             );
-            let _ = call_tool(
-                client,
-                base_url,
-                "close_session",
-                json!({ "sessionId": existing_id }),
-            )
-            .await;
+            warn_if_session_close_failed(client, base_url, &existing_id).await;
             invalidate_session(&state, base_url, session_name);
-            let capabilities = build_open_session_capabilities(tool_params);
-            let new_id =
-                create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
-            cli_println!("{}", format_session_opened_message(session_name, &new_id));
             reused_existing_session = false;
-            new_id
+            create_fresh_session(client, base_url, &state, session_name, tool_params).await?
         } else {
             existing_id
         }
-    } else if state.is_attached {
+    } else if state.kind.is_attached() {
         // For attached sessions (CDP or extension), never fall through to
         // create_session — that would launch a NEW browser instance instead
         // of using the attached one.  Verify health directly and reuse the
         // attached session, or report a clear error if it is gone.
-        if let Some(ref attached_id) = state.session_id {
-            let ready_params = json!({ "sessionId": attached_id });
-            let healthy = call_tool(client, base_url, "check_session_ready", ready_params)
-                .await
-                .ok()
-                .and_then(|r| serde_json::from_str::<Value>(&r).ok())
-                .map(|v| {
-                    let ready = v.get("ready").and_then(|r| r.as_bool()).unwrap_or(false);
-                    let h = v.get("healthy").and_then(|h| h.as_bool()).unwrap_or(false);
-                    ready && h
-                })
-                .unwrap_or(false);
-
-            if healthy {
-                attached_id.clone()
-            } else if force_new_session {
-                // The attached session is stale, and the caller explicitly
-                // wants a new session (e.g., `open` command).  Auto-evict
-                // the stale attached session so the unnamed slot is freed
-                // for the new Browser4 session.
-                cli_println!(
-                    "Attached session {} is no longer healthy — auto-evicting it to create a new Browser4 session.",
-                    attached_id
-                );
-                cli_println!(
-                    "Use 'attach --extension' or 'attach --cdp' to reconnect the attached browser later."
-                );
-                invalidate_session(&state, base_url, session_name);
-                let capabilities = build_open_session_capabilities(tool_params);
-                let new_id =
-                    create_session(client, base_url, &state, session_name, Some(capabilities))
-                        .await?;
-                cli_println!("{}", format_session_opened_message(session_name, &new_id));
-                new_id
-            } else {
-                let attach_cmd = if state.attach_type.as_deref() == Some("extension") {
-                    "attach --extension"
-                } else {
-                    "attach --cdp"
-                };
-                let mut msg = format!(
-                    "Attached session {} is no longer healthy. \
-                     The browser or extension may have disconnected.\n\
-                     Re-run `{}` to reconnect, or \
-                     `close` / `close-all` to clear this session state.",
-                    attached_id, attach_cmd
-                );
-                // Add chrome:// page hint for extension sessions
-                if state.attach_type.as_deref() == Some("extension") {
-                    msg.push_str(
-                        "\n\nNote: Navigating to chrome:// internal pages \
-                         (chrome://version, chrome://settings, etc.) may \
-                         cause the extension connection to drop. After such \
-                         navigation, re-attach with `attach --extension`.",
-                    );
-                }
-                return Err(msg);
-            }
-        } else {
-            return Err(
-                "Attached session state has no session ID — re-run `attach` to create one."
-                    .to_string(),
-            );
-        }
+        resolve_attached_session_id(
+            client,
+            base_url,
+            &state,
+            session_name,
+            tool_params,
+            force_new_session,
+        )
+        .await?
     } else {
         // When the user passes -s <id> and <id> happens to be the session_id
         // of an existing attached session (e.g., extension), refuse to create a
@@ -1293,13 +1223,17 @@ async fn get_or_create_navigation_session(
         // the correct command for targeting the attached session.
         if let Some(name) = session_name {
             let default_state = read_state(None, None);
-            if default_state.session_id.as_deref() == Some(name) && default_state.is_attached {
-                let attach_cmd = if default_state.attach_type.as_deref() == Some("extension") {
+            if default_state.session_id.as_deref() == Some(name) && default_state.kind.is_attached() {
+                let attach_cmd = if default_state.kind == crate::state::SessionKind::ExtensionAttached {
                     "attach --extension"
                 } else {
                     "attach --cdp"
                 };
-                let conn_type = default_state.attach_type.as_deref().unwrap_or("cdp");
+                let conn_type = if default_state.kind == crate::state::SessionKind::ExtensionAttached {
+                    "extension"
+                } else {
+                    "cdp"
+                };
                 return Err(format!(
                     "'{}' is an existing {conn_type}-attached session, not a named Browser4 session.\n\
                      Use '-s {}' directly with tab commands, e.g.:\n  \
@@ -1318,11 +1252,7 @@ async fn get_or_create_navigation_session(
         if !json_active() {
             eprintln!("No active session — creating a new one.");
         }
-        let capabilities = build_open_session_capabilities(tool_params);
-        let new_id =
-            create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
-        cli_println!("{}", format_session_opened_message(session_name, &new_id));
-        new_id
+        create_fresh_session(client, base_url, &state, session_name, tool_params).await?
     };
 
     // When reconnecting to an existing session, inform the user what page is active
@@ -1382,6 +1312,103 @@ async fn get_or_create_navigation_session(
     }
 
     Ok((state, session_id, reused_existing_session))
+}
+
+/// Create a fresh Browser4 session from the current CLI state and print the
+/// "Session opened" message.
+///
+/// Shared by every branch of [get_or_create_navigation_session] that decides
+/// to stop reusing and start over (new session, `--fresh`, attached-session
+/// eviction).
+async fn create_fresh_session(
+    client: &Client,
+    base_url: &str,
+    state: &CliState,
+    session_name: Option<&str>,
+    tool_params: &Value,
+) -> Result<String, String> {
+    let capabilities = build_open_session_capabilities(tool_params);
+    let new_id = create_session(client, base_url, state, session_name, Some(capabilities)).await?;
+    cli_println!("{}", format_session_opened_message(session_name, &new_id));
+    Ok(new_id)
+}
+
+/// Resolve the session for an attached (CDP / extension) state that has no
+/// reusable backend entry.
+///
+/// Attached sessions must never fall through to `create_session` — that would
+/// launch a NEW browser instance instead of using the attached one.  Health is
+/// verified directly (`check_session_ready`): a healthy attached session is
+/// reused; an unhealthy one is auto-evicted (fresh Browser4 session) when
+/// `force_new_session` is set, or reported as a clear error otherwise.
+async fn resolve_attached_session_id(
+    client: &Client,
+    base_url: &str,
+    state: &CliState,
+    session_name: Option<&str>,
+    tool_params: &Value,
+    force_new_session: bool,
+) -> Result<String, String> {
+    let Some(attached_id) = state.session_id.as_deref() else {
+        return Err(
+            "Attached session state has no session ID — re-run `attach` to create one."
+                .to_string(),
+        );
+    };
+
+    let ready_params = json!({ "sessionId": attached_id });
+    let healthy = call_tool(client, base_url, "check_session_ready", ready_params)
+        .await
+        .ok()
+        .and_then(|r| serde_json::from_str::<Value>(&r).ok())
+        .map(|v| {
+            let ready = v.get("ready").and_then(|r| r.as_bool()).unwrap_or(false);
+            let h = v.get("healthy").and_then(|h| h.as_bool()).unwrap_or(false);
+            ready && h
+        })
+        .unwrap_or(false);
+
+    if healthy {
+        return Ok(attached_id.to_string());
+    }
+
+    if force_new_session {
+        // The attached session is stale, and the caller explicitly wants a
+        // new session (e.g., `open` command).  Auto-evict the stale attached
+        // session so the unnamed slot is freed for the new Browser4 session.
+        cli_println!(
+            "Attached session {} is no longer healthy — auto-evicting it to create a new Browser4 session.",
+            attached_id
+        );
+        cli_println!(
+            "Use 'attach --extension' or 'attach --cdp' to reconnect the attached browser later."
+        );
+        invalidate_session(state, base_url, session_name);
+        return create_fresh_session(client, base_url, state, session_name, tool_params).await;
+    }
+
+    let attach_cmd = if state.kind == crate::state::SessionKind::ExtensionAttached {
+        "attach --extension"
+    } else {
+        "attach --cdp"
+    };
+    let mut msg = format!(
+        "Attached session {} is no longer healthy. \
+         The browser or extension may have disconnected.\n\
+         Re-run `{}` to reconnect, or \
+         `close` / `close-all` to clear this session state.",
+        attached_id, attach_cmd
+    );
+    // Add chrome:// page hint for extension sessions
+    if state.kind == crate::state::SessionKind::ExtensionAttached {
+        msg.push_str(
+            "\n\nNote: Navigating to chrome:// internal pages \
+             (chrome://version, chrome://settings, etc.) may \
+             cause the extension connection to drop. After such \
+             navigation, re-attach with `attach --extension`.",
+        );
+    }
+    Err(msg)
 }
 
 // ---------------------------------------------------------------------------
@@ -1668,8 +1695,7 @@ async fn handle_attach(
         state.base_url = effective_base_url.clone();
         state.active_selector = None;
         state.last_mouse_position = None;
-        state.is_attached = true;
-        state.attach_type = Some("extension".to_string());
+        state.kind = crate::state::SessionKind::ExtensionAttached;
         state.browser_channel = channel.clone();
         state.created_at = Some(Utc::now().to_rfc3339());
         state.last_accessed_at = Some(Utc::now().to_rfc3339());
@@ -1833,8 +1859,7 @@ async fn handle_attach(
     state.base_url = effective_base_url.clone();
     state.active_selector = None;
     state.last_mouse_position = None;
-    state.is_attached = true;
-    state.attach_type = Some("cdp".to_string());
+    state.kind = crate::state::SessionKind::CdpAttached;
     state.cdp_endpoint = Some(cdp_endpoint.clone());
     state.created_at = Some(Utc::now().to_rfc3339());
     state.last_accessed_at = Some(Utc::now().to_rfc3339());
@@ -1940,16 +1965,39 @@ async fn handle_open(
                 }
                 post_command_snapshot(client, base_url, &session_id).await;
 
-                // Headed launches should show a visible window. If the browser
-                // process is alive but no window exists, surface a clear
-                // warning instead of letting the user think nothing happened.
+                // Headed launches should show a visible window. Diagnose the
+                // Browser4-managed browser state instead of guessing from any
+                // chrome window on the system: the user's own browser must not
+                // mask a missing headed window, and a headed session that was
+                // launched headless (display-mode regression) must be called out.
                 let headed = tool_params
                     .get("headed")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
                 if headed {
-                    let (found, has_window) = crate::daemon::browser_window_visibility();
-                    if found && !has_window {
+                    // The first window can appear a moment after navigation
+                    // settles — brief retries avoid false warnings on slow
+                    // cold starts.
+                    let mut state = crate::daemon::browser4_window_state();
+                    for _ in 0..5 {
+                        if !state.found_browser || state.headed_window_visible {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        state = crate::daemon::browser4_window_state();
+                    }
+
+                    if state.found_browser && !state.headed_browser {
+                        cli_println!(
+                            "⚠  Browser4 started the session in HEADLESS mode even though --headed was requested."
+                        );
+                        cli_println!(
+                            "   The browser is functional, but no window will appear. Close it with 'close'"
+                        );
+                        cli_println!(
+                            "   and retry 'open --headed' once; if this persists it is a display-mode bug."
+                        );
+                    } else if state.headed_browser && !state.headed_window_visible {
                         cli_println!(
                             "⚠  Browser4 started a headed browser process, but no visible window was detected."
                         );
@@ -1974,13 +2022,7 @@ async fn handle_open(
                 // The browser context was not ready yet (BrowserProtocol initialization race).
                 // Or the reused saved session no longer has a usable browser tab.
                 // Close the failed session, create a fresh one, and retry navigation.
-                let _ = call_tool(
-                    client,
-                    base_url,
-                    "close_session",
-                    json!({ "sessionId": session_id }),
-                )
-                .await;
+                warn_if_session_close_failed(client, base_url, &session_id).await;
                 invalidate_session(&state, base_url, session_name);
                 let capabilities = build_open_session_capabilities(tool_params);
                 let retry_id =
@@ -2078,13 +2120,7 @@ async fn handle_goto(
                 ));
             }
 
-            let _ = call_tool(
-                client,
-                base_url,
-                "close_session",
-                json!({ "sessionId": session_id }),
-            )
-            .await;
+            warn_if_session_close_failed(client, base_url, &session_id).await;
             invalidate_session(&state, base_url, session_name);
             let capabilities = build_open_session_capabilities(tool_params);
             let retry_id =
@@ -2396,6 +2432,30 @@ async fn verify_click_navigation(
     }
 }
 
+/// Best-effort close of an existing backend session.
+///
+/// Reports a warning when the backend cannot confirm the close, so the user
+/// knows the backend session (and its browser) may still be alive.  Such
+/// orphaned sessions are reaped by the backend after its idle timeout.
+async fn warn_if_session_close_failed(client: &Client, base_url: &str, session_id: &str) {
+    if let Err(err) = call_tool(
+        client,
+        base_url,
+        "close_session",
+        json!({ "sessionId": session_id }),
+    )
+    .await
+    {
+        eprintln!(
+            "⚠  Warning: the backend could not confirm closing session {}: {}",
+            session_id, err
+        );
+        eprintln!(
+            "   The session may still be running — retry `close` or use `close-all` to clean up."
+        );
+    }
+}
+
 async fn handle_close(
     client: &Client,
     base_url: &str,
@@ -2412,18 +2472,13 @@ async fn handle_close(
         return Ok(());
     };
     json_field("session_id", json!(&session_id));
-    let is_attached = state.is_attached;
-    // Ignore errors — session might already be closed
-    let _ = call_tool(
-        client,
-        base_url,
-        "close_session",
-        json!({ "sessionId": session_id }),
-    )
-    .await;
+    let is_attached = state.kind.is_attached();
+    // Ignore errors — session might already be closed (the warning is printed
+    // by warn_if_session_close_failed so the user is not left in the dark).
+    warn_if_session_close_failed(client, base_url, &session_id).await;
     clear_state(None, session_name);
     if is_attached {
-        if state.attach_type.as_deref() == Some("extension") {
+        if state.kind == crate::state::SessionKind::ExtensionAttached {
             cli_println!("Disconnected from Browser4 Chrome Extension. Your browser tabs and the extension remain active. Re-attach with `attach --extension`.");
         } else {
             cli_println!("Disconnected from attached browser. The browser remains running.");
@@ -3707,15 +3762,15 @@ fn log_shutdown_result(action: &str, result: &ShutdownResult) {
 
 /// Format a session's browser connection type for the `list` command table.
 fn connection_label(state: &CliState) -> String {
-    match state.attach_type.as_deref() {
-        Some("cdp") => {
+    match state.kind {
+        crate::state::SessionKind::CdpAttached => {
             if let Some(ref endpoint) = state.cdp_endpoint {
                 format!("CDP: {endpoint}")
             } else {
                 "CDP".to_string()
             }
         }
-        Some("extension") => {
+        crate::state::SessionKind::ExtensionAttached => {
             if let Some(ref channel) = state.browser_channel {
                 format!("Extension ({channel})")
             } else {
@@ -3961,6 +4016,10 @@ fn count_tracked_sessions() -> usize {
 struct BackendSessionRecord {
     session_id: String,
     status: Option<String>,
+    /// Real health as reported by the backend (`list_sessions` runs a health
+    /// check).  `None` when the backend does not report it (older backends or
+    /// string-array responses) — treated as healthy for backward compat.
+    healthy: Option<bool>,
     created_at: Option<i64>,
     last_accessed_at: Option<i64>,
 }
@@ -3974,7 +4033,9 @@ fn list_session_status(
             .iter()
             .find(|record| record.session_id == session_id)
             .map(|record| {
-                if session_status_is_active(record.status.as_deref()) {
+                if record.healthy.unwrap_or(true)
+                    && session_status_is_active(record.status.as_deref())
+                {
                     "Active"
                 } else {
                     "Stale"
@@ -4018,7 +4079,7 @@ async fn find_reusable_persisted_session_id(
         Err(error) if is_backend_unreachable_error(&error) => {
             // For attached sessions, don't invalidate on backend unreachable —
             // the attached browser/extension may still be alive.
-            if !state.is_attached {
+            if !state.kind.is_attached() {
                 invalidate_session(state, base_url, session_name);
             }
             return Ok(None);
@@ -4033,7 +4094,7 @@ async fn find_reusable_persisted_session_id(
     // For attached sessions (CDP or extension), the list_sessions status may
     // not reflect actual health — verify directly via check_session_ready
     // before giving up.
-    if state.is_attached {
+    if state.kind.is_attached() {
         let ready_params = json!({ "sessionId": &session_id });
         if let Ok(ready_result) =
             call_tool(client, base_url, "check_session_ready", ready_params).await
@@ -4078,6 +4139,7 @@ fn parse_backend_session_records(result: &str) -> Vec<BackendSessionRecord> {
                             .map(|session_id| BackendSessionRecord {
                                 session_id: session_id.to_string(),
                                 status: Some("active".to_string()),
+                                healthy: None,
                                 created_at: None,
                                 last_accessed_at: None,
                             })
@@ -4092,6 +4154,9 @@ fn parse_backend_session_records(result: &str) -> Vec<BackendSessionRecord> {
                                             .get("status")
                                             .and_then(|value| value.as_str())
                                             .map(str::to_string),
+                                        healthy: entry
+                                            .get("healthy")
+                                            .and_then(|value| value.as_bool()),
                                         created_at: entry.get("createdAt").and_then(|v| v.as_i64()),
                                         last_accessed_at: entry
                                             .get("lastAccessedAt")
@@ -4113,7 +4178,9 @@ fn session_status_is_active(status: Option<&str>) -> bool {
 
 fn session_is_active_in_records(records: &[BackendSessionRecord], session_id: &str) -> bool {
     records.iter().any(|record| {
-        record.session_id == session_id && session_status_is_active(record.status.as_deref())
+        record.session_id == session_id
+            && record.healthy.unwrap_or(true)
+            && session_status_is_active(record.status.as_deref())
     })
 }
 
@@ -21593,12 +21660,14 @@ mod tests {
             BackendSessionRecord {
                 session_id: "session-1".to_string(),
                 status: Some("active".to_string()),
+                healthy: None,
                 created_at: None,
                 last_accessed_at: None,
             },
             BackendSessionRecord {
                 session_id: "session-2".to_string(),
                 status: Some("stopped".to_string()),
+                healthy: None,
                 created_at: None,
                 last_accessed_at: None,
             },
@@ -21607,6 +21676,52 @@ mod tests {
         assert_eq!(list_session_status(Some(&records), "session-1"), "Active");
         assert_eq!(list_session_status(Some(&records), "session-2"), "Stale");
         assert_eq!(list_session_status(Some(&records), "missing"), "Stale");
+    }
+
+    #[test]
+    fn list_session_status_marks_unhealthy_backend_sessions_stale() {
+        // The backend now reports real health; an "active" session whose
+        // browser died must be shown as Stale so `open` refreshes it.
+        let records = vec![
+            BackendSessionRecord {
+                session_id: "session-1".to_string(),
+                status: Some("active".to_string()),
+                healthy: Some(false),
+                created_at: None,
+                last_accessed_at: None,
+            },
+            BackendSessionRecord {
+                session_id: "session-2".to_string(),
+                status: Some("active".to_string()),
+                healthy: Some(true),
+                created_at: None,
+                last_accessed_at: None,
+            },
+        ];
+
+        assert_eq!(list_session_status(Some(&records), "session-1"), "Stale");
+        assert_eq!(list_session_status(Some(&records), "session-2"), "Active");
+        assert_eq!(
+            list_session_next_open_action(Some(&records), "session-1"),
+            "Refresh"
+        );
+        assert_eq!(
+            list_session_next_open_action(Some(&records), "session-2"),
+            "Reuse"
+        );
+        assert!(!session_is_active_in_records(&records, "session-1"));
+        assert!(session_is_active_in_records(&records, "session-2"));
+    }
+
+    #[test]
+    fn session_is_active_treats_missing_healthy_field_as_healthy() {
+        // Backward compat: backends without the `healthy` field (or plain
+        // string-array listings) must keep the old status-based behavior.
+        let records = r#"[{"sessionId":"session-1","status":"active"}]"#;
+        assert!(session_is_active(records, "session-1"));
+
+        let records = r#"["session-1"]"#;
+        assert!(session_is_active(records, "session-1"));
     }
 
     #[test]
@@ -21620,12 +21735,14 @@ mod tests {
             BackendSessionRecord {
                 session_id: "session-1".to_string(),
                 status: Some("active".to_string()),
+                healthy: None,
                 created_at: None,
                 last_accessed_at: None,
             },
             BackendSessionRecord {
                 session_id: "session-2".to_string(),
                 status: Some("stopped".to_string()),
+                healthy: None,
                 created_at: None,
                 last_accessed_at: None,
             },
@@ -21838,6 +21955,7 @@ mod tests {
         let records = vec![BackendSessionRecord {
             session_id: "s1".to_string(),
             status: Some("active".to_string()),
+            healthy: None,
             created_at: None,
             last_accessed_at: None,
         }];
@@ -21849,6 +21967,7 @@ mod tests {
         let records = vec![BackendSessionRecord {
             session_id: "s1".to_string(),
             status: Some("stopped".to_string()),
+            healthy: None,
             created_at: None,
             last_accessed_at: None,
         }];
@@ -21860,6 +21979,7 @@ mod tests {
         let records = vec![BackendSessionRecord {
             session_id: "s1".to_string(),
             status: Some("active".to_string()),
+            healthy: None,
             created_at: None,
             last_accessed_at: None,
         }];
@@ -24896,15 +25016,16 @@ mod tests {
     // =========================================================================
 
     /// Simulate what create_session does to the persisted state: clone the
-    /// current state, set a new session ID, and write it back.  Attachment
-    /// flags must be cleared because the new session is Browser4-managed,
-    /// not extension/CDP-attached.
+    /// current state, set a new session ID, and write it back.  The kind must
+    /// be reset to Browser4Launched because the new session is
+    /// Browser4-managed, not extension/CDP-attached.
     #[test]
     fn create_session_logic_clears_attachment_flags() {
         let tmp = test_temp_dir();
         let dir = tmp.path();
 
-        // Build a state that looks like an extension-attached session.
+        // Build a state that looks like an extension-attached session
+        // (legacy fields — exactly what an old state file would contain).
         let old_state = CliState {
             session_id: Some("7fd8ffae-519b-4713-adfa-5b296a3249b9".to_string()),
             base_url: "http://localhost:8182".to_string(),
@@ -24921,17 +25042,22 @@ mod tests {
         new_state.base_url = "http://localhost:8182".to_string();
         new_state.active_selector = None;
         new_state.last_mouse_position = None;
-        new_state.is_attached = false;
-        new_state.attach_type = None;
+        new_state.kind = crate::state::SessionKind::Browser4Launched;
         new_state.cdp_endpoint = None;
         new_state.browser_channel = None;
         new_state.created_at = Some("2026-07-25T00:00:00Z".to_string());
         new_state.last_accessed_at = Some("2026-07-25T00:00:00Z".to_string());
         write_state(&new_state, Some(dir), None).unwrap();
 
-        // Read back and verify.
+        // Read back and verify — kind is the source of truth; the legacy
+        // fields are synced from it on write.
         let read = read_state(Some(dir), None);
         assert_eq!(read.session_id.as_deref(), Some("new-browser4-session-id"));
+        assert_eq!(
+            read.kind,
+            crate::state::SessionKind::Browser4Launched,
+            "kind must be Browser4Launched for a new Browser4-managed session"
+        );
         assert!(
             !read.is_attached,
             "is_attached must be false for a new Browser4-managed session"
@@ -24944,8 +25070,8 @@ mod tests {
         assert_eq!(read.browser_channel, None);
     }
 
-    /// CDP-attached sessions must also have their attachment flags cleared
-    /// when a new Browser4-managed session replaces them.
+    /// CDP-attached sessions must also have their kind reset when a new
+    /// Browser4-managed session replaces them.
     #[test]
     fn create_session_logic_clears_cdp_attachment_flags() {
         let tmp = test_temp_dir();
@@ -24963,20 +25089,20 @@ mod tests {
 
         let mut new_state = old_state.clone();
         new_state.session_id = Some("new-browser4-session-id".to_string());
-        new_state.is_attached = false;
-        new_state.attach_type = None;
+        new_state.kind = crate::state::SessionKind::Browser4Launched;
         new_state.cdp_endpoint = None;
         new_state.browser_channel = None;
         write_state(&new_state, Some(dir), None).unwrap();
 
         let read = read_state(Some(dir), None);
+        assert_eq!(read.kind, crate::state::SessionKind::Browser4Launched);
         assert!(!read.is_attached);
         assert_eq!(read.attach_type, None);
         assert_eq!(read.cdp_endpoint, None);
     }
 
-    /// invalidate_session (as used in with_session recovery) keeps attachment
-    /// flags so the caller can decide whether to reconnect or create a new
+    /// invalidate_session (as used in with_session recovery) keeps the session
+    /// kind so the caller can decide whether to reconnect or create a new
     /// session.  This test guards the distinction between invalidation and
     /// creation.
     #[test]
@@ -24996,8 +25122,8 @@ mod tests {
 
         write_state(&old_state, Some(dir), None).unwrap();
 
-        // Simulate invalidate_session: clear session_id but keep attachment
-        // flags so the caller can reconnect.
+        // Simulate invalidate_session: clear session_id but keep the kind so
+        // the caller can reconnect.
         let mut invalidated = old_state.clone();
         invalidated.session_id = None;
         invalidated.active_selector = None;
@@ -25008,6 +25134,11 @@ mod tests {
         assert!(
             read.session_id.is_none(),
             "invalidate_session clears session_id"
+        );
+        assert_eq!(
+            read.kind,
+            crate::state::SessionKind::ExtensionAttached,
+            "invalidate_session preserves kind for potential reconnect"
         );
         assert!(read.is_attached, "invalidate_session preserves is_attached");
         assert_eq!(

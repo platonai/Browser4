@@ -257,12 +257,27 @@ class PluginManager(
             clazz = clazz.superclass ?: return null
         }
         val location = clazz.protectionDomain?.codeSource?.location ?: return null
-        val jarPath = runCatching { Path.of(location.toURI()) }.getOrNull() ?: return null
-        if (!jarPath.fileName.toString().endsWith(".jar")) {
-            return null
-        }
-        return runCatching {
-            JarFile(jarPath.toFile()).use { PluginManifest.fromJar(it) }
-        }.getOrNull()
+        return manifestOfLocation(location)
     }
+}
+
+/**
+ * Resolves a [PluginManifest] from a class code-source [location], or null
+ * when the location does not point at a readable plugin JAR.
+ *
+ * Code sources are not always JARs: in tests they are `target/classes`
+ * directories, inside a Spring Boot fat jar they are nested-jar entries
+ * (BOOT-INF/...), and some class loaders expose root/empty locations. Any
+ * of those must yield null (the bean is core, not a plugin) instead of
+ * crashing startup — `Path.getFileName()` is null for root/empty paths.
+ */
+internal fun manifestOfLocation(location: java.net.URL): PluginManifest? {
+    val jarPath = runCatching { Path.of(location.toURI()) }.getOrNull() ?: return null
+    val fileName = jarPath.fileName?.toString() ?: return null
+    if (!fileName.endsWith(".jar")) {
+        return null
+    }
+    return runCatching {
+        JarFile(jarPath.toFile()).use { PluginManifest.fromJar(it) }
+    }.getOrNull()
 }

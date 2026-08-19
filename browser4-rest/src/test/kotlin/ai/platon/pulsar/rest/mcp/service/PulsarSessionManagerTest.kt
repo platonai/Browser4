@@ -7,11 +7,14 @@ import ai.platon.pulsar.agentic.context.AgenticContexts
 import ai.platon.pulsar.agentic.context.GenericAgenticContext
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.rest.session.PulsarSessionManager
+import ai.platon.pulsar.rest.session.SessionKind
+import ai.platon.pulsar.rest.session.SessionStatus
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.api.Browser
 import ai.platon.pulsar.api.WebDriver
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.chrome.protocol.transport.ExtensionMessageSender
+import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.*
@@ -23,6 +26,8 @@ import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
 import org.mockito.MockitoAnnotations
 import org.springframework.context.support.GenericApplicationContext
+import java.net.InetSocketAddress
+import java.time.Duration
 
 class PulsarSessionManagerTest {
     @Mock
@@ -151,8 +156,10 @@ class PulsarSessionManagerTest {
     }
 
     @Test
-    fun getSessionCreatesEnsureDefaultSessionOnDemand() {
-        val session = sessionManager.getSession("default")
+    fun getOrRecoverSessionCreatesEnsureDefaultSessionOnDemand() {
+        // The default session is created on demand by the recovery path only;
+        // the pure-lookup getSession must NOT create it (see getSessionIsPureLookup).
+        val session = sessionManager.getOrRecoverSession("default")
 
         assertNotNull(session)
         // DEFAULT is resolved to a stable UUID; it is no longer the literal "DEFAULT"
@@ -161,6 +168,29 @@ class PulsarSessionManagerTest {
         assertEquals(expectedId, session.capabilities?.get("sessionId"))
         // Default sessions get SEQUENTIAL profile mode by default
         assertNotNull(session.capabilities?.get("profileMode"))
+    }
+
+    @Test
+    fun getSessionIsPureLookupWithoutCreationOrRecovery() {
+        // getSession must be side-effect free: no on-demand default creation...
+        assertNull(sessionManager.getSession("default"), "getSession must not create the default session")
+
+        // ...and no health-check recreation.
+        val browser = Mockito.mock(Browser::class.java)
+        Mockito.`when`(browser.healthy()).thenReturn(CheckState(0), CheckState(-1))
+        val initialSession = mockAgenticSession(isActive = true, browser = browser)
+        val replacementSession = mockAgenticSession(isActive = true)
+        Mockito.doReturn(initialSession, replacementSession)
+            .`when`(agenticContext)
+            .createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
+
+        val created = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-pure"))
+        val fetched = sessionManager.getSession("team-pure")
+
+        assertSame(created, fetched, "Pure lookup returns the cached session")
+        verify(agenticContext, times(1)).createSession(
+            Mockito.any(PulsarSettings::class.java) ?: PulsarSettings()
+        )
     }
 
     @Test
@@ -178,17 +208,17 @@ class PulsarSessionManagerTest {
         assertNotEquals("team-c", firstSession.sessionId, "Named session should use UUID, not raw name")
         assertEquals(firstSession.sessionId, firstSession.capabilities?.get("sessionId"))
         assertEquals("SEQUENTIAL", firstSession.capabilities?.get("profileMode"))
-        assertEquals("active", firstSession.status)
+        assertEquals(SessionStatus.ACTIVE, firstSession.status)
         assertEquals(firstSession.sessionId, secondSession.sessionId) // same UUID for same display name
         assertEquals("SEQUENTIAL", secondSession.capabilities?.get("profileMode"))
-        assertEquals("active", secondSession.status)
+        assertEquals(SessionStatus.ACTIVE, secondSession.status)
         assertSame(firstSession, secondSession)
         assertSame(secondSession, sessionManager.getSession("team-c"))
         verify(agenticContext, times(2)).createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
     }
 
     @Test
-    fun getSessionRecreatesNamedSessionWhenCachedBrowserBecomesUnhealthy() {
+    fun getOrRecoverSessionRecreatesNamedSessionWhenCachedBrowserBecomesUnhealthy() {
         val browser = Mockito.mock(Browser::class.java)
         Mockito.`when`(browser.healthy()).thenReturn(CheckState(0), CheckState(-1))
 
@@ -199,14 +229,14 @@ class PulsarSessionManagerTest {
             .createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
 
         val firstSession = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-d"))
-        val fetchedSession = sessionManager.getSession("team-d")
+        val fetchedSession = sessionManager.getOrRecoverSession("team-d")
 
         requireNotNull(fetchedSession)
         assertNotSame(firstSession, fetchedSession)
         // Named sessions get UUID-based IDs
         assertNotEquals("team-d", fetchedSession.sessionId, "Named session should use UUID, not raw name")
         assertEquals(fetchedSession.sessionId, fetchedSession.capabilities?.get("sessionId"))
-        assertEquals("active", fetchedSession.status)
+        assertEquals(SessionStatus.ACTIVE, fetchedSession.status)
         verify(agenticContext, times(2)).createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
     }
 
@@ -228,7 +258,7 @@ class PulsarSessionManagerTest {
         // Named sessions get UUID-based IDs
         assertNotEquals("team-e", session.sessionId, "Named session should use UUID, not raw name")
         assertEquals(session.sessionId, session.capabilities?.get("sessionId"))
-        assertEquals("stopped", session.status)
+        assertEquals(SessionStatus.STOPPED, session.status)
         assertSame(session, sessionManager.getAllSessions().single())
         verify(agenticContext, times(2)).createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
     }
@@ -242,7 +272,7 @@ class PulsarSessionManagerTest {
 
         val session = sessionManager.getSession(sessionId)
         assertNotNull(session, "Extension-attached session should exist")
-        assertEquals("stopped", session!!.status,
+        assertEquals(SessionStatus.STOPPED, session!!.status,
             "Extension session without active WebSocket should be inactive, not recreated")
 
         // Verify only one agenticSession was created (the initial one — no recreation)
@@ -266,7 +296,7 @@ class PulsarSessionManagerTest {
         // Verify session is active while extension is connected
         val activeSession = sessionManager.getSession(sessionId)
         assertNotNull(activeSession)
-        assertEquals("active", activeSession!!.status,
+        assertEquals(SessionStatus.ACTIVE, activeSession!!.status,
             "Session should be active while extension WebSocket is connected")
 
         // Extension disconnects
@@ -275,7 +305,7 @@ class PulsarSessionManagerTest {
         // Verify session is inactive (not recreated)
         val inactiveSession = sessionManager.getSession(sessionId)
         assertNotNull(inactiveSession, "Extension-attached session should still exist after disconnect")
-        assertEquals("stopped", inactiveSession!!.status,
+        assertEquals(SessionStatus.STOPPED, inactiveSession!!.status,
             "Disconnected extension session should be inactive, not recreated as Browser4-CDP")
 
         // Verify still only one agenticSession (no recreation)
@@ -340,13 +370,224 @@ class PulsarSessionManagerTest {
             .createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
 
         val firstSession = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-recreate"))
-        val fetchedSession = sessionManager.getSession("team-recreate")
+        val fetchedSession = sessionManager.getOrRecoverSession("team-recreate")
 
         requireNotNull(fetchedSession)
         assertNotSame(firstSession, fetchedSession,
             "Regular (non-extension) unhealthy session should be recreated")
-        assertEquals("active", fetchedSession.status)
+        assertEquals(SessionStatus.ACTIVE, fetchedSession.status)
         verify(agenticContext, times(2)).createSession(
+            Mockito.any(PulsarSettings::class.java) ?: PulsarSettings()
+        )
+    }
+
+    @Test
+    fun deleteSessionByDisplayNameResolvesToUuid() {
+        val session = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-delete-by-name"))
+
+        // Deleting by display name must resolve to the UUID and actually
+        // remove the session — closing by name must not silently "fail".
+        assertTrue(sessionManager.deleteSession("team-delete-by-name"))
+        assertNull(sessionManager.getSession("team-delete-by-name"))
+        assertNull(sessionManager.getSession(session.sessionId))
+    }
+
+    @Test
+    fun reapIdleSessionsReapsOnlyIdleNonDefaultSessions() {
+        // A manager with a short idle timeout so the reaper logic is
+        // testable without waiting hours.
+        val manager = PulsarSessionManager(agenticContext, Duration.ofMillis(50))
+
+        // The default session is never reaped.
+        val defaultSession = manager.getOrCreateSession(null)
+        // The shared swarm session is never reaped.
+        val swarmSession = manager.ensureSwarmSession()
+        // Named session A: created and then left idle.
+        val idleSession = manager.getOrCreateSession(mapOf("sessionId" to "team-idle"))
+        // Named session B: created now, accessed again right before the sweep.
+        val freshSession = manager.getOrCreateSession(mapOf("sessionId" to "team-fresh"))
+
+        Thread.sleep(120)
+
+        // Touch the fresh session after the idle window has elapsed.
+        manager.getSession("team-fresh")
+
+        val reaped = manager.reapIdleSessions()
+
+        assertEquals(1, reaped, "Only the idle named session should be reaped")
+        assertNotNull(manager.getSession(defaultSession.sessionId), "Default session must never be reaped")
+        assertNotNull(manager.getSession(swarmSession.sessionId), "Swarm session must never be reaped")
+        assertNull(manager.getSession(idleSession.sessionId), "Idle named session should be reaped")
+        assertNotNull(manager.getSession(freshSession.sessionId), "Recently accessed session should be kept")
+    }
+
+    @Test
+    fun reapIdleSessionsKeepsAttachedSessions() {
+        // Attached (CDP / extension) sessions reference external browsers —
+        // the idle reaper must never tear them down implicitly.
+        val info = sessionManager.createExtensionAttachedSession(channel = "chrome")
+
+        Thread.sleep(120)
+
+        assertEquals(0, sessionManager.reapIdleSessions())
+        assertNotNull(sessionManager.getSession(info.sessionId),
+            "Extension-attached session must not be reaped")
+    }
+
+    @Test
+    fun displayNameRegistryPersistsAcrossManagerRestarts() {
+        val registryFile = java.nio.file.Files.createTempFile("session-registry", ".json")
+        try {
+            val manager1 = PulsarSessionManager(agenticContext, registryFile = registryFile)
+            val session = manager1.getOrCreateSession(mapOf("sessionId" to "team-persist"))
+
+            // A new manager (simulating a backend restart) restores the mapping.
+            val manager2 = PulsarSessionManager(agenticContext, registryFile = registryFile)
+            val restored = manager2.getOrCreateSession(mapOf("sessionId" to "team-persist"))
+
+            assertEquals(
+                session.sessionId, restored.sessionId,
+                "Display name must resolve to the same UUID after a restart"
+            )
+        } finally {
+            java.nio.file.Files.deleteIfExists(registryFile)
+        }
+    }
+
+    @Test
+    fun attachedSessionIsMarkedCdpAttachedAndNotRecreated() {
+        // Regression guard for the attach flow: `attach --cdp` sessions must be
+        // marked CDP_ATTACHED (non-owned) so resolveHealthySession never
+        // silently recreates them with a fresh Browser4-launched Chrome.
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/json/version") { ex ->
+            val body = """{"Browser":"Chrome/Test","webSocketDebuggerUrl":"ws://127.0.0.1:0/devtools/browser/x"}"""
+            ex.responseHeaders.add("Content-Type", "application/json")
+            ex.sendResponseHeaders(200, body.toByteArray().size.toLong())
+            ex.responseBody.use { it.write(body.toByteArray()) }
+        }
+        server.createContext("/json") { ex ->
+            val body = """[{"id":"t1","type":"page","url":"https://example.com"}]"""
+            ex.responseHeaders.add("Content-Type", "application/json")
+            ex.sendResponseHeaders(200, body.toByteArray().size.toLong())
+            ex.responseBody.use { it.write(body.toByteArray()) }
+        }
+        server.start()
+        try {
+            val port = server.address.port
+            val info = sessionManager.createAttachedSession(cdpEndpoint = "http://127.0.0.1:$port")
+
+            val session = sessionManager.getSession(info.sessionId)
+            requireNotNull(session)
+            assertEquals(SessionKind.CDP_ATTACHED, session.kind,
+                "Attach-created sessions must be CDP_ATTACHED (non-owned)")
+            assertFalse(session.ownsBrowser,
+                "CDP-attached sessions do not own their browser")
+
+            // Re-fetching must return the same session — never a recreation.
+            val fetched = sessionManager.getOrCreateSession(info.sessionId)
+            assertSame(session, fetched, "Attached session must never be recreated")
+            verify(agenticContext, times(1)).createSession(
+                Mockito.any(PulsarSettings::class.java) ?: PulsarSettings()
+            )
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun displayNameRegistryDropsMappingOnDelete() {
+        val registryFile = java.nio.file.Files.createTempFile("session-registry", ".json")
+        try {
+            val manager = PulsarSessionManager(agenticContext, registryFile = registryFile)
+            val session = manager.getOrCreateSession(mapOf("sessionId" to "team-persist-delete"))
+            manager.deleteSession(session.sessionId)
+
+            // After deletion, a restarted manager must resolve the display
+            // name to a NEW UUID (the old mapping was removed).
+            val manager2 = PulsarSessionManager(agenticContext, registryFile = registryFile)
+            val reopened = manager2.getOrCreateSession(mapOf("sessionId" to "team-persist-delete"))
+
+            assertNotEquals(
+                session.sessionId, reopened.sessionId,
+                "Deleted session's display name must get a fresh UUID"
+            )
+        } finally {
+            java.nio.file.Files.deleteIfExists(registryFile)
+        }
+    }
+
+    @Test
+    fun sessionWithLostDriverLinkIsRecoveredViaInPlaceDriverReconnect() {
+        // pulsar 4.11.5+: the driver can reconnect to the same tab in place.
+        // Recovery must prefer that over creating a new driver on the browser.
+        val browser = Mockito.mock(Browser::class.java)
+        Mockito.`when`(browser.healthy()).thenReturn(CheckState(0, "Browser is healthy"))
+
+        val staleDriver = Mockito.mock(WebDriver::class.java)
+        runBlocking {
+            Mockito.`when`(staleDriver.healthy()).thenReturn(
+                CheckState(503, "WebDriver is not open - the connection to the backend tab is lost")
+            )
+            Mockito.`when`(staleDriver.reconnect()).thenReturn(true)
+        }
+
+        val agenticSession = mockAgenticSession(isActive = true, browser = browser, driver = staleDriver)
+        Mockito.doReturn(agenticSession)
+            .`when`(agenticContext)
+            .createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
+
+        val session = sessionManager.getOrCreateSession(mapOf("sessionId" to "reconnect-driver-inplace"))
+
+        assertSame(agenticSession, session.agenticSession,
+            "Session must not be recreated when the driver can reconnect in place")
+        assertEquals(SessionStatus.ACTIVE, session.status)
+        // The same driver/tab was reconnected — no new driver must be created.
+        Mockito.verify(browser, Mockito.never()).newDriver(Mockito.anyString())
+        verify(agenticContext, times(1)).createSession(
+            Mockito.any(PulsarSettings::class.java) ?: PulsarSettings()
+        )
+    }
+
+    @Test
+    fun sessionWithLostDriverLinkIsRecoveredWithoutRecreatingBrowser() {
+        // Regression guard for issue #571: when the browser process is healthy
+        // but the driver link (backend tab connection) is lost — e.g. after
+        // machine sleep killed the CDP websocket — the session must rebind a
+        // fresh driver to the SAME browser (preserving the Chrome profile,
+        // cookies and manual logins) instead of recreating the session with a
+        // fresh anonymous profile.
+        val browser = Mockito.mock(Browser::class.java)
+        Mockito.`when`(browser.healthy()).thenReturn(CheckState(0, "Browser is healthy"))
+
+        val replacementDriver = Mockito.mock(WebDriver::class.java)
+        runBlocking {
+            Mockito.`when`(replacementDriver.healthy()).thenReturn(CheckState(0, "WebDriver is healthy"))
+        }
+        Mockito.`when`(browser.newDriver(Mockito.anyString())).thenReturn(replacementDriver)
+
+        val staleDriver = Mockito.mock(WebDriver::class.java)
+        runBlocking {
+            Mockito.`when`(staleDriver.healthy()).thenReturn(
+                CheckState(503, "WebDriver is not open - the connection to the backend tab is lost")
+            )
+            // In-place reconnect unsupported (returns false) — recovery must
+            // fall back to binding a fresh driver on the same browser.
+            Mockito.`when`(staleDriver.reconnect()).thenReturn(false)
+        }
+
+        val agenticSession = mockAgenticSession(isActive = true, browser = browser, driver = staleDriver)
+        Mockito.doReturn(agenticSession)
+            .`when`(agenticContext)
+            .createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
+
+        val session = sessionManager.getOrCreateSession(mapOf("sessionId" to "recover-driver-link"))
+
+        assertSame(agenticSession, session.agenticSession,
+            "Session must not be recreated when the driver link can be recovered on the same browser")
+        assertEquals(SessionStatus.ACTIVE, session.status)
+        verify(browser).newDriver(Mockito.anyString())
+        verify(agenticContext, times(1)).createSession(
             Mockito.any(PulsarSettings::class.java) ?: PulsarSettings()
         )
     }

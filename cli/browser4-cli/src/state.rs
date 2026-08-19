@@ -407,7 +407,27 @@ fn write_state_to_dir(
     state.attach_type = state.kind.attach_type_str().map(|s| s.to_string());
 
     let json = serde_json::to_string_pretty(&state).expect("state serialization should not fail");
-    fs::write(path, json)
+    atomic_write(&path, json.as_bytes())
+}
+
+/// Write bytes to `path` atomically: write to a unique temp file in the same
+/// directory, then rename over the target.
+///
+/// Readers never observe a partially written state file, and a crash cannot
+/// corrupt the previous state.  The temp file is unique per process so
+/// concurrent CLI invocations do not stomp on each other's temp files (the
+/// last rename wins, but the file itself stays intact).
+fn atomic_write(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let tmp_path = PathBuf::from(format!("{}.{}.tmp", path.display(), std::process::id()));
+    if let Err(e) = fs::write(&tmp_path, contents) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+    if let Err(e) = fs::rename(&tmp_path, path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Clear all persisted CLI state (called on `close`).
@@ -546,7 +566,7 @@ fn write_loop_state_to_dir(
     }
     let json =
         serde_json::to_string_pretty(state).expect("loop state serialization should not fail");
-    fs::write(path, json)
+    atomic_write(&path, json.as_bytes())
 }
 
 /// Return the full path to the loop state file (for display).
@@ -984,7 +1004,7 @@ fn write_async_tasks_to_path(list: &AsyncTaskList, path: &Path) -> std::io::Resu
         std::fs::create_dir_all(parent)?;
     }
     let content = serde_json::to_string_pretty(list)?;
-    std::fs::write(path, content)
+    atomic_write(path, content.as_bytes())
 }
 
 /// Add a task to the tracked list and persist.

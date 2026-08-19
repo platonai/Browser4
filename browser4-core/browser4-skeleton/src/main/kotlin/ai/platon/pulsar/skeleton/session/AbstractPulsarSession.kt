@@ -228,6 +228,20 @@ abstract class AbstractPulsarSession(
 
     override fun createBoundDriver(): WebDriver {
         synchronized(context) {
+            // A browser may already be bound to this session — e.g. after
+            // `attach --cdp` bound an external browser, or after a driver-link
+            // recovery rebound a driver. Create the driver on THAT browser
+            // (same Chrome instance, same profile — cookies and manual logins
+            // are preserved) instead of launching a brand-new browser, which
+            // would silently start a fresh anonymous profile.
+            val existingBrowser = boundBrowser
+            if (existingBrowser != null) {
+                val driver = existingBrowser.newDriver() as PulsarWebDriver
+                val b4Driver = Browser4WebDriver.from(driver)
+                bindDriver(b4Driver)
+                return b4Driver
+            }
+
             val mode = BrowserProfileMode.fromString(sessionConfig[BROWSER_CONTEXT_MODE])
             val browser = if (sessionConfig[BROWSER_DISPLAY_MODE] != null) {
                 // The session explicitly requested a display mode (e.g.

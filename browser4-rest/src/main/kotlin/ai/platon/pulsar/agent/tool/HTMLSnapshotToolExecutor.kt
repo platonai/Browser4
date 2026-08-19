@@ -44,7 +44,7 @@ class HTMLSnapshotToolExecutor(
     private fun resolveSession(args: Map<String, Any?>, receiver: Any): ManagedSession {
         if (receiver is ManagedSession) return receiver
         val sessionId = requireSessionId(args)
-        return sessionManager.getSession(sessionId)
+        return sessionManager.getOrRecoverSession(sessionId)
             ?: throw IllegalArgumentException("Session not found: $sessionId")
     }
 

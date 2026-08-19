@@ -3,6 +3,7 @@ package ai.platon.pulsar.agentic.tools.advanced.agent
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.detail.DefaultServerSideAgentEventHandlers
+import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.getLogger
@@ -10,6 +11,8 @@ import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import com.github.benmanes.caffeine.cache.Cache
 import com.github.benmanes.caffeine.cache.Caffeine
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.Closeable
 import java.nio.file.Path
 import java.time.Instant
@@ -32,6 +35,14 @@ open class StatefulAgentRunner(
         .expireAfterWrite(2, TimeUnit.HOURS)
         .recordStats()
         .build()
+
+    /**
+     * Serializes agent task execution for this session. The companion agent and its
+     * AgentStateManager are shared session resources — concurrent tasks would interleave
+     * their contexts and histories, so only one run may be active at a time. Tasks
+     * submitted while another is running are queued here.
+     */
+    private val runMutex = Mutex()
 
     internal val persistence = JsonlPersistence(
         file = agentPersistencePath(),
@@ -95,8 +106,15 @@ open class StatefulAgentRunner(
         logger.info("Compacted {} expired agent tasks (TTL: {} min)", stale.size, taskTtlMinutes)
 
         // Rewrite the persistence file so compacted tasks don't revive on restart.
+        // Serialize detached snapshots: an in-progress status may hold the agent's live
+        // history reference, which can grow/trim concurrently with this rewrite.
         persistence.clear()
-        statusCache.asMap().values.forEach { persistence.append(it) }
+        statusCache.asMap().values.forEach { status ->
+            val snapshot = status.copy().apply {
+                agentHistory = status.agentHistory?.let { AgentHistory(it.states.toMutableList()) }
+            }
+            persistence.append(snapshot)
+        }
     }
 
     fun create(): AgentTaskStatus {
@@ -133,6 +151,9 @@ open class StatefulAgentRunner(
      * The status is updated with the agent's state history reference, allowing callers
      * to access the latest agent state via [AgentTaskStatus.agentState] during execution.
      *
+     * Execution is serialized per session through [runMutex] so concurrent tasks cannot
+     * interleave the shared companion agent's execution contexts and history.
+     *
      * This method creates and wires up ServerSideAgentEventHandlers for event collection,
      * following the pattern from StatefulPageVisitor#doVisit. A [supervisorScope] ensures
      * the event collector is structured within this call — it is launched as a child,
@@ -140,6 +161,12 @@ open class StatefulAgentRunner(
      * Multiple commands can run concurrently without cross-talk between SSE streams.
      */
     suspend fun execute(plainCommand: String, status: AgentTaskStatus) {
+        runMutex.withLock {
+            executeSerialized(plainCommand, status)
+        }
+    }
+
+    private suspend fun executeSerialized(plainCommand: String, status: AgentTaskStatus) {
         try {
             status.refresh(ResourceStatus.SC_PROCESSING)
 
@@ -211,7 +238,16 @@ open class StatefulAgentRunner(
         val savedUrl = runCatching { session.boundDriver?.currentUrl() }.getOrNull()
         logger.debug("Agent task {}: saved user page URL before agent run: {}", status.id, savedUrl)
 
-        val history = agent.run(plainCommand)
+        val history = try {
+            agent.run(plainCommand)
+        } finally {
+            // Scope the status history to THIS task's execution session and detach it
+            // from the agent's live (accumulating/trimming) history list. Without this,
+            // a status could expose other tasks' states, and later history trims could
+            // retroactively shrink a completed task's history.
+            status.agentHistory = agent.stateHistory.snapshotFor(agent.lastRunSessionId)
+        }
+        status.agentHistory = history
 
         // Restore the user's page if the agent navigated away from it
         try {

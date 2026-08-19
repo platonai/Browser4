@@ -12,8 +12,20 @@ data class CommandAgentState(
     var instruction: String? = null,
     var description: String? = null,
     var event: String? = null,
+    // AI: the tool domain of the action executed in this step (e.g. "tab", "fs", "agent")
+    var domain: String? = null,
+    // AI: the tool method of the action executed in this step (e.g. "click", "type")
+    var method: String? = null,
+    // AI: the model's thinking for this step
+    var thinking: String? = null,
+    // AI: the next goal to achieve
+    var nextGoal: String? = null,
+    // AI: evaluation of the previous goal: [success, failed, partial success]
+    var evaluationPreviousGoal: String? = null,
     var summary: String? = null,
     var isComplete: Boolean? = null,
+    // When the step state was created
+    var timestamp: String? = null,
 )
 
 data class CommandAgentHistory(
@@ -64,7 +76,13 @@ internal fun AgentState.toCommandAgentState(): CommandAgentState {
         instruction = instruction,
         description = description,
         event = event,
+        domain = domain,
+        method = method,
+        thinking = thinking,
+        nextGoal = nextGoal,
+        evaluationPreviousGoal = evaluationPreviousGoal,
         summary = summary,
         isComplete = isComplete,
+        timestamp = timestamp.toString(),
     )
 }
