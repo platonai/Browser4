@@ -22,6 +22,7 @@ import ai.platon.pulsar.rest.api.service.ScrapeService
 import ai.platon.pulsar.rest.session.ManagedSession
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.rest.session.SessionKind
+import ai.platon.pulsar.rest.session.SessionStatus
 import ai.platon.pulsar.skeleton.context.PulsarContext
 import ai.platon.pulsar.skeleton.plugin.PluginManifest
 import ai.platon.pulsar.skeleton.session.PulsarSession
@@ -93,7 +94,7 @@ class SystemStatusControllerTest {
 
     private fun managedSession(
         id: String,
-        status: String = "active",
+        status: SessionStatus = SessionStatus.ACTIVE,
         active: Boolean = true,
         kind: SessionKind = SessionKind.BROWSER4_LAUNCHED,
         browser: AbstractBrowser? = null,
@@ -146,8 +147,8 @@ class SystemStatusControllerTest {
     @Test
     fun `status aggregates session summary`() {
         val sessions = listOf(
-            managedSession("session-1", status = "active", active = true),
-            managedSession("session-2", status = "paused", active = false, kind = SessionKind.SWARM),
+            managedSession("session-1", status = SessionStatus.ACTIVE, active = true),
+            managedSession("session-2", status = SessionStatus.PAUSED, active = false, kind = SessionKind.SWARM),
         )
         val result = controller(sessions = sessions).status()
 
@@ -336,7 +337,7 @@ class SystemStatusControllerTest {
 
     @Test
     fun `status reports sessions without browsers`() {
-        val session = managedSession("session-1", status = "stopped")
+        val session = managedSession("session-1", status = SessionStatus.STOPPED)
 
         val result = controller(sessions = listOf(session)).status()
 
@@ -433,7 +434,7 @@ class SystemStatusControllerTest {
 
     @Test
     fun `status reports swarm session and task summary`() {
-        val swarmSession = managedSession("swarm", status = "active", kind = SessionKind.SWARM)
+        val swarmSession = managedSession("swarm", status = SessionStatus.ACTIVE, kind = SessionKind.SWARM)
         val summary = mapOf("total" to 5, "done" to 3, "running" to 2)
 
         val result = controller(sessions = listOf(swarmSession), scrapeSummary = summary).status()
