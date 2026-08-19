@@ -2,6 +2,9 @@ package ai.platon.pulsar.chrome
 
 import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.api.model.BrowserTab
+import ai.platon.pulsar.api.model.BrowserUseState
+import ai.platon.pulsar.api.model.PageTarget
+import ai.platon.pulsar.api.model.SnapshotOptions
 import ai.platon.pulsar.api.model.WebDriverException
 import ai.platon.pulsar.chrome.network.RobustRPC
 import ai.platon.pulsar.chrome.protocol.Keyboard
@@ -245,6 +248,32 @@ open class Browser4WebDriver(
      * per-instance, so it is tracked independently from the parent's counters.
      */
     private val rpc = RobustRPC(this)
+
+    /**
+     * Capture the browser/page state, degrading gracefully when the page is unusable.
+     *
+     * The upstream [PulsarWebDriver.browserUseState] can throw a `NullPointerException`
+     * when it is invoked on a driver whose browser/page has been torn down.  Agent
+     * sessions reuse the same bound driver across tasks, so a task that closed the
+     * browser leaves the next task's driver pointing at a dead page — and the NPE
+     * would otherwise crash the whole agent run.  Return the dummy state instead so
+     * the agent can still proceed (and typically recover by navigating).
+     *
+     * @param pageTarget Optional page target (defaults to the active page).
+     * @param snapshotOptions Options controlling the depth/verbosity of the snapshot.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun browserUseState(
+        pageTarget: PageTarget,
+        snapshotOptions: SnapshotOptions
+    ): BrowserUseState {
+        return try {
+            super.browserUseState(pageTarget, snapshotOptions)
+        } catch (e: Exception) {
+            logger.warn("browserUseState degraded ({}); returning dummy state", e.message)
+            BrowserUseState.DUMMY
+        }
+    }
 
     /**
      * Click on the element identified by [selector] the given number of times.

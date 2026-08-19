@@ -522,7 +522,18 @@ class AgentStateManager(
 
         // Add timeout to prevent hanging on DOM snapshot operations
         return withTimeout(30_000.milliseconds) {
-            val baseState = driver.browserUseState(snapshotOptions = snapshotOptions)
+            val baseState = try {
+                driver.browserUseState(snapshotOptions = snapshotOptions)
+            } catch (e: Exception) {
+                // A session may reuse the same bound driver across agent tasks; when the
+                // previous task tore the page/browser down, browserUseState can throw
+                // (typically NPE from the upstream driver). Degrade to the dummy state
+                // instead of crashing the whole task.
+                logger.warn(
+                    "browserUseState failed ({}); degrading to dummy state", e.message
+                )
+                BrowserUseState.DUMMY
+            }
             injectTabsInfo(baseState)
         }
     }
@@ -534,6 +545,13 @@ class AgentStateManager(
     private suspend fun injectTabsInfo(baseState: BrowserUseState): BrowserUseState {
         val currentDriver = this.driver
         val browser = currentDriver.browser
+
+        // The browser may already be torn down when the session reuses the driver
+        // across agent tasks; in that case keep the base state unchanged.
+        if (browser == null || !browser.isConnected) {
+            logger.warn("injectTabsInfo skipped: browser is not connected")
+            return baseState
+        }
 
         // fetch all drivers
         browser.listDrivers()

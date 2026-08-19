@@ -5,8 +5,12 @@ import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.inference.detail.PageStateTracker
 import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.api.model.BrowserUseState
+import ai.platon.pulsar.chrome.PulsarBrowser
+import ai.platon.pulsar.chrome.PulsarWebDriver
+import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -16,17 +20,19 @@ import java.nio.file.Path
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class AgentStateManagerTest {
 
     private lateinit var tempDir: Path
+    private lateinit var agent: BasicBrowserAgent
     private lateinit var stateManager: AgentStateManager
 
     @BeforeEach
     fun setUp(@TempDir dir: Path) {
         tempDir = dir
-        val agent = mockk<BasicBrowserAgent>(relaxed = true)
+        agent = mockk<BasicBrowserAgent>(relaxed = true)
         every { agent.logDir } returns tempDir
         every { agent.config } returns AgentConfig()
         val pageStateTracker = mockk<PageStateTracker>(relaxed = true)
@@ -174,5 +180,40 @@ class AgentStateManagerTest {
         assertEquals(1, stateManager.stateHistory.states.size)
         val jsonl = tempDir.resolve("task-s1").resolve("history.jsonl")
         assertEquals(1, Files.readAllLines(jsonl).size)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // P5: session reuse across agent tasks must not crash when the previous
+    // task tore the browser/page down (browserUseState NPE regression)
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("getAgentState degrades to DUMMY when browserUseState throws")
+    fun getAgentStateDegradesWhenBrowserUseStateThrows() = runBlocking {
+        val driver = mockk<PulsarWebDriver>(relaxed = true)
+        // The upstream driver throws NPE when invoked on a torn-down page.
+        coEvery { driver.browserUseState(any(), any()) } throws NullPointerException("page torn down")
+        every { agent.activeDriver } returns driver
+
+        val state = stateManager.getAgentState("instr", 1)
+
+        assertNotNull(state)
+        assertSame(BrowserUseState.DUMMY, state.browserUseState)
+    }
+
+    @Test
+    @DisplayName("getAgentState keeps the base state when the browser is disconnected")
+    fun getAgentStateKeepsBaseStateWhenBrowserDisconnected() = runBlocking {
+        val driver = mockk<PulsarWebDriver>(relaxed = true)
+        val browser = mockk<PulsarBrowser>(relaxed = true)
+        every { browser.isConnected } returns false
+        coEvery { driver.browserUseState(any(), any()) } returns BrowserUseState.DUMMY
+        every { driver.browser } returns browser
+        every { agent.activeDriver } returns driver
+
+        val state = stateManager.getAgentState("instr", 1)
+
+        assertNotNull(state)
+        assertSame(BrowserUseState.DUMMY, state.browserUseState)
     }
 }

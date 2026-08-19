@@ -73,15 +73,40 @@ class UserCommandExecutor(
      * */
     private val rejectedStatuses = ConcurrentHashMap<String, CommandStatus>()
 
-    fun ensurePageVisitor(sessionId: String): StatefulPageVisitor =
-        pageVisitors.getOrPut(sessionId) {
+    fun ensurePageVisitor(sessionId: String): StatefulPageVisitor {
+        val existing = pageVisitors[sessionId]
+        if (existing != null && existing.session.isActive) {
+            return existing
+        }
+        // The cached visitor may hold a session that was deleted/closed (e.g. by
+        // close_all_sessions) while this executor survived. Rebuild it against a
+        // fresh session instead of running page visits against a closed session.
+        if (existing != null) {
+            pageVisitors.remove(sessionId)
+            runCatching { existing.close() }
+        }
+        return pageVisitors.getOrPut(sessionId) {
             StatefulPageVisitor(sessionManager.getOrCreateSession(sessionId).agenticSession)
         }
+    }
 
-    fun ensureAgentRunner(sessionId: String): StatefulAgentRunner =
-        agentRunners.getOrPut(sessionId) {
+    fun ensureAgentRunner(sessionId: String): StatefulAgentRunner {
+        val existing = agentRunners[sessionId]
+        if (existing != null && existing.session.isActive) {
+            return existing
+        }
+        // The cached runner may hold a session whose agent was closed (e.g. by
+        // close_all_sessions) while this executor survived. Rebuild it against a
+        // fresh session — otherwise agent tasks run against a closed agent and
+        // finish in zero steps with no result.
+        if (existing != null) {
+            agentRunners.remove(sessionId)
+            runCatching { existing.close() }
+        }
+        return agentRunners.getOrPut(sessionId) {
             StatefulAgentRunner(sessionManager.getOrCreateSession(sessionId).agenticSession)
         }
+    }
 
     suspend fun executePageVisitCommand(
         sessionId: String,

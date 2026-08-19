@@ -5,6 +5,8 @@ import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.detail.DefaultServerSideAgentEventHandlers
 import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
+import ai.platon.pulsar.api.AbstractWebDriver
+import ai.platon.pulsar.api.Browser
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -218,6 +220,40 @@ open class StatefulAgentRunner(
     }
 
     /**
+     * Ensure the session's bound driver is usable before an agent task runs.
+     *
+     * [ai.platon.pulsar.skeleton.session.PulsarSession.getOrCreateBoundDriver]
+     * returns the existing bound driver without a health check, so a driver whose
+     * browser was torn down keeps being reused across tasks. When the health check
+     * fails, unbind and close the dead driver (and its browser) so the next
+     * [ai.platon.pulsar.skeleton.session.PulsarSession.getOrCreateBoundDriver]
+     * launches a fresh browser.
+     */
+    private suspend fun ensureSessionDriverHealthy() {
+        val driver = runCatching { session.boundDriver }.getOrNull() as? AbstractWebDriver
+            ?: return // no bound driver yet — a fresh one is created on first use
+
+        val healthy = runCatching { driver.quickCheckHealthy().isOK }.getOrDefault(false)
+        if (healthy) {
+            return
+        }
+
+        logger.warn("Agent task: session driver is unhealthy; resetting bound driver and browser")
+        runCatching { session.unbindDriver(driver) }
+            .onFailure { logger.warn("Failed to unbind unhealthy driver", it) }
+        runCatching { driver.close() }
+            .onFailure { logger.warn("Failed to close unhealthy driver", it) }
+
+        val browser = runCatching { session.boundBrowser }.getOrNull()
+        if (browser != null) {
+            runCatching { session.unbindBrowser(browser) }
+                .onFailure { logger.warn("Failed to unbind dead browser", it) }
+            runCatching { browser.close() }
+                .onFailure { logger.warn("Failed to close dead browser", it) }
+        }
+    }
+
+    /**
      * Executes the agent command logic.
      *
      * This method is extracted to allow the event handlers to be properly bound
@@ -229,6 +265,13 @@ open class StatefulAgentRunner(
         // Record the submitted instruction so callers can verify they're
         // getting results for the right task (prevents cross-talk confusion).
         status.submittedTask = plainCommand
+
+        // A session reuses its bound driver across tasks. If a previous task (or a
+        // close-all) shut the browser down, the driver points at a dead browser and
+        // the agent would fail every step (DOM settle timeout, browserUseState
+        // degradation, zero-step runs). Reset the bound driver/browser so a fresh
+        // browser is created for this task.
+        ensureSessionDriverHealthy()
 
         // Set agent history reference to allow real-time state tracking
         status.agentHistory = agent.stateHistory
