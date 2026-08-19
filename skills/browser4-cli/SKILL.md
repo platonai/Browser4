@@ -264,7 +264,7 @@ browser4-cli skills path                    # Print skills directory path
 browser4-cli skills unpack                  # Unpack bundled skill files to disk
 ```
 
-Set `BROWSER4_SKILLS_DIR` to override the skills directory location. Skill files are unpacked automatically during `browser4-cli install`. Use `skills unpack` to refresh or relocate skill files without reinstalling.
+Set `BROWSER4_SKILLS_DIR` to override the skills directory location. Skill files are unpacked automatically during `browser4-cli install` (and refreshed by `upgrade`) into the versioned installation directory; unchanged files are skipped, so re-running is cheap. `install` / `upgrade` also copy the bundled skills into `~/.agents/skills` so AI agents (e.g. Codex) can load them automatically (override with `BROWSER4_AGENTS_SKILLS_DIR`). Use `skills unpack` to refresh or relocate skill files without reinstalling.
 
 ## 4. Decision Trees
 
@@ -740,11 +740,14 @@ browser4-cli install
 **Windows (PowerShell):**
 ```powershell
 irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
-browser4-cli install
 ```
 
 **Linux / macOS (bash):**
 ```bash
 curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
-browser4-cli install
 ```
+
+The bootstrap scripts also install the Browser4 backend (runtime bundle)
+automatically: `browser4-cli install` on a fresh machine, or
+`browser4-cli upgrade` when a backend already exists (add `--skip-backend`
+to install the CLI only).

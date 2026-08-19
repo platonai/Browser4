@@ -161,18 +161,16 @@ npm install -g browser4-cli
 browser4-cli install
 ```
 
-或者用单条命令直接引导安装原生二进制：
+或者用单条命令直接引导安装原生二进制。脚本随后会自动安装 Browser4 后端（运行时包）——全新机器执行 `browser4-cli install`，已安装后端则执行 `browser4-cli upgrade` 升级到最新版（可用 `--skip-backend` 跳过此步骤）：
 
 **Windows（PowerShell）：**
 ```powershell
 irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
-browser4-cli install
 ```
 
 **Linux / macOS（bash）：**
 ```bash
 curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
-browser4-cli install
 ```
 
 ## 💡 面向人的 CLI 指南

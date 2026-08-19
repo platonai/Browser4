@@ -144,18 +144,19 @@ npm install -g browser4-cli
 browser4-cli install
 ```
 
-Or bootstrap the native binary directly with a single command:
+Or bootstrap the native binary directly with a single command. The scripts
+also install the Browser4 backend (runtime bundle) afterwards — running
+`browser4-cli install` on a fresh machine, or `browser4-cli upgrade` when a
+backend is already present (pass `--skip-backend` to skip this step):
 
 **Windows (PowerShell):**
 ```powershell
 irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
-browser4-cli install
 ```
 
 **Linux / macOS (bash):**
 ```bash
 curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
-browser4-cli install
 ```
 
 ## 💡 CLI Guide for Humans

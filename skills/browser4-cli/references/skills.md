@@ -71,7 +71,12 @@ browser4-cli skills path
 ```
 
 The directory is created automatically by `skills unpack`.  `browser4-cli
-install` also unpacks skills into the versioned installation directory.
+install` also unpacks skills into the versioned installation directory, and
+`browser4-cli upgrade` refreshes them; unpacking is idempotent (files that
+already match the bundled copy are skipped), so re-running is cheap.
+`install` / `upgrade` also copy the bundled skills into `~/.agents/skills`
+(the directory AI agents such as Codex load skills from), overridable via
+`BROWSER4_AGENTS_SKILLS_DIR`.
 
 ### Options
 

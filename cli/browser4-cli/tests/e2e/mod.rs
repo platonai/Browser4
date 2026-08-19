@@ -2212,6 +2212,13 @@ fn run_cli_process_internal(
         .current_dir(&ctx.workspace_dir)
         .env("BROWSER4_CLI_STATE_DIR", &ctx.state_dir)
         .env("BROWSER4_RUNTIME_DIR", &ctx.runtime_dir)
+        // Point the AI-agent skills install (~/.agents/skills) at a temp dir
+        // so install/upgrade scenarios never touch the real user home.
+        // Scenarios may override this via ctx.set_env.
+        .env(
+            "BROWSER4_AGENTS_SKILLS_DIR",
+            ctx.workspace_dir.join("agents-skills"),
+        )
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 

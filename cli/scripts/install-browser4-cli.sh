@@ -4,7 +4,9 @@
 #
 # Detects OS, CPU architecture, and libc variant (glibc / musl), downloads
 # the matching binary from GitHub Releases or Alibaba Cloud OSS, and installs
-# it to a user-local directory.
+# it to a user-local directory.  After the CLI binary is in place it also
+# installs the Browser4 backend (runtime bundle) via `browser4-cli install`,
+# or upgrades an existing backend via `browser4-cli upgrade`.
 #
 # Usage:
 #   curl -fsSL https://.../install-browser4-cli.sh | bash
@@ -23,6 +25,7 @@
 #   --silent, -s         Suppress non-error output.
 #   --dry-run            Print what would be done without doing it.
 #   --skip-if-installed  Skip download if binary already exists at install path.
+#   --skip-backend       Skip installing/upgrading the Browser4 backend.
 #   --help, -h           Show this message.
 
 set -euo pipefail
@@ -42,6 +45,7 @@ SILENT=false
 DRY_RUN=false
 SKIP_IF_INSTALLED=false
 SKIP_LOCAL=false
+SKIP_BACKEND=false
 LOCATE_MODE=false
 CHINA_DETECTED=false
 SCRIPT_DIR=""
@@ -130,6 +134,7 @@ Options:
   --silent, -s        Suppress non-error output.
   --dry-run           Print what would be done without doing it.
   --skip-if-installed Skip download if binary already exists at install path.
+  --skip-backend      Skip installing/upgrading the Browser4 backend.
   --help, -h          Show this message.
 
 Examples:
@@ -141,6 +146,7 @@ Examples:
   $(basename "$0") --skip-local             # Force download, ignore bundled binary
   $(basename "$0") --source oss             # Force Aliyun OSS (China mainland)
   $(basename "$0") --skip-if-installed      # Skip download if already installed
+  $(basename "$0") --skip-backend           # CLI only, skip backend install/upgrade
 EOF
 }
 
@@ -168,6 +174,7 @@ while [[ $# -gt 0 ]]; do
     --silent|-s) SILENT=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     --skip-if-installed) SKIP_IF_INSTALLED=true; shift ;;
+    --skip-backend) SKIP_BACKEND=true; shift ;;
     --help|-h) usage; exit 0 ;;
     *) die "Unknown argument: $1 (use --help)";;
   esac
@@ -543,6 +550,72 @@ create_symlinks() {
 }
 
 # ----------------------------------------------
+# Backend (runtime bundle) install / upgrade
+# ----------------------------------------------
+
+# Decide which backend command to run based on `browser4-cli status` output.
+# Echoes "install" when no runtime bundle is installed yet, otherwise
+# "upgrade" (refresh CLI + runtime to the latest version).
+pick_backend_action() {
+  local status_output="$1"
+  if echo "$status_output" | grep -q "Installed bundle: not installed"; then
+    echo "install"
+  else
+    echo "upgrade"
+  fi
+}
+
+# After the CLI binary is in place, install the Browser4 backend:
+#   - no backend installed yet  -> browser4-cli install
+#   - backend already present   -> browser4-cli upgrade (to the latest)
+# A --version tag is passed through as --tag so the backend matches the CLI.
+# Non-fatal: a failed backend step leaves a working CLI behind.
+install_backend() {
+  local cli_path="$1"
+  local tag="$2"
+
+  if [[ "$SKIP_BACKEND" == true ]]; then
+    step "Skipping backend install/upgrade (--skip-backend)"
+    return 0
+  fi
+
+  step "Checking for an existing Browser4 backend..."
+
+  local status_output
+  status_output=$("$cli_path" status 2>&1 || true)
+
+  local action
+  action=$(pick_backend_action "$status_output")
+
+  local args=("$action")
+  if [[ -n "$tag" ]]; then
+    args+=(--tag "$tag")
+  fi
+
+  if [[ "$action" == "install" ]]; then
+    step "No backend installed -- running 'browser4-cli install'..."
+  else
+    step "Backend already installed -- running 'browser4-cli upgrade'..."
+  fi
+
+  if [[ "$DRY_RUN" == true ]]; then
+    ok "[DRY-RUN] Would run: $cli_path ${args[*]}"
+    return 0
+  fi
+
+  local backend_output
+  if backend_output=$("$cli_path" "${args[@]}" 2>&1); then
+    ok "Backend ${action} succeeded (${args[*]})."
+    if [[ "$SILENT" != true ]]; then
+      echo "$backend_output"
+    fi
+  else
+    echo "    [!] Backend ${action} failed (${args[*]}). Retry manually with: browser4-cli ${args[*]}" >&2
+    echo "$backend_output" >&2
+  fi
+}
+
+# ----------------------------------------------
 # Main
 # ----------------------------------------------
 
@@ -742,6 +815,12 @@ main() {
   else
     echo -e "${color_yellow}[DRY-RUN] Installation plan complete${color_reset}"
   fi
+
+  # Install / upgrade the Browser4 backend (runtime bundle) using the CLI
+  # we just installed.  Fresh machines get `browser4-cli install`; machines
+  # that already have a backend get `browser4-cli upgrade` to the latest.
+  say ""
+  install_backend "$binary_path" "$VERSION"
 
   say ""
   echo -e "${color_cyan}Run 'browser4-cli --help' to get started.${color_reset}"

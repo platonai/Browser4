@@ -32,6 +32,8 @@ Options: `--skip-docker-build`, `--dry-run`.
 
 Both scripts auto-detect OS, CPU architecture, and libc variant (glibc vs musl on Linux). They download the matching binary from GitHub Releases or Alibaba Cloud OSS (auto-selected by locale: OSS first in China mainland). The binary is installed to a user-local directory and optionally added to PATH.
 
+After the CLI binary is in place, both scripts install the Browser4 backend (runtime bundle) using the freshly installed CLI: `browser4-cli install` on a fresh machine, or `browser4-cli upgrade` when a backend is already present (upgrades to the latest version). Pass `--skip-backend` / `-SkipBackend` to install the CLI only. When `--version TAG` is given, the backend is installed/upgraded with the matching `--tag TAG`.
+
 ### Common options
 
 | Option | Description |
@@ -44,6 +46,7 @@ Both scripts auto-detect OS, CPU architecture, and libc variant (glibc vs musl o
 | `--dry-run` / `-DryRun` | Print what would be done without doing it. |
 | `--skip-if-installed` / `-SkipIfInstalled` | Skip download if binary already exists. |
 | `--skip-local` / `-SkipLocal` | Skip local bundled binary check; always download. |
+| `--skip-backend` / `-SkipBackend` | Skip installing/upgrading the Browser4 backend. |
 | `--force` / `-Force` (pwsh) | Force reinstallation even if the binary already exists at the target path. |
 | `--locate` / `-Locate` | Print detection results (OS, arch, locale) and exit (no install). |
 

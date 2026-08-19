@@ -102,7 +102,8 @@ $ast = [System.Management.Automation.Language.Parser]::ParseInput($content, [ref
 
 Test "param block defines all expected parameters" {
     $expected = @('Version', 'InstallDir', 'Source', 'AddToPath',
-                  'Silent', 'DryRun', 'SkipIfInstalled', 'SkipLocal', 'Locate')
+                  'Silent', 'DryRun', 'SkipIfInstalled', 'SkipLocal',
+                  'Force', 'SkipBackend', 'Locate')
     # Extract param block text via AST extents
     $paramAst = $ast.ParamBlock
     if (-not $paramAst) { throw "Could not find param block AST" }
@@ -187,6 +188,28 @@ Write-Host "--- Parameter acceptance ---" -ForegroundColor Cyan
 Test "-SkipIfInstalled flag accepted" {
     $ec3 = 0; $r3 = RunScript -scriptArgs "-SkipIfInstalled -DryRun" -exitCode ([ref]$ec3)
     if ($ec3 -ne 0) { throw "Exit code: $ec3, output: $($r3.Output)" }
+}
+
+Test "-SkipBackend flag accepted" {
+    $ecSkipBackend = 0
+    $rSkipBackend = RunScript -scriptArgs "-SkipBackend -DryRun" -exitCode ([ref]$ecSkipBackend)
+    if ($ecSkipBackend -ne 0) { throw "Exit code: $ecSkipBackend, output: $($rSkipBackend.Output)" }
+}
+
+Test "-DryRun prints backend plan" {
+    $ecPlan = 0
+    $rPlan = RunScript -scriptArgs "-DryRun -AddToPath:`$false" -exitCode ([ref]$ecPlan)
+    if ($rPlan.Output -notmatch 'Would run:') {
+        throw "Expected backend plan ('Would run:') in: $($rPlan.Output.Substring(0, [Math]::Min(800, $rPlan.Output.Length)))"
+    }
+}
+
+Test "-SkipBackend suppresses backend plan" {
+    $ecSkip = 0
+    $rSkip = RunScript -scriptArgs "-SkipBackend -DryRun -AddToPath:`$false" -exitCode ([ref]$ecSkip)
+    if ($rSkip.Output -match 'Would run:') {
+        throw "Expected no backend plan with -SkipBackend, got: $($rSkip.Output.Substring(0, [Math]::Min(800, $rSkip.Output.Length)))"
+    }
 }
 
 Test "-SkipLocal flag accepted" {
@@ -296,6 +319,21 @@ $sb = [ScriptBlock]::Create($scriptContent)
 
     Test "Test-LocalBinary returns false for null" {
         if (Test-LocalBinary -Path $null) { throw "Should be false" }
+    }
+
+    Test "Get-BackendAction returns install when not installed" {
+        $action = Get-BackendAction -StatusOutput "Installed bundle: not installed (run 'browser4-cli install')"
+        if ($action -ne "install") { throw "Expected 'install', got: $action" }
+    }
+
+    Test "Get-BackendAction returns upgrade when installed" {
+        $action = Get-BackendAction -StatusOutput "Installed bundle: v4.13.0 (at 2026-01-01T00:00:00Z)"
+        if ($action -ne "upgrade") { throw "Expected 'upgrade', got: $action" }
+    }
+
+    Test "Get-BackendAction defaults to upgrade on empty status" {
+        $action = Get-BackendAction -StatusOutput ""
+        if ($action -ne "upgrade") { throw "Expected 'upgrade', got: $action" }
     }
 }
 

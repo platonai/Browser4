@@ -12841,6 +12841,91 @@ fn format_install_output(runtime: &InstalledBrowser4Runtime) -> Vec<String> {
     lines
 }
 
+/// Outcome of syncing bundled skill files into a runtime install directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SkillsSyncOutcome {
+    /// Number of files written because they were missing or outdated.
+    files_written: usize,
+    /// Total number of bundled skill files.
+    files_total: usize,
+}
+
+/// Format the user-facing message for a skill sync.  Pure function so the
+/// branching logic can be unit-tested.
+fn format_skills_sync_message(outcome: SkillsSyncOutcome, skills_dir: &Path) -> String {
+    if outcome.files_written > 0 {
+        format!(
+            "📦 Unpacked {} skill files to {}",
+            outcome.files_written,
+            skills_dir.display()
+        )
+    } else {
+        format!(
+            "✅ Bundled skill files already up to date at {} ({} files)",
+            skills_dir.display(),
+            outcome.files_total
+        )
+    }
+}
+
+/// Unpack bundled skill files into the runtime's versioned install directory
+/// (`<install_dir>/skills`) so the skills on disk always match the CLI binary.
+///
+/// Runs on every `install` / `upgrade`, including when the runtime was
+/// already present: the CLI binary may embed newer skills than the installed
+/// runtime (e.g. after upgrading the binary alone).  Write-if-changed keeps
+/// re-syncs cheap.  The skills directory sits alongside the runtime, so it
+/// is versioned with the install and `skills path` finds it automatically.
+fn sync_skills_for_runtime(runtime: &InstalledBrowser4Runtime) -> Result<SkillsSyncOutcome, String> {
+    let skills_dir = runtime.install_dir.join("skills");
+    let files_total = skills::bundled_skill_file_count();
+    let files_written = skills::unpack_skills_to(&skills_dir)?;
+    Ok(SkillsSyncOutcome {
+        files_written,
+        files_total,
+    })
+}
+
+/// Format the user-facing message for an AI-agent skills sync (`~/.agents/skills`).
+/// Pure function so the branching logic can be unit-tested.
+fn format_agents_skills_sync_message(outcome: SkillsSyncOutcome, agents_dir: &Path) -> String {
+    if outcome.files_written > 0 {
+        format!(
+            "🤖 Installed {} skill files for AI agents to {}",
+            outcome.files_written,
+            agents_dir.display()
+        )
+    } else {
+        format!(
+            "🤖 Bundled skill files already up to date for AI agents at {}",
+            agents_dir.display()
+        )
+    }
+}
+
+/// Unpack bundled skill files into the AI-agent skills directory
+/// (`~/.agents/skills`, overridable via `BROWSER4_AGENTS_SKILLS_DIR`).
+///
+/// Agents such as Codex load skills from there automatically, so `install` /
+/// `upgrade` keep it in sync with the CLI binary's embedded skills.  Like the
+/// versioned-dir sync this is idempotent (write-if-changed).  Returns `Ok(None)`
+/// when no agents directory can be resolved (no override and no home dir).
+fn sync_skills_to_agents_dir() -> Result<Option<(SkillsSyncOutcome, PathBuf)>, String> {
+    let Some(agents_dir) = skills::agents_skills_dir() else {
+        eprintln!("⚠  Could not resolve the home directory; skipping AI-agent skills install.");
+        return Ok(None);
+    };
+    let files_total = skills::bundled_skill_file_count();
+    let files_written = skills::unpack_skills_to(&agents_dir)?;
+    Ok(Some((
+        SkillsSyncOutcome {
+            files_written,
+            files_total,
+        },
+        agents_dir,
+    )))
+}
+
 async fn handle_install(tool_params: &Value) -> Result<(), String> {
     let tag = tool_params.get("tag").and_then(|value| value.as_str());
     let force = tool_params
@@ -12874,15 +12959,33 @@ async fn handle_install(tool_params: &Value) -> Result<(), String> {
 
     // Unpack bundled skill files into the versioned installation directory.
     // The skills directory is at <install_dir>/skills/ alongside the runtime.
-    if !runtime.reused_existing {
-        let skills_dir = runtime.install_dir.join("skills");
-        match skills::unpack_skills_to(&skills_dir) {
-            Ok(n) => {
-                eprintln!("📦 Unpacked {n} skill files to {}", skills_dir.display());
-            }
-            Err(e) => {
-                eprintln!("⚠  Failed to unpack skill files: {e}");
-            }
+    // This runs on every install — including the reuse fast-path — so the
+    // on-disk skills always match the CLI binary that is installed.  Failure
+    // is non-fatal: the runtime bundle is already installed at this point.
+    let skills_dir = runtime.install_dir.join("skills");
+    match sync_skills_for_runtime(&runtime) {
+        Ok(outcome) => {
+            eprintln!("{}", format_skills_sync_message(outcome, &skills_dir));
+            json_field("skills_dir", json!(skills_dir.display().to_string()));
+            json_field("skills_files_unpacked", json!(outcome.files_written));
+            json_field("skills_files_total", json!(outcome.files_total));
+        }
+        Err(e) => {
+            eprintln!("⚠  Failed to unpack skill files: {e}");
+        }
+    }
+
+    // Also install the bundled skills into the AI-agent skills directory
+    // (`~/.agents/skills`) so agents like Codex can load them automatically.
+    match sync_skills_to_agents_dir() {
+        Ok(Some((outcome, agents_dir))) => {
+            eprintln!("{}", format_agents_skills_sync_message(outcome, &agents_dir));
+            json_field("agents_skills_dir", json!(agents_dir.display().to_string()));
+            json_field("agents_skills_files_unpacked", json!(outcome.files_written));
+        }
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("⚠  Failed to install skill files for AI agents: {e}");
         }
     }
 
@@ -13001,7 +13104,14 @@ fn handle_skills_unpack(tool_params: &Value) -> Result<(), String> {
 
     match skills::unpack_skills_to(&dest_dir) {
         Ok(n) => {
-            cli_println!("Unpacked {} skill files to {}", n, dest_dir.display());
+            if n > 0 {
+                cli_println!("Unpacked {} skill files to {}", n, dest_dir.display());
+            } else {
+                cli_println!(
+                    "Bundled skill files already up to date at {}",
+                    dest_dir.display()
+                );
+            }
             Ok(())
         }
         Err(e) => Err(format!("Failed to unpack skill files: {e}")),
@@ -14202,6 +14312,37 @@ async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
     );
     json_field("reused_existing", json!(runtime.reused_existing));
     json_field("source_url", json!(&runtime.download_url));
+
+    // Unpack bundled skill files into the (possibly new) versioned install
+    // directory.  `upgrade` may have just replaced the CLI binary with one
+    // that embeds newer skills, so always re-sync — write-if-changed makes
+    // the no-op case cheap.  Failure is non-fatal.
+    let skills_dir = runtime.install_dir.join("skills");
+    match sync_skills_for_runtime(&runtime) {
+        Ok(outcome) => {
+            eprintln!("{}", format_skills_sync_message(outcome, &skills_dir));
+            json_field("skills_dir", json!(skills_dir.display().to_string()));
+            json_field("skills_files_unpacked", json!(outcome.files_written));
+            json_field("skills_files_total", json!(outcome.files_total));
+        }
+        Err(e) => {
+            eprintln!("⚠  Failed to unpack skill files: {e}");
+        }
+    }
+
+    // Keep the AI-agent skills directory (`~/.agents/skills`) in sync too.
+    match sync_skills_to_agents_dir() {
+        Ok(Some((outcome, agents_dir))) => {
+            eprintln!("{}", format_agents_skills_sync_message(outcome, &agents_dir));
+            json_field("agents_skills_dir", json!(agents_dir.display().to_string()));
+            json_field("agents_skills_files_unpacked", json!(outcome.files_written));
+        }
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("⚠  Failed to install skill files for AI agents: {e}");
+        }
+    }
+
     Ok(())
 }
 
@@ -19547,6 +19688,110 @@ mod tests {
             lines[0].contains("installed successfully"),
             "expected 'installed successfully', got: {:?}",
             lines
+        );
+    }
+
+    #[test]
+    fn test_format_skills_sync_message_unpacked() {
+        let msg = format_skills_sync_message(
+            SkillsSyncOutcome {
+                files_written: 12,
+                files_total: 33,
+            },
+            Path::new("/tmp/browser4/skills"),
+        );
+        assert!(msg.contains("Unpacked 12 skill files to"), "got: {msg}");
+        assert!(msg.contains("/tmp/browser4/skills"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_format_skills_sync_message_up_to_date() {
+        let msg = format_skills_sync_message(
+            SkillsSyncOutcome {
+                files_written: 0,
+                files_total: 33,
+            },
+            Path::new("/tmp/browser4/skills"),
+        );
+        assert!(msg.contains("already up to date"), "got: {msg}");
+        assert!(msg.contains("33"), "expected total in message, got: {msg}");
+    }
+
+    #[test]
+    fn test_format_agents_skills_sync_message_unpacked() {
+        let msg = format_agents_skills_sync_message(
+            SkillsSyncOutcome {
+                files_written: 33,
+                files_total: 33,
+            },
+            Path::new("/home/user/.agents/skills"),
+        );
+        assert!(
+            msg.contains("Installed 33 skill files for AI agents to"),
+            "got: {msg}"
+        );
+        assert!(msg.contains("/home/user/.agents/skills"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_format_agents_skills_sync_message_up_to_date() {
+        let msg = format_agents_skills_sync_message(
+            SkillsSyncOutcome {
+                files_written: 0,
+                files_total: 33,
+            },
+            Path::new("/home/user/.agents/skills"),
+        );
+        assert!(
+            msg.contains("already up to date for AI agents"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_agents_skills_dir_env_override() {
+        let tmp = test_temp_dir();
+        let guard = set_env("BROWSER4_AGENTS_SKILLS_DIR", tmp.path().to_str().unwrap());
+        let resolved = skills::agents_skills_dir().expect("agents dir");
+        let expected = tmp.path().canonicalize().unwrap_or_else(|_| tmp.path().to_path_buf());
+        assert_eq!(resolved, expected, "override should be used as-is");
+
+        // Reject flag-looking values and fall back to the default.
+        drop(guard);
+        let guard = set_env("BROWSER4_AGENTS_SKILLS_DIR", "--bad");
+        let home = dirs::home_dir().expect("home dir");
+        assert_eq!(
+            skills::agents_skills_dir().expect("default agents dir"),
+            home.join(".agents").join("skills"),
+            "flag-like override should fall back to ~/.agents/skills"
+        );
+        drop(guard);
+    }
+
+    #[test]
+    fn test_unpack_skills_to_is_idempotent() {
+        let tmp = test_temp_dir();
+        let total = skills::bundled_skill_file_count();
+        assert!(total > 0, "expected bundled skills embedded by build.rs");
+
+        // First unpack writes every bundled file.
+        let first = skills::unpack_skills_to(tmp.path()).expect("first unpack");
+        assert_eq!(first, total, "first unpack should write every file");
+
+        // Second unpack skips identical files — nothing rewritten.
+        let second = skills::unpack_skills_to(tmp.path()).expect("second unpack");
+        assert_eq!(second, 0, "second unpack should skip identical files");
+
+        // Tampering with one file forces a rewrite of exactly that file.
+        let skill_md = tmp.path().join("browser4-cli").join("SKILL.md");
+        let original = std::fs::read(&skill_md).expect("read SKILL.md");
+        std::fs::write(&skill_md, b"tampered").expect("tamper SKILL.md");
+        let third = skills::unpack_skills_to(tmp.path()).expect("third unpack");
+        assert_eq!(third, 1, "only the tampered file should be rewritten");
+        assert_eq!(
+            std::fs::read(&skill_md).expect("re-read SKILL.md"),
+            original,
+            "SKILL.md should be restored to the bundled content"
         );
     }
 
