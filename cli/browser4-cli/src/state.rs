@@ -1173,8 +1173,10 @@ pub fn format_async_task_list(
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
-        if desc.len() > desc_w {
-            desc = format!("{}…", &desc[..desc_w - 1]);
+        if desc.chars().count() > desc_w {
+            // Truncate on char boundaries — byte slicing panics on multi-byte
+            // UTF-8 (e.g. Chinese task descriptions).
+            desc = format!("{}…", desc.chars().take(desc_w - 1).collect::<String>());
         };
         let status = if entry.last_status.is_empty() {
             "pending".to_string()
