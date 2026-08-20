@@ -754,5 +754,7 @@ Apache 2.0 License。详见 [LICENSE](LICENSE)。
 
 ## 友链
 
-[DSH Data Agent · 用对话分析数据](https://github.com/omdsh-dev/dsh-data-agent)
-[DSH TUI · 一个美观且实用的 Claude Code 风格 TUI 插件](https://github.com/ccch1mneyyy/dsh-TUI)
+* [omdsh-dev/dsh-data-agent](https://github.com/omdsh-dev/dsh-data-agent) - DSH Data Agent · 用对话分析数据
+* [ccch1mneyyy/dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI) - DSH TUI · 一个美观且实用的 Claude Code 风格 TUI 插件
+
+
