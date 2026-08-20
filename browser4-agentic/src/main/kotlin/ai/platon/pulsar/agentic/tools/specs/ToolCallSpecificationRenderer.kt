@@ -128,6 +128,45 @@ object ToolCallSpecificationRenderer {
         }
     }
 
+    /** Page-interaction domains collapsed to a one-line summary for coding tasks. */
+    private val PAGE_DOMAINS = setOf("tab", "browser")
+
+    /** Developer domains collapsed to a one-line summary for browsing tasks. */
+    private val DEV_DOMAINS = setOf("coding", "cli")
+
+    /**
+     * Tiered, task-adaptive disclosure (design §1.2):
+     * - coding task → coding/cli/custom in full; page domains collapsed to a
+     *   one-line summary (expand via `system.help("<domain>")`).
+     * - browsing task → page/agent domains in full; dev domains collapsed.
+     * - [codingTask] == null or disclosure == "full" → flat disclosure (legacy).
+     */
+    fun renderTiered(
+        includeCustomDomains: Boolean = true,
+        codingTask: Boolean? = null,
+        disclosure: String = "tiered",
+    ): String {
+        if (codingTask == null || disclosure.equals("full", ignoreCase = true)) {
+            return render(includeCustomDomains)
+        }
+
+        val all = collectAllToolSpecs(includeCustomDomains)
+        val collapsedDomains = if (codingTask) PAGE_DOMAINS else DEV_DOMAINS
+        val included = all.filter { it.domain !in collapsedDomains }
+        val excluded = all.filter { it.domain in collapsedDomains }
+
+        if (excluded.isEmpty()) {
+            return render(included)
+        }
+
+        val domainNames = excluded.map { it.domain }.distinct().joinToString(", ")
+        val methodPreview = excluded.distinctBy { it.method }.take(8).joinToString("/") { it.method }
+        val summary = "// 其他可用工具（$domainNames）: $methodPreview 等 ${excluded.size} 个；" +
+            "需要完整签名时调用 system.help(\"$domainNames\")"
+
+        return render(included) + "\n\n" + summary
+    }
+
     /**
      * Render built-in and custom tool-call specs as JSON.
      *

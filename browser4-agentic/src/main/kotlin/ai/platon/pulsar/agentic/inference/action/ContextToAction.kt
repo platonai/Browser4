@@ -68,6 +68,14 @@ open class ContextToAction(
     /** How tools are exposed to the LLM (config-driven). */
     val toolExposeMode: ToolExposeMode = ToolExposeMode.from(conf)
 
+    /**
+     * Max model↔tool round-trips inside one native tool-calling turn.
+     * 12 by default: multi-tool coding chains (write×N → mvnBuild → test)
+     * exceed the legacy 5 and would otherwise restart mid-chain.
+     */
+    private val toolLoopMaxIterations: Int =
+        conf.getLong("browser4.agent.toolLoop.maxIterations", 12).toInt().coerceIn(1, 50)
+
     /** Lazy tool-calling loop — engaged only in TOOL_CALLING mode. */
     private val toolCallLoop by lazy {
         if (toolManager == null || !toolExposeMode.nativeToolCalling) {
@@ -81,6 +89,7 @@ open class ContextToAction(
                 coordinator = ai.platon.pulsar.agentic.tools.langchain4j.ToolExecutionCoordinator(
                     toolManager, registry
                 ),
+                maxIterations = toolLoopMaxIterations,
                 requestTokenLimiter = requestTokenLimiter,
             )
         }
@@ -311,6 +320,16 @@ open class ContextToAction(
                     modelSupportsVision.set(false)
                     visionCapabilityResolved = true
                     loop.generate(messages.toChatMessages())
+                } else if (isToolSpecUnsupportedError(e)) {
+                    // Provider rejects native tool specifications — degrade to the
+                    // legacy TEXT path for the rest of the task (design P5.2).
+                    if (degradedToTextMode.compareAndSet(false, true)) {
+                        logger.warn(
+                            "Model/provider does not support native tool calling ({}); " +
+                                "degrading to TEXT mode for this task", e.message
+                        )
+                    }
+                    generateResponseRawLegacyUnbounded(messages, screenshotB64)
                 } else {
                     throw e
                 }
@@ -407,6 +426,32 @@ open class ContextToAction(
      * Checks whether the given exception was caused by the LLM API rejecting
      * `image_url` content blocks (typical of text-only models like DeepSeek).
      */
+    /**
+     * Set once the provider rejects native tool specifications — the task
+     * degrades to the legacy TEXT path (warn once, then stay degraded).
+     */
+    private val degradedToTextMode = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Heuristic: does the exception indicate the model/provider does not accept
+     * native tool specifications (as opposed to transient/network errors)?
+     */
+    private fun isToolSpecUnsupportedError(e: Exception): Boolean {
+        var cause: Throwable? = e
+        while (cause != null) {
+            val msg = (cause.message ?: "").lowercase()
+            if ((msg.contains("tool") || msg.contains("function")) &&
+                (msg.contains("not supported") || msg.contains("unsupported") ||
+                    msg.contains("not allowed") || msg.contains("invalid") ||
+                    msg.contains("unknown parameter") || msg.contains("unexpected"))
+            ) {
+                return true
+            }
+            cause = cause.cause
+        }
+        return false
+    }
+
     private fun isImageNotSupportedError(e: Exception): Boolean {
         var cause: Throwable? = e
         while (cause != null) {

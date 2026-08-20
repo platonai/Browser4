@@ -126,6 +126,19 @@ class AgentToolManager constructor(
 
     val customTargets: Map<String, Any> get() = _customTargets
 
+    /**
+     * Callback invoked after every successful tool execution (including tools
+     * executed inside the native tool-calling loop). The owning agent uses it
+     * to count inner-loop executions for the finish-report false-completion
+     * guard (design §3.2).
+     */
+    var toolExecutionRecorder: ((domain: String, method: String) -> Unit)? = null
+
+    /** Notify the recorder (if wired) about one executed tool call. */
+    fun notifyToolExecuted(domain: String, method: String) {
+        toolExecutionRecorder?.invoke(domain, method)
+    }
+
     init {
         // Register coding and cli tool specs so they appear in the LLM prompt.
         // The ToolCallSpecificationRenderer merges these dynamically-registered

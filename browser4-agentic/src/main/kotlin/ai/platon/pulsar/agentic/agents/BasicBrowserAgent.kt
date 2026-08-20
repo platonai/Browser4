@@ -46,12 +46,33 @@ open class BasicBrowserAgent(
     protected val promptBuilder = PromptBuilder()
 
     private val lazyAgentToolManager by lazy {
-        AgentToolManager(_baseDir, this)
+        AgentToolManager(_baseDir, this).also {
+            // Inner (native tool-calling loop) executions don't produce outer
+            // AgentStates — record them so the finish-report guard can see them.
+            it.toolExecutionRecorder = ::recordInnerToolExecution
+        }
     }
 
     /** The [AgentToolManager] used by this agent for tool discovery and execution. */
     val agentToolManager: AgentToolManager get() = lazyAgentToolManager
     protected val fs get() = agentToolManager.fs
+
+    /**
+     * Count of tool executions performed inside the native tool-calling loop
+     * (no outer AgentState is created for those) — resets per run.
+     */
+    private val innerToolExecutions = java.util.concurrent.atomic.AtomicInteger(0)
+    val innerToolExecutionCount: Int get() = innerToolExecutions.get()
+
+    /** Record one inner-loop tool execution (called from [AgentToolManager.notifyToolExecuted]). */
+    fun recordInnerToolExecution(domain: String, method: String) {
+        innerToolExecutions.incrementAndGet()
+    }
+
+    /** Reset the inner execution counter; invoked at the start of each run. */
+    fun resetInnerToolExecutions() {
+        innerToolExecutions.set(0)
+    }
 
     val activeDriver get() = session.getOrCreateBoundDriver()
     val startTime get() = _startTime
@@ -647,10 +668,11 @@ open class BasicBrowserAgent(
             is ObserveOptions -> context.createObserveParams(
                 options,
                 fromAct = false,
-                multistep = multistep
+                multistep = multistep,
+                codingMode = codingMode,
             )
 
-            is ActionOptions -> context.createObserveActParams(multistep)
+            is ActionOptions -> context.createObserveActParams(multistep, codingMode)
             else -> throw IllegalArgumentException("Not supported options | $options")
         }
 

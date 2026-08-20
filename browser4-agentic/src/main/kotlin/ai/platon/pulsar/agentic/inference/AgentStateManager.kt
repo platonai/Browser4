@@ -506,6 +506,14 @@ class AgentStateManager(
     }
 
     private suspend fun getBrowserUseState(): BrowserUseState {
+        // Coding tasks must not pay page-state costs and must not automatically
+        // receive page info (design §3.5): short-circuit to DUMMY — no DOM-settle
+        // wait, no full snapshot, no tab injection. Page info becomes available
+        // only after the model explicitly drives the page via tab.* tools.
+        if (agent.codingMode) {
+            return BrowserUseState.DUMMY
+        }
+
         pageStateTracker.waitForDOMSettle()
 
         val snapshotOptions = SnapshotOptions(

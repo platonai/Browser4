@@ -54,6 +54,12 @@ data class AgentState constructor(
     var keyFindings: List<String>? = null,
     // AI: completion next suggestions
     var nextSuggestions: List<String>? = null,
+    // AI: quality-gate report from the completion output (design §3.2)
+    var gates: List<Map<String, Any?>>? = null,
+    // AI: files changed during the task
+    var filesChanged: List<String>? = null,
+    // AI: open problems the task did not resolve
+    var problems: List<String>? = null,
 
     // low level action description which is originally constructed from AI's response
     @JsonIgnore
@@ -68,6 +74,17 @@ data class AgentState constructor(
     val isSuccess: Boolean get() = exception == null
     val isDone: Boolean get() = isComplete == true
     val hasErrors: Boolean get() = exception != null
+
+    /**
+     * Bounded, single-line preview of the last tool call result, rendered into the
+     * agent's Execution History so the model can see what its tools returned even
+     * in TEXT exposure mode (the full result stays in the persisted state logs).
+     */
+    val resultPreview: String?
+        get() = toolCallResult?.evaluate?.toString()
+            ?.replace(Regex("\\s+"), " ")
+            ?.trim()
+            ?.take(600)
 
     /** The tool domain of the action executed in this state (e.g., "tab", "fs", "agent"). */
     val actionDomain: String? get() = toolCallResult?.actionDescription?.toolCall?.domain

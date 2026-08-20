@@ -81,11 +81,15 @@ $summaryLines
  */
 fun buildMainSystemPromptV1(): String = buildMainSystemPromptV1(ToolSpecFormat.KOTLIN)
 
-fun buildToolSpecContent(toolFormat: ToolSpecFormat): String {
+fun buildToolSpecContent(
+    toolFormat: ToolSpecFormat,
+    codingTask: Boolean? = null,
+    disclosure: String = "tiered",
+): String {
     val toolSpecContent = when (toolFormat) {
         ToolSpecFormat.KOTLIN -> """
 ```
-${ToolCallSpecificationRenderer.render(includeCustomDomains = true)}
+${ToolCallSpecificationRenderer.renderTiered(includeCustomDomains = true, codingTask = codingTask, disclosure = disclosure)}
 ```
 """.trimIndent()
 
@@ -102,6 +106,8 @@ ${ToolCallSpecificationRenderer.renderJson(includeCustomDomains = true)}
 fun buildToolUseSections(
     toolFormat: ToolSpecFormat = ToolSpecFormat.KOTLIN,
     includeToolList: Boolean = true,
+    codingTask: Boolean? = null,
+    disclosure: String = "tiered",
 ): String {
     return """
 ## Tool Usage
@@ -119,7 +125,7 @@ $EXTRACTION_TOOL_NOTE_CONTENT
 ${if (includeToolList) """
 ### Tool List
 
-${buildToolSpecContent(toolFormat)}
+${buildToolSpecContent(toolFormat, codingTask, disclosure)}
 """ else ""}
 ### Available Skills
 
@@ -141,6 +147,8 @@ ${buildSkillSummariesSection()}
 fun buildMainSystemPromptV1(
     toolFormat: ToolSpecFormat,
     includeToolList: Boolean = true,
+    codingTask: Boolean? = null,
+    disclosure: String = "tiered",
 ): String {
     return """
 # System Instructions
@@ -221,7 +229,7 @@ $OBSERVE_RESPONSE_COMPLETE_SCHEMA
 
 ---
 
-${buildToolUseSections(toolFormat, includeToolList)}
+${buildToolUseSections(toolFormat, includeToolList, codingTask, disclosure)}
 
         """.trimIndent()
 }

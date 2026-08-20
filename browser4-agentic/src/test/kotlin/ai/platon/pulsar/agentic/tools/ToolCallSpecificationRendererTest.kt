@@ -513,4 +513,56 @@ class ToolCallSpecificationRendererTest {
             return SkillResult.success(data = "Test result")
         }
     }
+
+    // ── Tiered disclosure (design §1.2) ──────────────────────────────────────
+
+    @Test
+    @DisplayName("renderTiered for coding tasks collapses page domains into a summary line")
+    fun testRenderTieredCodingTaskCollapsesPageDomains() {
+        val rendered = ToolCallSpecificationRenderer.renderTiered(
+            includeCustomDomains = true, codingTask = true, disclosure = "tiered"
+        )
+
+        assertFalse(rendered.contains("tab.navigate"), "coding disclosure must not list tab tools: $rendered")
+        assertFalse(rendered.contains("browser.closeTab"), "coding disclosure must not list browser tools: $rendered")
+        assertTrue(rendered.contains("tab"), "summary line must mention the collapsed tab domain")
+        assertTrue(rendered.contains("system.help"), "summary line must point to system.help")
+    }
+
+    @Test
+    @DisplayName("renderTiered for browsing tasks collapses dev domains when registered")
+    fun testRenderTieredBrowsingTaskCollapsesDevDomains() {
+        ToolCallSpecificationRenderer.registerBuiltinDomainSpecs(
+            "coding",
+            listOf(
+                ToolSpec(
+                    domain = "coding", method = "read",
+                    arguments = listOf(ToolSpec.Arg("path", "String")),
+                    returnType = "String", description = "Read a file"
+                )
+            )
+        )
+        try {
+            val rendered = ToolCallSpecificationRenderer.renderTiered(
+                includeCustomDomains = true, codingTask = false, disclosure = "tiered"
+            )
+
+            assertTrue(rendered.contains("tab.navigate"), "browsing disclosure must list tab tools")
+            assertFalse(rendered.contains("coding.read"), "browsing disclosure must not list coding tools: $rendered")
+            assertTrue(rendered.contains("coding"), "summary line must mention the collapsed coding domain")
+        } finally {
+            // builtinDomainSpecs is process-global; restore isolation for other tests
+            ToolCallSpecificationRenderer.registerBuiltinDomainSpecs("coding", emptyList())
+        }
+    }
+
+    @Test
+    @DisplayName("renderTiered falls back to flat disclosure for full mode or unknown task")
+    fun testRenderTieredFullFallback() {
+        val full = ToolCallSpecificationRenderer.renderTiered(includeCustomDomains = true, codingTask = true, disclosure = "full")
+        assertTrue(full.contains("tab.navigate"), "full disclosure keeps page tools")
+
+        val unknown = ToolCallSpecificationRenderer.renderTiered(includeCustomDomains = true, codingTask = null, disclosure = "tiered")
+        assertTrue(unknown.contains("tab.navigate"), "unknown task type keeps flat disclosure")
+    }
 }

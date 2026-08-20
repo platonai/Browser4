@@ -24,6 +24,12 @@ data class ObserveParams(
     val multistep: Boolean = false,
     val logInferenceToFile: Boolean = false,
     val fromAct: Boolean = false,
+    /**
+     * True when the task is a pure coding task (CodingTaskDetector) — drives
+     * tiered tool disclosure: coding tools in full, page tools collapsed to a
+     * one-line summary (and vice versa for browsing tasks).
+     */
+    val codingMode: Boolean = false,
 )
 
 /**

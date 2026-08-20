@@ -103,6 +103,7 @@ open class RobustBrowserAgent(
      */
     override suspend fun run(action: ActionOptions): AgentHistory {
         _lastRunSessionId = null
+        resetInnerToolExecutions()
         onWillRun(action)
 
         // The first context created below starts this run's execution session; all
@@ -354,6 +355,11 @@ open class RobustBrowserAgent(
     ): ResolveResult {
         initializeResolution(initContext, attempt)
         var consecutiveNoOps = 0
+        // Text-only stall fuse: consecutive responses without ANY tool call and
+        // without a completion marker. Text-only responses deliberately don't
+        // count as no-ops (they're legitimate reasoning turns), but an agent
+        // that only reasons without ever acting stalls forever — abort it.
+        var consecutiveTextOnly = 0
         var lastStopReason: StopReason? = null
         var context = initContext
         val startTime = Instant.now()
@@ -387,6 +393,22 @@ open class RobustBrowserAgent(
                 if (stepResult.shouldStop) {
                     lastStopReason = stepResult.stopReason
                     break
+                }
+
+                // Text-only stall fuse (browser4.agent.textOnlyStallLimit, 0 = disabled).
+                val lastToolCall = context.agentState.actionDescription?.toolCall
+                if (lastToolCall == null) {
+                    consecutiveTextOnly++
+                    if (config.textOnlyStallLimit > 0 && consecutiveTextOnly >= config.textOnlyStallLimit) {
+                        logger.info(
+                            "🧵 textOnly.stall sid={} step={} consecutive={} limit={}",
+                            context.sid, context.step, consecutiveTextOnly, config.textOnlyStallLimit
+                        )
+                        lastStopReason = StopReason.NOOP_LIMIT
+                        break
+                    }
+                } else {
+                    consecutiveTextOnly = 0
                 }
             }
 
@@ -640,11 +662,46 @@ open class RobustBrowserAgent(
         val sid = context.sessionId
 
         require(action.isDecidedComplete) { "Required action.isComplete" }
+
+        // ── Finish-report hard validation (design §3.2) ─────────────────────
+        // A completion claim with ZERO executed tool calls is a fabricated
+        // narrative (observed: 35s / 1 step / 0 tool calls "all done"). Reject
+        // it in strict mode so the task fails instead of reporting success.
+        // Two sources: outer states (one per model turn with an executed tool)
+        // and inner-loop executions recorded by the tool-calling coordinator.
+        val runStates = stateHistory.snapshotFor(context.sessionId).states
+        val outerExecuted = runStates.filter { it.toolCallResult != null }
+        val totalExecuted = outerExecuted.size + innerToolExecutionCount
+        if (totalExecuted == 0 && config.finishGateCheck.equals("strict", ignoreCase = true)) {
+            throw IllegalStateException(
+                "Finish report rejected: task completed with zero executed tool calls (false-completion guard)"
+            )
+        }
+        // Gate cross-check: gates claiming `ran:true` should reference tools that
+        // actually executed. Free-form gate names make this fuzzy, so mismatches
+        // warn instead of failing.
+        val executedNames = outerExecuted
+            .mapNotNull { s -> s.actionDomain?.let { d -> "$d.${s.method}" } }
+            .toSet()
+        action.gates.orEmpty().filter { it["ran"] == true }.forEach { gate ->
+            val name = gate["name"]?.toString() ?: return@forEach
+            val matched = executedNames.any { it.endsWith(name) || it.contains(name) }
+            if (!matched) {
+                logger.warn(
+                    "⚠ finish.gate sid={} gate='{}' claims ran but no matching tool call executed; executed={}",
+                    sid.take(8), name, executedNames.joinToString(",")
+                )
+            }
+        }
+
         context.agentState.also {
             it.isComplete = true
             it.summary = action.summary
             it.keyFindings = action.keyFindings
             it.nextSuggestions = action.nextSuggestions
+            it.gates = action.gates
+            it.filesChanged = action.filesChanged
+            it.problems = action.problems
             it.actionDescription = action
         }
 

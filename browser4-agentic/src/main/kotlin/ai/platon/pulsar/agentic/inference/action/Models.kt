@@ -42,10 +42,26 @@ data class ModelObserveResponseComplete(
      * Suggested next steps (follow-up queries, alternate actions, etc.).
      */
     val nextSuggestions: List<String>? = null,
+
+    /**
+     * Quality-gate report (design §3.2): `{name, ran, exitCode, ok, detail}` per gate.
+     * `ran` must be true only for gates the agent actually executed via a tool call.
+     */
+    val gates: List<Map<String, Any?>>? = null,
+
+    /**
+     * Files changed during the task (write/delete/replace targets).
+     */
+    val filesChanged: List<String>? = null,
+
+    /**
+     * Open problems the task did not resolve.
+     */
+    val problems: List<String>? = null,
 )
 
 const val OBSERVE_RESPONSE_COMPLETE_SCHEMA = """
-{"taskComplete":bool,"success":bool,"errorCause":string?,"summary":string,"keyFindings":[string],"nextSuggestions":[string]}
+{"taskComplete":bool,"success":bool,"errorCause":string?,"summary":string,"keyFindings":[string],"nextSuggestions":[string],"gates":[{"name":string,"ran":bool,"exitCode":int?,"ok":bool?,"detail":string?}],"filesChanged":[string],"problems":[string]}
 """
 
 /**

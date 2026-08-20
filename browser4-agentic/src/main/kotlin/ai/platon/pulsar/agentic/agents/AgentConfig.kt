@@ -54,8 +54,40 @@ data class AgentConfig(
     val allowedPorts: Set<Int> = setOf(80, 443, 8080, 8443, 3000, 5000, 8000, 9000),
     val maxSelectorLength: Int = 1000,
     val denyUnknownActions: Boolean = false,
-    // Tool exposure mode: TEXT (default), CHAT, or TOOL_CALLING
-    val toolExposeMode: ToolExposeMode = ToolExposeMode.TEXT,
+    // Tool exposure mode: TOOL_CALLING (default), CHAT, or TEXT
+    val toolExposeMode: ToolExposeMode = ToolExposeMode.TOOL_CALLING,
+    // ── Feedback-loop overhaul (docs-dev/copilot/browser4-agent-feedback-implementation-plan.md) ──
+    /**
+     * Wrap every tool result into a bounded [ai.platon.pulsar.agentic.model.ToolOutcome]
+     * envelope before it is rendered back to the model (history + previous-step result).
+     * Configurable via `-Dbrowser4.agent.toolOutcome=false` to revert to raw results.
+     */
+    val toolOutcome: Boolean =
+        System.getProperty("browser4.agent.toolOutcome", "true").toBoolean(),
+    /**
+     * Tool disclosure strategy: `tiered` (task-adaptive L0/L1/L2) or `full` (flat list).
+     * Configurable via `-Dbrowser4.agent.toolDisclosure=full`.
+     */
+    val toolDisclosure: String =
+        System.getProperty("browser4.agent.toolDisclosure", "tiered"),
+    /**
+     * Abort the run after N consecutive text-only responses (no tool call, no completion).
+     * 0 disables the fuse. Configurable via `-Dbrowser4.agent.textOnlyStallLimit=<n>`.
+     */
+    val textOnlyStallLimit: Int =
+        System.getProperty("browser4.agent.textOnlyStallLimit", "5").toInt().coerceAtLeast(0),
+    /**
+     * Finish-report gate validation: `strict` (mismatched gates fail the task) or `warn`
+     * (log only). Configurable via `-Dbrowser4.agent.finishGateCheck=warn`.
+     */
+    val finishGateCheck: String =
+        System.getProperty("browser4.agent.finishGateCheck", "strict"),
+    /**
+     * Max model↔tool round-trips inside one native tool-calling loop turn.
+     * Configurable via `-Dbrowser4.agent.toolLoop.maxIterations=<n>`.
+     */
+    val toolLoopMaxIterations: Int =
+        System.getProperty("browser4.agent.toolLoop.maxIterations", "12").toInt().coerceAtLeast(1),
     // Overall timeout for resolve() to avoid indefinite hangs
     val resolveTimeoutMs: Long = 24.hours.inWholeMilliseconds,
     // Circuit breaker configuration

@@ -54,6 +54,7 @@ class AgentToolCallLoop(
         var totalInput = 0
         var totalOutput = 0
         var totalTotal = 0
+        val executedTools = mutableListOf<String>()
 
         for (iteration in 0 until maxIterations) {
             // Halt the task when the accumulated messages would exceed the
@@ -89,13 +90,16 @@ class AgentToolCallLoop(
             for (request in toolRequests) {
                 val resultMessage: ToolExecutionResultMessage = coordinator.execute(request)
                 messages.add(resultMessage)
+                executedTools += request.name()
             }
         }
 
         // Max iterations exhausted — return last response with error
         logger.warn("Tool loop exceeded max iterations ($maxIterations)")
+        val executed = executedTools.distinct().joinToString(", ")
         return chatResponseToModelResponse(response!!, totalInput, totalOutput, totalTotal).let { mr ->
-            mr.copy(modelError = "Tool call loop exceeded max iterations ($maxIterations)")
+            mr.copy(modelError = "Tool call loop exceeded max iterations ($maxIterations)" +
+                if (executed.isNotBlank()) "; executed: $executed" else "")
         }
     }
 

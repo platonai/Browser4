@@ -352,6 +352,19 @@ data class ActionDescription constructor(
      * */
     val nextSuggestions: List<String>? = null,
     /**
+     * AI: quality-gate report from the completion output (design §3.2);
+     * each entry: `{name, ran, exitCode, ok, detail}`.
+     * */
+    val gates: List<Map<String, Any?>>? = null,
+    /**
+     * AI: files changed during the task.
+     * */
+    val filesChanged: List<String>? = null,
+    /**
+     * AI: open problems the task did not resolve.
+     * */
+    val problems: List<String>? = null,
+    /**
      * AI: model response
      * */
     val modelResponse: ModelResponse? = null,

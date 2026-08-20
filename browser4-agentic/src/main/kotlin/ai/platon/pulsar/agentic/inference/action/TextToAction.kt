@@ -127,6 +127,9 @@ open class TextToAction(
                     summary = complete.summary,
                     keyFindings = complete.keyFindings,
                     nextSuggestions = complete.nextSuggestions,
+                    gates = complete.gates,
+                    filesChanged = complete.filesChanged,
+                    problems = complete.problems,
                     modelResponse = modelResponse
                 )
             }
