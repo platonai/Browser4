@@ -46,14 +46,14 @@ class DevTaskPlannerTest {
     @Test
     @DisplayName("unknown browser4-plugins/<name> mention is a new plugin module with a scaffold step")
     fun newPluginModuleDetection() {
-        val plan = DevTaskPlanner.plan("创建新插件 browser4-plugins/browser4-wordcount，实现 getWordCount 工具")
-        assertTrue("browser4-plugins/browser4-wordcount" in plan.newPluginModules,
+        val plan = DevTaskPlanner.plan("创建新插件 browser4-plugins/browser4-testprobe，实现 getWordCount 工具")
+        assertTrue("browser4-plugins/browser4-testprobe" in plan.newPluginModules,
             "new plugin modules: ${plan.newPluginModules}")
         val scaffold = plan.steps.firstOrNull { it.tool == "coding.scaffoldToDir" }
         assertNotNull(scaffold, "scaffold step expected: ${plan.steps}")
-        assertEquals("browser4-plugins/browser4-wordcount", scaffold!!.args["dir"])
+        assertEquals("browser4-plugins/browser4-testprobe", scaffold!!.args["dir"])
         // The build step targets the NEW module.
-        assertTrue(plan.steps.any { it.tool == "coding.mvnBuild" && it.command.contains("browser4-wordcount") },
+        assertTrue(plan.steps.any { it.tool == "coding.mvnBuild" && it.command.contains("browser4-testprobe") },
             "mvnBuild should target the new module: ${plan.steps}")
     }
 
@@ -109,7 +109,7 @@ class DevTaskPlannerTest {
     @DisplayName("plans never include a git-commit step")
     fun noCommitStep() {
         val plan = DevTaskPlanner.plan(
-            "Create a new plugin browser4-plugins/browser4-wordcount and add WordcountService.kt")
+            "Create a new plugin browser4-plugins/browser4-testprobe and add WordcountService.kt")
         assertFalse(plan.steps.any { it.command.contains("git commit") },
             "agents must not auto-commit: ${plan.steps.map { it.command }}")
     }
@@ -118,10 +118,10 @@ class DevTaskPlannerTest {
     @DisplayName("bare filename in a new-plugin task yields a locate step on the module dir")
     fun bareFilenameLocateStep() {
         val plan = DevTaskPlanner.plan(
-            "Create a new plugin browser4-plugins/browser4-wordcount and implement HelloService.kt")
+            "Create a new plugin browser4-plugins/browser4-testprobe and implement HelloService.kt")
         val locate = plan.steps.firstOrNull { it.tool == "coding.listDir" }
         assertNotNull(locate, "locate step expected: ${plan.steps}")
-        assertEquals("browser4-plugins/browser4-wordcount", locate!!.args["path"])
+        assertEquals("browser4-plugins/browser4-testprobe", locate!!.args["path"])
         assertFalse(plan.steps.any { it.tool == "coding.read" && it.command == "coding.read(path=\"HelloService.kt\")" },
             "bare filename must not be read from the workspace root: ${plan.steps}")
     }
