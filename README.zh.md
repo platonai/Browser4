@@ -66,6 +66,15 @@ Read https://browser4.io/SKILL.md and install browser4-cli (if not installed) fo
 5. write the result to a markdown file
 ```
 
+## DeepSeek Harness 集成
+
+https://github.com/platonai/dsh-browser4
+
+```
+dsh plugin --profile web add dsh-browser4                  # npm registry
+dsh plugin --profile web add github:platonai/dsh-browser4  # GitHub
+```
+
 ## 🧭 工具选择指南
 
 根据任务类型选择最合适的工具：
