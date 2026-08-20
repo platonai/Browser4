@@ -699,7 +699,7 @@ Join our community for support, feedback, and collaboration!
 
 We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
-<img width="450" height="450" alt="群聊：dsh-Browser4社区交流3群" src="https://github.com/user-attachments/assets/c15fe635-0e9f-4ac2-b038-abec6bd6bbe4" />
+<img width="400" height="400" alt="群聊：dsh-Browser4社区交流3群" src="https://github.com/user-attachments/assets/c15fe635-0e9f-4ac2-b038-abec6bd6bbe4" />
 
 ---
 
