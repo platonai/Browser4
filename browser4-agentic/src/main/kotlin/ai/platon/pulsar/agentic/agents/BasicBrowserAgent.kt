@@ -58,20 +58,22 @@ open class BasicBrowserAgent(
     protected val fs get() = agentToolManager.fs
 
     /**
-     * Count of tool executions performed inside the native tool-calling loop
-     * (no outer AgentState is created for those) — resets per run.
+     * Tools executed inside the native tool-calling loop (no outer AgentState
+     * is created for those) — tracked by domain.method, resets per run. Used by
+     * the finish-report guard (count) and the gate cross-check (names).
      */
-    private val innerToolExecutions = java.util.concurrent.atomic.AtomicInteger(0)
-    val innerToolExecutionCount: Int get() = innerToolExecutions.get()
+    private val innerToolExecutions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    val innerToolExecutionCount: Int get() = innerToolExecutions.size
+    val innerToolExecutionNames: Set<String> get() = innerToolExecutions.toSet()
 
     /** Record one inner-loop tool execution (called from [AgentToolManager.notifyToolExecuted]). */
     fun recordInnerToolExecution(domain: String, method: String) {
-        innerToolExecutions.incrementAndGet()
+        innerToolExecutions.add("$domain.$method")
     }
 
-    /** Reset the inner execution counter; invoked at the start of each run. */
+    /** Reset the inner execution registry; invoked at the start of each run. */
     fun resetInnerToolExecutions() {
-        innerToolExecutions.set(0)
+        innerToolExecutions.clear()
     }
 
     val activeDriver get() = session.getOrCreateBoundDriver()
@@ -662,8 +664,6 @@ open class BasicBrowserAgent(
         options: Any, context: ExecutionContext, multistep: Boolean
     ): ObserveActResult {
         val observeOptions = options as? ObserveOptions
-        val drawOverlay = alwaysTrue() || (observeOptions?.drawOverlay ?: false)
-
         val params = when (options) {
             is ObserveOptions -> context.createObserveParams(
                 options,
@@ -676,9 +676,13 @@ open class BasicBrowserAgent(
             else -> throw IllegalArgumentException("Not supported options | $options")
         }
 
-        // Sync browser state just before observe
+        // Sync browser state just before observe (coding mode short-circuits to
+        // DUMMY inside getBrowserUseState — no driver, no settle, no snapshot).
         stateManager.updateBrowserUseState(context)
         val interactiveElements = context.agentState.browserUseState.getAllInteractiveElements()
+        // P4.5: coding tasks never draw CDP highlights — doing so would bind a
+        // driver and launch a browser for a pure file/build task.
+        val drawOverlay = !codingMode && (alwaysTrue() || (observeOptions?.drawOverlay ?: false))
         try {
             if (drawOverlay) {
                 snapshotService.addHighlights(interactiveElements)

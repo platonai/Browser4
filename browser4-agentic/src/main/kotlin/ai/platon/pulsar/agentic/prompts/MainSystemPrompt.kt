@@ -10,6 +10,19 @@ import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationRenderer
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecFormat
 
 /**
+ * Note appended to the system prompt for coding tasks: page-state response
+ * fields are irrelevant without a page — the model should fill "N/A" instead
+ * of describing a non-existent page (design §3.5 / P4.3).
+ */
+private const val CODING_NO_PAGE_FIELDS_NOTE = """
+
+**Coding task — no page context.** In your response, set `screenshotContentSummary`
+and `currentPageContentSummary` to `"N/A"` — no browser page is attached to this
+task. If you need web page information, explicitly call `tab.navigate` /
+`tab.ariaSnapshot` / `tab.textContent` / `tab.eval` first.
+"""
+
+/**
  * Skill tool type definitions for the system prompt.
  *
  * These type definitions help the LLM understand the data structures returned by skill-related tool calls.
@@ -227,6 +240,7 @@ ${buildResponseSchema()}
 Output format:
 $OBSERVE_RESPONSE_COMPLETE_SCHEMA
 
+${if (codingTask == true) CODING_NO_PAGE_FIELDS_NOTE else ""}
 ---
 
 ${buildToolUseSections(toolFormat, includeToolList, codingTask, disclosure)}

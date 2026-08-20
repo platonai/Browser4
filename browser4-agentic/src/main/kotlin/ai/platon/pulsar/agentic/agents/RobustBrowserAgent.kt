@@ -527,11 +527,16 @@ open class RobustBrowserAgent(
     private suspend fun buildExecutionContextForStep(
         action: ActionOptions, event: String, ctxIn: ExecutionContext
     ): ExecutionContext {
-        val driver = activeDriver
-        val url = driver.url()
-        if (!codingMode && (url.isBlank() || url == "about:blank")) {
-            val searchURL = SearchEngineSelector.selectBest()
-            driver.navigate(searchURL)
+        // P4.5 lazy browser launch: coding tasks must not bind a driver (or
+        // navigate) until the model explicitly calls a page tool — activeDriver
+        // is a lazily-creating getter, so skip it entirely in coding mode.
+        if (!codingMode) {
+            val driver = activeDriver
+            val url = driver.url()
+            if (url.isBlank() || url == "about:blank") {
+                val searchURL = SearchEngineSelector.selectBest()
+                driver.navigate(searchURL)
+            }
         }
 
         val instruction = action.action
@@ -678,11 +683,12 @@ open class RobustBrowserAgent(
             )
         }
         // Gate cross-check: gates claiming `ran:true` should reference tools that
-        // actually executed. Free-form gate names make this fuzzy, so mismatches
-        // warn instead of failing.
+        // actually executed. Matches against outer states AND inner-loop names
+        // (exact or method-substring); free-form gate names make strict failure
+        // risky, so mismatches warn instead of failing.
         val executedNames = outerExecuted
             .mapNotNull { s -> s.actionDomain?.let { d -> "$d.${s.method}" } }
-            .toSet()
+            .toSet() + innerToolExecutionNames
         action.gates.orEmpty().filter { it["ran"] == true }.forEach { gate ->
             val name = gate["name"]?.toString() ?: return@forEach
             val matched = executedNames.any { it.endsWith(name) || it.contains(name) }
