@@ -66,6 +66,15 @@ Read https://browser4.io/SKILL.md and install browser4-cli (if not installed) fo
 5. write the result to a markdown file
 ```
 
+## DeepSeek Harness 集成
+
+https://github.com/platonai/dsh-browser4
+
+```
+dsh plugin --profile web add dsh-browser4                  # npm registry
+dsh plugin --profile web add github:platonai/dsh-browser4  # GitHub
+```
+
 ## 🧭 工具选择指南
 
 根据任务类型选择最合适的工具：
@@ -712,6 +721,8 @@ Browser4 自带一个轻量级 **MockSite** 服务器，用于提供静态 HTML 
 
 欢迎贡献代码和文档！详情见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
+<img width="400" height="400" alt="群聊：dsh-Browser4社区交流3群" src="https://github.com/user-attachments/assets/c15fe635-0e9f-4ac2-b038-abec6bd6bbe4" />
+
 ---
 
 ## 📜 文档
@@ -740,3 +751,10 @@ export PROXY_ROTATION_URL=https://your-proxy-provider.com/rotation-endpoint
 ## 许可证
 
 Apache 2.0 License。详见 [LICENSE](LICENSE)。
+
+## 友链
+
+* [omdsh-dev/dsh-data-agent](https://github.com/omdsh-dev/dsh-data-agent) - DSH Data Agent · 用对话分析数据
+* [ccch1mneyyy/dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI) - DSH TUI · 一个美观且实用的 Claude Code 风格 TUI 插件
+
+
