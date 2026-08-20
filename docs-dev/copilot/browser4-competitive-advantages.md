@@ -8,7 +8,7 @@
 
 ### A. 抽取与智能（5）
 1. **X-SQL + 零 Token 确定性抽取** — `htmlsnapshot query --sql @query.sql` 对存储页面快照做确定性抽取，规模化时成本趋近于零。
-2. **WebMiner ML 聚类** — HTML 目录经本地 ML 聚类直接产出报表（SMILE 单机 / Spark 分布式），不消耗 LLM token。
+2. **WebMiner / scent-miner ML 聚类** — `java -jar scent-miner.jar all <dir>` 一键跑完 encode（HTML→特征向量）→ cluster（SMILE KMeans，K 自动检测）→ views（交互式 HTML 报告 + Excel），不消耗 LLM token；免费层 <1,000 页单机、商业层 Spark 分布式。**本仓库自带 `skills/scent-miner/SKILL.md` 技能**：launcher 自安装/自更新（SHA-256 校验）、`run-example` 内置演示语料，agent 可零人工跑通整条管线。
 3. **混合智能四层可降级** — LLM 抽取、ML 聚类、X-SQL、经验库任选一层，LLM 是可选项而非必需品。
 4. **渐进式经验库** — `experience save/query/deep-learn` 按 URL/域名沉淀选择器、反爬陷阱与提示，跨会话、跨智能体复用。
 5. **双快照模型 + WPSI 压缩摘要** — `snapshot`（交互 a11y refs）与 `htmlsnapshot`（抽取 DOM）两套互补视图；`htmlsnapshot summary` 产出 token 高效的 Web Page Summary Index；快照落盘可 `grep/list/clean` 复用。
@@ -51,7 +51,7 @@
 | **浏览器驱动** | CDP 原生（自研 PulsarWebDriver，协程安全） | Playwright（CDP/WebKit/Firefox） | Playwright（CDP） | 默认无浏览器（可拼 Splash/Playwright） |
 | **确定性抽取** | ✅✅ X-SQL 查存页快照，零 token；双快照模型；WPSI 压缩摘要；webdb 网页数据库 | ❌ 只有 a11y 快照文本，交给 LLM | ❌ DOM 片段喂给 LLM | ✅ XPath/CSS + Item Pipeline（HTTP 层） |
 | **AI 抽取** | ✅ 可选：extract/summarize/chat，LLM 供应商可换 | ❌ 无内置（靠宿主 LLM） | ✅ 核心即 LLM（每步烧 token） | ❌ 无 |
-| **混合智能降级** | ✅ LLM/ML/X-SQL/经验库四层可选，WebMiner ML 本地出报表 | ❌ | ❌ | ❌ |
+| **混合智能降级** | ✅ LLM/ML/X-SQL/经验库四层可选，scent-miner（WebMiner）ML 本地出报表，仓库自带 scent-miner 技能 | ❌ | ❌ | ❌ |
 | **经验记忆** | ✅ experience save/query/deep-learn 复用选择器与反爬经验 | ❌ | 部分（近期有 memory 能力） | ❌ |
 | **登录态/身份复用** | ✅✅ attach 已有浏览器、扩展导入、state-save/load、profile 模式、cookie/local/session storage 全控制 | ⚠️ 有持久 context，但无机器人共享的导入路径 | ⚠️ 浏览器 profile 复用 | ❌ 无浏览器身份概念 |
 | **规模化** | ✅ swarm 并行 + URL 池优先级/期限调度 + batch/loop 定时；宣称单机日 10万–20万 复杂页（设计目标） | ⚠️ 单实例单浏览器，横向靠自建 | ⚠️ 多智能体并行，LLM 成本线性放大 | ✅✅ HTTP 级极快（纯 HTML），JS 重站点无力 |
@@ -81,7 +81,7 @@
 
 ### 三大支柱卖点
 
-1. **Zero-Token Extraction** — 确定性 X-SQL 直查页面快照，WPSI 压缩摘要省上下文，HTML 目录经 WebMiner 本地聚类成报表。LLM 只在需要时出场，规模化账单趋近于零。
+1. **Zero-Token Extraction** — 确定性 X-SQL 直查页面快照，WPSI 压缩摘要省上下文，HTML 目录经 `scent-miner`（WebMiner）本地聚类成交互式报表（encode→cluster→views，一条命令）。LLM 只在需要时出场，规模化账单趋近于零。
 2. **Hybrid Intelligence, Growing Memory** — LLM/ML/X-SQL/经验库四层可降级；每跑一个站点，选择器与反爬经验自动沉淀（`experience save/query`），越用越懂网页。
 3. **Enterprise-Scale, Human-Operable** — CDP 原生协程引擎 + swarm 优先级调度，设计目标单机日行十万页；headed 可视化、`/status` 面板、doctor 诊断，AI 踩坑时人随时接管。
 
@@ -101,3 +101,4 @@
 - [ ] 性能数字（10万–20万页/天）为设计目标，对外使用前补 benchmark 或保留 "designed for" 措辞。
 - [ ] 竞品列特性随时间变化，发布前核对 Playwright MCP / Browser Use / Scrapy 最新版本。
 - [ ] 对比表若用于官网，建议增加版本日期与"信息截止"标注。
+- [ ] scent-miner（WebMiner）已知问题（来自 coworker 实测记录，v0.0.7）：`all` 的 views 输出落在应用临时目录而非文档所述 `<html-dir>-ml-output` 树（结束时打印绝对路径可缓解）；launcher 曾有吞 stdout 问题（已修复）；需 JDK 17+；免费层 <1,000 页、`--max-files` 默认 40。对外宣传前确认这些点已修复或在文案中规避。
