@@ -42,11 +42,12 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 
 ### ✨ Key Capabilities
 
-* 🤖 **Agent Browser** — Browser automation CLI for AI agents.
-* ⚙️ **Machine Learning Agent** — Turns complex pages into Excel/structured data without consuming tokens.
-* ⚡ **Extreme Performance** — Fully coroutine-safe; supports 100k ~ 200k complex page visits per machine per day.
-* 🧬 **Data Extraction** — Hybrid of LLM, ML, X-SQL and selectors for clean data across chaotic pages.
-* 📦 **And More** - Swarm scraping, crawl, batch, loop, stateful sessions, page storage, extension, plugins, and more.
+* 🤖 **Agent Browser** — AI agents and humans drive real browsers via a Rust CLI, MCP, and an agentic backend: navigate, click, fill, snapshot, batch, and loop.
+* 🧬 **Zero-Token Extraction** — X-SQL + CSS selectors for deterministic extraction from live pages or stored HTML snapshots; WebMiner ML clustering turns HTML corpora into spreadsheet and report views with no LLM tokens.
+* 🧠 **Hybrid Intelligence** — Combine LLM extraction, ML clustering, X-SQL, and a progressive experience store that reuses learned selectors and blockers.
+* ⚡ **High-Performance Runtime** — Coroutine-safe, CDP-native engine designed for 100k–200k complex page visits per machine per day via swarm/crawl scale-out.
+* 📦 **Enterprise-Scale Automation** — Swarm crawling, batch/loop jobs, stateful sessions, plugins, runtime skills, browser extension, and MCP-over-HTTP.
+* 🛠️ **Programming-Agent Kernel** — 47 `coding.*` tools (sandboxed shell/fs, scaffolding, validation, self-development) for agents building Browser4 artifacts — or Browser4 itself.
 
 ## Quick Start
 
