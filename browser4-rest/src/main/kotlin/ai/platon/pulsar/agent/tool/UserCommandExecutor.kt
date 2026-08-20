@@ -227,11 +227,31 @@ class UserCommandExecutor(
         plainCommand: String,
         noopLimit: Int? = null
     ): String {
-        val status = ensureAgentRunner(sessionId).create()
+        val runner = ensureAgentRunner(sessionId)
+        val status = runner.create()
         taskOwner[status.id] = "agent"
         logger.info("Submitting agent task {} (session={}, noopLimit={})", status.id, sessionId, noopLimit)
-        commanderScope.launch { ensureAgentRunner(sessionId).execute(plainCommand, status, noopLimit) }
+        runner.submit(plainCommand, status, noopLimit)
         return status.id
+    }
+
+    /**
+     * Cancel a running/queued agent task by id.
+     *
+     * Probes every session's agent runner — the [taskOwner] map may be stale
+     * after restarts, and the id itself is globally unique.
+     *
+     * @return true when a live job was found and cancelled
+     */
+    fun cancelAgentTask(id: String): Boolean {
+        val cancelled = agentRunners.values.any { it.cancel(id) }
+        if (cancelled) {
+            taskOwner.remove(id)
+            logger.info("Cancelled agent task {}", id)
+        } else {
+            logger.debug("Agent task {} not running — nothing to cancel", id)
+        }
+        return cancelled
     }
 
     /**

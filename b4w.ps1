@@ -166,6 +166,56 @@ if (!$Rebuild -and !$NoBuild -and (Test-Path $Exe)) {
     }
 }
 
+# ── Backend staleness check ──────────────────────────────────────────────
+# The CLI binary is rebuilt from source above, but the Browser4 backend runs
+# from a runtime bundle (browser4-apps/browser4-bundle/target/runtime-bundle)
+# whose jars are only refreshed on demand via
+# BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1. Detect changed Kotlin sources and
+# warn instead of silently talking to a stale backend. `-Rebuild` also
+# forces the bundle rebuild and caches the new hash afterwards.
+$ForcedBundleRebuild = $false
+$BackendHashToCache = $null
+if (!$NoBuild -and (Test-Path (Join-Path $ScriptDir 'browser4-apps\browser4-bundle'))) {
+    $BackendHashFile = Join-Path $ScriptDir 'cli\browser4-cli\target\.backend-source-hash'
+    $BackendCurrentHash = $null
+    try {
+        $Hasher2 = [System.Security.Cryptography.SHA256]::Create()
+        $BackendDirs = @(
+            'browser4-core', 'browser4-agentic', 'browser4-coding',
+            'browser4-rest', 'browser4-boot', 'browser4-agent-tools'
+        )
+        $BackendFiles = foreach ($d in $BackendDirs) {
+            @(Get-ChildItem -Path (Join-Path $ScriptDir $d) -Recurse -File -Filter '*.kt' -ErrorAction SilentlyContinue)
+        }
+        $BackendFiles += @(Get-Item (Join-Path $ScriptDir 'pom.xml'), (Join-Path $ScriptDir 'VERSION') -ErrorAction SilentlyContinue | Where-Object { $_ })
+        $BackendFiles = @($BackendFiles | Sort-Object FullName -Unique)
+        foreach ($f in $BackendFiles) {
+            $Content = [System.IO.File]::ReadAllBytes($f.FullName)
+            $Hasher2.TransformBlock($Content, 0, $Content.Length, $Content, 0) > $null
+        }
+        $Hasher2.TransformFinalBlock(@(), 0, 0) > $null
+        $BackendCurrentHash = [BitConverter]::ToString($Hasher2.Hash) -replace '-'
+        $Hasher2.Dispose()
+    } catch {
+        # If hashing fails (e.g. permission), skip the staleness check.
+    }
+    if ($BackendCurrentHash) {
+        $BackendCachedHash = if (Test-Path $BackendHashFile) { (Get-Content $BackendHashFile -ErrorAction SilentlyContinue).Trim() } else { $null }
+        if ($BackendCachedHash -and $BackendCachedHash -eq $BackendCurrentHash) {
+            # Backend sources unchanged since the last bundle build — skip.
+        } else {
+            Write-Host 'Backend sources changed since the runtime bundle was last built.' -ForegroundColor Yellow
+            Write-Host 'Rebuild with:  $env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE = "1"; b4w <command>' -ForegroundColor Yellow
+            Write-Host '  (or pass -Rebuild to b4w to force the rebuild automatically)' -ForegroundColor DarkGray
+            if ($Rebuild) {
+                $env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE = '1'
+                $ForcedBundleRebuild = $true
+                $BackendHashToCache = $BackendCurrentHash
+            }
+        }
+    }
+}
+
 # Support explicit passthrough: everything after '--' bypasses the
 # script's own param() block and goes directly to the CLI binary.
 # This allows flags like -s <session> to work without PowerShell
@@ -832,6 +882,15 @@ if (Test-Path $Exe) {
     } else {
         cargo run --manifest-path $Manifest
     }
+}
+
+# After a -Rebuild-forced bundle rebuild, persist the backend source hash so
+# subsequent invocations skip the staleness warning.
+if ($ForcedBundleRebuild -and $BackendHashToCache) {
+    try {
+        New-Item -Path (Split-Path $BackendHashFile -Parent) -ItemType Directory -Force -ErrorAction SilentlyContinue > $null
+        $BackendHashToCache | Out-File -FilePath $BackendHashFile -Encoding ascii -NoNewline
+    } catch { }
 }
 
 # Restore the original working directory so the caller's shell session

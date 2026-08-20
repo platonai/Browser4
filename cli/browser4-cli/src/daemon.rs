@@ -5189,10 +5189,13 @@ async fn run_bundle_build_script(
     // Build a -Command line that forces UTF-8 encoding on the console output
     // stream, then dot-sources the build script.  We shell-escape the script
     // path so that paths with spaces or special characters work correctly.
+    // The ErrorEncoding property only exists on PowerShell 7+ — on Windows
+    // PowerShell 5.1 (powershell.exe) it raises a PropertyAssignmentException,
+    // so the assignment is guarded with try/catch.
     let script_path_escaped = script_path.to_string_lossy().replace('\'', "''");
     let command = format!(
         "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \
-         [Console]::ErrorEncoding = [System.Text.Encoding]::UTF8; \
+         try {{ [Console]::ErrorEncoding = [System.Text.Encoding]::UTF8 }} catch {{}}; \
          & '{}' -SkipMavenInstall",
         script_path_escaped
     );
@@ -5755,7 +5758,12 @@ async fn probe_server_state(client: &Client, base_url: &str) -> ServerState {
     let health_url = format!("{trimmed}/actuator/health");
     let tools_url = format!("{trimmed}/mcp/tools");
 
-    let health_response = match client.get(&health_url).send().await {
+    // Explicit short per-probe timeouts: the readiness loop must stay
+    // responsive and finish within its overall budget even when the global
+    // client timeout is large (--timeout 600) or a probe stalls.
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+    let health_response = match client.get(&health_url).timeout(PROBE_TIMEOUT).send().await {
         Ok(response) => response,
         Err(error) => return ServerState::Unreachable(error.to_string()),
     };
@@ -5767,7 +5775,7 @@ async fn probe_server_state(client: &Client, base_url: &str) -> ServerState {
         return ServerState::Starting(health_body);
     }
 
-    let tools_response = match client.get(&tools_url).send().await {
+    let tools_response = match client.get(&tools_url).timeout(PROBE_TIMEOUT).send().await {
         Ok(response) => response,
         Err(error) => return ServerState::Starting(error.to_string()),
     };

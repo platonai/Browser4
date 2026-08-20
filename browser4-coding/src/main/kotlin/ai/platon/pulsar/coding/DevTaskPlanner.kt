@@ -169,12 +169,26 @@ object DevTaskPlanner {
                     "pluginName" to pluginName, "verify" to "true"))
         }
 
-        // 1. Locate the code the task touches.
+        // 1. Locate the code the task touches. Bare filenames (e.g.
+        //    "HelloService.kt" with no directory part) do not resolve from the
+        //    workspace root — list the owning module directory instead so the
+        //    agent sees the real layout (e.g. right after scaffolding a new
+        //    plugin module).
         val readPath = files.firstOrNull()
         if (readPath != null) {
-            steps += PlanStep(order++, "coding.read",
-                "Read the file(s) the task touches to ground the change in real code",
-                "coding.read(path=\"$readPath\")", mapOf("path" to readPath))
+            if (readPath.contains('/')) {
+                steps += PlanStep(order++, "coding.read",
+                    "Read the file(s) the task touches to ground the change in real code",
+                    "coding.read(path=\"$readPath\")", mapOf("path" to readPath))
+            } else {
+                val locateDir = newPluginModules.firstOrNull() ?: modules.firstOrNull()
+                if (locateDir != null) {
+                    steps += PlanStep(order++, "coding.listDir",
+                        "Locate the file(s) the task touches inside $locateDir (bare filename given, no workspace-relative path)",
+                        "coding.listDir(path=\"$locateDir\", maxDepth=8)",
+                        mapOf("path" to locateDir, "maxDepth" to "8"))
+                }
+            }
         }
 
         // 2. Impact analysis — which module owns the change and who depends on it.
@@ -234,11 +248,8 @@ object DevTaskPlanner {
             "coding.validate(type=\"repo-consistency\")",
             mapOf("type" to "repo-consistency"))
 
-        // 7. Commit guidance.
-        steps += PlanStep(order++, "coding.shell",
-            "Commit the change on the current branch with a focused message",
-            "git add -A && git commit -m \"<summary>\"",
-            mapOf("command" to "git add -A && git commit"))
+        // NOTE: no git-commit step here. Agents must not auto-commit; the
+        // supervising caller decides when a change is ready to land.
 
         return steps
     }

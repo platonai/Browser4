@@ -34,7 +34,6 @@ object ModuleMap {
         "browser4-core/browser4-resources",
         "browser4-core/browser4-skeleton",
         "browser4-dependencies",
-        "browser4-pageinfo",
         "browser4-pdk",
         "browser4-pdk/browser4-pdk-bom",
         "browser4-pdk/browser4-pdk-test-plugin",
@@ -46,11 +45,9 @@ object ModuleMap {
         "browser4-plugins/browser4-images",
         "browser4-plugins/browser4-markdown",
         "browser4-plugins/browser4-media",
-        "browser4-plugins/browser4-pagetitle",
         "browser4-plugins/browser4-pptx",
         "browser4-plugins/browser4-seo",
         "browser4-plugins/browser4-swarm",
-        "browser4-plugins/browser4-weather",
         "browser4-rest",
         "browser4-tests",
         "browser4-tests/browser4-e2e-tests",
@@ -83,13 +80,12 @@ object ModuleMap {
         "browser4-agentic" to listOf(
             "browser4-agent-tools",
             "browser4-apps/browser4-bundle", "browser4-apps/browser4-standalone",
-            "browser4-boot", "browser4-pageinfo", "browser4-pdk/browser4-pdk-test-plugin",
+            "browser4-boot", "browser4-pdk/browser4-pdk-test-plugin",
             "browser4-plugins/browser4-captcha", "browser4-plugins/browser4-forms",
             "browser4-plugins/browser4-headings", "browser4-plugins/browser4-images",
             "browser4-plugins/browser4-markdown", "browser4-plugins/browser4-media",
-            "browser4-plugins/browser4-pagetitle", "browser4-plugins/browser4-pptx",
+            "browser4-plugins/browser4-pptx",
             "browser4-plugins/browser4-seo", "browser4-plugins/browser4-swarm",
-            "browser4-plugins/browser4-weather",
             "browser4-rest", "browser4-tests/browser4-e2e-tests",
             "examples/browser4-examples",
         ),
@@ -116,13 +112,12 @@ object ModuleMap {
         "browser4-core/browser4-protocol" to listOf(
             "browser4-agentic",
             "browser4-apps/browser4-bundle", "browser4-apps/browser4-standalone",
-            "browser4-boot", "browser4-pageinfo", "browser4-pdk/browser4-pdk-test-plugin",
+            "browser4-boot", "browser4-pdk/browser4-pdk-test-plugin",
             "browser4-plugins/browser4-captcha", "browser4-plugins/browser4-forms",
             "browser4-plugins/browser4-headings", "browser4-plugins/browser4-images",
             "browser4-plugins/browser4-markdown", "browser4-plugins/browser4-media",
-            "browser4-plugins/browser4-pagetitle", "browser4-plugins/browser4-pptx",
+            "browser4-plugins/browser4-pptx",
             "browser4-plugins/browser4-seo", "browser4-plugins/browser4-swarm",
-            "browser4-plugins/browser4-weather",
             "browser4-rest", "examples/browser4-examples",
         ),
         "browser4-core/browser4-resources" to listOf(
@@ -135,24 +130,22 @@ object ModuleMap {
             "browser4-agent-tools", "browser4-agentic",
             "browser4-apps/browser4-bundle", "browser4-apps/browser4-standalone",
             "browser4-boot", "browser4-core/browser4-parse",
-            "browser4-core/browser4-protocol", "browser4-pageinfo", "browser4-pdk/browser4-pdk-test-plugin",
+            "browser4-core/browser4-protocol", "browser4-pdk/browser4-pdk-test-plugin",
             "browser4-plugins/browser4-captcha", "browser4-plugins/browser4-forms",
             "browser4-plugins/browser4-headings", "browser4-plugins/browser4-images",
             "browser4-plugins/browser4-markdown", "browser4-plugins/browser4-media",
-            "browser4-plugins/browser4-pagetitle", "browser4-plugins/browser4-pptx",
+            "browser4-plugins/browser4-pptx",
             "browser4-plugins/browser4-seo", "browser4-plugins/browser4-swarm",
-            "browser4-plugins/browser4-weather",
             "browser4-rest", "examples/browser4-examples",
         ),
         "browser4-pdk" to listOf(
-            "browser4-pageinfo", "browser4-pdk/browser4-pdk-test-plugin", "browser4-pdk/browser4-plugin-archetype",
+            "browser4-pdk/browser4-pdk-test-plugin", "browser4-pdk/browser4-plugin-archetype",
             "browser4-plugins/browser4-captcha", "browser4-plugins/browser4-forms",
             "browser4-plugins/browser4-headings", "browser4-plugins/browser4-images",
             "browser4-plugins/browser4-markdown", "browser4-plugins/browser4-media",
-            "browser4-plugins/browser4-pagetitle", "browser4-plugins/browser4-pptx",
+            "browser4-plugins/browser4-pptx",
             "browser4-plugins/browser4-seo",
             "browser4-plugins/browser4-swarm",
-            "browser4-plugins/browser4-weather",
         ),
         "browser4-plugins/browser4-swarm" to listOf(
             "browser4-tests/browser4-rest-tests",
@@ -192,11 +185,17 @@ object ModuleMap {
      * Suggested test command for a Maven module.
      *
      * @param testClass optional test-class filter (`-Dtest=...`, comma-separated
-     *   for multiple) — the smallest scope when the task names specific tests
+     *   for multiple) — the smallest scope when the task names specific tests.
+     *
+     * With `-am` every upstream reactor module runs its test phase too; a
+     * `-Dtest` filter that matches nothing there fails surefire with
+     * "No tests matching pattern" — so `failIfNoSpecifiedTests=false` is added
+     * whenever a filter is present.
      */
     fun mavenTestCommand(module: String, testClass: String? = null): String {
         val testArg = if (testClass.isNullOrBlank()) "" else " -Dtest=$testClass"
-        return "mvn test -pl $module -am$testArg -DskipTests=false"
+        val noSpecifiedTestsFlag = if (testClass.isNullOrBlank()) "" else " -Dsurefire.failIfNoSpecifiedTests=false"
+        return "mvn test -pl $module -am$testArg -DskipTests=false$noSpecifiedTestsFlag"
     }
 
     /** Suggested test command for the Rust CLI. */

@@ -176,6 +176,13 @@ When the task is complete and no further tool call is needed, output the
 explanations instead. Text-only responses without a completion marker waste
 steps and are indistinguishable from a stalled agent.
 
+**Anchor the completion summary to measured evidence.** If the task specifies
+quality gates (build, tests, validation, deploy), your `summary` MUST list each
+gate with its actual measured result — exit code, test counts, or validator
+output you actually observed. A gate you did not run must be reported as
+"not run", and a gate that failed must be reported as "failed" with the error
+— never claim success without the tool output in front of you.
+
 ---
 
 ### Reasoning Pattern

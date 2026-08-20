@@ -36,7 +36,7 @@ class DevTaskPlannerTest {
     @Test
     @DisplayName("browser4-plugin.json is extracted whole, not truncated to .js")
     fun jsonFileNotTruncatedToJs() {
-        val plan = DevTaskPlanner.plan("update the manifest browser4-plugin.json of browser4-plugins/browser4-pagetitle")
+        val plan = DevTaskPlanner.plan("update the manifest browser4-plugin.json of browser4-plugins/browser4-seo")
         assertTrue(plan.files.any { it.endsWith("browser4-plugin.json") },
             "full .json name expected, got: ${plan.files}")
         assertFalse(plan.files.any { it.endsWith("browser4-plugin.js") },
@@ -60,7 +60,7 @@ class DevTaskPlannerTest {
     @Test
     @DisplayName("existing plugin mention is not treated as new")
     fun existingPluginNotNew() {
-        val plan = DevTaskPlanner.plan("fix a test in browser4-plugins/browser4-pagetitle")
+        val plan = DevTaskPlanner.plan("fix a test in browser4-plugins/browser4-seo")
         assertTrue(plan.newPluginModules.isEmpty(),
             "existing module must not be flagged as new: ${plan.newPluginModules}")
     }
@@ -68,11 +68,11 @@ class DevTaskPlannerTest {
     @Test
     @DisplayName("test class binds to its owning module via camelCase→kebab matching")
     fun testClassOwningModuleBinding() {
-        val plan = DevTaskPlanner.plan("补充 PagetitleConfigTest 用例")
-        assertTrue(plan.testClasses.contains("PagetitleConfigTest"), "testClasses: ${plan.testClasses}")
+        val plan = DevTaskPlanner.plan("补充 HeadingsConfigTest 用例")
+        assertTrue(plan.testClasses.contains("HeadingsConfigTest"), "testClasses: ${plan.testClasses}")
         val testStep = plan.steps.firstOrNull { it.tool == "coding.shell" && it.command.contains("-Dtest=") }
         assertNotNull(testStep, "test step expected: ${plan.steps}")
-        assertTrue(testStep!!.command.contains("-pl browser4-plugins/browser4-pagetitle"),
+        assertTrue(testStep!!.command.contains("-pl browser4-plugins/browser4-headings"),
             "test must run in the owning module, got: ${testStep.command}")
     }
 
@@ -91,8 +91,39 @@ class DevTaskPlannerTest {
         val plan = DevTaskPlanner.plan("please improve the overall performance")
         assertTrue(plan.modules.isEmpty(), "no modules should be inferred: ${plan.modules}")
         assertTrue(plan.summary.contains("No module/file signals"), plan.summary)
-        // The baseline steps (validate + commit) still exist.
+        // The baseline validate step still exists.
         assertTrue(plan.steps.any { it.tool == "coding.validate" })
+    }
+
+    @Test
+    @DisplayName("test command tolerates upstream modules with no matching tests (-am + -Dtest)")
+    fun testCommandToleratesNoSpecifiedTests() {
+        val plan = DevTaskPlanner.plan(
+            "run SeoServiceTest and SeoConfigTest in browser4-plugins/browser4-seo/src/test")
+        val testStep = plan.steps.first { it.command.contains("-Dtest=") }
+        assertTrue(testStep.command.contains("-Dsurefire.failIfNoSpecifiedTests=false"),
+            "test command must tolerate upstream modules with no matching tests: ${testStep.command}")
+    }
+
+    @Test
+    @DisplayName("plans never include a git-commit step")
+    fun noCommitStep() {
+        val plan = DevTaskPlanner.plan(
+            "Create a new plugin browser4-plugins/browser4-wordcount and add WordcountService.kt")
+        assertFalse(plan.steps.any { it.command.contains("git commit") },
+            "agents must not auto-commit: ${plan.steps.map { it.command }}")
+    }
+
+    @Test
+    @DisplayName("bare filename in a new-plugin task yields a locate step on the module dir")
+    fun bareFilenameLocateStep() {
+        val plan = DevTaskPlanner.plan(
+            "Create a new plugin browser4-plugins/browser4-wordcount and implement HelloService.kt")
+        val locate = plan.steps.firstOrNull { it.tool == "coding.listDir" }
+        assertNotNull(locate, "locate step expected: ${plan.steps}")
+        assertEquals("browser4-plugins/browser4-wordcount", locate!!.args["path"])
+        assertFalse(plan.steps.any { it.tool == "coding.read" && it.command == "coding.read(path=\"HelloService.kt\")" },
+            "bare filename must not be read from the workspace root: ${plan.steps}")
     }
 
     @Test

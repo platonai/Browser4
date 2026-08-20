@@ -152,6 +152,24 @@ class CommandController(
         return ResponseEntity.ok(result)
     }
 
+    /**
+     * Cancel a running/queued agent task by id.
+     *
+     * Cancelling interrupts the agent loop and marks the task failed with
+     * reason "Task cancelled" — see
+     * [ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner.cancel].
+     */
+    @PostMapping("/{id}/cancel")
+    fun cancelCommand(@PathVariable id: String): ResponseEntity<Map<String, Any>> {
+        val cancelled = commandExecutor.cancelAgentTask(id)
+        val body = if (cancelled) {
+            mapOf("taskId" to id, "cancelled" to true)
+        } else {
+            mapOf("taskId" to id, "cancelled" to false, "message" to "task not running or unknown")
+        }
+        return ResponseEntity.ok(body)
+    }
+
     @GetMapping(value = ["/{id}/stream"], produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     fun streamEvents(
         @PathVariable id: String,

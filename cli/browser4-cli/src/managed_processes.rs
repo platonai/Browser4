@@ -814,7 +814,15 @@ fn force_kill_all_browser4_server_processes() -> ServerKillResult {
     const WAIT_AFTER_KILL_MS: u64 = 500;
     const WAIT_POLL_MS: u64 = 100;
 
-    let pids = find_browser4_server_processes();
+    // Command-line pattern matching misses servers launched via @argfile or
+    // with a bundle start script. Add a port-based sweep: any java process
+    // still LISTENING on a managed port (or the default 8182) IS a Browser4
+    // server for the purposes of `stop`.
+    let mut pids = find_browser4_server_processes();
+    pids.extend(find_java_pids_listening_on_ports(&managed_server_ports_for_sweep()));
+    pids.sort_unstable();
+    pids.dedup();
+
     if pids.is_empty() {
         return ServerKillResult::default();
     }
@@ -835,6 +843,88 @@ fn force_kill_all_browser4_server_processes() -> ServerKillResult {
     dedup_sort_u32(&mut result.killed_pids);
     dedup_sort_u32(&mut result.remaining_pids);
     result
+}
+
+/// Ports swept by the port-based server cleanup: every port recorded in the
+/// managed-process registry plus the default 8182.
+fn managed_server_ports_for_sweep() -> Vec<u16> {
+    let mut ports: Vec<u16> = read_managed_server_processes(None)
+        .iter()
+        .map(|p| p.port)
+        .filter(|&p| p > 0)
+        .collect();
+    if !ports.contains(&8182) {
+        ports.push(8182);
+    }
+    ports
+}
+
+/// Java PIDs currently LISTENING on any of [ports], resolved via netstat.
+/// Cross-platform: Windows `netstat -ano -p tcp` and unix `netstat -anp`.
+fn find_java_pids_listening_on_ports(ports: &[u16]) -> Vec<u32> {
+    if ports.is_empty() {
+        return Vec::new();
+    }
+
+    let mut pids: Vec<u32> = Vec::new();
+
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        if let Ok(output) = Command::new("netstat").args(["-ano", "-p", "tcp"]).output() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                if !line.to_ascii_uppercase().contains("LISTENING") {
+                    continue;
+                }
+                let tokens: Vec<&str> = line.split_whitespace().collect();
+                // Proto Local Foreign State PID
+                if tokens.len() >= 5 && local_address_matches_any_port(tokens.get(1).copied(), ports) {
+                    if let Some(pid) = tokens.last().and_then(|t| t.parse::<u32>().ok()) {
+                        pids.push(pid);
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        if let Ok(output) = Command::new("netstat").args(["-anp"]).output() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                if !line.to_ascii_uppercase().contains("LISTEN") {
+                    continue;
+                }
+                let tokens: Vec<&str> = line.split_whitespace().collect();
+                // Proto Recv-Q Send-Q Local Foreign State PID/Program
+                if tokens.len() >= 6 && local_address_matches_any_port(tokens.get(3).copied(), ports) {
+                    let pid = tokens
+                        .last()
+                        .and_then(|t| t.split('/').next())
+                        .and_then(|t| t.parse::<u32>().ok());
+                    if let Some(pid) = pid {
+                        pids.push(pid);
+                    }
+                }
+            }
+        }
+    }
+
+    pids.sort_unstable();
+    pids.dedup();
+    pids
+}
+
+/// True when a netstat local-address column (`0.0.0.0:8182`, `[::]:18182`,
+/// `127.0.0.1:8182`) has a port in [ports].
+fn local_address_matches_any_port(local_address: Option<&str>, ports: &[u16]) -> bool {
+    local_address
+        .and_then(|addr| addr.rsplit(':').next())
+        .and_then(|p| p.parse::<u16>().ok())
+        .map(|p| ports.contains(&p))
+        .unwrap_or(false)
 }
 
 fn is_browser4_server_process(pid: u32) -> bool {
@@ -1641,6 +1731,24 @@ mod tests {
 
         assert_eq!(merged.killed_pids, vec![1001, 1002, 1003]);
         assert_eq!(merged.remaining_pids, vec![2001, 2002]);
+    }
+
+    #[test]
+    fn test_local_address_matches_any_port() {
+        let ports = [8182u16, 18182];
+        assert!(local_address_matches_any_port(Some("0.0.0.0:8182"), &ports));
+        assert!(local_address_matches_any_port(Some("127.0.0.1:18182"), &ports));
+        assert!(local_address_matches_any_port(Some("[::]:8182"), &ports));
+        assert!(!local_address_matches_any_port(Some("0.0.0.0:81820"), &ports));
+        assert!(!local_address_matches_any_port(Some("0.0.0.0:80"), &ports));
+        assert!(!local_address_matches_any_port(None, &ports));
+        assert!(!local_address_matches_any_port(Some("not-an-address"), &ports));
+    }
+
+    #[test]
+    fn test_managed_server_ports_for_sweep_includes_default() {
+        let ports = managed_server_ports_for_sweep();
+        assert!(ports.contains(&8182), "default port must always be swept: {ports:?}");
     }
 
     #[test]

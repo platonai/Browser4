@@ -516,7 +516,15 @@ pub async fn submit_plain_command_with_options(
             payload[k] = v.clone();
         }
     }
-    call_tool(client, base_url, "command_run", payload).await
+    // Async agent submission (`agent run`) creates the session's companion
+    // agent on first use, which can exceed the default 30s HTTP timeout —
+    // the server returns the task ID only after that warm-up. Use a longer
+    // override so valid submissions are not reported as HTTP timeouts.
+    if async_mode {
+        call_tool_with_timeout_override(client, base_url, "command_run", payload, Some(180)).await
+    } else {
+        call_tool(client, base_url, "command_run", payload).await
+    }
 }
 
 /// Send a chat message to the AI via the conversations API.

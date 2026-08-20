@@ -3080,6 +3080,22 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "agent-cancel",
+            description: "Cancel a running or queued agent task (interrupts the agent loop and marks the task failed)",
+            category: Category::Agent,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "id", description: "Task ID returned by agent run", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                json!({ "id": get_str(args, "id").unwrap_or_default() })
+            },
+        },
+        CommandDef {
             name: "swarm-create",
             description: "Create a swarm scrape session with parallel browser contexts",
             category: Category::Swarm,
@@ -4606,6 +4622,23 @@ pub fn all_commands() -> Vec<CommandDef> {
             e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "coding_workspaceRoot".to_string(),
             tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "code-javap",
+            description: "Inspect a class on the backend classpath: superclass chain and public method signatures (reflection-based; for external library APIs like ImmutableConfig)",
+            category: Category::Code,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "class", description: "Fully-qualified class name (e.g. ai.platon.pulsar.common.config.ImmutableConfig)", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "coding_classInfo".to_string(),
+            tool_params_fn: |args| {
+                let class_name = get_str(args, "class").unwrap_or_default();
+                json!({ "class": class_name })
+            },
         },
     ]
 }

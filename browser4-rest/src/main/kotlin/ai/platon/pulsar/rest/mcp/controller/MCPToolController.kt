@@ -802,11 +802,12 @@ class MCPToolController(
         request: MCPToolCallRequest,
     ): ResponseEntity<MCPToolCallResponse> {
         val domain = "coding"
-        // Derive method name: "coding_mvnBuild" → "mvnBuild"
-        val rawMethod = if (toolName.startsWith("${domain}_")) {
-            toolName.substring(domain.length + 1)
-        } else {
-            toolName
+        // Derive method name: "coding_mvnBuild" → "mvnBuild"; the dotted
+        // agent-prompt form "coding.mvnBuild" is accepted too.
+        val rawMethod = when {
+            toolName.startsWith("${domain}_") -> toolName.substring(domain.length + 1)
+            toolName.startsWith("${domain}.") -> toolName.substring(domain.length + 1)
+            else -> toolName
         }
         // Reverse-match through the executor's tool specs to resolve
         // snake_case tool names back to camelCase method names.
@@ -863,10 +864,11 @@ class MCPToolController(
         // 1) Check registered CustomToolRegistry domains first — these may
         //    contain underscores (e.g. "html_snapshot").  Pick the longest
         //    matching prefix so "html_snapshot" beats "html" when both are
-        //    hypothetically registered.
+        //    hypothetically registered. Both `domain_method` (MCP convention)
+        //    and `domain.method` (agent prompt convention) are accepted.
         val knownDomains = CustomToolRegistry.instance.getAllDomains()
         val matchingDomain = knownDomains
-            .filter { toolName.startsWith("${it}_") || toolName == it }
+            .filter { toolName.startsWith("${it}_") || toolName.startsWith("${it}.") || toolName == it }
             .maxByOrNull { it.length }
         if (matchingDomain != null) {
             return matchingDomain
@@ -891,13 +893,15 @@ class MCPToolController(
         request: MCPToolCallRequest,
     ): ResponseEntity<MCPToolCallResponse> {
         // Derive method name from tool name: "pptx_generate" → "generate".
+        // Both `domain_method` (MCP convention) and `domain.method` (agent
+        // prompt convention) are accepted here.
         // The raw substring is snake_case (e.g. "detect_videos"); resolve it
         // back to the executor's native camelCase method name (e.g. "detectVideos")
         // by reverse-matching through the executor's registered tool specs.
-        val rawMethod = if (toolName.startsWith("${domain}_")) {
-            toolName.substring(domain.length + 1)
-        } else {
-            toolName
+        val rawMethod = when {
+            toolName.startsWith("${domain}_") -> toolName.substring(domain.length + 1)
+            toolName.startsWith("${domain}.") -> toolName.substring(domain.length + 1)
+            else -> toolName
         }
         val method = executor.getToolSpecs().keys.firstOrNull { specMethod ->
             toMcpToolName(domain, specMethod) == toolName

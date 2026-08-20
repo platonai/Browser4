@@ -13,6 +13,7 @@ import ai.platon.pulsar.coding.KotlinSemanticIndexer
 import ai.platon.pulsar.coding.MavenBuildSupport
 import ai.platon.pulsar.coding.ModuleGraph
 import ai.platon.pulsar.coding.ModuleMap
+import ai.platon.pulsar.coding.ModuleMapSource
 import ai.platon.pulsar.coding.RepoConsistencyCheck
 import ai.platon.pulsar.coding.SkeletonExtractor
 import ai.platon.pulsar.coding.TokenEstimator
@@ -682,6 +683,15 @@ class CodingToolExecutor : AbstractToolExecutor() {
             description = "Estimate the LLM token count of a text (heuristic, ±25%). Use to check a message " +
                 "or file chunk before sending it to the model."
         )
+        toolSpec["classInfo"] = ToolSpec(
+            domain = domain, method = "classInfo",
+            arguments = listOf(ToolSpec.Arg("class", "String")),
+            returnType = "String",
+            description = "Inspect a class on the BACKEND classpath: superclass chain and public method " +
+                "signatures (via reflection, no javap needed). Use to learn the real API of external " +
+                "library types (e.g. ai.platon.pulsar.common.config.ImmutableConfig) that live outside " +
+                "the workspace and cannot be grepped — prevents guessing accessor names like getString."
+        )
     }
 
     @Throws(IllegalArgumentException::class)
@@ -1286,9 +1296,14 @@ class CodingToolExecutor : AbstractToolExecutor() {
                         if (normalizedDir.startsWith("browser4-plugins/") && module.isNotBlank()) {
                             val aggregator = fs.readFile("browser4-plugins/pom.xml")
                             if (!aggregator.startsWith("Error:") && !aggregator.contains("<module>$module</module>")) {
+                                // Match the indentation of the last existing <module>
+                                // line so the new entry does not drift the block's style.
+                                val moduleLine = Regex("""(?m)^(\s*)<module>[^<]+</module>\s*$""")
+                                val indent = moduleLine.findAll(aggregator).lastOrNull()
+                                    ?.groupValues?.get(1) ?: "        "
                                 val updated = aggregator.replace(
                                     "</modules>",
-                                    "        <module>$module</module>\n    </modules>"
+                                    "$indent<module>$module</module>\n    </modules>"
                                 )
                                 if (updated != aggregator) {
                                     val writeResult = fs.writeFile("browser4-plugins/pom.xml", updated)
@@ -1441,6 +1456,11 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 val text = paramString(args, "text", functionName)!!
                 "≈ ${TokenEstimator.estimateTokens(text)} tokens (${text.length} chars)"
             }
+            "classInfo" -> {
+                validateArgs(args, allowed = setOf("class"), required = setOf("class"), functionName)
+                val className = paramString(args, "class", functionName)!!
+                classInfoReport(className)
+            }
 
             else -> throw IllegalArgumentException("Unsupported coding method: $functionName(${args.keys})")
         }
@@ -1529,6 +1549,25 @@ class CodingToolExecutor : AbstractToolExecutor() {
             liveGraph?.nodes?.filterValues { it.dependencies.contains(m) }?.keys?.toSet() ?: emptySet()
         }
 
+        // Prefer the ON-DISK ModuleMap.kt as the static snapshot. The loaded
+        // ModuleMap class comes from the running backend's build and can be
+        // stale (e.g. right after scaffoldToDir synced a new module) — comparing
+        // against it reports false drift. Parse the source file so the check
+        // reflects what the next build will actually compile.
+        val moduleMapSource = fs.readFile(
+            "browser4-coding/src/main/kotlin/ai/platon/pulsar/coding/ModuleMap.kt"
+        ).takeUnless { it.startsWith("Error:") }
+        val parsedModuleMap = moduleMapSource?.let { ModuleMapSource.parse(it) }
+        // When the disk snapshot cannot be parsed (mock/foreign workspace), the
+        // loaded-class comparison is meaningless (it produces massive false
+        // drift) — skip the drift checks and surface a warning instead.
+        val staticModules = parsedModuleMap?.modules ?: emptyList()
+        val staticDependents = parsedModuleMap?.dependents ?: emptyMap()
+        val staleFallbackNote = if (parsedModuleMap == null) {
+            "\n⚠ ModuleMap.kt could not be read from disk — ModuleMap drift checks are skipped; " +
+                "sync browser4-coding/src/main/kotlin/ai/platon/pulsar/coding/ModuleMap.kt if you expect them."
+        } else ""
+
         val result = RepoConsistencyCheck.check(
             versionContent = versionContent,
             rootPom = rootPom,
@@ -1536,12 +1575,12 @@ class CodingToolExecutor : AbstractToolExecutor() {
             moduleExists = { m -> fs.exists(m) },
             onDiskModuleDirs = onDiskModuleDirs,
             pluginManifestContents = pluginManifestContents,
-            staticModuleMap = ModuleMap.MODULES,
+            staticModuleMap = staticModules,
             liveModuleDirs = liveModules,
-            staticDependents = ModuleMap.DEPENDENTS,
+            staticDependents = staticDependents,
             liveDependentsOf = liveDependentsOf,
         )
-        return result.format()
+        return result.format() + staleFallbackNote
     }
 
     /**
@@ -1578,6 +1617,45 @@ class CodingToolExecutor : AbstractToolExecutor() {
         }
 
         return tools.mapValues { it.value.toSet() }
+    }
+
+    /**
+     * Reflectively inspect a class on the backend classpath: superclass chain
+     * plus public method signatures. Lets agents learn the REAL API of types
+     * that live outside the workspace (e.g. external-library config classes)
+     * instead of guessing accessor names.
+     */
+    private fun classInfoReport(className: String): String {
+        val clazz = runCatching { Class.forName(className) }.getOrNull()
+            ?: return "Class not found on the backend classpath: $className " +
+                "(plugin classes in isolated loaders are not visible — use this for host/external API types)"
+
+        return buildString {
+            var current: Class<*>? = clazz
+            var depth = 0
+            while (current != null && depth < 4) {
+                if (depth == 0) {
+                    appendLine("class ${current.name}" + (current.superclass?.let { " : ${it.name}" } ?: ""))
+                } else {
+                    appendLine("  ^ superclass ${current.name}")
+                }
+                val interfaces = current.interfaces.map { it.name }
+                if (interfaces.isNotEmpty()) {
+                    appendLine("    implements ${interfaces.joinToString(", ")}")
+                }
+                current.methods
+                    .filter { java.lang.reflect.Modifier.isPublic(it.modifiers) }
+                    .sortedWith(compareBy({ it.name }, { it.parameterCount }))
+                    .forEach { m ->
+                        appendLine(
+                            "    ${m.name}(${m.parameterTypes.joinToString(", ") { it.simpleName }}): " +
+                                m.returnType.simpleName
+                        )
+                    }
+                current = current.superclass
+                depth++
+            }
+        }.trimEnd()
     }
 
     /**

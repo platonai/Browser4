@@ -115,6 +115,13 @@ open class RobustBrowserAgent(
             val result = withContext(ctx) { resolveProblemInCoroutine(action) }
 
             onDidRun(action, result.result)
+
+            // Surface abnormal terminations (no-op limit, max steps, exhausted
+            // retries) to the caller instead of returning a history that LOOKS
+            // successful. Runners (e.g. StatefulAgentRunner) mark the task
+            // failed when the exception propagates — without this, MAX_STEPS
+            // aborts were reported as "completed" with status 200.
+            result.result.exception?.let { throw it }
         } catch (e: CancellationException) {
             logger.info("🛑 run.cancelled reason={}", e.message ?: "user cancellation")
             throw e

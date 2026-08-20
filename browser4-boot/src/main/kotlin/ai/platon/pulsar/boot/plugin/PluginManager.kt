@@ -116,7 +116,11 @@ class PluginManager(
     // ---- Wiring ----
 
     private fun wireAllMounts(mounts: List<PluginMount>) {
-        val pageHandlers = PulsarEventBus.pageEventHandlers
+        // Ensure the global bus exists BEFORE wiring: it is lazily created with
+        // default (empty) chains, so the default handlers stay behavior-neutral
+        // while plugin mounts added below actually fire at the emulator's hook
+        // points. Without this, every event-phase mount was silently skipped.
+        val pageHandlers = PulsarEventBus.ensurePageEventHandlers()
 
         for (mount in mounts) {
             val manifest = pluginManifestOf(mount)
@@ -157,41 +161,29 @@ class PluginManager(
 
             // --- Event-phase mounts ---
             if (mount is LoadEventMount) {
-                if (pageHandlers != null) {
-                    try {
-                        mount.configureLoadHandlers(pageHandlers.loadEventHandlers)
-                        logger.info("  + Configured load event handlers")
-                    } catch (e: Exception) {
-                        logger.warn("  ! Failed to configure load event handlers: {}", e.message)
-                    }
-                } else {
-                    logger.debug("  - Skipping LoadEventMount: pageEventHandlers not yet available")
+                try {
+                    mount.configureLoadHandlers(pageHandlers.loadEventHandlers)
+                    logger.info("  + Configured load event handlers")
+                } catch (e: Exception) {
+                    logger.warn("  ! Failed to configure load event handlers: {}", e.message)
                 }
             }
 
             if (mount is BrowseEventMount) {
-                if (pageHandlers != null) {
-                    try {
-                        mount.configureBrowseHandlers(pageHandlers.browseEventHandlers)
-                        logger.info("  + Configured browse event handlers")
-                    } catch (e: Exception) {
-                        logger.warn("  ! Failed to configure browse event handlers: {}", e.message)
-                    }
-                } else {
-                    logger.debug("  - Skipping BrowseEventMount: pageEventHandlers not yet available")
+                try {
+                    mount.configureBrowseHandlers(pageHandlers.browseEventHandlers)
+                    logger.info("  + Configured browse event handlers")
+                } catch (e: Exception) {
+                    logger.warn("  ! Failed to configure browse event handlers: {}", e.message)
                 }
             }
 
             if (mount is CrawlEventMount) {
-                if (pageHandlers != null) {
-                    try {
-                        mount.configureCrawlHandlers(pageHandlers.crawlEventHandlers)
-                        logger.info("  + Configured crawl event handlers")
-                    } catch (e: Exception) {
-                        logger.warn("  ! Failed to configure crawl event handlers: {}", e.message)
-                    }
-                } else {
-                    logger.debug("  - Skipping CrawlEventMount: pageEventHandlers not yet available")
+                try {
+                    mount.configureCrawlHandlers(pageHandlers.crawlEventHandlers)
+                    logger.info("  + Configured crawl event handlers")
+                } catch (e: Exception) {
+                    logger.warn("  ! Failed to configure crawl event handlers: {}", e.message)
                 }
             }
 

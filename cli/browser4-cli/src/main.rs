@@ -409,6 +409,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "agent-status",
         "agent-result",
         "agent-list",
+        "agent-cancel",
         "swarm-create",
         "swarm-submit",
         "swarm-query",
@@ -469,6 +470,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "code-devtask",
         "code-impact",
         "code-workspace",
+        "code-javap",
         "errors",
         "is-visible",
         "is-enabled",
@@ -10054,6 +10056,56 @@ async fn handle_agent_list(
     Ok(())
 }
 
+/// `agent cancel <id>` — cancel a running/queued agent task on the server.
+///
+/// Calls `POST /api/commands/{id}/cancel`; the backend interrupts the agent
+/// loop and marks the task failed with reason "Task cancelled".
+async fn handle_agent_cancel(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let id = tool_params
+        .get("id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Task ID is required (e.g. `agent cancel <task-id>`).".to_string())?;
+
+    let url = format!("{}/api/commands/{}/cancel", base_url.trim_end_matches('/'), id);
+    let response = client
+        .post(&url)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to cancel agent task: {e}"))?;
+
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read cancel response: {e}"))?;
+
+    if !status.is_success() {
+        return Err(format!("Failed to cancel agent task (HTTP {}): {}", status.as_u16(), text));
+    }
+
+    let parsed: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    let cancelled = parsed.get("cancelled").and_then(|v| v.as_bool()).unwrap_or(false);
+    if cancelled {
+        cli_println!("✅ Agent task {} cancelled.", id);
+        json_field("cancelled", json!(true));
+    } else {
+        let message = parsed
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("task not running or unknown");
+        cli_println!("⚠ Agent task {} not cancelled: {}", id, message);
+        json_field("cancelled", json!(false));
+    }
+    json_field("task_id", json!(id));
+    Ok(())
+}
+
 /// Parse `statusCode` from a JSON value, handling both integer and string forms.
 ///
 /// The Kotlin backend serializes `statusCode` as an integer (e.g. `200`, `102`),
@@ -17161,6 +17213,7 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "doctor-metrics"
         && command != "doctor-status"
         && command != "agent-list"
+        && command != "agent-cancel"
         && command != "crawl-list"
         && command != "swarm-list"
         && command != "skills"
@@ -17426,6 +17479,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "agent-status" => Some("agent status"),
         "agent-result" => Some("agent result"),
         "agent-list" => Some("agent list"),
+        "agent-cancel" => Some("agent cancel"),
         "swarm-create" => Some("swarm create"),
         "swarm-submit" => Some("swarm submit"),
         "swarm-query" => Some("swarm query"),
@@ -17498,6 +17552,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "code-devtask" => Some("code devtask"),
         "code-impact" => Some("code impact"),
         "code-workspace" => Some("code workspace"),
+        "code-javap" => Some("code javap"),
         "is-visible" => Some("is visible"),
         "is-enabled" => Some("is enabled"),
         "is-checked" => Some("is checked"),
@@ -18083,6 +18138,7 @@ fn compile_batch_request(
             "list" | "close-all" | "kill-all" | "delete-data" | "install" | "uninstall"
             | "upgrade" | "agent-run" | "agent-status" | "agent-result" | "swarm-create"
             | "swarm-submit" | "swarm-query" | "swarm-status" | "swarm-result" | "agent-list"
+            | "agent-cancel"
             | "crawl-list" | "swarm-list" | "skills" | "skills-list" | "skills-get"
             | "skills-path" => {
                 if push_batch_local_failure(
@@ -19568,6 +19624,9 @@ async fn run(
         "agent-list" => {
             handle_agent_list(&client, &base_url, &tool_params).await?;
         }
+        "agent-cancel" => {
+            handle_agent_cancel(&client, &base_url, &tool_params).await?;
+        }
         // Swarm commands
         "swarm-create" => {
             handle_swarm_create(
@@ -19915,7 +19974,7 @@ async fn run(
         | "code-stat" | "code-glob" | "code-grep" | "code-mkdir"
         | "code-diff" | "code-changes" | "code-shell" | "code-scaffold"
         | "code-validate" | "code-mvn" | "code-run" | "code-devtask"
-        | "code-impact" | "code-workspace" => {
+        | "code-impact" | "code-workspace" | "code-javap" => {
             handle_code_command(
                 &client,
                 &base_url,

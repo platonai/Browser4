@@ -204,11 +204,31 @@ open class ContextToAction(
     }
 
     /**
+     * Per-request timeout for every LLM chat call. A hung provider connection
+     * (no response for minutes) previously stalled the whole agent loop
+     * indefinitely; the timeout turns it into a TimeoutCancellationException
+     * that the resolve pipeline treats as a retryable step error.
+     * Configurable via `browser4.agent.chat.requestTimeoutMs` (default 5 min).
+     */
+    private val requestTimeoutMs: Long =
+        conf.getLong("browser4.agent.chat.requestTimeoutMs", 300_000L).coerceIn(10_000L, 3_600_000L)
+
+    private suspend fun <T> withChatTimeout(block: suspend () -> T): T =
+        kotlinx.coroutines.withTimeout(requestTimeoutMs) { block() }
+
+    /**
      * Legacy TEXT-mode path — byte-identical to the original implementation.
      * Collapses system/user messages to two plain strings and calls
      * [BrowserChatModel.call].
      */
     private suspend fun generateResponseRawLegacy(
+        messages: AgentMessageList,
+        screenshotB64: String? = null,
+    ): ModelResponse = withChatTimeout {
+        generateResponseRawLegacyUnbounded(messages, screenshotB64)
+    }
+
+    private suspend fun generateResponseRawLegacyUnbounded(
         messages: AgentMessageList,
         screenshotB64: String? = null,
     ): ModelResponse {
@@ -261,6 +281,13 @@ open class ContextToAction(
      * multi-turn function calling.
      */
     private suspend fun generateResponseRawWithLangChain4j(
+        messages: AgentMessageList,
+        screenshotB64: String? = null,
+    ): ModelResponse = withChatTimeout {
+        generateResponseRawWithLangChain4jUnbounded(messages, screenshotB64)
+    }
+
+    private suspend fun generateResponseRawWithLangChain4jUnbounded(
         messages: AgentMessageList,
         screenshotB64: String? = null,
     ): ModelResponse {

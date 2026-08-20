@@ -19,6 +19,7 @@ import kotlinx.coroutines.sync.withLock
 import java.io.Closeable
 import java.nio.file.Path
 import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 open class StatefulAgentRunner(
@@ -46,6 +47,17 @@ open class StatefulAgentRunner(
      * submitted while another is running are queued here.
      */
     private val runMutex = Mutex()
+
+    /**
+     * Scope for agent task execution jobs. Cancelling the job of a task stops
+     * its agent loop (see [cancel]).
+     */
+    private val taskScope = CoroutineScope(
+        Dispatchers.IO + SupervisorJob() + CoroutineName("agent-tasks")
+    )
+
+    /** Currently queued/running task jobs by task id (for [cancel]). */
+    private val runningJobs = ConcurrentHashMap<String, Job>()
 
     internal val persistence = JsonlPersistence(
         file = agentPersistencePath(),
@@ -87,6 +99,15 @@ open class StatefulAgentRunner(
                 entry.createdTime.isBefore(ttlCutoff)
             ) {
                 logger.debug("Skipping expired agent task {} during restore (created={})", entry.id, entry.createdTime)
+                return@restore
+            }
+            // Skip stale non-terminal entries too: created/queued tasks are never
+            // auto-resumed after a restart, so restoring them only pollutes the
+            // status caches with zombie "queued" records from previous sessions.
+            if (entry.processState != terminalState &&
+                entry.createdTime.isBefore(ttlCutoff)
+            ) {
+                logger.debug("Skipping stale non-terminal agent task {} during restore (created={})", entry.id, entry.createdTime)
                 return@restore
             }
             statusCache.put(entry.id, entry)
@@ -146,6 +167,33 @@ open class StatefulAgentRunner(
         val status = create()
         execute(plainCommand, status, noopLimit)
         return status
+    }
+
+    /**
+     * Submit [plainCommand] for background execution and return the tracked [Job].
+     *
+     * The job is recorded so [cancel] can stop the task: cancelling the job
+     * interrupts the agent loop, releases the [runMutex], and marks the task
+     * failed with reason "Task cancelled" (see [executeSerialized]).
+     */
+    fun submit(plainCommand: String, status: AgentTaskStatus, noopLimit: Int? = null): Job {
+        val job = taskScope.launch { execute(plainCommand, status, noopLimit) }
+        runningJobs[status.id] = job
+        job.invokeOnCompletion { runningJobs.remove(status.id) }
+        return job
+    }
+
+    /**
+     * Cancel a queued/running task by id.
+     *
+     * @return true when a live job was found and cancelled; false when the task
+     *   is unknown, already finished, or its job is no longer tracked.
+     */
+    fun cancel(id: String): Boolean {
+        val job = runningJobs.remove(id) ?: return false
+        logger.info("Cancelling agent task {} (session={})", id, session.uuid)
+        job.cancel()
+        return true
     }
 
     /**

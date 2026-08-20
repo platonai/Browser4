@@ -327,9 +327,18 @@ class AgentToolManager constructor(
             else -> {
                 val customExecutor = CustomToolRegistry.instance.get(normalized.domain)
                 if (customExecutor != null) {
-                    val target = _customTargets[normalized.domain]
-                        ?: throw UnsupportedOperationException(
-                            "Custom domain '${normalized.domain}' is registered but no target object is available.")
+                    // Resolve the receiver by the executor's declared receiverClass:
+                    // plugin tools operating on the current page (WebDriver receiver)
+                    // get the session-bound driver — the same receiver the captcha
+                    // branch passes. Domains with an explicitly registered target
+                    // (e.g. "command") fall back to the custom-target registry.
+                    val target = when {
+                        customExecutor.receiverClass == WebDriver::class -> driver
+                        else -> _customTargets[normalized.domain]
+                            ?: throw UnsupportedOperationException(
+                                "Custom domain '${normalized.domain}' is registered but no target object is available."
+                            )
+                    }
                     customExecutor.callFunctionOn(normalized, target)
                 } else {
                     throw UnsupportedOperationException("Unsupported domain: ${normalized.domain}")
