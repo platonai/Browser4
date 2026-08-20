@@ -744,6 +744,6 @@ Apache 2.0 License. See [LICENSE](LICENSE) for details.
 
 ## 友链
 
-[DSH Data Agent · Analyze data through conversation](https://github.com/omdsh-dev/dsh-data-agent)
-[DSH TUI · Text-based User Interface](https://github.com/ccch1mneyyy/dsh-TUI)
+* [DSH Data Agent · Analyze data through conversation](https://github.com/omdsh-dev/dsh-data-agent)
+* [DSH TUI · Text-based User Interface](https://github.com/ccch1mneyyy/dsh-TUI)
 
