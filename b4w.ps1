@@ -203,14 +203,34 @@ if (!$NoBuild -and (Test-Path (Join-Path $ScriptDir 'browser4-apps\browser4-bund
         $BackendCachedHash = if (Test-Path $BackendHashFile) { (Get-Content $BackendHashFile -ErrorAction SilentlyContinue).Trim() } else { $null }
         if ($BackendCachedHash -and $BackendCachedHash -eq $BackendCurrentHash) {
             # Backend sources unchanged since the last bundle build — skip.
-        } else {
-            Write-Host 'Backend sources changed since the runtime bundle was last built.' -ForegroundColor Yellow
-            Write-Host 'Rebuild with:  $env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE = "1"; b4w <command>' -ForegroundColor Yellow
-            Write-Host '  (or pass -Rebuild to b4w to force the rebuild automatically)' -ForegroundColor DarkGray
-            if ($Rebuild) {
-                $env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE = '1'
-                $ForcedBundleRebuild = $true
-                $BackendHashToCache = $BackendCurrentHash
+        } elseif ($BackendFiles) {
+            # Hash cache differs — but that may just mean the bundle was rebuilt
+            # manually (e.g. via build-runtime-bundle.ps1) and the cache wasn't
+            # refreshed. Verify against the bundle's own build stamp: when the
+            # bundle artifact is NEWER than every backend source file, the
+            # running code matches the sources — refresh the cache silently
+            # instead of warning.
+            $BackendNewestSource = ($BackendFiles | ForEach-Object { $_.LastWriteTime } | Measure-Object -Maximum).Maximum
+            $BundleStamp = Join-Path $ScriptDir 'browser4-apps\browser4-bundle\target\runtime-bundle\_work\browser4-bundle-runtime-windows-x64\browser4-bundle-runtime-windows-x64\runtime-bundle.json'
+            $BundleFresh = $false
+            if (Test-Path $BundleStamp) {
+                $BundleMtime = (Get-Item $BundleStamp).LastWriteTime
+                if ($BundleMtime -gt $BackendNewestSource) { $BundleFresh = $true }
+            }
+            if ($BundleFresh) {
+                try {
+                    New-Item -Path (Split-Path $BackendHashFile -Parent) -ItemType Directory -Force -ErrorAction SilentlyContinue > $null
+                    $BackendCurrentHash | Out-File -FilePath $BackendHashFile -Encoding ascii -NoNewline
+                } catch { }
+            } else {
+                Write-Host 'Backend sources changed since the runtime bundle was last built.' -ForegroundColor Yellow
+                Write-Host 'Rebuild with:  $env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE = "1"; b4w <command>' -ForegroundColor Yellow
+                Write-Host '  (or pass -Rebuild to b4w to force the rebuild automatically)' -ForegroundColor DarkGray
+                if ($Rebuild) {
+                    $env:BROWSER4_CLI_FORCE_REBUILD_BUNDLE = '1'
+                    $ForcedBundleRebuild = $true
+                    $BackendHashToCache = $BackendCurrentHash
+                }
             }
         }
     }
