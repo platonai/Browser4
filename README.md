@@ -738,3 +738,12 @@ If you need this type of URL, please contact your proxy service provider.
 ## License
 
 Apache 2.0 License. See [LICENSE](LICENSE) for details.
+
+## Links
+
+
+## 友链
+
+[DSH Data Agent · Analyze data through conversation](https://github.com/omdsh-dev/dsh-data-agent)
+[DSH TUI · Text-based User Interface](https://github.com/ccch1mneyyy/dsh-TUI)
+
