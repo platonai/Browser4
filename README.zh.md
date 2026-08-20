@@ -751,3 +751,8 @@ export PROXY_ROTATION_URL=https://your-proxy-provider.com/rotation-endpoint
 ## 许可证
 
 Apache 2.0 License。详见 [LICENSE](LICENSE)。
+
+## 友链
+
+[DSH Data Agent · 用对话分析数据](https://github.com/omdsh-dev/dsh-data-agent)
+[DSH TUI · 一个美观且实用的 Claude Code 风格 TUI 插件](https://github.com/ccch1mneyyy/dsh-TUI)
