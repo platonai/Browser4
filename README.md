@@ -699,6 +699,8 @@ Join our community for support, feedback, and collaboration!
 
 We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
+<img width="540" height="849" alt="image" src="https://github.com/user-attachments/assets/830b3b76-7f7a-4007-8630-fd5652e0b5b6" />
+
 ---
 
 ## 📜 Documentation
