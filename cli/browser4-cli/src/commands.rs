@@ -113,10 +113,6 @@ fn get_str<'a>(map: &'a HashMap<String, Value>, key: &str) -> Option<&'a str> {
     map.get(key).and_then(|v| v.as_str())
 }
 
-/// Normalize a cookie/storage domain for Chrome: strip a leading dot
-/// (Chrome rejects ".example.com"), and reject values that collapse to an
-/// empty host (e.g. ".").  Returns None for invalid domains so callers can
-/// skip the option or surface a clear error instead of sending a bad value.
 /// Normalize a cookie/storage domain for Chrome: trim surrounding whitespace,
 /// strip a leading dot (Chrome rejects ".example.com"), and reject values that
 /// collapse to an empty host or still contain whitespace.  Returns None for

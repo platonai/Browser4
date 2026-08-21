@@ -16817,11 +16817,10 @@ async fn run(
     // Early validation for cookie/storage domain options — an explicitly
     // provided but invalid domain (e.g. "." or "a b.com") must fail loudly
     // instead of silently falling back to "no domain", which would broaden
-    // the cookie filter or target the wrong page domain.
-    if matches!(
-        command,
-        "cookie-set" | "cookie-delete" | "cookie-list" | "state-save" | "state-load"
-    ) {
+    // the cookie filter or target the wrong page domain.  Only the commands
+    // whose tool_params_fn sets the `_invalid_domain` sentinel are checked
+    // (state-save/state-load accept no --domain option and never set it).
+    if matches!(command, "cookie-set" | "cookie-delete" | "cookie-list") {
         if let Some(bad) = tool_params.get("_invalid_domain").and_then(|v| v.as_str()) {
             return Err(CliError(
                 ExitCode::Usage,

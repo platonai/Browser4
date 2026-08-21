@@ -409,10 +409,14 @@ open class Browser4WebDriver(
     // Drag & drop fix — the upstream pulsar-browser:4.11.x drag() dispatches
     // synthetic (untrusted) DragEvents from JS, which never reach listeners
     // registered by the page's own scripts (isolated-world dispatch does not
-    // cross into the main world for drag events).  This override performs a
-    // real CDP drag: Input.setInterceptDrags + mouse sequence, then
-    // Input.dispatchDragEvent for dragEnter/dragOver/drop — the same flow as
-    // EmulationHandler.Mouse.dragAndDrop, resolved through selectors.
+    // cross into the main world for drag events).  This override runs the same
+    // event sequence through BrowserProtocol.evaluate (main world, no
+    // isolated-world context id), so page-registered listeners receive the
+    // full drag lifecycle (dragstart → dragenter → dragover → drop → dragend).
+    // The events remain synthetic (isTrusted=false): libraries that gate on
+    // isTrusted (SortableJS, react-dnd) still won't respond — a browser-level
+    // limitation, not fixable from the driver (see the KDoc below for what was
+    // tried and ruled out).
     // ---------------------------------------------------------------------------
 
     /**
