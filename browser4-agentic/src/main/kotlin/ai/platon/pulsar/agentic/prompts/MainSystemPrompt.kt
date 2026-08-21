@@ -22,6 +22,63 @@ task. If you need web page information, explicitly call `tab.navigate` /
 `tab.ariaSnapshot` / `tab.textContent` / `tab.eval` first.
 """
 
+private val FILE_HANDLING_BROWSER = """
+## File Handling
+
+- Use the file system to save your processing progress and final results.
+- Prefer `fs.*` tools for file operations.
+- Use `plan.md` if you have a plan.
+- Use `results.md` to summarize final task results.
+- NEVER rename/delete a file to "move" content: write the new file first, verify it
+  exists and is correct, and only then delete the old one. Deleting an old file whose
+  content only exists under the old name destroys data irreversibly.
+""".trimIndent()
+
+private val FILE_HANDLING_CODING = """
+## File Handling
+
+- Operate on the repository workspace with `coding.*` tools, not `fs.*`.
+- Read before editing: use `coding.read`, `coding.listDir`, `coding.glob`, and `coding.grep`
+  to ground every change in the actual repository layout.
+- Use `plan.md` for a short implementation plan and `results.md` for final results.
+- Prefer `coding.replace`/`coding.write` for precise edits; never rewrite a whole file blindly.
+- NEVER rename/delete a file to "move" content: write the new file first, verify it
+  exists and is correct, and only then delete the old one. Deleting an old file whose
+  content only exists under the old name destroys data irreversibly.
+""".trimIndent()
+
+private val REASONING_PATTERN_BROWSER = """
+### Reasoning Pattern
+
+To complete `<user_request>`, follow this reasoning pattern:
+
+```
+<thinking>
+[1] Goal analysis: Relate the current sub-goal to the overall objective.
+[2] State check: Review the current page, screenshot, and previous result.
+[3] Evidence: Ground decisions in visible content, page structure, and prior observations.
+[4] Blockers: Identify what is preventing progress.
+[5] Plan: Choose the smallest effective next action.
+</thinking>
+```
+""".trimIndent()
+
+private val REASONING_PATTERN_CODING = """
+### Reasoning Pattern
+
+To complete `<user_request>`, follow this reasoning pattern:
+
+```
+<thinking>
+[1] Goal analysis: Relate the current sub-goal to the overall objective.
+[2] Code state check: Review the files, modules, tests, and latest tool output relevant to the change.
+[3] Evidence: Ground decisions in actual code, build output, test counts, and validator results.
+[4] Blockers: Identify compilation errors, test failures, or unknown APIs preventing progress.
+[5] Plan: Choose the smallest effective next coding action.
+</thinking>
+```
+""".trimIndent()
+
 /**
  * Skill tool type definitions for the system prompt.
  *
@@ -173,15 +230,7 @@ fun buildMainSystemPromptV1(
 
 ---
 
-## File Handling
-
-- Use the file system to save your processing progress and final results.
-- Prefer `fs.*` tools for file operations.
-- Use `plan.md` if you have a plan.
-- Use `results.md` to summarize final task results.
-- NEVER rename/delete a file to "move" content: write the new file first, verify it
-  exists and is correct, and only then delete the old one. Deleting an old file whose
-  content only exists under the old name destroys data irreversibly.
+${if (codingTask == true) FILE_HANDLING_CODING else FILE_HANDLING_BROWSER}
 
 ---
 
@@ -206,19 +255,7 @@ output you actually observed. A gate you did not run must be reported as
 
 ---
 
-### Reasoning Pattern
-
-To complete `<user_request>`, follow this reasoning pattern:
-
-```
-<thinking>
-[1] Goal analysis: Relate the current sub-goal to the overall objective.
-[2] State check: Review the current page, screenshot, and previous result.
-[3] Evidence: Ground decisions in visible content, page structure, and prior observations.
-[4] Blockers: Identify what is preventing progress.
-[5] Plan: Choose the smallest effective next action.
-</thinking>
-```
+${if (codingTask == true) REASONING_PATTERN_CODING else REASONING_PATTERN_BROWSER}
 
 ---
 

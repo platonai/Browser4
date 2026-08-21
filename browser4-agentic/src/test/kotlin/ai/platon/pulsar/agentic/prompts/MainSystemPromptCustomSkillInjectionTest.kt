@@ -6,8 +6,10 @@ import ai.platon.pulsar.agentic.skills.SkillRegistry
 import ai.platon.pulsar.agentic.skills.examples.WebScrapingSkill
 import ai.platon.pulsar.agentic.skills.tools.SkillToolExecutor
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
+import ai.platon.pulsar.agentic.tools.specs.ToolSpecFormat
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -99,5 +101,26 @@ class MainSystemPromptCustomSkillInjectionTest {
         // Check for SkillResult type definition
         assertTrue(prompt.contains("data class SkillResult"),
             "System prompt should contain SkillResult type definition")
+    }
+
+    @Test
+    fun codingPromptUsesCodingFileHandlingAndReasoning() {
+        val prompt = buildMainSystemPromptV1(ToolSpecFormat.KOTLIN, codingTask = true)
+
+        assertTrue(prompt.contains("Operate on the repository workspace with `coding.*` tools"), prompt)
+        assertTrue(prompt.contains("Code state check"), prompt)
+        assertTrue(prompt.contains("build output, test counts, and validator results"), prompt)
+
+        assertFalse(prompt.contains("Prefer `fs.*` tools for file operations"), prompt)
+        assertFalse(prompt.contains("Review the current page, screenshot, and previous result"), prompt)
+    }
+
+    @Test
+    fun browserPromptKeepsPageOrientedReasoning() {
+        val prompt = buildMainSystemPromptV1(ToolSpecFormat.KOTLIN, codingTask = false)
+
+        assertTrue(prompt.contains("Prefer `fs.*` tools for file operations"), prompt)
+        assertTrue(prompt.contains("Review the current page, screenshot, and previous result"), prompt)
+        assertFalse(prompt.contains("Code state check"), prompt)
     }
 }
