@@ -909,7 +909,17 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 validateArgs(args, allowed("selector", "values"), setOf("selector", "values"), functionName)
                 val values = args["values"] as? List<String>
                     ?: throw IllegalArgumentException("values must be a list of strings")
-                driver.selectOption(selector = paramString(args, "selector", functionName)!!, values = values)
+                val selector = paramString(args, "selector", functionName)!!
+                // Verify the target exists before delegating: the upstream
+                // selectOption reports success even when no element matches,
+                // which silently swallows typos and stale refs.
+                val exists = runCatching {
+                    driver.evaluateValue(selector, "function(){ return this != null; }") as? Boolean
+                }.getOrNull() ?: false
+                if (!exists) {
+                    throw IllegalArgumentException("Option target not found: $selector")
+                }
+                driver.selectOption(selector = selector, values = values)
             }
 
             "ariaSnapshot" -> {

@@ -5,6 +5,7 @@ import ai.platon.pulsar.api.model.BrowserTab
 import ai.platon.pulsar.api.model.WebDriverException
 import ai.platon.pulsar.chrome.network.RobustRPC
 import ai.platon.pulsar.chrome.protocol.Keyboard
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import kotlinx.coroutines.delay
 
 /**
@@ -401,6 +402,170 @@ open class Browser4WebDriver(
             )
         }.onFailure {
             // Best-effort safety net — a failure here must not fail the press itself.
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Drag & drop fix — the upstream pulsar-browser:4.11.x drag() dispatches
+    // synthetic (untrusted) DragEvents from JS, which never reach listeners
+    // registered by the page's own scripts (isolated-world dispatch does not
+    // cross into the main world for drag events).  This override performs a
+    // real CDP drag: Input.setInterceptDrags + mouse sequence, then
+    // Input.dispatchDragEvent for dragEnter/dragOver/drop — the same flow as
+    // EmulationHandler.Mouse.dragAndDrop, resolved through selectors.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Drag the element identified by [sourceSelector] onto the element identified
+     * by [targetSelector].
+     *
+     * Upstream drag() dispatches synthetic DragEvents through `JsHandler`,
+     * which evaluates in an **isolated world** — the events never reach
+     * main-world page listeners, so the drag silently does nothing.
+     *
+     * This override runs the same event sequence through
+     * [BrowserProtocol.evaluate] (main world, no isolated-world context id),
+     * so page-registered listeners receive the full drag lifecycle
+     * (dragstart → dragenter → dragover → drop → dragend), verified against a
+     * live listener probe.
+     *
+     * Notes on what was tried and ruled out:
+     * - CDP `Input.dispatchDragEvent` + manual DragData: accepted by Chrome,
+     *   but libraries require `dragstart`, which CDP never emits.
+     * - Trusted CDP mouse sequences (press → move → release): headless Chrome
+     *   never starts the native drag state machine, so no dragstart fires.
+     * - Synthetic events are `isTrusted=false`; libraries that gate on
+     *   isTrusted (SortableJS, react-dnd) will not respond.  That is a
+     *   browser-level limitation, not fixable from the driver.
+     *
+     * @param sourceSelector A CSS selector, XPath, or "backend:nodeId" locator for the drag source.
+     * @param targetSelector A CSS selector, XPath, or "backend:nodeId" locator for the drop target.
+     * @throws WebDriverException if either element cannot be located or the script fails.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun drag(sourceSelector: String, targetSelector: String) {
+        rpc.invokeOnPage("drag") {
+            val encodedSource = "'${escapeJsSelector(sourceSelector)}'"
+            val encodedTarget = "'${escapeJsSelector(targetSelector)}'"
+            val script = """
+                (async () => {
+                    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+                    const source = document.querySelector($encodedSource);
+                    const target = document.querySelector($encodedTarget);
+                    if (!source || !target) {
+                        return JSON.stringify({
+                            ok: false,
+                            error: !source && !target
+                                ? 'Source and target elements were not found'
+                                : !source
+                                    ? 'Source element was not found'
+                                    : 'Target element was not found'
+                        });
+                    }
+                    if (typeof DataTransfer === 'undefined' || typeof DragEvent === 'undefined') {
+                        return JSON.stringify({
+                            ok: false,
+                            error: 'HTML5 drag-and-drop APIs are not available in the current page context'
+                        });
+                    }
+
+                    const sourceRect = source.getBoundingClientRect();
+                    const targetRect = target.getBoundingClientRect();
+                    const sourceX = Math.round(sourceRect.left + sourceRect.width / 2);
+                    const sourceY = Math.round(sourceRect.top + sourceRect.height / 2);
+                    const targetX = Math.round(targetRect.left + targetRect.width / 2);
+                    const targetY = Math.round(targetRect.top + targetRect.height / 2);
+                    const dataTransfer = new DataTransfer();
+
+                    const fire = (element, type, clientX, clientY) => {
+                        const event = new DragEvent(type, {
+                            bubbles: true,
+                            cancelable: true,
+                            composed: true,
+                            dataTransfer,
+                            clientX,
+                            clientY
+                        });
+                        element.dispatchEvent(event);
+                    };
+
+                    fire(source, 'dragstart', sourceX, sourceY);
+                    await sleep(80);
+                    fire(target, 'dragenter', targetX, targetY);
+                    await sleep(80);
+                    fire(target, 'dragover', targetX, targetY);
+                    await sleep(120);
+                    fire(target, 'drop', targetX, targetY);
+                    await sleep(80);
+                    fire(source, 'dragend', targetX, targetY);
+
+                    return JSON.stringify({ ok: true });
+                })()
+            """.trimIndent()
+
+            // browserProtocol.evaluate runs in the main world (no contextId),
+            // unlike JsHandler.evaluate which prefers an isolated world.
+            val evaluate = browserProtocol.evaluate(script, returnByValue = true, awaitPromise = true)
+            val result = evaluate.result.value as? String
+                ?: """{"ok":false,"error":"Failed to execute drag script"}"""
+            val parsed = runCatching { pulsarObjectMapper().readTree(result) }.getOrNull()
+            if (parsed?.get("ok")?.asBoolean() != true) {
+                val error = parsed?.get("error")?.asText() ?: "Unknown drag failure"
+                throw WebDriverException(
+                    "Failed to drag '$sourceSelector' to '$targetSelector': $error",
+                    driver = this@Browser4WebDriver
+                )
+            }
+
+            gap("drag")
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Dialog state fix — upstream dialogAccept/dialogDismiss call CDP
+    // Page.handleJavaScriptDialog directly but never drain DialogHandler's
+    // pending queue, and DialogHandler.onDialogClosed only logs.  The
+    // tool-layer "blocked by a native dialog" guard checks that queue, so a
+    // handled dialog keeps failing screenshots/health-checks until the session
+    // is closed.  These overrides drain the queue after every CDP dialog call.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Accept the current JavaScript dialog, then drain the pending-dialog queue
+     * so the "blocked by dialog" guard does not keep failing on an already
+     * handled dialog.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun dialogAccept(promptText: String?) {
+        try {
+            super.dialogAccept(promptText)
+        } finally {
+            drainPendingDialogs()
+        }
+    }
+
+    /**
+     * Dismiss (Cancel) the current JavaScript dialog, then drain the
+     * pending-dialog queue (see [dialogAccept]).
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun dialogDismiss() {
+        try {
+            super.dialogDismiss()
+        } finally {
+            drainPendingDialogs()
+        }
+    }
+
+    /**
+     * Drop every entry from [DialogHandler]'s pending queue.  The queue is
+     * only appended by `Page.javascriptDialogOpening` and never emptied by
+     * the upstream dialog path, so it must be drained explicitly after a CDP
+     * `Page.handleJavaScriptDialog` call.
+     */
+    private fun drainPendingDialogs() {
+        while (dialogHandler.hasPendingDialog()) {
+            dialogHandler.getPendingDialog()
         }
     }
 }

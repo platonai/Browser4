@@ -1640,7 +1640,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(domain) = get_opt_str(args, "domain") {
-                    p["domain"] = json!(domain);
+                    // Normalize: strip a leading dot (Chrome rejects ".example.com").
+                    p["domain"] = json!(domain.trim_start_matches('.'));
                 }
                 if let Some(path) = get_opt_str(args, "path") {
                     p["path"] = json!(path);
@@ -1694,7 +1695,10 @@ pub fn all_commands() -> Vec<CommandDef> {
                     "value": get_string_value(args, "value").unwrap_or_default(),
                 });
                 if let Some(domain) = get_opt_str(args, "domain") {
-                    p["domain"] = json!(domain);
+                    // Normalize: strip a leading dot (".example.com" → "example.com").
+                    // Chrome rejects cookie domains with a leading dot, which made
+                    // `--domain .foo.com` silently fail before.
+                    p["domain"] = json!(domain.trim_start_matches('.'));
                 }
                 if let Some(path) = get_opt_str(args, "path") {
                     p["path"] = json!(path);
@@ -1736,7 +1740,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                     "name": get_string_value(args, "name").unwrap_or_default()
                 });
                 if let Some(domain) = get_opt_str(args, "domain") {
-                    p["domain"] = json!(domain);
+                    // Normalize: strip a leading dot (Chrome rejects ".example.com").
+                    p["domain"] = json!(domain.trim_start_matches('.'));
                 }
                 if let Some(path) = get_opt_str(args, "path") {
                     p["path"] = json!(path);
@@ -3122,6 +3127,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
                 OptionDef {
+                    name: "filename",
+                    description: "Alias for --file (accepted for compatibility)",
+                    is_bool: false,
+                    short: None,
+                },
+                OptionDef {
                     name: "clean",
                     description: "Strip <script>, <style>, comments, and non-standard attributes (keeps 'vi', aria-*, data-*, role, and standard HTML5 attrs)",
                     is_bool: true,
@@ -3132,8 +3143,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_name_fn: |_| "html_snapshot_export".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
-                // Accept file as --file option (takes precedence) or positional arg
+                // Accept file as --file option (takes precedence) or --filename alias or positional arg
                 if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
+                else if let Some(f) = get_opt_str(args, "filename") { p["file"] = json!(f); }
                 if let Some(true) = get_bool(args, "clean") { p["clean"] = json!(true); }
                 p
             },
