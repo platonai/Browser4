@@ -211,6 +211,7 @@ class FetchResult(
         fun crawlRetry(task: FetchTask, delay: Duration, reason: Exception) =
             FetchResult(task, ForwardingResponse.crawlRetry(task.page, reason)).also { task.page.retryDelay = delay }
 
-        fun failed(task: FetchTask, e: Throwable?) = FetchResult(task, ForwardingResponse.failed(task.page, e))
+        fun failed(task: FetchTask, e: Throwable?) =
+            FetchResult(task, ForwardingResponse.failed(task.page, e), e)
     }
 }

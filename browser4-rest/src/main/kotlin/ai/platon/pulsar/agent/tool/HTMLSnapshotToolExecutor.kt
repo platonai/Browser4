@@ -326,9 +326,16 @@ class HTMLSnapshotToolExecutor(
         // H2 reports errors through the response body (statusCode 417) rather
         // than an exception.  H2 treats double quotes as identifier quotes, so
         // a CSS selector written as DOM_LOAD_AND_SELECT(@url, "a") fails with a
-        // confusing "Column a not found" message — surface the real cause.
+        // confusing "Column a not found" message.  Only append the single-quote
+        // hint when the failing statement actually contains a double-quoted
+        // argument inside a DOM_LOAD_AND_SELECT call — unrelated quoted-column
+        // errors (e.g. a genuinely missing table column) pass through untouched.
         val rawMessage = response.message
-        if (rawMessage != null && rawMessage.contains("not found") && rawMessage.contains("SQL statement") && rawMessage.contains('"')) {
+        if (rawMessage != null &&
+            rawMessage.contains("not found") &&
+            rawMessage.contains("SQL statement") &&
+            Regex("""DOM_LOAD_AND_SELECT\s*\([^)]*"[^"]*"""", RegexOption.IGNORE_CASE).containsMatchIn(processedSql)
+        ) {
             response.message = rawMessage + " — CSS selectors inside DOM_LOAD_AND_SELECT must use " +
                 "SINGLE quotes (H2 treats double quotes as identifier quotes). " +
                 "Example: DOM_LOAD_AND_SELECT(@url, 'a')"

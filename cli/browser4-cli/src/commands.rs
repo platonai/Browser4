@@ -113,6 +113,19 @@ fn get_str<'a>(map: &'a HashMap<String, Value>, key: &str) -> Option<&'a str> {
     map.get(key).and_then(|v| v.as_str())
 }
 
+/// Normalize a cookie/storage domain for Chrome: strip a leading dot
+/// (Chrome rejects ".example.com"), and reject values that collapse to an
+/// empty host (e.g. ".").  Returns None for invalid domains so callers can
+/// skip the option or surface a clear error instead of sending a bad value.
+fn normalize_cookie_domain(domain: &str) -> Option<String> {
+    let trimmed = domain.trim_start_matches('.');
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 /// Resolve a user-supplied output directory to an absolute path against the
 /// CLI's current working directory.  Paths that are already absolute (native
 /// drive/UNC forms, or rooted with `/` or `\` like the POSIX-style `/tmp/x`
@@ -1640,8 +1653,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(domain) = get_opt_str(args, "domain") {
-                    // Normalize: strip a leading dot (Chrome rejects ".example.com").
-                    p["domain"] = json!(domain.trim_start_matches('.'));
+                    if let Some(normalized) = normalize_cookie_domain(domain) {
+                        p["domain"] = json!(normalized);
+                    }
                 }
                 if let Some(path) = get_opt_str(args, "path") {
                     p["path"] = json!(path);
@@ -1695,10 +1709,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                     "value": get_string_value(args, "value").unwrap_or_default(),
                 });
                 if let Some(domain) = get_opt_str(args, "domain") {
-                    // Normalize: strip a leading dot (".example.com" → "example.com").
-                    // Chrome rejects cookie domains with a leading dot, which made
-                    // `--domain .foo.com` silently fail before.
-                    p["domain"] = json!(domain.trim_start_matches('.'));
+                    if let Some(normalized) = normalize_cookie_domain(domain) {
+                        p["domain"] = json!(normalized);
+                    }
                 }
                 if let Some(path) = get_opt_str(args, "path") {
                     p["path"] = json!(path);
@@ -1740,8 +1753,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                     "name": get_string_value(args, "name").unwrap_or_default()
                 });
                 if let Some(domain) = get_opt_str(args, "domain") {
-                    // Normalize: strip a leading dot (Chrome rejects ".example.com").
-                    p["domain"] = json!(domain.trim_start_matches('.'));
+                    if let Some(normalized) = normalize_cookie_domain(domain) {
+                        p["domain"] = json!(normalized);
+                    }
                 }
                 if let Some(path) = get_opt_str(args, "path") {
                     p["path"] = json!(path);

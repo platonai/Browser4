@@ -152,7 +152,10 @@ open class MultiPrivacyContextManager(
             // and converted to a crawlRetry, which the upstream task loop retries
             // forever — FetchTask.nRetries is never incremented anywhere.
             // Fail the task after a bounded number of attempts instead.
-            val maxRetries = conf.getWithFallback("fetch.maxPrivacyRetries", "5")?.toIntOrNull() ?: 5
+            val maxRetries = conf.getWithFallback("fetch.maxPrivacyRetries", "5")
+                ?.toIntOrNull()
+                ?.takeIf { it >= 0 }
+                ?: 5
             task.nRetries++
             if (task.nRetries >= maxRetries) {
                 logger.warn(

@@ -443,23 +443,29 @@ open class Browser4WebDriver(
      * @throws WebDriverException if either element cannot be located or the script fails.
      */
     @Throws(WebDriverException::class)
-    override suspend fun drag(sourceSelector: String, targetSelector: String) {
+    override suspend fun drag(sourceSelector: String, targetSelector: String): Unit {
         rpc.invokeOnPage("drag") {
-            val encodedSource = "'${escapeJsSelector(sourceSelector)}'"
-            val encodedTarget = "'${escapeJsSelector(targetSelector)}'"
+            // Resolve both elements through the driver's locator path
+            // (supports CSS selectors, XPath, backend:nodeId and eN snapshot
+            // refs), computing their viewport centers in one pass.
+            val sourcePoint = resolveDragCenter(sourceSelector)
+                ?: throw WebDriverException("Source element was not found: $sourceSelector", driver = this@Browser4WebDriver)
+            val targetPoint = resolveDragCenter(targetSelector)
+                ?: throw WebDriverException("Target element was not found: $targetSelector", driver = this@Browser4WebDriver)
+
             val script = """
                 (async () => {
                     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-                    const source = document.querySelector($encodedSource);
-                    const target = document.querySelector($encodedTarget);
+                    const source = document.elementFromPoint(${sourcePoint.first}, ${sourcePoint.second});
+                    const target = document.elementFromPoint(${targetPoint.first}, ${targetPoint.second});
                     if (!source || !target) {
                         return JSON.stringify({
                             ok: false,
                             error: !source && !target
-                                ? 'Source and target elements were not found'
+                                ? 'Source and target elements were not found at their resolved positions'
                                 : !source
-                                    ? 'Source element was not found'
-                                    : 'Target element was not found'
+                                    ? 'Source element was not found at its resolved position'
+                                    : 'Target element was not found at its resolved position'
                         });
                     }
                     if (typeof DataTransfer === 'undefined' || typeof DragEvent === 'undefined') {
@@ -469,14 +475,7 @@ open class Browser4WebDriver(
                         });
                     }
 
-                    const sourceRect = source.getBoundingClientRect();
-                    const targetRect = target.getBoundingClientRect();
-                    const sourceX = Math.round(sourceRect.left + sourceRect.width / 2);
-                    const sourceY = Math.round(sourceRect.top + sourceRect.height / 2);
-                    const targetX = Math.round(targetRect.left + targetRect.width / 2);
-                    const targetY = Math.round(targetRect.top + targetRect.height / 2);
                     const dataTransfer = new DataTransfer();
-
                     const fire = (element, type, clientX, clientY) => {
                         const event = new DragEvent(type, {
                             bubbles: true,
@@ -489,15 +488,15 @@ open class Browser4WebDriver(
                         element.dispatchEvent(event);
                     };
 
-                    fire(source, 'dragstart', sourceX, sourceY);
+                    fire(source, 'dragstart', ${sourcePoint.first}, ${sourcePoint.second});
                     await sleep(80);
-                    fire(target, 'dragenter', targetX, targetY);
+                    fire(target, 'dragenter', ${targetPoint.first}, ${targetPoint.second});
                     await sleep(80);
-                    fire(target, 'dragover', targetX, targetY);
+                    fire(target, 'dragover', ${targetPoint.first}, ${targetPoint.second});
                     await sleep(120);
-                    fire(target, 'drop', targetX, targetY);
+                    fire(target, 'drop', ${targetPoint.first}, ${targetPoint.second});
                     await sleep(80);
-                    fire(source, 'dragend', targetX, targetY);
+                    fire(source, 'dragend', ${targetPoint.first}, ${targetPoint.second});
 
                     return JSON.stringify({ ok: true });
                 })()
@@ -521,6 +520,27 @@ open class Browser4WebDriver(
         }
     }
 
+    /**
+     * Resolve the viewport center of [selector] via the driver's locator path.
+     * Supports CSS selectors, XPath, `backend:nodeId` and `eN` snapshot refs
+     * (the upstream evaluateValue locator resolution), so drag works with every
+     * locator format the rest of the CLI accepts. Returns (x, y) in viewport
+     * CSS pixels, or null when the element does not exist.
+     */
+    private suspend fun resolveDragCenter(selector: String): Pair<Double, Double>? {
+        val value = evaluateValue(
+            selector,
+            """
+            function() {
+                const r = this.getBoundingClientRect();
+                return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+            }
+            """.trimIndent()
+        ) as? String ?: return null
+        val node = runCatching { pulsarObjectMapper().readTree(value) }.getOrNull() ?: return null
+        return Pair(node.get("x").asDouble(), node.get("y").asDouble())
+    }
+
     // ---------------------------------------------------------------------------
     // Dialog state fix — upstream dialogAccept/dialogDismiss call CDP
     // Page.handleJavaScriptDialog directly but never drain DialogHandler's
@@ -531,40 +551,41 @@ open class Browser4WebDriver(
     // ---------------------------------------------------------------------------
 
     /**
-     * Accept the current JavaScript dialog, then drain the pending-dialog queue
-     * so the "blocked by dialog" guard does not keep failing on an already
-     * handled dialog.
+     * Accept the current JavaScript dialog, then acknowledge exactly the dialog
+     * CDP handled (queue head) so later pending entries stay intact.
      */
     @Throws(WebDriverException::class)
-    override suspend fun dialogAccept(promptText: String?) {
+    override suspend fun dialogAccept(promptText: String?): Unit {
         try {
             super.dialogAccept(promptText)
         } finally {
-            drainPendingDialogs()
+            acknowledgeHandledDialog()
         }
     }
 
     /**
-     * Dismiss (Cancel) the current JavaScript dialog, then drain the
-     * pending-dialog queue (see [dialogAccept]).
+     * Dismiss (Cancel) the current JavaScript dialog, then acknowledge exactly
+     * the dialog CDP handled (see [dialogAccept]).
      */
     @Throws(WebDriverException::class)
-    override suspend fun dialogDismiss() {
+    override suspend fun dialogDismiss(): Unit {
         try {
             super.dialogDismiss()
         } finally {
-            drainPendingDialogs()
+            acknowledgeHandledDialog()
         }
     }
 
     /**
-     * Drop every entry from [DialogHandler]'s pending queue.  The queue is
-     * only appended by `Page.javascriptDialogOpening` and never emptied by
-     * the upstream dialog path, so it must be drained explicitly after a CDP
+     * Remove only the head of [DialogHandler]'s pending queue — the dialog CDP
+     * just handled.  Unlike draining the whole queue, later entries (dialogs
+     * queued after this one) are preserved.  The queue is only appended by
+     * `Page.javascriptDialogOpening` and never emptied by the upstream dialog
+     * path, so it must be acknowledged explicitly after a CDP
      * `Page.handleJavaScriptDialog` call.
      */
-    private fun drainPendingDialogs() {
-        while (dialogHandler.hasPendingDialog()) {
+    private fun acknowledgeHandledDialog() {
+        if (dialogHandler.hasPendingDialog()) {
             dialogHandler.getPendingDialog()
         }
     }

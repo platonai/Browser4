@@ -912,10 +912,13 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 val selector = paramString(args, "selector", functionName)!!
                 // Verify the target exists before delegating: the upstream
                 // selectOption reports success even when no element matches,
-                // which silently swallows typos and stale refs.
-                val exists = runCatching {
-                    driver.evaluateValue(selector, "function(){ return this != null; }") as? Boolean
-                }.getOrNull() ?: false
+                // which silently swallows typos and stale refs.  Only the
+                // missing-target case is treated as "not found" — driver,
+                // session and transport failures keep propagating.
+                val exists = driver.evaluateValue(
+                    selector,
+                    "function(){ return this != null; }"
+                ) as? Boolean ?: false
                 if (!exists) {
                     throw IllegalArgumentException("Option target not found: $selector")
                 }
