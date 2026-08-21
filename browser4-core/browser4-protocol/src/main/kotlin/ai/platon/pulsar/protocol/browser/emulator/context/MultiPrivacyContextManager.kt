@@ -147,7 +147,21 @@ open class MultiPrivacyContextManager(
             logger.warn("ProxyVendorException, can not handle at this layer, rethrow | {}\n{}", task.url, e.brief())
             throw e
         } catch (e: PrivacyException) {
-            logger.warn("PrivacyException, retry later | ${task.url}", e)
+            // Guard against infinite retries: when the privacy-context pool is
+            // exhausted (or no context is ready), this exception is caught here
+            // and converted to a crawlRetry, which the upstream task loop retries
+            // forever — FetchTask.nRetries is never incremented anywhere.
+            // Fail the task after a bounded number of attempts instead.
+            val maxRetries = conf.getWithFallback("fetch.maxPrivacyRetries", "5")?.toIntOrNull() ?: 5
+            task.nRetries++
+            if (task.nRetries >= maxRetries) {
+                logger.warn(
+                    "PrivacyException exceeded retry limit ({}), failing task | {}",
+                    maxRetries, task.url
+                )
+                return FetchResult.failed(task, e)
+            }
+            logger.warn("PrivacyException, retry later ({}/{}) | {}", task.nRetries, maxRetries, task.url)
             return FetchResult.crawlRetry(task, e)
         }
     }
