@@ -350,6 +350,7 @@ fn looks_like_negative_value(token: &str) -> bool {
 pub fn build_command_args(
     raw: &HashMap<String, Value>,
     arg_names: &[&str],
+    aliases: &[(&str, &[&str])],
 ) -> Result<HashMap<String, Value>, String> {
     let mut result = raw.clone();
 
@@ -374,7 +375,13 @@ pub fn build_command_args(
             // An explicitly supplied option wins over a positional value for
             // the same slot (e.g. `htmlsnapshot export --file a.html b.html`
             // must export to a.html, not be overwritten by the positional).
-            if raw.contains_key(*name) {
+            // Alias-aware: `--filename other.html` (alias of --file) must also
+            // win over a positional filename.
+            let explicit_option = raw.contains_key(*name)
+                || aliases
+                    .iter()
+                    .any(|(canonical, alts)| *canonical == *name && alts.iter().any(|a| raw.contains_key(*a)));
+            if explicit_option {
                 continue;
             }
             // When the last named slot must absorb trailing positionals
@@ -884,8 +891,29 @@ mod tests {
         // pass-through subcommands work.
         let mut raw = HashMap::new();
         raw.insert("_".to_string(), json!(["cmd", "a", "b", "c"]));
-        let result = build_command_args(&raw, &["x"]).unwrap();
+        let result = build_command_args(&raw, &["x"], &[]).unwrap();
         assert_eq!(result.get("x"), Some(&json!("a b c")));
+    }
+
+    #[test]
+    fn test_build_command_args_option_beats_positional_with_alias() {
+        // `export positional.html --filename other.html` must keep the
+        // explicit --filename (alias of --file) over the positional slot.
+        let mut raw = HashMap::new();
+        raw.insert("_".to_string(), json!(["cmd", "positional.html"]));
+        raw.insert("filename".to_string(), json!("other.html"));
+        let aliases: &[(&str, &[&str])] = &[("file", &["file", "filename"])];
+        let result = build_command_args(&raw, &["file"], aliases).unwrap();
+        // Explicit --filename survives; the positional did not overwrite it
+        // (and no "file" key was synthesized from the positional).
+        assert_eq!(result.get("filename"), Some(&json!("other.html")));
+        assert!(!result.contains_key("file"));
+
+        // Without an explicit option the positional fills the slot.
+        let mut raw2 = HashMap::new();
+        raw2.insert("_".to_string(), json!(["cmd", "positional.html"]));
+        let result2 = build_command_args(&raw2, &["file"], aliases).unwrap();
+        assert_eq!(result2.get("file"), Some(&json!("positional.html")));
     }
 
     #[test]
@@ -893,7 +921,7 @@ mod tests {
         // A command that declares zero positional slots rejects any positionals.
         let mut raw = HashMap::new();
         raw.insert("_".to_string(), json!(["cmd", "a"]));
-        let result = build_command_args(&raw, &[]);
+        let result = build_command_args(&raw, &[], &[]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("unexpected positional arguments"));
     }
@@ -905,7 +933,7 @@ mod tests {
         // into the url slot).
         let mut raw = HashMap::new();
         raw.insert("_".to_string(), json!(["goto", "http://example.com/page", "-q"]));
-        let result = build_command_args(&raw, &["url"]);
+        let result = build_command_args(&raw, &["url"], &[]);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("-q"), "error should list the stray flag: {err}");
@@ -916,7 +944,7 @@ mod tests {
         // `goto -q <url>` must also fail loudly instead of url="-q <url>".
         let mut raw = HashMap::new();
         raw.insert("_".to_string(), json!(["goto", "-q", "http://example.com/page"]));
-        let result = build_command_args(&raw, &["url"]);
+        let result = build_command_args(&raw, &["url"], &[]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("-q"));
     }
@@ -925,7 +953,7 @@ mod tests {
     fn test_goto_keeps_plain_url() {
         let mut raw = HashMap::new();
         raw.insert("_".to_string(), json!(["goto", "http://example.com/page"]));
-        let result = build_command_args(&raw, &["url"]).unwrap();
+        let result = build_command_args(&raw, &["url"], &[]).unwrap();
         assert_eq!(result.get("url"), Some(&json!("http://example.com/page")));
     }
 
@@ -936,7 +964,7 @@ mod tests {
         let mut raw = HashMap::new();
         raw.insert("_".to_string(), json!(["loop", "-s", "price-watch", "eval", "x"]));
         raw.insert("_.dd".to_string(), json!(1)); // `--` right after the command name
-        let result = build_command_args(&raw, &["task"]).unwrap();
+        let result = build_command_args(&raw, &["task"], &[]).unwrap();
         assert_eq!(
             result.get("task"),
             Some(&json!("-s price-watch eval x"))
@@ -947,7 +975,7 @@ mod tests {
     fn test_build_command_args_numeric_coercion() {
         let mut raw = HashMap::new();
         raw.insert("_".to_string(), json!(["mousemove", "100", "200"]));
-        let result = build_command_args(&raw, &["x", "y"]).unwrap();
+        let result = build_command_args(&raw, &["x", "y"], &[]).unwrap();
         assert_eq!(result.get("x"), Some(&json!(100)));
         assert_eq!(result.get("y"), Some(&json!(200)));
     }
@@ -956,7 +984,7 @@ mod tests {
     fn test_build_command_args_decimal_numeric_coercion() {
         let mut raw = HashMap::new();
         raw.insert("_".to_string(), json!(["mousewheel", "1.5", "-2.25"]));
-        let result = build_command_args(&raw, &["dx", "dy"]).unwrap();
+        let result = build_command_args(&raw, &["dx", "dy"], &[]).unwrap();
         assert_eq!(result.get("dx"), Some(&json!(1.5)));
         assert_eq!(result.get("dy"), Some(&json!(-2.25)));
     }
