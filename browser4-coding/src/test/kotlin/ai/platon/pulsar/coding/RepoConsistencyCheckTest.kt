@@ -213,7 +213,7 @@ class RepoConsistencyCheckTest {
     fun moduleMapFormatFlagsTrailingWhitespaceAndLongLines() {
         val badSource = "package x\n" +
             "val a = 1  \n" + // trailing whitespace
-            "        \"browser4-core/browser4-protocol\" to listOf(\"browser4-plugins/browser4-wordcount\", \"browser4-plugins/browser4-linkcheck\"),\n" // > 120 cols
+            "        \"browser4-core/browser4-protocol\" to listOf(\"browser4-plugins/browser4-wordcount\", \"browser4-plugins/browser4-pagetitle\"),\n" // > 120 cols
         val result = RepoConsistencyCheck.check(
             version, rootPom, bomPom,
             moduleMapSource = badSource)

@@ -194,7 +194,7 @@ class DevTaskPlannerTest {
         // browser4-core/browser4-protocol instead of the freshly scaffolded module.
         val plan = DevTaskPlanner.plan(
             "在 browser4-agentic、browser4-core/browser4-protocol、browser4-core/browser4-skeleton、" +
-                "browser4-pdk 的 DEPENDENTS 补 browser4-plugins/browser4-testprobe，并补 LinkcheckConfigTest")
+                "browser4-pdk 的 DEPENDENTS 补 browser4-plugins/browser4-testprobe，并补 TestprobeConfigTest")
         assertTrue("browser4-plugins/browser4-testprobe" in plan.newPluginModules,
             "new plugin modules: ${plan.newPluginModules}")
         val mvnBuild = plan.steps.first { it.tool == "coding.mvnBuild" }

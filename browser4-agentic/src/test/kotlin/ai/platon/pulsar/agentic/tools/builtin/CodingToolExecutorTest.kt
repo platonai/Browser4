@@ -1203,7 +1203,7 @@ class CodingToolExecutorTest {
                 method = "devTask",
                 arguments = mutableMapOf(
                     "task" to "在 browser4-agentic、browser4-core/browser4-protocol、browser4-core/browser4-skeleton、" +
-                        "browser4-pdk 的 DEPENDENTS 补 browser4-plugins/browser4-testprobe，并补 LinkcheckConfigTest",
+                        "browser4-pdk 的 DEPENDENTS 补 browser4-plugins/browser4-testprobe，并补 TestprobeConfigTest",
                     "verify" to "true",
                     "runTests" to "true",
                 )

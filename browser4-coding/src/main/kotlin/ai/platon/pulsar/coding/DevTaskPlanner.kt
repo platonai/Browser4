@@ -148,7 +148,7 @@ object DevTaskPlanner {
 
     /**
      * Complete the module prefix for workspace-relative paths that live inside
-     * a NEW plugin module: `src/main/resources/linkcheck/countLinks.js` must
+     * a NEW plugin module: `src/main/resources/pagetitle/countPages.js` must
      * resolve as `browser4-plugins/<name>/src/...` because the workspace root is
      * the repo root (v1.3 fixed bare filenames only). Paths already rooted at a
      * known module — or at a well-known top-level repo directory — are left
