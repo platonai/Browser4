@@ -1,8 +1,0 @@
-{
-  "name": "browser4-linkstats",
-  "version": "1.0.0",
-  "sdkVersion": "4.14.0-SNAPSHOT",
-  "description": "统计页面链接分布",
-  "dependsOn": ["browser4-skeleton", "browser4-protocol", "browser4-agentic"],
-  "autoConfigurationClasses": ["ai.platon.pulsar.linkstats.config.LinkstatsAutoConfiguration"]
-}
