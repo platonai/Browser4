@@ -16812,6 +16812,22 @@ async fn run(
     let tool_name = (cmd_def.tool_name_fn)(&parsed);
     let mut tool_params = (cmd_def.tool_params_fn)(&parsed);
 
+    // Early validation for cookie/storage domain options — an explicitly
+    // provided but invalid domain (e.g. "." or "a b.com") must fail loudly
+    // instead of silently falling back to "no domain", which would broaden
+    // the cookie filter or target the wrong page domain.
+    if matches!(
+        command,
+        "cookie-set" | "cookie-delete" | "cookie-list" | "state-save" | "state-load"
+    ) {
+        if let Some(bad) = tool_params.get("_invalid_domain").and_then(|v| v.as_str()) {
+            return Err(CliError(
+                ExitCode::Usage,
+                format!("invalid cookie/storage domain: '{bad}'"),
+            ));
+        }
+    }
+
     // Early validation for grep commands — at least one of <pattern> or -e
     // must be provided, so catch the missing-pattern case before server start.
     if command == "htmlsnapshot-grep" || command == "snapshot-grep" {

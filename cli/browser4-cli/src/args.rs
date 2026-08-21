@@ -371,6 +371,12 @@ pub fn build_command_args(
 
     for (i, name) in arg_names.iter().enumerate() {
         if i < positional.len() {
+            // An explicitly supplied option wins over a positional value for
+            // the same slot (e.g. `htmlsnapshot export --file a.html b.html`
+            // must export to a.html, not be overwritten by the positional).
+            if raw.contains_key(*name) {
+                continue;
+            }
             // When the last named slot must absorb trailing positionals
             // (e.g. `loop -- -s price-watch eval …`), join them with
             // spaces so the subcommand handler can re-parse them.

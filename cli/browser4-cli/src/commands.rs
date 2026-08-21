@@ -1658,8 +1658,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(domain) = get_opt_str(args, "domain") {
-                    if let Some(normalized) = normalize_cookie_domain(domain) {
-                        p["domain"] = json!(normalized);
+                    match normalize_cookie_domain(domain) {
+                        Some(normalized) => { p["domain"] = json!(normalized); }
+                        None => { p["_invalid_domain"] = json!(domain); }
                     }
                 }
                 if let Some(path) = get_opt_str(args, "path") {
@@ -1714,8 +1715,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                     "value": get_string_value(args, "value").unwrap_or_default(),
                 });
                 if let Some(domain) = get_opt_str(args, "domain") {
-                    if let Some(normalized) = normalize_cookie_domain(domain) {
-                        p["domain"] = json!(normalized);
+                    match normalize_cookie_domain(domain) {
+                        Some(normalized) => { p["domain"] = json!(normalized); }
+                        None => { p["_invalid_domain"] = json!(domain); }
                     }
                 }
                 if let Some(path) = get_opt_str(args, "path") {
@@ -1758,8 +1760,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                     "name": get_string_value(args, "name").unwrap_or_default()
                 });
                 if let Some(domain) = get_opt_str(args, "domain") {
-                    if let Some(normalized) = normalize_cookie_domain(domain) {
-                        p["domain"] = json!(normalized);
+                    match normalize_cookie_domain(domain) {
+                        Some(normalized) => { p["domain"] = json!(normalized); }
+                        None => { p["_invalid_domain"] = json!(domain); }
                     }
                 }
                 if let Some(path) = get_opt_str(args, "path") {
