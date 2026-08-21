@@ -134,6 +134,9 @@ class CodingAgentShell(
     /** Base working directory — resolved to canonical path for security checks */
     private val canonicalBaseDir: Path = baseDir.toRealPath()
 
+    /** Canonical workspace directory used as the default command working directory. */
+    val canonicalWorkspaceDir: Path get() = canonicalBaseDir
+
     // ------------------------------------------------------------------
     // Per-instance allow / deny overrides
     // ------------------------------------------------------------------

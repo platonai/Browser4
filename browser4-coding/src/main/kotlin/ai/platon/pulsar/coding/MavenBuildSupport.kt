@@ -1,6 +1,7 @@
 package ai.platon.pulsar.coding
 
 import org.slf4j.LoggerFactory
+import java.io.File
 
 /**
  * A single Kotlin/Java compiler error or warning with source location.
@@ -43,6 +44,20 @@ class MavenBuildSupport {
 
     companion object {
         private val logger = LoggerFactory.getLogger(MavenBuildSupport::class.java)
+
+        /**
+         * Prefer the repository Maven wrapper (`mvnw`/`mvnw.cmd`) over a bare
+         * `mvn` on PATH. Windows shells cannot execute the Unix `mvnw` script,
+         * and developers commonly have only the wrapper and no global Maven.
+         */
+        private fun mavenLauncher(shell: CodingAgentShell, workingDir: String?): String {
+            val isWindows = System.getProperty("os.name").lowercase().contains("win")
+            val wrapperName = if (isWindows) "mvnw.cmd" else "mvnw"
+            val base = workingDir?.takeIf { it.isNotBlank() }
+                ?: runCatching { shell.canonicalWorkspaceDir.toString() }.getOrNull()
+            val candidate = if (base == null) File(wrapperName) else File(base, wrapperName)
+            return if (candidate.exists()) wrapperName else "mvn"
+        }
 
         /**
          * Parse Kotlin/Java compiler errors from Maven output.
@@ -130,7 +145,8 @@ class MavenBuildSupport {
     ): BuildResult {
         val goalList = goals.trim().ifBlank { "compile" }
         val skipFlag = if (skipTests) " -DskipTests" else ""
-        val command = "mvn -pl $module -am $goalList$skipFlag -q"
+        val launcher = mavenLauncher(shell, workingDir)
+        val command = "$launcher -pl $module -am $goalList$skipFlag -q"
         logger.info("Maven build: {}", command)
         val result = shell.executeRaw(
             command = command,

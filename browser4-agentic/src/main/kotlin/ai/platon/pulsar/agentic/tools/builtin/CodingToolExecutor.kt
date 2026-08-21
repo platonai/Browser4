@@ -652,6 +652,7 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 ToolSpec.Arg("task", "String"),
                 ToolSpec.Arg("verify", "Boolean", "false"),
                 ToolSpec.Arg("runTests", "Boolean", "false"),
+                ToolSpec.Arg("execute", "Boolean", "false"),
                 ToolSpec.Arg("module", "String", "null"),
             ),
             returnType = "String",
@@ -662,6 +663,8 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "graph (coding.moduleGraph) when available. verify=true additionally RUNS the fast checks " +
                 "(mvnBuild compile of the affected module, trapCheck, repo-consistency); runTests=true (with " +
                 "verify) also runs the module's test suite (mvn test -pl <module> -am / cargo test). " +
+                "execute=true runs the generated plan steps in order (scaffold, build, tests, validation) and " +
+                "stops at the first failure. " +
                 "module overrides the inferred module."
         )
 
@@ -1381,10 +1384,11 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 fs.protect(path, on)
             }
             "devTask" -> {
-                validateArgs(args, allowed = setOf("task", "verify", "runTests", "module"), required = setOf("task"), functionName)
+                validateArgs(args, allowed = setOf("task", "verify", "runTests", "execute", "module"), required = setOf("task"), functionName)
                 val task = paramString(args, "task", functionName)!!
                 val verify = paramBool(args, "verify", functionName, required = false, default = false) ?: false
                 val runTests = paramBool(args, "runTests", functionName, required = false, default = false) ?: false
+                val execute = paramBool(args, "execute", functionName, required = false, default = false) ?: false
                 val moduleOverride = paramString(args, "module", functionName, required = false, default = null)
 
                 // Resolve module mentions against the LIVE pom graph when possible.
@@ -1392,7 +1396,11 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 val knownModules = graph?.nodes?.keys?.toList()?.takeIf { it.isNotEmpty() }
                     ?: ModuleMap.MODULES
                 val plan = DevTaskPlanner.plan(task, knownModules)
-                val modules = if (!moduleOverride.isNullOrBlank()) listOf(moduleOverride) else plan.modules
+                val planModules = if (!moduleOverride.isNullOrBlank()) {
+                    listOf(moduleOverride)
+                } else {
+                    plan.modules + plan.newPluginModules
+                }
                 val planText = buildString {
                     appendLine("Dev task plan (${plan.steps.size} steps):")
                     plan.steps.forEach { s ->
@@ -1400,8 +1408,8 @@ class CodingToolExecutor : AbstractToolExecutor() {
                         appendLine("      ${s.command}")
                     }
                     appendLine("Signals: ${plan.summary}")
-                    if (modules.isNotEmpty() && moduleOverride.isNullOrBlank()) {
-                        appendLine("Inferred modules: ${modules.joinToString(", ")}")
+                    if (planModules.isNotEmpty() && moduleOverride.isNullOrBlank()) {
+                        appendLine("Inferred modules: ${planModules.joinToString(", ")}")
                     }
                     if (moduleOverride != null) {
                         appendLine("Module override: $moduleOverride")
@@ -1411,6 +1419,10 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     }
                 }.trimEnd()
 
+                if (execute) {
+                    return executeDevTaskPlan(planText, plan, receiver as Target)
+                }
+
                 if (!verify) return planText
 
                 // verify=true: run the fast checks against the live workspace.
@@ -1418,7 +1430,11 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 // Same tie-break rule as DevTaskPlanner.buildSteps: a freshly
                 // scaffolded plugin module wins over same-depth DEPENDENTS-key
                 // mentions, so verify/runTests never compile the wrong module.
-                val verifyCandidates = (if (moduleOverride.isNullOrBlank()) plan.newPluginModules else emptyList()) + modules
+                val verifyCandidates = if (moduleOverride.isNullOrBlank()) {
+                    plan.newPluginModules + plan.modules
+                } else {
+                    planModules
+                }
                 val mavenModule = verifyCandidates.filter { it != ModuleMap.CLI_CRATE }
                     .maxByOrNull { it.count { c -> c == '/' } }
                 if (mavenModule != null) {
@@ -1444,7 +1460,7 @@ class CodingToolExecutor : AbstractToolExecutor() {
                         results += "tests on $mavenModule${testArg?.let { " [-Dtest=$it]" } ?: ""} (exit ${r.exitCode}):\n" +
                             listOf(r.stdout, r.stderr).filter { it.isNotBlank() }.joinToString("\n").takeLast(3000)
                     }
-                    if (ModuleMap.CLI_CRATE in modules) {
+                    if (ModuleMap.CLI_CRATE in planModules) {
                         val cmd = ModuleMap.cargoTestCommand()
                         val r = shell.executeRaw(cmd, timeoutSeconds = 600)
                         results += "cargo tests (exit ${r.exitCode}):\n" +
@@ -1476,6 +1492,52 @@ class CodingToolExecutor : AbstractToolExecutor() {
 
             else -> throw IllegalArgumentException("Unsupported coding method: $functionName(${args.keys})")
         }
+    }
+
+    /**
+     * Execute a [DevTaskPlanner.DevPlan] step by step using the same coding
+     * methods exposed to LLM agents. Execution is fail-fast: the first failing
+     * step stops the run and reports which step failed.
+     */
+    private suspend fun executeDevTaskPlan(
+        planText: String,
+        plan: DevTaskPlanner.DevPlan,
+        receiver: Target,
+    ): String {
+        val lines = mutableListOf<String>()
+        var failed = false
+
+        for (step in plan.steps) {
+            lines += "Step ${step.order}. [${step.tool}] ${step.purpose}"
+            try {
+                val method = step.tool.removePrefix("coding.")
+                val stepArgs: Map<String, Any?> = HashMap<String, Any?>().apply {
+                    step.args.forEach { (key, value) -> put(key, value) }
+                }
+                val result = callFunctionOn(domain, method, stepArgs, receiver)
+                val text = when (result) {
+                    null -> "(no output)"
+                    is String -> result
+                    else -> result.toString()
+                }
+                lines += text.trimEnd()
+            } catch (e: Exception) {
+                lines += "FAILED: ${e.message}"
+                failed = true
+                break
+            }
+        }
+
+        return buildString {
+            appendLine(planText)
+            appendLine()
+            appendLine("--- Execution ---")
+            append(lines.joinToString("\n\n"))
+            if (failed) {
+                appendLine()
+                appendLine("Stopped at first failure.")
+            }
+        }.trimEnd()
     }
 
     /**
@@ -1722,5 +1784,3 @@ class CodingToolExecutor : AbstractToolExecutor() {
         name.split('-', '_').filter { it.isNotEmpty() }
             .joinToString("") { it.replaceFirstChar { c -> c.uppercase() } }
 }
-
-

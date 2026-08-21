@@ -212,8 +212,13 @@ object DevTaskPlanner {
         }
 
         // 2. Impact analysis — which module owns the change and who depends on it.
-        val impactPath = files.firstOrNull()?.let { resolvePlannedPath(it, knownModules, newPluginModules) }
-            ?: modules.firstOrNull() ?: newPluginModules.firstOrNull()
+        val resolvedImpactFile = files.firstOrNull()
+            ?.let { resolvePlannedPath(it, knownModules, newPluginModules) }
+        val impactPath = if (newPluginModules.isNotEmpty() && resolvedImpactFile?.contains('/') != true) {
+            newPluginModules.first()
+        } else {
+            resolvedImpactFile ?: modules.firstOrNull() ?: newPluginModules.firstOrNull()
+        }
         if (impactPath != null) {
             steps += PlanStep(order++, "coding.impact",
                 "Assess the blast radius: owning module, transitive dependents, suggested test commands",

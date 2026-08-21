@@ -4583,6 +4583,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "verify", description: "Run validation after task", is_bool: true, short: None },
                 OptionDef { name: "run-tests", description: "Run tests after task", is_bool: true, short: None },
+                OptionDef { name: "execute", description: "Execute the generated dev-task plan steps (writes files and runs builds/tests)", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "coding_devTask".to_string(),
@@ -4591,6 +4592,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let mut p = json!({ "task": task });
                 if get_bool(args, "verify").unwrap_or(false) { p["verify"] = json!(true); }
                 if get_bool(args, "run-tests").unwrap_or(false) { p["runTests"] = json!(true); }
+                if get_bool(args, "execute").unwrap_or(false) { p["execute"] = json!(true); }
                 p
             },
         },
@@ -4723,6 +4725,20 @@ mod tests {
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["type"], "skill");
         assert_eq!(params["triggers"], "hello,world");
+    }
+
+    #[test]
+    fn test_code_devtask_maps_execute_flag() {
+        let map = commands_map();
+        let cmd = map.get("code-devtask").unwrap();
+        let mut args = HashMap::new();
+        args.insert("task".to_string(), json!("scaffold a plugin"));
+        args.insert("execute".to_string(), json!(true));
+
+        assert_eq!((cmd.tool_name_fn)(&args), "coding_devTask");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["task"], "scaffold a plugin");
+        assert_eq!(params["execute"], true);
     }
 
     #[test]

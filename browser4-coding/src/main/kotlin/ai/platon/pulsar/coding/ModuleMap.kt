@@ -39,6 +39,7 @@ object ModuleMap {
         "browser4-pdk/browser4-pdk-test-plugin",
         "browser4-pdk/browser4-plugin-archetype",
         "browser4-plugins",
+        "browser4-plugins/browser4-linkstats",
         "browser4-plugins/browser4-wordcount",
         "browser4-plugins/browser4-captcha",
         "browser4-plugins/browser4-forms",
@@ -79,6 +80,7 @@ object ModuleMap {
             "browser4-rest",
         ),
         "browser4-agentic" to listOf(
+            "browser4-plugins/browser4-linkstats",
             "browser4-plugins/browser4-wordcount",
             "browser4-agent-tools",
             "browser4-apps/browser4-bundle", "browser4-apps/browser4-standalone",
@@ -112,6 +114,7 @@ object ModuleMap {
         ),
         "browser4-core/browser4-parse" to listOf("browser4-agent-tools"),
         "browser4-core/browser4-protocol" to listOf(
+            "browser4-plugins/browser4-linkstats",
             "browser4-plugins/browser4-wordcount",
             "browser4-agentic",
             "browser4-apps/browser4-bundle", "browser4-apps/browser4-standalone",
@@ -130,6 +133,7 @@ object ModuleMap {
             "browser4-core/browser4-skeleton", "browser4-rest",
         ),
         "browser4-core/browser4-skeleton" to listOf(
+            "browser4-plugins/browser4-linkstats",
             "browser4-plugins/browser4-wordcount",
             "browser4-agent-tools", "browser4-agentic",
             "browser4-apps/browser4-bundle", "browser4-apps/browser4-standalone",
@@ -142,7 +146,9 @@ object ModuleMap {
             "browser4-plugins/browser4-seo", "browser4-plugins/browser4-swarm",
             "browser4-rest", "examples/browser4-examples",
         ),
-        "browser4-pdk" to listOf("browser4-plugins/browser4-wordcount",
+        "browser4-pdk" to listOf(
+            "browser4-plugins/browser4-linkstats",
+            "browser4-plugins/browser4-wordcount",
             "browser4-pdk/browser4-pdk-test-plugin", "browser4-pdk/browser4-plugin-archetype",
             "browser4-plugins/browser4-captcha", "browser4-plugins/browser4-forms",
             "browser4-plugins/browser4-headings", "browser4-plugins/browser4-images",

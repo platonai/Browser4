@@ -58,6 +58,15 @@ class DevTaskPlannerTest {
     }
 
     @Test
+    @DisplayName("new plugin impact analysis targets the new module, not a bare manifest file")
+    fun newPluginImpactTargetsModule() {
+        val plan = DevTaskPlanner.plan(
+            "Create a new plugin browser4-plugins/browser4-testprobe and add browser4-plugin.json")
+        val impact = plan.steps.first { it.tool == "coding.impact" }
+        assertEquals("browser4-plugins/browser4-testprobe", impact.args["path"])
+    }
+
+    @Test
     @DisplayName("existing plugin mention is not treated as new")
     fun existingPluginNotNew() {
         val plan = DevTaskPlanner.plan("fix a test in browser4-plugins/browser4-seo")
