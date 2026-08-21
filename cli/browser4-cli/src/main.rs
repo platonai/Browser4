@@ -43,6 +43,7 @@ use serde_json::{json, Value};
 
 use args::{
     build_command_args, build_short_option_map, parse_batch_args, parse_batch_json_commands,
+    COMMAND_ARG_ALIASES,
     parse_command_string, parse_global_flags, parse_raw_args, GlobalFlags,
 };
 use commands::{commands_map, is_element_reference};
@@ -15746,7 +15747,7 @@ fn compile_batch_request(
         let (nested_short_to_long, nested_bool_opts) = build_short_option_map(cmd_def.options);
         let raw_parsed = parse_raw_args(&effective_nested_global.args, Some(&nested_short_to_long), Some(&nested_bool_opts));
         let arg_names: Vec<&str> = cmd_def.args.iter().map(|arg| arg.name).collect();
-        let parsed = match build_command_args(&raw_parsed, &arg_names) {
+        let parsed = match build_command_args(&raw_parsed, &arg_names, COMMAND_ARG_ALIASES) {
             Ok(parsed) => parsed,
             Err(error) => {
                 if push_batch_local_failure(&mut entries, spec, error, bail) {
@@ -16794,7 +16795,8 @@ async fn run(
     let (short_to_long, bool_opts) = build_short_option_map(cmd_def.options);
     let raw_parsed = parse_raw_args(&global.args, Some(&short_to_long), Some(&bool_opts));
     let arg_names: Vec<&str> = cmd_def.args.iter().map(|a| a.name).collect();
-    let parsed = build_command_args(&raw_parsed, &arg_names).map_err(|e| e.to_string())?;
+    let parsed =
+        build_command_args(&raw_parsed, &arg_names, COMMAND_ARG_ALIASES).map_err(|e| e.to_string())?;
 
     // Validate required positional arguments (fast-fail for malformed commands).
     validate_required_args(cmd_def, &parsed)?;

@@ -347,6 +347,13 @@ fn looks_like_negative_value(token: &str) -> bool {
 /// excess positionals are joined into the last named argument so that
 /// pass-through subcommands work correctly.  A command that declares zero
 /// positional slots still rejects unexpected positionals.
+///
+/// Argument-name aliases shared by all [build_command_args] call sites:
+/// `(canonical, [canonical, aliases...])`.  An explicitly supplied alias wins
+/// over a positional value for the same slot (e.g. `htmlsnapshot export
+/// a.html --filename b.html` must export to b.html).
+pub const COMMAND_ARG_ALIASES: &[(&str, &[&str])] = &[("file", &["file", "filename"])];
+
 pub fn build_command_args(
     raw: &HashMap<String, Value>,
     arg_names: &[&str],
