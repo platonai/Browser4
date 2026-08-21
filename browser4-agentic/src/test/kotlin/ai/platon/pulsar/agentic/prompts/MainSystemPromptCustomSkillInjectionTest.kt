@@ -119,7 +119,8 @@ class MainSystemPromptCustomSkillInjectionTest {
     fun browserPromptKeepsPageOrientedReasoning() {
         val prompt = buildMainSystemPromptV1(ToolSpecFormat.KOTLIN, codingTask = false)
 
-        assertTrue(prompt.contains("Prefer `fs.*` tools for file operations"), prompt)
+        assertTrue(prompt.contains("Use `coding.*` tools for file operations"), prompt)
+        assertFalse(prompt.contains("Prefer `fs.*` tools for file operations"), prompt)
         assertTrue(prompt.contains("Review the current page, screenshot, and previous result"), prompt)
         assertFalse(prompt.contains("Code state check"), prompt)
     }

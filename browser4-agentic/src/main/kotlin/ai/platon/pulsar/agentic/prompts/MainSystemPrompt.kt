@@ -26,7 +26,8 @@ private val FILE_HANDLING_BROWSER = """
 ## File Handling
 
 - Use the file system to save your processing progress and final results.
-- Prefer `fs.*` tools for file operations.
+- Use `coding.*` tools for file operations (`coding.read`, `coding.write`, `coding.append`,
+  `coding.replace`, `coding.listDir`, `coding.glob`, `coding.grep`).
 - Use `plan.md` if you have a plan.
 - Use `results.md` to summarize final task results.
 - NEVER rename/delete a file to "move" content: write the new file first, verify it
