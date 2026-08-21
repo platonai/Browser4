@@ -1451,6 +1451,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "swarm-close" {
         lines.push("Notes:".to_string());
         lines.push("  - Closes the active swarm session and releases browser resources.".to_string());
+        lines.push("  - Pending (queued/processing) tasks are aborted and marked as failed (closed),".to_string());
+        lines.push("    so they don't stay \"queued\" forever and leak across sessions.".to_string());
         lines.push("  - Equivalent to `close` when a swarm session is active.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());

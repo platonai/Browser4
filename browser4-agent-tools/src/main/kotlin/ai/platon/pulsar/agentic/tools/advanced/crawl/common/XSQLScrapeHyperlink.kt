@@ -36,10 +36,38 @@ open class XSQLHyperlink(
                 it
             }
             onLoaded.addLast { url, page ->
-                if (!hyperlink.isDone) {
-                    hyperlink.complete(page ?: GoraWebPage.NIL)
+                val p = page ?: GoraWebPage.NIL
+                when {
+                    hyperlink.isDone -> {
+                        // Already completed (defensive: a duplicate loaded event).
+                        response.refresh(isDone = true)
+                    }
+
+                    // Transient failure or cancellation: the task has been
+                    // re-queued for another attempt. Keep it in a non-terminal
+                    // state so the CLI keeps polling and a later attempt can
+                    // complete the task. This also prevents the task from being
+                    // reported "done" with an empty result mid-retry.
+                    // NOTE: checked before isFailed — both the canceled and the
+                    // retry protocol statuses also report isFailed.
+                    p.isCanceled || p.protocolStatus.isRetry -> {
+                        response.emitEvent("retry")
+                        response.message = "Page fetch is being retried: ${p.protocolStatus.reason ?: "transient failure"}"
+                        response.refresh(ResourceStatus.SC_ACCEPTED, p.protocolStatus.minorCode, false)
+                    }
+
+                    // Terminal failure: the fetch failed. This includes a
+                    // canceled task whose retry budget was exhausted — the
+                    // runner clears the canceled flag and marks its status as
+                    // failed. Completing here with an empty result set would
+                    // report a "successful" task whose page was never fetched —
+                    // instead mark it as failed with the real reason.
+                    p.protocolStatus.isFailed || p.isNil || !p.isFetched -> {
+                        hyperlink.fail(p, page == null)
+                    }
+
+                    else -> hyperlink.complete(p)
                 }
-                response.refresh(isDone = true)
             }
         }
     }
@@ -99,6 +127,34 @@ open class XSQLHyperlink(
         } catch (t: Throwable) {
             warnInterruptible(this, t, "Error extracting data from page: ${page.url}")
         }
+    }
+
+    /**
+     * Mark the task as failed with a clear diagnostic instead of completing it
+     * with an empty result. Used when the page was never fetched, was dropped,
+     * or the fetch failed/canceled — so a completed task either contains data
+     * or reports the real failure reason.
+     * */
+    open fun fail(page: WebPage, pageWasNull: Boolean = false) {
+        val status = page.protocolStatus
+        val reason = status.reason?.toString()?.takeIf { it.isNotBlank() } ?: "unknown"
+        response.pageContentBytes = page.contentLength.toInt().coerceAtLeast(0)
+        response.pageStatusCode = status.minorCode
+        response.statusCode = ResourceStatus.SC_EXPECTATION_FAILED
+        response.message = when {
+            page.isNil || pageWasNull || !page.isFetched ->
+                "The page was never fetched. The task may have been dropped or evicted. Re-run the query with -refresh to retry."
+
+            page.isCanceled ->
+                "The page fetch was canceled ($reason). Re-fetch with -refresh or -ignoreFailure to retry."
+
+            status.isFailed ->
+                "Page fetch failed with status ${status.minorCode} ($reason). Re-fetch with -refresh or -ignoreFailure to retry."
+
+            else ->
+                "The page was not fetched (protocol status ${status.minorCode}: $reason)."
+        }
+        complete(page)
     }
 
     protected open fun doExtract(page: WebPage, document: FeaturedDocument) {

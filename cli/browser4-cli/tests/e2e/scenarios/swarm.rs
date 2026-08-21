@@ -1,5 +1,118 @@
 use crate::*;
 
+pub(super) fn test_swarm_concurrency_bounded_completion_live(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    // Reproduces issue #577: 5 concurrent swarm jobs against a small privacy
+    // context pool. The pool is pinned to 2 contexts x 1 tab and the fixture
+    // URLs are slow (6 s each), so the pool is deterministically exhausted:
+    // the extra jobs hit the PrivacyException path that used to retry forever
+    // ("Trying 1th 43s later" in the logs) or be reported "completed" with an
+    // empty resultSet. With the fixes, all jobs must reach a terminal state
+    // with fetched data within the bounded `--wait` window.
+    let create_result = run_command(
+        ctx,
+        &[
+            "swarm",
+            "create",
+            "--profile-mode=TEMPORARY",
+            "--max-open-tabs=1",
+            "--max-browser-contexts=2",
+            "--display-mode=HEADLESS",
+        ],
+    );
+    let create_output = strip_snapshot_output(&create_result.stdout);
+    assert!(
+        create_output.contains("Swarm session created:"),
+        "Expected swarm session creation output in:\n{}",
+        create_result.stdout
+    );
+
+    let urls = [
+        ctx.slow_url(1),
+        ctx.slow_url(2),
+        ctx.slow_url(3),
+        ctx.slow_url(4),
+        ctx.slow_url(5),
+    ];
+    let seed_file = ctx.workspace_dir.join("swarm-concurrency-seeds.txt");
+    std::fs::write(&seed_file, urls.join("\n")).expect("write swarm concurrency seed file");
+    let seed_arg = format!("--seed-file={}", seed_file.to_string_lossy());
+    // NOTE: @url is substituted as an already-quoted value, so it must NOT be
+    // wrapped in quotes here (the issue's repro SQL uses the same pattern).
+    let sql = "select dom_base_uri(dom) as url from load_and_select(@url, ':root')";
+    let sql_arg = format!("--sql={sql}");
+
+    let query_result = run_command(ctx, &["swarm", "query", &seed_arg, &sql_arg, "--wait"]);
+    let query_output = strip_snapshot_output(&query_result.stdout);
+    assert!(
+        query_output.contains("All 5 job(s) completed"),
+        "Expected all 5 concurrent jobs to complete within the bounded wait window.\n\
+         The fix must prevent unbounded retries and queued-forever tasks.\n\
+         swarm query output:\n{}",
+        query_result.stdout
+    );
+
+    // Every completed job must contain fetched data. This catches the other
+    // half of issue #577: jobs reported "completed" with an empty resultSet
+    // and pageContentBytes = 0 (the page was never fetched). Parse the task
+    // ids printed by `swarm query` and verify each resultSet is non-empty and
+    // references its URL.
+    let task_ids: Vec<String> = query_output
+        .lines()
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix("Query Submitted: ")
+                .and_then(|rest| rest.split(" -> Task ID: ").nth(1))
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+        })
+        .collect();
+    assert_eq!(
+        task_ids.len(),
+        urls.len(),
+        "Expected {} submitted task ids in swarm query output:\n{}",
+        urls.len(),
+        query_result.stdout
+    );
+
+    for (task_id, expected_url) in task_ids.iter().zip(&urls) {
+        let result_payload = wait_for_swarm_result(ctx, task_id, 30_000);
+        let result_set = result_payload
+            .get("resultSet")
+            .and_then(|v| v.as_array())
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected non-null resultSet array for task '{task_id}', got:\n{result_payload}"
+                )
+            });
+        assert!(
+            !result_set.is_empty(),
+            "Expected non-empty resultSet for task '{task_id}' — the page must actually be fetched.\n\
+             (issue #577: completed jobs used to return empty resultSet + pageContentBytes 0)\n{result_payload}"
+        );
+        let found_url = result_set.iter().filter_map(|row| {
+            row.get("url").and_then(|v| v.as_str())
+        }).any(|u| u.trim() == expected_url.trim());
+        assert!(
+            found_url,
+            "Expected resultSet of task '{task_id}' to reference '{}', got:\n{result_payload}",
+            expected_url
+        );
+    }
+
+    // Every submitted job must have reached a terminal state.
+    let list_result = run_command(ctx, &["swarm", "list"]);
+    let list_output = strip_snapshot_output(&list_result.stdout);
+    assert!(
+        !list_output.contains("queued") && !list_output.contains("processing"),
+        "No job should remain queued/processing after completion. swarm list:\n{list_output}"
+    );
+
+    run_command(ctx, &["swarm", "close"]);
+}
+
 pub(super) fn test_swarm_submission_commands_live(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 

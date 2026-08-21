@@ -710,6 +710,24 @@ pub async fn submit_swarm_query(
     .await
 }
 
+/// Close the swarm session through `SwarmController.close()`.
+///
+/// The backend aborts all pending (non-terminal) tasks of the swarm session so
+/// they don't stay "queued" forever and leak across sessions. Returns the
+/// backend payload (e.g. `{"closed":true,"abortedPendingTasks":3}`).
+pub async fn close_swarm_session(
+    client: &Client,
+    base_url: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, "/api/swarm");
+    send_rest_request(
+        client
+            .delete(url)
+            .timeout(std::time::Duration::from_secs(10)),
+    )
+    .await
+}
+
 /// Read swarm task status through `SwarmController.getStatus(id)`.
 ///
 /// Uses a short timeout (5 s) so that a single unreachable task does not block
