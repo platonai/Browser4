@@ -157,7 +157,7 @@ open class MultiPrivacyContextManager(
                 ?.takeIf { it >= 0 }
                 ?: 5
             task.nRetries++
-            if (task.nRetries >= maxRetries) {
+            if (task.nRetries > maxRetries) {
                 logger.warn(
                     "PrivacyException exceeded retry limit ({}), failing task | {}",
                     maxRetries, task.url
