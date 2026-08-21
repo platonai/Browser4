@@ -11,6 +11,7 @@ import ai.platon.pulsar.api.model.DisplayMode
 import ai.platon.pulsar.common.Systems
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.CapabilityTypes
+import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import org.springframework.context.ApplicationContext
@@ -38,6 +39,8 @@ import org.springframework.context.support.StaticApplicationContext
  */
 @Suppress("unused")
 object AgenticContexts {
+    private val logger = getLogger(AgenticContexts::class)
+
     init {
         Systems.setPropertyIfAbsent(CapabilityTypes.APP_NAME_KEY, "browser4")
     }
@@ -178,6 +181,17 @@ object AgenticContexts {
     @Throws(Exception::class)
     fun ensureSwarmSession(settings: PulsarSettings, applicationContext: ApplicationContext): AgenticSession {
         val context = getOrCreate(applicationContext) as AbstractAgenticContext
+        val zombies = context.sessions.values.filterIsInstance<AgenticSession>()
+            .filter { it.label == SWARM_SESSION_LABEL && !it.isActive }
+
+        // A closed swarm session must never be returned or kept in the registry:
+        // new tasks submitted to a closed session are never consumed and appear
+        // "queued" forever. Drop any zombie sessions before lookup/creation.
+        zombies.forEach { zombie ->
+            logger.info("Removing inactive SWARM session #{} from the context registry", zombie.id)
+            context.closeSession(zombie)
+        }
+
         val swarmSession =
             context.sessions.values.filterIsInstance<AgenticSession>().firstOrNull { it.label == SWARM_SESSION_LABEL }
         if (swarmSession != null) {

@@ -43,6 +43,22 @@ class SwarmController(
     }
 
     /**
+     * Close the swarm session and abort all of its pending tasks.
+     *
+     * Pending tasks belong to the live swarm session and can never be consumed
+     * after it closes; without this cleanup they stay "queued" forever and leak
+     * across sessions. Closed tasks are marked as failed with a clear reason.
+     *
+     * @return The number of aborted pending tasks.
+     * */
+    @DeleteMapping
+    fun close(): Map<String, Any> {
+        val aborted = swarmService.closeSession()
+        logger.info("Swarm session closed, {} pending task(s) aborted", aborted)
+        return mapOf("closed" to true, "abortedPendingTasks" to aborted)
+    }
+
+    /**
      * Submit a URL to scrape or submit an X-SQL to execute
      *
      * @param payload The url to scrape or an X-SQL to execute

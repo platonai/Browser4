@@ -3416,6 +3416,10 @@ pub(super) fn test_swarm_close_session(ctx: &mut E2ECtx) {
         "Expected close_session call with SWARM session ID, got {:?}",
         snapshot.close_session_calls
     );
+    assert_eq!(
+        snapshot.swarm_close_calls, 1,
+        "swarm close must ask the backend to abort pending tasks (DELETE /api/swarm)"
+    );
 }
 
 // ---------------------------------------------------------------------------
