@@ -91,4 +91,20 @@ class TextToActionParsingTest {
 //        assertTrue(ad.cssFriendlyExpressions.any { it.startsWith("driver.scrollToMiddle(") })
         assertFalse(ad.isDecidedComplete)
     }
+
+    @Test
+    @DisplayName("overflow modelError with empty content parses without losing the error")
+    fun overflowModelErrorWithEmptyContentKeepsError() {
+        // P0.2: a tool-loop overflow yields empty content + modelError. The
+        // parser must not discard the error — the overflow digest rides on it
+        // into the next step's prompt.
+        val overflow = ModelResponse("", ResponseState.STOP)
+            .copy(modelError = "Tool call loop exceeded max iterations (12); executed: coding.read, coding.glob")
+
+        val ad = tta.parse(overflow)
+
+        assertNull(ad.toolCall, "empty content must not fabricate a tool call")
+        assertEquals(overflow.modelError, ad.modelResponse?.modelError, "modelError must survive parsing")
+        assertFalse(ad.isDecidedComplete)
+    }
 }

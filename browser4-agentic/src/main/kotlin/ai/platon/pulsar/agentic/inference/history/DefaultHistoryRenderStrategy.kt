@@ -16,7 +16,10 @@ class DefaultHistoryRenderStrategy(
     override fun render(agentHistory: AgentHistory, stateHistoryPath: String?): String {
         val history = agentHistory.states
         if (history.isEmpty()) {
-            return ""
+            // A blank render would flow into an empty user message and crash the
+            // LangChain4j conversion ("text cannot be null or blank") on a fresh
+            // task's first step. Emit an informative placeholder instead.
+            return "No execution history yet."
         }
 
         val recentStates = history.takeLast(recentStepsToKeep)

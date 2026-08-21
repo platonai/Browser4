@@ -1,0 +1,8 @@
+{
+  "name": "browser4-linkcheck",
+  "version": "1.0.0",
+  "sdkVersion": "4.14.0-SNAPSHOT",
+  "description": "Count total, external and internal links on the current page",
+  "dependsOn": ["browser4-skeleton", "browser4-protocol", "browser4-agentic"],
+  "autoConfigurationClasses": ["ai.platon.pulsar.linkcheck.config.LinkcheckAutoConfiguration"]
+}

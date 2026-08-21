@@ -37,6 +37,8 @@ class AgentToolCallLoop(
     private val coordinator: ToolExecutionCoordinator,
     private val maxIterations: Int = 5,
     private val requestTokenLimiter: RequestTokenLimiter = RequestTokenLimiter(),
+    private val compressor: ToolLoopCompressor? = null,
+    private val onToolExecuted: () -> Unit = {},
 ) {
     private val logger = getLogger(AgentToolCallLoop::class)
 
@@ -57,6 +59,22 @@ class AgentToolCallLoop(
         val executedTools = mutableListOf<String>()
 
         for (iteration in 0 until maxIterations) {
+            // Automatic context compression: prune over-budget tool results,
+            // then compact the oldest rounds into a checkpoint when pressure
+            // exceeds the threshold. Keeps the loop's O(N²) re-send cost
+            // bounded without discarding the recent tail.
+            //
+            // Runs BEFORE the token-limit check: the limiter must validate the
+            // post-compression context, otherwise a halting exception would
+            // fire on a list the compressor could have fixed.
+            if (compressor != null) {
+                val pruned = compressor.pruneToolResults(messages)
+                val compacted = compressor.compressIfNeeded(messages)
+                if (pruned || compacted) {
+                    logger.info("🧹 tool-loop compression applied (pruned={}, compacted={})", pruned, compacted)
+                }
+            }
+
             // Halt the task when the accumulated messages would exceed the
             // per-request token limit — tool results can grow the context
             // beyond the model's limit across multi-round loops.
@@ -91,16 +109,37 @@ class AgentToolCallLoop(
                 val resultMessage: ToolExecutionResultMessage = coordinator.execute(request)
                 messages.add(resultMessage)
                 executedTools += request.name()
+                onToolExecuted()
             }
         }
 
-        // Max iterations exhausted — return last response with error
+        // Max iterations exhausted — return last response with error. The error
+        // carries the executed-tool names PLUS a bounded digest of the newest
+        // results, so the caller can persist real progress instead of discarding
+        // a whole step's work (the results list itself dies with the loop).
         logger.warn("Tool loop exceeded max iterations ($maxIterations)")
         val executed = executedTools.distinct().joinToString(", ")
         return chatResponseToModelResponse(response!!, totalInput, totalOutput, totalTotal).let { mr ->
-            mr.copy(modelError = "Tool call loop exceeded max iterations ($maxIterations)" +
-                if (executed.isNotBlank()) "; executed: $executed" else "")
+            mr.copy(modelError = OVERFLOW_ERROR_PREFIX + " ($maxIterations)" +
+                (if (executed.isNotBlank()) "; executed: $executed" else "") +
+                overflowProgressSummary(messages))
         }
+    }
+
+    /**
+     * Bounded progress digest of the newest tool results for the overflow error:
+     * up to [OVERFLOW_SUMMARY_RESULTS] results, first line only (<=200 chars each),
+     * whole digest capped at [OVERFLOW_SUMMARY_MAX_CHARS].
+     */
+    private fun overflowProgressSummary(messages: List<ChatMessage>): String {
+        val summaries = messages.filterIsInstance<ToolExecutionResultMessage>()
+            .takeLast(OVERFLOW_SUMMARY_RESULTS)
+            .map { m ->
+                val firstLine = m.text().lineSequence().firstOrNull().orEmpty().trim().take(200)
+                "${m.toolName()} -> $firstLine"
+            }
+        return if (summaries.isEmpty()) "" else "; results: " +
+            summaries.joinToString(" | ").take(OVERFLOW_SUMMARY_MAX_CHARS)
     }
 
     private fun chatResponseToModelResponse(
@@ -126,4 +165,22 @@ class AgentToolCallLoop(
             ),
         )
     }
+
+    companion object {
+        /** Prefix of the modelError set when the loop exhausts [maxIterations]. */
+        const val OVERFLOW_ERROR_PREFIX = "Tool call loop exceeded max iterations"
+
+        /** How many newest tool results the overflow digest summarizes. */
+        const val OVERFLOW_SUMMARY_RESULTS = 6
+
+        /** Hard cap on the whole overflow result digest. */
+        const val OVERFLOW_SUMMARY_MAX_CHARS = 2_000
+    }
 }
+
+/**
+ * Thrown when the tool-calling loop exhausts its iteration budget AND the
+ * operator enabled `browser4.agent.toolLoop.failOnOverflow` — converts the
+ * "success with no action" overflow step into an explicit step failure.
+ */
+class ToolLoopOverflowException(message: String) : IllegalStateException(message)

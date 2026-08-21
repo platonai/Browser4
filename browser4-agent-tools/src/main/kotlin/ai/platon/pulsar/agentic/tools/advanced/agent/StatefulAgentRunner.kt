@@ -110,6 +110,14 @@ open class StatefulAgentRunner(
                 logger.debug("Skipping stale non-terminal agent task {} during restore (created={})", entry.id, entry.createdTime)
                 return@restore
             }
+            // Terminal states never regress: when an earlier row already restored
+            // a terminal status for this id, a later non-terminal row (append-order
+            // glitch in the JSONL) must not overwrite it back to queued/in_progress.
+            val cached = statusCache.getIfPresent(entry.id)
+            if (cached?.processState == terminalState && entry.processState != terminalState) {
+                logger.debug("Skipping non-terminal row for agent task {} — terminal status already restored", entry.id)
+                return@restore
+            }
             statusCache.put(entry.id, entry)
             logger.debug("Restored agent task {}", entry.id)
         }

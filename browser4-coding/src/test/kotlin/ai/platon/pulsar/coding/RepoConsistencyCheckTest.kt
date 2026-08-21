@@ -208,6 +208,34 @@ class RepoConsistencyCheckTest {
 
     // ---- isPluginManifestPath ----
 
+    @Test
+    @DisplayName("ModuleMap source hygiene flags trailing whitespace and overlong lines as warnings")
+    fun moduleMapFormatFlagsTrailingWhitespaceAndLongLines() {
+        val badSource = "package x\n" +
+            "val a = 1  \n" + // trailing whitespace
+            "        \"browser4-core/browser4-protocol\" to listOf(\"browser4-plugins/browser4-wordcount\", \"browser4-plugins/browser4-linkcheck\"),\n" // > 120 cols
+        val result = RepoConsistencyCheck.check(
+            version, rootPom, bomPom,
+            moduleMapSource = badSource)
+        assertTrue(result.issues.any { it.severity == Severity.WARNING && it.message.contains("trailing whitespace") },
+            "issues: ${result.issues}")
+        assertTrue(result.issues.any { it.severity == Severity.WARNING && it.message.contains("columns wide") },
+            "issues: ${result.issues}")
+        // Warnings do not fail the validation.
+        assertTrue(result.valid, "format warnings must not fail governance: ${result.issues}")
+    }
+
+    @Test
+    @DisplayName("clean ModuleMap source yields no format warnings")
+    fun moduleMapFormatCleanSourceNoWarnings() {
+        val cleanSource = "package x\n        \"browser4-core/browser4-protocol\" to listOf(\n            \"browser4-plugins/browser4-wordcount\",\n        ),\n"
+        val result = RepoConsistencyCheck.check(
+            version, rootPom, bomPom,
+            moduleMapSource = cleanSource)
+        assertTrue(result.issues.none { it.message.contains("columns wide") || it.message.contains("trailing whitespace") },
+            "clean source must yield no format warnings: ${result.issues}")
+    }
+
     private fun writeManifest(dir: java.nio.file.Path, relPath: String): java.nio.file.Path {
         val file = dir.resolve(relPath)
         file.parent.toFile().mkdirs()

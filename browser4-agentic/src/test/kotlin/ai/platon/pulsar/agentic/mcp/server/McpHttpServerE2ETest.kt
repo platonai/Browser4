@@ -258,6 +258,36 @@ class McpHttpServerE2ETest {
     }
 
     // -------------------------------------------------------------------------
+    // Port fallback (P2.3)
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("start falls back to an ephemeral port when the configured port is busy")
+    fun startFallsBackWhenConfiguredPortBusy() {
+        // P2.3 regression: a busy mcp.http.port used to leave MCP-over-HTTP
+        // unavailable (WARN only). It must bind an ephemeral port instead.
+        val blocker = ServerSocket(0)
+        try {
+            val busyPort = blocker.localPort
+            val fallbackServer = McpHttpServer(
+                toolManager = toolManager,
+                port = busyPort,
+                host = "127.0.0.1",
+                serverInfo = Implementation(name = "browser4-e2e-http-test", version = "1.0.0"),
+            )
+            try {
+                fallbackServer.start()
+                assertTrue(fallbackServer.actualPort > 0, "a port must be bound")
+                assertTrue(fallbackServer.actualPort != busyPort, "must not use the busy port")
+            } finally {
+                fallbackServer.stop()
+            }
+        } finally {
+            blocker.close()
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 

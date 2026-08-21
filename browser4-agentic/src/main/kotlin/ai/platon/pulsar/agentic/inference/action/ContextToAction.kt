@@ -10,6 +10,9 @@ import ai.platon.pulsar.agentic.inference.TokenBudgetExceededException
 import ai.platon.pulsar.agentic.inference.ToolExposeMode
 import ai.platon.pulsar.agentic.inference.collapseToLegacyString
 import ai.platon.pulsar.agentic.inference.toChatMessages
+import ai.platon.pulsar.agentic.inference.chat.AgentToolCallLoop
+import ai.platon.pulsar.agentic.inference.chat.ToolLoopCompressor
+import ai.platon.pulsar.agentic.inference.chat.ToolLoopOverflowException
 import ai.platon.pulsar.agentic.model.ActionDescription
 import ai.platon.pulsar.agentic.model.ExecutionContext
 import ai.platon.pulsar.agentic.tools.AgentToolManager
@@ -26,6 +29,7 @@ import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
 import dev.langchain4j.data.image.Image
 import dev.langchain4j.data.message.ImageContent
+import dev.langchain4j.data.message.ChatMessage
 import dev.langchain4j.data.message.UserMessage
 import dev.langchain4j.model.chat.request.ChatRequest
 import dev.langchain4j.model.chat.response.ChatResponse
@@ -76,6 +80,43 @@ open class ContextToAction(
     private val toolLoopMaxIterations: Int =
         conf.getLong("browser4.agent.toolLoop.maxIterations", 12).toInt().coerceIn(1, 50)
 
+    /** Automatic tool-loop context compression (mirrors deepseek-harness compaction). */
+    private val toolLoopCompressionEnabled: Boolean =
+        conf.getBoolean("browser4.agent.toolLoop.compressionEnabled", true)
+
+    /** Estimated-token pressure threshold that triggers region compaction. */
+    private val toolLoopCompressionThresholdTokens: Long =
+        conf.getLong("browser4.agent.toolLoop.compressionThresholdTokens", 60_000L).coerceAtLeast(1_000L)
+
+    /** Estimated-token budget of the recent tail kept verbatim. */
+    private val toolLoopRetainTokens: Long =
+        conf.getLong("browser4.agent.toolLoop.retainTokens", 24_000L).coerceAtLeast(1_000L)
+
+    /** Per-result pruning budgets for the model-free phase. */
+    private val toolLoopPruneThresholdChars: Int =
+        conf.getLong("browser4.agent.toolLoop.pruneThresholdChars", 1_500L).toInt().coerceAtLeast(100)
+    private val toolLoopPruneHeadChars: Int =
+        conf.getLong("browser4.agent.toolLoop.pruneHeadChars", 800L).toInt().coerceAtLeast(0)
+    private val toolLoopPruneTailChars: Int =
+        conf.getLong("browser4.agent.toolLoop.pruneTailChars", 400L).toInt().coerceAtLeast(0)
+
+    /** Max output tokens for the compaction summarization request. */
+    private val toolLoopSummarizationMaxTokens: Int =
+        conf.getLong("browser4.agent.toolLoop.summarizationMaxTokens", 2_048L).toInt().coerceIn(128, 16_384)
+
+    /** Convert a tool-loop overflow step into an explicit step failure (default: keep stepping). */
+    private val toolLoopFailOnOverflow: Boolean =
+        conf.getBoolean("browser4.agent.toolLoop.failOnOverflow", false)
+
+    /**
+     * Set by the tool-calling loop's [AgentToolCallLoop.onToolExecuted] callback
+     * while [generateResponseRawWithLangChain4jUnbounded] runs — tells the
+     * caller whether the step executed ≥1 internal tool regardless of whether
+     * the final response parsed into a [ToolCall] (overflow steps don't).
+     */
+    @Volatile
+    private var lastLoopExecutedTools = false
+
     /** Lazy tool-calling loop — engaged only in TOOL_CALLING mode. */
     private val toolCallLoop by lazy {
         if (toolManager == null || !toolExposeMode.nativeToolCalling) {
@@ -83,6 +124,18 @@ open class ContextToAction(
         } else {
             val specs = toolManager.getLangChain4jToolSpecifications()
             val registry = toolManager.getLangChain4jToolRegistry()
+            val compressor = if (toolLoopCompressionEnabled) {
+                ToolLoopCompressor(
+                    enabled = true,
+                    thresholdTokens = toolLoopCompressionThresholdTokens,
+                    retainTokens = toolLoopRetainTokens,
+                    pruneThresholdChars = toolLoopPruneThresholdChars,
+                    pruneHeadChars = toolLoopPruneHeadChars,
+                    pruneTailChars = toolLoopPruneTailChars,
+                ) { prefix -> summarizeToolLoop(prefix, specs) }
+            } else {
+                null
+            }
             ai.platon.pulsar.agentic.inference.chat.AgentToolCallLoop(
                 model = chatModel,
                 toolSpecifications = specs,
@@ -91,8 +144,29 @@ open class ContextToAction(
                 ),
                 maxIterations = toolLoopMaxIterations,
                 requestTokenLimiter = requestTokenLimiter,
+                compressor = compressor,
+                onToolExecuted = { lastLoopExecutedTools = true },
             )
         }
+    }
+
+    /**
+     * Production summarizer for tool-loop compaction: reuses the conversation's
+     * own tool specifications and appends the compaction instruction as the
+     * final user message, so the auxiliary call reuses the routed request
+     * prefix (mirrors deepseek-harness KV-cache reuse).
+     */
+    private suspend fun summarizeToolLoop(
+        prefix: List<ChatMessage>,
+        toolSpecifications: List<dev.langchain4j.agent.tool.ToolSpecification>,
+    ): String {
+        val request = ChatRequest.builder()
+            .messages(prefix + UserMessage.from(ToolLoopCompressor.COMPACTION_INSTRUCTION))
+            .toolSpecifications(toolSpecifications)
+            .maxOutputTokens(toolLoopSummarizationMaxTokens)
+            .build()
+        val response = chatModel.langChainChat(request, "cta-compaction")
+        return response.aiMessage().text() ?: ""
     }
 
     /**
@@ -132,8 +206,27 @@ open class ContextToAction(
             val instruction = context.instruction
 
             val response = generateResponseRaw(messages, context.screenshotB64)
+            val internalToolsExecuted = lastLoopExecutedTools
+
+            // Opt-in hard failure on tool-loop overflow: with the flag off, the
+            // overflow digest flows into the next step's prompt (progress kept);
+            // with it on, the step is marked failed instead of "success, no action".
+            val overflowError = response.modelError
+            if (toolLoopFailOnOverflow &&
+                overflowError?.startsWith(AgentToolCallLoop.OVERFLOW_ERROR_PREFIX) == true
+            ) {
+                throw ToolLoopOverflowException(overflowError)
+            }
 
             val actionDescription = tta.modelResponseToActionDescription(instruction, context.agentState, response)
+                .let { ad -> if (internalToolsExecuted) ad.copy(internalToolsExecuted = true) else ad }
+
+            // The copy above creates a new instance when internal tools executed —
+            // republish it so the state carries the flag (data-class equality
+            // would otherwise trip the require below).
+            if (internalToolsExecuted) {
+                context.agentState.actionDescription = actionDescription
+            }
 
             require(context.agentState.actionDescription == actionDescription) {
                 "Required: context.agentState.actionDescription == actionDescription"
@@ -151,8 +244,13 @@ open class ContextToAction(
             // Must propagate — the task must stop and report status so the
             // user can decide whether to raise the limit and re-launch.
             throw e
+        } catch (e: ToolLoopOverflowException) {
+            // Must propagate — with browser4.agent.toolLoop.failOnOverflow=true
+            // an overflow is a hard step failure that the resolve pipeline
+            // retries and then aborts on, instead of "success, no action".
+            throw e
         } catch (e: Exception) {
-            val errorResponse = ModelResponse("Unknown exception" + e.brief(), ResponseState.OTHER)
+            val errorResponse = ModelResponse("Unknown exception: " + e.brief(), ResponseState.OTHER)
             val actionDescription = ActionDescription(
                 context.instruction,
                 exception = e,
@@ -160,6 +258,9 @@ open class ContextToAction(
                 context = context
             )
             context.agentState.actionDescription = actionDescription
+            // Record the failure on the state too — a step whose generation
+            // crashed used to stay isSuccess=true in the history.
+            context.agentState.exception = e
 
             return actionDescription
         } finally {
@@ -311,6 +412,7 @@ open class ContextToAction(
         val loop = toolCallLoop
         if (loop != null) {
             return try {
+                lastLoopExecutedTools = false
                 loop.generate(chatMessages)
             } catch (e: Exception) {
                 if (screenshotB64 != null && isImageNotSupportedError(e)) {
@@ -319,6 +421,7 @@ open class ContextToAction(
                     )
                     modelSupportsVision.set(false)
                     visionCapabilityResolved = true
+                    lastLoopExecutedTools = false
                     loop.generate(messages.toChatMessages())
                 } else if (isToolSpecUnsupportedError(e)) {
                     // Provider rejects native tool specifications — degrade to the

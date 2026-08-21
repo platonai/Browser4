@@ -77,6 +77,10 @@ class McpHttpServer(
 
     private var engine: EmbeddedServer<*, *>? = null
 
+    /** The port the engine actually bound — [port] unless an ephemeral fallback kicked in. */
+    @Volatile
+    private var boundPort: Int = port
+
     // -------------------------------------------------------------------------
     // Lifecycle
     // -------------------------------------------------------------------------
@@ -86,11 +90,39 @@ class McpHttpServer(
      *
      * This method returns immediately; the server runs on its own event-loop thread.
      * Call [stop] to shut it down.
+     *
+     * When [port] is already taken (e.g. a second backend instance on the same
+     * host), the server falls back to an ephemeral OS-assigned port so
+     * MCP-over-HTTP stays available instead of degrading to a WARN-only no-op.
+     * The port is probed up front because the embedded engine binds
+     * asynchronously and does not throw a usable [java.net.BindException]
+     * to the caller.
      */
     fun start() {
-        logger.info("Starting MCP HTTP server on {}:{}", host, port)
+        var listenPort = port
+        if (!isPortFree(port)) {
+            logger.warn(
+                "MCP HTTP port {} is already in use — binding an ephemeral port instead",
+                port
+            )
+            listenPort = java.net.ServerSocket(0).use { it.localPort }
+        }
+        boundPort = listenPort
 
-        engine = embeddedServer(CIO, port = port, host = host) {
+        logger.info("Starting MCP HTTP server on {}:{}", host, listenPort)
+        startOnPort(listenPort)
+        logger.info("MCP HTTP server listening on http://{}:{}/mcp/sse", host, listenPort)
+    }
+
+    /** Whether a TCP server can bind [candidatePort] right now. */
+    private fun isPortFree(candidatePort: Int): Boolean = try {
+        java.net.ServerSocket(candidatePort).use { true }
+    } catch (_: java.io.IOException) {
+        false
+    }
+
+    private fun startOnPort(listenPort: Int) {
+        engine = embeddedServer(CIO, port = listenPort, host = host) {
             install(SSE)
 
             routing {
@@ -109,9 +141,13 @@ class McpHttpServer(
                 }
             }
         }.start(wait = false)
-
-        logger.info("MCP HTTP server listening on http://{}:{}/mcp/sse", host, port)
     }
+
+    /**
+     * The port the embedded server actually bound. Differs from [port] only
+     * after an ephemeral fallback.
+     */
+    val actualPort: Int get() = boundPort
 
     /**
      * Stop the embedded Ktor server, closing all active SSE connections.

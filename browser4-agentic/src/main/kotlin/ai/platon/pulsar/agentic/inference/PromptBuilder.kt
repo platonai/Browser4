@@ -381,8 +381,14 @@ ${buildMainSystemPromptV1(ToolSpecFormat.KOTLIN, includeToolList, codingTask, di
             messages.addUser(buildBrowserVisionInfo())
         }
 
-        val prevTCResult = context.agentState.prevState?.toolCallResult
-        if (prevTCResult != null) {
+        val prevState = context.agentState.prevState
+        val prevTCResult = prevState?.toolCallResult
+        val prevModelError = prevState?.actionDescription?.modelResponse?.modelError
+        // Render the previous step result when there is either an executed tool
+        // result or a model error worth forwarding. The model-error-only case
+        // covers tool-loop overflow: the step executed tools but left no
+        // toolCallResult — the overflow digest must still reach the next step.
+        if (prevTCResult != null || !prevModelError.isNullOrBlank()) {
             messages.addUser(buildPrevToolCallResultMessage(context))
         }
 
@@ -430,14 +436,23 @@ $userProvidedInstructions
 
     fun buildPrevToolCallResultMessage(context: ExecutionContext): String {
         val agentState = requireNotNull(context.agentState)
-        val toolCallResult = requireNotNull(context.agentState.prevState?.toolCallResult)
+        // toolCallResult may be absent (e.g. a tool-loop overflow step that
+        // executed tools internally but produced no parsed ToolCall) — in that
+        // case render the model error only, so the overflow digest still flows
+        // into the next step's prompt instead of crashing the build.
+        val toolCallResult = context.agentState.prevState?.toolCallResult
         // Bounded ToolOutcome envelope: header + truncated body + errors — the
         // model sees the previous step's achievement/problem without context blow-up.
-        val outcome = ToolOutcome.from(toolCallResult)
-        val evalMessage = outcome.render().let { Strings.compactInline(it, 5000) }
-        val help = toolCallResult.evaluate.exception?.help?.takeIf { it.isNotBlank() }
+        val evalMessage = toolCallResult?.let {
+            val outcome = ToolOutcome.from(it)
+            outcome.render().let { rendered -> Strings.compactInline(rendered, 5000) }
+        } ?: "(no tool result; see Previous model error below)"
+        val help = toolCallResult?.evaluate?.exception?.help?.takeIf { it.isNotBlank() }
         val helpMessageOrEmpty = help?.let { "Help:\n```\n$it\n```" } ?: ""
-        val lastModelError = agentState.actionDescription?.modelResponse?.modelError
+        // The PREVIOUS step's actionDescription carries the overflow modelError
+        // (the current state's is still null at prompt-build time) — reading the
+        // wrong state made this section dead code and dropped the overflow digest.
+        val lastModelError = agentState.prevState?.actionDescription?.modelResponse?.modelError
         val lastModelErrorOrEmpty = if (lastModelError != null) {
             """
 Previous model error:

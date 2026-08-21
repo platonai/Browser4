@@ -4421,6 +4421,23 @@ fn collect_jvm_opts_and_program_args() -> (Vec<String>, Vec<String>) {
         jvm_opts.push(format!("-Dchrome.path={}", browser_path.to_string_lossy()));
     }
 
+    // Pin the backend's coding workspace to the repository root the CLI was
+    // invoked from. The server is launched with working_dir = install_dir
+    // (the bundled runtime), so a user.dir-based fallback in CodingWorkspace
+    // can drift onto a sibling worktree and make every code tool read/write
+    // the wrong checkout. `-Dbrowser4.agent.workspace` wins over that
+    // fallback. Placed before BROWSER4_SERVER_OPTS so a user-supplied
+    // -Dbrowser4.agent.workspace=... in that env var overrides (Java uses the
+    // last -D value for a given key).
+    if let Some(root) = find_browser4_root() {
+        // Forward slashes (JVM-accepted on Windows) and no verbatim \\?\ prefix —
+        // the argfile path would otherwise escape/mangle the embedded backslashes.
+        jvm_opts.push(format!(
+            "-Dbrowser4.agent.workspace={}",
+            normalize_jvm_windows_path_text(&root.to_string_lossy())
+        ));
+    }
+
     // The Pulsar SDK's AppContext.APP_DATA_DIR defaults to $HOME/.pulsar.
     // Since this is the Browser4 application, override to $HOME/.browser4
     // so that LocalResourceProperties.load() finds config files in
@@ -6176,6 +6193,7 @@ mod tests {
 
     #[test]
     fn test_find_browser4_root_prefers_invocation_env_dir() {
+        let _env_guard = lock_env_mutex(); // serialize ROOT_SEARCH_START_DIR_ENV manipulation
         let tmp = test_temp_dir();
         let root = create_browser4_root(&tmp);
         let nested = root.join("cli").join("browser4-cli");
@@ -6189,6 +6207,81 @@ mod tests {
         }
 
         assert_eq!(detected, Some(root));
+    }
+
+    #[test]
+    fn test_collect_jvm_opts_injects_agent_workspace_from_repo_root() {
+        let _env_guard = lock_env_mutex(); // serialize BROWSER4_SERVER_OPTS / ROOT_SEARCH_START_DIR_ENV manipulation
+        let tmp = test_temp_dir();
+        let root = create_browser4_root(&tmp);
+
+        // Isolate the env vars this function reads so parallel tests cannot
+        // pollute the result.
+        let prev_server_opts = env::var(BROWSER4_SERVER_OPTS_ENV).ok();
+        let prev_search_start = env::var(ROOT_SEARCH_START_DIR_ENV).ok();
+        unsafe {
+            env::set_var(ROOT_SEARCH_START_DIR_ENV, root.join("cli").join("browser4-cli").as_os_str());
+            env::remove_var(BROWSER4_SERVER_OPTS_ENV);
+        }
+        let (jvm_opts, _) = collect_jvm_opts_and_program_args();
+        unsafe {
+            match prev_server_opts {
+                Some(v) => env::set_var(BROWSER4_SERVER_OPTS_ENV, v),
+                None => env::remove_var(BROWSER4_SERVER_OPTS_ENV),
+            }
+            match prev_search_start {
+                Some(v) => env::set_var(ROOT_SEARCH_START_DIR_ENV, v),
+                None => env::remove_var(ROOT_SEARCH_START_DIR_ENV),
+            }
+        }
+
+        // P1.4: the server must be pinned to the repo root the CLI was invoked
+        // from, so its coding workspace cannot drift onto a sibling worktree.
+        let expected = format!(
+            "-Dbrowser4.agent.workspace={}",
+            normalize_jvm_windows_path_text(&root.to_string_lossy())
+        );
+        assert!(
+            jvm_opts.iter().any(|o| *o == expected),
+            "expected {expected} in jvm opts: {jvm_opts:?}"
+        );
+    }
+
+    #[test]
+    fn test_user_server_opts_override_injected_agent_workspace() {
+        let _env_guard = lock_env_mutex(); // serialize BROWSER4_SERVER_OPTS / ROOT_SEARCH_START_DIR_ENV manipulation
+        let tmp = test_temp_dir();
+        let root = create_browser4_root(&tmp);
+
+        let prev_server_opts = env::var(BROWSER4_SERVER_OPTS_ENV).ok();
+        let prev_search_start = env::var(ROOT_SEARCH_START_DIR_ENV).ok();
+        unsafe {
+            env::set_var(ROOT_SEARCH_START_DIR_ENV, root.join("cli").join("browser4-cli").as_os_str());
+            env::set_var(BROWSER4_SERVER_OPTS_ENV, "-Dbrowser4.agent.workspace=/custom/workspace");
+        }
+        let (jvm_opts, _) = collect_jvm_opts_and_program_args();
+        unsafe {
+            match prev_server_opts {
+                Some(v) => env::set_var(BROWSER4_SERVER_OPTS_ENV, v),
+                None => env::remove_var(BROWSER4_SERVER_OPTS_ENV),
+            }
+            match prev_search_start {
+                Some(v) => env::set_var(ROOT_SEARCH_START_DIR_ENV, v),
+                None => env::remove_var(ROOT_SEARCH_START_DIR_ENV),
+            }
+        }
+
+        // The injected value comes first, the user's value last — the JVM uses
+        // the last -D for a given key, so the user override wins.
+        let injected = jvm_opts
+            .iter()
+            .position(|o| o == "-Dbrowser4.agent.workspace=/custom/workspace")
+            .expect("user -Dbrowser4.agent.workspace must be present");
+        let auto = jvm_opts
+            .iter()
+            .position(|o| o.starts_with("-Dbrowser4.agent.workspace="))
+            .expect("injected -Dbrowser4.agent.workspace must be present");
+        assert!(auto < injected, "injected value must precede the user override: {jvm_opts:?}");
     }
 
     #[test]

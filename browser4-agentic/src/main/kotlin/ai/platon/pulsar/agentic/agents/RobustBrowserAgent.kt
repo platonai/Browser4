@@ -8,6 +8,7 @@ import ai.platon.pulsar.agentic.inference.detail.*
 import ai.platon.pulsar.agentic.model.ActionDescription
 import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.model.ExecutionContext
+import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecification
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.getLogger
@@ -396,19 +397,24 @@ open class RobustBrowserAgent(
                 }
 
                 // Text-only stall fuse (browser4.agent.textOnlyStallLimit, 0 = disabled).
+                // A step that executed ≥1 internal tool (loop tool calls, e.g.
+                // coding.read) is real work even when the final response carries
+                // no ToolCall (overflow steps) — never count it as text idling.
                 val lastToolCall = context.agentState.actionDescription?.toolCall
-                if (lastToolCall == null) {
-                    consecutiveTextOnly++
-                    if (config.textOnlyStallLimit > 0 && consecutiveTextOnly >= config.textOnlyStallLimit) {
+                val internalToolsExecuted = context.agentState.actionDescription?.internalToolsExecuted == true
+                consecutiveTextOnly = nextTextOnlyStallCount(consecutiveTextOnly, lastToolCall, internalToolsExecuted)
+                if (lastToolCall == null && !internalToolsExecuted) {
+                    // `--noop-limit` (noopLimitOverride) also raises this fuse so the
+                    // two no-progress fuses stay coupled when the operator tunes one.
+                    val stallLimit = if (noopLimitOverride != null) noopLimit else config.textOnlyStallLimit
+                    if (stallLimit > 0 && consecutiveTextOnly >= stallLimit) {
                         logger.info(
                             "🧵 textOnly.stall sid={} step={} consecutive={} limit={}",
-                            context.sid, context.step, consecutiveTextOnly, config.textOnlyStallLimit
+                            context.sid, context.step, consecutiveTextOnly, stallLimit
                         )
                         lastStopReason = StopReason.NOOP_LIMIT
                         break
                     }
-                } else {
-                    consecutiveTextOnly = 0
                 }
             }
 
@@ -803,3 +809,14 @@ open class RobustBrowserAgent(
         }
     }
 }
+
+/**
+ * Next value of the text-only stall counter for one step.
+ *
+ * A step whose response parsed into a [ToolCall] — or one that executed ≥1
+ * internal tool inside the tool-calling loop (overflow steps execute tools but
+ * carry no parsed ToolCall) — resets the counter to 0; pure text responses
+ * increment it (P0.2-2: real work must never count as text idling).
+ */
+internal fun nextTextOnlyStallCount(current: Int, toolCall: ToolCall?, internalToolsExecuted: Boolean): Int =
+    if (toolCall == null && !internalToolsExecuted) current + 1 else 0

@@ -114,4 +114,14 @@ class DefaultHistoryRenderStrategyTest {
 
         assertTrue(rendered.contains("\"result\""), "Rendered step JSON should include the result field")
     }
+
+    @Test
+    @org.junit.jupiter.api.DisplayName("empty history renders a non-blank placeholder")
+    fun emptyHistoryRendersNonBlankPlaceholder() {
+        // P0.1 regression: a blank render flowed into an empty user message and
+        // crashed LangChain4j conversion on a fresh task's first step.
+        val rendered = DefaultHistoryRenderStrategy().render(AgentHistory())
+
+        assertTrue(rendered.isNotBlank(), "Empty history must render a non-blank placeholder")
+    }
 }

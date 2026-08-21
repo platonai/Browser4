@@ -36,10 +36,21 @@ fun SimpleMessage.toChatMessage(): ChatMessage {
 
 /**
  * Convert an entire [AgentMessageList] into a LangChain4j message list.
+ *
+ * Blank user/system/tool messages are dropped: LangChain4j rejects blank text on
+ * those roles ("text cannot be null or blank"), which used to crash the whole
+ * generation step on fresh tasks whose history rendered to an empty string.
  */
 fun AgentMessageList.toChatMessages(): List<ChatMessage> {
-    return messages.map { it.toChatMessage() }
+    return messages
+        .filterNot {
+            it.role.lowercase() in BLANK_REJECTED_ROLES && it.content.isBlank()
+        }
+        .map { it.toChatMessage() }
 }
+
+/** Roles whose LangChain4j constructors reject blank text. */
+private val BLANK_REJECTED_ROLES = setOf("user", "system", "tool")
 
 /**
  * Reverse: [ChatMessage] → [SimpleMessage].

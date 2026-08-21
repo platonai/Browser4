@@ -28,12 +28,14 @@ import org.springframework.context.event.EventListener
  *
  * ## Configuration
  *
+ * These keys are read as **JVM system properties** (`-D` flags), not from
+ * `application.properties`:
+ *
  * ```
- * # application.properties
- * mcp.http.enabled=true        # enable/disable (default: true)
- * mcp.http.port=8088           # listen port (default: 8088)
- * mcp.http.host=0.0.0.0        # bind host (default: 0.0.0.0)
- * mcp.http.headless=false      # run Chrome in headless mode (default: false)
+ * -Dmcp.http.enabled=true        # enable/disable (default: true)
+ * -Dmcp.http.port=8088           # listen port (default: 8088)
+ * -Dmcp.http.host=0.0.0.0        # bind host (default: 0.0.0.0)
+ * -Dmcp.http.headless=false      # run Chrome in headless mode (default: false)
  * ```
  *
  * ## Clients

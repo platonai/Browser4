@@ -54,4 +54,29 @@ class RobustBrowserAgentTest {
     private class TestRobustBrowserAgent(session: AgenticSession) : RobustBrowserAgent(session) {
         fun resolveLastExecutedToolCall(context: ExecutionContext): ToolCall? = lastExecutedToolCall(context)
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // P0.2-2: text-only stall counter semantics
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("text-only stall increments for pure text responses")
+    fun stallCounterIncrementsForPureText() {
+        assertEquals(3, nextTextOnlyStallCount(2, null, false))
+    }
+
+    @Test
+    @DisplayName("text-only stall resets when the response carries a parsed ToolCall")
+    fun stallCounterResetsForParsedToolCall() {
+        val toolCall = ToolCall("tab", "click", mutableMapOf("selector" to "#x"))
+        assertEquals(0, nextTextOnlyStallCount(4, toolCall, false))
+    }
+
+    @Test
+    @DisplayName("text-only stall resets when internal tools executed (overflow steps)")
+    fun stallCounterResetsForInternalToolExecution() {
+        // The step executed loop tools but the final response carries no
+        // ToolCall (overflow) — never count real work as text idling.
+        assertEquals(0, nextTextOnlyStallCount(4, null, true))
+    }
 }

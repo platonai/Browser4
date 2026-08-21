@@ -1296,15 +1296,23 @@ class CodingToolExecutor : AbstractToolExecutor() {
                         if (normalizedDir.startsWith("browser4-plugins/") && module.isNotBlank()) {
                             val aggregator = fs.readFile("browser4-plugins/pom.xml")
                             if (!aggregator.startsWith("Error:") && !aggregator.contains("<module>$module</module>")) {
-                                // Match the indentation of the last existing <module>
+                                // Match the indentation of the FIRST existing <module>
                                 // line so the new entry does not drift the block's style.
+                                // The closing-tag line carries its own 4-space indent:
+                                // replacing the whole tail (instead of just
+                                // "</modules>") keeps the new module line at exactly
+                                // `indent` spaces — the old form left those 4 spaces
+                                // in place and crept the indent +4 per scaffold
+                                // (8 → 12 → 16).
                                 val moduleLine = Regex("""(?m)^(\s*)<module>[^<]+</module>\s*$""")
-                                val indent = moduleLine.findAll(aggregator).lastOrNull()
+                                val indent = moduleLine.findAll(aggregator).firstOrNull()
                                     ?.groupValues?.get(1) ?: "        "
-                                val updated = aggregator.replace(
-                                    "</modules>",
-                                    "$indent<module>$module</module>\n    </modules>"
-                                )
+                                val closing = "    </modules>"
+                                val updated = if (aggregator.contains(closing)) {
+                                    aggregator.replace(closing, "$indent<module>$module</module>\n$closing")
+                                } else {
+                                    aggregator.replace("</modules>", "$indent<module>$module</module>\n    </modules>")
+                                }
                                 if (updated != aggregator) {
                                     val writeResult = fs.writeFile("browser4-plugins/pom.xml", updated)
                                     if (writeResult.startsWith("✓")) {
@@ -1407,7 +1415,11 @@ class CodingToolExecutor : AbstractToolExecutor() {
 
                 // verify=true: run the fast checks against the live workspace.
                 val results = mutableListOf<String>()
-                val mavenModule = modules.filter { it != ModuleMap.CLI_CRATE }
+                // Same tie-break rule as DevTaskPlanner.buildSteps: a freshly
+                // scaffolded plugin module wins over same-depth DEPENDENTS-key
+                // mentions, so verify/runTests never compile the wrong module.
+                val verifyCandidates = (if (moduleOverride.isNullOrBlank()) plan.newPluginModules else emptyList()) + modules
+                val mavenModule = verifyCandidates.filter { it != ModuleMap.CLI_CRATE }
                     .maxByOrNull { it.count { c -> c == '/' } }
                 if (mavenModule != null) {
                     results += "mvnBuild compile of $mavenModule:\n" +
@@ -1476,10 +1488,12 @@ class CodingToolExecutor : AbstractToolExecutor() {
      */
     /**
      * Keep the static [ModuleMap] snapshot consistent when a new plugin module is
-     * scaffolded: insert the module into MODULES (unique anchor line) and instruct the
-     * agent to complete the DEPENDENTS reverse edges (the scaffolded plugin's pom
-     * depends on skeleton/protocol/agentic and parent pdk). `validate repo-consistency`
-     * reports any remaining drift as an error, closing the loop.
+     * scaffolded: insert the module into MODULES (unique anchor line) AND complete
+     * the DEPENDENTS reverse edges automatically (the scaffolded plugin's pom
+     * depends on skeleton/protocol/agentic and parent pdk). Completing them here —
+     * instead of instructing the agent to hand-edit — closes the drift window that
+     * made ModuleMapDriftE2ETest fail any `-am` build between aggregator
+     * registration and the agent's manual DEPENDENTS edit (P2.4).
      */
     private suspend fun syncModuleMapForNewPlugin(fs: CodingAgentFileSystem, module: String, sb: StringBuilder) {
         val mapPath = "browser4-coding/src/main/kotlin/ai/platon/pulsar/coding/ModuleMap.kt"
@@ -1498,13 +1512,34 @@ class CodingToolExecutor : AbstractToolExecutor() {
             sb.append("\n⚠ ModuleMap.kt anchor not found — add $entry to ModuleMap.MODULES manually.")
             return
         }
-        val updated = content.replace(anchor, anchor + "        \"$entry\",\n")
+        // The four DEPENDENTS keys the scaffolded plugin depends on: agentic,
+        // protocol, skeleton and pdk. Each entry is one line, 8-space indented,
+        // so it stays ≤120 columns and carries no trailing whitespace.
+        val dependentsAnchors = listOf(
+            "\"browser4-agentic\" to listOf(",
+            "\"browser4-core/browser4-protocol\" to listOf(",
+            "\"browser4-core/browser4-skeleton\" to listOf(",
+            "\"browser4-pdk\" to listOf(",
+        )
+        val dependentsEntry = "        \"$entry\","
+        var updated = content.replace(anchor, anchor + "        \"$entry\",\n")
+        var insertedEdges = 0
+        dependentsAnchors.forEach { dependentsAnchor ->
+            if (updated.contains(dependentsAnchor)) {
+                updated = updated.replace(dependentsAnchor, dependentsAnchor + "\n" + dependentsEntry)
+                insertedEdges++
+            }
+        }
         val writeResult = fs.writeFile(mapPath, updated)
         if (writeResult.startsWith("✓")) {
             sb.append("\n✓ Synced ModuleMap.MODULES with $entry")
-            sb.append("\n⚠ Also add \"$entry\" to the DEPENDENTS lists of browser4-agentic, " +
-                "browser4-core/browser4-protocol, browser4-core/browser4-skeleton, browser4-pdk " +
-                "(the scaffolded plugin depends on them) — `validate repo-consistency` flags any drift.")
+            if (insertedEdges > 0) {
+                sb.append("\n✓ Added $entry to $insertedEdges DEPENDENTS reverse edges (agentic/protocol/skeleton/pdk)")
+            } else {
+                sb.append("\n⚠ DEPENDENTS anchors not found — add \"$entry\" to the DEPENDENTS lists of browser4-agentic, " +
+                    "browser4-core/browser4-protocol, browser4-core/browser4-skeleton, browser4-pdk manually " +
+                    "(`validate repo-consistency` flags any drift).")
+            }
         } else {
             sb.append("\n⚠ ModuleMap sync failed: $writeResult")
         }
@@ -1579,6 +1614,7 @@ class CodingToolExecutor : AbstractToolExecutor() {
             liveModuleDirs = liveModules,
             staticDependents = staticDependents,
             liveDependentsOf = liveDependentsOf,
+            moduleMapSource = moduleMapSource,
         )
         return result.format() + staleFallbackNote
     }

@@ -342,6 +342,102 @@ class CodingToolExecutorTest {
         }
 
         @Test
+        @DisplayName("scaffoldToDir copies the FIRST module line indent instead of creeping +4 per scaffold")
+        fun testScaffoldToDirUsesFirstModuleIndent() = runBlocking {
+            // P2.1 regression: taking the LAST module line made the indent creep
+            // 8 → 12 → 16 spaces on every scaffold.
+            coEvery { fs.readFile(any()) } returnsMany listOf(
+                "", // VERSION
+                "<modules>\n        <module>browser4-captcha</module>\n    </modules>", // aggregator (8-space base)
+                "Error: unreadable", // ModuleMap.kt
+            )
+            coEvery { fs.writeFile(any(), any()) } returns "✓ Wrote"
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "scaffoldToDir",
+                arguments = mutableMapOf(
+                    "type" to "plugin",
+                    "dir" to "browser4-plugins/browser4-wordcount",
+                    "name" to "browser4-wordcount",
+                )
+            )
+
+            executor.callFunctionOn(tc, target)
+            coVerify {
+                fs.writeFile(
+                    "browser4-plugins/pom.xml",
+                    match {
+                        it.contains("\n        <module>browser4-wordcount</module>\n    </modules>") &&
+                            !it.contains("            <module>") &&
+                            !it.contains("                <module>")
+                    }
+                )
+            }
+        }
+
+        @Test
+        @DisplayName("scaffoldToDir auto-completes all four DEPENDENTS reverse edges in ModuleMap")
+        fun testScaffoldToDirCompletesDependentsEdges() = runBlocking {
+            // P2.4 regression: DEPENDENTS was left to the agent to hand-edit, so
+            // any -am build failed on ModuleMapDriftE2ETest in the window between
+            // aggregator registration and the manual edit.
+            val moduleMap = """
+                object ModuleMap {
+                    val MODULES = listOf(
+                        "browser4-agentic",
+                        "browser4-plugins",
+                    )
+                    val DEPENDENTS: Map<String, List<String>> = mapOf(
+                        "browser4-agentic" to listOf(
+                            "browser4-rest",
+                        ),
+                        "browser4-core/browser4-protocol" to listOf(
+                            "browser4-rest",
+                        ),
+                        "browser4-core/browser4-skeleton" to listOf(
+                            "browser4-rest",
+                        ),
+                        "browser4-pdk" to listOf(
+                            "browser4-pdk/browser4-pdk-test-plugin",
+                        ),
+                    )
+                }
+            """.trimIndent()
+            coEvery { fs.readFile(any()) } returnsMany listOf(
+                "", // VERSION
+                "<modules>\n    </modules>", // aggregator
+                moduleMap, // ModuleMap.kt
+            )
+            coEvery { fs.writeFile(any(), any()) } returns "✓ Wrote"
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "scaffoldToDir",
+                arguments = mutableMapOf(
+                    "type" to "plugin",
+                    "dir" to "browser4-plugins/browser4-wordcount",
+                    "name" to "browser4-wordcount",
+                )
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            val output = result.value.toString()
+            assertTrue(
+                output.contains("Added browser4-plugins/browser4-wordcount to 4 DEPENDENTS reverse edges"),
+                output
+            )
+            coVerify {
+                fs.writeFile(
+                    match { it.endsWith("ModuleMap.kt") },
+                    match { written ->
+                        Regex("\"browser4-plugins/browser4-wordcount\",").findAll(written).count() == 5
+                    }
+                )
+            }
+        }
+
+        @Test
         @DisplayName("scaffold with verify does not treat verify as a template param")
         fun testScaffoldAcceptsVerifyFlag() = runBlocking {
             coEvery { fs.readFile(any()) } returns ""
@@ -1087,6 +1183,47 @@ class CodingToolExecutorTest {
             assertTrue(value.contains("mvnBuild compile of browser4-rest"), value)
             assertTrue(value.contains("All checks passed"), value)
             assertFalse(value.contains("tests on"), "runTests=false must not run tests")
+        }
+
+        @Test
+        @DisplayName("devTask verify builds the new plugin module, not a same-depth DEPENDENTS key")
+        fun testDevTaskVerifyTargetsNewPluginModule() = runBlocking {
+            // P1.1 execution-phase regression: verify previously compiled
+            // browser4-core/browser4-protocol (a DEPENDENTS key) and reported a
+            // false-positive "Build succeeded" for a plugin that did not exist yet.
+            // The workspace is an EMPTY temp dir, so the live pom scan finds
+            // nothing and planning falls back to the static ModuleMap snapshot.
+            coEvery { shell.executeRaw(any(), any(), any()) } returns
+                ShellResult("s1", "compile", 0, "compiled", "", 100)
+
+            val realFs = CodingAgentFileSystem(tempDir)
+            val realTarget = CodingToolExecutor.Target(shell, realFs)
+            val tc = ToolCall(
+                domain = "coding",
+                method = "devTask",
+                arguments = mutableMapOf(
+                    "task" to "在 browser4-agentic、browser4-core/browser4-protocol、browser4-core/browser4-skeleton、" +
+                        "browser4-pdk 的 DEPENDENTS 补 browser4-plugins/browser4-testprobe，并补 LinkcheckConfigTest",
+                    "verify" to "true",
+                    "runTests" to "true",
+                )
+            )
+
+            val result = executor.callFunctionOn(tc, realTarget)
+            val value = result.value as String
+            assertTrue(value.contains("mvnBuild compile of browser4-plugins/browser4-testprobe"), value)
+            assertFalse(
+                value.contains("mvnBuild compile of browser4-core/browser4-protocol"),
+                "verification must not compile a DEPENDENTS key: $value"
+            )
+            // runTests captures the actual command line.
+            coVerify {
+                shell.executeRaw(
+                    match { it.contains("-pl browser4-plugins/browser4-testprobe") &&
+                        !it.contains("browser4-core/browser4-protocol") },
+                    any(), any()
+                )
+            }
         }
 
         @Test

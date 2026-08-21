@@ -184,4 +184,61 @@ class DevTaskPlannerTest {
         // No -Dtest= in the test step.
         assertFalse(plan.steps.any { it.command.contains("-Dtest=") }, "no -Dtest expected: ${plan.steps}")
     }
+
+    @Test
+    @DisplayName("DEPENDENTS-key mentions do not hijack build/test binding from a new plugin module")
+    fun dependentsKeysWithNewPluginTargetNewModule() {
+        // P1.1 regression: the four DEPENDENTS keys have the same path depth as
+        // browser4-plugins/<name> and previously won the tie-break (maxByOrNull
+        // returns the first maximum), binding mvnBuild/test to
+        // browser4-core/browser4-protocol instead of the freshly scaffolded module.
+        val plan = DevTaskPlanner.plan(
+            "在 browser4-agentic、browser4-core/browser4-protocol、browser4-core/browser4-skeleton、" +
+                "browser4-pdk 的 DEPENDENTS 补 browser4-plugins/browser4-testprobe，并补 LinkcheckConfigTest")
+        assertTrue("browser4-plugins/browser4-testprobe" in plan.newPluginModules,
+            "new plugin modules: ${plan.newPluginModules}")
+        val mvnBuild = plan.steps.first { it.tool == "coding.mvnBuild" }
+        assertTrue(mvnBuild.command.contains("browser4-plugins/browser4-testprobe"),
+            "mvnBuild must target the new module: ${mvnBuild.command}")
+        assertFalse(mvnBuild.command.contains("browser4-core/browser4-protocol"),
+            "mvnBuild must not target a DEPENDENTS key: ${mvnBuild.command}")
+        val testStep = plan.steps.first { it.tool == "coding.shell" && it.command.contains("-Dtest=") }
+        assertTrue(testStep.command.contains("-pl browser4-plugins/browser4-testprobe"),
+            "test step must run in the new module: ${testStep.command}")
+        assertFalse(testStep.command.contains("browser4-core/browser4-protocol"),
+            "test step must not run in a DEPENDENTS key: ${testStep.command}")
+    }
+
+    @Test
+    @DisplayName("slashed path inside a new plugin module gets the module prefix")
+    fun slashedPathInNewPluginGetsModulePrefix() {
+        // P1.2 regression: `src/main/resources/...` used to be read from the
+        // workspace root (repo root) instead of the new plugin module.
+        val plan = DevTaskPlanner.plan(
+            "创建新插件 browser4-plugins/browser4-testprobe，实现 src/main/resources/testprobe/count.js")
+        val read = plan.steps.first { it.tool == "coding.read" }
+        assertEquals(
+            "browser4-plugins/browser4-testprobe/src/main/resources/testprobe/count.js",
+            read.args["path"], "read path must be module-prefixed: ${read.command}")
+        val impact = plan.steps.first { it.tool == "coding.impact" }
+        assertEquals(
+            "browser4-plugins/browser4-testprobe/src/main/resources/testprobe/count.js",
+            impact.args["path"], "impact path must be module-prefixed: ${impact.command}")
+    }
+
+    @Test
+    @DisplayName("slashed paths rooted at a known module or repo top-level dir are not re-prefixed")
+    fun rootedPathsAreNotReprefixed() {
+        val knownModulePath = DevTaskPlanner.plan(
+            "fix browser4-plugins/browser4-seo/src/main/resources/seo/x.js and create browser4-plugins/browser4-testprobe")
+        assertEquals(
+            "browser4-plugins/browser4-seo/src/main/resources/seo/x.js",
+            knownModulePath.steps.first { it.tool == "coding.read" }.args["path"])
+
+        val topLevelPath = DevTaskPlanner.plan(
+            "create browser4-plugins/browser4-testprobe and update cli/browser4-cli/src/commands.rs")
+        assertEquals(
+            "cli/browser4-cli/src/commands.rs",
+            topLevelPath.steps.first { it.tool == "coding.read" }.args["path"])
+    }
 }

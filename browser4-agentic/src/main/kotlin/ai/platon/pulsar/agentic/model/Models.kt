@@ -377,6 +377,13 @@ data class ActionDescription constructor(
      * */
     val context: Any? = null,
     /**
+     * Whether the tool-calling loop executed ≥1 internal tool during this step,
+     * regardless of whether the final response parsed into a [ToolCall]
+     * (loop-overflow steps execute tools but carry no toolCall). Feeds the
+     * text-only stall fuse so real work is never counted as text idling.
+     * */
+    val internalToolsExecuted: Boolean = false,
+    /**
      * The agent state
      * */
     val agentState: AgentState? = null,

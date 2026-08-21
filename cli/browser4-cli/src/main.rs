@@ -9902,13 +9902,17 @@ async fn handle_agent_status(
 
 /// Update the local task-tracking file with the latest server status for a task.
 fn sync_agent_status_to_local(task_id: &str, status_json: &str) {
+    // Same guards as `agent list` refresh: "null"/empty/404 answers and
+    // terminal-state downgrades never touch the cache (P2.5).
     let mut list = read_async_tasks(None);
-    if let Some(entry) = list.tasks.iter_mut().find(|t| t.task_id == task_id) {
-        if let Ok(parsed) = serde_json::from_str::<Value>(status_json) {
-            entry.last_status = extract_readable_agent_status(&parsed);
-            let _ = write_async_tasks(&list, None);
-        }
-    }
+    let Some(entry) = list.tasks.iter_mut().find(|t| t.task_id == task_id) else {
+        return;
+    };
+    let Some(fresh) = refreshed_agent_status(&entry.last_status, status_json) else {
+        return;
+    };
+    entry.last_status = fresh;
+    let _ = write_async_tasks(&list, None);
 }
 
 async fn handle_agent_result(
@@ -9998,23 +10002,17 @@ async fn handle_agent_list(
                 continue;
             }
             if let Ok(status_json) = get_command_status(client, base_url, &entry.task_id).await {
-                if let Ok(parsed) = serde_json::from_str::<Value>(&status_json) {
-                    let process_state = parsed
-                        .get("processState")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let is_done = parsed
-                        .get("isDone")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    let status_code = parse_status_code_from_json(&parsed);
-                    entry.last_status = friendly_agent_status(process_state, is_done, &status_code);
-                    // Prefer backend finishTime; fall back to local clock.
-                    // Only set completed_at when it hasn't been set yet — once set,
-                    // keep the first completion timestamp (don't overwrite on later polls).
-                    let now_completed =
-                        entry.last_status == "completed" || entry.last_status.starts_with("failed");
-                    if now_completed && entry.completed_at.is_none() {
+                let Some(fresh) = refreshed_agent_status(&entry.last_status, &status_json) else {
+                    continue;
+                };
+                entry.last_status = fresh;
+                // Prefer backend finishTime; fall back to local clock.
+                // Only set completed_at when it hasn't been set yet — once set,
+                // keep the first completion timestamp (don't overwrite on later polls).
+                let now_completed =
+                    entry.last_status == "completed" || entry.last_status.starts_with("failed");
+                if now_completed && entry.completed_at.is_none() {
+                    if let Ok(parsed) = serde_json::from_str::<Value>(&status_json) {
                         if let Some(ts) = parsed
                             .get("finishTime")
                             .and_then(|v| v.as_str())
@@ -10704,6 +10702,50 @@ fn friendly_agent_status(process_state: &str, is_done: bool, status_code: &str) 
     } else {
         process_state.to_lowercase()
     }
+}
+
+/// Map a fresh server status onto the cached local one for `agent list` refresh.
+///
+/// Returns `None` when the cache must stay untouched:
+/// - the backend answered "null"/empty (task id unknown after a restart), or
+/// - a structured notFound answer (statusCode 404 / SC_NOT_FOUND), or
+/// - the cached status is terminal (completed/failed) while the fresh one is
+///   not — terminal states never regress (P2.5 regression: a restarted backend
+///   answering "null" used to poison cached terminal statuses with "queued").
+fn refreshed_agent_status(cached: &str, status_json: &str) -> Option<String> {
+    let trimmed = status_json.trim();
+    if trimmed == "null" || trimmed.is_empty() {
+        return None;
+    }
+    let parsed: Value = serde_json::from_str(trimmed).ok()?;
+    // Require at least one known status field — a bare `{}` (or unrelated JSON)
+    // must not map to "queued" and overwrite the cache.
+    let has_status_field = parsed.get("processState").is_some()
+        || parsed.get("isDone").is_some()
+        || parsed.get("statusCode").is_some()
+        || parsed.get("finishTime").is_some();
+    if !has_status_field {
+        return None;
+    }
+    let status_code = parse_status_code_from_json(&parsed);
+    if status_code == "404" || status_code == "SC_NOT_FOUND" {
+        return None;
+    }
+    let process_state = parsed
+        .get("processState")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let is_done = parsed
+        .get("isDone")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let fresh = friendly_agent_status(process_state, is_done, &status_code);
+    let cached_terminal = cached == "completed" || cached.starts_with("failed");
+    let fresh_terminal = fresh == "completed" || fresh.starts_with("failed");
+    if cached_terminal && !fresh_terminal {
+        return None;
+    }
+    Some(fresh)
 }
 
 /// Map crawl status strings to the same lifecycle labels.
@@ -24921,6 +24963,65 @@ mod tests {
     #[test]
     fn friendly_agent_status_unknown_is_lowered() {
         assert_eq!(friendly_agent_status("Running", false, ""), "running");
+    }
+
+    // -----------------------------------------------------------------------
+    // refreshed_agent_status tests (P2.5: unknown/404 answers never poison the cache)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn refreshed_agent_status_keeps_cache_on_null_body() {
+        assert_eq!(refreshed_agent_status("completed", "null"), None);
+        assert_eq!(refreshed_agent_status("queued", "  "), None);
+        assert_eq!(refreshed_agent_status("processing", ""), None);
+    }
+
+    #[test]
+    fn refreshed_agent_status_keeps_cache_on_not_found() {
+        let not_found = r#"{"id":"t1","statusCode":404,"processState":"done","isDone":true}"#;
+        assert_eq!(refreshed_agent_status("completed", not_found), None);
+        assert_eq!(refreshed_agent_status("queued", not_found), None);
+    }
+
+    #[test]
+    fn refreshed_agent_status_never_downgrades_terminal_cache() {
+        // A restarted backend may answer "created" for a task whose cached
+        // status is terminal — the terminal state must win.
+        let created = r#"{"statusCode":200,"processState":"created","isDone":false}"#;
+        assert_eq!(refreshed_agent_status("completed", created), None);
+        assert_eq!(refreshed_agent_status("failed (timeout)", created), None);
+    }
+
+    #[test]
+    fn refreshed_agent_status_applies_fresh_status() {
+        let processing = r#"{"statusCode":200,"processState":"in_progress","isDone":false}"#;
+        assert_eq!(
+            refreshed_agent_status("queued", processing),
+            Some("processing".to_string())
+        );
+        let done = r#"{"statusCode":"SC_OK","processState":"done","isDone":true}"#;
+        assert_eq!(
+            refreshed_agent_status("processing", done),
+            Some("completed".to_string())
+        );
+        // A fresh terminal status may overwrite a non-terminal cache.
+        assert_eq!(
+            refreshed_agent_status("queued", done),
+            Some("completed".to_string())
+        );
+    }
+
+    #[test]
+    fn refreshed_agent_status_rejects_unparsable_json() {
+        assert_eq!(refreshed_agent_status("queued", "{not json"), None);
+    }
+
+    #[test]
+    fn refreshed_agent_status_rejects_empty_object() {
+        // A bare {} carries no status fields — mapping it to "queued" would
+        // poison the cache exactly like the old "null" answer did.
+        assert_eq!(refreshed_agent_status("completed", "{}"), None);
+        assert_eq!(refreshed_agent_status("queued", "{ }"), None);
     }
 
     // -----------------------------------------------------------------------

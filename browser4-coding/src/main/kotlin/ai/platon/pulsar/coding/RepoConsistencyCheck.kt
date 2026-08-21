@@ -27,6 +27,7 @@ object RepoConsistencyCheck {
     private val BOM_VERSION = Regex("""<artifactId>browser4-dependencies</artifactId>\s*<version>([^<]+)</version>""")
     private val MANIFEST_NAME = Regex(""""name"\s*:\s*"([^"]+)"""")
     private val SDK_VERSION_TAG = Regex(""""sdkVersion"\s*:\s*"([^"]*)"""")
+    private val TRAILING_WS = Regex("""[ \t]+$""")
 
     /**
      * Run the consistency checks.
@@ -47,6 +48,9 @@ object RepoConsistencyCheck {
      * @param liveDependentsOf reverse-edge lookup on the live pom graph: returns the
      *   modules that directly depend on [String] (optional); when both are provided,
      *   per-module reverse edges are compared as sets in both directions
+     * @param moduleMapSource raw ModuleMap.kt source text (optional); checked for
+     *   source hygiene (trailing whitespace, lines wider than 120 columns) as
+     *   WARNING-level issues so hand-edited snapshots stay readable
      */
     fun check(
         versionContent: String?,
@@ -59,6 +63,7 @@ object RepoConsistencyCheck {
         liveModuleDirs: List<String> = emptyList(),
         staticDependents: Map<String, List<String>> = emptyMap(),
         liveDependentsOf: ((String) -> Set<String>)? = null,
+        moduleMapSource: String? = null,
     ): ValidationResult {
         val issues = mutableListOf<ValidationIssue>()
 
@@ -181,6 +186,25 @@ object RepoConsistencyCheck {
                         Severity.ERROR,
                         "ModuleMap.DEPENDENTS[$m] drifted: live={${live.sorted().joinToString(", ")}} " +
                             "static={${static.sorted().joinToString(", ")}} — sync ModuleMap.kt"
+                    )
+                }
+            }
+        }
+
+        // --- ModuleMap source hygiene ---
+        // Hand-edited DEPENDENTS entries used to land with trailing whitespace and
+        // >120-column lines; flag them (WARNING) so the drift machinery never
+        // produces unreadable snapshots.
+        if (!moduleMapSource.isNullOrBlank()) {
+            moduleMapSource.lineSequence().forEachIndexed { index, line ->
+                if (TRAILING_WS.containsMatchIn(line)) {
+                    issues += ValidationIssue(
+                        Severity.WARNING, "ModuleMap.kt:${index + 1} has trailing whitespace"
+                    )
+                }
+                if (line.length > 120) {
+                    issues += ValidationIssue(
+                        Severity.WARNING, "ModuleMap.kt:${index + 1} is ${line.length} columns wide (limit 120)"
                     )
                 }
             }

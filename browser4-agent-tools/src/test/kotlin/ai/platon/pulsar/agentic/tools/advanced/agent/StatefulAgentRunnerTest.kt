@@ -123,6 +123,42 @@ class StatefulAgentRunnerTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────
+    // P2.5: JSONL restore never regresses a terminal status
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("restoreFromDisk keeps a terminal status when a later JSONL row is non-terminal")
+    fun restoreFromDiskKeepsTerminalStatus() {
+        val agent = mockAgent(AgentHistory(), "run-r")
+        val runner1 = StatefulAgentRunner(mockSession(agent))
+        try {
+            // Out-of-order append glitch: the done row lands before a stale
+            // created row for the same id.
+            val done = AgentTaskStatus(id = "t-prio", statusCode = ResourceStatus.SC_OK, processState = "done").apply {
+                startedTime = null; lastModifiedTime = null; finishTime = null
+            }
+            runner1.persistence.append(done)
+            val created = AgentTaskStatus(id = "t-prio", statusCode = ResourceStatus.SC_CREATED, processState = "created").apply {
+                startedTime = null; lastModifiedTime = null; finishTime = null
+            }
+            runner1.persistence.append(created)
+        } finally {
+            runner1.close()
+        }
+
+        // A fresh runner (simulated restart) restores from the same JSONL.
+        val runner2 = StatefulAgentRunner(mockSession(agent))
+        try {
+            val restored = runner2.getStatus("t-prio")
+            assertNotNull(restored, "terminal task must be restored from the JSONL")
+            assertEquals("done", restored!!.processState,
+                "a non-terminal row must not overwrite the restored terminal status")
+        } finally {
+            runner2.close()
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
     // P6: concurrent task submissions are serialized per session
     // ─────────────────────────────────────────────────────────────────────
 

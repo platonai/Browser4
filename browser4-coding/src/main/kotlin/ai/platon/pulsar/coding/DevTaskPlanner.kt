@@ -146,6 +146,26 @@ object DevTaskPlanner {
 
     // ==================== planning ====================
 
+    /**
+     * Complete the module prefix for workspace-relative paths that live inside
+     * a NEW plugin module: `src/main/resources/linkcheck/countLinks.js` must
+     * resolve as `browser4-plugins/<name>/src/...` because the workspace root is
+     * the repo root (v1.3 fixed bare filenames only). Paths already rooted at a
+     * known module — or at a well-known top-level repo directory — are left
+     * untouched, and no prefix is added when the task creates no new module.
+     */
+    private fun resolvePlannedPath(
+        raw: String, knownModules: List<String>, newPluginModules: List<String>,
+    ): String {
+        val norm = raw.replace('\\', '/')
+        if (!norm.contains('/')) return norm
+        val firstSeg = norm.substringBefore('/')
+        val moduleRooted = knownModules.any { it == firstSeg || it.startsWith("$firstSeg/") }
+        if (moduleRooted || firstSeg in TOP_LEVEL_DIRS) return norm
+        val newModule = newPluginModules.firstOrNull()
+        return if (newModule != null) "$newModule/$norm" else norm
+    }
+
     private fun buildSteps(
         task: String,
         modules: List<String>,
@@ -174,7 +194,7 @@ object DevTaskPlanner {
         //    workspace root — list the owning module directory instead so the
         //    agent sees the real layout (e.g. right after scaffolding a new
         //    plugin module).
-        val readPath = files.firstOrNull()
+        val readPath = files.firstOrNull()?.let { resolvePlannedPath(it, knownModules, newPluginModules) }
         if (readPath != null) {
             if (readPath.contains('/')) {
                 steps += PlanStep(order++, "coding.read",
@@ -192,7 +212,8 @@ object DevTaskPlanner {
         }
 
         // 2. Impact analysis — which module owns the change and who depends on it.
-        val impactPath = files.firstOrNull() ?: modules.firstOrNull() ?: newPluginModules.firstOrNull()
+        val impactPath = files.firstOrNull()?.let { resolvePlannedPath(it, knownModules, newPluginModules) }
+            ?: modules.firstOrNull() ?: newPluginModules.firstOrNull()
         if (impactPath != null) {
             steps += PlanStep(order++, "coding.impact",
                 "Assess the blast radius: owning module, transitive dependents, suggested test commands",
@@ -202,7 +223,11 @@ object DevTaskPlanner {
         // 3. Compile check of the affected module (or cargo for the CLI crate).
         //    Prefer the most specific (deepest-path) module so the build targets
         //    the leaf (e.g. browser4-plugins/browser4-seo) over its aggregator.
-        val mavenModule = (modules + newPluginModules).filter { it != ModuleMap.CLI_CRATE }
+        //    newPluginModules come FIRST so a freshly scaffolded plugin module
+        //    wins the tie-break against same-depth DEPENDENTS-key mentions
+        //    (browser4-core/browser4-protocol etc. — maxByOrNull returns the
+        //    first maximum), which previously bound build/test to the wrong module.
+        val mavenModule = (newPluginModules + modules).filter { it != ModuleMap.CLI_CRATE }
             .maxByOrNull { it.count { c -> c == '/' } }
         if (mavenModule != null) {
             steps += PlanStep(order++, "coding.mvnBuild",
@@ -268,4 +293,9 @@ object DevTaskPlanner {
         return if (parts.isEmpty()) "No module/file signals found in the task — the agent should clarify scope."
         else parts.joinToString(" | ")
     }
+
+    /** Repo top-level directories that never start a module-relative path. */
+    private val TOP_LEVEL_DIRS = setOf(
+        "cli", "docs", "docs-dev", "skills", "examples", "coworker", "bin", ".github", "target", "plugins",
+    )
 }

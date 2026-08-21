@@ -33,6 +33,7 @@
         <module>browser4-seo</module>
         <module>browser4-swarm</module>
         <module>browser4-headings</module>
-            <module>browser4-wordcount</module>
+        <module>browser4-wordcount</module>
+        <module>browser4-linkcheck</module>
     </modules>
 </project>

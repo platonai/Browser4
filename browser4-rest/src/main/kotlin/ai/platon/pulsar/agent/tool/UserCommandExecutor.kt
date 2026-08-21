@@ -278,8 +278,19 @@ class UserCommandExecutor(
                 ?: fallbackAgentStatus(sessionId, id)
             "agent" -> ensureAgentRunner(sessionId).getStatus(id)?.toCommandStatus()
                 ?: fallbackPageStatus(sessionId, id)
-            else -> fallbackPageStatus(sessionId, id)
-                ?: fallbackAgentStatus(sessionId, id)
+            else -> {
+                // Unknown owner (stale taskOwner after a restart, or a task
+                // created by a previous instance): probe every existing runner
+                // and visitor first — each runner restores the global JSONL
+                // persistence into its status cache on construction. Only when
+                // no runner exists at all, construct one so restoreFromDisk can
+                // revive terminal statuses. Without this, a restarted backend
+                // answered "null" and the CLI overwrote its cached terminal
+                // statuses with "queued" (P2.5).
+                agentRunners.values.firstNotNullOfOrNull { it.getStatus(id)?.toCommandStatus() }
+                    ?: pageVisitors.values.firstNotNullOfOrNull { it.getStatus(id)?.toCommandStatus() }
+                    ?: ensureAgentRunner(sessionId).getStatus(id)?.toCommandStatus()
+            }
         }
 
         if (status == null && owner != null) {

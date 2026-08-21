@@ -4,6 +4,7 @@ import ai.platon.pulsar.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import ai.platon.pulsar.rest.api.entities.CommandStatus
 import kotlin.reflect.KClass
 
 /**
@@ -109,7 +110,10 @@ class CommandToolExecutor(
                 validateArgs(args, allowed = setOf("id"), required = setOf("id"), functionName)
                 val sessionId = paramString(args, "sessionId", functionName, default = DEFAULT_SESSION_ID)!!
                 val id = paramString(args, "id", functionName)!!
-                val status = service.getStatus(sessionId, id)
+                // Serializing a null status used to emit the literal "null" and
+                // the CLI then overwrote its cached terminal statuses with
+                // "queued" (P2.5) — return a structured notFound status instead.
+                val status = service.getStatus(sessionId, id) ?: CommandStatus.notFound(id)
                 pulsarObjectMapper().writeValueAsString(status)
             }
 
