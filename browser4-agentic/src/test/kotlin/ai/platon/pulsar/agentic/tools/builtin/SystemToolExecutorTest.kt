@@ -58,6 +58,33 @@ class SystemToolExecutorTest {
     }
 
     @Test
+        @DisplayName("skillDoc reads bundled browser4-cli SKILL.md from classpath")
+    fun skillDocReadsBundledSkill() {
+        val content = executor.skillDoc("SKILL.md")
+
+        assertTrue(content.startsWith("---"), "expected bundled SKILL.md frontmatter, got: ${content.take(60)}")
+        assertTrue(content.contains("browser4-cli"), "SKILL.md must mention browser4-cli")
+    }
+
+    @Test
+        @DisplayName("skillDoc lists available documents for an unknown name")
+    fun skillDocUnknownNameListsAvailable() {
+        val content = executor.skillDoc("does-not-exist.md")
+
+        assertTrue(content.contains("Skill document not found"))
+        assertTrue(content.contains("SKILL.md"))
+        assertTrue(content.contains("x-sql.md"))
+    }
+
+    @Test
+        @DisplayName("skillDoc rejects path traversal")
+    fun skillDocRejectsPathTraversal() {
+        assertThrows(IllegalArgumentException::class.java) {
+            executor.skillDoc("../../secret")
+        }
+    }
+
+    @Test
         @DisplayName("domain property is system")
     fun domainPropertyIsSystem() {
         assertEquals("system", executor.domain)

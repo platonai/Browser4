@@ -745,6 +745,46 @@ set "MAIN_CLASS=$mainClass"
     Set-Content -LiteralPath $startBatPath -Value $startBatContent -Encoding ASCII
 }
 
+<#
+.SYNOPSIS
+Bundle the browser4-cli binary into the runtime bundle's bin/ directory.
+
+.DESCRIPTION
+Uses a prebuilt release binary when present, otherwise builds one with cargo
+(best effort).  When neither is possible the bundle is still produced — the
+CliBinaryResolver falls back to PATH / auto-install.  This guarantees the
+SKILL.md tool surface is available on a fresh machine that only has the
+bundle (design §4.2/§4.3).
+#>
+function Install-Browser4Cli([string]$bundleDirectory) {
+    $binDirectory = Join-Path $bundleDirectory 'bin'
+    $cliExeName = if (Get-IsWindows) { 'browser4-cli.exe' } else { 'browser4-cli' }
+    $cliSourceDir = Join-Path $PSScriptRoot (Join-Path '..' (Join-Path '..' (Join-Path 'cli' 'browser4-cli')))
+    $releaseBinary = Join-Path $cliSourceDir (Join-Path 'target' (Join-Path 'release' $cliExeName))
+
+    if (-not (Test-Path -LiteralPath $releaseBinary -PathType Leaf)) {
+        $cargo = Get-Command cargo -ErrorAction SilentlyContinue
+        if (-not $cargo) {
+            Write-Warning "No browser4-cli release binary and no cargo found; the bundle will not ship a CLI binary."
+            return
+        }
+        Write-Host "Building browser4-cli release binary (first bundle build may take a while)..." -ForegroundColor Cyan
+        Push-Location $cliSourceDir
+        try {
+            & $cargo.Source build --release
+        } finally {
+            Pop-Location
+        }
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $releaseBinary -PathType Leaf)) {
+            Write-Warning "cargo build for browser4-cli failed; the bundle will not ship a CLI binary."
+            return
+        }
+    }
+
+    Copy-Item -LiteralPath $releaseBinary -Destination (Join-Path $binDirectory $cliExeName) -Force
+    Write-Host "Bundled browser4-cli -> bin/$cliExeName" -ForegroundColor Green
+}
+
 # ============================================================================
 # Main script
 # ============================================================================
@@ -1428,6 +1468,7 @@ Write-BuildProgress -Status $buildPhases[$phaseIndex - 1].Label
 
 Write-Host "Writing launch scripts..." -ForegroundColor Cyan
 Write-LaunchScripts -bundleDirectory $bundleDirectory -mainClass $MainClass
+Install-Browser4Cli -bundleDirectory $bundleDirectory
 
 Set-Content -LiteralPath (Join-Path $bundleDirectory 'runtime-bundle.json') `
     -Value (Get-BundleMetadataJson -assetName $AssetName -modules $modules -mainClass $MainClass) `

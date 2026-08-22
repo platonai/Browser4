@@ -175,4 +175,23 @@
             <artifactId>snakeyaml</artifactId>
         </dependency>
     </dependencies>
+
+    <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <!-- Bundle the repo-level browser4-cli skill (SKILL.md + reference
+                 docs) into the agentic jar at classpath `skills/browser4-cli/**`,
+                 so SkillBootstrap and system.skillDoc can serve it without a
+                 source tree (design §4.3 — new-machine guarantee). -->
+            <resource>
+                <directory>${maven.multiModuleProjectDirectory}/skills</directory>
+                <targetPath>skills</targetPath>
+                <includes>
+                    <include>browser4-cli/**</include>
+                </includes>
+            </resource>
+        </resources>
+    </build>
 </project>

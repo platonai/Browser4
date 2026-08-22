@@ -346,7 +346,11 @@ M4 实测摊销效果。参考文档按需经 `system.skillDoc` 拉取，不预�
    M1 覆盖：resolve/封顶、deadline 归因、进程树两级终止、argv fixture、环境白名单、
    并发上限 + 有界队列、取消传播、teardown 兜底、版本兼容探测、CLI 单次开销实测、
    SKILL.md token 成本实测。
-2. **M2**：bundle 打包 CLI 与 `skills/browser4-cli/**`；`system.skillDoc`。
+2. **M2（已完成 2026-08-23）**：`skills/browser4-cli/**`（28 个文件）经
+   `${maven.multiModuleProjectDirectory}` 资源映射打进 agentic jar（classpath `skills/browser4-cli/**`）；
+   `system.skillDoc(name)` 实现（classpath 读取 + 越界防护 + 文档清单 + 120k 字符上限），3 个测试全绿；
+   `build-runtime-bundle.ps1` 新增 `Install-Browser4Cli`（预编译二进制优先，缺则 cargo build --release，
+   再缺则告警跳过，由 resolver 回退 PATH/自动安装）。
 3. **M3**：`doRunCliAgentLoop` + `system.taskComplete` 接线；`AgentConfig.runEngine`。
 4. **M4**：CLI `agent run --engine=cli` + e2e（维基多步 + 全新环境 + 长命令取消后后端任务确认停止 +
    多任务 SKILL.md 摊销验证）。
