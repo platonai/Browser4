@@ -14,6 +14,7 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -85,6 +86,30 @@ class AgentToolCallLoopTest {
             digest.length <= AgentToolCallLoop.OVERFLOW_SUMMARY_MAX_CHARS,
             "digest must be capped, got ${digest.length}"
         )
+    }
+
+    @Test
+    @DisplayName("onToolRequest callback receives name and arguments before execution")
+    fun onToolRequestCallbackReceivesNameAndArgs() = runBlocking {
+        val model = mockk<BrowserChatModel>()
+        val coordinator = mockk<ToolExecutionCoordinator>()
+        val callMessage = AiMessage.from("calling", listOf(toolRequest("c1", name = "coding.read")))
+        coEvery { model.langChainChat(any<ChatRequest>(), any()) } returns chatResponseOf(callMessage)
+        every { coordinator.execute(any()) } returns
+            ToolExecutionResultMessage.from("c1", "coding.read", "ok")
+
+        val seen = mutableListOf<Pair<String, String>>()
+        val loop = AgentToolCallLoop(
+            model = model,
+            toolSpecifications = emptyList(),
+            coordinator = coordinator,
+            maxIterations = 1,
+            onToolRequest = { name, args -> seen += name to args },
+        )
+
+        loop.generate(listOf(UserMessage.from("do it")))
+
+        assertEquals(listOf("coding.read" to "{}"), seen)
     }
 
     @Test

@@ -351,6 +351,11 @@ M4 实测摊销效果。参考文档按需经 `system.skillDoc` 拉取，不预�
    `system.skillDoc(name)` 实现（classpath 读取 + 越界防护 + 文档清单 + 120k 字符上限），3 个测试全绿；
    `build-runtime-bundle.ps1` 新增 `Install-Browser4Cli`（预编译二进制优先，缺则 cargo build --release，
    再缺则告警跳过，由 resolver 回退 PATH/自动安装）。
-3. **M3**：`doRunCliAgentLoop` + `system.taskComplete` 接线；`AgentConfig.runEngine`。
+3. **M3（已完成 2026-08-23）**：`AgentConfig.runEngine`（`-Dbrowser4.agent.runEngine=cli` 切换，
+   默认 OBSERVE_ACT 不动）；`system.taskComplete` 完成协议 + `TaskCompletion` JSON 解析；
+   `AgentToolCallLoop.onToolRequest` 回调捕获 taskComplete 参数；`RobustBrowserAgent.doRunCliAgentLoop`
+   原生工具循环（coding/cli/system 工具集 + 主 SKILL.md system prompt + 上下文卫生规则），
+   完成走 `onTaskCompletion`/finish gate，无完成标记按异常终止上报。M3 为单轮
+   `generate()` 版本（内部最多 toolLoopMaxIterations 轮）；跨轮历史压缩列为 M4 细化。
 4. **M4**：CLI `agent run --engine=cli` + e2e（维基多步 + 全新环境 + 长命令取消后后端任务确认停止 +
    多任务 SKILL.md 摊销验证）。

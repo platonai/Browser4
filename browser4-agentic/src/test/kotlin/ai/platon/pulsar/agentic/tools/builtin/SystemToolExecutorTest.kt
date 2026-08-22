@@ -79,9 +79,48 @@ class SystemToolExecutorTest {
     @Test
         @DisplayName("skillDoc rejects path traversal")
     fun skillDocRejectsPathTraversal() {
-        assertThrows(IllegalArgumentException::class.java) {
-            executor.skillDoc("../../secret")
-        }
+        val thrown = runCatching { executor.skillDoc("../../secret") }.exceptionOrNull()
+        assertTrue(thrown is IllegalArgumentException, "expected IllegalArgumentException, got: $thrown")
+    }
+
+    @Test
+        @DisplayName("taskComplete executes and returns a confirmation")
+    fun taskCompleteReturnsConfirmation() = runBlocking {
+        val tc = ToolCall(
+            domain = "system",
+            method = "taskComplete",
+            arguments = mutableMapOf(
+                "summary" to "Task done",
+                "keyFindings" to listOf("k1"),
+                "filesChanged" to listOf("f.md"),
+                "problems" to listOf("p1"),
+            )
+        )
+
+        val text = executor.callFunctionOn(tc, executor).value?.toString() ?: ""
+
+        assertTrue(text.contains("Task marked complete"), text)
+        assertTrue(text.contains("Task done"), text)
+    }
+
+    @Test
+        @DisplayName("taskComplete rejects a blank summary")
+    fun taskCompleteRejectsBlankSummary() {
+        val thrown = runCatching { executor.taskComplete("   ", null, null, null) }.exceptionOrNull()
+        assertTrue(thrown is IllegalArgumentException, "expected IllegalArgumentException, got: $thrown")
+    }
+
+    @Test
+        @DisplayName("TaskCompletion parses native tool-call arguments JSON")
+    fun taskCompletionFromJsonParses() {
+        val completion = TaskCompletion.fromJson(
+            """{"summary":"done","keyFindings":["k1"],"filesChanged":["f1"],"problems":["p1"]}"""
+        )
+
+        assertEquals("done", completion.summary)
+        assertTrue(completion.keyFindings == listOf("k1"), "keyFindings: ${completion.keyFindings}")
+        assertTrue(completion.filesChanged == listOf("f1"), "filesChanged: ${completion.filesChanged}")
+        assertTrue(completion.problems == listOf("p1"), "problems: ${completion.problems}")
     }
 
     @Test

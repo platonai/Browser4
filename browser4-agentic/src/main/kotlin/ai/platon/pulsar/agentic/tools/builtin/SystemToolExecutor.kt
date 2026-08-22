@@ -2,7 +2,9 @@ package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolManager
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.getLogger
+import com.fasterxml.jackson.module.kotlin.readValue
 import kotlin.reflect.KClass
 
 class SystemToolExecutor(
@@ -33,6 +35,20 @@ class SystemToolExecutor(
                 "(e.g. SKILL.md, snapshot.md, htmlsnapshot.md, x-sql.md, crawl.md). " +
                 "The available document names are listed when an unknown name is requested."
         )
+        toolSpec["taskComplete"] = ToolSpec(
+            domain = domain,
+            method = "taskComplete",
+            arguments = listOf(
+                ToolSpec.Arg("summary", "String"),
+                ToolSpec.Arg("keyFindings", "List<String>", "[]"),
+                ToolSpec.Arg("filesChanged", "List<String>", "[]"),
+                ToolSpec.Arg("problems", "List<String>", "[]"),
+            ),
+            returnType = "String",
+            description = "Mark the current task as complete. summary: concise final report; " +
+                "keyFindings: list of key findings; filesChanged: list of files changed; " +
+                "problems: unresolved issues."
+        )
     }
 
     fun help(domain: String, method: String): String {
@@ -62,6 +78,21 @@ class SystemToolExecutor(
     }
 
     /**
+     * Completion protocol for the CLI tool-loop engine (design §3.1): the model
+     * calls `system.taskComplete` instead of emitting a JSON completion marker.
+     * Returns a confirmation string that feeds back into the conversation.
+     */
+    fun taskComplete(
+        summary: String,
+        keyFindings: List<String>?,
+        filesChanged: List<String>?,
+        problems: List<String>?,
+    ): String {
+        require(summary.isNotBlank()) { "taskComplete summary must not be blank" }
+        return "Task marked complete. Summary: ${summary.take(200)}"
+    }
+
+    /**
      * Execute system.* expressions with named args.
      */
     @Suppress("UNUSED_PARAMETER")
@@ -81,9 +112,27 @@ class SystemToolExecutor(
                 validateArgs(args, allowed = setOf("name"), required = setOf("name"), functionName)
                 skillDoc(args["name"]!! as String)
             }
+            "taskComplete" -> {
+                validateArgs(
+                    args, allowed = setOf("summary", "keyFindings", "filesChanged", "problems"),
+                    required = setOf("summary"), functionName
+                )
+                taskComplete(
+                    summary = args["summary"] as String,
+                    keyFindings = stringListArg(args["keyFindings"]),
+                    filesChanged = stringListArg(args["filesChanged"]),
+                    problems = stringListArg(args["problems"]),
+                )
+            }
 
             else -> throw IllegalArgumentException("Unsupported system method: $functionName(${args.keys})")
         }
+    }
+
+    private fun stringListArg(value: Any?): List<String>? = when (value) {
+        null -> null
+        is List<*> -> value.mapNotNull { it?.toString() }
+        else -> listOf(value.toString())
     }
 
     companion object {
@@ -102,5 +151,23 @@ class SystemToolExecutor(
             "x-sql-dom-functions.md", "x-sql-dom-load-select.md", "x-sql-dom-select-functions.md",
             "x-sql-string-functions.md",
         )
+    }
+}
+
+/**
+ * Structured completion payload carried by `system.taskComplete` (design §3.1).
+ */
+data class TaskCompletion(
+    val summary: String,
+    val keyFindings: List<String>? = null,
+    val filesChanged: List<String>? = null,
+    val problems: List<String>? = null,
+) {
+    companion object {
+        private val mapper = pulsarObjectMapper()
+
+        /** Parse a native tool-call arguments JSON into a [TaskCompletion]. */
+        fun fromJson(argumentsJson: String): TaskCompletion =
+            mapper.readValue(argumentsJson)
     }
 }

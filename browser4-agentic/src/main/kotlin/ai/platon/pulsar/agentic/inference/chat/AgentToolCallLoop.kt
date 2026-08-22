@@ -39,6 +39,8 @@ class AgentToolCallLoop(
     private val requestTokenLimiter: RequestTokenLimiter = RequestTokenLimiter(),
     private val compressor: ToolLoopCompressor? = null,
     private val onToolExecuted: () -> Unit = {},
+    /** Called for every tool request before execution (name, arguments JSON). */
+    private val onToolRequest: (String, String) -> Unit = { _, _ -> },
 ) {
     private val logger = getLogger(AgentToolCallLoop::class)
 
@@ -106,6 +108,7 @@ class AgentToolCallLoop(
 
             // Execute each tool request and append results
             for (request in toolRequests) {
+                onToolRequest(request.name(), request.arguments() ?: "{}")
                 val resultMessage: ToolExecutionResultMessage = coordinator.execute(request)
                 messages.add(resultMessage)
                 executedTools += request.name()

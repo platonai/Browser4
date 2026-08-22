@@ -5,6 +5,29 @@ import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 
 /**
+ * Which inner execution engine [RobustBrowserAgent] uses for a run.
+ *
+ * - [OBSERVE_ACT] — legacy observe→act loop (ARIA snapshot + JSON action
+ *   description); unchanged default.
+ * - [CLI_TOOL_LOOP] — native function-calling loop driving browser4-cli
+ *   subprocesses via `cli.run` (design v0.2).
+ */
+enum class RunEngine {
+    OBSERVE_ACT,
+    CLI_TOOL_LOOP,
+    ;
+
+    companion object {
+        /** Parse from the `browser4.agent.runEngine` system property value. */
+        fun parse(value: String?): RunEngine = when (value?.trim()?.lowercase()) {
+            "cli", "cli-tool-loop", "cli_tool_loop" -> CLI_TOOL_LOOP
+            null, "", "observe-act", "observe_act", "v1", "legacy" -> OBSERVE_ACT
+            else -> OBSERVE_ACT
+        }
+    }
+}
+
+/**
  * Configuration for enhanced error handling, retry mechanisms and agent behavior.
  *
  * Each field tunes a specific aspect of the autonomous loop:
@@ -88,6 +111,13 @@ data class AgentConfig(
      */
     val toolLoopMaxIterations: Int =
         System.getProperty("browser4.agent.toolLoop.maxIterations", "12").toInt().coerceAtLeast(1),
+    /**
+     * Inner execution engine for a run (design v0.2). Default stays
+     * [RunEngine.OBSERVE_ACT] so v1 is untouched; switch with
+     * `-Dbrowser4.agent.runEngine=cli`.
+     */
+    val runEngine: RunEngine =
+        RunEngine.parse(System.getProperty("browser4.agent.runEngine")),
     // Overall timeout for resolve() to avoid indefinite hangs
     val resolveTimeoutMs: Long = 24.hours.inWholeMilliseconds,
     // Circuit breaker configuration

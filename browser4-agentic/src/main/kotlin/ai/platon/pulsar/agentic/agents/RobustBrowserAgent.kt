@@ -4,11 +4,15 @@ import ai.platon.pulsar.chrome.dom.util.DomDebug
 import ai.platon.pulsar.agentic.*
 import ai.platon.pulsar.agentic.inference.RequestTokenLimitExceededException
 import ai.platon.pulsar.agentic.inference.TokenBudgetExceededException
+import ai.platon.pulsar.agentic.inference.chat.AgentToolCallLoop
 import ai.platon.pulsar.agentic.inference.detail.*
 import ai.platon.pulsar.agentic.model.ActionDescription
 import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.model.ExecutionContext
 import ai.platon.pulsar.agentic.model.ToolCall
+import ai.platon.pulsar.agentic.tools.builtin.TaskCompletion
+import ai.platon.pulsar.agentic.tools.langchain4j.ToolExecutionCoordinator
+import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecification
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.getLogger
@@ -16,18 +20,22 @@ import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
 import com.fasterxml.jackson.databind.node.JsonNodeFactory
+import dev.langchain4j.data.message.SystemMessage
+import dev.langchain4j.data.message.UserMessage
 import kotlinx.coroutines.*
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.min
 import kotlin.time.Duration.Companion.milliseconds
 
 // File-level constants previously in companion object
 private const val COMPACT_INLINE_SESSION_LENGTH = 160
 private const val COMPACT_INLINE_INSTRUCTION_LENGTH = 100
+private const val CLI_SYSTEM_PROMPT_MAX_CHARS = 120_000
 
 open class RobustBrowserAgent(
     session: AgenticSession, val maxSteps: Int = 100, config: AgentConfig = AgentConfig(maxSteps = maxSteps)
@@ -355,6 +363,9 @@ open class RobustBrowserAgent(
         initActionOptions: ActionOptions, initContext: ExecutionContext, attempt: Int
     ): ResolveResult {
         initializeResolution(initContext, attempt)
+        if (config.runEngine == RunEngine.CLI_TOOL_LOOP) {
+            return doRunCliAgentLoop(initActionOptions, initContext, attempt)
+        }
         var consecutiveNoOps = 0
         // Text-only stall fuse: consecutive responses without ANY tool call and
         // without a completion marker. Text-only responses deliberately don't
@@ -440,6 +451,121 @@ open class RobustBrowserAgent(
         } catch (e: Exception) {
             throw handleResolutionFailure(e, context, startTime)
         }
+    }
+
+    // ─── CLI tool-loop engine (design v0.2) ────────────────────────────────
+
+    /**
+     * Native function-calling loop that drives browser4-cli subprocesses via
+     * `cli.run`, following the bundled SKILL.md. Completion is signalled by the
+     * model calling `system.taskComplete` (no JSON parsing anywhere).
+     */
+    private suspend fun doRunCliAgentLoop(
+        initActionOptions: ActionOptions, initContext: ExecutionContext, attempt: Int
+    ): ResolveResult {
+        initializeResolution(initContext, attempt)
+        var context = initContext
+        val startTime = Instant.now()
+        val completionRef = AtomicReference<ActionDescription?>()
+        try {
+            val action = initActionOptions.copy(fromRunLoop = true)
+            val loop = buildCliToolLoop(action.action, completionRef)
+            val initialMessages = listOf(
+                SystemMessage.from(cliAgentSystemPrompt()),
+                UserMessage.from(action.action),
+            )
+            logger.info(
+                "🚀 cli-agent.start sid={} instr='{}'",
+                context.sid, Strings.compactInline(action.action, 100)
+            )
+            val response = withTimeout(config.llmInferenceTimeoutMs.milliseconds) {
+                loop.generate(initialMessages)
+            }
+            val completion = completionRef.get()
+            if (completion != null && completion.isDecidedComplete) {
+                onTaskCompletion(completion, context)
+                return ResolveResult(context, ActResultHelper.complete(completion))
+            }
+            // Model stopped without calling system.taskComplete — abnormal
+            // termination, reported as failure (never a silent "success").
+            logger.info(
+                "⛔ cli-agent.no-completion sid={} resp='{}'",
+                context.sid, response.content.take(100)
+            )
+            val actResult = buildFinalActResult(initContext.instruction, context, startTime, StopReason.MAX_STEPS)
+            return ResolveResult(context, actResult)
+        } catch (e: CancellationException) {
+            logger.info(
+                "🛑 cli-agent.cancelled sid={} reason={}",
+                context.sid, e.message ?: "user interruption"
+            )
+            return ResolveResult(context, ActResultHelper.failed(e, initContext.instruction))
+        } catch (e: Exception) {
+            throw handleResolutionFailure(e, context, startTime)
+        }
+    }
+
+    private fun buildCliToolLoop(
+        instruction: String,
+        completionRef: AtomicReference<ActionDescription?>,
+    ): AgentToolCallLoop {
+        val allSpecs = agentToolManager.getLangChain4jToolSpecifications()
+        val allRegistry = agentToolManager.getLangChain4jToolRegistry()
+        val keep = { name: String ->
+            name.startsWith("coding_") || name.startsWith("cli_") || name.startsWith("system_")
+        }
+        val specs = allSpecs.filter { keep(it.name()) }
+        val registry = allRegistry.filterKeys { keep(it) }
+        val taskCompleteName = ToolSpecificationConverter.toolName("system", "taskComplete")
+        logger.info("cli-agent tools exposed: {} (of {} total)", specs.size, allSpecs.size)
+        return AgentToolCallLoop(
+            model = cta.chatModel,
+            toolSpecifications = specs,
+            coordinator = ToolExecutionCoordinator(agentToolManager, registry),
+            maxIterations = config.toolLoopMaxIterations,
+            requestTokenLimiter = cta.requestTokenLimiter,
+            onToolRequest = { name, argsJson ->
+                if (name == taskCompleteName) {
+                    runCatching {
+                        val completion = TaskCompletion.fromJson(argsJson)
+                        completionRef.set(
+                            ActionDescription(
+                                instruction = instruction,
+                                isDecidedComplete = true,
+                                summary = completion.summary,
+                                keyFindings = completion.keyFindings,
+                                filesChanged = completion.filesChanged,
+                                problems = completion.problems,
+                            )
+                        )
+                    }.onFailure { logger.warn("cli-agent taskComplete parse failed: {}", it.message) }
+                }
+            },
+        )
+    }
+
+    /** System prompt for the CLI tool-loop engine: role + bundled SKILL.md + hygiene rules. */
+    private fun cliAgentSystemPrompt(): String = buildString {
+        append(
+            """
+            You are a browser automation agent. Drive the browser EXCLUSIVELY through the
+            browser4-cli tool via cli.run(...), following the bundled SKILL.md below.
+            Use coding.* tools for file/workspace work when needed, and system.skillDoc(name)
+            to read reference documents on demand.
+            """.trimIndent()
+        )
+        append("\n\n### SKILL.md (bundled)\n\n")
+        append(agentToolManager.system.skillDoc("SKILL.md").take(CLI_SYSTEM_PROMPT_MAX_CHARS))
+        append(
+            """
+
+            ### Context hygiene
+            - Prefer `snapshot -v 0 --stdout` and targeted `htmlsnapshot get` over full page dumps.
+            - After navigation, take a snapshot before deciding the next action.
+            - When the task is finished, call system.taskComplete(
+              summary=..., keyFindings=[...], filesChanged=[...], problems=[...]).
+            """.trimIndent()
+        )
     }
 
     private suspend fun step(action: ActionOptions, context: ExecutionContext, noOpsIn: Int): StepProcessingResult {
