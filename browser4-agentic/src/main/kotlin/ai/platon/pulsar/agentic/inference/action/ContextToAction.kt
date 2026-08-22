@@ -4,6 +4,7 @@ import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.AgenticEvents
 import ai.platon.pulsar.agentic.inference.AgentMessageList
 import ai.platon.pulsar.agentic.inference.AgentTokenBudget
+import ai.platon.pulsar.agentic.inference.forceLlmMaxInputTokenLength
 import ai.platon.pulsar.agentic.inference.RequestTokenLimiter
 import ai.platon.pulsar.agentic.inference.RequestTokenLimitExceededException
 import ai.platon.pulsar.agentic.inference.TokenBudgetExceededException
@@ -44,7 +45,10 @@ open class ContextToAction(
 
     val baseDir = AppPaths.get("tta")
 
-    val chatModel: BrowserChatModel get() = ChatModelFactory.getOrCreate(conf)
+    /** Conf with the PulsarRPA input-length cap force-raised for deepseek-v4-flash's 1M context window. */
+    private val chatModelConf: ImmutableConfig by lazy { conf.forceLlmMaxInputTokenLength() }
+
+    val chatModel: BrowserChatModel get() = ChatModelFactory.getOrCreate(chatModelConf)
 
     val tta = TextToAction(conf)
 

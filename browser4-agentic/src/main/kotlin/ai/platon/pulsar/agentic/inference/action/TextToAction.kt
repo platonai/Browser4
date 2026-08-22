@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agentic.inference.action
 
 import ai.platon.pulsar.agentic.inference.AgentMessageList
+import ai.platon.pulsar.agentic.inference.forceLlmMaxInputTokenLength
 import ai.platon.pulsar.agentic.inference.PromptBuilder.Companion.SINGLE_WEB_DRIVER_ACTION_GENERATION_PROMPT
 import ai.platon.pulsar.agentic.inference.PromptBuilder.Companion.buildObserveResultSchema
 import ai.platon.pulsar.agentic.model.ActionDescription
@@ -31,7 +32,10 @@ open class TextToAction(
 ) {
     private val logger = getLogger(this)
 
-    val chatModel: BrowserChatModel get() = ChatModelFactory.getOrCreate(conf)
+    /** Conf with the PulsarRPA input-length cap force-raised for deepseek-v4-flash's 1M context window. */
+    private val chatModelConf: ImmutableConfig by lazy { conf.forceLlmMaxInputTokenLength() }
+
+    val chatModel: BrowserChatModel get() = ChatModelFactory.getOrCreate(chatModelConf)
 
     /**
      * Generate EXACT ONE WebDriver action with interactive elements.

@@ -1,6 +1,6 @@
 # 监督时间线（b4 插件开发任务 browser4-linkcheck 执行记录）
 
-日期：2026-08-21 · 后端：HEAD b7ed815d85 的 runtime bundle @ 8183（监督会话自起，绑定本工作树）· LLM：deepseek-v4-pro（~/.browser4 配置）
+日期：2026-08-21 · 后端：HEAD b7ed815d85 的 runtime bundle @ 8183（监督会话自起，绑定本工作树）· LLM：deepseek-v4-flash（~/.browser4 配置）
 任务定义：`docs-dev/copilot/plugin-dev-task-linkcheck.md`。监督方式：`code devtask` 计划 → b4 代理（agent run）执行 → 监督方独立复验。
 
 ## 0. 环境准备（本轮发现 2 个环境级问题）

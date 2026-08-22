@@ -3994,7 +3994,7 @@ exec
  succeeded in 349ms:
 spring.main.allow-bean-definition-overriding=true
 DEEPSEEK_API_KEY = [REDACTED, length 35]
-DEEPSEEK_MODEL_NAME=deepseek-v4-pro
+DEEPSEEK_MODEL_NAME=deepseek-v4-flash
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 
 codex
