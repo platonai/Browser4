@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agent.tool
 
+import ai.platon.pulsar.agentic.agents.RunEngine
 import ai.platon.pulsar.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
@@ -43,12 +44,15 @@ class CommandToolExecutor(
                 ToolSpec.Arg("command", "String", null),
                 ToolSpec.Arg("async", "Boolean", "true"),
                 ToolSpec.Arg("noopLimit", "Int", null),
+                ToolSpec.Arg("engine", "String", null),
             ),
             returnType = "String",
             description = "Execute a plain command (URL, instruction, or agent task). " +
                     "When async=true (default), returns a task ID immediately. " +
                     "When async=false, blocks until done and returns the CommandStatus as JSON. " +
-                    "noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks."
+                    "noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. " +
+                    "engine optionally selects the agent execution engine: 'cli' for the CLI tool-loop engine " +
+                    "(default: observe-act)."
         )
 
         toolSpec["status"] = ToolSpec(
@@ -85,11 +89,11 @@ class CommandToolExecutor(
         }
 
         return when (functionName) {
-            // command.run(command: String, async?: Boolean = true, noopLimit?: Int = null)
+            // command.run(command: String, async?: Boolean = true, noopLimit?: Int = null, engine?: String = null)
             "run" -> {
                 validateArgs(
                     args,
-                    allowed = setOf("command", "async", "noopLimit"),
+                    allowed = setOf("command", "async", "noopLimit", "engine"),
                     required = setOf("command"),
                     functionName
                 )
@@ -97,10 +101,11 @@ class CommandToolExecutor(
                 val command = paramString(args, "command", functionName)!!
                 val isAsync = paramBool(args, "async", functionName, required = false, default = true) ?: true
                 val noopLimit = paramInt(args, "noopLimit", functionName, required = false, default = null)
+                val engine = RunEngine.parse(paramString(args, "engine", functionName, required = false))
                 if (isAsync) {
-                    service.submitPlainCommand(sessionId, command, noopLimit)
+                    service.submitPlainCommand(sessionId, command, noopLimit, engine)
                 } else {
-                    val status = service.executePlainCommand(sessionId, command, noopLimit)
+                    val status = service.executePlainCommand(sessionId, command, noopLimit, engine)
                     pulsarObjectMapper().writeValueAsString(status)
                 }
             }

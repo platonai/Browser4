@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agentic.tools.advanced.agent
 
 import ai.platon.pulsar.agentic.AgenticSession
+import ai.platon.pulsar.agentic.agents.RunEngine
 import ai.platon.pulsar.agentic.agents.RobustBrowserAgent
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.detail.DefaultServerSideAgentEventHandlers
@@ -171,9 +172,13 @@ open class StatefulAgentRunner(
      * @param plainCommand The plain text command for the agent to execute.
      * @return AgentStatus containing the execution result.
      */
-    suspend fun execute(plainCommand: String, noopLimit: Int? = null): AgentTaskStatus {
+    suspend fun execute(
+        plainCommand: String,
+        noopLimit: Int? = null,
+        engine: RunEngine? = null,
+    ): AgentTaskStatus {
         val status = create()
-        execute(plainCommand, status, noopLimit)
+        execute(plainCommand, status, noopLimit, engine)
         return status
     }
 
@@ -184,8 +189,13 @@ open class StatefulAgentRunner(
      * interrupts the agent loop, releases the [runMutex], and marks the task
      * failed with reason "Task cancelled" (see [executeSerialized]).
      */
-    fun submit(plainCommand: String, status: AgentTaskStatus, noopLimit: Int? = null): Job {
-        val job = taskScope.launch { execute(plainCommand, status, noopLimit) }
+    fun submit(
+        plainCommand: String,
+        status: AgentTaskStatus,
+        noopLimit: Int? = null,
+        engine: RunEngine? = null,
+    ): Job {
+        val job = taskScope.launch { execute(plainCommand, status, noopLimit, engine) }
         runningJobs[status.id] = job
         job.invokeOnCompletion { runningJobs.remove(status.id) }
         return job
@@ -219,13 +229,23 @@ open class StatefulAgentRunner(
      * cancelled in the finally block, and the scope suspends until it terminates.
      * Multiple commands can run concurrently without cross-talk between SSE streams.
      */
-    suspend fun execute(plainCommand: String, status: AgentTaskStatus, noopLimit: Int? = null) {
+    suspend fun execute(
+        plainCommand: String,
+        status: AgentTaskStatus,
+        noopLimit: Int? = null,
+        engine: RunEngine? = null,
+    ) {
         runMutex.withLock {
-            executeSerialized(plainCommand, status, noopLimit)
+            executeSerialized(plainCommand, status, noopLimit, engine)
         }
     }
 
-    private suspend fun executeSerialized(plainCommand: String, status: AgentTaskStatus, noopLimit: Int? = null) {
+    private suspend fun executeSerialized(
+        plainCommand: String,
+        status: AgentTaskStatus,
+        noopLimit: Int? = null,
+        engine: RunEngine? = null,
+    ) {
         try {
             status.refresh(ResourceStatus.SC_PROCESSING)
 
@@ -236,6 +256,10 @@ open class StatefulAgentRunner(
                 it.noopLimitOverride = noopLimit
                 if (noopLimit != null) {
                     logger.info("Agent task {} (session={}): noop limit overridden to {}", status.id, session.uuid, noopLimit)
+                }
+                it.runEngineOverride = engine
+                if (engine != null) {
+                    logger.info("Agent task {} (session={}): engine overridden to {}", status.id, session.uuid, engine)
                 }
             }
 

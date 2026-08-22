@@ -122,6 +122,7 @@ param(
     [string]$JdkHome = '',
     [int]$JdkVersion = 0,
     [switch]$SkipMavenInstall = $false,
+    [switch]$SkipCli = $false,
     [switch]$ShowMavenOutput = $false,
     [switch]$Help = $false
 )
@@ -1468,7 +1469,11 @@ Write-BuildProgress -Status $buildPhases[$phaseIndex - 1].Label
 
 Write-Host "Writing launch scripts..." -ForegroundColor Cyan
 Write-LaunchScripts -bundleDirectory $bundleDirectory -mainClass $MainClass
-Install-Browser4Cli -bundleDirectory $bundleDirectory
+if (-not $SkipCli) {
+    Install-Browser4Cli -bundleDirectory $bundleDirectory
+} else {
+    Write-Host "Skipping browser4-cli bundling (-SkipCli)." -ForegroundColor DarkGray
+}
 
 Set-Content -LiteralPath (Join-Path $bundleDirectory 'runtime-bundle.json') `
     -Value (Get-BundleMetadataJson -assetName $AssetName -modules $modules -mainClass $MainClass) `

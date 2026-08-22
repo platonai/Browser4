@@ -62,7 +62,12 @@ class AgentToolManager constructor(
         CodingToolExecutor.Target(codingShell, codingFs)
     }
     /** CLI tool executor for browser4-cli integration */
-    val cliExecutor: CliToolExecutor = CliToolExecutor()
+    val cliExecutor: CliToolExecutor = CliToolExecutor(
+        // M0: force CLI subprocesses onto THIS backend (BROWSER4_CLI_SERVER) so
+        // the CLI can never auto-start/restart a server. Set by the hosting app
+        // via `browser4.server.url` (system property or configuration).
+        backendBaseUrl = session.sessionConfig.get("browser4.server.url"),
+    )
 
     val system: SystemToolExecutor = SystemToolExecutor(this)
 

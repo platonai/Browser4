@@ -2,6 +2,10 @@ package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.coding.CodingAgentShell
 import ai.platon.pulsar.agentic.model.ToolSpec
+import ai.platon.pulsar.agentic.cli.CliBinaryResolver
+import ai.platon.pulsar.agentic.cli.CliProcessManager
+import ai.platon.pulsar.agentic.cli.CliRunRequest
+import java.nio.file.Path
 import kotlin.reflect.KClass
 
 /**
@@ -27,7 +31,8 @@ import kotlin.reflect.KClass
  * ```
  */
 class CliToolExecutor(
-    private val cliPath: String = "browser4-cli",
+    private val backendBaseUrl: String? = null,
+    private val cliProcessManager: CliProcessManager = CliProcessManager(CliBinaryResolver()),
 ) : AbstractToolExecutor() {
 
     companion object {
@@ -56,8 +61,8 @@ class CliToolExecutor(
             ),
             returnType = "String",
             description = "Execute browser4-cli with the given arguments. " +
-                "Example: coding.cli(args=\"tab navigate --url https://example.com\"). " +
-                "The CLI must be installed and on PATH. " +
+                "Example: cli.run(args=\"tab navigate --url https://example.com\"). " +
+                "The binary is resolved automatically (bundled / PATH / auto-install). " +
                 "NOTE: 'agent run', 'agent-run', and 'act' subcommands are blocked " +
                 "to prevent nested agent spawning."
         )
@@ -92,17 +97,30 @@ class CliToolExecutor(
                 requireAgentNotSpawned(cliArgs)
                 val timeout = paramLong(args, "timeoutSeconds", functionName, required = false, default = 120L) ?: 120L
                 val workingDir = paramString(args, "workingDir", functionName, required = false, default = null)
-                shell.execute("$cliPath $cliArgs", timeoutSeconds = timeout, workingDir = workingDir)
+                cliProcessManager.run(
+                    CliRunRequest(
+                        args = cliArgs,
+                        timeoutSeconds = timeout,
+                        workingDir = workingDir?.let { Path.of(it) },
+                    ),
+                    backendBaseUrl = backendBaseUrl,
+                ).toModelText()
             }
             "version" -> {
                 validateArgs(args, allowed = emptySet(), required = emptySet(), functionName)
-                shell.execute("$cliPath --version", timeoutSeconds = 10)
+                cliProcessManager.run(
+                    CliRunRequest(args = "--version", timeoutSeconds = 10),
+                    backendBaseUrl = backendBaseUrl,
+                ).toModelText()
             }
             "help" -> {
                 validateArgs(args, allowed = setOf("command"), required = emptySet(), functionName)
                 val command = paramString(args, "command", functionName, required = false)
                 val helpArgs = if (command != null) "$command --help" else "--help"
-                shell.execute("$cliPath $helpArgs", timeoutSeconds = 10)
+                cliProcessManager.run(
+                    CliRunRequest(args = helpArgs, timeoutSeconds = 10),
+                    backendBaseUrl = backendBaseUrl,
+                ).toModelText()
             }
             else -> throw IllegalArgumentException("Unsupported cli method: $functionName(${args.keys})")
         }

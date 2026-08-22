@@ -52,6 +52,16 @@ open class RobustBrowserAgent(
     @Volatile
     var noopLimitOverride: Int? = null
 
+    /**
+     * Per-task engine override (design v0.2), set by
+     * [ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner] when the
+     * caller chooses the CLI tool-loop engine. Falls back to [AgentConfig.runEngine].
+     */
+    @Volatile
+    var runEngineOverride: RunEngine? = null
+
+    private val effectiveRunEngine: RunEngine get() = runEngineOverride ?: config.runEngine
+
     private val noopLimit: Int get() = (noopLimitOverride ?: config.consecutiveNoOpLimit).coerceAtLeast(1)
 
     /**
@@ -363,7 +373,7 @@ open class RobustBrowserAgent(
         initActionOptions: ActionOptions, initContext: ExecutionContext, attempt: Int
     ): ResolveResult {
         initializeResolution(initContext, attempt)
-        if (config.runEngine == RunEngine.CLI_TOOL_LOOP) {
+        if (effectiveRunEngine == RunEngine.CLI_TOOL_LOOP) {
             return doRunCliAgentLoop(initActionOptions, initContext, attempt)
         }
         var consecutiveNoOps = 0

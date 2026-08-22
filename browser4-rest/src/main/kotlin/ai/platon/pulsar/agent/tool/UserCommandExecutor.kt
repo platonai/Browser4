@@ -5,6 +5,7 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitStatus
 import ai.platon.pulsar.agentic.tools.advanced.crawl.StatefulPageVisitor
 import ai.platon.pulsar.agentic.tools.advanced.crawl.failed
+import ai.platon.pulsar.agentic.agents.RunEngine
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.Strings
@@ -139,7 +140,8 @@ class UserCommandExecutor(
     suspend fun executePlainCommand(
         sessionId: String,
         plainCommand: String,
-        noopLimit: Int? = null
+        noopLimit: Int? = null,
+        engine: RunEngine? = null,
     ): CommandStatus {
         if (plainCommand.isBlank()) {
             return CommandStatus.failed(ResourceStatus.SC_BAD_REQUEST)
@@ -150,7 +152,9 @@ class UserCommandExecutor(
             val eventHandlers = PageEventHandlersFactory.create()
             ensurePageVisitor(sessionId).visit(request, eventHandlers).toCommandStatus()
         } else {
-            ensureAgentRunner(sessionId).execute(plainCommand, noopLimit = noopLimit).toCommandStatus()
+            ensureAgentRunner(sessionId)
+                .execute(plainCommand, noopLimit = noopLimit, engine = engine)
+                .toCommandStatus()
         }
     }
 
@@ -167,7 +171,8 @@ class UserCommandExecutor(
     suspend fun submitPlainCommand(
         sessionId: String,
         plainCommand: String,
-        noopLimit: Int? = null
+        noopLimit: Int? = null,
+        engine: RunEngine? = null,
     ): String {
         val command = plainCommand.trim()
 
@@ -197,7 +202,7 @@ class UserCommandExecutor(
             submitPageVisitCommand(sessionId, request, eventHandlers)
         } else {
             // 4. Free-form agent command
-            submitAgentTask(sessionId, command, noopLimit)
+            submitAgentTask(sessionId, command, noopLimit, engine)
         }
     }
 
@@ -225,13 +230,14 @@ class UserCommandExecutor(
     fun submitAgentTask(
         sessionId: String,
         plainCommand: String,
-        noopLimit: Int? = null
+        noopLimit: Int? = null,
+        engine: RunEngine? = null,
     ): String {
         val runner = ensureAgentRunner(sessionId)
         val status = runner.create()
         taskOwner[status.id] = "agent"
         logger.info("Submitting agent task {} (session={}, noopLimit={})", status.id, sessionId, noopLimit)
-        runner.submit(plainCommand, status, noopLimit)
+        runner.submit(plainCommand, status, noopLimit, engine)
         return status.id
     }
 
