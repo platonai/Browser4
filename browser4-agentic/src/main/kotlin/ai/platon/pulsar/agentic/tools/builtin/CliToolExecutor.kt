@@ -56,13 +56,14 @@ class CliToolExecutor(
             domain = domain, method = "run",
             arguments = listOf(
                 ToolSpec.Arg("args", "String"),
-                ToolSpec.Arg("timeoutSeconds", "Long", "120"),
+                ToolSpec.Arg("timeoutSeconds", "Long", "300"),
                 ToolSpec.Arg("workingDir", "String", "null"),
             ),
             returnType = "String",
             description = "Execute browser4-cli with the given arguments. " +
                 "Example: cli.run(args=\"tab navigate --url https://example.com\"). " +
                 "The binary is resolved automatically (bundled / PATH / auto-install). " +
+                "Default timeout 300s (max 600s); pass timeoutSeconds for long commands. " +
                 "NOTE: 'agent run', 'agent-run', and 'act' subcommands are blocked " +
                 "to prevent nested agent spawning."
         )
@@ -95,7 +96,7 @@ class CliToolExecutor(
                 validateArgs(args, allowed = setOf("args", "timeoutSeconds", "workingDir"), required = setOf("args"), functionName)
                 val cliArgs = paramString(args, "args", functionName)!!
                 requireAgentNotSpawned(cliArgs)
-                val timeout = paramLong(args, "timeoutSeconds", functionName, required = false, default = 120L) ?: 120L
+                val timeout = paramLong(args, "timeoutSeconds", functionName, required = false, default = 300L) ?: 300L
                 val workingDir = paramString(args, "workingDir", functionName, required = false, default = null)
                 cliProcessManager.run(
                     CliRunRequest(

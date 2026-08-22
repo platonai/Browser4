@@ -5,6 +5,7 @@ import ai.platon.pulsar.agentic.*
 import ai.platon.pulsar.agentic.inference.RequestTokenLimitExceededException
 import ai.platon.pulsar.agentic.inference.TokenBudgetExceededException
 import ai.platon.pulsar.agentic.inference.chat.AgentToolCallLoop
+import ai.platon.pulsar.agentic.inference.chat.ToolLoopCompressor
 import ai.platon.pulsar.agentic.inference.detail.*
 import ai.platon.pulsar.agentic.model.ActionDescription
 import ai.platon.pulsar.agentic.model.AgentHistory
@@ -24,6 +25,7 @@ import dev.langchain4j.data.message.AiMessage
 import dev.langchain4j.data.message.ChatMessage
 import dev.langchain4j.data.message.SystemMessage
 import dev.langchain4j.data.message.UserMessage
+import dev.langchain4j.model.chat.request.ChatRequest
 import kotlinx.coroutines.*
 import java.time.Duration
 import java.time.Instant
@@ -41,6 +43,8 @@ private const val CLI_SYSTEM_PROMPT_MAX_CHARS = 120_000
 private const val CLI_CONTINUE_NUDGE =
     "If the task is fully finished, call system.taskComplete with the final report now. " +
         "Otherwise continue working with tools. Do not answer in plain text unless you are done."
+/** Explicit tool domains exposed to the CLI engine (design v0.2 §4.4). */
+private val CLI_ENGINE_DOMAINS = setOf("coding", "cli", "system")
 
 open class RobustBrowserAgent(
     session: AgenticSession, val maxSteps: Int = 100, config: AgentConfig = AgentConfig(maxSteps = maxSteps)
@@ -573,11 +577,10 @@ open class RobustBrowserAgent(
     ): AgentToolCallLoop {
         val allSpecs = agentToolManager.getLangChain4jToolSpecifications()
         val allRegistry = agentToolManager.getLangChain4jToolRegistry()
-        val keep = { name: String ->
-            name.startsWith("coding_") || name.startsWith("cli_") || name.startsWith("system_")
-        }
-        val specs = allSpecs.filter { keep(it.name()) }
-        val registry = allRegistry.filterKeys { keep(it) }
+        // Explicit domain whitelist (robust to tool-name renames): filter the
+        // reverse registry by ToolSpec.domain, then keep matching specs.
+        val registry = allRegistry.filterValues { it.domain in CLI_ENGINE_DOMAINS }
+        val specs = allSpecs.filter { it.name() in registry.keys }
         val taskCompleteName = ToolSpecificationConverter.toolName("system", "taskComplete")
         logger.info("cli-agent tools exposed: {} (of {} total)", specs.size, allSpecs.size)
         return AgentToolCallLoop(
@@ -589,6 +592,7 @@ open class RobustBrowserAgent(
             // engine a higher ceiling, overflow is handled by the outer loop.
             maxIterations = config.toolLoopMaxIterations.coerceAtLeast(20),
             requestTokenLimiter = cta.requestTokenLimiter,
+            compressor = cliToolLoopCompressor(specs),
             onToolExecuted = { toolExecutions.incrementAndGet() },
             onToolRequest = { name, argsJson ->
                 if (name == taskCompleteName) {
@@ -608,6 +612,40 @@ open class RobustBrowserAgent(
                 }
             },
         )
+    }
+
+    /** Auto context compression for the CLI tool loop (long multi-step tasks). */
+    private fun cliToolLoopCompressor(
+        specs: List<dev.langchain4j.agent.tool.ToolSpecification>,
+    ): ToolLoopCompressor? {
+        val conf = session.sessionConfig
+        if (!conf.getBoolean("browser4.agent.toolLoop.compressionEnabled", true)) return null
+        return ToolLoopCompressor(
+            enabled = true,
+            thresholdTokens = conf.getLong("browser4.agent.toolLoop.compressionThresholdTokens", 60_000L)
+                .coerceAtLeast(1_000L),
+            retainTokens = conf.getLong("browser4.agent.toolLoop.retainTokens", 24_000L)
+                .coerceAtLeast(1_000L),
+            pruneThresholdChars = conf.getLong("browser4.agent.toolLoop.pruneThresholdChars", 1_500L)
+                .toInt().coerceAtLeast(100),
+            pruneHeadChars = conf.getLong("browser4.agent.toolLoop.pruneHeadChars", 800L)
+                .toInt().coerceAtLeast(0),
+            pruneTailChars = conf.getLong("browser4.agent.toolLoop.pruneTailChars", 400L)
+                .toInt().coerceAtLeast(0),
+        ) { prefix -> summarizeCliLoop(prefix, specs) }
+    }
+
+    private suspend fun summarizeCliLoop(
+        prefix: List<ChatMessage>,
+        toolSpecifications: List<dev.langchain4j.agent.tool.ToolSpecification>,
+    ): String {
+        val request = ChatRequest.builder()
+            .messages(prefix + UserMessage.from(ToolLoopCompressor.COMPACTION_INSTRUCTION))
+            .toolSpecifications(toolSpecifications)
+            .maxOutputTokens(2_048)
+            .build()
+        val response = cta.chatModel.langChainChat(request, "cta-compaction")
+        return response.aiMessage().text() ?: ""
     }
 
     /**
