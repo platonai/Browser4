@@ -1,6 +1,8 @@
 package ai.platon.pulsar.agentic.cli
 
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import ai.platon.pulsar.agentic.observability.CliMetrics
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -68,6 +70,9 @@ class CliProcessManager(
     private val globalSemaphore = Semaphore(config.maxConcurrentGlobal)
     private val sessionSemaphores = ConcurrentHashMap<String, Semaphore>()
     private val healthCache = ConcurrentHashMap<String, Pair<Long, Boolean>>()
+    private val backendVersionCache = ConcurrentHashMap<String, Pair<Long, String?>>()
+    private val loggedVersions = ConcurrentHashMap.newKeySet<String>()
+    private val warnedMismatches = ConcurrentHashMap.newKeySet<String>()
     private val httpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofMillis(config.backendHealthTimeoutMs))
         .build()
@@ -113,6 +118,7 @@ class CliProcessManager(
         } catch (e: CliUnavailableException) {
             return CliResult(null, "", "", infraFailure = e.message, durationMs = 0)
         }
+        checkVersionAlignment(spec, backendBaseUrl)
 
         if (backendBaseUrl != null && !config.allowServerAutoStart && !backendHealthy(backendBaseUrl)) {
             return CliResult(
@@ -182,18 +188,81 @@ class CliProcessManager(
         outThread.join(2_000)
         errThread.join(2_000)
         val durationMs = System.currentTimeMillis() - startMs
+        val outText = stdout.text()
+        val errText = stderr.text()
+        CliMetrics.recordCall(
+            durationMs = durationMs,
+            timedOut = outcome == Outcome.TimedOut,
+            truncated = outText.contains("dropped") || errText.contains("dropped"),
+        )
 
         return when (outcome) {
             is Outcome.Exited -> CliResult(
-                outcome.code, stdout.text(), stderr.text(), durationMs = durationMs
+                outcome.code, outText, errText, durationMs = durationMs
             )
             Outcome.TimedOut -> CliResult(
-                null, stdout.text(), stderr.text(), timedOut = true, durationMs = durationMs
+                null, outText, errText, timedOut = true, durationMs = durationMs
             )
             Outcome.Aborted -> CliResult(
-                null, stdout.text(), stderr.text(), aborted = true, durationMs = durationMs
+                null, outText, errText, aborted = true, durationMs = durationMs
             )
         }
+    }
+
+    /**
+     * Version alignment (design §4.2): log the resolved CLI version once, and
+     * warn when its major.minor differs from the backend's (API drift risk —
+     * prefer a bundle binary that ships with the backend).
+     */
+    private suspend fun checkVersionAlignment(spec: CliRunSpec, backendBaseUrl: String?) {
+        // Version alignment only makes sense for the browser4-cli binary
+        // itself — skip the (slow) version probe for test/other binaries.
+        if (!spec.binaryPath.fileName.toString().startsWith("browser4-cli")) return
+        val cliVersion = resolver.version(spec.binaryPath) ?: return
+        if (loggedVersions.add(spec.binaryPath.toString())) {
+            logger.info("browser4-cli resolved: {} ({})", spec.binaryPath, cliVersion)
+        }
+        if (backendBaseUrl == null) return
+        val backendVersion = backendVersion(backendBaseUrl) ?: return
+        if (cliBackendVersionMismatch(cliVersion, backendVersion)) {
+            if (warnedMismatches.add("${spec.binaryPath}|$cliVersion|$backendVersion")) {
+                logger.warn(
+                    "browser4-cli version mismatch: CLI={} backend={} — prefer a bundle binary matching the backend",
+                    cliVersion, backendVersion
+                )
+            }
+        }
+    }
+
+    private suspend fun backendVersion(baseUrl: String): String? {
+        val now = System.currentTimeMillis()
+        backendVersionCache[baseUrl]?.let { (ts, v) -> if (now - ts < 5 * 60_000) return v }
+        val version = withContext(Dispatchers.IO) {
+            runCatching {
+                val uri = URI.create(baseUrl.trimEnd('/') + "/api/system/build")
+                val req = HttpRequest.newBuilder(uri)
+                    .timeout(Duration.ofSeconds(3))
+                    .GET().build()
+                val resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString())
+                if (resp.statusCode() != 200) {
+                    null
+                } else {
+                    runCatching {
+                        pulsarObjectMapper().readTree(resp.body()).get("version")?.asText()
+                    }.getOrNull()
+                }
+            }.getOrNull()
+        }
+        backendVersionCache[baseUrl] = now to version
+        return version
+    }
+
+    private fun cliBackendVersionMismatch(cli: String, backend: String): Boolean {
+        fun nums(v: String): List<Int> =
+            Regex("\\d+").findAll(v).map { it.value.toInt() }.take(2).toList()
+        val a = nums(cli)
+        val b = nums(backend)
+        return a.size >= 2 && b.size >= 2 && (a[0] != b[0] || a[1] != b[1])
     }
 
     private fun killTree(process: Process, graceMs: Long) {

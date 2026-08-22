@@ -6,6 +6,7 @@ import ai.platon.pulsar.agentic.cli.CliBinaryResolver
 import ai.platon.pulsar.agentic.cli.CliJobRegistry
 import ai.platon.pulsar.agentic.cli.CliProcessManager
 import ai.platon.pulsar.agentic.cli.CliRunRequest
+import ai.platon.pulsar.agentic.observability.CliMetrics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -147,6 +148,7 @@ class CliToolExecutor(
                 if (result != null) {
                     result.toModelText()
                 } else {
+                    CliMetrics.recordJobEscalation()
                     "[job: $jobId] Command still running after ${jobYieldMs / 1000}s. " +
                         "Poll with cli.status(id=\"$jobId\"), wait with cli.wait(id=\"$jobId\", " +
                         "timeoutSeconds=...), or cancel with cli.kill(id=\"$jobId\")."

@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.observability
 
+import ai.platon.pulsar.common.getLogger
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.binder.jvm.ClassLoaderMetrics
 import io.micrometer.core.instrument.binder.jvm.JvmGcMetrics
@@ -42,6 +43,8 @@ import io.micrometer.prometheusmetrics.PrometheusMeterRegistry
  */
 object MetricsConfig {
 
+    private val logger = getLogger(MetricsConfig::class)
+
     private val isMetricsEnabled: Boolean =
         System.getenv("METRICS_ENABLED")?.toBoolean() ?: true
 
@@ -76,26 +79,35 @@ object MetricsConfig {
             return@lazy SimpleMeterRegistry()
         }
 
-        val prometheusRegistry = PrometheusMeterRegistry(PrometheusConfig.DEFAULT)
+        // The Prometheus registry classes are an optional dependency and may be
+        // absent from slim bundles (e.g. the runtime bundle lib). Fall back to
+        // the in-memory SimpleMeterRegistry so metrics collection can never
+        // break agent execution.
+        try {
+            val prometheusRegistry = PrometheusMeterRegistry(PrometheusConfig.DEFAULT)
 
-        // Add common tags
-        commonTags.forEach { (key, value) ->
-            prometheusRegistry.config().commonTags(key, value)
+            // Add common tags
+            commonTags.forEach { (key, value) ->
+                prometheusRegistry.config().commonTags(key, value)
+            }
+
+            // Add metrics prefix if configured
+            if (metricsPrefix.isNotBlank()) {
+                prometheusRegistry.config().commonTags("prefix", metricsPrefix)
+            }
+
+            // Register JVM metrics
+            JvmMemoryMetrics().bindTo(prometheusRegistry)
+            JvmGcMetrics().bindTo(prometheusRegistry)
+            JvmThreadMetrics().bindTo(prometheusRegistry)
+            ClassLoaderMetrics().bindTo(prometheusRegistry)
+            ProcessorMetrics().bindTo(prometheusRegistry)
+
+            prometheusRegistry
+        } catch (e: Throwable) {
+            logger.warn("Prometheus metrics registry unavailable, falling back to SimpleMeterRegistry: {}", e.message)
+            SimpleMeterRegistry()
         }
-
-        // Add metrics prefix if configured
-        if (metricsPrefix.isNotBlank()) {
-            prometheusRegistry.config().commonTags("prefix", metricsPrefix)
-        }
-
-        // Register JVM metrics
-        JvmMemoryMetrics().bindTo(prometheusRegistry)
-        JvmGcMetrics().bindTo(prometheusRegistry)
-        JvmThreadMetrics().bindTo(prometheusRegistry)
-        ClassLoaderMetrics().bindTo(prometheusRegistry)
-        ProcessorMetrics().bindTo(prometheusRegistry)
-
-        prometheusRegistry
     }
 
     /**

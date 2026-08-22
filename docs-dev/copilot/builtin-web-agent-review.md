@@ -66,4 +66,7 @@ e2e 两次 status 200。
   `closeCliJobs` 清理全部后台进程（含进程树杀）。单测覆盖快速命令直达 + 长命令
   升级→status→kill→wait(aborted) 全流程。
 - P2（已修）：工具白名单常量（按 ToolSpec.domain 显式过滤）。
-- P2 剩余：文本回退简化、版本对齐、CLI 指标。
+- P2（已修 2026-08-23）：文本回退简化为"有真实工具执行后 1 轮纯文本即接受"；
+  版本对齐——`CliProcessManager` 解析 CLI 版本并与后端 `/api/system/build` 比对，
+  漂移时**每组合只警告一次**；CLI 指标——新增 `CliMetrics`（调用数/延迟/超时/截断/job 升级），
+  `MetricsConfig` Prometheus 缺失时回退 SimpleMeterRegistry，指标失败绝不影响执行。

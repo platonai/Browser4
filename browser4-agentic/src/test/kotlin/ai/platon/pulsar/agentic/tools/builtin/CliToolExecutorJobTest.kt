@@ -38,7 +38,9 @@ class CliToolExecutorJobTest {
     @Test
     @DisplayName("quick commands return their result directly (no job handle)")
     fun quickCommandReturnsResult() = runBlocking {
-        val ex = executor(jobYieldMs = 10_000)
+        // Windows Store pwsh cold start can take several seconds; use a wide
+        // yield window so a genuinely quick command is not escalated.
+        val ex = executor(jobYieldMs = 30_000)
         try {
             val text = ex.callFunctionOn(
                 ToolCall(

@@ -545,7 +545,11 @@ open class RobustBrowserAgent(
                     textOnlyStreak++
                     // Real work happened earlier and the model answers in text
                     // again — accept it as the final report.
-                    if (toolExecutions.get() > 0 && textOnlyStreak >= 2) {
+                    // One text-only response after real work is the final
+                    // report (the nudge already told the model to call
+                    // taskComplete or continue with tools; a plain-text answer
+                    // means it is done).
+                    if (toolExecutions.get() > 0 && textOnlyStreak >= 1) {
                         logger.info("✅ cli-agent.text-completion sid={} tools={}",
                             context.sid, toolExecutions.get())
                         val textCompletion = ActionDescription(
