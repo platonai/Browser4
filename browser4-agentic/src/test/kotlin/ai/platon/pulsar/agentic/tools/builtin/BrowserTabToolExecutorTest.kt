@@ -475,4 +475,49 @@ class BrowserTabToolExecutorTest {
             Mockito.verify(driver, Mockito.never()).evaluateValue("document.readyState")
         }
     }
+
+    @Test
+    fun `explicit waitForNavigation without oldUrl polls readyState instead of the no-op overload`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.currentUrl()).thenReturn("http://example.com")
+            // The navigation keeps the URL; readyState transitions loading -> complete.
+            `when`(driver.evaluateValue("document.readyState")).thenReturn("loading", "complete")
+
+            executor.callFunctionOn(
+                ToolCall("tab", "waitForNavigation", mutableMapOf<String, Any?>()),
+                driver
+            )
+
+            // Regression: the no-arg driver.waitForNavigation() has predicate
+            // `"" != currentUrl()` — true as soon as the page has any URL, so it
+            // returned immediately without waiting. The explicit wait tool must
+            // poll readyState instead (at least 2 reads: loading -> complete).
+            Mockito.verify(driver, Mockito.atLeast(2))
+                .evaluateValue("document.readyState")
+            Mockito.verify(driver, Mockito.never()).waitForNavigation()
+        }
+    }
+
+    @Test
+    fun `explicit waitForNavigation with oldUrl polls readyState on same-URL navigation`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.currentUrl()).thenReturn("http://example.com")
+            `when`(driver.evaluateValue("document.readyState")).thenReturn("loading", "complete")
+
+            executor.callFunctionOn(
+                ToolCall("tab", "waitForNavigation", mutableMapOf<String, Any?>("oldUrl" to "http://example.com")),
+                driver
+            )
+
+            // Regression: driver.waitForNavigation(oldUrl) has predicate
+            // `oldUrl != currentUrl()` — it can never become true for a same-URL
+            // navigation and would burn the whole timeout silently.
+            Mockito.verify(driver, Mockito.atLeast(2))
+                .evaluateValue("document.readyState")
+            Mockito.verify(driver, Mockito.never())
+                .waitForNavigation("http://example.com")
+        }
+    }
 }

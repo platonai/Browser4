@@ -279,12 +279,16 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
      * Algorithm (inspired by [PageStateTracker.waitForDOMSettle]):
      * 1. Check if the URL already changed — if so the navigation is complete, wait for body + settle delay.
      * 2. If the URL is unchanged, eval `document.readyState`. If "loading", the navigation is in flight —
-     *    call `waitForNavigation` then settle.
+     *    poll readyState until 'complete' (bounded by [pollTimeoutMillis]).
      * 3. Otherwise no navigation occurred — return immediately (no unnecessary delay).
      *
      * TODO: add an option for each WebDriver action to control the behaviour of the action including waiting.
      */
-    private suspend fun waitForPotentialNavigation(driver: WebDriver, urlBefore: String) {
+    private suspend fun waitForPotentialNavigation(
+        driver: WebDriver,
+        urlBefore: String,
+        pollTimeoutMillis: Long = NAVIGATION_POLL_TIMEOUT_MS
+    ) {
         // wait for a while for the action effects
         delay(200.milliseconds)
 
@@ -309,7 +313,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 // would burn the whole timeout silently. Poll document.readyState
                 // instead, which covers both same-URL and URL-changing navigations.
                 var sawComplete = false
-                val deadline = System.currentTimeMillis() + NAVIGATION_POLL_TIMEOUT_MS
+                val deadline = System.currentTimeMillis() + pollTimeoutMillis
                 while (System.currentTimeMillis() < deadline) {
                     val state = driver.evaluateValue("document.readyState") as? String
                     if (state == "complete") {
@@ -482,10 +486,21 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
             "waitForNavigation" -> {
                 when {
-                    args.isEmpty() -> driver.waitForNavigation()
+                    args.isEmpty() -> {
+                        // The no-arg waitForNavigation() overload is a no-op: its
+                        // predicate is `"" != currentUrl()`, true as soon as the page
+                        // has any URL. Poll document.readyState instead so an explicit
+                        // wait actually waits for the in-flight navigation.
+                        val urlBefore = driver.currentUrl()
+                        waitForPotentialNavigation(driver, urlBefore)
+                    }
+
                     args.containsKey("oldUrl") && !args.containsKey("timeoutMillis") -> {
                         validateArgs(args, allowed("oldUrl"), setOf("oldUrl"), functionName)
-                        driver.waitForNavigation(paramString(args, "oldUrl", functionName)!!)
+                        // oldUrl overload's predicate is `oldUrl != currentUrl()`,
+                        // which can never complete for same-URL navigations — poll
+                        // document.readyState instead (covers both cases).
+                        waitForPotentialNavigation(driver, paramString(args, "oldUrl", functionName)!!)
                     }
 
                     args.containsKey("oldUrl") && args.containsKey("timeoutMillis") -> {
@@ -495,7 +510,8 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                             setOf("oldUrl", "timeoutMillis"),
                             functionName
                         )
-                        driver.waitForNavigation(
+                        waitForPotentialNavigation(
+                            driver,
                             paramString(args, "oldUrl", functionName)!!,
                             paramLong(args, "timeoutMillis", functionName)!!
                         )
