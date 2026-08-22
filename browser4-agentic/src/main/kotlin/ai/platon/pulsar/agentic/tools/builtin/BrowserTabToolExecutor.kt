@@ -302,18 +302,34 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             // URL unchanged — check if the document is currently loading
             val readyState = driver.evaluateValue("document.readyState") as? String
             if (readyState == "loading") {
-                // Navigation is in flight, wait for it to complete
-                driver.waitForNavigation(urlBefore, NAVIGATION_POLL_TIMEOUT_MS)
+                // Navigation is in flight. Do NOT use waitForNavigation(urlBefore, ...)
+                // here: its predicate is `currentUrl() != urlBefore`, which can
+                // never become true for a same-URL navigation (reload, same-URL
+                // goto, fragment/SPA navigation that keeps the URL) — the wait
+                // would burn the whole timeout silently. Poll document.readyState
+                // instead, which covers both same-URL and URL-changing navigations.
+                var sawComplete = false
+                val deadline = System.currentTimeMillis() + NAVIGATION_POLL_TIMEOUT_MS
+                while (System.currentTimeMillis() < deadline) {
+                    val state = driver.evaluateValue("document.readyState") as? String
+                    if (state == "complete") {
+                        sawComplete = true
+                        break
+                    }
+                    delay(200.milliseconds)
+                }
                 driver.waitForSelector("body", NAVIGATION_POLL_TIMEOUT_MS)
                 delay(NAVIGATION_DOM_SETTLE_DELAY_MS.milliseconds)
 
-                // Verify the navigation actually landed on a different URL.
-                // If the URL is unchanged after waiting, the navigation silently failed.
-                val finalUrl = driver.currentUrl()
-                if (finalUrl == urlBefore) {
+                // A URL change is expected only for link/form navigations; a
+                // same-URL navigation (e.g. refresh) legitimately keeps the URL.
+                // Only warn when the document never became ready — the
+                // navigation appears to have failed.
+                if (!sawComplete) {
+                    val finalUrl = driver.currentUrl()
                     logger.warning(
-                        "waitForPotentialNavigation: navigation appeared to start (readyState=loading) " +
-                                "but URL did not change from '$urlBefore'. Navigation may have failed silently."
+                        "waitForPotentialNavigation: document never became ready after the action " +
+                                "(url='$finalUrl'). Navigation may have failed silently."
                     )
                 }
             } else {

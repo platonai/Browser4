@@ -383,4 +383,49 @@ class BrowserTabToolExecutorTest {
 
         }
     }
+
+    @Test
+    fun `reload waits for readyState instead of burning waitForNavigation on same-URL navigation`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.currentUrl()).thenReturn("http://example.com")
+            // A reload never changes the URL; the first readyState poll (after
+            // the initial 200ms settle) still reports "loading", the second
+            // "complete" — the navigation finishes without any URL change.
+            `when`(driver.evaluateValue("document.readyState")).thenReturn("loading", "complete")
+
+            executor.callFunctionOn(
+                ToolCall("tab", "reload", mutableMapOf<String, Any?>()),
+                driver
+            )
+
+            // Regression: the executor used to call
+            // waitForNavigation(urlBefore, 30s) here, whose predicate is
+            // `currentUrl() != urlBefore` — it can never become true when the
+            // URL is unchanged (reload / same-URL goto), so it silently burned
+            // the full 30s poll timeout. The fix polls document.readyState in
+            // a loop instead: readyState must be re-read after the initial
+            // check ("loading" -> "complete").
+            Mockito.verify(driver, Mockito.atLeast(2))
+                .evaluateValue("document.readyState")
+        }
+    }
+
+    @Test
+    fun `reload with no in-flight navigation skips the wait`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.currentUrl()).thenReturn("http://example.com")
+            `when`(driver.evaluateValue("document.readyState")).thenReturn("complete")
+
+            executor.callFunctionOn(
+                ToolCall("tab", "reload", mutableMapOf<String, Any?>()),
+                driver
+            )
+
+            // readyState was already complete — no polling loop at all.
+            Mockito.verify(driver, Mockito.times(1))
+                .evaluateValue("document.readyState")
+        }
+    }
 }
