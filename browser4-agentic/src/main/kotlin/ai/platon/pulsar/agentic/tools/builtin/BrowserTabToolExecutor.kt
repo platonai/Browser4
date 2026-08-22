@@ -314,14 +314,26 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     }
                     delay(200.milliseconds)
                 }
-                driver.waitForSelector("body", NAVIGATION_POLL_TIMEOUT_MS)
-                delay(NAVIGATION_DOM_SETTLE_DELAY_MS.milliseconds)
 
                 // A URL change is expected only for link/form navigations; a
                 // same-URL navigation (e.g. refresh) legitimately keeps the URL.
-                // Only warn when the document never became ready — the
-                // navigation appears to have failed.
-                if (!sawComplete) {
+                if (sawComplete) {
+                    // The document became ready — the navigation completed. The
+                    // body should already exist; a short DOM-ready budget is
+                    // enough (same as the URL-changing branch above). Do NOT
+                    // use the full NAVIGATION_POLL_TIMEOUT_MS here: the poll
+                    // already consumed that budget, and stacking another wait
+                    // doubles the dead time when the body never appears.
+                    driver.waitForSelector("body", NAVIGATION_DOM_READY_TIMEOUT_MS)
+                    delay(NAVIGATION_DOM_SETTLE_DELAY_MS.milliseconds)
+                } else {
+                    // The document never became ready — the navigation appears
+                    // to have failed (e.g. the page context is wedged and evals
+                    // return null). Do NOT pile waitForSelector("body", 30s) on
+                    // top of the exhausted poll: the page is stuck, another
+                    // full-timeout wait would double the dead time for every
+                    // navigation-triggering action. Surface the warning and let
+                    // the caller recover (reload, reopen the tab).
                     val finalUrl = driver.currentUrl()
                     logger.warning(
                         "waitForPotentialNavigation: document never became ready after the action " +

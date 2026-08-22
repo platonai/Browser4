@@ -477,6 +477,58 @@ class BrowserTabToolExecutorTest {
     }
 
     @Test
+    fun `wedged page skips the stacked body wait after readyState poll timeout`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.currentUrl()).thenReturn("http://example.com")
+            // The page context is wedged: evals keep returning "loading" forever
+            // (CDP evals return null, the page never becomes ready).
+            `when`(driver.evaluateValue("document.readyState")).thenReturn("loading")
+
+            // Use a tiny explicit poll budget so the test does not burn the
+            // real 30s default timeout.
+            executor.callFunctionOn(
+                ToolCall(
+                    "tab", "waitForNavigation",
+                    mutableMapOf<String, Any?>("oldUrl" to "http://example.com", "timeoutMillis" to 500)
+                ),
+                driver
+            )
+
+            // Regression: after the readyState poll timed out, the executor
+            // used to call waitForSelector("body", 30s) unconditionally,
+            // stacking a second full-timeout dead wait on top of the exhausted
+            // poll — ~61s per navigation action when the page context is
+            // wedged. The fix surfaces the warning instead and skips the wait.
+            Mockito.verify(driver, Mockito.atLeast(1))
+                .evaluateValue("document.readyState")
+            Mockito.verify(driver, Mockito.never())
+                .waitForSelector("body", 30_000L)
+        }
+    }
+
+    @Test
+    fun `same-URL navigation waits for body with the short DOM-ready budget`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.currentUrl()).thenReturn("http://example.com")
+            `when`(driver.evaluateValue("document.readyState")).thenReturn("loading", "complete")
+
+            executor.callFunctionOn(
+                ToolCall("tab", "navigate", mutableMapOf<String, Any?>("url" to "http://example.com")),
+                driver
+            )
+
+            // After the readyState poll succeeds, the body wait must use the
+            // short DOM-ready budget (10s, same as the URL-changing branch),
+            // not the full 30s navigation poll timeout — the poll already
+            // consumed that budget and stacking it doubles dead time.
+            Mockito.verify(driver).waitForSelector("body", 10_000L)
+            Mockito.verify(driver, Mockito.never()).waitForSelector("body", 30_000L)
+        }
+    }
+
+    @Test
     fun `explicit waitForNavigation without oldUrl polls readyState instead of the no-op overload`() {
         runBlocking {
             val driver = Mockito.mock(WebDriver::class.java)

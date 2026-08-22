@@ -37,6 +37,13 @@ class AgentToolManager constructor(
     private val navigationPollIntervalMillis = 200L
 
     /**
+     * Timeout for waiting on the body element once the document became ready.
+     * The body must already exist at that point, so a short budget is enough —
+     * the poll above already consumed the main navigation timeout.
+     */
+    private val navigationDomReadyTimeoutMillis = 10_000L
+
+    /**
      * Custom tool targets registry, mapping domain names to their corresponding target objects.
      * Users can register custom targets here for their custom tool executors.
      */
@@ -499,11 +506,13 @@ class AgentToolManager constructor(
         // Poll document.readyState until 'complete' instead, which covers both
         // URL-changing and same-URL navigations. Best-effort: if the eval fails
         // (e.g. the page context is wedged), fall back to a short settle delay.
+        var sawComplete = false
         try {
             val deadline = System.currentTimeMillis() + navigationPollTimeoutMillis
             while (System.currentTimeMillis() < deadline) {
                 val state = driver.evaluateValue("document.readyState") as? String
                 if (state == "complete") {
+                    sawComplete = true
                     break
                 }
                 delay(navigationPollIntervalMillis)
@@ -511,7 +520,25 @@ class AgentToolManager constructor(
         } catch (e: Exception) {
             logger.debug("onDidNavigate: exception while polling readyState: ${e.message}")
         }
-        driver.waitForSelector("body")
+
+        if (sawComplete) {
+            // The document became ready. The body must already exist — a short
+            // DOM-ready budget is enough. Do NOT call the no-timeout
+            // waitForSelector("body") overload: its default timeout is 60s, and
+            // stacking it on top of the exhausted poll doubles the dead time
+            // when the body never appears.
+            driver.waitForSelector("body", navigationDomReadyTimeoutMillis)
+        } else {
+            // The document never became ready (e.g. the page context is
+            // wedged and evals return null). Do NOT pile the 60s-default
+            // waitForSelector("body") on top of the exhausted poll — surface
+            // the problem and move on so the caller can recover.
+            logger.warn(
+                "onDidNavigate: document never became ready after navigation (url='{}'). " +
+                        "Navigation may have failed silently.",
+                driver.currentUrl()
+            )
+        }
         delay(1000.milliseconds)
     }
 

@@ -219,4 +219,27 @@ class AgentToolManagerTest {
         coVerify(exactly = 0) { boundDriver.waitForNavigation() }
         coVerify(atLeast = 2) { boundDriver.evaluateValue("document.readyState") }
     }
+
+    @Test
+    @DisplayName("onDidNavigate does not stack the 60s-default body wait when the document never becomes ready")
+    fun onDidNavigateSkipsBodyWaitWhenDocumentNeverReady() = runBlocking {
+        // The page context is wedged: evals throw (CDP evals return null /
+        // the page is broken), so readyState never reads "complete".
+        coEvery { boundDriver.currentUrl() } returns "http://example.com"
+        coEvery { boundDriver.evaluateValue("document.readyState") } throws RuntimeException("wedged page")
+        coEvery { boundDriver.navigate(any<String>()) } returns Unit
+        coEvery { boundDriver.waitForSelector(any(), any<Long>()) } returns 0L
+
+        manager.execute(
+            ToolCall("tab", "navigate", mutableMapOf<String, Any?>("url" to "http://example.com"))
+        )
+
+        // Regression: onDidNavigate used to call the no-timeout
+        // waitForSelector("body") after the poll, whose default timeout is 60s —
+        // stacking a full-timeout dead wait on top of the exhausted poll (~90s
+        // per navigation action when the page context is wedged). The fix
+        // skips the body wait entirely when the document never became ready.
+        coVerify(exactly = 0) { boundDriver.waitForSelector("body") }
+        coVerify(exactly = 0) { boundDriver.waitForSelector("body", any<Long>()) }
+    }
 }
