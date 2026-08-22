@@ -101,7 +101,11 @@ class CommandToolExecutor(
                 val command = paramString(args, "command", functionName)!!
                 val isAsync = paramBool(args, "async", functionName, required = false, default = true) ?: true
                 val noopLimit = paramInt(args, "noopLimit", functionName, required = false, default = null)
-                val engine = RunEngine.parse(paramString(args, "engine", functionName, required = false))
+                // null (param absent) must stay null so the agent falls back to
+                // its configured runEngine; RunEngine.parse(null) would force
+                // OBSERVE_ACT and clobber a CLI_TOOL_LOOP config.
+                val engine = paramString(args, "engine", functionName, required = false)
+                    ?.let { RunEngine.parse(it) }
                 if (isAsync) {
                     service.submitPlainCommand(sessionId, command, noopLimit, engine)
                 } else {
