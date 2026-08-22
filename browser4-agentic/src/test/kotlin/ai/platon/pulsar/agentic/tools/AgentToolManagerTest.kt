@@ -12,6 +12,7 @@ import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarBrowser
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
@@ -190,5 +191,32 @@ class AgentToolManagerTest {
         )
 
         verify(exactly = 1) { browser.frontDriver = remainingDriver }
+    }
+
+    @Test
+    @DisplayName("navigate polls readyState instead of calling the no-op waitForNavigation in onDidNavigate")
+    fun navigatePollsReadyStateInsteadOfNoOpWaitForNavigation() = runBlocking {
+        // Same-URL navigation (SPA route): currentUrl never changes.
+        coEvery { boundDriver.currentUrl() } returns "http://example.com"
+        // The first readyState read (BrowserTabToolExecutor.waitForPotentialNavigation)
+        // reports "loading", subsequent reads "complete" — the executor-level poll
+        // consumes "loading" then "complete", and onDidNavigate's poll sees "complete".
+        coEvery { boundDriver.evaluateValue("document.readyState") } returnsMany listOf(
+            "loading", "complete", "complete"
+        )
+        coEvery { boundDriver.navigate(any<String>()) } returns Unit
+        coEvery { boundDriver.waitForSelector(any(), any<Long>()) } returns 0L
+
+        manager.execute(
+            ToolCall("tab", "navigate", mutableMapOf<String, Any?>("url" to "http://example.com"))
+        )
+
+        // Regression: onDidNavigate used to call the no-arg driver.waitForNavigation(),
+        // whose predicate is `"" != currentUrl()` — true as soon as the page has any
+        // URL, so it returned immediately without waiting at all (and the oldUrl
+        // overload can never complete for same-URL navigations). Both the executor
+        // and the manager must now poll document.readyState instead.
+        coVerify(exactly = 0) { boundDriver.waitForNavigation() }
+        coVerify(atLeast = 2) { boundDriver.evaluateValue("document.readyState") }
     }
 }

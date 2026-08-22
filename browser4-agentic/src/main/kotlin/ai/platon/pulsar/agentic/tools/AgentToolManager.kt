@@ -30,6 +30,12 @@ class AgentToolManager constructor(
 ) {
     private val logger = getLogger(AgentToolManager::class)
 
+    /** Upper bound for polling document.readyState after a navigation-triggering action. */
+    private val navigationPollTimeoutMillis = 30_000L
+
+    /** Interval between document.readyState polls while waiting for a navigation. */
+    private val navigationPollIntervalMillis = 200L
+
     /**
      * Custom tool targets registry, mapping domain names to their corresponding target objects.
      * Users can register custom targets here for their custom tool executors.
@@ -484,9 +490,29 @@ class AgentToolManager constructor(
      * */
     @Suppress("UNUSED_PARAMETER")
     private suspend fun onDidNavigate(driver: WebDriver, toolCall: ToolCall, evaluate: TcEvaluate) {
-        driver.waitForNavigation()
+        // waitForNavigation() must not be used here:
+        // - the no-arg overload's predicate is `"" != currentUrl()`, which is true as soon
+        //   as the page has any URL — it returns immediately without waiting at all;
+        // - the oldUrl overload's predicate is `oldUrl != currentUrl()`, which can never
+        //   become true for a same-URL navigation (SPA route, fragment jump, same-URL
+        //   goto) — it silently burns the whole timeout.
+        // Poll document.readyState until 'complete' instead, which covers both
+        // URL-changing and same-URL navigations. Best-effort: if the eval fails
+        // (e.g. the page context is wedged), fall back to a short settle delay.
+        try {
+            val deadline = System.currentTimeMillis() + navigationPollTimeoutMillis
+            while (System.currentTimeMillis() < deadline) {
+                val state = driver.evaluateValue("document.readyState") as? String
+                if (state == "complete") {
+                    break
+                }
+                delay(navigationPollIntervalMillis)
+            }
+        } catch (e: Exception) {
+            logger.debug("onDidNavigate: exception while polling readyState: ${e.message}")
+        }
         driver.waitForSelector("body")
-        delay(3000.milliseconds)
+        delay(1000.milliseconds)
     }
 
     /**

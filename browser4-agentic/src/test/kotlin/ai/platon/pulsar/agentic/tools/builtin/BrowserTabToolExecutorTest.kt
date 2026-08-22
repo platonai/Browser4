@@ -428,4 +428,51 @@ class BrowserTabToolExecutorTest {
                 .evaluateValue("document.readyState")
         }
     }
+
+    @Test
+    fun `navigate to a same-URL destination polls readyState instead of a no-op waitForNavigation`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.currentUrl()).thenReturn("http://example.com")
+            // The URL does not change (SPA route / same-URL goto); the first
+            // readyState poll (after the initial settle) still reports "loading",
+            // the second "complete" — the navigation finishes without any URL change.
+            `when`(driver.evaluateValue("document.readyState")).thenReturn("loading", "complete")
+
+            executor.callFunctionOn(
+                ToolCall("tab", "navigate", mutableMapOf<String, Any?>("url" to "http://example.com")),
+                driver
+            )
+
+            // Regression: the executor used to call the no-arg waitForNavigation()
+            // here, whose predicate is `"" != currentUrl()` — true as soon as the
+            // page has any URL, so it returned immediately without waiting at all.
+            // The oldUrl overload can never complete for same-URL navigations.
+            // readyState must now be polled: at least 2 reads (loading -> complete).
+            Mockito.verify(driver, Mockito.atLeast(2))
+                .evaluateValue("document.readyState")
+            Mockito.verify(driver, Mockito.never()).waitForNavigation()
+        }
+    }
+
+    @Test
+    fun `navigate to a different URL waits for the new body`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            // URL changes during navigation: the executor must wait for the new
+            // document's body rather than poll readyState indefinitely.
+            `when`(driver.currentUrl()).thenReturn("http://old.example.com", "http://new.example.com")
+
+            executor.callFunctionOn(
+                ToolCall("tab", "navigate", mutableMapOf<String, Any?>("url" to "http://new.example.com")),
+                driver
+            )
+
+            Mockito.verify(driver).navigate("http://new.example.com")
+            // URL already changed — wait for the body element of the new page.
+            Mockito.verify(driver).waitForSelector("body", 10_000L)
+            // readyState polling must not happen for a URL-changing navigation.
+            Mockito.verify(driver, Mockito.never()).evaluateValue("document.readyState")
+        }
+    }
 }
