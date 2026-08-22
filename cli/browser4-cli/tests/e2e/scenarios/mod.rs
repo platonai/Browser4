@@ -215,6 +215,16 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         level: ScenarioLevel::Extended,
     },
     ScenarioDef {
+        name: "test_e2e_swarm_concurrency_bounded_completion_live",
+        short_name: "test_swarm_concurrency_bounded_completion_live",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: swarm::test_swarm_concurrency_bounded_completion_live,
+        group: Some("swarm"),
+        level: ScenarioLevel::Extended,
+    },
+    ScenarioDef {
         name: "test_e2e_crawl_submission_live",
         short_name: "test_crawl_submission_live",
         requires_browser4: true,

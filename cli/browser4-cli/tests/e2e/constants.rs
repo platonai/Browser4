@@ -94,6 +94,8 @@ Environment variables:
   BROWSER4_E2E_FIXTURE_HOST    Host the Browser4 container uses to reach the
                                fixture HTTP server (default: 127.0.0.1)
   BROWSER4_E2E_CLI_TIMEOUT_SECS Override per-command timeout in seconds
+                               (commands with --wait default to 300 s, matching
+                               the CLI's built-in wait cap; everything else 120 s)
   BROWSER4_E2E_USE_MAVEN_STARTUP Set to 1/true/yes/on for Maven startup
   BROWSER4_E2E_FORCE_REMOTE_BUNDLE Set to 1/true/yes/on to download runtime
                                bundle from GitHub (equiv. --force-remote-bundle)

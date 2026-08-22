@@ -932,8 +932,16 @@ class PulsarSessionManager(
                 sessionId, pulsarSession.id, pulsarSession.display
             )
 
-            // Close session
-            pulsarSession.close()
+            // Close the session AND deregister it from the context's session
+            // registry. A plain close() leaves a zombie session in
+            // context.sessions; `ensureSwarmSession` looks sessions up by label
+            // and would otherwise return the closed swarm session forever,
+            // leaving every new swarm task "queued" and never consumed.
+            runCatching { pulsarSession.context.closeSession(pulsarSession) }
+                .onFailure { e ->
+                    logger.warn("Failed to deregister session {}, falling back to plain close: {}", sessionId, e.message)
+                    pulsarSession.close()
+                }
             // Close the companion browser if it exists
             if (browser != null) {
                 // might be already closed by the session, but we ensure it's closed here to release resources
