@@ -20,6 +20,8 @@ import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
 import com.fasterxml.jackson.databind.node.JsonNodeFactory
+import dev.langchain4j.data.message.AiMessage
+import dev.langchain4j.data.message.ChatMessage
 import dev.langchain4j.data.message.SystemMessage
 import dev.langchain4j.data.message.UserMessage
 import kotlinx.coroutines.*
@@ -477,32 +479,75 @@ open class RobustBrowserAgent(
         var context = initContext
         val startTime = Instant.now()
         val completionRef = AtomicReference<ActionDescription?>()
+        val toolExecutions = AtomicInteger(0)
         try {
             val action = initActionOptions.copy(fromRunLoop = true)
-            val loop = buildCliToolLoop(action.action, completionRef)
-            val initialMessages = listOf(
+            val loop = buildCliToolLoop(action.action, completionRef, toolExecutions)
+            var messages: List<ChatMessage> = listOf(
                 SystemMessage.from(cliAgentSystemPrompt()),
                 UserMessage.from(action.action),
             )
-            logger.info(
-                "🚀 cli-agent.start sid={} instr='{}'",
-                context.sid, Strings.compactInline(action.action, 100)
-            )
-            val response = withTimeout(config.llmInferenceTimeoutMs.milliseconds) {
-                loop.generate(initialMessages)
+            var textOnlyStreak = 0
+            var turn = 0
+            val maxTurns = config.maxSteps.coerceAtLeast(1)
+            logger.info("🚀 cli-agent.start sid={} turns={} instr='{}'",
+                context.sid, maxTurns, Strings.compactInline(action.action, 100))
+
+            // Completion rules:
+            // 1. Preferred: the model calls system.taskComplete.
+            // 2. Fallback: the model worked (≥1 tool executed in this run) and
+            //    answers twice in plain text — the second text is the final
+            //    report (the finish-gate's zero-tool guard still rejects
+            //    fabricated completions).
+            // 3. Pure text-only streak with no tools ever executed = stall.
+            while (!isClosed && turn < maxTurns) {
+                val toolsBefore = toolExecutions.get()
+                val response = withTimeout(config.llmInferenceTimeoutMs.milliseconds) {
+                    loop.generate(messages)
+                }
+                val completion = completionRef.get()
+                if (completion != null && completion.isDecidedComplete) {
+                    return completeCliRun(completion, context)
+                }
+                val text = response.content
+                val executed = toolExecutions.get() > toolsBefore
+                if (text.isBlank()) break
+                if (executed) {
+                    textOnlyStreak = 0
+                } else {
+                    textOnlyStreak++
+                    // Real work happened earlier and the model answers in text
+                    // again — accept it as the final report.
+                    if (toolExecutions.get() > 0 && textOnlyStreak >= 2) {
+                        logger.info("✅ cli-agent.text-completion sid={} tools={}",
+                            context.sid, toolExecutions.get())
+                        val textCompletion = ActionDescription(
+                            instruction = action.action,
+                            isDecidedComplete = true,
+                            summary = text,
+                        )
+                        return completeCliRun(textCompletion, context)
+                    }
+                    if (config.textOnlyStallLimit > 0 && textOnlyStreak >= config.textOnlyStallLimit) {
+                        logger.info("⛔ cli-agent.text-only-stall sid={} consecutive={}",
+                            context.sid, textOnlyStreak)
+                        break
+                    }
+                }
+                messages = messages + AiMessage.from(text) + UserMessage.from(
+                    "If the task is fully finished, call system.taskComplete with the final report now. " +
+                        "Otherwise continue working with tools. Do not answer in plain text unless you are done."
+                )
+                turn++
             }
+
             val completion = completionRef.get()
             if (completion != null && completion.isDecidedComplete) {
-                onTaskCompletion(completion, context)
-                return ResolveResult(context, ActResultHelper.complete(completion))
+                return completeCliRun(completion, context)
             }
-            // Model stopped without calling system.taskComplete — abnormal
-            // termination, reported as failure (never a silent "success").
-            logger.info(
-                "⛔ cli-agent.no-completion sid={} resp='{}'",
-                context.sid, response.content.take(100)
-            )
-            val actResult = buildFinalActResult(initContext.instruction, context, startTime, StopReason.MAX_STEPS)
+            val stopReason = if (turn >= maxTurns) StopReason.MAX_STEPS else StopReason.NOOP_LIMIT
+            logger.info("⛔ cli-agent.no-completion sid={} stop={}", context.sid, stopReason)
+            val actResult = buildFinalActResult(initContext.instruction, context, startTime, stopReason)
             return ResolveResult(context, actResult)
         } catch (e: CancellationException) {
             logger.info(
@@ -518,6 +563,7 @@ open class RobustBrowserAgent(
     private fun buildCliToolLoop(
         instruction: String,
         completionRef: AtomicReference<ActionDescription?>,
+        toolExecutions: AtomicInteger,
     ): AgentToolCallLoop {
         val allSpecs = agentToolManager.getLangChain4jToolSpecifications()
         val allRegistry = agentToolManager.getLangChain4jToolRegistry()
@@ -534,6 +580,7 @@ open class RobustBrowserAgent(
             coordinator = ToolExecutionCoordinator(agentToolManager, registry),
             maxIterations = config.toolLoopMaxIterations,
             requestTokenLimiter = cta.requestTokenLimiter,
+            onToolExecuted = { toolExecutions.incrementAndGet() },
             onToolRequest = { name, argsJson ->
                 if (name == taskCompleteName) {
                     runCatching {
@@ -552,6 +599,20 @@ open class RobustBrowserAgent(
                 }
             },
         )
+    }
+
+    /**
+     * Finish a CLI-engine run: run the shared completion pipeline and record the
+     * completed state into the agent history so callers (StatefulAgentRunner)
+     * can surface the final summary (the loop itself creates no step states).
+     */
+    private suspend fun completeCliRun(
+        completion: ActionDescription,
+        context: ExecutionContext,
+    ): ResolveResult {
+        onTaskCompletion(completion, context)
+        stateManager.addToHistory(context.agentState)
+        return ResolveResult(context, ActResultHelper.complete(completion))
     }
 
     /** System prompt for the CLI tool-loop engine: role + bundled SKILL.md + hygiene rules. */

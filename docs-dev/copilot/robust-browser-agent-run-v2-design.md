@@ -357,5 +357,12 @@ M4 实测摊销效果。参考文档按需经 `system.skillDoc` 拉取，不预�
    原生工具循环（coding/cli/system 工具集 + 主 SKILL.md system prompt + 上下文卫生规则），
    完成走 `onTaskCompletion`/finish gate，无完成标记按异常终止上报。M3 为单轮
    `generate()` 版本（内部最多 toolLoopMaxIterations 轮）；跨轮历史压缩列为 M4 细化。
-4. **M4**：CLI `agent run --engine=cli` + e2e（维基多步 + 全新环境 + 长命令取消后后端任务确认停止 +
-   多任务 SKILL.md 摊销验证）。
+4. **M4（e2e 已通过 2026-08-23）**：`CliToolExecutor` 接入 `CliProcessManager`（M1→M3 最后拼图）；
+   `runEngineOverride` 每任务开关 + REST `engine` 参数打通（`CommandToolExecutor` → `UserCommandExecutor`
+   → `StatefulAgentRunner`）；`doRunCliAgentLoop` 修复为**多轮 generate + 纯文本续推 + stall 熔断 +
+   文本最终回答回退**（模型常以文本作答而非调 taskComplete；有真实工具执行时接受文本为最终报告，
+   finish-gate 零工具守卫兜底）；完成状态写入 `stateHistory`（否则 StatefulAgentRunner 报
+   "no results"）。e2e：维基多步任务经 `-Dbrowser4.agent.runEngine=cli` 真实完成
+   输入→提交→跳转→提取，返回 Einstein 文章标题与首段（status 200）。
+   待办（后续）：CLI Rust 侧 `agent run --engine=cli` flag；全新环境/长命令取消验证；
+   多任务 SKILL.md 摊销验证。
