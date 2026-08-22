@@ -9606,18 +9606,17 @@ async fn handle_agent_run(
 
     // Optional per-task no-op threshold (long coding chains benefit from 8-10).
     let noop_limit = tool_params.get("noopLimit").and_then(|v| v.as_i64());
-    let result = if let Some(n) = noop_limit {
-        submit_plain_command_with_options(
-            client,
-            base_url,
-            task,
-            true,
-            serde_json::json!({ "noopLimit": n }),
-        )
-        .await?
-    } else {
-        submit_plain_command(client, base_url, task, true).await?
-    };
+    // Engine selection (default: cli) — merged into the command_run payload.
+    let engine = tool_params
+        .get("engine")
+        .and_then(|v| v.as_str())
+        .unwrap_or("cli");
+    let mut extra = serde_json::json!({ "engine": engine });
+    if let Some(n) = noop_limit {
+        extra["noopLimit"] = serde_json::json!(n);
+    }
+    let result =
+        submit_plain_command_with_options(client, base_url, task, true, extra).await?;
 
     // The async response is a task ID (possibly JSON-quoted)
     let task_id = result.trim().trim_matches('"').to_string();

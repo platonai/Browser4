@@ -18,11 +18,14 @@ enum class RunEngine {
     ;
 
     companion object {
-        /** Parse from the `browser4.agent.runEngine` system property value. */
+        /**
+         * Parse from the `browser4.agent.runEngine` system property value.
+         * The default is now [CLI_TOOL_LOOP]; opt back into the legacy engine
+         * with `observe-act` / `v1` / `legacy`.
+         */
         fun parse(value: String?): RunEngine = when (value?.trim()?.lowercase()) {
-            "cli", "cli-tool-loop", "cli_tool_loop" -> CLI_TOOL_LOOP
-            null, "", "observe-act", "observe_act", "v1", "legacy" -> OBSERVE_ACT
-            else -> OBSERVE_ACT
+            "observe-act", "observe_act", "v1", "legacy" -> OBSERVE_ACT
+            else -> CLI_TOOL_LOOP
         }
     }
 }
@@ -112,12 +115,12 @@ data class AgentConfig(
     val toolLoopMaxIterations: Int =
         System.getProperty("browser4.agent.toolLoop.maxIterations", "12").toInt().coerceAtLeast(1),
     /**
-     * Inner execution engine for a run (design v0.2). Default stays
-     * [RunEngine.OBSERVE_ACT] so v1 is untouched; switch with
-     * `-Dbrowser4.agent.runEngine=cli`.
+     * Inner execution engine for a run (design v0.2). Default is now
+     * [RunEngine.CLI_TOOL_LOOP]; opt back into the legacy engine with
+     * `-Dbrowser4.agent.runEngine=observe-act`.
      */
     val runEngine: RunEngine =
-        RunEngine.parse(System.getProperty("browser4.agent.runEngine")),
+        RunEngine.parse(System.getProperty("browser4.agent.runEngine", "cli")),
     // Overall timeout for resolve() to avoid indefinite hangs
     val resolveTimeoutMs: Long = 24.hours.inWholeMilliseconds,
     // Circuit breaker configuration

@@ -3,7 +3,8 @@
 > 状态：规划稿 v0.2（评审修订版，未实现） · 日期：2026-08-22 · 范围：`ai.platon.pulsar.agentic.agents.RobustBrowserAgent#run`
 > 评审：见《robust-browser-agent-run-v2-review.md》——按评审结论裁剪进程防线、统一输出缓冲、
 > 补充两段式取消与版本对齐、修正动机表述。
-> 原则：**v1（observe→act 引擎）完全不动**，通过 `AgentConfig.runEngine` 切换，默认保持不变。
+> 原则：v1（observe→act 引擎）保留为显式可选（`--engine=observe-act` / `-Dbrowser4.agent.runEngine=observe-act`），
+> 通过 `AgentConfig.runEngine` 切换；**默认引擎已是 CLI_TOOL_LOOP（2026-08-23 起）**。
 > 设计参考：`D:\workspace\ds-harness\deepseek-harness\docs-dev\process-management-analysis.md`（2026-08-22），
 > 进程管理部分对齐其三层能力缝（tool → service → subprocess）与进程树管控细节。
 > 补充参考：`D:\codebase\codex\docs-dev\process-management.md`（Codex 进程管理分析），
@@ -293,9 +294,10 @@ M4 实测摊销效果。参考文档按需经 `system.skillDoc` 拉取，不预�
 
 ## 6. 兼容与迁移
 
-- `AgentConfig` 增加 `runEngine: RunEngine = OBSERVE_ACT`（枚举），默认不变，v1 路径零改动。
+- `AgentConfig` 增加 `runEngine: RunEngine`（枚举），**默认 `CLI_TOOL_LOOP`**；
+  v1 通过显式 `observe-act` 选择，原有路径保持可用。
 - `StatefulAgentRunner` 按任务选项或 `-Dbrowser4.agent.runEngine=cli` 切换；
-  CLI 侧 `agent run` 保持 v1，新增 `agent run --engine=cli`（或 `agent run2`）。
+  CLI 侧 `agent run` 新增 `--engine` 选项（**默认 `cli`**）。
 - coding 模式判定照旧；v2 天然无进程内驱动绑定（等价于"全程 coding 模式 + CLI 管浏览器"）。
 - `system.taskComplete` 复用 `ActionDescription`/`onTaskCompletion` 数据模型，状态持久化与
   SSE 事件通道不变。
@@ -364,5 +366,4 @@ M4 实测摊销效果。参考文档按需经 `system.skillDoc` 拉取，不预�
    finish-gate 零工具守卫兜底）；完成状态写入 `stateHistory`（否则 StatefulAgentRunner 报
    "no results"）。e2e：维基多步任务经 `-Dbrowser4.agent.runEngine=cli` 真实完成
    输入→提交→跳转→提取，返回 Einstein 文章标题与首段（status 200）。
-   待办（后续）：CLI Rust 侧 `agent run --engine=cli` flag；全新环境/长命令取消验证；
-   多任务 SKILL.md 摊销验证。
+待办（后续）：全新环境/长命令取消验证；多任务 SKILL.md 摊销验证。

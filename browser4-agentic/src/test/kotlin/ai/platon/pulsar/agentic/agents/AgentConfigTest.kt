@@ -10,12 +10,13 @@ class AgentConfigTest {
     @Test
     @DisplayName("runEngine parse maps legacy and cli values")
     fun runEngineParsing() {
-        assertEquals(RunEngine.OBSERVE_ACT, RunEngine.parse(null))
+        // CLI tool-loop is now the default; observe-act is the explicit opt-out.
+        assertEquals(RunEngine.CLI_TOOL_LOOP, RunEngine.parse(null))
         assertEquals(RunEngine.OBSERVE_ACT, RunEngine.parse("observe-act"))
         assertEquals(RunEngine.OBSERVE_ACT, RunEngine.parse("v1"))
         assertEquals(RunEngine.CLI_TOOL_LOOP, RunEngine.parse("cli"))
         assertEquals(RunEngine.CLI_TOOL_LOOP, RunEngine.parse("cli-tool-loop"))
         assertEquals(RunEngine.CLI_TOOL_LOOP, RunEngine.parse("CLI_TOOL_LOOP"))
-        assertEquals(RunEngine.OBSERVE_ACT, RunEngine.parse("unknown-value"))
+        assertEquals(RunEngine.CLI_TOOL_LOOP, RunEngine.parse("unknown-value"))
     }
 }

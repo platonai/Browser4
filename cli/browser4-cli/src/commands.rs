@@ -3013,6 +3013,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "wait", description: "Block until the agent task completes (max 10 minutes)", is_bool: true, short: None },
                 OptionDef { name: "noop-limit", description: "Override the consecutive no-op abort threshold (default: 5; long coding tasks benefit from 8-10)", is_bool: false, short: None },
+                OptionDef { name: "engine", description: "Agent execution engine (default: cli; use observe-act for the legacy engine)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "command_run".to_string(),
@@ -3026,6 +3027,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                         p["noopLimit"] = json!(limit);
                     }
                 }
+                p["engine"] = json!(get_opt_str(args, "engine").unwrap_or("cli"));
                 p
             },
         },
