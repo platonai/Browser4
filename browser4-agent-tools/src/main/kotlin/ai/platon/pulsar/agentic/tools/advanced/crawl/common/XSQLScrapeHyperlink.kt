@@ -62,7 +62,16 @@ open class XSQLHyperlink(
                     // failed. Completing here with an empty result set would
                     // report a "successful" task whose page was never fetched —
                     // instead mark it as failed with the real reason.
-                    p.protocolStatus.isFailed || p.isNil || !p.isFetched -> {
+                    // NOTE: `!isFetched` alone is NOT a failure. isFetched is
+                    // only set by FetchComponent when a protocol actually
+                    // fetched the page over the network; a page served from the
+                    // WebDB cache (a load without -refresh that reuses a
+                    // previously fetched record) legitimately completes with
+                    // content and a success status while isFetched stays false.
+                    // Failing those tasks turned repeated swarm queries on
+                    // cached URLs into 417 "never fetched" errors.
+                    p.isNil || p.protocolStatus.isFailed ||
+                        (!p.isFetched && !p.protocolStatus.isSuccess) -> {
                         hyperlink.fail(p, page == null)
                     }
 

@@ -176,6 +176,30 @@ class XSQLScrapeHyperlinkTest {
     }
 
     @Test
+    fun `cached success page completes the task even without a fresh fetch`() {
+        // Regression: a page served from the WebDB cache (load without
+        // -refresh) has a success protocol status and content, but isFetched
+        // stays false because only FetchComponent sets it on a real network
+        // fetch. The onLoaded handler used to fail such tasks with 417
+        // "The page was never fetched", breaking repeated swarm queries on
+        // already-cached URLs.
+        val link = hyperlink()
+        // Mirrors the real flow: executeQuery sets SC_OK before the SQL runs.
+        link.response.refresh(ResourceStatus.SC_OK, ProtocolStatusCodes.SC_OK, false)
+
+        val page = newPage()
+        page.protocolStatus = ProtocolStatus.STATUS_SUCCESS
+        page.setByteArrayContent("<html><body><h3>title</h3></body></html>".toByteArray())
+
+        fireLoaded(link, page)
+
+        val response = link.response
+        assertTrue(response.isDone, "A cache-served page must complete the task")
+        assertEquals(ResourceStatus.SC_OK, response.statusCode)
+        assertNull(response.message, "A cache-served page must not carry a failure message")
+    }
+
+    @Test
     fun `failed status after a retry attempt marks the task as failed`() {
         val link = hyperlink()
         val retryPage = newPage()
