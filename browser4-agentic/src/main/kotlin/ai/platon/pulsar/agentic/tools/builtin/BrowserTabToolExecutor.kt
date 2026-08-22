@@ -56,14 +56,6 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "loadStorageState"
         )
 
-        // Actions that may trigger page navigation (form submission, link clicks, history traversal, etc.).
-        // After these execute, the executor checks whether the page started navigating and waits for the
-        // DOM to settle before returning — preventing the CLI's post_command_snapshot from capturing an
-        // empty/partial page while navigation is still in flight.
-        private val NAVIGATION_TRIGGERING_ACTIONS = setOf(
-            "press", "click", "dblclick", "goBack", "goForward", "reload"
-        )
-
         private const val NAVIGATION_POLL_TIMEOUT_MS = 30_000L
         private const val NAVIGATION_DOM_READY_TIMEOUT_MS = 10_000L
         private const val NAVIGATION_DOM_SETTLE_DELAY_MS = 1_000L
