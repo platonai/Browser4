@@ -29,6 +29,7 @@ import java.nio.file.Path
 import java.text.MessageFormat
 import java.time.Instant
 import java.util.*
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration.Companion.milliseconds
 
 open class BasicBrowserAgent(
@@ -47,6 +48,7 @@ open class BasicBrowserAgent(
     protected val promptBuilder = PromptBuilder()
 
     private val lazyAgentToolManager by lazy {
+        toolManagerInitialized.set(true)
         // Workspace isolation: CLI-engine (browser) tasks get a per-agent
         // scratch workspace so helper files never pollute the repository root;
         // coding tasks keep CodingWorkspace.workspaceRoot.
@@ -61,9 +63,14 @@ open class BasicBrowserAgent(
         }
     }
 
+    private val toolManagerInitialized = AtomicBoolean(false)
+
     /** The [AgentToolManager] used by this agent for tool discovery and execution. */
     val agentToolManager: AgentToolManager get() = lazyAgentToolManager
     protected val fs get() = agentToolManager.fs
+
+    /** True once the tool manager was actually created (avoids costly lazy init on close). */
+    internal val isAgentToolManagerInitialized: Boolean get() = toolManagerInitialized.get()
 
     /**
      * Tools executed inside the native tool-calling loop (no outer AgentState

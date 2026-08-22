@@ -61,6 +61,9 @@ e2e 两次 status 200。
 - P1（已修 2026-08-23）：compressor 接线 → 工作区隔离（CLI 引擎任务工作区收敛到
   `AgentPaths/.../agent/<uuid>/workspace`，coding 工作区与 cli.run 默认工作目录同步指向，
   仓库根不再产生垃圾文件）；cli.run 默认超时 120s→300s。
-- P1 剩余：长命令完整 job 化（CliJobRegistry 接线）。
+- P1（已修 2026-08-23）：长命令完整 job 化——`cli.run` 经 yield 窗口（10s）升级为后台 job，
+  返回 `[job: <id>]` 句柄；新增 `cli.status` / `cli.wait` / `cli.kill` 工具；agent 关闭时
+  `closeCliJobs` 清理全部后台进程（含进程树杀）。单测覆盖快速命令直达 + 长命令
+  升级→status→kill→wait(aborted) 全流程。
 - P2（已修）：工具白名单常量（按 ToolSpec.domain 显式过滤）。
 - P2 剩余：文本回退简化、版本对齐、CLI 指标。

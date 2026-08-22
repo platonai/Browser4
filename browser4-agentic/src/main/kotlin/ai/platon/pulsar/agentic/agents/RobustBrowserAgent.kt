@@ -286,6 +286,13 @@ open class RobustBrowserAgent(
                 logger.warn("Agent job cancellation error: ${it.message}")
             }
 
+            // Cancel any background CLI jobs (long crawl/swarm processes) so the
+            // agent never leaves orphan subprocesses behind.
+            if (isAgentToolManagerInitialized) {
+                runCatching { agentToolManager.closeCliJobs() }
+                    .onFailure { logger.warn("Failed to close CLI jobs: ${it.message}") }
+            }
+
             // Close bound WebDriver if exists
             runCatching {
                 session.boundDriver?.let { driver ->

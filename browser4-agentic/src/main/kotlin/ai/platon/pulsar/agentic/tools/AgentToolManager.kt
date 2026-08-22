@@ -146,6 +146,11 @@ class AgentToolManager constructor(
         toolExecutionRecorder?.invoke(domain, method)
     }
 
+    /** Cancel all tracked CLI background jobs (agent close). */
+    fun closeCliJobs() {
+        cliExecutor.closeJobs()
+    }
+
     init {
         // Register coding and cli tool specs so they appear in the LLM prompt.
         // The ToolCallSpecificationRenderer merges these dynamically-registered

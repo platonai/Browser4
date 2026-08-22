@@ -3,8 +3,13 @@ package ai.platon.pulsar.agentic.tools.builtin
 import ai.platon.pulsar.coding.CodingAgentShell
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.cli.CliBinaryResolver
+import ai.platon.pulsar.agentic.cli.CliJobRegistry
 import ai.platon.pulsar.agentic.cli.CliProcessManager
 import ai.platon.pulsar.agentic.cli.CliRunRequest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import java.nio.file.Path
 import kotlin.reflect.KClass
 
@@ -34,7 +39,12 @@ class CliToolExecutor(
     private val backendBaseUrl: String? = null,
     private val defaultWorkingDir: Path? = null,
     private val cliProcessManager: CliProcessManager = CliProcessManager(CliBinaryResolver()),
+    /** Yield window before a long command escalates to a background job. */
+    private val jobYieldMs: Long = 10_000,
 ) : AbstractToolExecutor() {
+
+    private val jobScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val jobRegistry = CliJobRegistry(cliProcessManager, jobScope)
 
     companion object {
         /**
@@ -65,8 +75,34 @@ class CliToolExecutor(
                 "Example: cli.run(args=\"tab navigate --url https://example.com\"). " +
                 "The binary is resolved automatically (bundled / PATH / auto-install). " +
                 "Default timeout 300s (max 600s); pass timeoutSeconds for long commands. " +
+                "Commands that finish quickly return their result directly; commands still " +
+                "running after ~10s return a '[job: <id>]' handle — poll with cli.status(id=...), " +
+                "wait with cli.wait(id=..., timeoutSeconds=...), or cancel with cli.kill(id=...). " +
                 "NOTE: 'agent run', 'agent-run', and 'act' subcommands are blocked " +
                 "to prevent nested agent spawning."
+        )
+        toolSpec["status"] = ToolSpec(
+            domain = domain, method = "status",
+            arguments = listOf(ToolSpec.Arg("id", "String")),
+            returnType = "String",
+            description = "Check the status of a long-running cli job returned by cli.run " +
+                "(e.g. '[job: <id>]'). Returns RUNNING/COMPLETED/CANCELLED/FAILED plus the result when done."
+        )
+        toolSpec["wait"] = ToolSpec(
+            domain = domain, method = "wait",
+            arguments = listOf(
+                ToolSpec.Arg("id", "String"),
+                ToolSpec.Arg("timeoutSeconds", "Long", "60"),
+            ),
+            returnType = "String",
+            description = "Block (up to timeoutSeconds) for a cli job to finish; returns the " +
+                "result, or a still-running notice when the timeout expires."
+        )
+        toolSpec["kill"] = ToolSpec(
+            domain = domain, method = "kill",
+            arguments = listOf(ToolSpec.Arg("id", "String")),
+            returnType = "String",
+            description = "Cancel a running cli job by id (kills the process tree)."
         )
         toolSpec["version"] = ToolSpec(
             domain = domain, method = "version",
@@ -90,8 +126,6 @@ class CliToolExecutor(
         require(domain == this.domain) { "Unsupported domain: $domain" }
         require(receiver is CodingAgentShell) { "Target must be a CodingAgentShell" }
 
-        val shell = receiver
-
         return when (functionName) {
             "run" -> {
                 validateArgs(args, allowed = setOf("args", "timeoutSeconds", "workingDir"), required = setOf("args"), functionName)
@@ -99,14 +133,57 @@ class CliToolExecutor(
                 requireAgentNotSpawned(cliArgs)
                 val timeout = paramLong(args, "timeoutSeconds", functionName, required = false, default = 300L) ?: 300L
                 val workingDir = paramString(args, "workingDir", functionName, required = false, default = null)
-                cliProcessManager.run(
-                    CliRunRequest(
-                        args = cliArgs,
-                        timeoutSeconds = timeout,
-                        workingDir = workingDir?.let { Path.of(it) } ?: defaultWorkingDir,
-                    ),
-                    backendBaseUrl = backendBaseUrl,
-                ).toModelText()
+                // Long-command job escalation (design §4.1.1): start the command
+                // as a background job; if it finishes within the yield window
+                // return the result directly, otherwise hand the model a job
+                // handle to poll/wait/kill.
+                val request = CliRunRequest(
+                    args = cliArgs,
+                    timeoutSeconds = timeout,
+                    workingDir = workingDir?.let { Path.of(it) } ?: defaultWorkingDir,
+                )
+                val jobId = jobRegistry.start(request, backendBaseUrl)
+                val result = jobRegistry.await(jobId, jobYieldMs)
+                if (result != null) {
+                    result.toModelText()
+                } else {
+                    "[job: $jobId] Command still running after ${jobYieldMs / 1000}s. " +
+                        "Poll with cli.status(id=\"$jobId\"), wait with cli.wait(id=\"$jobId\", " +
+                        "timeoutSeconds=...), or cancel with cli.kill(id=\"$jobId\")."
+                }
+            }
+            "status" -> {
+                validateArgs(args, allowed = setOf("id"), required = setOf("id"), functionName)
+                val id = paramString(args, "id", functionName)!!
+                val job = jobRegistry.status(id)
+                    ?: return "Job not found: $id"
+                buildString {
+                    append("Job ").append(id).append(" state=").append(job.state)
+                    append(" started=").append(job.startedAt)
+                    job.finishedAt?.let { append(" finished=").append(it) }
+                    job.result?.let { append("\n").append(it.toModelText()) }
+                }
+            }
+            "wait" -> {
+                validateArgs(args, allowed = setOf("id", "timeoutSeconds"), required = setOf("id"), functionName)
+                val id = paramString(args, "id", functionName)!!
+                val timeout = paramLong(args, "timeoutSeconds", functionName, required = false, default = 60L) ?: 60L
+                val result = jobRegistry.await(id, timeout * 1000)
+                if (result != null) {
+                    result.toModelText()
+                } else {
+                    "[job: $id] still running after ${timeout}s; poll with cli.status(id=\"$id\") " +
+                        "or wait again with cli.wait(id=\"$id\", timeoutSeconds=...)."
+                }
+            }
+            "kill" -> {
+                validateArgs(args, allowed = setOf("id"), required = setOf("id"), functionName)
+                val id = paramString(args, "id", functionName)!!
+                if (jobRegistry.kill(id)) {
+                    "Job $id cancelled."
+                } else {
+                    "Job $id not found or already finished."
+                }
             }
             "version" -> {
                 validateArgs(args, allowed = emptySet(), required = emptySet(), functionName)
@@ -126,6 +203,12 @@ class CliToolExecutor(
             }
             else -> throw IllegalArgumentException("Unsupported cli method: $functionName(${args.keys})")
         }
+    }
+
+    /** Cancel all tracked background jobs (called on agent close). */
+    fun closeJobs() {
+        jobRegistry.close()
+        jobScope.cancel()
     }
 
     /**
