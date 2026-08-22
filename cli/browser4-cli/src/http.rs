@@ -94,6 +94,12 @@ fn is_navigation_tool(tool: &str) -> bool {
             | "browser_reload"
             | "browser_navigate_back"
             | "browser_navigate_forward"
+            // load_storage_state applies cookies and reloads/navigates the page
+            // to activate localStorage. On a slow browser this can exceed the
+            // 30s default timeout; aborting the HTTP request mid-operation while
+            // the backend keeps mutating the session corrupts its state, and the
+            // caller's automatic retry then races the still-running operation.
+            | "browser_load_storage_state"
     )
 }
 
@@ -1178,6 +1184,9 @@ mod tests {
         assert_eq!(timeout_for_tool("browser_reload").as_secs(), 7);
         assert_eq!(timeout_for_tool("browser_navigate_back").as_secs(), 7);
         assert_eq!(timeout_for_tool("browser_navigate_forward").as_secs(), 7);
+        // Storage-state load reloads/navigates the page to apply cookies and
+        // localStorage — it must not be aborted by the 30s default timeout.
+        assert_eq!(timeout_for_tool("browser_load_storage_state").as_secs(), 7);
         // Navigation-triggering tools should also get the navigation budget
         assert_eq!(timeout_for_tool("browser_click").as_secs(), 7);
         assert_eq!(timeout_for_tool("browser_press_key").as_secs(), 7);
