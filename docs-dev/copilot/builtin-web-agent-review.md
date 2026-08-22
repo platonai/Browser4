@@ -58,5 +58,9 @@ e2e 两次 status 200。
 ## 5. 修复优先级
 
 - **P0（本轮）**：① URL 任务路由一致（走 cli 引擎）；② M0 守卫默认开启。
-- P1：compressor 接线 → 长命令 job 化 → 工作区隔离。
-- P2：工具白名单常量、文本回退简化、版本对齐、指标。
+- P1（已修 2026-08-23）：compressor 接线 → 工作区隔离（CLI 引擎任务工作区收敛到
+  `AgentPaths/.../agent/<uuid>/workspace`，coding 工作区与 cli.run 默认工作目录同步指向，
+  仓库根不再产生垃圾文件）；cli.run 默认超时 120s→300s。
+- P1 剩余：长命令完整 job 化（CliJobRegistry 接线）。
+- P2（已修）：工具白名单常量（按 ToolSpec.domain 显式过滤）。
+- P2 剩余：文本回退简化、版本对齐、CLI 指标。

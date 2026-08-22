@@ -27,6 +27,8 @@ import dev.langchain4j.data.message.SystemMessage
 import dev.langchain4j.data.message.UserMessage
 import dev.langchain4j.model.chat.request.ChatRequest
 import kotlinx.coroutines.*
+import java.nio.file.Files
+import java.nio.file.Path
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
@@ -69,7 +71,16 @@ open class RobustBrowserAgent(
     @Volatile
     var runEngineOverride: RunEngine? = null
 
-    private val effectiveRunEngine: RunEngine get() = runEngineOverride ?: config.runEngine
+    internal val effectiveRunEngine: RunEngine get() = runEngineOverride ?: config.runEngine
+
+    /**
+     * Per-agent scratch workspace for CLI-engine (browser) tasks. Helper files
+     * the model writes via coding.* and cli.run land here — never the backend
+     * working directory / repository root (workspace isolation, P1).
+     */
+    internal val agentWorkspaceDir: Path by lazy {
+        baseDir.resolve("workspace").also { Files.createDirectories(it) }
+    }
 
     private val noopLimit: Int get() = (noopLimitOverride ?: config.consecutiveNoOpLimit).coerceAtLeast(1)
 
@@ -680,6 +691,9 @@ open class RobustBrowserAgent(
             ### Context hygiene
             - Prefer `snapshot -v 0 --stdout` and targeted `htmlsnapshot get` over full page dumps.
             - After navigation, take a snapshot before deciding the next action.
+            - Your working directory is ${agentWorkspaceDir}; write helper files
+              (e.g. JS for eval) with relative paths — never create files in the
+              repository root.
             - When the task is finished, call system.taskComplete(
               summary=..., keyFindings=[...], filesChanged=[...], problems=[...]).
             """.trimIndent()

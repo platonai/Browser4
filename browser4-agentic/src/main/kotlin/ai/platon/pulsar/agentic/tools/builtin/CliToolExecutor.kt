@@ -32,6 +32,7 @@ import kotlin.reflect.KClass
  */
 class CliToolExecutor(
     private val backendBaseUrl: String? = null,
+    private val defaultWorkingDir: Path? = null,
     private val cliProcessManager: CliProcessManager = CliProcessManager(CliBinaryResolver()),
 ) : AbstractToolExecutor() {
 
@@ -102,7 +103,7 @@ class CliToolExecutor(
                     CliRunRequest(
                         args = cliArgs,
                         timeoutSeconds = timeout,
-                        workingDir = workingDir?.let { Path.of(it) },
+                        workingDir = workingDir?.let { Path.of(it) } ?: defaultWorkingDir,
                     ),
                     backendBaseUrl = backendBaseUrl,
                 ).toModelText()

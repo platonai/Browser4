@@ -28,6 +28,7 @@ import kotlin.time.Duration.Companion.milliseconds
 class AgentToolManager constructor(
     val baseDir: Path,
     val agent: BasicBrowserAgent,
+    val workspaceRoot: Path = CodingWorkspace.workspaceRoot,
 ) {
     private val logger = getLogger(AgentToolManager::class)
 
@@ -44,14 +45,14 @@ class AgentToolManager constructor(
 
     /** Enhanced coding shell for dev tools (git, cargo, mvn, npm, etc.) */
     val codingShell: CodingAgentShell = CodingAgentShell(
-        baseDir = CodingWorkspace.workspaceRoot,
+        baseDir = workspaceRoot,
         // Independent/multi-tenant deployments can tighten defaults via system property:
         // -Dbrowser4.agent.allowDestructive=false denies rm/del/mv/cp/kill etc.
         allowDestructive = CodingWorkspace.allowDestructive,
     )
     /** Enhanced coding file system for full filesystem access */
     val codingFs: CodingAgentFileSystem = CodingAgentFileSystem(
-        workspaceRoot = CodingWorkspace.workspaceRoot,
+        workspaceRoot = workspaceRoot,
         // Same tightening switch; note delete() additionally hard-protects the
         // workspace root and VCS directories regardless of this flag.
         allowExternalAccess = CodingWorkspace.allowExternalAccess,
@@ -67,6 +68,7 @@ class AgentToolManager constructor(
         // the CLI can never auto-start/restart a server. Set by the hosting app
         // via `browser4.server.url` (system property or configuration).
         backendBaseUrl = session.sessionConfig.get("browser4.server.url"),
+        defaultWorkingDir = workspaceRoot,
     )
 
     val system: SystemToolExecutor = SystemToolExecutor(this)

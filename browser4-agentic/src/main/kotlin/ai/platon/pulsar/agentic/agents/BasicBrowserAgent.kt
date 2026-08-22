@@ -14,6 +14,7 @@ import ai.platon.pulsar.agentic.inference.detail.PageStateTracker
 import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecification
+import ai.platon.pulsar.coding.CodingWorkspace
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.alwaysTrue
 import ai.platon.pulsar.common.event.EventBus
@@ -46,7 +47,14 @@ open class BasicBrowserAgent(
     protected val promptBuilder = PromptBuilder()
 
     private val lazyAgentToolManager by lazy {
-        AgentToolManager(_baseDir, this).also {
+        // Workspace isolation: CLI-engine (browser) tasks get a per-agent
+        // scratch workspace so helper files never pollute the repository root;
+        // coding tasks keep CodingWorkspace.workspaceRoot.
+        val workspace = (this as? RobustBrowserAgent)
+            ?.takeIf { it.effectiveRunEngine == RunEngine.CLI_TOOL_LOOP }
+            ?.agentWorkspaceDir
+            ?: CodingWorkspace.workspaceRoot
+        AgentToolManager(_baseDir, this, workspaceRoot = workspace).also {
             // Inner (native tool-calling loop) executions don't produce outer
             // AgentStates — record them so the finish-report guard can see them.
             it.toolExecutionRecorder = ::recordInnerToolExecution
