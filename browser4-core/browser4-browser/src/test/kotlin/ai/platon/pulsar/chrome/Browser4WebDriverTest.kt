@@ -136,4 +136,97 @@ class Browser4WebDriverTest {
         assertTrue(js.contains("new Event('input'"), "expected input event")
         assertTrue(js.contains("new Event('change'"), "expected change event")
     }
+
+    // -------------------------------------------------------------------------
+    // Storage state helpers (loadStorageState override)
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("normalizeStorageStateCookie keeps name and value and maps optional fields")
+    fun normalizeStorageStateCookieKeepsFields() {
+        val cookie = mapOf(
+            "name" to "session_id",
+            "value" to "abc123",
+            "url" to "http://127.0.0.1:47815/interactive",
+            "path" to "/",
+            "httpOnly" to true,
+            "secure" to false,
+        )
+        val normalized = Browser4WebDriver.normalizeStorageStateCookie(cookie)
+        assertEquals("session_id", normalized["name"])
+        assertEquals("abc123", normalized["value"])
+        assertEquals("http://127.0.0.1:47815/interactive", normalized["url"])
+        assertEquals("/", normalized["path"])
+        assertEquals(true, normalized["httpOnly"])
+        assertEquals(false, normalized["secure"])
+        assertFalse(normalized.containsKey("expires"), "absent expires must be dropped")
+    }
+
+    @Test
+    @DisplayName("normalizeStorageStateCookie trims and coerces values")
+    fun normalizeStorageStateCookieTrimsAndCoerces() {
+        val normalized = Browser4WebDriver.normalizeStorageStateCookie(
+            mapOf(
+                "name" to "  restoredCookie ",
+                "value" to 42,
+                "domain" to " 127.0.0.1 ",
+                "expires" to "0",
+                "sameSite" to " Lax ",
+            )
+        )
+        assertEquals("restoredCookie", normalized["name"])
+        assertEquals("42", normalized["value"])
+        assertEquals("127.0.0.1", normalized["domain"])
+        assertEquals("Lax", normalized["sameSite"])
+        assertFalse(normalized.containsKey("expires"), "expires <= 0 must be dropped")
+    }
+
+    @Test
+    @DisplayName("normalizeStorageStateCookie requires a url or domain")
+    fun normalizeStorageStateCookieRequiresUrlOrDomain() {
+        val error = runCatching {
+            Browser4WebDriver.normalizeStorageStateCookie(mapOf("name" to "x", "value" to "y"))
+        }.exceptionOrNull()
+        assertTrue(error is IllegalArgumentException, "expected an IllegalArgumentException, got $error")
+        assertTrue(
+            error?.message?.contains("url or domain") == true,
+            "expected missing url/domain message, got ${error?.message}"
+        )
+    }
+
+    @Test
+    @DisplayName("normalizeStorageStateCookie rejects blank names")
+    fun normalizeStorageStateCookieRejectsBlankName() {
+        val error = runCatching {
+            Browser4WebDriver.normalizeStorageStateCookie(
+                mapOf("name" to "  ", "value" to "y", "url" to "http://example.com")
+            )
+        }.exceptionOrNull()
+        assertTrue(error is IllegalArgumentException, "expected an IllegalArgumentException, got $error")
+    }
+
+    @Test
+    @DisplayName("restoreLocalStorageScript clears and rewrites the entries array")
+    fun restoreLocalStorageScriptClearsAndRewrites() {
+        val script = Browser4WebDriver.restoreLocalStorageScript(
+            """[{"name":"k","value":"v"}]"""
+        )
+        assertTrue(script.contains("window.localStorage.clear()"), "expected clear call: $script")
+        assertTrue(script.contains("window.localStorage.setItem(entry.name, entry.value ?? \"\")"), "expected setItem: $script")
+        assertTrue(script.contains("return entries.length"), "expected entry count return: $script")
+    }
+
+    @Test
+    @DisplayName("isDocumentOriginReady accepts only an exact committed origin")
+    fun isDocumentOriginReadyAcceptsOnlyExactOrigin() {
+        assertTrue(Browser4WebDriver.isDocumentOriginReady("http://127.0.0.1:47815", "http://127.0.0.1:47815"))
+        assertFalse(Browser4WebDriver.isDocumentOriginReady(null, "http://127.0.0.1:47815"))
+        assertFalse(Browser4WebDriver.isDocumentOriginReady("", "http://127.0.0.1:47815"))
+        // Opaque-origin provisional documents report "null" — not ready.
+        assertFalse(Browser4WebDriver.isDocumentOriginReady("null", "http://127.0.0.1:47815"))
+        // A redirect to another origin is not ready for the requested origin.
+        assertFalse(
+            Browser4WebDriver.isDocumentOriginReady("https://www.example.com", "http://127.0.0.1:47815")
+        )
+    }
 }
