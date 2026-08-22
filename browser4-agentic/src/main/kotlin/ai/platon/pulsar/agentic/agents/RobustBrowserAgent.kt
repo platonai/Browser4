@@ -38,6 +38,9 @@ import kotlin.time.Duration.Companion.milliseconds
 private const val COMPACT_INLINE_SESSION_LENGTH = 160
 private const val COMPACT_INLINE_INSTRUCTION_LENGTH = 100
 private const val CLI_SYSTEM_PROMPT_MAX_CHARS = 120_000
+private const val CLI_CONTINUE_NUDGE =
+    "If the task is fully finished, call system.taskComplete with the final report now. " +
+        "Otherwise continue working with tools. Do not answer in plain text unless you are done."
 
 open class RobustBrowserAgent(
     session: AgenticSession, val maxSteps: Int = 100, config: AgentConfig = AgentConfig(maxSteps = maxSteps)
@@ -511,8 +514,10 @@ open class RobustBrowserAgent(
                 }
                 val text = response.content
                 val executed = toolExecutions.get() > toolsBefore
-                if (text.isBlank()) break
-                if (executed) {
+                // Internal tool-loop overflow (maxIterations exhausted) is real
+                // work, not a stall: keep going with a fresh generate() call.
+                val overflow = response.modelError != null
+                if (executed || overflow) {
                     textOnlyStreak = 0
                 } else {
                     textOnlyStreak++
@@ -534,10 +539,11 @@ open class RobustBrowserAgent(
                         break
                     }
                 }
-                messages = messages + AiMessage.from(text) + UserMessage.from(
-                    "If the task is fully finished, call system.taskComplete with the final report now. " +
-                        "Otherwise continue working with tools. Do not answer in plain text unless you are done."
-                )
+                messages = if (text.isBlank()) {
+                    messages + UserMessage.from(CLI_CONTINUE_NUDGE)
+                } else {
+                    messages + AiMessage.from(text) + UserMessage.from(CLI_CONTINUE_NUDGE)
+                }
                 turn++
             }
 
@@ -578,7 +584,10 @@ open class RobustBrowserAgent(
             model = cta.chatModel,
             toolSpecifications = specs,
             coordinator = ToolExecutionCoordinator(agentToolManager, registry),
-            maxIterations = config.toolLoopMaxIterations,
+            // Browser tasks routinely exceed the default 12-round internal cap
+            // (open → snapshot → type → submit → wait → extract); give the CLI
+            // engine a higher ceiling, overflow is handled by the outer loop.
+            maxIterations = config.toolLoopMaxIterations.coerceAtLeast(20),
             requestTokenLimiter = cta.requestTokenLimiter,
             onToolExecuted = { toolExecutions.incrementAndGet() },
             onToolRequest = { name, argsJson ->

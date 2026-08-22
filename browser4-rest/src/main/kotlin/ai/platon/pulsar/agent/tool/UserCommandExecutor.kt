@@ -147,7 +147,14 @@ class UserCommandExecutor(
             return CommandStatus.failed(ResourceStatus.SC_BAD_REQUEST)
         }
 
-        val request = commandNormalizer?.normalize(plainCommand)
+        // CLI engine (the default) executes everything as an agent task; only
+        // the explicit legacy OBSERVE_ACT engine keeps the URL/normalizer
+        // routing (URL-bearing tasks would otherwise hijack cli-engine runs).
+        val request = if (engine == RunEngine.OBSERVE_ACT) {
+            commandNormalizer?.normalize(plainCommand)
+        } else {
+            null
+        }
         return if (request != null) {
             val eventHandlers = PageEventHandlersFactory.create()
             ensurePageVisitor(sessionId).visit(request, eventHandlers).toCommandStatus()
@@ -181,6 +188,12 @@ class UserCommandExecutor(
             val status = CommandStatus(statusCode = ResourceStatus.SC_BAD_REQUEST, processState = "done")
             rejectedStatuses[status.id] = status
             return status.id
+        }
+
+        // CLI engine (the default): always an agent task — no URL shortcut, no
+        // normalizer hijack. The agent decides how to reach the page via cli.run.
+        if (engine != RunEngine.OBSERVE_ACT) {
+            return submitAgentTask(sessionId, command, noopLimit, engine)
         }
 
         // 2. Single URL with optional parameters — use page visit directly
