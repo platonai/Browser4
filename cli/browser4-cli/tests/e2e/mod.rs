@@ -1847,6 +1847,44 @@ fn is_browser4_healthy_now(base_url: &str) -> bool {
     }
 }
 
+/// Check whether the running backend reports the file-backed test LLM via
+/// `/api/doctor/llm-status`. Older or misconfigured backends return false, in
+/// which case the mock-LLM scenario is skipped with a warning instead of
+/// silently using a real LLM.
+fn backend_supports_file_backed_mock_llm(base_url: &str) -> bool {
+    let url = format!(
+        "{}/api/doctor/llm-status",
+        base_url.trim_end_matches('/')
+    );
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return false,
+    };
+
+    let response = match client.get(&url).send() {
+        Ok(response) => response,
+        Err(_) => return false,
+    };
+    if !response.status().is_success() {
+        return false;
+    }
+    let body = match response.text() {
+        Ok(body) => body,
+        Err(_) => return false,
+    };
+    let status: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(status) => status,
+        Err(_) => return false,
+    };
+    status
+        .get("detectedVia")
+        .and_then(|value| value.as_str())
+        == Some("test_file_backed")
+}
+
 // ---------------------------------------------------------------------------
 // CLI runner
 // ---------------------------------------------------------------------------
@@ -1986,6 +2024,10 @@ struct E2ETestResources {
     /// legitimately reuse the same healthy process without reprinting startup
     /// diagnostics.
     local_browser4_started: bool,
+    /// True once a file-backed mock-LLM scenario has (re)started the backend
+    /// with `BROWSER4_TEST_LLM_RESPONSE_DIR` set. Subsequent mock-LLM
+    /// scenarios can reuse that backend without another restart.
+    file_backed_llm_backend_ready: bool,
     /// Deferred Browser4 cleanup running in the background, if any.
     pending_cleanup: Option<(String, CleanupJoinHandle)>,
     ctx: E2ECtx,
@@ -3998,6 +4040,7 @@ fn create_e2e_test_resources() -> E2ETestResources {
         _fixture: fixture,
         external_service: is_external,
         local_browser4_started: false,
+        file_backed_llm_backend_ready: false,
         pending_cleanup: None,
         ctx: E2ECtx {
             fixture_base_url,
@@ -4628,6 +4671,50 @@ fn failure_from_cleanup_error(error: String) -> FailureDetail {
     }
 }
 
+/// Directory where a scenario's file-backed mock LLM responses live.
+pub(crate) fn file_backed_llm_response_dir(ctx: &E2ECtx) -> PathBuf {
+    ctx.workspace_dir.join("mock-llm-responses")
+}
+
+/// Write scripted LLM replies for a file-backed mock LLM scenario. The outer
+/// test prepares these files before `agent run` so the backend never talks to a
+/// real provider.  A shared directory is reused across scenarios; the marker
+/// file tells the backend's FileBackedChatModel to reset its sequence counter.
+pub(crate) fn write_file_backed_llm_responses(
+    ctx: &E2ECtx,
+    scenario_name: &str,
+    responses: &[&str],
+) -> PathBuf {
+    let dir = file_backed_llm_response_dir(ctx);
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("clear previous mock LLM responses");
+    }
+    fs::create_dir_all(&dir).expect("create mock LLM response directory");
+    fs::write(dir.join("scenario.txt"), scenario_name).expect("write mock LLM scenario marker");
+    for (index, response) in responses.iter().enumerate() {
+        let file = dir.join(format!("{index:03}.json"));
+        fs::write(&file, response).expect("write mock LLM response file");
+    }
+    dir
+}
+
+/// Apply per-scenario environment for the file-backed mock LLM before the
+/// Browser4 backend starts, so the backend JVM inherits it on launch.
+fn apply_scenario_server_env(name: &str, ctx: &mut E2ECtx) {
+    // Clear any stale test-LLM configuration first. Empty values are treated as
+    // disabled by TestChatModelFactory, so non-mock scenarios stay on the real
+    // provider path.
+    ctx.set_env("BROWSER4_TEST_LLM_RESPONSE_FILE", "");
+    ctx.set_env("BROWSER4_TEST_LLM_RESPONSE_DIR", "");
+
+    if name.starts_with("test_e2e_agent_run_mock_llm_") {
+        let dir = file_backed_llm_response_dir(ctx);
+        fs::create_dir_all(&dir).expect("create mock LLM response directory");
+        let dir_str = dir.to_string_lossy().into_owned();
+        ctx.set_env("BROWSER4_TEST_LLM_RESPONSE_DIR", &dir_str);
+    }
+}
+
 fn run_named_scenario(
     name: &str,
     resources: &mut E2ETestResources,
@@ -4641,6 +4728,10 @@ fn run_named_scenario(
 
     std::io::stdout().flush().expect("stdout flush failed");
     resources.ctx.clear_step_timings();
+    apply_scenario_server_env(name, &mut resources.ctx);
+    let is_mock_llm_scenario = name.starts_with("test_e2e_agent_run_mock_llm_");
+    let force_mock_llm_restart =
+        is_mock_llm_scenario && !resources.file_backed_llm_backend_ready;
     // Save and restore browser4_base_url so that mock-server scenarios which
     // temporarily point it at a MockBrowser4Server don't leak a stale URL into
     // subsequent real-backend scenarios that consult external_service + base_url.
@@ -4654,13 +4745,30 @@ fn run_named_scenario(
                 .unwrap_or_else(|error| panic!("{error}"));
             harness_steps.extend(pending_steps);
 
-            let setup_steps = if restart_browser4 {
+            let setup_steps = if restart_browser4 || force_mock_llm_restart {
                 println!("restarting browser4 ...");
                 resources.restart_browser4()
             } else {
                 resources.ensure_browser4()
             };
             harness_steps.extend(setup_steps);
+            if is_mock_llm_scenario {
+                resources.file_backed_llm_backend_ready = true;
+            }
+        }
+        if is_mock_llm_scenario
+            && !backend_supports_file_backed_mock_llm(&resources.ctx.browser4_base_url)
+        {
+            println!(
+                "SKIPPED ({}) - backend does not support file-backed mock LLM responses",
+                name
+            );
+            resources.ctx.browser4_base_url = saved_browser4_base_url;
+            let report = TimingReport::new(name, total_started_at.elapsed(), harness_steps);
+            return ScenarioOutcome {
+                report,
+                failures: Vec::new(),
+            };
         }
         test_fn(&mut resources.ctx);
         let mut steps = harness_steps;
@@ -4681,6 +4789,7 @@ fn run_named_scenario(
     // Wrap the test in catch_unwind so that Browser4 and Chrome are always
     // force-stopped even when the test panics, preventing leaked processes
     // from contaminating later scenarios.
+    let mut mock_llm_unsupported = false;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if requires_browser4 {
             let pending_steps = resources
@@ -4688,16 +4797,38 @@ fn run_named_scenario(
                 .unwrap_or_else(|error| panic!("{error}"));
             harness_steps.extend(pending_steps);
 
-            let setup_steps = if restart_browser4 {
+            let setup_steps = if restart_browser4 || force_mock_llm_restart {
                 println!("restarting browser4 ...");
                 resources.restart_browser4()
             } else {
                 resources.ensure_browser4()
             };
             harness_steps.extend(setup_steps);
+            if is_mock_llm_scenario {
+                resources.file_backed_llm_backend_ready = true;
+            }
+        }
+        if is_mock_llm_scenario
+            && !backend_supports_file_backed_mock_llm(&resources.ctx.browser4_base_url)
+        {
+            mock_llm_unsupported = true;
+            return;
         }
         test_fn(&mut resources.ctx);
     }));
+
+    if mock_llm_unsupported {
+        println!(
+            "SKIPPED ({}) - backend does not support file-backed mock LLM responses",
+            name
+        );
+        resources.ctx.browser4_base_url = saved_browser4_base_url;
+        let report = TimingReport::new(name, total_started_at.elapsed(), harness_steps);
+        return ScenarioOutcome {
+            report,
+            failures: Vec::new(),
+        };
+    }
 
     let cleanup_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         cleanup_after_scenario(resources, name, requires_browser4, cleanup_mode)

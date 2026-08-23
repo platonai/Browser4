@@ -23,6 +23,7 @@ import ai.platon.pulsar.api.WebDriver
 import ai.platon.pulsar.external.BrowserChatModel
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.external.ModelResponse
+import ai.platon.pulsar.skeleton.llm.TestChatModelFactory
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import java.nio.file.Files
@@ -35,7 +36,8 @@ open class TextToAction(
     /** Conf with the PulsarRPA input-length cap force-raised for deepseek-v4-flash's 1M context window. */
     private val chatModelConf: ImmutableConfig by lazy { conf.forceLlmMaxInputTokenLength() }
 
-    val chatModel: BrowserChatModel get() = ChatModelFactory.getOrCreate(chatModelConf)
+    val chatModel: BrowserChatModel
+        get() = TestChatModelFactory.getOrCreate(chatModelConf) ?: ChatModelFactory.getOrCreate(chatModelConf)
 
     /**
      * Generate EXACT ONE WebDriver action with interactive elements.

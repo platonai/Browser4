@@ -92,6 +92,8 @@ buildNumber.properties
 
 #.idea/markdown-navigator/
 logs/
+.backend-detached.log
+.backend-detached.log.err
 # coworker scheduler status (kept in home directory)
 .browser4/
 lib/

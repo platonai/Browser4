@@ -10,6 +10,7 @@ import ai.platon.pulsar.common.urls.UrlAware
 import ai.platon.pulsar.api.WebDriver
 import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.dom.FeaturedDocument
+import ai.platon.pulsar.external.BrowserChatModel
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.loop.TaskLoops
@@ -24,6 +25,7 @@ import ai.platon.pulsar.skeleton.common.urls.NormURL
 import ai.platon.pulsar.skeleton.context.PulsarContext
 import ai.platon.pulsar.skeleton.session.AbstractPulsarSession
 import ai.platon.pulsar.skeleton.session.PulsarSession
+import ai.platon.pulsar.skeleton.llm.TestChatModelFactory
 import ai.platon.pulsar.skeleton.workflow.common.FetchState
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCacheFactory
@@ -485,13 +487,16 @@ abstract class AbstractPulsarContext(
     }
 
     override suspend fun chat(prompt: String): ModelResponse {
-        return ChatModelFactory.getOrCreateOrNull(configuration)?.call(prompt) ?: ModelResponse.LLM_NOT_AVAILABLE
+        return chatModelOrNull()?.call(prompt) ?: ModelResponse.LLM_NOT_AVAILABLE
     }
 
     override suspend fun chat(userMessage: String, systemMessage: String): ModelResponse {
-        return ChatModelFactory.getOrCreateOrNull(configuration)?.callUmSm(userMessage, systemMessage)
+        return chatModelOrNull()?.callUmSm(userMessage, systemMessage)
             ?: ModelResponse.LLM_NOT_AVAILABLE
     }
+
+    private fun chatModelOrNull(): BrowserChatModel? =
+        TestChatModelFactory.getOrCreate(configuration) ?: ChatModelFactory.getOrCreateOrNull(configuration)
 
     @Throws(WebDBException::class)
     override fun persist(page: WebPage) {

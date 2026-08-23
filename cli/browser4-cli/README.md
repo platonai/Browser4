@@ -427,6 +427,39 @@ cargo test --test e2e -- --nocapture --force-remote-bundle
 cargo test --test e2e -- --nocapture --level All --force-remote-bundle --enable-batch-scenario --enable-install-scenario
 ```
 
+### File-backed mock LLM scenarios (`agent run`)
+
+The multi-step `agent run` e2e scenarios use a real Browser4 backend with
+`FileBackedChatModel`: the test harness prepares numbered response files under
+`BROWSER4_TEST_LLM_RESPONSE_DIR` and the backend reads those files instead of
+calling a real LLM. The scenarios are excluded by default; pass `--enable-all`
+to include them in a full run, or use an explicit `--scenario` filter:
+
+```bash
+# Run all four file-backed mock-LLM scenarios
+cargo test --test e2e -- --nocapture --scenario test_e2e_agent_run_mock_llm_* --level EXTENDED
+
+# Run a single scenario
+cargo test --test e2e -- --nocapture --scenario test_e2e_agent_run_mock_llm_multi_step_cli_tools --level EXTENDED
+
+# Include them in a full Extended run
+cargo test --test e2e -- --nocapture --level EXTENDED --enable-all
+```
+
+Scenario names:
+
+- `test_e2e_agent_run_mock_llm_multi_step_cli_tools`
+- `test_e2e_agent_run_mock_llm_task_complete_protocol`
+- `test_e2e_agent_run_mock_llm_async_then_result`
+- `test_e2e_agent_run_mock_llm_failure_then_recovery`
+
+The first mock-LLM scenario restarts the backend with the mock configuration;
+later scenarios reuse that backend. Before executing, the harness asks the
+backend's `/api/doctor/llm-status` endpoint whether `detectedVia` is
+`test_file_backed`. If the backend does not support the file-backed mock LLM,
+the scenario prints `SKIPPED` and continues with the rest of the suite instead
+of failing.
+
 ## License
 
 Apache-2.0

@@ -15,6 +15,7 @@ import ai.platon.pulsar.rest.session.ManagedSession
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.rest.session.SessionKind
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
+import ai.platon.pulsar.skeleton.llm.TestChatModelFactory
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import com.codahale.metrics.Counter
 import com.codahale.metrics.Gauge
@@ -122,6 +123,7 @@ class SystemStatusController(
     private fun llmInfo(): Map<String, Any?> {
         val envVars = LLM_ENV_VARS.filter { System.getenv(it) != null }
         val properties = LLM_PROPERTIES.filter { System.getProperty(it) != null }
+        val testLlmEnabled = TestChatModelFactory.isEnabled()
 
         // Primary check: same path used by DoctorController and the standalone app —
         // reads the Pulsar SDK ImmutableConfig loaded from ~/.browser4/config/conf-enabled/.
@@ -133,6 +135,7 @@ class SystemStatusController(
         }
 
         val detectedVia = when {
+            testLlmEnabled -> "test_file_backed"
             factoryConfigured == true -> "config_file"
             envVars.isNotEmpty() || properties.isNotEmpty() -> "env_or_property"
             else -> null

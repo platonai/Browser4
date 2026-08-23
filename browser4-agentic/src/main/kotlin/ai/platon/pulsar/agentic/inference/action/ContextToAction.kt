@@ -28,6 +28,7 @@ import ai.platon.pulsar.external.BrowserChatModel
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
+import ai.platon.pulsar.skeleton.llm.TestChatModelFactory
 import dev.langchain4j.data.image.Image
 import dev.langchain4j.data.message.ImageContent
 import dev.langchain4j.data.message.ChatMessage
@@ -48,7 +49,8 @@ open class ContextToAction(
     /** Conf with the PulsarRPA input-length cap force-raised for deepseek-v4-flash's 1M context window. */
     private val chatModelConf: ImmutableConfig by lazy { conf.forceLlmMaxInputTokenLength() }
 
-    val chatModel: BrowserChatModel get() = ChatModelFactory.getOrCreate(chatModelConf)
+    val chatModel: BrowserChatModel
+        get() = TestChatModelFactory.getOrCreate(chatModelConf) ?: ChatModelFactory.getOrCreate(chatModelConf)
 
     val tta = TextToAction(conf)
 

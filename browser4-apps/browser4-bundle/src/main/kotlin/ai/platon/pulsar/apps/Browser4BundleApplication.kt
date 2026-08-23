@@ -5,6 +5,7 @@ import ai.platon.pulsar.boot.plugin.PluginClasspathEnhancer
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.rest.ApiApplication
+import ai.platon.pulsar.skeleton.llm.TestChatModelFactory
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import kotlin.concurrent.thread
 import org.springframework.beans.factory.annotation.Value
@@ -58,6 +59,9 @@ class Browser4BundleApplication(
 
     private fun getLLMStatusMessage(): String {
         return try {
+            if (TestChatModelFactory.isEnabled()) {
+                return "LLM is configured (file-backed test mock)."
+            }
             val hasLLM = ChatModelFactory.isModelConfigured(session.configuration, verbose = false)
             if (hasLLM) {
                 "LLM is configured, you can use LLM commands."

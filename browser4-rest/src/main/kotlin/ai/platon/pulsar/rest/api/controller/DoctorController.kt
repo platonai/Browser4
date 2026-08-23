@@ -2,6 +2,7 @@ package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.external.ChatModelFactory
+import ai.platon.pulsar.skeleton.llm.TestChatModelFactory
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import com.codahale.metrics.*
 import org.slf4j.LoggerFactory
@@ -139,6 +140,7 @@ class DoctorController(
 
         val foundEnvVars = envKeyNames.filter { System.getenv(it) != null }
         val foundProperties = propertyKeyNames.filter { System.getProperty(it) != null }
+        val testLlmEnabled = TestChatModelFactory.isEnabled()
 
         // Primary check: use ChatModelFactory which reads from the Pulsar SDK's
         // ImmutableConfig (loaded from ~/.browser4/config/conf-enabled/). This is
@@ -151,6 +153,7 @@ class DoctorController(
         }
 
         val configured = when {
+            testLlmEnabled -> true
             factoryConfigured == true -> true
             foundEnvVars.isNotEmpty() || foundProperties.isNotEmpty() -> true
             else -> false
@@ -168,6 +171,7 @@ class DoctorController(
             mapOf(
                 "configured" to configured,
                 "detectedVia" to when {
+                    testLlmEnabled -> "test_file_backed"
                     factoryConfigured == true -> "config_file"
                     foundEnvVars.isNotEmpty() || foundProperties.isNotEmpty() -> "env_or_property"
                     else -> null
