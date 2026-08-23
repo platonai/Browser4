@@ -24,7 +24,9 @@ mod config;
 mod daemon;
 mod help;
 mod http;
+mod java;
 mod managed_processes;
+mod webminer;
 mod skills;
 mod snapshot;
 mod snapshot_diff;
@@ -448,6 +450,14 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "plugin-info",
         "plugin-install",
         "plugin-remove",
+        "webminer",
+        "webminer-install",
+        "webminer-update",
+        "webminer-version",
+        "webminer-uninstall",
+        "webminer-run-example",
+        "webminer-all",
+        "webminer-views",
     ]
     .into()
 }
@@ -13195,6 +13205,188 @@ fn handle_skills_unpack(tool_params: &Value) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// webminer (WebMiner) command handlers
+// ---------------------------------------------------------------------------
+
+/// Forward raw CLI tokens (everything after the command name) to
+/// `java -jar scent-miner.jar`, optionally prefixing a jar command name.
+/// A non-zero child exit code is surfaced as a command failure.
+fn forward_webminer_run(raw_args: &[String], jar_command: Option<&str>) -> Result<(), CliError> {
+    let mut forward: Vec<String> = Vec::new();
+    if let Some(cmd) = jar_command {
+        forward.push(cmd.to_string());
+    }
+    // raw_args[0] is the (possibly rewritten) command name.
+    forward.extend(raw_args.iter().skip(1).cloned());
+
+    match webminer::run_pipeline(&forward) {
+        Ok(0) => Ok(()),
+        Ok(code) => Err(CliError(
+            ExitCode::General,
+            format!("webminer exited with code {code}"),
+        )),
+        Err(e) => Err(CliError(ExitCode::General, e)),
+    }
+}
+
+/// Print the installed/latest/Java summary (shared by `version` and the
+/// bare `webminer` status view).
+async fn print_webminer_status(show_usage: bool) -> Result<(), CliError> {
+    let status = webminer::version_status().await;
+    json_field("installed", json!(status.installed));
+    json_field(
+        "install_dir",
+        json!(status.install_dir.display().to_string()),
+    );
+    json_field(
+        "latest",
+        json!(status.latest.as_ref().map(|l| &l.tag_name)),
+    );
+
+    cli_println!();
+    cli_println!("  webminer (WebMiner) — cluster HTML pages into interactive views");
+    cli_println!("  ----------------------------------------------------------------");
+    match &status.installed {
+        Some(version) => {
+            let size = status
+                .jar_bytes
+                .map(|b| format!("{:.1} MB", b as f64 / 1_048_576.0))
+                .unwrap_or_else(|| "(JAR missing)".to_string());
+            cli_println!("  Installed : {version}  ({size})");
+            cli_println!("  Location  : {}", status.install_dir.display());
+        }
+        None => {
+            cli_println!("  Installed : (none) — run `browser4-cli webminer install`");
+        }
+    }
+    match java::find_java17() {
+        Ok(java) => cli_println!("  Java 17+  : {}", java.display()),
+        Err(e) => cli_println!("  Java 17+  : not found ({e})"),
+    }
+    match (&status.latest, &status.latest_error) {
+        (Some(latest), _) => {
+            let size = latest
+                .jar_size
+                .map(|b| format!("{:.1} MB", b as f64 / 1_048_576.0))
+                .unwrap_or_else(|| "?".to_string());
+            cli_println!("  Latest    : {}  ({size})", latest.tag_name);
+            if let Some(published) = &latest.published_at {
+                cli_println!("  Published : {published}");
+            }
+            if status.installed.as_deref() != Some(latest.tag_name.as_str()) {
+                cli_println!();
+                cli_println!("  Update available! Run: browser4-cli webminer update");
+            }
+        }
+        (None, Some(err)) => {
+            cli_println!("  Latest    : (cannot reach GitHub or OSS mirror: {err})");
+        }
+        (None, None) => {}
+    }
+    if show_usage {
+        cli_println!();
+        cli_println!("  Subcommands:");
+        cli_println!("    install [version]   Download and install scent-miner.jar (GitHub → OSS mirror)");
+        cli_println!("    update              Update to the latest release");
+        cli_println!("    version             Show installed and latest versions");
+        cli_println!("    uninstall           Remove the installed release");
+        cli_println!("    run-example         Download the sample dataset and run the full pipeline (needs 7-Zip)");
+        cli_println!("    all <html-dir>      Run the full pipeline on downloaded HTML files");
+        cli_println!("    views <result-dir>  Rebuild the interactive views from an existing run");
+        cli_println!();
+        cli_println!("  Other commands are forwarded to scent-miner.jar. See `browser4-cli help webminer`.");
+    }
+    cli_println!();
+    Ok(())
+}
+
+async fn handle_webminer(raw_args: &[String]) -> Result<(), CliError> {
+    // Bare `webminer` → status + usage.  Anything else is forwarded
+    // verbatim to scent-miner.jar: known subcommands (install, all, views …)
+    // are rewritten to webminer-<sub> before dispatch, so this branch
+    // covers arbitrary JAR commands like `webminer encode <dir>`.
+    if raw_args.len() <= 1 {
+        return print_webminer_status(true).await;
+    }
+    forward_webminer_run(raw_args, None)
+}
+
+async fn handle_webminer_install(tool_params: &Value) -> Result<(), CliError> {
+    let version = tool_params.get("version").and_then(|v| v.as_str());
+    let force = tool_params
+        .get("force")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let outcome = webminer::install(version, force)
+        .await
+        .map_err(CliError::from)?;
+    json_field("tag", json!(&outcome.tag));
+    json_field(
+        "install_dir",
+        json!(outcome.install_dir.display().to_string()),
+    );
+    json_field("reused_existing", json!(outcome.reused_existing));
+    json_field("source_url", json!(&outcome.source_url));
+    if outcome.reused_existing {
+        cli_println!("✓ webminer {} is already installed.", outcome.tag);
+    } else {
+        cli_println!(
+            "✓ webminer {} installed to {}",
+            outcome.tag,
+            outcome.install_dir.display()
+        );
+    }
+    Ok(())
+}
+
+async fn handle_webminer_update() -> Result<(), CliError> {
+    let outcome = webminer::update().await.map_err(CliError::from)?;
+    json_field("tag", json!(&outcome.tag));
+    json_field("reused_existing", json!(outcome.reused_existing));
+    if outcome.reused_existing {
+        cli_println!("✓ webminer is up to date ({}).", outcome.tag);
+    } else {
+        cli_println!("✓ webminer updated to {}.", outcome.tag);
+    }
+    Ok(())
+}
+
+async fn handle_webminer_version() -> Result<(), CliError> {
+    print_webminer_status(false).await
+}
+
+fn handle_webminer_uninstall() -> Result<(), CliError> {
+    let root = webminer::uninstall().map_err(CliError::from)?;
+    json_field("install_dir", json!(root.display().to_string()));
+    if root.is_dir() {
+        cli_println!("No webminer installation found at {}.", root.display());
+    } else {
+        cli_println!("✓ Removed webminer installation at {}.", root.display());
+    }
+    Ok(())
+}
+
+async fn handle_webminer_run_example(raw_args: &[String]) -> Result<(), CliError> {
+    let forward: Vec<String> = raw_args.iter().skip(1).cloned().collect();
+    match webminer::run_example(&forward).await {
+        Ok(0) => Ok(()),
+        Ok(code) => Err(CliError(
+            ExitCode::General,
+            format!("webminer exited with code {code}"),
+        )),
+        Err(e) => Err(CliError(ExitCode::General, e)),
+    }
+}
+
+async fn handle_webminer_all(raw_args: &[String]) -> Result<(), CliError> {
+    forward_webminer_run(raw_args, Some("all"))
+}
+
+async fn handle_webminer_views(raw_args: &[String]) -> Result<(), CliError> {
+    forward_webminer_run(raw_args, Some("views"))
+}
+
+// ---------------------------------------------------------------------------
 // plugin command handlers
 // ---------------------------------------------------------------------------
 
@@ -15326,6 +15518,15 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "config-get"
         && command != "config-set"
         && command != "config-delete"
+        // webminer runs a local Java tool — no Browser4 server needed.
+        && command != "webminer"
+        && command != "webminer-install"
+        && command != "webminer-update"
+        && command != "webminer-version"
+        && command != "webminer-uninstall"
+        && command != "webminer-run-example"
+        && command != "webminer-all"
+        && command != "webminer-views"
 }
 
 /// Commands that require a web page to already be loaded in the browser.
@@ -15499,6 +15700,28 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
             }
         }
     }
+    // "webminer" works standalone (webminer) AND as a prefix
+    // (webminer install / all / views ...).  Known subcommands are
+    // rewritten to their flat forms; unknown ones (arbitrary JAR commands
+    // like `webminer encode <dir>`) fall through so the bare command
+    // handler can forward them verbatim to scent-miner.jar.
+    if prefix == "webminer" {
+        let known_subs = [
+            "install",
+            "update",
+            "version",
+            "uninstall",
+            "run-example",
+            "all",
+            "views",
+        ];
+        if known_subs.contains(&sub.as_str()) {
+            let mut rewritten = vec![format!("webminer-{}", sub)];
+            rewritten.extend(args[2..].iter().cloned());
+            return Some(rewritten);
+        }
+        return None;
+    }
     let rewritten_command = match prefix {
         "swarm" => format!("swarm-{}", sub),
         "agent" => format!("agent-{}", sub),
@@ -15570,6 +15793,13 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "config-get" => Some("config get"),
         "config-set" => Some("config set"),
         "config-delete" => Some("config delete"),
+        "webminer-install" => Some("webminer install"),
+        "webminer-update" => Some("webminer update"),
+        "webminer-version" => Some("webminer version"),
+        "webminer-uninstall" => Some("webminer uninstall"),
+        "webminer-run-example" => Some("webminer run-example"),
+        "webminer-all" => Some("webminer all"),
+        "webminer-views" => Some("webminer views"),
         _ => None,
     }
 }
@@ -16993,6 +17223,30 @@ async fn run(
         }
         "config-delete" => {
             handle_config_delete(&tool_params)?;
+        }
+        "webminer" => {
+            handle_webminer(&global.args).await?;
+        }
+        "webminer-install" => {
+            handle_webminer_install(&tool_params).await?;
+        }
+        "webminer-update" => {
+            handle_webminer_update().await?;
+        }
+        "webminer-version" => {
+            handle_webminer_version().await?;
+        }
+        "webminer-uninstall" => {
+            handle_webminer_uninstall()?;
+        }
+        "webminer-run-example" => {
+            handle_webminer_run_example(&global.args).await?;
+        }
+        "webminer-all" => {
+            handle_webminer_all(&global.args).await?;
+        }
+        "webminer-views" => {
+            handle_webminer_views(&global.args).await?;
         }
         "install" => {
             handle_install(&tool_params).await?;
@@ -23210,5 +23464,145 @@ mod tests {
             .output()
             .expect("run self");
         assert!(!output.status.success());
+    }
+
+    // -----------------------------------------------------------------------
+    // webminer (WebMiner) command rewriting / dispatch helpers
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn rewrite_prefixed_command_supports_webminer_install() {
+        let rewritten = rewrite_prefixed_command(&[
+            "webminer".to_string(),
+            "install".to_string(),
+            "v0.0.7".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "webminer-install");
+        assert_eq!(rewritten[1], "v0.0.7");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_webminer_all_and_views() {
+        let rewritten = rewrite_prefixed_command(&[
+            "webminer".to_string(),
+            "all".to_string(),
+            "./html-pages".to_string(),
+            "--max-files".to_string(),
+            "50".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "webminer-all");
+        assert_eq!(rewritten[1], "./html-pages");
+        assert_eq!(rewritten[2], "--max-files");
+        assert_eq!(rewritten[3], "50");
+
+        let rewritten = rewrite_prefixed_command(&[
+            "webminer".to_string(),
+            "views".to_string(),
+            "out/kmeans-result/p1".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "webminer-views");
+        assert_eq!(rewritten[1], "out/kmeans-result/p1");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_webminer_management_subs() {
+        for sub in ["update", "version", "uninstall", "run-example"] {
+            let rewritten =
+                rewrite_prefixed_command(&["webminer".to_string(), sub.to_string()]).unwrap();
+            assert_eq!(rewritten[0], format!("webminer-{sub}"));
+            assert_eq!(rewritten.len(), 1);
+        }
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_webminer_unknown_subcommand_passes_through() {
+        // Unknown subcommands (arbitrary JAR commands) must NOT be rewritten —
+        // the bare `webminer` handler forwards them verbatim.
+        let result = rewrite_prefixed_command(&[
+            "webminer".to_string(),
+            "encode".to_string(),
+            "./html-pages".to_string(),
+        ]);
+        assert!(result.is_none(), "unknown webminer subcommands pass through");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_webminer_bare_is_not_rewritten() {
+        assert!(rewrite_prefixed_command(&["webminer".to_string()]).is_none());
+    }
+
+    #[test]
+    fn preferred_spaced_command_form_includes_webminer_subcommands() {
+        assert_eq!(
+            preferred_spaced_command_form("webminer-install"),
+            Some("webminer install")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("webminer-update"),
+            Some("webminer update")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("webminer-version"),
+            Some("webminer version")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("webminer-uninstall"),
+            Some("webminer uninstall")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("webminer-run-example"),
+            Some("webminer run-example")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("webminer-all"),
+            Some("webminer all")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("webminer-views"),
+            Some("webminer views")
+        );
+        // The bare group command stays valid (status/help view), like `skills`.
+        assert_eq!(preferred_prefixed_group_form("webminer"), None);
+    }
+
+    #[test]
+    fn no_snapshot_commands_includes_webminer() {
+        let cmds = no_snapshot_commands();
+        for name in [
+            "webminer",
+            "webminer-install",
+            "webminer-update",
+            "webminer-version",
+            "webminer-uninstall",
+            "webminer-run-example",
+            "webminer-all",
+            "webminer-views",
+        ] {
+            assert!(cmds.contains(name), "{name} should be in no_snapshot_commands");
+        }
+    }
+
+    #[test]
+    fn should_ensure_server_running_excludes_webminer() {
+        // webminer runs a local Java tool — it must never auto-start the
+        // Browser4 server.
+        for name in [
+            "webminer",
+            "webminer-install",
+            "webminer-update",
+            "webminer-version",
+            "webminer-uninstall",
+            "webminer-run-example",
+            "webminer-all",
+            "webminer-views",
+        ] {
+            assert!(
+                !should_ensure_server_running(name),
+                "{name} should not ensure the server is running"
+            );
+        }
     }
 }

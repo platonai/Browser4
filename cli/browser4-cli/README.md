@@ -169,6 +169,23 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 
 Skills are AI agent instruction files bundled into the CLI binary at compile time. The bundled content always matches the installed CLI version. Set `BROWSER4_SKILLS_DIR` to override the skills directory path. Skill files are unpacked to the versioned installation directory during `browser4-cli install` and refreshed by `upgrade`; unpacking is idempotent (unchanged files are skipped), so re-running is cheap. `install` / `upgrade` also copy the bundled skills into `~/.agents/skills` so AI agents (e.g. Codex) can load them automatically (override with `BROWSER4_AGENTS_SKILLS_DIR`).
 
+### webminer (WebMiner)
+
+`webminer` runs the [WebMiner](https://github.com/platonai/web-miner) ML clustering tool on local HTML files — no Browser4 server and no PowerShell needed. It installs, updates, and launches `scent-miner.jar` natively (Java 17+ is auto-detected from `JAVA_HOME`, common paths, or `PATH`).
+
+| Command | Description |
+|---|---|
+| `webminer` | Show installed version, Java 17+ status, and subcommand list |
+| `webminer install [version]` | Download and install the latest release (or a specific tag) to `~/.scent/webminer` with SHA-256 verification (GitHub → OSS mirror fallback) |
+| `webminer update` | Update to the latest release |
+| `webminer version` | Show installed and latest available versions |
+| `webminer uninstall` | Remove the installed release |
+| `webminer run-example` | Download the sample dataset and run the full pipeline (needs 7-Zip) |
+| `webminer all <html-dir>` | Full pipeline (encode → cluster → views) with `--max-files`, `--output`, `--resume` |
+| `webminer views <result-dir>` | Rebuild interactive views from an existing clustering result |
+
+Any other command is forwarded verbatim to `scent-miner.jar` (e.g. `webminer encode <dir>`). The same `~/.scent/webminer` installation is shared with the `webminer.ps1` launcher from the [web-miner skill](../../skills/web-miner/SKILL.md).
+
 ### Install / Admin
 
 | Command | Description |
@@ -229,11 +246,12 @@ Need to process multiple pages?
 [WebMiner](https://github.com/platonai/web-miner) clusters downloaded HTML files into structured spreadsheets via ML — no API keys, no tokens. Free tier (SMILE engine) handles < 1,000 pages; commercial tier (Apache Spark ML) scales to 100K+ pages/day.
 
 ```
-java -jar scent-miner.jar all ./html-pages/
+browser4-cli webminer install
+browser4-cli webminer all ./html-pages/
 # → Interactive HTML report + Excel spreadsheets
 ```
 
-See [web-miner](https://github.com/platonai/web-miner) for install instructions.
+Requires JDK 17+ (auto-detected). See `browser4-cli help webminer` and [web-miner](https://github.com/platonai/web-miner).
 
 ## Build
 

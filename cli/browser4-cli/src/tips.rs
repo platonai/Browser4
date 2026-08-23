@@ -241,6 +241,21 @@ const TIPS_AGENT: &[Tip] = &[
     },
 ];
 
+const TIPS_WEBMINER: &[Tip] = &[
+    Tip {
+        text: "webminer clusters downloaded HTML pages into interactive views — start with `webminer install`, then `webminer run-example`",
+    },
+    Tip {
+        text: "Use `webminer all <html-dir>` to run the full pipeline (encode → cluster → views) with cluster counts auto-detected",
+    },
+    Tip {
+        text: "Export pages to HTML first (e.g. `htmlsnapshot export`) — webminer works offline on local HTML files",
+    },
+    Tip {
+        text: "Rebuild views next to your clustered results with `webminer views <html-dir>-ml-output/kmeans-result/p<timestamp>`",
+    },
+];
+
 const TIPS_ATTACH: &[Tip] = &[
     Tip {
         text: "Use `attach --cdp chrome` to connect to your regular Chrome with all your logins intact",
@@ -390,6 +405,9 @@ fn tips_for_command(command: &str) -> &'static [Tip] {
         "swarm-create" | "swarm-submit" | "swarm-query" | "swarm-status" | "swarm-result"
         | "swarm-list" | "swarm-close" => TIPS_SWARM,
         "agent-run" | "agent-status" | "agent-result" | "agent-list" => TIPS_AGENT,
+        "webminer" | "webminer-install" | "webminer-update" | "webminer-version"
+        | "webminer-uninstall" | "webminer-run-example" | "webminer-all"
+        | "webminer-views" => TIPS_WEBMINER,
         "attach" => TIPS_ATTACH,
         "cookie-list" | "cookie-get" | "cookie-set" | "cookie-delete" | "cookie-clear" => {
             TIPS_COOKIE

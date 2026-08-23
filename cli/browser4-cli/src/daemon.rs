@@ -1222,23 +1222,20 @@ fn try_migrate_legacy_runtime() -> Option<String> {
     }
 }
 
+/// Platform java executable name (`java.exe` on Windows, `java` elsewhere).
+/// Thin wrapper over the shared [`crate::java::executable_name`].
 fn browser4_java_executable_name() -> &'static str {
-    if cfg!(windows) {
-        "java.exe"
-    } else {
-        "java"
-    }
+    crate::java::executable_name()
 }
 
 fn browser4_install_metadata_path() -> PathBuf {
     browser4_install_dir().join(BROWSER4_INSTALL_METADATA_FILE_NAME)
 }
 
+/// Path of the JRE inside a runtime install directory.  Thin wrapper over
+/// the shared [`crate::java::java_in_install_dir`].
 fn java_path_in_install_dir(install_dir: &Path) -> PathBuf {
-    install_dir
-        .join(BROWSER4_RUNTIME_DIR_NAME)
-        .join("bin")
-        .join(browser4_java_executable_name())
+    crate::java::java_in_install_dir(install_dir)
 }
 
 pub fn read_installed_browser4_runtime_metadata() -> Option<InstalledBrowser4RuntimeMetadata> {
@@ -1531,7 +1528,7 @@ fn proxy_from_url(raw: &str) -> Option<reqwest::Proxy> {
 ///
 /// Returns `None` when no proxy is configured, so the download uses a
 /// direct connection.
-fn resolve_download_proxy() -> Option<reqwest::Proxy> {
+pub(crate) fn resolve_download_proxy() -> Option<reqwest::Proxy> {
     // 1 — Explicit CLI override (--proxy flag).
     let cli_proxy = std::env::var("BROWSER4_CLI_PROXY")
         .ok()

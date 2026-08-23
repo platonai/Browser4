@@ -53,6 +53,13 @@ pub fn public_command_name(name: &str) -> &str {
         "config-get" => "config get",
         "config-set" => "config set",
         "config-delete" => "config delete",
+        "webminer-install" => "webminer install",
+        "webminer-update" => "webminer update",
+        "webminer-version" => "webminer version",
+        "webminer-uninstall" => "webminer uninstall",
+        "webminer-run-example" => "webminer run-example",
+        "webminer-all" => "webminer all",
+        "webminer-views" => "webminer views",
         _ => name,
     }
 }

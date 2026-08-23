@@ -148,12 +148,13 @@ browser4-cli snapshot -i
 
 ### 如何把 HTML 转成电子表格——零 Token
 
-[WebMiner](https://github.com/platonai/web-miner) 会对下载下来的 HTML 文件做机器学习聚类，生成结构化电子表格和交互式报告——**不消耗 LLM token，全部本地运行。**
+[WebMiner](https://github.com/platonai/web-miner) 会对下载下来的 HTML 文件做机器学习聚类，生成结构化电子表格和交互式报告——**不消耗 LLM token，全部本地运行。** webminer 是 Browser4 CLI 的一等公民：`browser4-cli webminer install` + `browser4-cli webminer all <html-dir>` 即可跑完整流程，无需 PowerShell。
 
 ```
 已经有 HTML 文件，想要结构化数据，而且不想花 token？
 ├─ < 1,000 页（小中规模）？→ WebMiner Free（SMILE ML 引擎）
-│  java -jar scent-miner.jar all ./pages/
+│  browser4-cli webminer install
+│  browser4-cli webminer all ./pages/
 │  → 交互式 HTML 报告 + Excel 电子表格，本地运行，零成本
 ├─ > 1,000 页（生产规模）？→ WebMiner Commercial（Apache Spark ML）
 │  同样是 encode → cluster → views 流程，但可分布式扩展到多台机器
@@ -164,7 +165,7 @@ browser4-cli snapshot -i
        然后把 HTML 目录交给 WebMiner
 ```
 
-> **Pipeline：** `encode`（HTML → 特征向量 → CSV）→ `cluster`（KMeans，自动检测 K）→ `views`（HTML 报告 + Excel）。免费版使用 [SMILE](https://haifengl.github.io/) ML 库进行单机聚类（< 1,000 页）。需要 JDK 17+。安装说明见 [web-miner](https://github.com/platonai/web-miner)。
+> **Pipeline：** `encode`（HTML → 特征向量 → CSV）→ `cluster`（KMeans，自动检测 K）→ `views`（HTML 报告 + Excel）。免费版使用 [SMILE](https://haifengl.github.io/) ML 库进行单机聚类（< 1,000 页）。需要 JDK 17+（自动检测）。用法见 [web-miner](https://github.com/platonai/web-miner) 与 `browser4-cli help webminer`。
 
 ---
 

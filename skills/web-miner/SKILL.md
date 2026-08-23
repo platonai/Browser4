@@ -5,6 +5,32 @@ report with clusters of related pages — plus Excel spreadsheets for further
 analysis. Give it a folder of downloaded HTML files, and it handles the rest.
 Everything runs locally; no data leaves your machine.
 
+## Using from the Browser4 CLI
+
+WebMiner is a first-class Browser4 citizen: the `browser4-cli webminer`
+command installs, updates, and runs the tool natively (no PowerShell needed —
+the CLI locates a Java 17+ installation and launches `scent-miner.jar`
+directly). The JAR and its release metadata are installed to the same
+locations the launcher script uses (`~/.scent/webminer/`), so both entry
+points share one installation.
+
+```bash
+browser4-cli webminer install            # Download and install the latest release
+browser4-cli webminer update             # Check for and install the latest release
+browser4-cli webminer version            # Show installed and latest available versions
+browser4-cli webminer uninstall          # Remove the installed release
+browser4-cli webminer run-example        # Sample dataset + full pipeline (needs 7-Zip)
+browser4-cli webminer all <html-dir>     # Full pipeline (encode → cluster → views)
+browser4-cli webminer views <result-dir> # Rebuild views from an existing run
+```
+
+- `webminer all <dir>` accepts the pipeline options directly
+  (`--max-files <n>`, `--output <dir>`, `--resume [<project-id>]`).
+- Any other command is forwarded verbatim to `scent-miner.jar`, e.g.
+  `browser4-cli webminer encode <dir>`.
+- Runs started through the CLI set `-Dapp.name=webminer`, so the views
+  task-output root is `%TEMP%\webminer-pereg\ml\tasks\...` (see [Output](#output)).
+
 ## Installing WebMiner
 
 The `webminer.ps1` launcher can self-install and self-update from GitHub Releases:
@@ -15,6 +41,9 @@ The `webminer.ps1` launcher can self-install and self-update from GitHub Release
 .\webminer.ps1 version              # Show installed and latest available versions
 .\webminer.ps1 uninstall            # Remove the installed release
 ```
+
+`browser4-cli webminer install/update/version/uninstall` are the
+cross-platform equivalents (they do not require PowerShell).
 
 Releases are installed to `~/.scent/webminer/` and checked against
 `https://github.com/platonai/web-miner/releases`. SHA-256 checksums are

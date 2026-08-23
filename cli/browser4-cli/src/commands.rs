@@ -595,6 +595,173 @@ pub fn all_commands() -> Vec<CommandDef> {
                 params
             },
         },
+        // ---- webminer (WebMiner, bundled skill) ----
+        CommandDef {
+            name: "webminer",
+            description: "Run webminer (WebMiner): cluster downloaded HTML pages into interactive views. Subcommands: install, update, version, uninstall, run-example, all, views. Other commands are forwarded to scent-miner.jar (runs locally, no Browser4 server needed).",
+            category: Category::Skills,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "command",
+                description: "webminer subcommand or a JAR command to forward (e.g. all <html-dir>)",
+                optional: true,
+            }],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "webminer-install",
+            description: "Download and install the webminer release (scent-miner.jar) to ~/.scent/webminer, verifying the SHA-256 checksum (GitHub Releases with an OSS mirror fallback)",
+            category: Category::Skills,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "version",
+                description: "Release tag to install (e.g. v0.0.7); defaults to the latest release",
+                optional: true,
+            }],
+            options: &[OptionDef {
+                name: "force",
+                description: "Reinstall even when the same version is already installed",
+                is_bool: true,
+                short: None,
+            }],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(version) = get_opt_str(args, "version") {
+                    params["version"] = json!(version);
+                }
+                if let Some(force) = get_bool(args, "force") {
+                    params["force"] = json!(force);
+                }
+                params
+            },
+        },
+        CommandDef {
+            name: "webminer-update",
+            description: "Update webminer to the latest release",
+            category: Category::Skills,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "webminer-version",
+            description: "Show the installed and latest available webminer versions",
+            category: Category::Skills,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "webminer-uninstall",
+            description: "Remove the installed webminer release from ~/.scent/webminer",
+            category: Category::Skills,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "webminer-run-example",
+            description: "Download the sample dataset and run the full webminer pipeline on it (requires 7-Zip)",
+            category: Category::Skills,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "webminer-all",
+            description: "Run the full webminer pipeline (encode → cluster → views) on a directory of HTML files",
+            category: Category::Skills,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "dir",
+                description: "Directory containing the downloaded HTML files",
+                optional: false,
+            }],
+            options: &[
+                OptionDef {
+                    name: "max-files",
+                    description: "Maximum number of HTML files to process (default: 40)",
+                    is_bool: false,
+                    short: None,
+                },
+                OptionDef {
+                    name: "output",
+                    description: "Where to write the clustered results (default: <html-dir>-ml-output)",
+                    is_bool: false,
+                    short: None,
+                },
+                OptionDef {
+                    name: "resume",
+                    description: "Resume a previous run (optionally with a project id)",
+                    is_bool: true,
+                    short: None,
+                },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(dir) = get_opt_str(args, "dir") {
+                    params["dir"] = json!(dir);
+                }
+                if let Some(n) = get_opt_str(args, "max-files") {
+                    params["maxFiles"] = json!(n);
+                }
+                if let Some(out) = get_opt_str(args, "output") {
+                    params["output"] = json!(out);
+                }
+                if let Some(r) = get_bool(args, "resume") {
+                    params["resume"] = json!(r);
+                }
+                params
+            },
+        },
+        CommandDef {
+            name: "webminer-views",
+            description: "Rebuild the interactive views (index.html, xlsx, json) from an existing clustering result directory",
+            category: Category::Skills,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "result-dir",
+                description: "Clustering result directory (e.g. <html-dir>-ml-output/kmeans-result/p<timestamp>)",
+                optional: false,
+            }],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(dir) = get_opt_str(args, "result-dir") {
+                    params["resultDir"] = json!(dir);
+                }
+                params
+            },
+        },
         CommandDef {
             name: "batch",
             description: "Execute multiple commands in one invocation",
@@ -6940,5 +7107,98 @@ mod tests {
         assert_eq!(dl.args.len(), 2);
         assert!(!dl.args[0].optional, "url should be required");
         assert!(!dl.args[1].optional, "intent should be required");
+    }
+
+    // -----------------------------------------------------------------------
+    // webminer command definitions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_webminer_commands_registered() {
+        let map = commands_map();
+        for name in [
+            "webminer",
+            "webminer-install",
+            "webminer-update",
+            "webminer-version",
+            "webminer-uninstall",
+            "webminer-run-example",
+            "webminer-all",
+            "webminer-views",
+        ] {
+            assert!(map.contains_key(name), "{name} should be registered");
+            let cmd = &map[name];
+            // Local tool — no MCP tool name, not batchable.
+            assert_eq!((cmd.tool_name_fn)(&HashMap::new()), "");
+            assert!(!cmd.batch_supported);
+            // A bundled skill → Skills category (like skills-*/experience-*).
+            assert_eq!(cmd.category.as_str(), "skills", "{name} should be in Skills category");
+        }
+    }
+
+    #[test]
+    fn test_webminer_install_params() {
+        let map = commands_map();
+        let cmd = map.get("webminer-install").unwrap();
+
+        let mut args = HashMap::new();
+        args.insert("version".to_string(), json!("v0.0.7"));
+        args.insert("force".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["version"], "v0.0.7");
+        assert_eq!(params["force"], true);
+
+        let params = (cmd.tool_params_fn)(&HashMap::new());
+        assert_eq!(params, json!({}));
+    }
+
+    #[test]
+    fn test_webminer_all_params() {
+        let map = commands_map();
+        let cmd = map.get("webminer-all").unwrap();
+        // `dir` is a required positional.
+        assert_eq!(cmd.args.len(), 1);
+        assert!(!cmd.args[0].optional);
+        assert_eq!(cmd.args[0].name, "dir");
+
+        let mut args = HashMap::new();
+        args.insert("dir".to_string(), json!("./html-pages"));
+        args.insert("max-files".to_string(), json!("50"));
+        args.insert("output".to_string(), json!("out"));
+        args.insert("resume".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["dir"], "./html-pages");
+        assert_eq!(params["maxFiles"], "50");
+        assert_eq!(params["output"], "out");
+        assert_eq!(params["resume"], true);
+    }
+
+    #[test]
+    fn test_webminer_views_requires_result_dir() {
+        let map = commands_map();
+        let cmd = map.get("webminer-views").unwrap();
+        assert_eq!(cmd.args.len(), 1);
+        assert!(!cmd.args[0].optional);
+        assert_eq!(cmd.args[0].name, "result-dir");
+
+        let mut args = HashMap::new();
+        args.insert("result-dir".to_string(), json!("out/kmeans-result/p1"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["resultDir"], "out/kmeans-result/p1");
+    }
+
+    #[test]
+    fn test_webminer_group_command_visible_in_help() {
+        let map = commands_map();
+        let cmd = map.get("webminer").unwrap();
+        assert!(!cmd.hidden, "bare webminer should be visible in help");
+        // Describes the subcommand surface so `help webminer` is useful.
+        let description = cmd.description.to_lowercase();
+        for sub in ["install", "update", "version", "uninstall", "run-example", "all", "views"] {
+            assert!(
+                description.contains(sub),
+                "webminer description should mention '{sub}'"
+            );
+        }
     }
 }

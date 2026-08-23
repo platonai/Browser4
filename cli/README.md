@@ -126,12 +126,13 @@ Need to process multiple pages?
 
 ### How to Turn HTML into Spreadsheets — Zero Tokens
 
-[WebMiner](https://github.com/platonai/web-miner) runs ML clustering on downloaded HTML files to produce structured spreadsheets and interactive reports — **no LLM tokens, everything runs locally.**
+[WebMiner](https://github.com/platonai/web-miner) runs ML clustering on downloaded HTML files to produce structured spreadsheets and interactive reports — **no LLM tokens, everything runs locally.** webminer is a first-class Browser4 CLI citizen (`browser4-cli webminer install` + `all <html-dir>`, no PowerShell needed).
 
 ```
 Have HTML files and want structured data — without tokens?
 ├─ < 1,000 pages (small to medium)? → WebMiner Free (SMILE ML engine)
-│  java -jar scent-miner.jar all ./pages/
+│  browser4-cli webminer install
+│  browser4-cli webminer all ./pages/
 │  → Interactive HTML report + Excel spreadsheets — local, zero cost
 ├─ > 1,000 pages (production scale)? → WebMiner Commercial (Apache Spark ML)
 │  Same encode → cluster → views pipeline, distributed across machines
@@ -142,7 +143,7 @@ Have HTML files and want structured data — without tokens?
        Then feed the HTML directory to WebMiner
 ```
 
-> **Pipeline:** `encode` (HTML → feature vectors → CSV) → `cluster` (KMeans, auto-detected K) → `views` (HTML report + Excel). Free tier uses the [SMILE](https://haifengl.github.io/) ML library for single-machine clustering (< 1,000 pages). Requires JDK 17+. See [web-miner](https://github.com/platonai/web-miner) for install instructions.
+> **Pipeline:** `encode` (HTML → feature vectors → CSV) → `cluster` (KMeans, auto-detected K) → `views` (HTML report + Excel). Free tier uses the [SMILE](https://haifengl.github.io/) ML library for single-machine clustering (< 1,000 pages). Requires JDK 17+ (auto-detected). See [web-miner](https://github.com/platonai/web-miner) and `browser4-cli help webminer`.
 
 ---
 

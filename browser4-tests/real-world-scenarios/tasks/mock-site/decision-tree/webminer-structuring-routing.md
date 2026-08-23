@@ -1,6 +1,6 @@
 # webminer-structuring-routing
 
-Before running this scenario, ensure MockSite is running on localhost:18080 (`./bin/test.ps1 mock-site`). To execute the WebMiner steps, also install the launcher described in `skills/scent-miner/SKILL.md` (`.\webminer.ps1 install`) or provide a local `scent-miner.jar`.
+Before running this scenario, ensure MockSite is running on localhost:18080 (`./bin/test.ps1 mock-site`). To execute the WebMiner steps, install the tool with `browser4-cli webminer install` (first-class CLI command, no PowerShell), or use the launcher described in `skills/web-miner/SKILL.md` (`.\webminer.ps1 install`), or provide a local `scent-miner.jar`.
 
 This scenario covers every branch in **SKILL.md §4d — Structuring Extracted Pages (WebMiner)**.
 
@@ -25,6 +25,12 @@ This scenario covers every branch in **SKILL.md §4d — Structuring Extracted P
 
 1. Use the directory created in step 1 as the input corpus.
 2. Run either:
+
+```
+browser4-cli webminer all <html-dir>
+```
+
+or
 
 ```
 .\webminer.ps1 all <html-dir>
