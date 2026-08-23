@@ -131,6 +131,11 @@ runs:
         run_cmd="$run_cmd -p ${{ inputs.service_port }}:${{ inputs.service_port }}"
         # Allow the container to reach the host machine (e.g. fixture HTTP server)
         run_cmd="$run_cmd --add-host=host.docker.internal:host-gateway"
+        # Headless Chrome renders through shared memory (/dev/shm); the Docker
+        # default of 64MB is too small for multiple tabs and makes the GPU /
+        # renderer processes crash or wedge (Runtime.evaluate hangs), which
+        # stalls every navigation-triggering e2e test.
+        run_cmd="$run_cmd --shm-size=1g"
 
         # Add resource limits if specified
         if [ -n "${{ inputs.memory_limit }}" ]; then
