@@ -50,11 +50,19 @@ WORKDIR /app
 ENV TZ=Asia/Shanghai
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# Install Chromium and necessary dependencies with security updates
+# Install Chromium and necessary dependencies with security updates.
+# Pin the chromium version: the temurin alpine base image tracks a rolling
+# Alpine repo, and the unpinned `chromium` package silently jumped 149 → 151
+# between CI runs (2026-08-21 ok → 2026-08-24 E2E hangs: slow navigation,
+# blank pages, CDP evaluate timeouts). 149.0.7827.53-r0 is the last known-good
+# build (Alpine v3.23); the explicit --repository keeps the version resolvable
+# even when the base image points at a newer Alpine release.
 RUN apk update && apk upgrade && \
     apk add --no-cache \
+    --repository https://dl-cdn.alpinelinux.org/alpine/v3.23/main \
+    --repository https://dl-cdn.alpinelinux.org/alpine/v3.23/community \
     curl \
-    chromium \
+    chromium=149.0.7827.53-r0 \
     nss \
     freetype \
     freetype-dev \

@@ -15,11 +15,15 @@ WORKDIR /app
 ENV TZ=Asia/Shanghai
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# Install Chromium and necessary dependencies with security updates
+# Install Chromium and necessary dependencies with security updates.
+# Pin the chromium version — the unpinned package drifted 149 → 151 in the
+# rolling Alpine repo and broke E2E (see Dockerfile for details).
 RUN apk update && apk upgrade && \
     apk add --no-cache \
+    --repository https://dl-cdn.alpinelinux.org/alpine/v3.23/main \
+    --repository https://dl-cdn.alpinelinux.org/alpine/v3.23/community \
     curl \
-    chromium \
+    chromium=149.0.7827.53-r0 \
     nss \
     freetype \
     freetype-dev \

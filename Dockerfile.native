@@ -44,10 +44,11 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 # Install Chromium and necessary dependencies with security updates.
 # The native image still needs Chromium for browser automation and
 # basic system libraries (glibc, nss, etc.) for the native binary itself.
+# Pin the chromium version to the one shipped by the pinned alpine:3.21 base.
 RUN apk update && apk upgrade && \
     apk add --no-cache \
     curl \
-    chromium \
+    chromium=136.0.7103.113-r0 \
     nss \
     freetype \
     freetype-dev \
