@@ -62,8 +62,8 @@ class AgentToolManager constructor(
     val codingTarget: CodingToolExecutor.Target by lazy {
         CodingToolExecutor.Target(codingShell, codingFs)
     }
-    /** CLI tool executor for browser4-cli integration */
-    val cliExecutor: CliToolExecutor = CliToolExecutor(
+    /** CLI tool executor for browser4-cli integration (domain `b4`) */
+    val b4CliExecutor: B4CliToolExecutor = B4CliToolExecutor(
         // M0: force CLI subprocesses onto THIS backend (BROWSER4_CLI_SERVER) so
         // the CLI can never auto-start/restart a server. Set by the hosting app
         // via `browser4.server.url` (system property or configuration).
@@ -110,9 +110,10 @@ class AgentToolManager constructor(
         "Coding" to "coding",
         "dev" to "coding",
 
-        "cli" to "cli",
-        "Cli" to "cli",
-        "browser4-cli" to "cli",
+        "cli" to "b4",
+        "Cli" to "b4",
+        "browser4-cli" to "b4",
+        "b4" to "b4",
     )
 
     private val _concreteExecutors: MutableMap<String, ToolExecutor> by lazy {
@@ -121,7 +122,7 @@ class AgentToolManager constructor(
             BrowserToolExecutor(),
             AgentToolExecutor(),
             CodingToolExecutor(),
-            cliExecutor,
+            b4CliExecutor,
             system,
             skills
         ).associateBy { it.domain }.toMutableMap()
@@ -148,11 +149,11 @@ class AgentToolManager constructor(
 
     /** Cancel all tracked CLI background jobs (agent close). */
     fun closeCliJobs() {
-        cliExecutor.closeJobs()
+        b4CliExecutor.closeJobs()
     }
 
     init {
-        // Register coding and cli tool specs so they appear in the LLM prompt.
+        // Register coding and b4 (browser4-cli) tool specs so they appear in the LLM prompt.
         // The ToolCallSpecificationRenderer merges these dynamically-registered
         // specs alongside the hardcoded ToolSpecification.TOOL_CALL_SPECIFICATION.
         ToolCallSpecificationRenderer.registerBuiltinDomainSpecs(
@@ -160,8 +161,8 @@ class AgentToolManager constructor(
             CodingToolExecutor().getToolSpecs().values.toList()
         )
         ToolCallSpecificationRenderer.registerBuiltinDomainSpecs(
-            "cli",
-            cliExecutor.getToolSpecs().values.toList()
+            "b4",
+            b4CliExecutor.getToolSpecs().values.toList()
         )
     }
 
@@ -332,7 +333,7 @@ class AgentToolManager constructor(
             "shell" -> executor.callFunctionOn(normalized, shell)
             "agent" -> executor.callFunctionOn(normalized, agent)
             "coding" -> executor.callFunctionOn(normalized, codingTarget)
-            "cli" -> executor.callFunctionOn(normalized, codingShell)
+            "b4" -> executor.callFunctionOn(normalized, codingShell)
             "command" -> {
                 // TODO: the commandTarget is ai.platon.pulsar.agentic.tools.advanced.CommandRunner, consider make it built-in
                 //      and is registered in browser4-rest module

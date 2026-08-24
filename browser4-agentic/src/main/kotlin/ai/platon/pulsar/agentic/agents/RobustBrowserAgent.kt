@@ -55,7 +55,7 @@ private const val CLI_CONTINUE_NUDGE =
 /** How often the CLI tool loop emits a liveness event (every N tool executions). */
 private const val CLI_TOOL_PROGRESS_EVENT_INTERVAL = 5
 /** Explicit tool domains exposed to the CLI engine (design v0.2 §4.4). */
-private val CLI_ENGINE_DOMAINS = setOf("coding", "cli", "system")
+private val CLI_ENGINE_DOMAINS = setOf("coding", "b4", "system")
 
 open class RobustBrowserAgent(
     session: AgenticSession, val maxSteps: Int = 100, config: AgentConfig = AgentConfig(maxSteps = maxSteps)
@@ -84,7 +84,7 @@ open class RobustBrowserAgent(
 
     /**
      * Per-agent scratch workspace for CLI-engine (browser) tasks. Helper files
-     * the model writes via coding.* and cli.run land here — never the backend
+     * the model writes via coding.* and b4.run land here — never the backend
      * working directory / repository root (workspace isolation, P1).
      */
     internal val agentWorkspaceDir: Path by lazy {
@@ -515,7 +515,7 @@ open class RobustBrowserAgent(
 
     /**
      * Native function-calling loop that drives browser4-cli subprocesses via
-     * `cli.run`, following the bundled SKILL.md. Completion is signalled by the
+     * `b4.run`, following the bundled SKILL.md. Completion is signalled by the
      * model calling `system.taskComplete` (no JSON parsing anywhere).
      */
     private suspend fun doRunCliAgentLoop(
@@ -881,7 +881,7 @@ open class RobustBrowserAgent(
         append(
             """
             You are a browser automation agent. Drive the browser EXCLUSIVELY through the
-            browser4-cli tool via cli.run(...). Do not guess CLI syntax — fetch the bundled
+            browser4-cli tool via b4.run(...). Do not guess CLI syntax — fetch the bundled
             SKILL.md on demand with system.skillDoc("SKILL.md") and consult
             system.skillDoc(name) for topic reference docs.
             Use coding.* tools for file/workspace work when needed, and system.skillDoc(name)

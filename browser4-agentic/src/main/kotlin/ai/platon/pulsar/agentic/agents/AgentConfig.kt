@@ -10,7 +10,7 @@ import kotlin.time.Duration.Companion.minutes
  * - [OBSERVE_ACT] — legacy observe→act loop (ARIA snapshot + JSON action
  *   description); unchanged default.
  * - [CLI_TOOL_LOOP] — native function-calling loop driving browser4-cli
- *   subprocesses via `cli.run` (design v0.2).
+ *   subprocesses via `b4.run` (design v0.2).
  */
 enum class RunEngine {
     OBSERVE_ACT,

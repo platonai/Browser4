@@ -39,11 +39,11 @@ class ToolOutcomeTest {
         // already resolved (domain, method) — the header must not say
         // "unknown.unknown".
         val outcome = ToolOutcome.from(
-            result("cli.run -> ok"),
-            domain = "cli", method = "run",
+            result("b4.run -> ok"),
+            domain = "b4", method = "run",
         )
-        assertEquals("cli.run", "${outcome.domain}.${outcome.method}")
-        assertTrue(outcome.render().startsWith("cli.run [ok]"), outcome.render())
+        assertEquals("b4.run", "${outcome.domain}.${outcome.method}")
+        assertTrue(outcome.render().startsWith("b4.run [ok]"), outcome.render())
         assertFalse(outcome.render().contains("unknown.unknown"), outcome.render())
     }
 

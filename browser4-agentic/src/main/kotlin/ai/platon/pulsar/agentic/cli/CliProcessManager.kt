@@ -42,7 +42,7 @@ data class CliProcessConfig(
 )
 
 /**
- * Accurate subprocess invocation, monitoring and management for `cli.run`
+ * Accurate subprocess invocation, monitoring and management for `b4.run`
  * (design §4.1). Three-layer seam: tool layer → [CliProcessManager] (resolve +
  * run) → OS subprocess.
  *

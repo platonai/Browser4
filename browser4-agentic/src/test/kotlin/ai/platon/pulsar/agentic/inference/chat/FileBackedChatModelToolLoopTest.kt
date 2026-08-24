@@ -32,7 +32,7 @@ class FileBackedChatModelToolLoopTest {
             {
               "text": "calling cli",
               "toolCalls": [
-                {"id": "t1", "name": "cli.run", "arguments": {"args": "snapshot --stdout"}}
+                {"id": "t1", "name": "b4.run", "arguments": {"args": "snapshot --stdout"}}
               ]
             }
             """.trimIndent()
@@ -42,7 +42,7 @@ class FileBackedChatModelToolLoopTest {
         val model = FileBackedChatModel(ImmutableConfig(), responseDir)
         val coordinator = mockk<ToolExecutionCoordinator>()
         every { coordinator.execute(any()) } returns
-            ToolExecutionResultMessage.from("t1", "cli.run", "mock snapshot")
+            ToolExecutionResultMessage.from("t1", "b4.run", "mock snapshot")
 
         val loop = AgentToolCallLoop(
             model = model,

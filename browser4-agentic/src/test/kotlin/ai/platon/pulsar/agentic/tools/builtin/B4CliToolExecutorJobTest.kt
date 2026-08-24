@@ -13,8 +13,8 @@ import org.junit.jupiter.api.Test
 import java.nio.file.Files
 import java.nio.file.Path
 
-@DisplayName("CliToolExecutor long-command job escalation")
-class CliToolExecutorJobTest {
+@DisplayName("B4CliToolExecutor long-command job escalation")
+class B4CliToolExecutorJobTest {
 
     private fun pwshPath(): Path {
         val isWindows = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
@@ -27,7 +27,7 @@ class CliToolExecutorJobTest {
             ?: error("pwsh not found on PATH")
     }
 
-    private fun executor(jobYieldMs: Long = 10_000) = CliToolExecutor(
+    private fun executor(jobYieldMs: Long = 10_000) = B4CliToolExecutor(
         backendBaseUrl = null,
         cliProcessManager = CliProcessManager(CliBinaryResolver(explicitPath = pwshPath())),
         jobYieldMs = jobYieldMs,
@@ -44,7 +44,7 @@ class CliToolExecutorJobTest {
         try {
             val text = ex.callFunctionOn(
                 ToolCall(
-                    domain = "cli", method = "run",
+                    domain = "b4", method = "run",
                     arguments = mutableMapOf(
                         "args" to "-NoProfile -Command \"Write-Output job-ok\"",
                         "timeoutSeconds" to 30L,
@@ -67,7 +67,7 @@ class CliToolExecutorJobTest {
         try {
             val text = ex.callFunctionOn(
                 ToolCall(
-                    domain = "cli", method = "run",
+                    domain = "b4", method = "run",
                     arguments = mutableMapOf(
                         "args" to "-NoProfile -Command \"Start-Sleep -Seconds 60\"",
                         "timeoutSeconds" to 120L,
@@ -81,20 +81,20 @@ class CliToolExecutorJobTest {
             assertNotNull(id, "job id must be present: $text")
 
             val status = ex.callFunctionOn(
-                ToolCall(domain = "cli", method = "status", arguments = mutableMapOf("id" to id!!)),
+                ToolCall(domain = "b4", method = "status", arguments = mutableMapOf("id" to id!!)),
                 shell(),
             ).value?.toString() ?: ""
             assertTrue(status.contains("state="), "status shape: $status")
 
             val killed = ex.callFunctionOn(
-                ToolCall(domain = "cli", method = "kill", arguments = mutableMapOf("id" to id)),
+                ToolCall(domain = "b4", method = "kill", arguments = mutableMapOf("id" to id)),
                 shell(),
             ).value?.toString() ?: ""
             assertTrue(killed.contains("cancelled"), "kill result: $killed")
 
             val waited = ex.callFunctionOn(
                 ToolCall(
-                    domain = "cli", method = "wait",
+                    domain = "b4", method = "wait",
                     arguments = mutableMapOf("id" to id, "timeoutSeconds" to 20L),
                 ),
                 shell(),

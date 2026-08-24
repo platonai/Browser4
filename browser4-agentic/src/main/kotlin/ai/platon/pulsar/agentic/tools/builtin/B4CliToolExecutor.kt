@@ -17,7 +17,7 @@ import kotlin.reflect.KClass
 /**
  * Tool executor for invoking the browser4-cli from within an agent session.
  *
- * Domain: `cli`
+ * Domain: `b4`
  *
  * Allows an agent to invoke `browser4-cli` as a subprocess, enabling
  * composition of CLI commands within agent workflows. Results are captured
@@ -31,12 +31,12 @@ import kotlin.reflect.KClass
  * ## Usage
  *
  * ```kotlin
- * // Executed via AgentToolManager when domain is "cli"
- * cli.run(args = "tab navigate --url https://example.com")
- * cli.run(args = "tab screenshot --selector '#main'")
+ * // Executed via AgentToolManager when domain is "b4"
+ * b4.run(args = "tab navigate --url https://example.com")
+ * b4.run(args = "tab screenshot --selector '#main'")
  * ```
  */
-class CliToolExecutor(
+class B4CliToolExecutor(
     private val backendBaseUrl: String? = null,
     private val defaultWorkingDir: Path? = null,
     private val cliProcessManager: CliProcessManager = CliProcessManager(CliBinaryResolver()),
@@ -59,7 +59,7 @@ class CliToolExecutor(
         )
     }
 
-    override val domain = "cli"
+    override val domain = "b4"
 
     override val receiverClass: KClass<*> = CodingAgentShell::class
 
@@ -73,12 +73,12 @@ class CliToolExecutor(
             ),
             returnType = "String",
             description = "Execute browser4-cli with the given arguments. " +
-                "Example: cli.run(args=\"tab navigate --url https://example.com\"). " +
+                "Example: b4.run(args=\"tab navigate --url https://example.com\"). " +
                 "The binary is resolved automatically (bundled / PATH / auto-install). " +
                 "Default timeout 300s (max 600s); pass timeoutSeconds for long commands. " +
                 "Commands that finish quickly return their result directly; commands still " +
-                "running after ~10s return a '[job: <id>]' handle — poll with cli.status(id=...), " +
-                "wait with cli.wait(id=..., timeoutSeconds=...), or cancel with cli.kill(id=...). " +
+                "running after ~10s return a '[job: <id>]' handle — poll with b4.status(id=...), " +
+                "wait with b4.wait(id=..., timeoutSeconds=...), or cancel with b4.kill(id=...). " +
                 "NOTE: 'agent run', 'agent-run', and 'act' subcommands are blocked " +
                 "to prevent nested agent spawning."
         )
@@ -86,7 +86,7 @@ class CliToolExecutor(
             domain = domain, method = "status",
             arguments = listOf(ToolSpec.Arg("id", "String")),
             returnType = "String",
-            description = "Check the status of a long-running cli job returned by cli.run " +
+            description = "Check the status of a long-running cli job returned by b4.run " +
                 "(e.g. '[job: <id>]'). Returns RUNNING/COMPLETED/CANCELLED/FAILED plus the result when done."
         )
         toolSpec["wait"] = ToolSpec(
@@ -150,8 +150,8 @@ class CliToolExecutor(
                 } else {
                     CliMetrics.recordJobEscalation()
                     "[job: $jobId] Command still running after ${jobYieldMs / 1000}s. " +
-                        "Poll with cli.status(id=\"$jobId\"), wait with cli.wait(id=\"$jobId\", " +
-                        "timeoutSeconds=...), or cancel with cli.kill(id=\"$jobId\")."
+                        "Poll with b4.status(id=\"$jobId\"), wait with b4.wait(id=\"$jobId\", " +
+                        "timeoutSeconds=...), or cancel with b4.kill(id=\"$jobId\")."
                 }
             }
             "status" -> {
@@ -174,8 +174,8 @@ class CliToolExecutor(
                 if (result != null) {
                     result.toModelText()
                 } else {
-                    "[job: $id] still running after ${timeout}s; poll with cli.status(id=\"$id\") " +
-                        "or wait again with cli.wait(id=\"$id\", timeoutSeconds=...)."
+                    "[job: $id] still running after ${timeout}s; poll with b4.status(id=\"$id\") " +
+                        "or wait again with b4.wait(id=\"$id\", timeoutSeconds=...)."
                 }
             }
             "kill" -> {
@@ -203,7 +203,7 @@ class CliToolExecutor(
                     backendBaseUrl = backendBaseUrl,
                 ).toModelText()
             }
-            else -> throw IllegalArgumentException("Unsupported cli method: $functionName(${args.keys})")
+            else -> throw IllegalArgumentException("Unsupported b4 method: $functionName(${args.keys})")
         }
     }
 
@@ -217,7 +217,7 @@ class CliToolExecutor(
      * Reject CLI invocations that would spawn a nested agent.
      *
      * Without this guard the chain
-     *   agent → cli.run("agent run …") → subprocess → backend → new agent → …
+     *   agent → b4.run("agent run …") → subprocess → backend → new agent → …
      * has no depth limit and leads to unbounded recursion, OS-subprocess
      * exhaustion, and multiplied LLM spend.
      */

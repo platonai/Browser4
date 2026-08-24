@@ -7,16 +7,16 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.nio.file.Paths
 
-class CliToolExecutorTest {
+class B4CliToolExecutorTest {
 
-    private val executor = CliToolExecutor()
+    private val executor = B4CliToolExecutor()
     private val shell = CodingAgentShell(Paths.get("."))
 
     @Test
     fun `rejects agent run subcommand`() = runBlocking {
         val ex = assertThrows<IllegalArgumentException> {
             executor.callFunctionOn(
-                domain = "cli", functionName = "run",
+                domain = "b4", functionName = "run",
                 args = mapOf("args" to "agent run 'do something'"),
                 receiver = shell,
             )
@@ -28,7 +28,7 @@ class CliToolExecutorTest {
     fun `rejects agent-run subcommand`() = runBlocking {
         val ex = assertThrows<IllegalArgumentException> {
             executor.callFunctionOn(
-                domain = "cli", functionName = "run",
+                domain = "b4", functionName = "run",
                 args = mapOf("args" to "agent-run 'do something'"),
                 receiver = shell,
             )
@@ -40,7 +40,7 @@ class CliToolExecutorTest {
     fun `rejects act subcommand`() = runBlocking {
         val ex = assertThrows<IllegalArgumentException> {
             executor.callFunctionOn(
-                domain = "cli", functionName = "run",
+                domain = "b4", functionName = "run",
                 args = mapOf("args" to "act 'do something'"),
                 receiver = shell,
             )
@@ -52,7 +52,7 @@ class CliToolExecutorTest {
     fun `rejects leading whitespace agent run`() = runBlocking {
         val ex = assertThrows<IllegalArgumentException> {
             executor.callFunctionOn(
-                domain = "cli", functionName = "run",
+                domain = "b4", functionName = "run",
                 args = mapOf("args" to "   agent run 'do something'"),
                 receiver = shell,
             )

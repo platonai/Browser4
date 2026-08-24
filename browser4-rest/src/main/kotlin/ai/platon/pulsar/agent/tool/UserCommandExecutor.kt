@@ -191,7 +191,7 @@ class UserCommandExecutor(
         }
 
         // CLI engine (the default): always an agent task — no URL shortcut, no
-        // normalizer hijack. The agent decides how to reach the page via cli.run.
+        // normalizer hijack. The agent decides how to reach the page via b4.run.
         if (engine != RunEngine.OBSERVE_ACT) {
             return submitAgentTask(sessionId, command, noopLimit, engine)
         }
