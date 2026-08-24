@@ -351,7 +351,20 @@ class CliProcessManager(
                 commandLine,
             )
         } else {
-            Triple("/bin/sh", listOf("/bin/sh", "-c", commandLine), commandLine)
+            // POSIX: run through /bin/sh -c. Escape `$`, backticks and `\` in
+            // the args so sh does NOT expand `$env:PATH`, `$(...)` or
+            // backticks before the target binary sees them (pwsh -Command
+            // parses them itself). Without this, sh expands `$env:PATH` in
+            // double-quoted args — breaking pwsh commands and leaking shell
+            // interpretation into user args. The args' own double quotes stay
+            // intact: they keep word boundaries and are what pwsh -Command
+            // expects. Shell quotes inside args are still parsed by sh (M1
+            // design: shell single-argv, no tokenizer).
+            val escapedArgs = args
+                .replace("\\", "\\\\")
+                .replace("$", "\\$")
+                .replace("`", "\\`")
+            Triple("/bin/sh", listOf("/bin/sh", "-c", "$quotedBinary $escapedArgs"), commandLine)
         }
     }
 

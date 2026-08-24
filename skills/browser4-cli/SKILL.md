@@ -2,6 +2,12 @@
 name: browser4-cli
 title: "Browser Automation with browser4-cli"
 description: "Automates browser interactions for web testing, form filling, screenshots, and data extraction. Use when the user needs to navigate websites, interact with web pages, fill forms, take screenshots, test web applications, or extract information from web pages."
+tags:
+  - browser
+  - automation
+  - testing
+  - cdp
+  - snapshot
 allowed-tools: Bash(browser4-cli:*)
 tier: decision
 ---
