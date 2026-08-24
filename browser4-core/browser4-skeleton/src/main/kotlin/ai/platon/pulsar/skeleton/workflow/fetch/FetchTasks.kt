@@ -211,6 +211,12 @@ class FetchResult(
         fun crawlRetry(task: FetchTask, delay: Duration, reason: Exception) =
             FetchResult(task, ForwardingResponse.crawlRetry(task.page, reason)).also { task.page.retryDelay = delay }
 
-        fun failed(task: FetchTask, e: Throwable?) = FetchResult(task, ForwardingResponse.failed(task.page, e))
+        /**
+         * Create a failed [FetchResult] for [task], retaining the supplied
+         * [e] in [FetchResult.exception] so callers (e.g. the privacy retry
+         * path) can inspect the original failure.
+         */
+        fun failed(task: FetchTask, e: Throwable?): FetchResult =
+            FetchResult(task, ForwardingResponse.failed(task.page, e), e)
     }
 }

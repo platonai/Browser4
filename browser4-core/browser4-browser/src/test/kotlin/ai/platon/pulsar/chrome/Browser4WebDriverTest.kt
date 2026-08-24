@@ -1,10 +1,21 @@
 package ai.platon.pulsar.chrome
 
+import ai.platon.pulsar.api.BrowserProtocol
+import ai.platon.pulsar.api.model.BrowserSettings
+import ai.platon.pulsar.api.model.BrowserTab
+import ai.platon.pulsar.chrome.protocol.DialogEvent
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import org.mockito.kotlin.mock
+import org.mockito.kotlin.whenever
+import org.mockito.kotlin.wheneverBlocking
+import java.util.Queue
 
 /**
  * Unit tests for the pure helpers in [Browser4WebDriver.Companion].
@@ -228,5 +239,61 @@ class Browser4WebDriverTest {
         assertFalse(
             Browser4WebDriver.isDocumentOriginReady("https://www.example.com", "http://127.0.0.1:47815")
         )
+    }
+
+    @Test
+    @DisplayName("parseDragCenter reads resolved viewport coordinates")
+    fun parseDragCenterReadsCoordinates() {
+        assertEquals(Pair(12.5, 48.0), Browser4WebDriver.parseDragCenter("""{"x":12.5,"y":48}"""))
+    }
+
+    @Test
+    @DisplayName("parseDragCenter rejects malformed or incomplete results")
+    fun parseDragCenterRejectsMalformedResults() {
+        assertNull(Browser4WebDriver.parseDragCenter("not-json"))
+        assertNull(Browser4WebDriver.parseDragCenter("""{"x":12.5}"""))
+        assertNull(Browser4WebDriver.parseDragCenter(null))
+    }
+
+    @Test
+    @DisplayName("dialog acknowledgement preserves later queued dialogs")
+    fun dialogAcknowledgementPreservesLaterDialogs() = runBlocking {
+        val driver = dialogDriver()
+        val first = DialogEvent("first", "alert", "about:blank", "", false)
+        val second = DialogEvent("second", "alert", "about:blank", "", false)
+        pendingDialogs(driver).addAll(listOf(first, second))
+
+        driver.dialogDismiss()
+
+        assertSame(second, driver.dialogHandler.peekPendingDialog())
+    }
+
+    @Test
+    @DisplayName("failed CDP dialog action keeps the pending dialog")
+    fun failedDialogActionKeepsPendingDialog() = runBlocking {
+        val protocol = mock<BrowserProtocol>()
+        val driver = dialogDriver(protocol)
+        val pending = DialogEvent("pending", "alert", "about:blank", "", false)
+        pendingDialogs(driver).add(pending)
+        val failure = IllegalStateException("CDP failed")
+        wheneverBlocking { protocol.handleJavaScriptDialog(true, null) }.thenThrow(failure)
+
+        val thrown = runCatching { driver.dialogAccept(null) }.exceptionOrNull()
+
+        assertSame(failure, thrown)
+        assertSame(pending, driver.dialogHandler.peekPendingDialog())
+    }
+
+    private fun dialogDriver(protocol: BrowserProtocol = mock()): Browser4WebDriver {
+        val browser = mock<PulsarBrowser>()
+        whenever(browser.settings).thenReturn(BrowserSettings())
+        return Browser4WebDriver("test", BrowserTab(), protocol, browser)
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun pendingDialogs(driver: Browser4WebDriver): Queue<DialogEvent> {
+        val field = driver.dialogHandler.javaClass.getDeclaredField("pendingDialogs")
+        field.isAccessible = true
+        return field.get(driver.dialogHandler) as Queue<DialogEvent>
     }
 }
