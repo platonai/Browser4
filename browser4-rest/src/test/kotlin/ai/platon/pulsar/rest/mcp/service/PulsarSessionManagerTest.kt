@@ -147,6 +147,24 @@ class PulsarSessionManagerTest {
     }
 
     @Test
+    fun ensureSwarmSessionCreatesFreshSessionAfterDelete() {
+        // Regression guard for issue #577: a closed swarm session must never be
+        // resurrected. If it were, every new swarm task would be submitted to a
+        // closed session and stay "queued" forever.
+        val first = sessionManager.ensureSwarmSession()
+
+        assertTrue(sessionManager.deleteSession(SWARM_SESSION_ID))
+
+        val second = sessionManager.ensureSwarmSession()
+        assertNotNull(second)
+        assertNotSame(
+            first.agenticSession,
+            second.agenticSession,
+            "A closed swarm session must be replaced with a fresh session"
+        )
+    }
+
+    @Test
     fun getAllSessionsDoesNotCreateEnsureDefaultSessionOnDemand() {
         val sessions = sessionManager.getAllSessions()
 

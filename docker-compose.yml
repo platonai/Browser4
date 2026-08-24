@@ -50,6 +50,10 @@ services:
       nofile:
         soft: 65535
         hard: 65535
+    # Headless Chrome renders through shared memory (/dev/shm); the Docker
+    # default of 64MB is too small for multiple tabs and makes the GPU /
+    # renderer processes crash or wedge (Runtime.evaluate hangs).
+    shm_size: 1g
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8182/actuator/health"]
       interval: 30s

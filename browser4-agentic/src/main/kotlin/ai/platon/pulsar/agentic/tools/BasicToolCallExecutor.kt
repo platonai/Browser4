@@ -5,7 +5,6 @@ import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.tools.builtin.BrowserTabToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.BrowserToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
-import kotlin.reflect.full.isSuperclassOf
 
 /**
  * Executes WebDriver commands provided as string expressions.
@@ -34,7 +33,11 @@ open class BasicToolCallExecutor(
     @Throws(UnsupportedOperationException::class)
     suspend fun callFunctionOn(tc: ToolCall, receiver: Any): TcEvaluate {
         return toolExecutors.values
-            .firstOrNull { it.receiverClass.isSuperclassOf(receiver::class) }
+            // Prefer the java-level assignability check: kotlin-reflect's
+            // isSuperclassOf() can miss bytecode-generated proxies (e.g.
+            // mockk interface mocks) that implement the interface but carry
+            // no Kotlin metadata.
+            .firstOrNull { it.receiverClass.java.isAssignableFrom(receiver::class.java) }
             ?.callFunctionOn(tc, receiver)
             ?: throw UnsupportedOperationException("❓ Unsupported receiver ${receiver::class}")
     }

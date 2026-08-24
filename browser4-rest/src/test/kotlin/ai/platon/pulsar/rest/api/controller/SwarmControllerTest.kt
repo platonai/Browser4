@@ -56,6 +56,21 @@ class SwarmControllerTest {
     // -----------------------------------------------------------------
 
     @Test
+    fun closeAbortsPendingTasksAndReportsCount() {
+        val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
+        val swarmService = Mockito.mock(SwarmService::class.java)
+        val controller = SwarmController(sessionManager, swarmService)
+
+        Mockito.`when`(swarmService.closeSession()).thenReturn(3)
+
+        val result = controller.close()
+
+        assertEquals(true, result["closed"])
+        assertEquals(3, result["abortedPendingTasks"])
+        verify(swarmService).closeSession()
+    }
+
+    @Test
     fun submitWithBlankPayloadThrowsIllegalArgumentException() {
         val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
         val swarmService = Mockito.mock(SwarmService::class.java)

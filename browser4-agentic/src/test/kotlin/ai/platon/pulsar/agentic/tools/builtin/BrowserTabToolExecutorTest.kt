@@ -383,4 +383,193 @@ class BrowserTabToolExecutorTest {
 
         }
     }
+
+    @Test
+    fun `reload waits for readyState instead of burning waitForNavigation on same-URL navigation`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.currentUrl()).thenReturn("http://example.com")
+            // A reload never changes the URL; the first readyState poll (after
+            // the initial 200ms settle) still reports "loading", the second
+            // "complete" — the navigation finishes without any URL change.
+            `when`(driver.evaluateValue("document.readyState")).thenReturn("loading", "complete")
+
+            executor.callFunctionOn(
+                ToolCall("tab", "reload", mutableMapOf<String, Any?>()),
+                driver
+            )
+
+            // Regression: the executor used to call
+            // waitForNavigation(urlBefore, 30s) here, whose predicate is
+            // `currentUrl() != urlBefore` — it can never become true when the
+            // URL is unchanged (reload / same-URL goto), so it silently burned
+            // the full 30s poll timeout. The fix polls document.readyState in
+            // a loop instead: readyState must be re-read after the initial
+            // check ("loading" -> "complete").
+            Mockito.verify(driver, Mockito.atLeast(2))
+                .evaluateValue("document.readyState")
+        }
+    }
+
+    @Test
+    fun `reload with no in-flight navigation skips the wait`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.currentUrl()).thenReturn("http://example.com")
+            `when`(driver.evaluateValue("document.readyState")).thenReturn("complete")
+
+            executor.callFunctionOn(
+                ToolCall("tab", "reload", mutableMapOf<String, Any?>()),
+                driver
+            )
+
+            // readyState was already complete — no polling loop at all.
+            Mockito.verify(driver, Mockito.times(1))
+                .evaluateValue("document.readyState")
+        }
+    }
+
+    @Test
+    fun `navigate to a same-URL destination polls readyState instead of a no-op waitForNavigation`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.currentUrl()).thenReturn("http://example.com")
+            // The URL does not change (SPA route / same-URL goto); the first
+            // readyState poll (after the initial settle) still reports "loading",
+            // the second "complete" — the navigation finishes without any URL change.
+            `when`(driver.evaluateValue("document.readyState")).thenReturn("loading", "complete")
+
+            executor.callFunctionOn(
+                ToolCall("tab", "navigate", mutableMapOf<String, Any?>("url" to "http://example.com")),
+                driver
+            )
+
+            // Regression: the executor used to call the no-arg waitForNavigation()
+            // here, whose predicate is `"" != currentUrl()` — true as soon as the
+            // page has any URL, so it returned immediately without waiting at all.
+            // The oldUrl overload can never complete for same-URL navigations.
+            // readyState must now be polled: at least 2 reads (loading -> complete).
+            Mockito.verify(driver, Mockito.atLeast(2))
+                .evaluateValue("document.readyState")
+            Mockito.verify(driver, Mockito.never()).waitForNavigation()
+        }
+    }
+
+    @Test
+    fun `navigate to a different URL waits for the new body`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            // URL changes during navigation: the executor must wait for the new
+            // document's body rather than poll readyState indefinitely.
+            `when`(driver.currentUrl()).thenReturn("http://old.example.com", "http://new.example.com")
+
+            executor.callFunctionOn(
+                ToolCall("tab", "navigate", mutableMapOf<String, Any?>("url" to "http://new.example.com")),
+                driver
+            )
+
+            Mockito.verify(driver).navigate("http://new.example.com")
+            // URL already changed — wait for the body element of the new page.
+            Mockito.verify(driver).waitForSelector("body", 10_000L)
+            // readyState polling must not happen for a URL-changing navigation.
+            Mockito.verify(driver, Mockito.never()).evaluateValue("document.readyState")
+        }
+    }
+
+    @Test
+    fun `wedged page skips the stacked body wait after readyState poll timeout`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.currentUrl()).thenReturn("http://example.com")
+            // The page context is wedged: evals keep returning "loading" forever
+            // (CDP evals return null, the page never becomes ready).
+            `when`(driver.evaluateValue("document.readyState")).thenReturn("loading")
+
+            // Use a tiny explicit poll budget so the test does not burn the
+            // real 30s default timeout.
+            executor.callFunctionOn(
+                ToolCall(
+                    "tab", "waitForNavigation",
+                    mutableMapOf<String, Any?>("oldUrl" to "http://example.com", "timeoutMillis" to 500)
+                ),
+                driver
+            )
+
+            // Regression: after the readyState poll timed out, the executor
+            // used to call waitForSelector("body", 30s) unconditionally,
+            // stacking a second full-timeout dead wait on top of the exhausted
+            // poll — ~61s per navigation action when the page context is
+            // wedged. The fix surfaces the warning instead and skips the wait.
+            Mockito.verify(driver, Mockito.atLeast(1))
+                .evaluateValue("document.readyState")
+            Mockito.verify(driver, Mockito.never())
+                .waitForSelector("body", 30_000L)
+        }
+    }
+
+    @Test
+    fun `same-URL navigation waits for body with the short DOM-ready budget`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.currentUrl()).thenReturn("http://example.com")
+            `when`(driver.evaluateValue("document.readyState")).thenReturn("loading", "complete")
+
+            executor.callFunctionOn(
+                ToolCall("tab", "navigate", mutableMapOf<String, Any?>("url" to "http://example.com")),
+                driver
+            )
+
+            // After the readyState poll succeeds, the body wait must use the
+            // short DOM-ready budget (10s, same as the URL-changing branch),
+            // not the full 30s navigation poll timeout — the poll already
+            // consumed that budget and stacking it doubles dead time.
+            Mockito.verify(driver).waitForSelector("body", 10_000L)
+            Mockito.verify(driver, Mockito.never()).waitForSelector("body", 30_000L)
+        }
+    }
+
+    @Test
+    fun `explicit waitForNavigation without oldUrl polls readyState instead of the no-op overload`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.currentUrl()).thenReturn("http://example.com")
+            // The navigation keeps the URL; readyState transitions loading -> complete.
+            `when`(driver.evaluateValue("document.readyState")).thenReturn("loading", "complete")
+
+            executor.callFunctionOn(
+                ToolCall("tab", "waitForNavigation", mutableMapOf<String, Any?>()),
+                driver
+            )
+
+            // Regression: the no-arg driver.waitForNavigation() has predicate
+            // `"" != currentUrl()` — true as soon as the page has any URL, so it
+            // returned immediately without waiting. The explicit wait tool must
+            // poll readyState instead (at least 2 reads: loading -> complete).
+            Mockito.verify(driver, Mockito.atLeast(2))
+                .evaluateValue("document.readyState")
+            Mockito.verify(driver, Mockito.never()).waitForNavigation()
+        }
+    }
+
+    @Test
+    fun `explicit waitForNavigation with oldUrl polls readyState on same-URL navigation`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.currentUrl()).thenReturn("http://example.com")
+            `when`(driver.evaluateValue("document.readyState")).thenReturn("loading", "complete")
+
+            executor.callFunctionOn(
+                ToolCall("tab", "waitForNavigation", mutableMapOf<String, Any?>("oldUrl" to "http://example.com")),
+                driver
+            )
+
+            // Regression: driver.waitForNavigation(oldUrl) has predicate
+            // `oldUrl != currentUrl()` — it can never become true for a same-URL
+            // navigation and would burn the whole timeout silently.
+            Mockito.verify(driver, Mockito.atLeast(2))
+                .evaluateValue("document.readyState")
+            Mockito.verify(driver, Mockito.never())
+                .waitForNavigation("http://example.com")
+        }
+    }
 }

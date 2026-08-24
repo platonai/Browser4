@@ -125,18 +125,45 @@ open class StreamingTaskLoop(
         if (swarmSession == null) {
             logger.warn("SWARM session does not exist, falling back to default")
         }
-        val session = swarmSession ?: cx.getOrCreateSession()
-
-        // clear the global illegal states, so the newly created crawler can work properly
-        StreamingTaskRunner.clearIllegalState()
 
         val urls = urlFeeder.asSequence()
-        _taskRunner = StreamingTaskRunner(urls, session, autoClose = false)
+        var currentSession = swarmSession ?: cx.getOrCreateSession()
+        _taskRunner = StreamingTaskRunner(urls, currentSession, autoClose = false)
 
         crawlJob = scope.launch {
             supervisorScope {
                 started.countDown()
-                _taskRunner.run(this)
+
+                // Keep a working crawler for as long as the loop is started:
+                // if the task runner exits unexpectedly (e.g. an exception
+                // escaped the main loop or a global illegal state was set),
+                // restart it. Without this, the loop stays marked as "running"
+                // while nothing consumes the url pool, and every newly
+                // submitted task stays queued forever.
+                while (running.get() && cx.isActive) {
+                    // The swarm session may have been closed and recreated;
+                    // re-resolve it so a fresh runner is bound to the live one.
+                    currentSession = cx.sessions.values.firstOrNull { it.label == "SWARM" } ?: currentSession
+
+                    // clear the global illegal states, so the newly created crawler can work properly
+                    StreamingTaskRunner.clearIllegalState()
+
+                    // A fresh runner per attempt: a used runner keeps its
+                    // BREAK flow state and would exit again immediately.
+                    val taskRunner = StreamingTaskRunner(urls, currentSession, autoClose = false)
+                    _taskRunner = taskRunner
+
+                    val job = launch { taskRunner.run(this) }
+                    job.join()
+
+                    if (running.get() && cx.isActive) {
+                        logger.warn(
+                            "Task runner #{} exited unexpectedly, restarting in {}s | {}",
+                            taskRunner.id, 2, taskRunner
+                        )
+                        delay(2000)
+                    }
+                }
             }
         }
     }

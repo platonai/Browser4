@@ -56,14 +56,6 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "loadStorageState"
         )
 
-        // Actions that may trigger page navigation (form submission, link clicks, history traversal, etc.).
-        // After these execute, the executor checks whether the page started navigating and waits for the
-        // DOM to settle before returning — preventing the CLI's post_command_snapshot from capturing an
-        // empty/partial page while navigation is still in flight.
-        private val NAVIGATION_TRIGGERING_ACTIONS = setOf(
-            "press", "click", "dblclick", "goBack", "goForward", "reload"
-        )
-
         private const val NAVIGATION_POLL_TIMEOUT_MS = 30_000L
         private const val NAVIGATION_DOM_READY_TIMEOUT_MS = 10_000L
         private const val NAVIGATION_DOM_SETTLE_DELAY_MS = 1_000L
@@ -279,12 +271,16 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
      * Algorithm (inspired by [PageStateTracker.waitForDOMSettle]):
      * 1. Check if the URL already changed — if so the navigation is complete, wait for body + settle delay.
      * 2. If the URL is unchanged, eval `document.readyState`. If "loading", the navigation is in flight —
-     *    call `waitForNavigation` then settle.
+     *    poll readyState until 'complete' (bounded by [pollTimeoutMillis]).
      * 3. Otherwise no navigation occurred — return immediately (no unnecessary delay).
      *
      * TODO: add an option for each WebDriver action to control the behaviour of the action including waiting.
      */
-    private suspend fun waitForPotentialNavigation(driver: WebDriver, urlBefore: String) {
+    private suspend fun waitForPotentialNavigation(
+        driver: WebDriver,
+        urlBefore: String,
+        pollTimeoutMillis: Long = NAVIGATION_POLL_TIMEOUT_MS
+    ) {
         // wait for a while for the action effects
         delay(200.milliseconds)
 
@@ -302,18 +298,46 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             // URL unchanged — check if the document is currently loading
             val readyState = driver.evaluateValue("document.readyState") as? String
             if (readyState == "loading") {
-                // Navigation is in flight, wait for it to complete
-                driver.waitForNavigation(urlBefore, NAVIGATION_POLL_TIMEOUT_MS)
-                driver.waitForSelector("body", NAVIGATION_POLL_TIMEOUT_MS)
-                delay(NAVIGATION_DOM_SETTLE_DELAY_MS.milliseconds)
+                // Navigation is in flight. Do NOT use waitForNavigation(urlBefore, ...)
+                // here: its predicate is `currentUrl() != urlBefore`, which can
+                // never become true for a same-URL navigation (reload, same-URL
+                // goto, fragment/SPA navigation that keeps the URL) — the wait
+                // would burn the whole timeout silently. Poll document.readyState
+                // instead, which covers both same-URL and URL-changing navigations.
+                var sawComplete = false
+                val deadline = System.currentTimeMillis() + pollTimeoutMillis
+                while (System.currentTimeMillis() < deadline) {
+                    val state = driver.evaluateValue("document.readyState") as? String
+                    if (state == "complete") {
+                        sawComplete = true
+                        break
+                    }
+                    delay(200.milliseconds)
+                }
 
-                // Verify the navigation actually landed on a different URL.
-                // If the URL is unchanged after waiting, the navigation silently failed.
-                val finalUrl = driver.currentUrl()
-                if (finalUrl == urlBefore) {
+                // A URL change is expected only for link/form navigations; a
+                // same-URL navigation (e.g. refresh) legitimately keeps the URL.
+                if (sawComplete) {
+                    // The document became ready — the navigation completed. The
+                    // body should already exist; a short DOM-ready budget is
+                    // enough (same as the URL-changing branch above). Do NOT
+                    // use the full NAVIGATION_POLL_TIMEOUT_MS here: the poll
+                    // already consumed that budget, and stacking another wait
+                    // doubles the dead time when the body never appears.
+                    driver.waitForSelector("body", NAVIGATION_DOM_READY_TIMEOUT_MS)
+                    delay(NAVIGATION_DOM_SETTLE_DELAY_MS.milliseconds)
+                } else {
+                    // The document never became ready — the navigation appears
+                    // to have failed (e.g. the page context is wedged and evals
+                    // return null). Do NOT pile waitForSelector("body", 30s) on
+                    // top of the exhausted poll: the page is stuck, another
+                    // full-timeout wait would double the dead time for every
+                    // navigation-triggering action. Surface the warning and let
+                    // the caller recover (reload, reopen the tab).
+                    val finalUrl = driver.currentUrl()
                     logger.warning(
-                        "waitForPotentialNavigation: navigation appeared to start (readyState=loading) " +
-                                "but URL did not change from '$urlBefore'. Navigation may have failed silently."
+                        "waitForPotentialNavigation: document never became ready after the action " +
+                                "(url='$finalUrl'). Navigation may have failed silently."
                     )
                 }
             } else {
@@ -366,40 +390,51 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         val result = when (functionName) {
             // Navigation
             "open" -> {
-                validateArgs(args, allowed("url"), setOf("url"), functionName); driver.open(
+                validateArgs(args, allowed("url"), setOf("url"), functionName)
+                val urlBefore = driver.currentUrl()
+                driver.open(
                     paramString(
                         args,
                         "url",
                         functionName
                     )!!
                 )
+                // driver.open() internally calls navigate(url) + the no-arg
+                // waitForNavigation(), whose predicate is `"" != currentUrl()` —
+                // true as soon as the page has any URL, so it returns immediately
+                // without waiting. Poll document.readyState to actually wait for
+                // the navigation (covers both URL-changing and same-URL cases).
+                waitForPotentialNavigation(driver, urlBefore)
             }
 
             "navigate" -> {
                 when {
                     args.containsKey("url") -> {
                         validateArgs(args, allowed("url"), setOf("url"), functionName)
+                        val urlBefore = driver.currentUrl()
                         driver.navigate(paramString(args, "url", functionName)!!)
-                        // After navigation, wait for the page to load by waiting for the body element to be present
-                        driver.waitForNavigation()
-                        driver.waitForSelector("body", timeoutMillis = 10_000)
-                        // wait for another seconds for DOM ready
-                        delay(1.seconds)
+                        // After navigation, wait for the page to load. Do NOT use
+                        // waitForNavigation() here — the no-arg overload's predicate
+                        // is `"" != currentUrl()`, true as soon as the page has any
+                        // URL, so it returns immediately without waiting; and the
+                        // oldUrl overload can never complete for same-URL navigations
+                        // (SPA routes, fragment jumps, same-URL goto). Poll
+                        // document.readyState instead, which covers both cases.
+                        waitForPotentialNavigation(driver, urlBefore)
                     }
 
                     args.containsKey("rawUrl") || args.containsKey("pageUrl") -> {
                         validateArgs(args, allowed("rawUrl", "pageUrl"), setOf("rawUrl", "pageUrl"), functionName)
+                        val urlBefore = driver.currentUrl()
                         driver.navigate(
                             NavigateEntry(
                                 paramString(args, "rawUrl", functionName)!!,
                                 pageUrl = paramString(args, "pageUrl", functionName)!!
                             )
                         )
-                        // After navigation, wait for the page to load by waiting for the body element to be present
-                        driver.waitForNavigation()
-                        driver.waitForSelector("body", timeoutMillis = 10_000)
-                        // wait for another seconds for DOM ready
-                        delay(1.seconds)
+                        // See the 'url' branch above — waitForNavigation() is a no-op
+                        // or a guaranteed timeout for same-URL navigations.
+                        waitForPotentialNavigation(driver, urlBefore)
                     }
 
                     else -> throw IllegalArgumentException("navigate requires 'url' or ('rawUrl','pageUrl')")
@@ -455,10 +490,21 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
             "waitForNavigation" -> {
                 when {
-                    args.isEmpty() -> driver.waitForNavigation()
+                    args.isEmpty() -> {
+                        // The no-arg waitForNavigation() overload is a no-op: its
+                        // predicate is `"" != currentUrl()`, true as soon as the page
+                        // has any URL. Poll document.readyState instead so an explicit
+                        // wait actually waits for the in-flight navigation.
+                        val urlBefore = driver.currentUrl()
+                        waitForPotentialNavigation(driver, urlBefore)
+                    }
+
                     args.containsKey("oldUrl") && !args.containsKey("timeoutMillis") -> {
                         validateArgs(args, allowed("oldUrl"), setOf("oldUrl"), functionName)
-                        driver.waitForNavigation(paramString(args, "oldUrl", functionName)!!)
+                        // oldUrl overload's predicate is `oldUrl != currentUrl()`,
+                        // which can never complete for same-URL navigations — poll
+                        // document.readyState instead (covers both cases).
+                        waitForPotentialNavigation(driver, paramString(args, "oldUrl", functionName)!!)
                     }
 
                     args.containsKey("oldUrl") && args.containsKey("timeoutMillis") -> {
@@ -468,7 +514,8 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                             setOf("oldUrl", "timeoutMillis"),
                             functionName
                         )
-                        driver.waitForNavigation(
+                        waitForPotentialNavigation(
+                            driver,
                             paramString(args, "oldUrl", functionName)!!,
                             paramLong(args, "timeoutMillis", functionName)!!
                         )

@@ -5,7 +5,13 @@ import ai.platon.pulsar.api.model.BrowserTab
 import ai.platon.pulsar.api.model.WebDriverException
 import ai.platon.pulsar.chrome.network.RobustRPC
 import ai.platon.pulsar.chrome.protocol.Keyboard
+import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import ai.platon.pulsar.common.urls.URLUtils
+import com.fasterxml.jackson.annotation.JsonInclude
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 import kotlinx.coroutines.delay
 
 /**
@@ -54,6 +60,32 @@ open class Browser4WebDriver(
 ) : PulsarWebDriver(uniqueID, chromeTab, browserProtocol, browser) {
 
     companion object {
+        private val logger = getLogger(Browser4WebDriver::class)
+
+        private val storageStateMapper: ObjectMapper = jacksonObjectMapper()
+            .setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
+
+        private data class StorageStatePayload(
+            val cookies: List<Map<String, Any?>> = emptyList(),
+            val origins: List<StorageStateOriginPayload> = emptyList(),
+        )
+
+        private data class StorageStateOriginPayload(
+            val origin: String = "",
+            val localStorage: List<StorageStateEntryPayload> = emptyList(),
+        )
+
+        private data class StorageStateEntryPayload(
+            val name: String = "",
+            val value: String = "",
+        )
+
+        private data class StorageStateLoadSummary(
+            val cookies: Int,
+            val origins: Int,
+            val localStorageEntries: Int,
+        )
+
         /**
          * Create a [Browser4WebDriver] from an existing [PulsarWebDriver],
          * reusing its underlying CDP connection, tab, and browser.
@@ -136,6 +168,62 @@ open class Browser4WebDriver(
                 el.dispatchEvent(new Event('change', { bubbles: true }));
             }
             """.trimIndent()
+
+        /**
+         * Normalize a cookie from a storage-state JSON payload for
+         * `Network.setCookies`.  Mirrors the upstream pulsar-browser
+         * normalization so states saved by `tab.saveStorageState()` round-trip
+         * unchanged.
+         *
+         * @param cookie Raw cookie entry from the storage-state payload.
+         * @return A map with the canonical `Network.setCookies` field set.
+         */
+        fun normalizeStorageStateCookie(cookie: Map<String, Any?>): Map<String, Any?> {
+            val name = cookie["name"]?.toString()?.trim().orEmpty()
+            require(name.isNotEmpty()) { "Storage state cookie name must not be blank" }
+
+            val normalized = linkedMapOf<String, Any?>(
+                "name" to name,
+                "value" to (cookie["value"]?.toString() ?: ""),
+            )
+
+            cookie["url"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["url"] = it }
+            cookie["domain"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["domain"] = it }
+            cookie["path"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["path"] = it }
+            cookie["expires"]?.toString()?.toDoubleOrNull()?.takeIf { it > 0 }?.let { normalized["expires"] = it }
+            cookie["httpOnly"]?.toString()?.toBooleanStrictOrNull()?.let { normalized["httpOnly"] = it }
+            cookie["secure"]?.toString()?.toBooleanStrictOrNull()?.let { normalized["secure"] = it }
+            cookie["sameSite"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["sameSite"] = it }
+
+            require("url" in normalized || "domain" in normalized) {
+                "Storage state cookie '$name' must include either url or domain"
+            }
+            return normalized
+        }
+
+        /**
+         * Build the JavaScript used to restore localStorage entries for a single
+         * origin.  [entriesJson] must be a JSON array of `{name, value}` objects.
+         */
+        fun restoreLocalStorageScript(entriesJson: String): String =
+            """
+            (() => {
+              const entries = $entriesJson;
+              window.localStorage.clear();
+              for (const entry of entries) {
+                window.localStorage.setItem(entry.name, entry.value ?? "");
+              }
+              return entries.length;
+            })()
+            """.trimIndent()
+
+        /**
+         * True once the evaluated `location.origin` has committed to exactly
+         * [targetOrigin].  Opaque-origin documents report `"null"` (or fail to
+         * evaluate at all), so neither case counts as ready.
+         */
+        fun isDocumentOriginReady(evaluatedOrigin: String?, targetOrigin: String): Boolean =
+            !evaluatedOrigin.isNullOrBlank() && evaluatedOrigin.trim() == targetOrigin
     }
 
     // ---------------------------------------------------------------------------
@@ -380,6 +468,116 @@ open class Browser4WebDriver(
         evaluateValue(selector, fillValueJs(text))
     }
 
+    // ---------------------------------------------------------------------------
+    // Storage state — the upstream pulsar-browser implementation races the
+    // per-origin navigation and can evaluate `window.localStorage` against an
+    // opaque-origin provisional document (`SecurityError: Access is denied for
+    // this document`).  `open()` delegates to `waitForNavigation()` with the
+    // default `oldUrl=""`, which short-circuits as soon as the tab has *any*
+    // URL, so the restore runs before the target document commits.  This
+    // override navigates to each origin and waits until the document has
+    // actually committed to that origin before restoring its localStorage.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Loads a previously saved browser storage state JSON, restoring cookies
+     * and localStorage.
+     *
+     * Overrides the upstream pulsar-browser implementation to wait for each
+     * origin's document to commit before touching `window.localStorage`, which
+     * is only accessible on a document with a standard (non-opaque) origin.
+     *
+     * @param state A JSON string produced by [saveStorageState].
+     * @return A JSON summary of the restored cookies, origins, and localStorage entries.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun loadStorageState(state: String): String {
+        val payload = storageStateMapper.readValue<StorageStatePayload>(state)
+        val cookies = payload.cookies.map(::normalizeStorageStateCookie)
+        if (cookies.isNotEmpty()) {
+            browserProtocol.setCookies(cookies)
+        }
+
+        val originalUrl = currentUrl()
+        var restoredOrigins = 0
+        var restoredLocalStorageEntries = 0
+
+        payload.origins.forEach { originState ->
+            val origin = originState.origin.trim()
+            require(origin.isNotEmpty()) { "Storage state origin must not be blank" }
+            require(URLUtils.isStandard(origin)) { "Storage state origin must be a standard URL: $origin" }
+
+            navigate(origin)
+            restoreLocalStorageForOrigin(origin, originState.localStorage)
+            restoredOrigins += 1
+            restoredLocalStorageEntries += originState.localStorage.size
+        }
+
+        if (payload.origins.isNotEmpty() && originalUrl.isNotBlank() && currentUrl() != originalUrl) {
+            open(originalUrl)
+        }
+
+        return storageStateMapper.writeValueAsString(
+            StorageStateLoadSummary(
+                cookies = cookies.size,
+                origins = restoredOrigins,
+                localStorageEntries = restoredLocalStorageEntries,
+            )
+        )
+    }
+
+    /**
+     * Navigate to [origin] and restore its localStorage entries once the main
+     * document has actually committed to that origin.  Retries transient
+     * evaluation failures (execution contexts are destroyed/recreated while a
+     * navigation commits) and fails loudly if the document never settles.
+     */
+    private suspend fun restoreLocalStorageForOrigin(
+        origin: String,
+        entries: List<StorageStateEntryPayload>,
+    ) {
+        val normalizedEntries = entries.map { entry ->
+            val name = entry.name.trim()
+            require(name.isNotEmpty()) { "localStorage entry name must not be blank" }
+            mapOf(
+                "name" to name,
+                "value" to entry.value,
+            )
+        }
+        val entriesJson = storageStateMapper.writeValueAsString(normalizedEntries)
+        val script = restoreLocalStorageScript(entriesJson)
+        val waitTimeout = timeout("waitForNavigation")
+        val deadline = System.nanoTime() + waitTimeout.toMillis() * 1_000_000L
+
+        while (System.nanoTime() < deadline) {
+            val currentOrigin = runCatching { evaluateValue("location.origin")?.toString()?.trim() }
+                .getOrNull()
+            if (isDocumentOriginReady(currentOrigin, origin)) {
+                // The document is committed; restore now.  A thrown
+                // evaluation error here means the context was destroyed
+                // between the probe and the write — keep polling.
+                val restoredCount = runCatching { evaluateValue(script) }.getOrNull()
+                if (restoredCount != null) {
+                    val count = (restoredCount as? Number)?.toInt()
+                    require(count == normalizedEntries.size) {
+                        "Expected to restore ${normalizedEntries.size} localStorage entries but restored ${count ?: "none"}"
+                    }
+                    return
+                }
+            }
+            delay(200)
+        }
+
+        logger.warn(
+            "Timed out restoring localStorage for origin {} after {}",
+            origin,
+            waitTimeout
+        )
+        throw WebDriverException(
+            "Timed out restoring localStorage for origin $origin after $waitTimeout"
+        )
+    }
+
     /**
      * Re-implementation of the parent's private `trySubmitFormOnEnter()`.
      *
@@ -551,7 +749,7 @@ open class Browser4WebDriver(
     // pending queue, and DialogHandler.onDialogClosed only logs.  The
     // tool-layer "blocked by a native dialog" guard checks that queue, so a
     // handled dialog keeps failing screenshots/health-checks until the session
-    // is closed.  These overrides drain the queue after every CDP dialog call.
+    // is closed. These overrides acknowledge the queue head after CDP succeeds.
     // ---------------------------------------------------------------------------
 
     /**
@@ -560,11 +758,8 @@ open class Browser4WebDriver(
      */
     @Throws(WebDriverException::class)
     override suspend fun dialogAccept(promptText: String?): Unit {
-        try {
-            super.dialogAccept(promptText)
-        } finally {
-            acknowledgeHandledDialog()
-        }
+        super.dialogAccept(promptText)
+        acknowledgeHandledDialog()
     }
 
     /**
@@ -573,11 +768,8 @@ open class Browser4WebDriver(
      */
     @Throws(WebDriverException::class)
     override suspend fun dialogDismiss(): Unit {
-        try {
-            super.dialogDismiss()
-        } finally {
-            acknowledgeHandledDialog()
-        }
+        super.dialogDismiss()
+        acknowledgeHandledDialog()
     }
 
     /**
@@ -589,8 +781,6 @@ open class Browser4WebDriver(
      * `Page.handleJavaScriptDialog` call.
      */
     private fun acknowledgeHandledDialog() {
-        if (dialogHandler.hasPendingDialog()) {
-            dialogHandler.getPendingDialog()
-        }
+        dialogHandler.getPendingDialog()
     }
 }

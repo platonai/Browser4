@@ -60,10 +60,11 @@ use help::{
 };
 use http::{
     call_tool, call_tool_with_result, call_tool_with_timeout_override, cancel_crawl,
-    clear_all_crawls, clear_crawls, crawl_request_timeout, get_command_result,
-    get_command_status, get_crawl_result, get_crawl_status, get_swarm_result,
-    get_swarm_status, is_stale_session_error, make_client, submit_batch_commands,
-    submit_crawl, submit_plain_command, submit_swarm_payload, submit_swarm_query, CallToolResult,
+    clear_all_crawls, clear_crawls, close_swarm_session, crawl_request_timeout,
+    get_command_result, get_command_status, get_crawl_result, get_crawl_status,
+    get_swarm_result, get_swarm_status, is_stale_session_error, make_client,
+    submit_batch_commands, submit_crawl, submit_plain_command, submit_swarm_payload,
+    submit_swarm_query, CallToolResult,
 };
 use managed_processes::{
     read_managed_server_processes, stop_browser4_server_forcibly, ManagedServerProcess,
@@ -9415,6 +9416,33 @@ async fn handle_swarm_create(
     Ok(())
 }
 
+/// Mark locally tracked pending swarm tasks as "failed (closed)".
+///
+/// Pending tasks (never polled, queued, or processing) can never complete
+/// after their swarm session closes — the backend drops them, so the local
+/// tracking must reflect that instead of showing them "queued" forever.
+/// Completed/failed tasks are left untouched.
+///
+/// Returns the number of tasks marked.
+fn mark_local_swarm_tasks_closed(list: &mut state::AsyncTaskList) -> usize {
+    let mut marked = 0usize;
+    for t in list
+        .tasks
+        .iter_mut()
+        .filter(|t| t.command == "swarm-submit" || t.command == "swarm-query")
+    {
+        let is_pending = t.last_status.is_empty()
+            || t.last_status == "queued"
+            || t.last_status == "processing"
+            || t.last_status == "pending";
+        if is_pending {
+            t.last_status = "failed (closed)".to_string();
+            marked += 1;
+        }
+    }
+    marked
+}
+
 async fn handle_swarm_close(
     client: &Client,
     base_url: &str,
@@ -9433,6 +9461,22 @@ async fn handle_swarm_close(
     };
     json_field("session_id", json!(&session_id));
 
+    // Ask the backend to abort pending swarm tasks BEFORE closing the session,
+    // so they don't stay "queued" forever and leak across sessions. Best-effort:
+    // older backends without the DELETE /api/swarm endpoint (or an unreachable
+    // backend) must not break the close itself.
+    let mut aborted_pending: Option<i64> = None;
+    match close_swarm_session(client, base_url).await {
+        Ok(payload) => {
+            if let Ok(parsed) = serde_json::from_str::<Value>(&payload) {
+                aborted_pending = parsed.get("abortedPendingTasks").and_then(|v| v.as_i64());
+            }
+        }
+        Err(e) => {
+            eprintln!("Note: could not clean up pending swarm tasks on the backend: {e}");
+        }
+    }
+
     // Count tracked swarm tasks before closing (for the summary).
     let existing = read_async_tasks(None);
     let swarm_task_count = existing
@@ -9440,6 +9484,12 @@ async fn handle_swarm_close(
         .iter()
         .filter(|t| t.command == "swarm-submit" || t.command == "swarm-query")
         .count();
+
+    // Mark locally tracked pending tasks as failed (closed) so `swarm list`
+    // reflects the cleanup even when the backend was unreachable.
+    let mut list = existing;
+    let locally_closed = mark_local_swarm_tasks_closed(&mut list);
+    let _ = write_async_tasks(&list, None);
 
     // Close the swarm session — ignore errors if already closed.
     let _ = call_tool(
@@ -9452,11 +9502,22 @@ async fn handle_swarm_close(
     clear_state(None, effective_name);
 
     json_field("closed", json!(true));
+    json_field("aborted_pending_tasks", json!(aborted_pending.unwrap_or(0)));
     if swarm_task_count > 0 {
-        cli_println!(
-            "Swarm session closed. Browser terminated. {} tracked task(s) retained for history. Use `swarm list --clear` to remove.",
-            swarm_task_count
-        );
+        let cleanup_msg = match aborted_pending {
+            Some(n) if n > 0 => format!(" {n} pending task(s) aborted on the backend."),
+            Some(_) => " All pending tasks were already finished.".to_string(),
+            None => String::new(),
+        };
+        if locally_closed > 0 {
+            cli_println!(
+                "Swarm session closed. Browser terminated.{cleanup_msg} {locally_closed} locally tracked pending task(s) marked as failed (closed)."
+            );
+        } else {
+            cli_println!(
+                "Swarm session closed. Browser terminated.{cleanup_msg} {swarm_task_count} tracked task(s) retained for history. Use `swarm list --clear` to remove."
+            );
+        }
         json_field("tracked_tasks_retained", json!(swarm_task_count));
     } else {
         cli_println!("Swarm session closed. Browser terminated.");
@@ -9926,13 +9987,28 @@ async fn handle_swarm_result(
         "resultSet": result_set,
         "pageContentBytes": parsed.get("pageContentBytes").unwrap_or(&json!(null)),
         "error": parsed.get("error").unwrap_or(&json!(null)),
+        "message": parsed.get("message").unwrap_or(&json!(null)),
+        "statusCode": parsed.get("statusCode").unwrap_or(&json!(null)),
     });
     cli_println!("{}", serde_json::to_string_pretty(&payload).unwrap_or_default());
 
-    // Guide users when resultSet is empty — distinguish "page never fetched"
-    // from "page fetched but nothing extracted" so the hint doesn't mislead
-    // `swarm query` users whose task was silently dropped/evicted.
-    if is_empty && !parsed.get("error").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
+    // Surface the failure reason for terminal non-success tasks so a completed
+    // task with an empty resultSet explains WHY it is empty (page never
+    // fetched, aborted, timed out, ...) instead of guessing.
+    let has_message = parsed
+        .get("message")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+    if is_empty && has_message {
+        cli_println!("Note: {}", parsed["message"].as_str().unwrap_or_default());
+    }
+
+    // Guide users when resultSet is empty and no explicit failure reason was
+    // provided — distinguish "page never fetched" from "page fetched but
+    // nothing extracted" so the hint doesn't mislead `swarm query` users whose
+    // task was silently dropped/evicted.
+    if is_empty && !has_message && !parsed.get("error").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
         let page_content_bytes = parsed
             .get("pageContentBytes")
             .and_then(|v| v.as_i64())
@@ -22743,6 +22819,91 @@ mod tests {
 
         let result = swarm_wait_for_jobs(&client, base_url, &[]).await;
         assert!(result.is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // swarm close cleanup tests (issue #577)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mark_local_swarm_tasks_closed_marks_only_pending_swarm_tasks() {
+        let mut list = state::AsyncTaskList {
+            tasks: vec![
+                state::AsyncTaskEntry {
+                    task_id: "t1".to_string(),
+                    command: "swarm-query".to_string(),
+                    description: "https://example.com".to_string(),
+                    submitted_at: "s1".to_string(),
+                    last_status: "queued".to_string(),
+                    completed_at: None,
+                },
+                state::AsyncTaskEntry {
+                    task_id: "t2".to_string(),
+                    command: "swarm-submit".to_string(),
+                    description: "https://example.org".to_string(),
+                    submitted_at: "s2".to_string(),
+                    last_status: "processing".to_string(),
+                    completed_at: None,
+                },
+                state::AsyncTaskEntry {
+                    task_id: "t3".to_string(),
+                    command: "swarm-submit".to_string(),
+                    description: "https://example.net".to_string(),
+                    submitted_at: "s3".to_string(),
+                    last_status: String::new(), // never polled
+                    completed_at: None,
+                },
+                state::AsyncTaskEntry {
+                    task_id: "t4".to_string(),
+                    command: "swarm-query".to_string(),
+                    description: "https://example.edu".to_string(),
+                    submitted_at: "s4".to_string(),
+                    last_status: "completed".to_string(),
+                    completed_at: Some("c4".to_string()),
+                },
+                state::AsyncTaskEntry {
+                    task_id: "t5".to_string(),
+                    command: "swarm-query".to_string(),
+                    description: "https://example.io".to_string(),
+                    submitted_at: "s5".to_string(),
+                    last_status: "failed (timeout)".to_string(),
+                    completed_at: Some("c5".to_string()),
+                },
+                state::AsyncTaskEntry {
+                    task_id: "t6".to_string(),
+                    command: "crawl".to_string(),
+                    description: "https://example.xyz".to_string(),
+                    submitted_at: "s6".to_string(),
+                    last_status: "queued".to_string(),
+                    completed_at: None,
+                },
+            ],
+        };
+
+        let marked = mark_local_swarm_tasks_closed(&mut list);
+
+        assert_eq!(marked, 3, "pending swarm tasks must be marked");
+        let status = |id: &str| {
+            list.tasks
+                .iter()
+                .find(|t| t.task_id == id)
+                .unwrap()
+                .last_status
+                .clone()
+        };
+        assert_eq!(status("t1"), "failed (closed)");
+        assert_eq!(status("t2"), "failed (closed)");
+        assert_eq!(status("t3"), "failed (closed)");
+        assert_eq!(status("t4"), "completed", "completed tasks must be untouched");
+        assert_eq!(status("t5"), "failed (timeout)", "failed tasks must be untouched");
+        assert_eq!(status("t6"), "queued", "non-swarm tasks must be untouched");
+    }
+
+    #[test]
+    fn mark_local_swarm_tasks_closed_handles_empty_list() {
+        let mut list = state::AsyncTaskList::default();
+        let marked = mark_local_swarm_tasks_closed(&mut list);
+        assert_eq!(marked, 0);
     }
 
     // =========================================================================
