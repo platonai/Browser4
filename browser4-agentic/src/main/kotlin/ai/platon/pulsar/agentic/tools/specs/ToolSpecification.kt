@@ -43,7 +43,6 @@ browser.listTabs(): List<Map<String, String>>
 agent.extract(instruction: String, schema: String): String // Extract data with given JSON schema
 agent.summarize(instruction: String?, selector: String?): String // Extract textContent and generate a summary
 agent.observe(instruction: String): String                 // observe the current page following the instruction
-agent.run(task: String): String                            // run a sub-agent task and return the result
 
 // domain: system
 system.help(domain: String): String                        // get help for tool calls in a domain

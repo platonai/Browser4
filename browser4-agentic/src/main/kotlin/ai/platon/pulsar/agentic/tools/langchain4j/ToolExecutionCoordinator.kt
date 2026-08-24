@@ -46,7 +46,11 @@ class ToolExecutionCoordinator(
             // tool-calling results feed back into the conversation, so
             // unbounded Maven/read outputs blow up the context (observed
             // 90k-token requests). Header + truncated body + errors.
-            ToolOutcome.from(result).render().take(5000)
+            // The resolved (domain, method) is passed explicitly: the
+            // ToolCallResult from AgentToolManager.execute carries no
+            // ActionDescription, so without the override every envelope would
+            // render as "unknown.unknown [ok] ..." in the prompt and traces.
+            ToolOutcome.from(result, domain = tc.domain, method = tc.method).render().take(5000)
         } catch (e: Exception) {
             "[fail] ${e.message?.take(300) ?: "tool execution failed"}"
         }

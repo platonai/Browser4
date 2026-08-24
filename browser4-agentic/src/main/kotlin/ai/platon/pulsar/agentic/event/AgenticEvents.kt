@@ -51,6 +51,14 @@ object AgenticEvents {
         const val ON_DID_ACT = "PerceptiveAgent.onDidAct"
 
         /**
+         * Emitted periodically while the CLI engine's tool-calling loop executes
+         * tools inside a single step. Lets status/SSE observers see liveness
+         * during long multi-tool rounds instead of a frozen "starting up" message.
+         * Payload: Map containing "toolExecutions" (Int)
+         */
+        const val ON_TOOL_EXECUTED = "PerceptiveAgent.onToolExecuted"
+
+        /**
          * Emitted before executing the extract method.
          * Payload: Map containing "options" (ExtractOptions), "uuid" (UUID)
          */
@@ -163,6 +171,7 @@ object AgenticEvents {
         PerceptiveAgent.ON_DID_OBSERVE,
         PerceptiveAgent.ON_WILL_ACT,
         PerceptiveAgent.ON_DID_ACT,
+        PerceptiveAgent.ON_TOOL_EXECUTED,
         PerceptiveAgent.ON_WILL_EXTRACT,
         PerceptiveAgent.ON_DID_EXTRACT,
         PerceptiveAgent.ON_WILL_SUMMARIZE,

@@ -9628,6 +9628,11 @@ async fn handle_agent_run(
     cli_println!("Task submitted: {}", task_id);
     json_field("task_id", json!(&task_id));
 
+    // Persist the task for cross-session tracking in BOTH async and wait
+    // modes, so `agent list` always reflects every submitted task — including
+    // ones that later time out while the server keeps working on them.
+    let _ = track_async_task(&task_id, "agent", task, None);
+
     let wait = tool_params
         .get("wait")
         .and_then(|v| v.as_bool())
@@ -9636,9 +9641,23 @@ async fn handle_agent_run(
     if wait {
         cli_println!("Waiting for agent to complete (task {})...", task_id);
         let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(600); // 10 minutes
+        // Per-invocation override (--wait-timeout) wins; falls back to the
+        // BROWSER4_CLI_AGENT_WAIT_TIMEOUT_SECS env var; default is 10 minutes.
+        let wait_timeout_secs = tool_params
+            .get("waitTimeout")
+            .and_then(|v| v.as_u64())
+            .or_else(|| {
+                std::env::var("BROWSER4_CLI_AGENT_WAIT_TIMEOUT_SECS")
+                    .ok()
+                    .and_then(|raw| raw.trim().parse::<u64>().ok())
+            })
+            .unwrap_or(600);
+        let timeout = std::time::Duration::from_secs(wait_timeout_secs);
         loop {
             if start.elapsed() > timeout {
+                // The task is still alive server-side; keep it in the local
+                // list so `agent list` / `agent status` can pick it up later.
+                let _ = update_async_task_status(&task_id, "processing", None);
                 return Err(format!(
                     "Agent task {} timed out after {}s. Use 'agent status {}' to check later.",
                     task_id,
@@ -9670,6 +9689,7 @@ async fn handle_agent_run(
                     if status_code >= 400 || failure_reason.is_some() {
                         let message = failure_reason
                             .unwrap_or_else(|| format!("Agent task failed with status code {status_code}"));
+                        let _ = update_async_task_status(&task_id, "failed", None);
                         return Err(format!("Agent task failed: {message}"));
                     }
                     let result_text = get_command_result(client, base_url, &task_id).await?;
@@ -9688,6 +9708,7 @@ async fn handle_agent_run(
                         .get("message")
                         .and_then(|v| v.as_str())
                         .unwrap_or("Agent task failed");
+                    let _ = update_async_task_status(&task_id, "failed", None);
                     return Err(format!("Agent task failed: {}", message));
                 }
                 _ => {
@@ -9711,9 +9732,6 @@ async fn handle_agent_run(
         "Use 'agent status {}' to check progress, or 'agent list' to view all tracked tasks.",
         task_id
     );
-
-    // Persist the task for cross-session tracking
-    let _ = track_async_task(&task_id, "agent", task, None);
 
     Ok(())
 }

@@ -67,6 +67,21 @@ class SystemToolExecutorTest {
     }
 
     @Test
+        @DisplayName("skillDocMetadata returns frontmatter only, not the full SKILL.md body")
+    fun skillDocMetadataReturnsFrontmatterOnly() {
+        val metadata = executor.skillDocMetadata("SKILL.md")
+
+        assertTrue(metadata.startsWith("Skill: SKILL.md"), "expected metadata header, got: ${metadata.take(60)}")
+        assertTrue(metadata.contains("name: browser4-cli"), "metadata must include the skill name")
+        assertTrue(metadata.contains("description:"), "metadata must include the description")
+        assertFalse(
+            metadata.contains("## 1. Core Loop"),
+            "metadata must not embed the full SKILL.md body"
+        )
+        assertTrue(metadata.length < 1_000, "metadata must stay small, got ${metadata.length} chars")
+    }
+
+    @Test
         @DisplayName("skillDoc lists available documents for an unknown name")
     fun skillDocUnknownNameListsAvailable() {
         val content = executor.skillDoc("does-not-exist.md")

@@ -239,6 +239,9 @@ const TIPS_AGENT: &[Tip] = &[
     Tip {
         text: "Use `agent status` and `agent result` to poll async agent tasks",
     },
+    Tip {
+        text: "Use `agent run --wait --wait-timeout <seconds>` to block for a result — long browsing tasks may need more than the 600s default",
+    },
 ];
 
 const TIPS_ATTACH: &[Tip] = &[

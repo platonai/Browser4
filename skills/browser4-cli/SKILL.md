@@ -690,6 +690,11 @@ browser4-cli agent result <task-id>
 
 **Note:** `agent run` is asynchronous. Submit with `agent run`, then use `agent status` and `agent result` to track completion and fetch output.
 
+To block for the result in one command, pass `--wait` (default 600s; tune with
+`--wait-timeout <seconds>` or `BROWSER4_CLI_AGENT_WAIT_TIMEOUT_SECS`). If the
+wait window expires, the task keeps running server-side and stays listed in
+`agent list` for later polling with `agent status` / `agent result`.
+
 **Polling with `isDone`:** The JSON from `agent status` includes `isDone: true` when finished. Shell scripts can parse this:
 ```bash
 while true; do

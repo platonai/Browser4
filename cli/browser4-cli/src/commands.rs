@@ -3011,7 +3011,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "task", description: "Natural language task for the agent to execute", optional: false }],
             options: &[
-                OptionDef { name: "wait", description: "Block until the agent task completes (max 10 minutes)", is_bool: true, short: None },
+                OptionDef { name: "wait", description: "Block until the agent task completes (default timeout: 600s)", is_bool: true, short: None },
+                OptionDef { name: "wait-timeout", description: "Max seconds to block with --wait before giving up (default: 600; the task keeps running server-side after a timeout)", is_bool: false, short: None },
                 OptionDef { name: "noop-limit", description: "Override the consecutive no-op abort threshold (default: 5; long coding tasks benefit from 8-10)", is_bool: false, short: None },
                 OptionDef { name: "engine", description: "Agent execution engine (default: cli; use observe-act for the legacy engine)", is_bool: false, short: None },
             ],
@@ -3021,6 +3022,11 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let mut p = json!({ "task": get_str(args, "task").unwrap_or_default() });
                 if get_bool(args, "wait").unwrap_or(false) {
                     p["wait"] = json!(true);
+                }
+                if let Some(v) = get_opt_str(args, "wait-timeout") {
+                    if let Ok(secs) = v.parse::<u64>() {
+                        p["waitTimeout"] = json!(secs);
+                    }
                 }
                 if let Some(n) = get_opt_str(args, "noop-limit") {
                     if let Ok(limit) = n.parse::<i64>() {
@@ -5349,6 +5355,31 @@ mod tests {
         assert_eq!((cmd.tool_name_fn)(&args), "command_run");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["task"], "go to amazon.com");
+        assert!(params.get("waitTimeout").is_none());
+    }
+
+    #[test]
+    fn test_agent_run_forwards_wait_timeout() {
+        let map = commands_map();
+        let cmd = map.get("agent-run").unwrap();
+        let mut args = HashMap::new();
+        args.insert("task".to_string(), json!("go to amazon.com"));
+        args.insert("wait".to_string(), json!(true));
+        args.insert("wait-timeout".to_string(), json!("90"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["wait"], true);
+        assert_eq!(params["waitTimeout"], 90);
+    }
+
+    #[test]
+    fn test_agent_run_ignores_non_numeric_wait_timeout() {
+        let map = commands_map();
+        let cmd = map.get("agent-run").unwrap();
+        let mut args = HashMap::new();
+        args.insert("task".to_string(), json!("go to amazon.com"));
+        args.insert("wait-timeout".to_string(), json!("soon"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("waitTimeout").is_none());
     }
 
     #[test]

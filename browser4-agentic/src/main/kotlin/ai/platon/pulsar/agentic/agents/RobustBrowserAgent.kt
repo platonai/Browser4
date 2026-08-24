@@ -11,19 +11,26 @@ import ai.platon.pulsar.agentic.model.ActionDescription
 import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.model.ExecutionContext
 import ai.platon.pulsar.agentic.model.ToolCall
+import ai.platon.pulsar.agentic.event.AgentEventBus
+import ai.platon.pulsar.agentic.event.AgenticEvents
 import ai.platon.pulsar.agentic.tools.builtin.TaskCompletion
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolExecutionCoordinator
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecification
+import ai.platon.pulsar.common.AppPaths
+import ai.platon.pulsar.common.MultiSinkMessageWriter
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.Pson
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
 import com.fasterxml.jackson.databind.node.JsonNodeFactory
+import dev.langchain4j.agent.tool.ToolExecutionRequest
 import dev.langchain4j.data.message.AiMessage
 import dev.langchain4j.data.message.ChatMessage
 import dev.langchain4j.data.message.SystemMessage
+import dev.langchain4j.data.message.ToolExecutionResultMessage
 import dev.langchain4j.data.message.UserMessage
 import dev.langchain4j.model.chat.request.ChatRequest
 import kotlinx.coroutines.*
@@ -31,6 +38,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
 import java.time.Instant
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -41,10 +49,11 @@ import kotlin.time.Duration.Companion.milliseconds
 // File-level constants previously in companion object
 private const val COMPACT_INLINE_SESSION_LENGTH = 160
 private const val COMPACT_INLINE_INSTRUCTION_LENGTH = 100
-private const val CLI_SYSTEM_PROMPT_MAX_CHARS = 120_000
 private const val CLI_CONTINUE_NUDGE =
     "If the task is fully finished, call system.taskComplete with the final report now. " +
         "Otherwise continue working with tools. Do not answer in plain text unless you are done."
+/** How often the CLI tool loop emits a liveness event (every N tool executions). */
+private const val CLI_TOOL_PROGRESS_EVENT_INTERVAL = 5
 /** Explicit tool domains exposed to the CLI engine (design v0.2 §4.4). */
 private val CLI_ENGINE_DOMAINS = setOf("coding", "cli", "system")
 
@@ -81,6 +90,17 @@ open class RobustBrowserAgent(
     internal val agentWorkspaceDir: Path by lazy {
         baseDir.resolve("workspace").also { Files.createDirectories(it) }
     }
+
+    /**
+     * Complete-prompt + per-tool run tracing for the CLI engine. Writes:
+     * - `cli-prompt/<ts>.<seq>.request.json` — the EXACT message list plus the
+     *   tool specifications sent to the model on every round-trip;
+     * - `cli-tool-trace.jsonl` — every executed tool with arguments, full
+     *   result text and duration;
+     * - `cli-events.jsonl` — run-level events (start, overflow, completion).
+     * Gated by [AgentConfig.logInferenceToFile] (default true).
+     */
+    private val cliLoopTracer by lazy { CliLoopTracer(uuid, startTime, config.logInferenceToFile) }
 
     private val noopLimit: Int get() = (noopLimitOverride ?: config.consecutiveNoOpLimit).coerceAtLeast(1)
 
@@ -401,8 +421,9 @@ open class RobustBrowserAgent(
     ): ResolveResult {
         initializeResolution(initContext, attempt)
         if (effectiveRunEngine == RunEngine.CLI_TOOL_LOOP) {
-            return doRunCliAgentLoop(initActionOptions, initContext, attempt)
+            return doRunCliAgentLoop(initActionOptions, initContext)
         }
+
         var consecutiveNoOps = 0
         // Text-only stall fuse: consecutive responses without ANY tool call and
         // without a completion marker. Text-only responses deliberately don't
@@ -498,9 +519,8 @@ open class RobustBrowserAgent(
      * model calling `system.taskComplete` (no JSON parsing anywhere).
      */
     private suspend fun doRunCliAgentLoop(
-        initActionOptions: ActionOptions, initContext: ExecutionContext, attempt: Int
+        initActionOptions: ActionOptions, initContext: ExecutionContext
     ): ResolveResult {
-        initializeResolution(initContext, attempt)
         var context = initContext
         val startTime = Instant.now()
         val completionRef = AtomicReference<ActionDescription?>()
@@ -508,6 +528,7 @@ open class RobustBrowserAgent(
         try {
             val action = initActionOptions.copy(fromRunLoop = true)
             val loop = buildCliToolLoop(action.action, completionRef, toolExecutions)
+            cliLoopTracer.logEvent("run.start", mapOf("instruction" to action.action))
             var messages: List<ChatMessage> = listOf(
                 SystemMessage.from(cliAgentSystemPrompt()),
                 UserMessage.from(action.action),
@@ -565,10 +586,19 @@ open class RobustBrowserAgent(
                         break
                     }
                 }
-                messages = if (text.isBlank()) {
-                    messages + UserMessage.from(CLI_CONTINUE_NUDGE)
-                } else {
-                    messages + AiMessage.from(text) + UserMessage.from(CLI_CONTINUE_NUDGE)
+                messages = when {
+                    // Overflow: the inner loop's message list dies with the
+                    // generate() call, so without this hand-off the model would
+                    // restart the whole round from scratch and re-execute every
+                    // already-done tool call (the observed 20-iteration churn).
+                    // Feed the executed-tools + newest-results digest back so it
+                    // resumes from the cut point instead.
+                    overflow -> {
+                        cliLoopTracer.logEvent("overflow", mapOf("modelError" to response.modelError!!))
+                        messages + UserMessage.from(overflowContinuationMessage(response.modelError!!))
+                    }
+                    text.isBlank() -> messages + UserMessage.from(CLI_CONTINUE_NUDGE)
+                    else -> messages + AiMessage.from(text) + UserMessage.from(CLI_CONTINUE_NUDGE)
                 }
                 turn++
             }
@@ -611,11 +641,30 @@ open class RobustBrowserAgent(
             coordinator = ToolExecutionCoordinator(agentToolManager, registry),
             // Browser tasks routinely exceed the default 12-round internal cap
             // (open → snapshot → type → submit → wait → extract); give the CLI
-            // engine a higher ceiling, overflow is handled by the outer loop.
+            // engine a higher ceiling, overflow is handled by the outer loop
+            // (the model resumes from the executed-tools digest).
             maxIterations = config.toolLoopMaxIterations.coerceAtLeast(20),
             requestTokenLimiter = cta.requestTokenLimiter,
             compressor = cliToolLoopCompressor(specs),
-            onToolExecuted = { toolExecutions.incrementAndGet() },
+            // Complete prompt + run tracing: dump the exact request and every
+            // tool execution (see CliLoopTracer).
+            onBeforeGenerate = { msgs -> cliLoopTracer.logPrompt(msgs, specs) },
+            onToolResult = { req, result, durationMs -> cliLoopTracer.logTool(req, result, durationMs) },
+            onToolExecuted = {
+                val executed = toolExecutions.incrementAndGet()
+                // The CLI engine can execute dozens of tools inside a single
+                // step; without periodic events the status stays "Agent starting
+                // up" until the whole step resolves. Throttled liveness events
+                // let status/SSE observers see that the agent is still working.
+                if (executed % CLI_TOOL_PROGRESS_EVENT_INTERVAL == 0) {
+                    AgentEventBus.emitAgentEvent(
+                        eventType = AgenticEvents.PerceptiveAgent.ON_TOOL_EXECUTED,
+                        agentId = uuid.toString(),
+                        message = "Executed $executed tool call(s)",
+                        metadata = mapOf("toolExecutions" to executed)
+                    )
+                }
+            },
             onToolRequest = { name, argsJson ->
                 if (name == taskCompleteName) {
                     runCatching {
@@ -634,6 +683,141 @@ open class RobustBrowserAgent(
                 }
             },
         )
+    }
+
+    /**
+     * Continuation prompt handed back to the model after an internal tool-loop
+     * overflow: the [modelError] carries a bounded digest of the executed tools
+     * and their newest results, so the model resumes from the cut point instead
+     * of re-executing the whole round (the overflowed loop's own message list
+     * is discarded by [AgentToolCallLoop.generate]).
+     */
+    private fun overflowContinuationMessage(modelError: String): String = buildString {
+        append(
+            "Your previous tool round was cut short after exceeding the per-round " +
+                "iteration cap. The tools that already executed and the newest results " +
+                "are summarized below. Continue the task FROM THIS POINT — do not " +
+                "re-execute tools that already succeeded unless you need their full output.\n\n"
+        )
+        append(modelError)
+    }
+
+    /**
+     * Complete-prompt + run tracing for the CLI engine.
+     *
+     * Under the agent's aux log dir (`<aux>/agent/<startTime>/<uuid>/`):
+     * - `cli-prompt/<ts>.<seq>.request.json` — one file per model round-trip:
+     *   the EXACT `messages` list (system prompt, history, tool-call messages
+     *   and full tool results) plus the tool specifications the model saw;
+     * - `cli-tool-trace.jsonl` — one line per executed tool: name, arguments,
+     *   full result text, duration;
+     * - `cli-events.jsonl` — run-level events: run.start / overflow / complete.
+     */
+    private class CliLoopTracer(
+        agentUuid: UUID,
+        agentStartTime: Instant,
+        private val enabled: Boolean,
+    ) {
+        private val logger = getLogger(CliLoopTracer::class)
+
+        private val runDir: Path by lazy {
+            AppPaths.detectAuxiliaryLogDir().resolve("agent")
+                .resolve(AppPaths.fromTime(agentStartTime))
+                .resolve(agentUuid.toString())
+        }
+
+        private val jsonlWriter by lazy { MultiSinkMessageWriter(runDir) }
+        private val promptDir: Path by lazy {
+            runDir.resolve("cli-prompt").also { Files.createDirectories(it) }
+        }
+        private val promptSeq = AtomicInteger(0)
+        private val toolSeq = AtomicInteger(0)
+
+        /** Dump the exact prompt (messages + tool specs) sent to the model. */
+        fun logPrompt(
+            messages: List<ChatMessage>,
+            toolSpecifications: List<dev.langchain4j.agent.tool.ToolSpecification>,
+        ) {
+            if (!enabled) return
+            try {
+                val requestSeq = promptSeq.incrementAndGet()
+                val payload = mapOf(
+                    "requestSeq" to requestSeq,
+                    "timestamp" to AppPaths.fromNow(),
+                    "toolSpecifications" to toolSpecifications.map { spec ->
+                        mapOf(
+                            "name" to spec.name(),
+                            "description" to (spec.description() ?: ""),
+                            "parameters" to runCatching {
+                                pulsarObjectMapper().writeValueAsString(spec.parameters())
+                            }.getOrElse { "{}" },
+                        )
+                    },
+                    "messages" to messages.map { serializeMessage(it) },
+                    "messageCount" to messages.size,
+                )
+                val path = promptDir.resolve("${AppPaths.fromNow()}.$requestSeq.request.json")
+                Files.writeString(
+                    path,
+                    pulsarObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(payload),
+                )
+            } catch (e: Exception) {
+                logger.warn("Failed to write CLI prompt log: {}", e.message)
+            }
+        }
+
+        /** Append one executed tool (arguments + full result text + duration). */
+        fun logTool(request: ToolExecutionRequest, result: ToolExecutionResultMessage, durationMs: Long) {
+            if (!enabled) return
+            try {
+                val payload = mapOf(
+                    "timestamp" to AppPaths.fromNow(),
+                    "seq" to toolSeq.incrementAndGet(),
+                    "tool" to request.name(),
+                    "arguments" to (request.arguments() ?: "{}"),
+                    "durationMs" to durationMs,
+                    "resultText" to result.text(),
+                )
+                jsonlWriter.writeTo(payload, runDir.resolve("cli-tool-trace.jsonl"))
+            } catch (e: Exception) {
+                logger.warn("Failed to write CLI tool trace: {}", e.message)
+            }
+        }
+
+        /** Append a run-level event (run.start / overflow / complete). */
+        fun logEvent(event: String, detail: Map<String, Any?>) {
+            if (!enabled) return
+            try {
+                val payload = mapOf(
+                    "timestamp" to AppPaths.fromNow(),
+                    "event" to event,
+                ) + detail
+                jsonlWriter.writeTo(payload, runDir.resolve("cli-events.jsonl"))
+            } catch (e: Exception) {
+                logger.warn("Failed to write CLI event trace: {}", e.message)
+            }
+        }
+
+        private fun serializeMessage(message: ChatMessage): Map<String, Any?> = when (message) {
+            is SystemMessage -> mapOf("type" to "system", "text" to message.text())
+            is UserMessage -> mapOf("type" to "user", "text" to (message.singleText() ?: message.toString()))
+            is AiMessage -> mapOf(
+                "type" to "ai",
+                "text" to (message.text() ?: ""),
+                "toolExecutionRequests" to message.toolExecutionRequests().orEmpty().map { request ->
+                    mapOf(
+                        "name" to request.name(),
+                        "arguments" to (request.arguments() ?: "{}"),
+                    )
+                },
+            )
+            is ToolExecutionResultMessage -> mapOf(
+                "type" to "tool_result",
+                "toolName" to message.toolName(),
+                "text" to message.text(),
+            )
+            else -> mapOf("type" to "unknown", "text" to message.toString())
+        }
     }
 
     /** Auto context compression for the CLI tool loop (long multi-step tasks). */
@@ -679,23 +863,41 @@ open class RobustBrowserAgent(
         completion: ActionDescription,
         context: ExecutionContext,
     ): ResolveResult {
+        cliLoopTracer.logEvent(
+            "complete",
+            mapOf(
+                "summary" to (completion.summary ?: ""),
+                "keyFindings" to (completion.keyFindings ?: emptyList<String>()),
+                "filesChanged" to (completion.filesChanged ?: emptyList<String>()),
+            )
+        )
         onTaskCompletion(completion, context)
         stateManager.addToHistory(context.agentState)
         return ResolveResult(context, ActResultHelper.complete(completion))
     }
 
-    /** System prompt for the CLI tool-loop engine: role + bundled SKILL.md + hygiene rules. */
+    /** System prompt for the CLI tool-loop engine: role + SKILL metadata + hygiene rules. */
     private fun cliAgentSystemPrompt(): String = buildString {
         append(
             """
             You are a browser automation agent. Drive the browser EXCLUSIVELY through the
-            browser4-cli tool via cli.run(...), following the bundled SKILL.md below.
+            browser4-cli tool via cli.run(...). Do not guess CLI syntax — fetch the bundled
+            SKILL.md on demand with system.skillDoc("SKILL.md") and consult
+            system.skillDoc(name) for topic reference docs.
             Use coding.* tools for file/workspace work when needed, and system.skillDoc(name)
             to read reference documents on demand.
             """.trimIndent()
         )
-        append("\n\n### SKILL.md (bundled)\n\n")
-        append(agentToolManager.system.skillDoc("SKILL.md").take(CLI_SYSTEM_PROMPT_MAX_CHARS))
+        append("\n\n### Bundled skill (metadata)\n\n")
+        append(agentToolManager.system.skillDocMetadata("SKILL.md"))
+        append(
+            """
+
+            Load the complete SKILL.md with system.skillDoc("SKILL.md") before the first
+            browser interaction, and use system.skillDoc("<reference>.md") for detailed
+            topic guides (htmlsnapshot, x-sql, snapshot, crawl, swarm, ...) when needed.
+            """.trimIndent()
+        )
         append(
             """
 

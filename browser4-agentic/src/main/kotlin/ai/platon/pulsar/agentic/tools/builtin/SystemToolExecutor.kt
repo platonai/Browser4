@@ -61,6 +61,29 @@ class SystemToolExecutor(
      * reference docs without a source tree (design §4.3).
      */
     fun skillDoc(name: String): String {
+        val content = readBundledDoc(name)
+            ?: return "Skill document not found: $name\n\nAvailable bundled documents:\n" +
+                AVAILABLE_DOCS.joinToString("\n") { "  $it" }
+        return content.take(MAX_SKILL_DOC_CHARS)
+    }
+
+    /**
+     * Metadata-only view of a bundled skill document for system prompts.
+     *
+     * Returns just the YAML frontmatter (name, title, description, tier, ...)
+     * instead of the full document body, so prompts stay small and the model
+     * loads the complete SKILL.md on demand via [skillDoc] (progressive
+     * disclosure). Falls back to the first lines when a document has no
+     * frontmatter.
+     */
+    fun skillDocMetadata(name: String): String {
+        val content = readBundledDoc(name)
+            ?: return "Skill document not found: $name"
+        return extractFrontmatter(content)?.let { "Skill: $name\n$it" }
+            ?: content.lineSequence().take(5).joinToString("\n")
+    }
+
+    private fun readBundledDoc(name: String): String? {
         val safe = name.trim()
             .removePrefix("/")
             .removePrefix("skills/")
@@ -68,13 +91,22 @@ class SystemToolExecutor(
         require(safe.isNotBlank() && !safe.contains("..") && !safe.contains('\\')) {
             "Invalid skill doc name: $name"
         }
-        val resource = "/skills/browser4-cli/$safe"
-        val content = javaClass.getResourceAsStream(resource)
+        return javaClass.getResourceAsStream("/skills/browser4-cli/$safe")
             ?.bufferedReader(Charsets.UTF_8)
             ?.use { it.readText() }
-            ?: return "Skill document not found: $name\n\nAvailable bundled documents:\n" +
-                AVAILABLE_DOCS.joinToString("\n") { "  $it" }
-        return content.take(MAX_SKILL_DOC_CHARS)
+    }
+
+    /** Extract the YAML frontmatter between the leading `---` markers, if any. */
+    private fun extractFrontmatter(content: String): String? {
+        val trimmed = content.trimStart('\uFEFF', ' ', '\r', '\n')
+        if (!trimmed.startsWith("---")) {
+            return null
+        }
+        val end = trimmed.indexOf("\n---", 3)
+        if (end < 0) {
+            return null
+        }
+        return trimmed.substring(3, end).trim()
     }
 
     /**

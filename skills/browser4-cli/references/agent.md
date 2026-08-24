@@ -58,7 +58,30 @@ browser4-cli agent result <task-id>
 
 **Writing tasks:** Describe **what** you want, not how. Good: "extract the top 5 product titles and prices." Avoid step-by-step ref-based instructions.
 
-### 2. Poll Status
+### 2. Wait for Completion (Optional)
+
+`agent run --wait` blocks until the task reaches a terminal state, then prints
+the final result. The wait window defaults to 600 seconds — long enough for
+simple tasks, but browsing agents routinely exceed it. Tune it per invocation
+with `--wait-timeout` (seconds) or globally via the
+`BROWSER4_CLI_AGENT_WAIT_TIMEOUT_SECS` environment variable:
+
+```bash
+# Block up to 30 minutes
+browser4-cli agent run "Find a STEM toy for a 10-year-old girl on amazon.com" --wait --wait-timeout=1800
+```
+
+When the wait window expires, the CLI exits non-zero but the task keeps running
+server-side. The task is still tracked locally, so `agent list` and
+`agent status <task-id>` can pick it up later:
+
+```bash
+browser4-cli agent list          # the timed-out task stays listed as processing
+browser4-cli agent status <task-id>
+browser4-cli agent result <task-id>
+```
+
+### 3. Poll Status
 
 ```bash
 browser4-cli agent status <task-id>
@@ -76,7 +99,7 @@ Returns JSON:
 | `FAILED` | Task errored — inspect `message` and `statusCode` |
 | `EXPECTATION_FAILED` | Precondition failed (e.g., missing LLM config, status 417) |
 
-### 3. Fetch Results
+### 4. Fetch Results
 
 ```bash
 browser4-cli agent result <task-id>
@@ -84,7 +107,7 @@ browser4-cli agent result <task-id>
 
 Always confirm completion via `agent status` first — incomplete tasks may return empty or partial results.
 
-### 4. Composing with Standard Commands
+### 5. Composing with Standard Commands
 
 ```bash
 browser4-cli open https://app.example.com
@@ -92,14 +115,14 @@ browser4-cli state-load auth.json
 browser4-cli agent run "Navigate to the reports dashboard, extract all monthly metrics, and summarize trends"
 ```
 
-### 5. Synchronous Extraction (extract)
+### 6. Synchronous Extraction (extract)
 
 ```bash
 browser4-cli extract "product name, price, ratings"
 browser4-cli extract "all article headlines and authors" --schema '{"fields":[{"name":"title","type":"string"},{"name":"author","type":"string"}]}'
 ```
 
-### 6. Synchronous Summarization (summarize)
+### 7. Synchronous Summarization (summarize)
 
 ```bash
 browser4-cli summarize "summarize the product reviews"

@@ -58,15 +58,25 @@ data class ToolOutcome(
         /**
          * Build the envelope from an executed [ToolCallResult].
          *
+         * @param domain explicit domain override — used when the caller already
+         *   resolved the tool call but the result carries no [ActionDescription]
+         *   (e.g. the native tool-calling loop); falls back to the
+         *   actionDescription's toolCall, then "unknown".
+         * @param method explicit method override (same fallback semantics).
          * @param workspaceDelta optional file-change delta (e.g. "files +0, lines +47/-44");
          *   callers with filesystem access may supply it for write-family tools.
          */
-        fun from(result: ToolCallResult, workspaceDelta: String? = null): ToolOutcome {
+        fun from(
+            result: ToolCallResult,
+            domain: String? = null,
+            method: String? = null,
+            workspaceDelta: String? = null,
+        ): ToolOutcome {
             val evaluate = result.evaluate
             val toolCall = result.actionDescription?.toolCall
-            val domain = toolCall?.domain ?: "unknown"
-            val method = toolCall?.method ?: "unknown"
-            val key = "$domain.$method"
+            val resolvedDomain = domain ?: toolCall?.domain ?: "unknown"
+            val resolvedMethod = method ?: toolCall?.method ?: "unknown"
+            val key = "$resolvedDomain.$resolvedMethod"
             val exception = evaluate.exception
 
             val errors = mutableListOf<String>()
@@ -86,7 +96,7 @@ data class ToolOutcome(
                 ?.let { Strings.compactInline(it, BODY_BUDGETS[key] ?: DEFAULT_BODY_LEN) }
 
             return ToolOutcome(
-                domain = domain, method = method, ok = ok,
+                domain = resolvedDomain, method = resolvedMethod, ok = ok,
                 summary = summary, body = body, errors = errors,
                 workspaceDelta = workspaceDelta,
             )

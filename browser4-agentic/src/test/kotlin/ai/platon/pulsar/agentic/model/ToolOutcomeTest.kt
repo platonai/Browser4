@@ -32,6 +32,22 @@ class ToolOutcomeTest {
     }
 
     @Test
+    @DisplayName("explicit domain/method override the unknown fallback when the result has no actionDescription")
+    fun testExplicitDomainMethodOverrideUnknown() {
+        // Mirrors the native tool-calling loop: AgentToolManager.execute returns
+        // a ToolCallResult without an ActionDescription, but the coordinator has
+        // already resolved (domain, method) — the header must not say
+        // "unknown.unknown".
+        val outcome = ToolOutcome.from(
+            result("cli.run -> ok"),
+            domain = "cli", method = "run",
+        )
+        assertEquals("cli.run", "${outcome.domain}.${outcome.method}")
+        assertTrue(outcome.render().startsWith("cli.run [ok]"), outcome.render())
+        assertFalse(outcome.render().contains("unknown.unknown"), outcome.render())
+    }
+
+    @Test
     @DisplayName("envelope reports failure with bounded error chain")
     fun testFailureCapturesErrors() {
         val cause = IllegalStateException("Unresolved reference 'pdk'".repeat(60))

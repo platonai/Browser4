@@ -7,6 +7,7 @@ import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.external.BrowserChatModel
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
+import dev.langchain4j.agent.tool.ToolExecutionRequest
 import dev.langchain4j.agent.tool.ToolSpecification as LangChain4jToolSpec
 import dev.langchain4j.data.message.AiMessage
 import dev.langchain4j.data.message.ChatMessage
@@ -29,18 +30,30 @@ import dev.langchain4j.model.chat.response.ChatResponse
  * @param model             The [BrowserChatModel] (uses [langChainChat]).
  * @param toolSpecifications Native tool specs to expose to the LLM.
  * @param coordinator       Executes individual tool-call requests.
- * @param maxIterations     Hard cap on model↔tool round-trips (default 5).
+ * @param maxIterations     Hard cap on model↔tool round-trips (default 40).
  */
 class AgentToolCallLoop(
     private val model: BrowserChatModel,
     private val toolSpecifications: List<LangChain4jToolSpec>,
     private val coordinator: ToolExecutionCoordinator,
-    private val maxIterations: Int = 5,
+    private val maxIterations: Int = 40,
     private val requestTokenLimiter: RequestTokenLimiter = RequestTokenLimiter(),
     private val compressor: ToolLoopCompressor? = null,
     private val onToolExecuted: () -> Unit = {},
     /** Called for every tool request before execution (name, arguments JSON). */
     private val onToolRequest: (String, String) -> Unit = { _, _ -> },
+    /**
+     * Called after every executed tool with its request, result message and
+     * execution duration — feeds complete run tracing (name, arguments, full
+     * result text).
+     */
+    private val onToolResult: (ToolExecutionRequest, ToolExecutionResultMessage, Long) -> Unit = { _, _, _ -> },
+    /**
+     * Called with the EXACT message list right before each model request —
+     * feeds complete prompt logging (system prompt, history, tool results and
+     * tool-call messages exactly as sent to the LLM).
+     */
+    private val onBeforeGenerate: (List<ChatMessage>) -> Unit = {},
 ) {
     private val logger = getLogger(AgentToolCallLoop::class)
 
@@ -82,6 +95,12 @@ class AgentToolCallLoop(
             // beyond the model's limit across multi-round loops.
             requestTokenLimiter.enforce(messages)
 
+            // Complete-prompt hook: the message list at this point is EXACTLY
+            // what the model will see on this round-trip (post-compression,
+            // pre-request). Dumping it here preserves the full prompt even when
+            // the round later overflows or the caller discards the list.
+            onBeforeGenerate(messages)
+
             val request = ChatRequest.builder()
                 .messages(messages)
                 .toolSpecifications(toolSpecifications)
@@ -109,7 +128,9 @@ class AgentToolCallLoop(
             // Execute each tool request and append results
             for (request in toolRequests) {
                 onToolRequest(request.name(), request.arguments() ?: "{}")
+                val executedAt = System.currentTimeMillis()
                 val resultMessage: ToolExecutionResultMessage = coordinator.execute(request)
+                onToolResult(request, resultMessage, System.currentTimeMillis() - executedAt)
                 messages.add(resultMessage)
                 executedTools += request.name()
                 onToolExecuted()

@@ -5,6 +5,7 @@ import ai.platon.pulsar.agentic.tools.langchain4j.ToolExecutionCoordinator
 import ai.platon.pulsar.external.BrowserChatModel
 import dev.langchain4j.agent.tool.ToolExecutionRequest
 import dev.langchain4j.data.message.AiMessage
+import dev.langchain4j.data.message.ChatMessage
 import dev.langchain4j.data.message.ToolExecutionResultMessage
 import dev.langchain4j.data.message.UserMessage
 import dev.langchain4j.model.chat.request.ChatRequest
@@ -32,7 +33,7 @@ class AgentToolCallLoopTest {
     private fun loop(
         model: BrowserChatModel,
         coordinator: ToolExecutionCoordinator,
-        maxIterations: Int = 2,
+        maxIterations: Int = 100,
         limiter: RequestTokenLimiter = RequestTokenLimiter(maxTokens = 500_000),
         compressor: ToolLoopCompressor? = null,
         onToolExecuted: () -> Unit = {},
@@ -171,5 +172,73 @@ class AgentToolCallLoopTest {
 
         org.junit.jupiter.api.Assertions.assertEquals(2, executions.get(),
             "the callback must fire for every executed tool (feeds the stall fuse)")
+    }
+
+    @Test
+    @DisplayName("onBeforeGenerate receives the exact message list before every model request")
+    fun onBeforeGenerateReceivesExactMessageList() = runBlocking {
+        val model = mockk<BrowserChatModel>()
+        val coordinator = mockk<ToolExecutionCoordinator>()
+        val callMessage = AiMessage.from("calling", listOf(toolRequest("c1", name = "coding.read")))
+        val finalMessage = AiMessage.from("done")
+        coEvery { model.langChainChat(any<ChatRequest>(), any()) } returnsMany listOf(
+            chatResponseOf(callMessage),
+            chatResponseOf(finalMessage),
+        )
+        every { coordinator.execute(any()) } returns
+            ToolExecutionResultMessage.from("c1", "coding.read", "the full result")
+
+        val seen = mutableListOf<List<ChatMessage>>()
+        val loop = AgentToolCallLoop(
+            model = model,
+            toolSpecifications = emptyList(),
+            coordinator = coordinator,
+            maxIterations = 2,
+            onBeforeGenerate = { msgs -> seen += msgs },
+        )
+
+        loop.generate(listOf(UserMessage.from("do it")))
+
+        assertEquals(2, seen.size, "one dump per model request")
+        // First request: only the initial user message.
+        assertEquals(
+            listOf("do it"),
+            seen[0].filterIsInstance<UserMessage>().map { it.singleText() },
+            "first request must be the initial user message"
+        )
+        // Second request: initial user message + tool-call AiMessage + tool result.
+        assertTrue(seen[1].any { it is AiMessage && !it.toolExecutionRequests().isNullOrEmpty() },
+            "second request must carry the tool-call message: $seen")
+        assertTrue(seen[1].any { it is ToolExecutionResultMessage && it.text() == "the full result" },
+            "second request must carry the tool result text: $seen")
+    }
+
+    @Test
+    @DisplayName("onToolResult receives request, result and duration after every execution")
+    fun onToolResultReceivesRequestResultAndDuration() = runBlocking {
+        val model = mockk<BrowserChatModel>()
+        val coordinator = mockk<ToolExecutionCoordinator>()
+        val callMessage = AiMessage.from("calling", listOf(toolRequest("c1", name = "coding.read")))
+        coEvery { model.langChainChat(any<ChatRequest>(), any()) } returns chatResponseOf(callMessage)
+        every { coordinator.execute(any()) } answers {
+            val request = firstArg<ToolExecutionRequest>()
+            ToolExecutionResultMessage.from(request.id(), request.name(), "ok")
+        }
+        val seen = mutableListOf<Triple<ToolExecutionRequest, ToolExecutionResultMessage, Long>>()
+        val loop = AgentToolCallLoop(
+            model = model,
+            toolSpecifications = emptyList(),
+            coordinator = coordinator,
+            maxIterations = 1,
+            onToolResult = { req, result, durationMs -> seen += Triple(req, result, durationMs) },
+        )
+
+        loop.generate(listOf(UserMessage.from("do it")))
+
+        assertEquals(1, seen.size, "one callback per executed tool")
+        assertEquals("coding.read", seen[0].first.name())
+        assertEquals("coding.read", seen[0].second.toolName())
+        assertEquals("ok", seen[0].second.text())
+        assertTrue(seen[0].third >= 0, "duration must be non-negative, got ${seen[0].third}")
     }
 }

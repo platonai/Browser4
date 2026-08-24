@@ -474,7 +474,7 @@ These commands require an LLM key.
 | `summarize [instruction]` | Summarize the current page. Supports `--selector`, `--filename`, `--raw`, `--stdout`. |
 | `chat <message>` | Send a plain AI chat request without auto-appended browser context. |
 | `chat-result <id>` | Retrieve the result of an async chat task. |
-| `agent run <task>` | Submit an autonomous browser task and immediately receive a task ID. |
+| `agent run <task>` | Submit an autonomous browser task and immediately receive a task ID. Supports `--wait` (block for the result) and `--wait-timeout <seconds>` (default 600). |
 | `agent status <id>` | Check a running task. |
 | `agent result <id>` | Fetch a completed result. |
 | `agent list` | List tracked agent tasks and their status. |

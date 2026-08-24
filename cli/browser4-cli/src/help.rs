@@ -1118,10 +1118,22 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Requires: an LLM API key configured on the Browser4 backend server (the CLI shell itself does not need the key)."
                 .to_string(),
         );
+        lines.push(
+            "  - Pass `--wait` to block for the result (default timeout 600s; tune with --wait-timeout <seconds> or BROWSER4_CLI_AGENT_WAIT_TIMEOUT_SECS)."
+                .to_string(),
+        );
+        lines.push(
+            "  - Tasks stay tracked in `agent list` after submission, even when --wait times out — poll with `agent status <id>` and fetch with `agent result <id>`."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push(
             "  browser4-cli agent run \"Open browser4.io and summarize the hero section\""
+                .to_string(),
+        );
+        lines.push(
+            "  browser4-cli agent run \"Find a STEM toy for a 10-year-old on amazon.com\" --wait --wait-timeout=1800"
                 .to_string(),
         );
     }

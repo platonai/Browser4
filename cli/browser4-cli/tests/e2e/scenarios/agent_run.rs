@@ -202,6 +202,87 @@ pub(super) fn test_agent_run_wait_completed_state_variant(ctx: &mut E2ECtx) {
     );
 }
 
+/// `agent run --wait` writes the completed task into the local tracking list so
+/// `agent list` reflects it without a separate `agent status` call.
+pub(super) fn test_agent_run_wait_completed_tracks_task_in_list(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task = "Report the release notes";
+    mock_server.set_command_status_response(
+        "agent-task-1",
+        completed_status("agent-task-1", task, "done"),
+    );
+    mock_server.set_command_result_response(
+        "agent-task-1",
+        r#"{"summary":"Release notes: wait mode tracks the task."}"#,
+    );
+
+    let run_result = run_command(ctx, &["agent", "run", task, "--wait"]);
+    assert!(
+        run_result.stdout.contains("Agent completed in"),
+        "Expected wait mode to report completion timing in:\n{}",
+        run_result.stdout
+    );
+
+    // The completed task must be visible in the local tracking list.
+    let list_result = run_command(ctx, &["agent", "list"]);
+    let list_output = format!("{}\n{}", list_result.stdout, list_result.stderr);
+    assert!(
+        list_output.contains("agent-task-1"),
+        "Completed wait-mode task should appear in agent list:\n{}",
+        list_output
+    );
+    assert!(
+        list_output.contains("completed"),
+        "Completed wait-mode task should be marked completed:\n{}",
+        list_output
+    );
+}
+
+/// `agent run --wait` with a short `--wait-timeout` exits non-zero while the
+/// task keeps running server-side, and the task stays visible in `agent list`
+/// so the user can poll it later with `agent status`.
+pub(super) fn test_agent_run_wait_timeout_keeps_task_tracked(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task = "Keep working forever";
+    // No custom command_status registered — the mock returns a RUNNING status
+    // without a terminal processState, so the wait loop must hit its timeout.
+    let failure = run_command_expecting_failure(
+        ctx,
+        &["agent", "run", task, "--wait", "--wait-timeout=2"],
+        "timed out after 2s",
+    );
+    let combined = format!("{}\n{}", failure.stdout, failure.stderr);
+    assert!(
+        combined.contains("Use 'agent status agent-task-1' to check later"),
+        "Timeout error should point at the task id:\n{}",
+        combined
+    );
+
+    // The task must remain tracked locally even though the wait loop gave up.
+    let list_result = run_command(ctx, &["agent", "list"]);
+    let list_output = format!("{}\n{}", list_result.stdout, list_result.stderr);
+    assert!(
+        list_output.contains("agent-task-1"),
+        "Timed-out task should appear in agent list:\n{}",
+        list_output
+    );
+    assert!(
+        list_output.contains("processing"),
+        "Timed-out task should be shown as processing:\n{}",
+        list_output
+    );
+}
+
 /// Multiple `agent run` invocations map to distinct mock replies and remain
 /// independently retrievable through `agent result`.
 pub(super) fn test_agent_run_multiple_tasks_distinct_replies(ctx: &mut E2ECtx) {

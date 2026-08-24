@@ -489,7 +489,7 @@ browser4-cli htmlsnapshot query --sql @query.sql
 | `summarize [instruction]` | 总结当前页面内容。支持 `--selector`、`--filename`、`--raw`、`--stdout`。 |
 | `chat <message>` | 发送纯 AI chat 请求，不自动追加浏览器上下文。 |
 | `chat-result <id>` | 获取异步 chat 任务结果。 |
-| `agent run <task>` | 提交一个自主浏览器任务，并立即获得任务 ID。 |
+| `agent run <task>` | 提交一个自主浏览器任务，并立即获得任务 ID。支持 `--wait`（阻塞等待结果）和 `--wait-timeout <秒>`（默认 600）。 |
 | `agent status <id>` | 查询运行中的任务状态。 |
 | `agent result <id>` | 获取已完成任务的结果。 |
 | `agent list` | 列出已跟踪的 agent 任务及其状态。 |

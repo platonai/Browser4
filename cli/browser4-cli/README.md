@@ -165,7 +165,7 @@ extensions) are also possible via `open --profile` or PROTOTYPE mode. See
 | Command | Description |
 |---|---|
 | `extract <instruction>` | Extract structured data from the current page |
-| `agent run <task>` | Run an autonomous agent task (async, returns task ID) |
+| `agent run <task>` | Run an autonomous agent task (async, returns task ID). `--wait` blocks for the result; `--wait-timeout <seconds>` tunes the wait window (default 600). |
 | `agent status <id>` | Check the status of a running agent task |
 | `agent result <id>` | Get the result of a completed agent task |
 

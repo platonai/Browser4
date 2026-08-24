@@ -84,7 +84,7 @@ open class ContextToAction(
      * exceed the legacy 5 and would otherwise restart mid-chain.
      */
     private val toolLoopMaxIterations: Int =
-        conf.getLong("browser4.agent.toolLoop.maxIterations", 12).toInt().coerceIn(1, 50)
+        conf.getLong("browser4.agent.toolLoop.maxIterations", 12).toInt().coerceIn(1, 100)
 
     /** Automatic tool-loop context compression (mirrors deepseek-harness compaction). */
     private val toolLoopCompressionEnabled: Boolean =

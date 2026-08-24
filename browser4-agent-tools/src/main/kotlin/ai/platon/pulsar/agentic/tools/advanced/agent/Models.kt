@@ -150,6 +150,7 @@ fun AgentTaskStatus.emitEvent(event: String) {
         "onWillRun" in event -> "Agent starting up"
         "onWillAct" in event -> "Agent planning next action"
         "onDidAct" in event -> "Agent completed an action"
+        "onToolExecuted" in event -> "Agent is working"
         "onWillGenerate" in event -> "Agent generating response"
         "onDidGenerate" in event -> "Agent response generated"
         "onError" in event -> "Agent encountered an error"
