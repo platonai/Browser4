@@ -383,7 +383,7 @@ Requires JDK 17+ (auto-detected from `JAVA_HOME`, common paths, or `PATH`). Any 
 
 > **Install:** `browser4-cli webminer install` (or the legacy launcher `.\webminer.ps1 install` from the [web-miner](https://github.com/platonai/web-miner) project). The JAR is also downloadable from [web-miner releases](https://github.com/platonai/web-miner/releases).
 
-See **[web-miner/SKILL.md](../web-miner/SKILL.md)** for the full reference.
+See **[web-miner/SKILL.md](../browser4-web-miner/SKILL.md)** for the full reference.
 
 ### 4e. X-SQL Quickstart Template
 

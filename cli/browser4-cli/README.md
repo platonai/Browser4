@@ -184,7 +184,7 @@ Skills are AI agent instruction files bundled into the CLI binary at compile tim
 | `webminer all <html-dir>` | Full pipeline (encode → cluster → views) with `--max-files`, `--output`, `--resume` |
 | `webminer views <result-dir>` | Rebuild interactive views from an existing clustering result |
 
-Any other command is forwarded verbatim to `scent-miner.jar` (e.g. `webminer encode <dir>`). The same `~/.scent/webminer` installation is shared with the `webminer.ps1` launcher from the [web-miner skill](../../skills/web-miner/SKILL.md).
+Any other command is forwarded verbatim to `scent-miner.jar` (e.g. `webminer encode <dir>`). The same `~/.scent/webminer` installation is shared with the `webminer.ps1` launcher from the [web-miner skill](../../skills/browser4-web-miner/SKILL.md).
 
 ### Install / Admin
 

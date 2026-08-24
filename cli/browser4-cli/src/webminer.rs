@@ -4,7 +4,7 @@
 //! downloaded HTML pages into clusters and produces interactive HTML views
 //! plus Excel spreadsheets.  This module mirrors the behaviour of the
 //! PowerShell launcher shipped with the skill
-//! (`skills/web-miner/scripts/webminer.ps1`) in native Rust, so the CLI
+//! (`skills/browser4-web-miner/scripts/webminer.ps1`) in native Rust, so the CLI
 //! works on every platform without PowerShell:
 //!
 //! - **Management** — `install` / `update` / `version` / `uninstall` download
