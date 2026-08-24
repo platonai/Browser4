@@ -6,6 +6,7 @@ import ai.platon.pulsar.api.model.WebDriverException
 import ai.platon.pulsar.chrome.network.RobustRPC
 import ai.platon.pulsar.chrome.protocol.Keyboard
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.urls.URLUtils
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -223,6 +224,14 @@ open class Browser4WebDriver(
          */
         fun isDocumentOriginReady(evaluatedOrigin: String?, targetOrigin: String): Boolean =
             !evaluatedOrigin.isNullOrBlank() && evaluatedOrigin.trim() == targetOrigin
+
+        internal fun parseDragCenter(value: Any?): Pair<Double, Double>? {
+            val json = value as? String ?: return null
+            val node = runCatching { pulsarObjectMapper().readTree(json) }.getOrNull() ?: return null
+            val x = node.get("x")?.takeIf { it.isNumber }?.asDouble() ?: return null
+            val y = node.get("y")?.takeIf { it.isNumber }?.asDouble() ?: return null
+            return Pair(x, y)
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -600,5 +609,185 @@ open class Browser4WebDriver(
         }.onFailure {
             // Best-effort safety net — a failure here must not fail the press itself.
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Drag & drop fix — the upstream pulsar-browser:4.11.x drag() dispatches
+    // synthetic (untrusted) DragEvents from JS, which never reach listeners
+    // registered by the page's own scripts (isolated-world dispatch does not
+    // cross into the main world for drag events).  This override runs the same
+    // event sequence through BrowserProtocol.evaluate (main world, no
+    // isolated-world context id), so page-registered listeners receive the
+    // full drag lifecycle (dragstart → dragenter → dragover → drop → dragend).
+    // The events remain synthetic (isTrusted=false): libraries that gate on
+    // isTrusted (SortableJS, react-dnd) still won't respond — a browser-level
+    // limitation, not fixable from the driver (see the KDoc below for what was
+    // tried and ruled out).
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Drag the element identified by [sourceSelector] onto the element identified
+     * by [targetSelector].
+     *
+     * Upstream drag() dispatches synthetic DragEvents through `JsHandler`,
+     * which evaluates in an **isolated world** — the events never reach
+     * main-world page listeners, so the drag silently does nothing.
+     *
+     * This override runs the same event sequence through
+     * [BrowserProtocol.evaluate] (main world, no isolated-world context id),
+     * so page-registered listeners receive the full drag lifecycle
+     * (dragstart → dragenter → dragover → drop → dragend), verified against a
+     * live listener probe.
+     *
+     * Notes on what was tried and ruled out:
+     * - CDP `Input.dispatchDragEvent` + manual DragData: accepted by Chrome,
+     *   but libraries require `dragstart`, which CDP never emits.
+     * - Trusted CDP mouse sequences (press → move → release): headless Chrome
+     *   never starts the native drag state machine, so no dragstart fires.
+     * - Synthetic events are `isTrusted=false`; libraries that gate on
+     *   isTrusted (SortableJS, react-dnd) will not respond.  That is a
+     *   browser-level limitation, not fixable from the driver.
+     *
+     * @param sourceSelector A CSS selector, XPath, or "backend:nodeId" locator for the drag source.
+     * @param targetSelector A CSS selector, XPath, or "backend:nodeId" locator for the drop target.
+     * @throws WebDriverException if either element cannot be located or the script fails.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun drag(sourceSelector: String, targetSelector: String): Unit {
+        rpc.invokeOnPage("drag") {
+            // Resolve both elements through the driver's locator path
+            // (supports CSS selectors, XPath, backend:nodeId and eN snapshot
+            // refs), computing their viewport centers in one pass.
+            val sourcePoint = resolveDragCenter(sourceSelector)
+                ?: throw WebDriverException("Source element was not found: $sourceSelector", driver = this@Browser4WebDriver)
+            val targetPoint = resolveDragCenter(targetSelector)
+                ?: throw WebDriverException("Target element was not found: $targetSelector", driver = this@Browser4WebDriver)
+
+            val script = """
+                (async () => {
+                    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+                    const source = document.elementFromPoint(${sourcePoint.first}, ${sourcePoint.second});
+                    const target = document.elementFromPoint(${targetPoint.first}, ${targetPoint.second});
+                    if (!source || !target) {
+                        return JSON.stringify({
+                            ok: false,
+                            error: !source && !target
+                                ? 'Source and target elements were not found at their resolved positions'
+                                : !source
+                                    ? 'Source element was not found at its resolved position'
+                                    : 'Target element was not found at its resolved position'
+                        });
+                    }
+                    if (typeof DataTransfer === 'undefined' || typeof DragEvent === 'undefined') {
+                        return JSON.stringify({
+                            ok: false,
+                            error: 'HTML5 drag-and-drop APIs are not available in the current page context'
+                        });
+                    }
+
+                    const dataTransfer = new DataTransfer();
+                    const fire = (element, type, clientX, clientY) => {
+                        const event = new DragEvent(type, {
+                            bubbles: true,
+                            cancelable: true,
+                            composed: true,
+                            dataTransfer,
+                            clientX,
+                            clientY
+                        });
+                        element.dispatchEvent(event);
+                    };
+
+                    fire(source, 'dragstart', ${sourcePoint.first}, ${sourcePoint.second});
+                    await sleep(80);
+                    fire(target, 'dragenter', ${targetPoint.first}, ${targetPoint.second});
+                    await sleep(80);
+                    fire(target, 'dragover', ${targetPoint.first}, ${targetPoint.second});
+                    await sleep(120);
+                    fire(target, 'drop', ${targetPoint.first}, ${targetPoint.second});
+                    await sleep(80);
+                    fire(source, 'dragend', ${targetPoint.first}, ${targetPoint.second});
+
+                    return JSON.stringify({ ok: true });
+                })()
+            """.trimIndent()
+
+            // browserProtocol.evaluate runs in the main world (no contextId),
+            // unlike JsHandler.evaluate which prefers an isolated world.
+            val evaluate = browserProtocol.evaluate(script, returnByValue = true, awaitPromise = true)
+            val result = evaluate.result.value as? String
+                ?: """{"ok":false,"error":"Failed to execute drag script"}"""
+            val parsed = runCatching { pulsarObjectMapper().readTree(result) }.getOrNull()
+            if (parsed?.get("ok")?.asBoolean() != true) {
+                val error = parsed?.get("error")?.asText() ?: "Unknown drag failure"
+                throw WebDriverException(
+                    "Failed to drag '$sourceSelector' to '$targetSelector': $error",
+                    driver = this@Browser4WebDriver
+                )
+            }
+
+            gap("drag")
+        }
+    }
+
+    /**
+     * Resolve the viewport center of [selector] via the driver's locator path.
+     * Supports CSS selectors, XPath, `backend:nodeId` and `eN` snapshot refs
+     * (the upstream evaluateValue locator resolution), so drag works with every
+     * locator format the rest of the CLI accepts. Returns (x, y) in viewport
+     * CSS pixels, or null when the element does not exist.
+     */
+    private suspend fun resolveDragCenter(selector: String): Pair<Double, Double>? {
+        val value = evaluateValue(
+            selector,
+            """
+            function() {
+                const r = this.getBoundingClientRect();
+                return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+            }
+            """.trimIndent()
+        )
+        return parseDragCenter(value)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Dialog state fix — upstream dialogAccept/dialogDismiss call CDP
+    // Page.handleJavaScriptDialog directly but never drain DialogHandler's
+    // pending queue, and DialogHandler.onDialogClosed only logs.  The
+    // tool-layer "blocked by a native dialog" guard checks that queue, so a
+    // handled dialog keeps failing screenshots/health-checks until the session
+    // is closed. These overrides acknowledge the queue head after CDP succeeds.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Accept the current JavaScript dialog, then acknowledge exactly the dialog
+     * CDP handled (queue head) so later pending entries stay intact.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun dialogAccept(promptText: String?): Unit {
+        super.dialogAccept(promptText)
+        acknowledgeHandledDialog()
+    }
+
+    /**
+     * Dismiss (Cancel) the current JavaScript dialog, then acknowledge exactly
+     * the dialog CDP handled (see [dialogAccept]).
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun dialogDismiss(): Unit {
+        super.dialogDismiss()
+        acknowledgeHandledDialog()
+    }
+
+    /**
+     * Remove only the head of [DialogHandler]'s pending queue — the dialog CDP
+     * just handled.  Unlike draining the whole queue, later entries (dialogs
+     * queued after this one) are preserved.  The queue is only appended by
+     * `Page.javascriptDialogOpening` and never emptied by the upstream dialog
+     * path, so it must be acknowledged explicitly after a CDP
+     * `Page.handleJavaScriptDialog` call.
+     */
+    private fun acknowledgeHandledDialog() {
+        dialogHandler.getPendingDialog()
     }
 }

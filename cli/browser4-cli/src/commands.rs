@@ -113,6 +113,20 @@ fn get_str<'a>(map: &'a HashMap<String, Value>, key: &str) -> Option<&'a str> {
     map.get(key).and_then(|v| v.as_str())
 }
 
+/// Normalize a cookie/storage domain for Chrome: trim surrounding whitespace,
+/// strip a leading dot (Chrome rejects ".example.com"), and reject values that
+/// collapse to an empty host or still contain whitespace.  Returns None for
+/// invalid domains so callers can skip the option or surface a clear error
+/// instead of sending a bad value.
+fn normalize_cookie_domain(domain: &str) -> Option<String> {
+    let trimmed = domain.trim().trim_start_matches('.');
+    if trimmed.is_empty() || trimmed.chars().any(|c| c.is_whitespace()) {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 /// Resolve a user-supplied output directory to an absolute path against the
 /// CLI's current working directory.  Paths that are already absolute (native
 /// drive/UNC forms, or rooted with `/` or `\` like the POSIX-style `/tmp/x`
@@ -1640,7 +1654,10 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(domain) = get_opt_str(args, "domain") {
-                    p["domain"] = json!(domain);
+                    match normalize_cookie_domain(domain) {
+                        Some(normalized) => { p["domain"] = json!(normalized); }
+                        None => { p["_invalid_domain"] = json!(domain); }
+                    }
                 }
                 if let Some(path) = get_opt_str(args, "path") {
                     p["path"] = json!(path);
@@ -1694,7 +1711,10 @@ pub fn all_commands() -> Vec<CommandDef> {
                     "value": get_string_value(args, "value").unwrap_or_default(),
                 });
                 if let Some(domain) = get_opt_str(args, "domain") {
-                    p["domain"] = json!(domain);
+                    match normalize_cookie_domain(domain) {
+                        Some(normalized) => { p["domain"] = json!(normalized); }
+                        None => { p["_invalid_domain"] = json!(domain); }
+                    }
                 }
                 if let Some(path) = get_opt_str(args, "path") {
                     p["path"] = json!(path);
@@ -1736,7 +1756,10 @@ pub fn all_commands() -> Vec<CommandDef> {
                     "name": get_string_value(args, "name").unwrap_or_default()
                 });
                 if let Some(domain) = get_opt_str(args, "domain") {
-                    p["domain"] = json!(domain);
+                    match normalize_cookie_domain(domain) {
+                        Some(normalized) => { p["domain"] = json!(normalized); }
+                        None => { p["_invalid_domain"] = json!(domain); }
+                    }
                 }
                 if let Some(path) = get_opt_str(args, "path") {
                     p["path"] = json!(path);
@@ -3122,6 +3145,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
                 OptionDef {
+                    name: "filename",
+                    description: "Alias for --file (accepted for compatibility)",
+                    is_bool: false,
+                    short: None,
+                },
+                OptionDef {
                     name: "clean",
                     description: "Strip <script>, <style>, comments, and non-standard attributes (keeps 'vi', aria-*, data-*, role, and standard HTML5 attrs)",
                     is_bool: true,
@@ -3132,8 +3161,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_name_fn: |_| "html_snapshot_export".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
-                // Accept file as --file option (takes precedence) or positional arg
+                // Accept file as --file option (takes precedence) or --filename alias or positional arg
                 if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
+                else if let Some(f) = get_opt_str(args, "filename") { p["file"] = json!(f); }
                 if let Some(true) = get_bool(args, "clean") { p["clean"] = json!(true); }
                 p
             },
