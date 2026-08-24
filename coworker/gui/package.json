@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test summary-builder.test.js llm.test.js"
+    "test": "node --test summary-builder.test.js llm.test.js log-parser.test.js"
   },
   "dependencies": {
     "express": "^4.21.0",

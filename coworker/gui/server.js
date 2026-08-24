@@ -16,6 +16,7 @@ const { execFile } = require('child_process');
 const reviewHistory = require('./review-history.js');
 const llm = require('./llm.js');
 const { buildSummaryContent } = require('./summary-builder.js');
+const logParser = require('./log-parser.js');
 
 // ── CLI argument parsing ────────────────────────────────────────────────
 
@@ -1344,6 +1345,49 @@ function resolveRwsPaths() {
 // GET /logs — serve the log dashboard SPA
 app.get('/logs', (_req, res) => {
   res.sendFile(path.join(__dirname, 'frontend', 'watch-logs.html'));
+});
+
+// GET /logs/reader — serve the log parse & read SPA
+app.get('/logs/reader', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'frontend', 'log-reader.html'));
+});
+
+// POST /api/logs/parse — parse a tail window of a log source into structured
+// entries (timestamp, level, thread, logger, message + continuations).
+app.post('/api/logs/parse', (req, res) => {
+  const { source: sourceKey, windowLines, levels, query, maxEntries } = req.body || {};
+  const numLines = Math.min(Math.max(parseInt(windowLines, 10) || 1500, 100), 50000);
+
+  const source = LOG_SOURCES.find(s => s.label === sourceKey || s.key === sourceKey);
+  if (!source) return res.status(400).json({ error: `Unknown source: ${sourceKey}` });
+
+  const sentinel = source.paths[0] || '';
+  if (sentinel === '__git__' || sentinel === '__rws__' || sentinel === '__coworker__') {
+    return res.status(400).json({
+      error: `Source '${source.label}' has no parseable log lines — use the Log Dashboard (/logs) for raw output.`,
+    });
+  }
+
+  const resolved = resolveSourcePaths(source);
+  const raw = [];
+  for (const fp of resolved) {
+    const label = labelFor(fp, source);
+    const result = readTailLines(fp, Math.floor(numLines / Math.max(1, resolved.length)));
+    for (const line of result.lines) {
+      raw.push({ line, label, file: path.basename(fp) });
+    }
+  }
+
+  if (raw.length === 0) {
+    return res.json({
+      entries: [], stats: { total: 0, byLevel: {}, continuations: 0 },
+      totalParsed: 0, files: [], truncated: false,
+      message: 'No log files found for this source.',
+    });
+  }
+
+  const parsed = logParser.parseLogLines(raw, { levels, query, maxEntries });
+  res.json(parsed);
 });
 
 // POST /api/logs/tail — read tail of log files for a source

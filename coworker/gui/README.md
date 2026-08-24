@@ -30,6 +30,7 @@ Then open **http://127.0.0.1:8090**.
 | `GET /` | `frontend/index.html` | Main Coworker Task Manager — pipeline dashboard with stage tabs and file tree |
 | `GET /issues/review` | `frontend/issue-review.html` | Issue Review SPA — review `.issues.md` files from the `issues/review` queue |
 | `GET /logs` | `frontend/watch-logs.html` | Log Dashboard — real-time log viewer for all Browser4 log sources |
+| `GET /logs/reader` | `frontend/log-reader.html` | Log Reader — parse log lines into structured entries (level/thread/logger/message) with level & text filters, stack-trace folding, stats and export |
 
 ## API
 
@@ -66,6 +67,12 @@ The pipeline is organized into stage groups shown as tabs:
 | `POST` | `/api/issue-review/mark-done` | Finalize review: creates summary in `1ready`, archives original to `review/done`. Accepts optional `auto_approve` boolean — when true, appends `#auto-approve` tag to the summary so the coworker pipeline auto-moves it to `5approved` and triggers push. |
 | `POST` | `/api/issue-review/discard` | Discard a valueless issue file: moves it to `review/done/discard/` |
 
+**Log Reader:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/logs/parse` | Parse a tail window of a log source into structured entries. Body: `{ source, windowLines, levels?, query?, maxEntries? }`. Returns `{ entries, stats, totalParsed, files, truncated }` — each entry has `ts`, `level`, `thread`, `logger`, `message`, `text`, `continuation[]`, `raw`, `label`, `file`, `lineNo`. Multi-line stack traces are folded into their owning entry (`continuation`). |
+
 ### Auto-Approve
 
 When the "Auto-approve" checkbox is checked in the Issue Review SPA, the mark-done endpoint appends a `#auto-approve` tag to the end of the summary file written to `1ready`. The coworker worker (`coworker.ps1`) detects this tag and routes the task directly to `5approved` instead of `3done`, bypassing manual review and triggering the automated git push.
@@ -76,10 +83,12 @@ When the "Auto-approve" checkbox is checked in the Issue Review SPA, the mark-do
 .
 ├── package.json       # express + cors only
 ├── server.js          # All routes (~680 LOC)
+├── log-parser.js      # Log line parser (shared by /api/logs/parse)
 ├── frontend/
 │   ├── index.html          # Task Manager SPA
 │   ├── issue-review.html   # Issue Review SPA
 │   ├── watch-logs.html     # Log Dashboard SPA
+│   ├── log-reader.html     # Log Reader SPA (parsed log view)
 │   └── issue-model.js      # Shared issue model library
 └── README.md
 ```
