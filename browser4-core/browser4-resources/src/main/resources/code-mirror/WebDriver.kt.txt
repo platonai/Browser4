@@ -1,16 +1,16 @@
-package ai.platon.browser4.api
+package ai.platon.pulsar.api
 
-import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
-import ai.platon.browser4.api.model.JsEvaluation
-import ai.platon.browser4.api.model.NavigateEntry
-import ai.platon.browser4.api.model.NavigateHistory
-import ai.platon.browser4.api.model.WebDriverException
-import ai.platon.browser4.api.model.NetworkResourceResponse
-import ai.platon.browser4.api.model.NodeRef
-import ai.platon.browser4.api.model.BrowserUseState
-import ai.platon.browser4.api.model.NanoDOMTree
-import ai.platon.browser4.api.model.PageTarget
-import ai.platon.browser4.api.model.SnapshotOptions
+import ai.platon.pulsar.chrome.dom.model.AriaSnapshotOptions
+import ai.platon.pulsar.api.model.JsEvaluation
+import ai.platon.pulsar.api.model.NavigateEntry
+import ai.platon.pulsar.api.model.NavigateHistory
+import ai.platon.pulsar.api.model.WebDriverException
+import ai.platon.pulsar.api.model.NetworkResourceResponse
+import ai.platon.pulsar.api.model.NodeRef
+import ai.platon.pulsar.api.model.BrowserUseState
+import ai.platon.pulsar.api.model.NanoDOMTree
+import ai.platon.pulsar.api.model.PageTarget
+import ai.platon.pulsar.api.model.SnapshotOptions
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.ai.llm.MCP
 import ai.platon.pulsar.common.browser.BrowserType
@@ -129,7 +129,7 @@ import kotlin.time.Duration.Companion.milliseconds
  * @see [Document: referrer property](https://developer.mozilla.org/en-US/docs/Web/API/Document/referrer)
  * @see [Document: location property](https://developer.mozilla.org/en-US/docs/Web/API/Document/location)
  *
- * @see ai.platon.browser4.api.model.BrowserSettings
+ * @see ai.platon.pulsar.api.model.BrowserSettings
  */
 interface WebDriver : Closeable {
     /**
@@ -230,6 +230,14 @@ interface WebDriver : Closeable {
      * This is a heavy operation and should be called with low frequency.
      * */
     suspend fun healthy(): CheckState
+
+    /**
+     * Re-establishes the CDP connection to the backend tab after the link was
+     * lost (e.g. machine sleep killed the websocket, or the backend tab was
+     * closed). Keeps the same tab and browser — cookies and login state are
+     * preserved. Implementations that cannot reconnect return false.
+     */
+    suspend fun reconnect(): Boolean = false
 
     /**
      * Adds a script which would be evaluated whenever the page is navigated. @mcp

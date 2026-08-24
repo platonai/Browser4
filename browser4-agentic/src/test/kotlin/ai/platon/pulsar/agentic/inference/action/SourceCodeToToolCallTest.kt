@@ -1,6 +1,8 @@
 package ai.platon.pulsar.agentic.inference.action
 
+import ai.platon.pulsar.api.WebDriver
 import ai.platon.pulsar.common.B4LLMUtils
+import ai.platon.pulsar.common.B4ResourceLoader
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -150,6 +152,46 @@ class SourceCodeToToolCallTest {
     @DisplayName("WebDriver snapshot json is stable across repeated generation")
     fun webDriverSnapshotJsonIsStableAcrossRepeatedGeneration() {
         assertSnapshotJsonDeterministic("tab", "browser4-browser", "WebDriver.kt", "WebDriver")
+    }
+
+    @Test
+    @DisplayName("WebDriver source is read from the base library sources jar")
+    fun webDriverSourceReadFromBaseLibrarySourcesJar() {
+        val sourceCode = B4LLMUtils.readSourceFileFromBaseLibrary("WebDriver.kt", WebDriver::class.java)
+        if (sourceCode.isBlank()) {
+            // Offline environment (sources jar cannot be downloaded): the mirror-based tests
+            // above still cover extraction, so skip the network-dependent assertion.
+            return
+        }
+        assertTrue(sourceCode.contains("interface WebDriver"), "Source should contain the WebDriver interface")
+        assertTrue(sourceCode.contains("@MCP"), "Source should contain @MCP annotations")
+        assertTrue(sourceCode.contains("package ai.platon.pulsar.api"), "Source should come from the base library package")
+
+        val tools = ToolSpecGenerator.extractInterface("tab", sourceCode, "WebDriver")
+        assertTrue(tools.isNotEmpty(), "Tool list should not be empty")
+        assertTrue(tools.any { it.method == "click" }, "Should contain driver.click method")
+        assertTrue(tools.any { it.method == "upload" }, "Should contain driver.upload method")
+    }
+
+    @Test
+    @DisplayName("WebDriver specs generated from the mirrored source match the bundled JSON fallback")
+    fun webDriverSpecsFromMirroredSourceMatchBundledJson() {
+        val sourceCode = B4LLMUtils.readSourceFileFromResource("browser4-core", "WebDriver.kt")
+        val tools = ToolSpecGenerator.extractInterface("tab", sourceCode, "WebDriver")
+        val generated = ToolSpecGenerator.normalizeToLinuxLineEndings(
+            ToolSpecGenerator.toSnapshotJson(tools)
+        )
+
+        // B4ResourceLoader.readString appends a trailing newline; strip it on both sides.
+        val committed = B4ResourceLoader.readString("code-mirror/driver-tool-call-specs.json")
+            .replace("\r\n", "\n").replace('\r', '\n')
+            .trimEnd('\n')
+
+        assertEquals(
+            committed,
+            generated,
+            "Specs generated from the mirrored WebDriver.kt must match the bundled JSON fallback"
+        )
     }
 
     @Test

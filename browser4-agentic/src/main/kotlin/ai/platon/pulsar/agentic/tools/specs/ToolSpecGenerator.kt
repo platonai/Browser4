@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.specs
 
+import ai.platon.pulsar.api.WebDriver
 import ai.platon.pulsar.common.B4LLMUtils
 import ai.platon.pulsar.common.B4ProjectUtils
 import ai.platon.pulsar.common.B4ResourceLoader
@@ -36,7 +37,7 @@ object ToolSpecGenerator {
 
     private fun loadToolSpecs() {
         val webDriverSource = try {
-            B4LLMUtils.readSourceFileFromResource("browser4-core", "WebDriver.kt")
+            readWebDriverSource()
         } catch (e: Exception) {
             logger.warn("Could not read WebDriver.kt source: {}", e.message)
             ""
@@ -83,6 +84,28 @@ object ToolSpecGenerator {
         if (webDriverToolSpecs.isEmpty() && agentToolSpecs.isEmpty()) {
             isGenerated.set(false)
         }
+    }
+
+    /**
+     * Reads the WebDriver.kt source from the base library (`ai.platon.pulsar:pulsar-browser`).
+     *
+     * WebDriver.kt moved to the base library and is no longer part of this repository's source
+     * tree, so [B4LLMUtils.readSourceFileFromResource] cannot find it locally. Resolution order:
+     *
+     * 1. Sources jar of the base library version on the classpath, downloaded from Maven Central
+     *    and cached — authoritative, always matches the linked base library.
+     * 2. Mirrored resource (`code-mirror/WebDriver.kt.txt`) — offline fallback that may be stale.
+     */
+    private fun readWebDriverSource(): String {
+        val fromBaseLibrary = B4LLMUtils.readSourceFileFromBaseLibrary("WebDriver.kt", WebDriver::class.java)
+        if (fromBaseLibrary.isNotBlank()) {
+            return fromBaseLibrary
+        }
+        val mirrored = B4LLMUtils.readSourceFileFromResource("browser4-core", "WebDriver.kt")
+        if (mirrored.isNotBlank()) {
+            logger.info("Falling back to mirrored WebDriver.kt resource")
+        }
+        return mirrored
     }
 
     /**

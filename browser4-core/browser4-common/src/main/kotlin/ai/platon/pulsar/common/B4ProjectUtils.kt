@@ -432,4 +432,35 @@ object B4ProjectUtils {
             walkToFindFiles(fileName, moduleRootDir.first())
         } else emptyList()
     }
+
+    /**
+     * Resolves the version of the jar that provides [clazz] by parsing the class's code source location.
+     *
+     * Handles both plain classpath jars (`file:/.../pulsar-browser-4.11.6.jar`) and jars nested
+     * inside an uber JAR (`jar:file:/.../Browser4.jar!/BOOT-INF/lib/pulsar-browser-4.11.6.jar`).
+     *
+     * @param artifactId the Maven artifact id of the jar, e.g. `pulsar-browser`.
+     * @param clazz a class loaded from the jar whose version should be resolved.
+     * @return the version string, e.g. `4.11.6`, or null when it cannot be determined.
+     */
+    fun resolveJarVersion(artifactId: String, clazz: Class<*>): String? {
+        val location = clazz.protectionDomain.codeSource?.location?.toString() ?: return null
+        return parseJarVersionFromLocation(artifactId, location)
+    }
+
+    /**
+     * Extracts the version from a jar code source location string, e.g. `4.11.6` from
+     * `file:/.../pulsar-browser-4.11.6.jar` or `4.11.6-SNAPSHOT` from
+     * `jar:file:/.../Browser4.jar!/BOOT-INF/lib/pulsar-browser-4.11.6-SNAPSHOT.jar`.
+     *
+     * @return the version string, or null when the location does not reference a matching jar.
+     */
+    internal fun parseJarVersionFromLocation(artifactId: String, location: String): String? {
+        val marker = "$artifactId-"
+        val markerIndex = location.lastIndexOf(marker)
+        if (markerIndex < 0) return null
+        val tail = location.substring(markerIndex + marker.length)
+        if (!tail.contains(".jar")) return null
+        return tail.substringBefore(".jar").takeIf { it.isNotBlank() }
+    }
 }
