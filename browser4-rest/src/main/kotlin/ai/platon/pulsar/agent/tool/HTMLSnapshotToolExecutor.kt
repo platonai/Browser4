@@ -331,11 +331,7 @@ class HTMLSnapshotToolExecutor(
         // argument inside a DOM_LOAD_AND_SELECT call — unrelated quoted-column
         // errors (e.g. a genuinely missing table column) pass through untouched.
         val rawMessage = response.message
-        if (rawMessage != null &&
-            rawMessage.contains("not found") &&
-            rawMessage.contains("SQL statement") &&
-            Regex("""DOM_LOAD_AND_SELECT\s*\([^)]*"[^"]*"""", RegexOption.IGNORE_CASE).containsMatchIn(processedSql)
-        ) {
+        if (rawMessage != null && shouldAppendSelectorQuoteHint(rawMessage, processedSql)) {
             response.message = rawMessage + " — CSS selectors inside DOM_LOAD_AND_SELECT must use " +
                 "SINGLE quotes (H2 treats double quotes as identifier quotes). " +
                 "Example: DOM_LOAD_AND_SELECT(@url, 'a')"
@@ -401,6 +397,11 @@ class HTMLSnapshotToolExecutor(
     }
 
     companion object {
+        internal fun shouldAppendSelectorQuoteHint(message: String, sql: String): Boolean =
+            message.contains("not found") &&
+                message.contains("SQL statement") &&
+                Regex("""DOM_LOAD_AND_SELECT\s*\([^)]*"[^"]*"""", RegexOption.IGNORE_CASE).containsMatchIn(sql)
+
         private val STANDARD_HTML_ATTRIBUTES: Set<String> = setOf(
             "accesskey", "autocapitalize", "autofocus", "class", "contenteditable",
             "dir", "draggable", "enterkeyhint", "hidden", "id", "inert", "inputmode",

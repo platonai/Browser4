@@ -18456,7 +18456,7 @@ mod tests {
         let resolved = resolve_storage_state_path(Some("auth-state.json")).unwrap();
         std::env::set_current_dir(previous_dir).unwrap();
 
-        assert_eq!(resolved, tmp.path().join("auth-state.json"));
+        assert_eq!(resolved, tmp.path().canonicalize().unwrap().join("auth-state.json"));
     }
 
     #[test]
@@ -18468,7 +18468,8 @@ mod tests {
         let resolved = resolve_storage_state_path(None).unwrap();
         std::env::set_current_dir(previous_dir).unwrap();
 
-        assert_eq!(resolved.parent(), Some(tmp.path()));
+        let canonical_tmp = tmp.path().canonicalize().unwrap();
+        assert_eq!(resolved.parent(), Some(canonical_tmp.as_path()));
         assert!(resolved
             .file_name()
             .and_then(|name| name.to_str())

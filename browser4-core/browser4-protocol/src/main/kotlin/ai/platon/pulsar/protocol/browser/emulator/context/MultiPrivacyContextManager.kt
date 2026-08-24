@@ -68,6 +68,12 @@ open class MultiPrivacyContextManager(
         val SNAPSHOT_FILE_NAME = "privacy.context.snapshot.txt"
         val SNAPSHOT_PATH = AppPaths.TMP_DIR.resolve(SNAPSHOT_FILE_NAME)
         var SNAPSHOT_DUMP_INTERVAL = Duration.ofMinutes(1)
+
+        internal fun maxPrivacyRetries(configured: String?): Int =
+            configured?.toIntOrNull()?.takeIf { it >= 0 } ?: 5
+
+        internal fun isPrivacyRetryAllowed(retryCount: Int, maxRetries: Int): Boolean =
+            retryCount <= maxRetries
     }
 
     private val logger = getLogger(MultiPrivacyContextManager::class)
@@ -152,12 +158,9 @@ open class MultiPrivacyContextManager(
             // and converted to a crawlRetry, which the upstream task loop retries
             // forever — FetchTask.nRetries is never incremented anywhere.
             // Fail the task after a bounded number of attempts instead.
-            val maxRetries = conf.getWithFallback("fetch.maxPrivacyRetries", "5")
-                ?.toIntOrNull()
-                ?.takeIf { it >= 0 }
-                ?: 5
+            val maxRetries = maxPrivacyRetries(conf.getWithFallback("fetch.maxPrivacyRetries", "5"))
             task.nRetries++
-            if (task.nRetries > maxRetries) {
+            if (!isPrivacyRetryAllowed(task.nRetries, maxRetries)) {
                 logger.warn(
                     "PrivacyException exceeded retry limit ({}), failing task | {}",
                     maxRetries, task.url

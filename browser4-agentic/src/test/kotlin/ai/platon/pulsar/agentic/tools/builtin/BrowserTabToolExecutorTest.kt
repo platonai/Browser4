@@ -7,6 +7,7 @@ import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito
@@ -15,6 +16,56 @@ import org.mockito.Mockito.`when`
 
 class BrowserTabToolExecutorTest {
     private val executor = BrowserTabToolExecutor()
+
+    @Test
+    fun `selectOption delegates when target exists`() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        val probe = "function(){ return this != null; }"
+        `when`(driver.evaluateValue("#size", probe)).thenReturn(true)
+
+        executor.callFunctionOn(
+            ToolCall("tab", "selectOption", mutableMapOf("selector" to "#size", "values" to listOf("large"))),
+            driver
+        )
+
+        verify(driver).selectOption("#size", listOf("large"))
+    }
+
+    @Test
+    fun `selectOption reports a missing target`() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        val probe = "function(){ return this != null; }"
+        `when`(driver.evaluateValue("#missing", probe)).thenReturn(false)
+
+        val failure = runCatching {
+            executor.callFunctionOn(
+                ToolCall("tab", "selectOption", mutableMapOf("selector" to "#missing", "values" to listOf("x"))),
+                driver
+            )
+        }.exceptionOrNull()
+
+        assertTrue(failure is IllegalArgumentException)
+        assertTrue(failure?.message?.contains("Option target not found: #missing") == true)
+        Mockito.verify(driver, Mockito.never()).selectOption(Mockito.anyString(), Mockito.anyList())
+    }
+
+    @Test
+    fun `selectOption propagates driver failures`() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        val probe = "function(){ return this != null; }"
+        val expected = IllegalStateException("transport failed")
+        `when`(driver.evaluateValue("#size", probe)).thenThrow(expected)
+
+        val failure = runCatching {
+            executor.callFunctionOn(
+                ToolCall("tab", "selectOption", mutableMapOf("selector" to "#size", "values" to listOf("large"))),
+                driver
+            )
+        }.exceptionOrNull()
+
+        assertSame(expected, failure)
+        Mockito.verify(driver, Mockito.never()).selectOption(Mockito.anyString(), Mockito.anyList())
+    }
 
     @Test
     fun `type accepts focused element text only`() {

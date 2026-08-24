@@ -224,6 +224,14 @@ open class Browser4WebDriver(
          */
         fun isDocumentOriginReady(evaluatedOrigin: String?, targetOrigin: String): Boolean =
             !evaluatedOrigin.isNullOrBlank() && evaluatedOrigin.trim() == targetOrigin
+
+        internal fun parseDragCenter(value: Any?): Pair<Double, Double>? {
+            val json = value as? String ?: return null
+            val node = runCatching { pulsarObjectMapper().readTree(json) }.getOrNull() ?: return null
+            val x = node.get("x")?.takeIf { it.isNumber }?.asDouble() ?: return null
+            val y = node.get("y")?.takeIf { it.isNumber }?.asDouble() ?: return null
+            return Pair(x, y)
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -738,9 +746,8 @@ open class Browser4WebDriver(
                 return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
             }
             """.trimIndent()
-        ) as? String ?: return null
-        val node = runCatching { pulsarObjectMapper().readTree(value) }.getOrNull() ?: return null
-        return Pair(node.get("x").asDouble(), node.get("y").asDouble())
+        )
+        return parseDragCenter(value)
     }
 
     // ---------------------------------------------------------------------------
