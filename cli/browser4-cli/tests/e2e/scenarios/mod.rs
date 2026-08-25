@@ -115,6 +115,16 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         level: ScenarioLevel::Extended,
     },
     ScenarioDef {
+        name: "test_e2e_open_headless_no_headed_browser",
+        short_name: "test_open_headless_no_headed_browser",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: browser::test_open_headless_no_headed_browser,
+        group: Some("open"),
+        level: ScenarioLevel::Extended,
+    },
+    ScenarioDef {
         name: "test_e2e_navigation_and_storage",
         short_name: "test_navigation_and_storage",
         requires_browser4: true,

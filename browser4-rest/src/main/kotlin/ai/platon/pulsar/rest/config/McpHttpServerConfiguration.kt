@@ -1,9 +1,11 @@
 package ai.platon.pulsar.rest.config
 
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
-import ai.platon.pulsar.agentic.context.AgenticContexts
+import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.agentic.mcp.server.McpHttpServer
+import ai.platon.pulsar.api.model.DisplayMode
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.skeleton.PulsarSettings
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.boot.context.event.ApplicationReadyEvent
 import org.springframework.context.annotation.Bean
@@ -33,8 +35,18 @@ import org.springframework.context.event.EventListener
  * mcp.http.enabled=true        # enable/disable (default: true)
  * mcp.http.port=8088           # listen port (default: 8088)
  * mcp.http.host=0.0.0.0        # bind host (default: 0.0.0.0)
- * mcp.http.headless=false      # run Chrome in headless mode (default: false)
+ * mcp.http.headless=false      # force headless Chrome (default: false → follow browser.display.mode)
  * ```
+ *
+ * ## Session acquisition
+ *
+ * The session is acquired from the Spring-wired [AgenticContext] so the
+ * session browser launches through the server-wide configuration
+ * (`browser.display.mode`, which ships as HEADLESS). Using
+ * `AgenticContexts.getOrCreateSession(...)` here instead created a throwaway
+ * `StaticAgenticContext` whose configuration does not carry the server
+ * default — its session browser then launched HEADED (a visible window) on
+ * every backend start, even when the CLI used headless mode.
  *
  * ## Clients
  *
@@ -46,8 +58,16 @@ import org.springframework.context.event.EventListener
  */
 @Configuration
 @ConditionalOnProperty(name = ["mcp.http.enabled"], havingValue = "true", matchIfMissing = true)
-class McpHttpServerConfiguration {
-
+class McpHttpServerConfiguration(
+    /**
+     * The Spring-wired agentic context that owns browser sessions. Injecting
+     * it (instead of going through [ai.platon.pulsar.agentic.context.AgenticContexts])
+     * keeps the MCP session on the server-wide configuration, so a browser
+     * launched for this session honors `browser.display.mode` (HEADLESS by
+     * default) and the session never pops up an unexpected headed window.
+     */
+    private val agenticContext: AgenticContext,
+) {
     private val logger = getLogger(this)
 
     /**
@@ -65,7 +85,11 @@ class McpHttpServerConfiguration {
 
         logger.info("Creating MCP HTTP server session (headless={})", headless)
 
-        val session = AgenticContexts.getOrCreateSession(headless = headless)
+        // Reuse an existing session when available, otherwise create one.
+        // The display mode is only forced when mcp.http.headless=true; when
+        // false (the default) the server-wide browser.display.mode applies.
+        val displayMode = if (headless) DisplayMode.HEADLESS else null
+        val session = agenticContext.getOrCreateSession(PulsarSettings(spa = true, displayMode = displayMode))
         val agent = session.companionAgent as? BasicBrowserAgent
             ?: throw IllegalStateException(
                 "MCP HTTP server requires a BasicBrowserAgent, but companion agent is ${session.companionAgent::class.simpleName}"

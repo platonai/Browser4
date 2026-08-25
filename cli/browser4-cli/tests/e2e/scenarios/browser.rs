@@ -156,6 +156,65 @@ pub(super) fn test_open_recovery_after_browser_kill(ctx: &mut E2ECtx) {
     run_command(ctx, &["close"]);
 }
 
+/// Mirror scenario of the headed-window diagnostic: after `open --headless`,
+/// every Browser4-managed chrome process must run with `--headless` — an
+/// extra headed (GUI) browser may never appear. This pins the regression
+/// where the backend's MCP-over-HTTP session fell back to `DisplayMode.GUI`
+/// (its configuration lacked `browser.display.mode`), so every backend
+/// start popped up a visible window even though the CLI session was headless.
+///
+/// Windows-only: the probe inspects chrome process command lines and main
+/// window handles, which is only implemented on Windows. On other platforms
+/// it reports "unknown" and the scenario is a no-op.
+#[cfg(windows)]
+pub(super) fn test_open_headless_no_headed_browser(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    // Open a headless session against the local fixture (no external
+    // network dependency).
+    let open_result = run_command(
+        ctx,
+        &["open", "--headless", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
+    assert!(
+        open_result.stdout.contains("Session opened:"),
+        "Expected session to open headless. Output:\n{}",
+        open_result.stdout
+    );
+
+    // The browser process appears a moment after navigation settles — poll
+    // the Browser4-managed chrome window state instead of assuming a single
+    // read is current.
+    let mut state = browser4_cli::daemon::browser4_window_state();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !state.found_browser && Instant::now() < deadline {
+        sleep(Duration::from_millis(500));
+        state = browser4_cli::daemon::browser4_window_state();
+    }
+
+    assert!(
+        state.found_browser,
+        "Expected a Browser4-managed chrome process after open --headless. Window state: {state:?}"
+    );
+    assert!(
+        !state.headed_browser,
+        "open --headless must not launch any headed (GUI) browser, but a Browser4-managed \
+         chrome process runs without --headless. Window state: {state:?}"
+    );
+    assert!(
+        !state.headed_window_visible,
+        "open --headless must not produce a visible browser window. Window state: {state:?}"
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+#[cfg(not(windows))]
+pub(super) fn test_open_headless_no_headed_browser(_ctx: &mut E2ECtx) {
+    // The window-state probe is Windows-only; on other platforms this
+    // scenario is a documented no-op.
+}
+
 pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     run_command(
