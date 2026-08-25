@@ -17,6 +17,7 @@ const reviewHistory = require('./review-history.js');
 const llm = require('./llm.js');
 const { buildSummaryContent } = require('./summary-builder.js');
 const logParser = require('./log-parser.js');
+const agentLogParser = require('./agent-log-parser.js');
 
 // ── CLI argument parsing ────────────────────────────────────────────────
 
@@ -36,6 +37,10 @@ const PORT = parseInt(argFlag('port', '8090'), 10);
 const DEFAULT_TASKS_ROOT = path.resolve(__dirname, '..', 'tasks');
 const TASKS_ROOT = path.resolve(argFlag('tasks-root', DEFAULT_TASKS_ROOT));
 const OPEN_BROWSER = argBool('open-browser');
+
+// Agent logs root: explicit --logs-root, else <repo>/logs/agent (dev symlink),
+// else ~/.browser4/logs/agent (the durable data dir).
+const AGENT_LOGS_ROOT = agentLogParser.resolveAgentLogsRoot(argFlag('logs-root', null));
 
 // Initialise the review-history index and LLM wrapper
 reviewHistory.init(TASKS_ROOT);
@@ -1352,6 +1357,61 @@ app.get('/logs/reader', (_req, res) => {
   res.sendFile(path.join(__dirname, 'frontend', 'log-reader.html'));
 });
 
+// GET /agent/logs — serve the Agent Logs viewer SPA (runs, trajectories, LLM chats)
+app.get('/agent/logs', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'frontend', 'agent-logs.html'));
+});
+
+// ── Agent logs API (logs/agent: run traces + LLM chat sessions) ──────────
+
+// GET /api/agent/overview — root info + all runs and chat sessions
+app.get('/api/agent/overview', (_req, res) => {
+  const runs = agentLogParser.listRuns(AGENT_LOGS_ROOT.root);
+  const chats = agentLogParser.listChatSessions(AGENT_LOGS_ROOT.root);
+  const runCount = runs.runs.length;
+  const chatCount = chats.chats.length;
+  const statusCounts = {};
+  for (const r of runs.runs) {
+    statusCounts[r.status] = (statusCounts[r.status] || 0) + 1;
+  }
+  res.json({
+    root: AGENT_LOGS_ROOT.root,
+    source: AGENT_LOGS_ROOT.source,
+    exists: runs.exists || chats.exists,
+    stats: { runs: runCount, chats: chatCount, byStatus: statusCounts },
+    runs: runs.runs,
+    chats: chats.chats,
+  });
+});
+
+// GET /api/agent/runs — run list only (cheaper than overview)
+app.get('/api/agent/runs', (_req, res) => {
+  const runs = agentLogParser.listRuns(AGENT_LOGS_ROOT.root);
+  res.json({ root: AGENT_LOGS_ROOT.root, source: AGENT_LOGS_ROOT.source, exists: runs.exists, runs: runs.runs });
+});
+
+// GET /api/agent/chats — chat session list only
+app.get('/api/agent/chats', (_req, res) => {
+  const chats = agentLogParser.listChatSessions(AGENT_LOGS_ROOT.root);
+  res.json({ root: AGENT_LOGS_ROOT.root, source: AGENT_LOGS_ROOT.source, exists: chats.exists, chats: chats.chats });
+});
+
+// GET /api/agent/file?path=<rel>&jsonlLimit=N&chatLimit=N
+// Load one file under the logs root. Parsing is content-driven:
+//   .jsonl → structured event objects | .chat.user.log → request/response blocks
+//   .json → parsed JSON | anything else → plain text lines
+app.get('/api/agent/file', (req, res) => {
+  const relPath = String(req.query.path || '');
+  const jsonlLimit = Math.min(Math.max(parseInt(req.query.jsonlLimit, 10) || 5000, 1), 50000);
+  const chatLimit = Math.min(Math.max(parseInt(req.query.chatLimit, 10) || 2000, 1), 20000);
+  const result = agentLogParser.loadAgentFile(AGENT_LOGS_ROOT.root, relPath, { jsonlLimit, chatLimit });
+  if (result.kind === 'error') {
+    const status = result.error.includes('traversal') ? 403 : 404;
+    return res.status(status).json({ error: result.error });
+  }
+  res.json(result);
+});
+
 // POST /api/logs/parse — parse a tail window of a log source into structured
 // entries (timestamp, level, thread, logger, message + continuations).
 app.post('/api/logs/parse', (req, res) => {
@@ -1518,6 +1578,7 @@ app.listen(PORT, HOST, () => {
   const url = `http://${HOST}:${PORT}`;
   console.log(`Coworker Task Manager → ${url}`);
   console.log(`Tasks root: ${TASKS_ROOT}`);
+  console.log(`Agent logs root: ${AGENT_LOGS_ROOT.root} (${AGENT_LOGS_ROOT.source})`);
 
   if (OPEN_BROWSER) {
     const { exec } = require('child_process');
