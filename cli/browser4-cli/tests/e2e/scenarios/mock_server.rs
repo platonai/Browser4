@@ -4112,6 +4112,9 @@ pub(super) fn test_install_specific_tag(ctx: &mut E2ECtx) {
 pub(super) fn test_upgrade_already_latest(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
+    // Never touch npm or download/execute the real install scripts.
+    ctx.set_env("BROWSER4_CLI_SKIP_SELF_UPGRADE", "1");
+
     let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
     let download_server = FixtureDownloadServer::start(bundle_bytes, "v4.10.0");
     ctx.set_env("BROWSER4_RELEASES_BASE_URL", &download_server.base_url());
@@ -4131,6 +4134,9 @@ pub(super) fn test_upgrade_already_latest(ctx: &mut E2ECtx) {
 
 pub(super) fn test_upgrade_to_new_version(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+
+    // Never touch npm or download/execute the real install scripts.
+    ctx.set_env("BROWSER4_CLI_SKIP_SELF_UPGRADE", "1");
 
     // The harness points BROWSER4_AGENTS_SKILLS_DIR at this temp dir.
     let agents_skills_dir = ctx.workspace_dir.join("agents-skills");

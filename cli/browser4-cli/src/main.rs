@@ -86,6 +86,10 @@ const TEST_TEMPORARY_PROFILE_ENV: &str = "BROWSER4_CLI_TEST_TEMPORARY_PROFILE";
 const AGENT_RUN_FAILURE_POLL_ATTEMPTS: usize = 10;
 const AGENT_RUN_FAILURE_POLL_INTERVAL_MS: u64 = 250;
 const SWARM_SESSION_ID: &str = "SWARM";
+/// When set to "1"/"true", `upgrade` skips the CLI self-upgrade step (npm /
+/// install scripts).  The e2e harness sets this so install/upgrade scenarios
+/// never touch npm or download/execute the real install scripts.
+const CLI_SELF_UPGRADE_SKIP_ENV: &str = "BROWSER4_CLI_SKIP_SELF_UPGRADE";
 
 // ---------------------------------------------------------------------------
 // JSON output support (--json global flag)
@@ -14364,15 +14368,144 @@ fn format_upgrade_output(runtime: &InstalledBrowser4Runtime, force: bool) -> Vec
     ]
 }
 
-/// Check whether `npm` is available on PATH.
-fn is_npm_available() -> bool {
-    std::process::Command::new("npm")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
+/// Names to try when invoking npm.
+///
+/// On Windows npm ships as `npm.cmd` (a batch shim) — plain `npm` is not
+/// resolvable because CreateProcess does not consult PATHEXT.
+fn npm_command_names() -> &'static [&'static str] {
+    #[cfg(windows)]
+    {
+        &["npm.cmd", "npm"]
+    }
+    #[cfg(not(windows))]
+    {
+        &["npm"]
+    }
+}
+
+/// Locate a working npm invocation, or `None` when npm is not on PATH.
+fn resolve_npm() -> Option<&'static str> {
+    npm_command_names().iter().copied().find(|name| {
+        std::process::Command::new(name)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    })
+}
+
+/// Whether the CLI self-upgrade step should be skipped entirely.
+///
+/// The e2e harness sets this so install/upgrade scenarios never touch npm or
+/// download/execute the real install scripts from the public CDN.
+fn self_upgrade_skip_requested() -> bool {
+    std::env::var(CLI_SELF_UPGRADE_SKIP_ENV)
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
+}
+
+/// URL of the platform-specific install script used to self-upgrade the CLI.
+fn cli_install_script_url() -> &'static str {
+    #[cfg(windows)]
+    {
+        "https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1"
+    }
+    #[cfg(not(windows))]
+    {
+        "https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh"
+    }
+}
+
+/// Download the CLI install script to `target` using the CLI's own HTTP stack.
+///
+/// This avoids depending on PowerShell's `irm` (or curl) for the script fetch:
+/// `irm` can be blocked by execution policy, antivirus, or a broken PATH even
+/// when plain HTTPS from the CLI works fine.
+fn download_cli_install_script(url: &str, target: &Path) -> Result<(), String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("Cannot build HTTP client: {e}"))?;
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|e| format!("Download failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Download failed with status: {}", response.status()));
+    }
+    let bytes = response.bytes().map_err(|e| format!("Read failed: {e}"))?;
+    if bytes.is_empty() {
+        return Err("Downloaded install script is empty.".to_string());
+    }
+    std::fs::write(target, &bytes)
+        .map_err(|e| format!("Cannot write {}: {e}", target.display()))?;
+    Ok(())
+}
+
+/// Candidate PowerShell executables, most preferred first.
+///
+/// The absolute Windows PowerShell path comes first: it is immune to a PATH
+/// where a non-executable `powershell.exe` shadow (e.g. a leftover shim or
+/// decoy file) makes CreateProcess fail with "Access is denied (os error 5)".
+#[cfg(windows)]
+fn windows_powershell_candidates() -> Vec<String> {
+    let system_root = std::env::var("SystemRoot")
+        .or_else(|_| std::env::var("WINDIR"))
+        .unwrap_or_else(|_| r"C:\Windows".to_string());
+    let system_root = system_root.trim_end_matches('\\');
+    vec![
+        format!(r"{system_root}\System32\WindowsPowerShell\v1.0\powershell.exe"),
+        "powershell.exe".to_string(),
+        "pwsh.exe".to_string(),
+    ]
+}
+
+/// Arguments for running the downloaded install script under PowerShell.
+///
+/// `-SkipBackend` stops the script from re-running `browser4-cli install` —
+/// the runtime upgrade is handled by the caller right after this step.
+#[cfg(windows)]
+fn windows_install_script_args(script_path: &Path, tag: Option<&str>) -> Vec<String> {
+    let mut args = vec![
+        "-NoProfile".to_string(),
+        "-NonInteractive".to_string(),
+        "-ExecutionPolicy".to_string(),
+        "Bypass".to_string(),
+        "-File".to_string(),
+        script_path.display().to_string(),
+        "-SkipBackend".to_string(),
+        "-Silent".to_string(),
+    ];
+    if let Some(tag) = tag {
+        args.push("-Version".to_string());
+        args.push(tag.to_string());
+    }
+    args
+}
+
+/// Actionable guidance for a failed install-script spawn, keyed on the error
+/// kind (never the localized message text).
+fn upgrade_spawn_advice(err: &std::io::Error) -> &'static str {
+    match err.kind() {
+        std::io::ErrorKind::NotFound => {
+            "PowerShell was not found on this system. Install Node.js and run \
+             'npm install -g browser4-cli', or run the install script manually \
+             from https://browser4.io."
+        }
+        std::io::ErrorKind::PermissionDenied => {
+            "Windows refused to start the shell (access denied). This is usually \
+             caused by antivirus or AppLocker blocking PowerShell, or by a \
+             non-executable 'powershell.exe' earlier in PATH. Run the install \
+             script manually from an elevated PowerShell: irm \
+             https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex"
+        }
+        _ => {
+            "Run 'npm install -g browser4-cli' or the install script manually \
+             from https://browser4.io."
+        }
+    }
 }
 
 /// Upgrade the `browser4-cli` binary itself.
@@ -14380,8 +14513,10 @@ fn is_npm_available() -> bool {
 /// Strategy:
 /// 1. If `npm` is on PATH, use `npm install -g browser4-cli` (fast, atomic, handles running binary).
 /// 2. Otherwise, use the platform-specific install script from the README.
-///    - Windows: PowerShell with `irm … | iex`
-///    - Linux / macOS: `curl … | bash`
+///    - Windows: download the script with the CLI's own HTTP stack (immune to
+///      a blocked `irm` or PowerShell), then run it via PowerShell resolved by
+///      absolute path first, with `powershell` / `pwsh` on PATH as fallbacks.
+///    - Linux / macOS: `curl … | bash`.
 ///
 /// On Unix the running binary can be safely replaced in-place (the old inode
 /// stays alive until this process exits).  On Windows the install script may
@@ -14390,8 +14525,17 @@ fn is_npm_available() -> bool {
 ///
 /// All failures are non-fatal — a warning is printed and the runtime upgrade continues.
 async fn upgrade_cli_binary(tag: Option<&str>) {
+    // Test / e2e isolation: never touch npm or execute the real install scripts.
+    if self_upgrade_skip_requested() {
+        eprintln!(
+            "Skipping browser4-cli self-upgrade ({} is set).",
+            CLI_SELF_UPGRADE_SKIP_ENV
+        );
+        return;
+    }
+
     // ── 1. npm (preferred) ──
-    if is_npm_available() {
+    if let Some(npm) = resolve_npm() {
         eprintln!("Upgrading browser4-cli binary via npm...");
 
         let package_spec = match tag {
@@ -14404,7 +14548,7 @@ async fn upgrade_cli_binary(tag: Option<&str>) {
         };
 
         let result = tokio::task::spawn_blocking(move || {
-            std::process::Command::new("npm")
+            std::process::Command::new(npm)
                 .args(["install", "-g", &package_spec])
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
@@ -14438,52 +14582,102 @@ async fn upgrade_cli_binary(tag: Option<&str>) {
 
     #[cfg(windows)]
     {
-        let result = tokio::task::spawn_blocking(|| {
-            std::process::Command::new("powershell.exe")
-                .args([
-                    "-NoProfile",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-Command",
-                    "irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex",
-                ])
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .output()
-        })
-        .await;
+        // a) Fetch the script with our own HTTP stack — works even when
+        //    PowerShell / `irm` is blocked.
+        let script_url = cli_install_script_url().to_string();
+        let tmp_dir =
+            std::env::temp_dir().join(format!("browser4-cli-upgrade-{}", std::process::id()));
+        let script_path = tmp_dir.join("install-browser4-cli.ps1");
 
-        match result {
-            Ok(Ok(output)) if output.status.success() => {
-                cli_println!("✅ browser4-cli upgraded via install script.");
-            }
-            Ok(Ok(output)) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let combined = if stderr.is_empty() {
-                    String::from_utf8_lossy(&output.stdout).trim().to_string()
-                } else {
-                    stderr.trim().to_string()
-                };
-                eprintln!("⚠  Install script failed: {combined}");
-                if combined.to_lowercase().contains("access")
-                    || combined.to_lowercase().contains("denied")
-                    || combined.to_lowercase().contains("locked")
-                {
-                    eprintln!("   The binary may be locked because browser4-cli is running.");
-                    eprintln!("   Close all browser4-cli processes and run 'browser4-cli upgrade' again,");
-                    eprintln!("   or install the latest version manually from https://browser4.io.");
-                }
-                eprintln!("   The runtime upgrade will still proceed.");
-            }
+        let download_result = {
+            let script_path = script_path.clone();
+            tokio::task::spawn_blocking(move || -> Result<(), String> {
+                std::fs::create_dir_all(&tmp_dir).map_err(|e| {
+                    format!("Cannot create temp directory {}: {e}", tmp_dir.display())
+                })?;
+                download_cli_install_script(&script_url, &script_path)
+            })
+            .await
+        };
+
+        match download_result {
+            Ok(Ok(())) => {}
             Ok(Err(e)) => {
-                eprintln!("⚠  Failed to run install script: {e}");
+                eprintln!("⚠  Could not download the install script: {e}");
+                eprintln!("   Run it manually from an elevated PowerShell:");
+                eprintln!("     irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex");
                 eprintln!("   The runtime upgrade will still proceed.");
+                return;
             }
             Err(e) => {
-                eprintln!("⚠  Failed to spawn PowerShell: {e}");
+                eprintln!("⚠  Install-script download task failed: {e}");
                 eprintln!("   The runtime upgrade will still proceed.");
+                return;
             }
         }
+
+        // b) Run the script.  Prefer the absolute Windows PowerShell path so a
+        //    poisoned PATH cannot break the spawn; fall back to `powershell`
+        //    / `pwsh` on PATH (PowerShell Core).
+        let mut last_spawn_error: Option<std::io::Error> = None;
+        for shell in windows_powershell_candidates() {
+            let args = windows_install_script_args(&script_path, tag);
+            let result = tokio::task::spawn_blocking(move || {
+                std::process::Command::new(&shell)
+                    .args(&args)
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .output()
+            })
+            .await;
+
+            match result {
+                Ok(Ok(output)) if output.status.success() => {
+                    cli_println!("✅ browser4-cli upgraded via install script.");
+                    return;
+                }
+                Ok(Ok(output)) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let combined = if stderr.is_empty() {
+                        String::from_utf8_lossy(&output.stdout).trim().to_string()
+                    } else {
+                        stderr.trim().to_string()
+                    };
+                    eprintln!("⚠  Install script failed: {combined}");
+                    if combined.to_lowercase().contains("access")
+                        || combined.to_lowercase().contains("denied")
+                        || combined.to_lowercase().contains("locked")
+                    {
+                        eprintln!("   The binary may be locked because browser4-cli is running.");
+                        eprintln!("   Close all browser4-cli processes and run 'browser4-cli upgrade' again,");
+                        eprintln!("   or install the latest version manually from https://browser4.io.");
+                    }
+                    eprintln!("   The runtime upgrade will still proceed.");
+                    return;
+                }
+                Ok(Err(e)) => {
+                    // Spawn failed for this shell — remember it and try the
+                    // next candidate before giving up.
+                    last_spawn_error = Some(e);
+                }
+                Err(e) => {
+                    eprintln!("⚠  Failed to run install script (task error): {e}");
+                    eprintln!("   The runtime upgrade will still proceed.");
+                    return;
+                }
+            }
+        }
+
+        match last_spawn_error {
+            Some(e) => {
+                eprintln!("⚠  Failed to run install script: {e}");
+                eprintln!("   {}", upgrade_spawn_advice(&e));
+            }
+            None => {
+                eprintln!("⚠  Install script did not run (no usable PowerShell found).");
+            }
+        }
+        eprintln!("   The runtime upgrade will still proceed.");
     }
     #[cfg(not(windows))]
     {
@@ -14521,6 +14715,7 @@ async fn upgrade_cli_binary(tag: Option<&str>) {
                     eprintln!("   Install npm first, or run the install script manually.");
                 } else {
                     eprintln!("⚠  Failed to run install script: {e}");
+                    eprintln!("   {}", upgrade_spawn_advice(&e));
                 }
                 eprintln!("   The runtime upgrade will still proceed.");
             }
@@ -23622,5 +23817,124 @@ mod tests {
                 "{name} should not ensure the server is running"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // CLI self-upgrade (upgrade_cli_binary) tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn npm_command_names_prefer_cmd_shim_on_windows() {
+        #[cfg(windows)]
+        assert_eq!(npm_command_names(), &["npm.cmd", "npm"]);
+        #[cfg(not(windows))]
+        assert_eq!(npm_command_names(), &["npm"]);
+    }
+
+    #[test]
+    fn self_upgrade_skip_requested_respects_env() {
+        assert!(!self_upgrade_skip_requested(), "default must not skip");
+        let _guard = set_env(CLI_SELF_UPGRADE_SKIP_ENV, "1");
+        assert!(self_upgrade_skip_requested(), "'1' must skip");
+        let _guard2 = set_env(CLI_SELF_UPGRADE_SKIP_ENV, "true");
+        assert!(self_upgrade_skip_requested(), "'true' must skip");
+        let _guard3 = set_env(CLI_SELF_UPGRADE_SKIP_ENV, "0");
+        assert!(!self_upgrade_skip_requested(), "'0' must not skip");
+    }
+
+    #[test]
+    fn cli_install_script_url_matches_platform() {
+        let url = cli_install_script_url();
+        assert!(url.starts_with("https://"));
+        #[cfg(windows)]
+        assert!(url.ends_with(".ps1"), "Windows URL must be the .ps1 script: {url}");
+        #[cfg(not(windows))]
+        assert!(url.ends_with(".sh"), "Unix URL must be the .sh script: {url}");
+    }
+
+    #[test]
+    fn windows_powershell_candidates_prefer_absolute_path() {
+        #[cfg(windows)]
+        {
+            let candidates = windows_powershell_candidates();
+            assert_eq!(candidates.len(), 3, "expected 3 candidates, got {candidates:?}");
+            let first = Path::new(&candidates[0]);
+            assert!(first.is_absolute(), "first candidate must be absolute: {candidates:?}");
+            assert_eq!(
+                first.file_name().and_then(|n| n.to_str()),
+                Some("powershell.exe"),
+                "first candidate must be the Windows PowerShell exe: {candidates:?}"
+            );
+            assert_eq!(candidates[1], "powershell.exe");
+            assert_eq!(candidates[2], "pwsh.exe");
+        }
+        #[cfg(not(windows))]
+        {
+            assert!(windows_powershell_candidates().is_empty());
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_install_script_args_without_tag() {
+        let args = windows_install_script_args(Path::new(r"C:\tmp\install.ps1"), None);
+        assert_eq!(
+            args,
+            vec![
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                r"C:\tmp\install.ps1",
+                "-SkipBackend",
+                "-Silent",
+            ]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_install_script_args_with_tag() {
+        let args = windows_install_script_args(Path::new(r"C:\tmp\install.ps1"), Some("v4.13.10"));
+        assert_eq!(
+            args,
+            vec![
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                r"C:\tmp\install.ps1",
+                "-SkipBackend",
+                "-Silent",
+                "-Version",
+                "v4.13.10",
+            ]
+        );
+    }
+
+    #[test]
+    fn upgrade_spawn_advice_is_actionable_per_error_kind() {
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let advice = upgrade_spawn_advice(&denied);
+        assert!(
+            advice.contains("access denied") || advice.contains("antivirus"),
+            "PermissionDenied advice should point at AV/AppLocker/PATH: {advice}"
+        );
+
+        let not_found = std::io::Error::from(std::io::ErrorKind::NotFound);
+        let advice = upgrade_spawn_advice(&not_found);
+        assert!(
+            advice.contains("not found"),
+            "NotFound advice should say PowerShell is missing: {advice}"
+        );
+
+        let other = std::io::Error::new(std::io::ErrorKind::Other, "boom");
+        let advice = upgrade_spawn_advice(&other);
+        assert!(
+            advice.contains("npm install -g browser4-cli"),
+            "fallback advice should offer npm: {advice}"
+        );
     }
 }
