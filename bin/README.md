@@ -257,7 +257,7 @@ Code quality check scripts.
 
 Release management scripts. See also [release/README.md](release/README.md) for the full release workflow.
 
-- **`trigger-release.ps1`**: Interactive script to create and push a release tag (`vX.Y.Z`). Validates the version in `VERSION`, shows changelog since the previous tag, and pushes to the specified remote.
+- **`trigger-release.ps1`**: Interactive script to create and push a release tag (`vX.Y.Z`). Validates the version in `VERSION`, shows changelog since the previous tag, and pushes to the specified remote. Releases must be tagged from the latest `main` — the script warns when HEAD is off `origin/main`, and `release.yml` hard-fails any tag that does not point at the latest main.
 - **`check-publish-status.ps1`**: Check whether the current project version and CLI version have been fully published to GitHub and npm.
 - **`download-release-assets.ps1`**: Download all assets from a GitHub release (defaults to latest, supports specific tags via `-Tag`).
 - **`monitor-release.ps1`**: Monitor release workflow runs with diagnostic pipeline for release-specific failures. On success, auto-bumps the version to the next patch (unless `-SkipVersionBump`).
