@@ -242,9 +242,27 @@ class Browser4WebDriverTest {
     }
 
     @Test
-    @DisplayName("parseDragCenter reads resolved viewport coordinates")
+    @DisplayName("parseDragCenter reads resolved coordinates, css path and frame flag")
     fun parseDragCenterReadsCoordinates() {
-        assertEquals(Pair(12.5, 48.0), Browser4WebDriver.parseDragCenter("""{"x":12.5,"y":48}"""))
+        assertEquals(
+            Browser4WebDriver.DragCenter(12.5, 48.0, "div#board > span.item", false, 1280, 900),
+            Browser4WebDriver.parseDragCenter(
+                """{"x":12.5,"y":48,"cssPath":"div#board > span.item","inFrame":false,"vw":1280,"vh":900}"""
+            )
+        )
+    }
+
+    @Test
+    @DisplayName("parseDragCenter flags frame-resident elements")
+    fun parseDragCenterFlagsFrameResidents() {
+        val center = Browser4WebDriver.parseDragCenter(
+            """{"x":1,"y":2,"cssPath":"iframe#f > div","inFrame":true}"""
+        )
+        assertTrue(center?.inFrame == true, "expected inFrame=true, got $center")
+        // Absent inFrame defaults to false; absent viewport size defaults to 0.
+        val center2 = Browser4WebDriver.parseDragCenter("""{"x":1,"y":2,"cssPath":"div"}""")
+        assertTrue(center2?.inFrame == false, "expected inFrame=false, got $center2")
+        assertTrue(center2?.viewportWidth == 0 && center2?.viewportHeight == 0, "expected zero viewport, got $center2")
     }
 
     @Test
@@ -252,7 +270,126 @@ class Browser4WebDriverTest {
     fun parseDragCenterRejectsMalformedResults() {
         assertNull(Browser4WebDriver.parseDragCenter("not-json"))
         assertNull(Browser4WebDriver.parseDragCenter("""{"x":12.5}"""))
+        assertNull(Browser4WebDriver.parseDragCenter("""{"x":12.5,"y":48,"cssPath":""}"""))
         assertNull(Browser4WebDriver.parseDragCenter(null))
+    }
+
+    @Test
+    @DisplayName("dragCenterJs resolves center, css path, frame residency and viewport")
+    fun dragCenterJsContainsResolutionLogic() {
+        val js = Browser4WebDriver.dragCenterJs()
+        assertTrue(js.contains("getBoundingClientRect"), "expected rect resolution: $js")
+        assertTrue(js.contains("CSS.escape"), "expected id escaping: $js")
+        assertTrue(js.contains("nth-of-type"), "expected sibling disambiguation: $js")
+        assertTrue(js.contains("inFrame: this.ownerDocument !== document"), "expected frame detection: $js")
+        assertTrue(js.contains("cssPath: path.join(' > ')"), "expected css path output: $js")
+        assertTrue(js.contains("vw: window.innerWidth"), "expected viewport width output: $js")
+        assertTrue(js.contains("vh: window.innerHeight"), "expected viewport height output: $js")
+    }
+
+    @Test
+    @DisplayName("buildDragSequenceScript is a CDP-compatible function declaration")
+    fun buildDragSequenceScriptIsFunctionDeclaration() {
+        val script = Browser4WebDriver.buildDragSequenceScript(
+            targetCssPath = "div#target",
+            sourceX = 1.0,
+            sourceY = 1.0,
+            targetX = 1.0,
+            targetY = 1.0,
+            delays = listOf(1L, 1L, 1L, 1L),
+        )
+        // Runtime.callFunctionOn rejects expressions (IIFEs) with
+        // "Given expression does not evaluate to a function".
+        assertTrue(script.trimStart().startsWith("async function() {"), "expected function declaration: $script")
+        assertFalse(script.contains("(async () =>"), "must not use an IIFE: $script")
+    }
+
+    @Test
+    @DisplayName("buildDragSequenceScript fires the full lifecycle in order")
+    fun buildDragSequenceScriptFiresFullLifecycleInOrder() {
+        val script = Browser4WebDriver.buildDragSequenceScript(
+            targetCssPath = "div#target",
+            sourceX = 10.0,
+            sourceY = 20.0,
+            targetX = 30.0,
+            targetY = 40.0,
+            delays = listOf(150L, 200L, 250L, 180L),
+        )
+        val dragstart = script.indexOf("'dragstart'")
+        val dragenter = script.indexOf("'dragenter'")
+        val dragover = script.indexOf("'dragover'")
+        val drop = script.indexOf("'drop'")
+        val dragend = script.indexOf("'dragend'")
+        assertTrue(dragstart in 0 until dragenter, "dragstart must precede dragenter")
+        assertTrue(dragenter in 0 until dragover, "dragenter must precede dragover")
+        assertTrue(dragover in 0 until drop, "dragover must precede drop")
+        assertTrue(drop in 0 until dragend, "drop must precede dragend")
+    }
+
+    @Test
+    @DisplayName("buildDragSequenceScript embeds randomized delays and jittered points")
+    fun buildDragSequenceScriptEmbedsRandomizedDelays() {
+        val delays = listOf(111L, 222L, 333L, 444L)
+        val script = Browser4WebDriver.buildDragSequenceScript(
+            targetCssPath = "div#target",
+            sourceX = 10.5,
+            sourceY = 20.25,
+            targetX = 30.75,
+            targetY = 40.0,
+            delays = delays,
+        )
+        delays.forEach { delay ->
+            assertTrue(script.contains("sleep($delay)"), "expected embedded delay $delay: $script")
+        }
+        assertTrue(script.contains("elementFromPoint(30.75, 40.0)"), "expected jittered target point: $script")
+    }
+
+    @Test
+    @DisplayName("buildDragSequenceScript guards against occluded or moved targets")
+    fun buildDragSequenceScriptGuardsOcclusion() {
+        val script = Browser4WebDriver.buildDragSequenceScript(
+            targetCssPath = "div#target",
+            sourceX = 1.0,
+            sourceY = 1.0,
+            targetX = 1.0,
+            targetY = 1.0,
+            delays = listOf(1L, 1L, 1L, 1L),
+        )
+        assertTrue(script.contains("b.contains(a)"), "expected containment check: $script")
+        assertFalse(script.contains("a.contains(b)"), "ancestor hits must not count as related: $script")
+        assertTrue(script.contains("occluded or moved"), "expected occlusion error message: $script")
+        assertTrue(
+            script.contains("'Target element was not found at drag time'"),
+            "expected not-found-at-drag-time guard: $script"
+        )
+    }
+
+    @Test
+    @DisplayName("buildDragSequenceScript JSON-escapes the target css path")
+    fun buildDragSequenceScriptJsonEscapesCssPath() {
+        val script = Browser4WebDriver.buildDragSequenceScript(
+            targetCssPath = "div#it's",
+            sourceX = 1.0,
+            sourceY = 1.0,
+            targetX = 1.0,
+            targetY = 1.0,
+            delays = listOf(1L, 1L, 1L, 1L),
+        )
+        // The css path must be embedded as a JSON string literal so quotes are safe.
+        assertTrue(script.contains("""document.querySelector("div#it's")"""), "expected JSON-quoted path: $script")
+    }
+
+    @Test
+    @DisplayName("dragScriptErrorMessage reports success, script and page failures")
+    fun dragScriptErrorMessageReportsFailures() {
+        assertNull(Browser4WebDriver.dragScriptErrorMessage("""{"ok":true}"""))
+        assertEquals(
+            "Target element is occluded or moved",
+            Browser4WebDriver.dragScriptErrorMessage("""{"ok":false,"error":"Target element is occluded or moved"}""")
+        )
+        assertEquals("Unknown drag failure", Browser4WebDriver.dragScriptErrorMessage("""{"ok":false}"""))
+        assertEquals("Failed to execute drag script", Browser4WebDriver.dragScriptErrorMessage(42))
+        assertEquals("Failed to execute drag script", Browser4WebDriver.dragScriptErrorMessage(null))
     }
 
     @Test

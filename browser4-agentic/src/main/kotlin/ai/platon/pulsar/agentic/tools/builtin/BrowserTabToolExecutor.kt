@@ -961,13 +961,17 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 // selectOption reports success even when no element matches,
                 // which silently swallows typos and stale refs.  Only the
                 // missing-target case is treated as "not found" — driver,
-                // session and transport failures keep propagating.
+                // session and transport failures keep propagating (they throw
+                // inside evaluateValue rather than returning null).
                 val exists = driver.evaluateValue(
                     selector,
                     "function(){ return this != null; }"
-                ) as? Boolean ?: false
-                if (!exists) {
-                    throw IllegalArgumentException("Option target not found: $selector")
+                )
+                if (exists != true) {
+                    throw IllegalArgumentException(
+                        if (exists == null) "Option target could not be resolved (not found or locator failure): $selector"
+                        else "Option target not found: $selector"
+                    )
                 }
                 driver.selectOption(selector = selector, values = values)
             }

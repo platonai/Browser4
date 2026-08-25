@@ -205,6 +205,7 @@ struct FixturePages {
     form_html: String,
     mouse_html: String,
     keyboard_html: String,
+    drag_html: String,
 }
 
 impl FixtureServer {
@@ -226,6 +227,7 @@ impl FixtureServer {
             form_html: load_html_fixture(FORM_FIXTURE_FILE),
             mouse_html: load_html_fixture(MOUSE_FIXTURE_FILE),
             keyboard_html: load_html_fixture(KEYBOARD_FIXTURE_FILE),
+            drag_html: load_html_fixture(DRAG_FIXTURE_FILE),
         });
 
         thread::spawn(move || {
@@ -328,6 +330,12 @@ fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePage
             "200 OK",
             "text/html; charset=utf-8",
             pages.keyboard_html.clone(),
+        )
+    } else if path == DRAG_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.drag_html.clone(),
         )
     } else {
         (
@@ -1972,6 +1980,10 @@ impl E2ECtx {
 
     fn keyboard_url(&self) -> String {
         format!("{}{}", self.fixture_base_url, KEYBOARD_PATH)
+    }
+
+    fn drag_url(&self) -> String {
+        format!("{}{}", self.fixture_base_url, DRAG_PATH)
     }
 
     /// A slow fixture URL (served after a fixed delay) used to hold browser

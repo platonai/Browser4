@@ -575,6 +575,17 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         group: Some("mouse"),
         level: ScenarioLevel::Extended,
     },
+    // ── Drag hardening scenarios (dedicated drag fixture) ────────
+    ScenarioDef {
+        name: "test_e2e_drag_hardening",
+        short_name: "test_drag_hardening",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: browser::test_drag_hardening,
+        group: Some("mouse"),
+        level: ScenarioLevel::Extended,
+    },
     // ── Keyboard fixture scenarios ──────────────────────────────
     ScenarioDef {
         name: "test_e2e_keyboard_type_and_fill_edge_cases",

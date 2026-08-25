@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Drag &amp; Drop Hardening Fixture</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; background: #fafafa; }
+    h1 { font-size: 20px; }
+    h2 { font-size: 16px; margin-top: 28px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+    .row { display: flex; gap: 24px; align-items: center; flex-wrap: wrap; }
+    .box {
+      border: 2px dashed #999; border-radius: 8px; padding: 14px 20px; margin: 8px 0;
+      background: #fff; min-width: 160px; text-align: center; user-select: none;
+    }
+    .source { border-style: solid; border-color: #4a7; background: #eefaf2; cursor: grab; }
+    .target { border-color: #48a; background: #eef6fb; }
+    .target.dropped { border-color: #2a4; background: #e6ffe6; }
+    .overlay {
+      position: absolute; inset: 0; background: rgba(255, 200, 0, 0.35);
+      border-radius: 8px; pointer-events: auto; z-index: 5;
+    }
+    .wrap { position: relative; display: inline-block; }
+    #occluded-target.pe-none, #pe-target { pointer-events: none; }
+    #log { background: #111; color: #0f0; padding: 12px; border-radius: 8px;
+           font-family: monospace; font-size: 12px; max-height: 240px; overflow: auto; white-space: pre-wrap; }
+    #state-log { display: none; }
+    .note { color: #666; font-size: 12px; }
+    #far-section { margin-top: 3000px; }
+    iframe { border: 2px solid #888; border-radius: 8px; width: 360px; height: 160px; }
+    .drop-zone { min-height: 60px; display: flex; align-items: center; justify-content: center; }
+  </style>
+</head>
+<body>
+  <h1>Drag &amp; Drop Hardening Fixture</h1>
+  <p class="note">
+    Scenarios: basic DnD · occluded target · pointer-events:none target · off-viewport target ·
+    async layout shift · frame-resident target. Drag events are recorded in the log below.
+  </p>
+
+  <!-- ── 1. Basic DnD with dataTransfer payload ─────────────────── -->
+  <section id="basic-section">
+    <h2>1. Basic drag &amp; drop (dataTransfer payload)</h2>
+    <div class="row">
+      <div id="basic-source" class="box source" draggable="true">basic source</div>
+      <div id="basic-target" class="box target drop-zone">basic target</div>
+    </div>
+  </section>
+
+  <!-- ── 2. Occluded target ─────────────────────────────────────── -->
+  <section id="occluded-section">
+    <h2>2. Occluded target (overlay covers it — drag must FAIL loudly)</h2>
+    <div class="row">
+      <div id="occluded-source" class="box source" draggable="true">occluded source</div>
+      <div class="wrap">
+        <div id="occluded-target" class="box target drop-zone">occluded target</div>
+        <div id="occluded-overlay" class="overlay" title="covering overlay"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 3. pointer-events:none target ──────────────────────────── -->
+  <section id="pe-section">
+    <h2>3. pointer-events:none target — drag must FAIL loudly</h2>
+    <div class="row">
+      <div id="pe-source" class="box source" draggable="true">pe source</div>
+      <div id="pe-target" class="box target drop-zone">pe-none target</div>
+    </div>
+  </section>
+
+  <!-- ── 4. Off-viewport target (auto-scroll then drop) ─────────── -->
+  <section id="far-section">
+    <h2>4. Off-viewport target (page is tall; driver must scroll)</h2>
+    <div class="row">
+      <div id="far-source" class="box source" draggable="true">far source</div>
+      <div id="far-target" class="box target drop-zone">far target (3000px down)</div>
+    </div>
+  </section>
+
+  <!-- ── 5. Async layout shift ──────────────────────────────────── -->
+  <section id="shift-section">
+    <h2>5. Async layout shift (overlay appears 3s after load, or on demand)</h2>
+    <p class="note">Drag before the overlay appears succeeds; after it appears it must FAIL loudly.
+      Use the button to trigger the overlay deterministically in tests.</p>
+    <div class="row">
+      <div id="shift-source" class="box source" draggable="true">shift source</div>
+      <div class="wrap">
+        <div id="shift-target" class="box target drop-zone">shift target</div>
+        <div id="shift-overlay" class="overlay" style="display:none" title="late overlay"></div>
+      </div>
+      <button id="insert-shift-overlay" type="button">Insert shift overlay now</button>
+    </div>
+  </section>
+
+  <!-- ── 6. Frame-resident target ───────────────────────────────── -->
+  <section id="frame-section">
+    <h2>6. Frame-resident target (iframe) — must not silently mis-drag</h2>
+    <div class="row">
+      <div id="frame-source" class="box source" draggable="true">frame source</div>
+      <iframe id="frame-host" srcdoc="&lt;style&gt;body{font-family:sans-serif;margin:8px}#frame-drop{border:2px dashed #48a;border-radius:8px;padding:20px;text-align:center;background:#eef6fb;min-height:50px;display:flex;align-items:center;justify-content:center}&lt;/style&gt;&lt;div id=&quot;frame-drop&quot;&gt;frame drop (inside iframe)&lt;/div&gt;"></iframe>
+    </div>
+  </section>
+
+  <!-- ── Event log ──────────────────────────────────────────────── -->
+  <h2>Event log</h2>
+  <div id="log">(no drag events yet)</div>
+
+  <!-- State log (consumed by e2e / CLI state assertions) -->
+  <pre id="state-log"></pre>
+
+  <script>
+    window.__browser4State = {
+      basic: { dragstart: '', dragenter: '', dragover: 0, drop: { source: '', payload: '' }, dragend: '', order: [] },
+      occluded: { dragstart: '', drop: '' },
+      pe: { dragstart: '', drop: '' },
+      far: { dragstart: '', drop: { source: '', target: '' }, dragend: '' },
+      shift: { dragstart: '', drop: '', overlayVisible: false },
+      frame: { dragstart: '', drop: '' },
+      log: [],
+    };
+
+    var S = window.__browser4State;
+
+    function syncState() {
+      document.getElementById('state-log').textContent = JSON.stringify(S);
+    }
+
+    function log(msg) {
+      var el = document.getElementById('log');
+      S.log.push(msg);
+      if (el.textContent === '(no drag events yet)') { el.textContent = ''; }
+      el.textContent += msg + '\n';
+      el.scrollTop = el.scrollHeight;
+      syncState();
+    }
+
+    function recordOrder(bucket, type) {
+      if (bucket.order.length < 8) { bucket.order.push(type); }
+    }
+
+    function wireSource(el, bucket) {
+      el.addEventListener('dragstart', function(e) {
+        bucket.dragstart = e.target.id || el.id;
+        e.dataTransfer.setData('text/plain', el.id + ':' + el.textContent.trim());
+        e.dataTransfer.effectAllowed = 'move';
+        recordOrder(bucket, 'dragstart');
+        log('dragstart on ' + (e.target.id || el.id));
+      });
+      el.addEventListener('dragend', function(e) {
+        bucket.dragend = (e.target.id || el.id) + '@' + Math.round(e.clientX) + ',' + Math.round(e.clientY);
+        recordOrder(bucket, 'dragend');
+        log('dragend on ' + (e.target.id || el.id) + ' at ' + Math.round(e.clientX) + ',' + Math.round(e.clientY));
+      });
+    }
+
+    function wireTarget(el, bucket, name) {
+      el.addEventListener('dragenter', function(e) {
+        recordOrder(bucket, 'dragenter');
+        log('dragenter on ' + name);
+      });
+      el.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        bucket.dragover += 1;
+        recordOrder(bucket, 'dragover');
+        log('dragover on ' + name);
+      });
+      el.addEventListener('drop', function(e) {
+        e.preventDefault();
+        bucket.drop = {
+          source: e.dataTransfer.getData('text/plain'),
+          target: name,
+        };
+        recordOrder(bucket, 'drop');
+        log('drop on ' + name + ' payload="' + e.dataTransfer.getData('text/plain') + '"');
+        el.classList.add('dropped');
+        el.textContent = 'dropped: ' + e.dataTransfer.getData('text/plain');
+      });
+    }
+
+    wireSource(document.getElementById('basic-source'), S.basic);
+    wireTarget(document.getElementById('basic-target'), S.basic, 'basic-target');
+
+    wireSource(document.getElementById('occluded-source'), S.occluded);
+    wireTarget(document.getElementById('occluded-target'), S.occluded, 'occluded-target');
+
+    wireSource(document.getElementById('pe-source'), S.pe);
+    wireTarget(document.getElementById('pe-target'), S.pe, 'pe-target');
+
+    wireSource(document.getElementById('far-source'), S.far);
+    wireTarget(document.getElementById('far-target'), S.far, 'far-target');
+
+    wireSource(document.getElementById('shift-source'), S.shift);
+    wireTarget(document.getElementById('shift-target'), S.shift, 'shift-target');
+
+    wireSource(document.getElementById('frame-source'), S.frame);
+
+    // Async layout shift: an overlay covers the shift target 60s after load,
+    // simulating a lazy ad / late-arriving UI layer (60s so test flows can
+    // complete the "before" case; the button triggers it deterministically).
+    function insertShiftOverlay() {
+      var overlay = document.getElementById('shift-overlay');
+      overlay.style.display = 'block';
+      S.shift.overlayVisible = true;
+      log('shift overlay inserted (async layout shift)');
+      syncState();
+    }
+    document.getElementById('insert-shift-overlay').addEventListener('click', insertShiftOverlay);
+    setTimeout(insertShiftOverlay, 60000);
+
+    syncState();
+  </script>
+</body>
+</html>

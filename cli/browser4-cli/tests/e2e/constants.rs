@@ -18,6 +18,8 @@ pub const MOUSE_PATH: &str = "/mouse";
 
 pub const KEYBOARD_PATH: &str = "/keyboard";
 
+pub const DRAG_PATH: &str = "/drag-test";
+
 pub const INTERACTIVE_TITLE: &str = "Browser4 CLI Interactive Fixture";
 
 pub const OTHER_TITLE: &str = "Browser4 CLI Other Fixture";
@@ -47,6 +49,8 @@ pub const FORM_FIXTURE_FILE: &str = "mcp-tool-controller-form-fixture.html";
 pub const MOUSE_FIXTURE_FILE: &str = "mcp-tool-controller-mouse-fixture.html";
 
 pub const KEYBOARD_FIXTURE_FILE: &str = "mcp-tool-controller-keyboard-fixture.html";
+
+pub const DRAG_FIXTURE_FILE: &str = "drag-test.html";
 
 pub const MAX_EMPTY_READ_ATTEMPTS: u32 = 200; // 2 s with 10 ms sleep per attempt
 
