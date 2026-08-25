@@ -18,53 +18,47 @@ class BrowserTabToolExecutorTest {
     private val executor = BrowserTabToolExecutor()
 
     @Test
-    fun `selectOption delegates when target exists`() = runBlocking {
+    fun `selectOption delegates to the driver`() = runBlocking {
+        // The missing-target check now lives in Browser4WebDriver.selectOption;
+        // the executor only validates args and delegates.
         val driver = Mockito.mock(WebDriver::class.java)
-        val probe = "function(){ return this != null; }"
-        `when`(driver.evaluateValue("#size", probe)).thenReturn(true)
 
-        executor.callFunctionOn(
+        val result = executor.callFunctionOn(
             ToolCall("tab", "selectOption", mutableMapOf("selector" to "#size", "values" to listOf("large"))),
             driver
         )
 
+        assertTrue(result.success)
         verify(driver).selectOption("#size", listOf("large"))
+        Unit
     }
 
     @Test
-    fun `selectOption reports a missing target`() = runBlocking {
+    fun `selectOption rejects non-list values`() = runBlocking {
         val driver = Mockito.mock(WebDriver::class.java)
-        val probe = "function(){ return this != null; }"
-        `when`(driver.evaluateValue("#missing", probe)).thenReturn(false)
 
-        val failure = runCatching {
-            executor.callFunctionOn(
-                ToolCall("tab", "selectOption", mutableMapOf("selector" to "#missing", "values" to listOf("x"))),
-                driver
-            )
-        }.exceptionOrNull()
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "selectOption", mutableMapOf("selector" to "#size", "values" to "large")),
+            driver
+        )
 
-        assertTrue(failure is IllegalArgumentException)
-        assertTrue(failure?.message?.contains("Option target not found: #missing") == true)
+        assertTrue(result.exception?.cause?.message?.contains("values must be a list of strings") == true)
         Mockito.verify(driver, Mockito.never()).selectOption(Mockito.anyString(), Mockito.anyList())
+        Unit
     }
 
     @Test
     fun `selectOption propagates driver failures`() = runBlocking {
         val driver = Mockito.mock(WebDriver::class.java)
-        val probe = "function(){ return this != null; }"
         val expected = IllegalStateException("transport failed")
-        `when`(driver.evaluateValue("#size", probe)).thenThrow(expected)
+        `when`(driver.selectOption("#size", listOf("large"))).thenThrow(expected)
 
-        val failure = runCatching {
-            executor.callFunctionOn(
-                ToolCall("tab", "selectOption", mutableMapOf("selector" to "#size", "values" to listOf("large"))),
-                driver
-            )
-        }.exceptionOrNull()
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "selectOption", mutableMapOf("selector" to "#size", "values" to listOf("large"))),
+            driver
+        )
 
-        assertSame(expected, failure)
-        Mockito.verify(driver, Mockito.never()).selectOption(Mockito.anyString(), Mockito.anyList())
+        assertSame(expected, result.exception?.cause)
     }
 
     @Test

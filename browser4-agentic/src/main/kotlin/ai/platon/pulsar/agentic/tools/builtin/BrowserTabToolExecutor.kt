@@ -268,6 +268,11 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
      * After a navigation-triggering action, detect whether the page started navigating and wait for
      * the DOM to settle before returning.
      *
+     * Delegates to [Browser4WebDriver.waitForNavigationSettled] — the canonical implementation —
+     * when the driver is a Browser4WebDriver (all production sessions are, see
+     * AbstractPulsarSession.createBoundDriver).  The inline fallback below only serves
+     * non-Browser4WebDriver drivers (unit-test mocks, exotic bindings).
+     *
      * Algorithm (inspired by [PageStateTracker.waitForDOMSettle]):
      * 1. Check if the URL already changed — if so the navigation is complete, wait for body + settle delay.
      * 2. If the URL is unchanged, eval `document.readyState`. If "loading", the navigation is in flight —
@@ -281,6 +286,14 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         urlBefore: String,
         pollTimeoutMillis: Long = NAVIGATION_POLL_TIMEOUT_MS
     ) {
+        val b4Driver = driver as? Browser4WebDriver
+        if (b4Driver != null) {
+            b4Driver.waitForNavigationSettled(urlBefore, pollTimeoutMillis)
+            return
+        }
+
+        // Legacy fallback for non-Browser4WebDriver drivers — mirrors
+        // Browser4WebDriver.waitForNavigationSettled exactly.
         // wait for a while for the action effects
         delay(200.milliseconds)
 
@@ -355,6 +368,45 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
     }
 
     /**
+     * Last-resort form submission for the element matched by [selector]: dispatch
+     * DOM keyboard events (keydown/keypress/keyup) and call
+     * `form.requestSubmit()` (with `form.submit()` fallback) when a CDP-dispatched
+     * Enter did not navigate (JS-heavy SPAs may intercept both).
+     *
+     * Delegates to [Browser4WebDriver.submitFormFallback] when the driver is a
+     * Browser4WebDriver; otherwise evaluates the shared JS builder (see
+     * [Browser4WebDriver.submitFormFallbackJs]) through the WebDriver interface.
+     */
+    private suspend fun submitFormFallback(driver: WebDriver, selector: String) {
+        val b4Driver = driver as? Browser4WebDriver
+        if (b4Driver != null) {
+            b4Driver.submitFormFallback(selector)
+        } else {
+            driver.evaluate(Browser4WebDriver.submitFormFallbackJs(selector))
+        }
+    }
+
+    /**
+     * Run [block] with the driver's auto-dismiss-dialogs mode enabled when
+     * [enabled] (and the driver supports it — a [PulsarWebDriver]), restoring
+     * the property afterwards so the mode does not leak to subsequent
+     * operations.
+     */
+    private suspend fun <T> withAutoDismissDialogs(driver: WebDriver, enabled: Boolean, block: suspend () -> T): T {
+        val pulsarDriver = driver as? PulsarWebDriver
+        if (enabled && pulsarDriver != null) {
+            pulsarDriver.autoDismissDialogs = true
+        }
+        try {
+            return block()
+        } finally {
+            if (enabled && pulsarDriver != null) {
+                pulsarDriver.autoDismissDialogs = false
+            }
+        }
+    }
+
+    /**
      * Execute a WebDriver function by name with named arguments.
      * args: (parameterName -> value). If provided names don't match a supported signature, throw IllegalArgumentException.
      */
@@ -373,17 +425,24 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         // and select* require JS execution via CDP; when a dialog is open,
         // Chrome queues CDP commands behind the dialog and they never complete.
         // Instead of hanging, surface a clear error so the user knows to accept
-        // or dismiss the dialog first.
+        // or dismiss the dialog first.  The guard itself lives in
+        // Browser4WebDriver.requireNoPendingDialog; non-Browser4WebDriver
+        // drivers keep the legacy inline check.
         if (functionName in READ_PAGE_STATE_ACTIONS && driver is PulsarWebDriver) {
-            val dh = driver.dialogHandler
-            if (dh.hasPendingDialog()) {
-                val dialog = dh.peekPendingDialog()
-                val type = dialog?.type ?: "unknown"
-                val message = dialog?.message?.let { m -> if (m.length > 80) m.take(80) + "..." else m } ?: ""
-                throw IllegalStateException(
-                    "Page is blocked by a native $type dialog${if (message.isNotEmpty()) ": \"$message\"" else ""}. " +
-                    "Use dialog-accept or dialog-dismiss to handle the dialog before reading page state."
-                )
+            val b4Driver = driver as? Browser4WebDriver
+            if (b4Driver != null) {
+                b4Driver.requireNoPendingDialog()
+            } else {
+                val dh = driver.dialogHandler
+                if (dh.hasPendingDialog()) {
+                    val dialog = dh.peekPendingDialog()
+                    val type = dialog?.type ?: "unknown"
+                    val message = dialog?.message?.let { m -> if (m.length > 80) m.take(80) + "..." else m } ?: ""
+                    throw IllegalStateException(
+                        "Page is blocked by a native $type dialog${if (message.isNotEmpty()) ": \"$message\"" else ""}. " +
+                        "Use dialog-accept or dialog-dismiss to handle the dialog before reading page state."
+                    )
+                }
             }
         }
 
@@ -721,20 +780,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                                 driver.press("Enter", selector)
                                 delay(300)
                                 if (driver.currentUrl() == urlBefore) {
-                                    driver.evaluate("""
-                                        (function(){
-                                            var el=document.querySelector('${selector.replace("'", "\\'")}');
-                                            if(!el)return false;
-                                            el.focus();
-                                            var o={key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true};
-                                            el.dispatchEvent(new KeyboardEvent('keydown',o));
-                                            el.dispatchEvent(new KeyboardEvent('keypress',o));
-                                            el.dispatchEvent(new KeyboardEvent('keyup',o));
-                                            var form=el.closest('form');
-                                            if(form){try{form.requestSubmit();}catch(e){}form.submit();}
-                                            return true;
-                                        })()
-                                    """.trimIndent())
+                                    submitFormFallback(driver, selector)
                                 }
                             }
                         }
@@ -820,20 +866,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                         // DOM keyboard events and form.submit() directly via JS.
                         delay(300)
                         if (driver.currentUrl() == urlBefore) {
-                            driver.evaluate("""
-                                (function(){
-                                    var el=document.querySelector('${selector.replace("'", "\\'")}');
-                                    if(!el)return false;
-                                    el.focus();
-                                    var o={key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true};
-                                    el.dispatchEvent(new KeyboardEvent('keydown',o));
-                                    el.dispatchEvent(new KeyboardEvent('keypress',o));
-                                    el.dispatchEvent(new KeyboardEvent('keyup',o));
-                                    var form=el.closest('form');
-                                    if(form){try{form.requestSubmit();}catch(e){}form.submit();}
-                                    return true;
-                                })()
-                            """.trimIndent())
+                            submitFormFallback(driver, selector)
                         }
                     }
                 }
@@ -861,56 +894,49 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 // automation/batch workloads where manual dialog handling is
                 // not feasible.  The driver property is reset after the click
                 // so the mode does not leak to subsequent operations.
-                val wasAutoDismiss = args["autoDismissDialogs"] == true && driver is PulsarWebDriver
-                if (wasAutoDismiss) {
-                    (driver as PulsarWebDriver).autoDismissDialogs = true
-                }
-                try {
-                val button = args["button"]?.toString()
-                when {
-                    args.containsKey("selector") && args.containsKey("count") && !args.containsKey("modifier") -> {
-                        validateArgs(args, allowed("selector", "count", "button", "autoDismissDialogs"), setOf("selector", "count"), functionName)
-                        val b4Driver = driver as? Browser4WebDriver
-                        if (b4Driver != null) {
-                            b4Driver.click(
-                                selector = paramString(args, "selector", functionName)!!,
-                                count = paramInt(args, "count", functionName)!!,
-                                button = button,
-                            )
-                        } else {
+                val autoDismiss = args["autoDismissDialogs"] == true
+                withAutoDismissDialogs(driver, autoDismiss) {
+                    val button = args["button"]?.toString()
+                    when {
+                        args.containsKey("selector") && args.containsKey("count") && !args.containsKey("modifier") -> {
+                            validateArgs(args, allowed("selector", "count", "button", "autoDismissDialogs"), setOf("selector", "count"), functionName)
+                            val b4Driver = driver as? Browser4WebDriver
+                            if (b4Driver != null) {
+                                b4Driver.click(
+                                    selector = paramString(args, "selector", functionName)!!,
+                                    count = paramInt(args, "count", functionName)!!,
+                                    button = button,
+                                )
+                            } else {
+                                driver.click(
+                                    selector = paramString(args, "selector", functionName)!!,
+                                    count = paramInt(args, "count", functionName)!!,
+                                )
+                            }
+                        }
+
+                        args.containsKey("selector") && args.containsKey("modifier") && !args.containsKey("count") -> {
+                            validateArgs(args, allowed("selector", "modifier", "button", "autoDismissDialogs"), setOf("selector", "modifier"), functionName)
                             driver.click(
                                 selector = paramString(args, "selector", functionName)!!,
-                                count = paramInt(args, "count", functionName)!!,
+                                modifier = paramString(args, "modifier", functionName)!!
                             )
                         }
-                    }
 
-                    args.containsKey("selector") && args.containsKey("modifier") && !args.containsKey("count") -> {
-                        validateArgs(args, allowed("selector", "modifier", "button", "autoDismissDialogs"), setOf("selector", "modifier"), functionName)
-                        driver.click(
-                            selector = paramString(args, "selector", functionName)!!,
-                            modifier = paramString(args, "modifier", functionName)!!
-                        )
-                    }
-
-                    args.containsKey("selector") && !args.containsKey("count") && !args.containsKey("modifier") -> {
-                        validateArgs(args, allowed("selector", "button", "autoDismissDialogs"), setOf("selector"), functionName)
-                        val b4Driver = driver as? Browser4WebDriver
-                        if (b4Driver != null && button != null) {
-                            b4Driver.click(
-                                selector = paramString(args, "selector", functionName)!!,
-                                button = button,
-                            )
-                        } else {
-                            driver.click(selector = paramString(args, "selector", functionName)!!)
+                        args.containsKey("selector") && !args.containsKey("count") && !args.containsKey("modifier") -> {
+                            validateArgs(args, allowed("selector", "button", "autoDismissDialogs"), setOf("selector"), functionName)
+                            val b4Driver = driver as? Browser4WebDriver
+                            if (b4Driver != null && button != null) {
+                                b4Driver.click(
+                                    selector = paramString(args, "selector", functionName)!!,
+                                    button = button,
+                                )
+                            } else {
+                                driver.click(selector = paramString(args, "selector", functionName)!!)
+                            }
                         }
-                    }
 
-                    else -> throw IllegalArgumentException("click requires 'selector' plus optionally 'count', 'modifier', or 'button'")
-                }
-                } finally {
-                    if (wasAutoDismiss) {
-                        (driver as PulsarWebDriver).autoDismissDialogs = false
+                        else -> throw IllegalArgumentException("click requires 'selector' plus optionally 'count', 'modifier', or 'button'")
                     }
                 }
                 waitForPotentialNavigation(driver, urlBefore)
@@ -918,28 +944,22 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
             "dblclick" -> {
                 val urlBefore = driver.currentUrl()
-                val wasAutoDismiss = args["autoDismissDialogs"] == true && driver is PulsarWebDriver
-                if (wasAutoDismiss) {
-                    (driver as PulsarWebDriver).autoDismissDialogs = true
-                }
-                try {
-                validateArgs(
-                    args,
-                    if (args.containsKey("modifier")) allowed("selector", "modifier", "autoDismissDialogs") else allowed("selector", "autoDismissDialogs"),
-                    setOf("selector"),
-                    functionName
-                )
-                if (args.containsKey("modifier")) {
-                    driver.dblclick(
-                        selector = paramString(args, "selector", functionName)!!,
-                        modifier = paramString(args, "modifier", functionName)!!
+                // See the click branch above for the auto-dismiss-dialogs mode.
+                val autoDismiss = args["autoDismissDialogs"] == true
+                withAutoDismissDialogs(driver, autoDismiss) {
+                    validateArgs(
+                        args,
+                        if (args.containsKey("modifier")) allowed("selector", "modifier", "autoDismissDialogs") else allowed("selector", "autoDismissDialogs"),
+                        setOf("selector"),
+                        functionName
                     )
-                } else {
-                    driver.dblclick(selector = paramString(args, "selector", functionName)!!)
-                }
-                } finally {
-                    if (wasAutoDismiss) {
-                        (driver as PulsarWebDriver).autoDismissDialogs = false
+                    if (args.containsKey("modifier")) {
+                        driver.dblclick(
+                            selector = paramString(args, "selector", functionName)!!,
+                            modifier = paramString(args, "modifier", functionName)!!
+                        )
+                    } else {
+                        driver.dblclick(selector = paramString(args, "selector", functionName)!!)
                     }
                 }
                 waitForPotentialNavigation(driver, urlBefore)
@@ -956,24 +976,11 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 validateArgs(args, allowed("selector", "values"), setOf("selector", "values"), functionName)
                 val values = args["values"] as? List<String>
                     ?: throw IllegalArgumentException("values must be a list of strings")
-                val selector = paramString(args, "selector", functionName)!!
-                // Verify the target exists before delegating: the upstream
-                // selectOption reports success even when no element matches,
-                // which silently swallows typos and stale refs.  Only the
-                // missing-target case is treated as "not found" — driver,
-                // session and transport failures keep propagating (they throw
-                // inside evaluateValue rather than returning null).
-                val exists = driver.evaluateValue(
-                    selector,
-                    "function(){ return this != null; }"
-                )
-                if (exists != true) {
-                    throw IllegalArgumentException(
-                        if (exists == null) "Option target could not be resolved (not found or locator failure): $selector"
-                        else "Option target not found: $selector"
-                    )
-                }
-                driver.selectOption(selector = selector, values = values)
+                // The missing-target check now lives in the driver:
+                // Browser4WebDriver.selectOption probes the target and fails loudly,
+                // because the upstream selectOption reports success even when no
+                // element matches (silently swallowing typos and stale refs).
+                driver.selectOption(selector = paramString(args, "selector", functionName)!!, values = values)
             }
 
             "ariaSnapshot" -> {
@@ -1304,16 +1311,23 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     args.containsKey("viewport") -> {
                         validateArgs(args, allowed("viewport"), setOf("viewport"), functionName)
                         val viewportIndex = paramInt(args, "viewport", functionName)!!
-                        val w = driver.evaluateValue("window.innerWidth")?.toString()?.toDoubleOrNull() ?: 1920.0
-                        val h = driver.evaluateValue("window.innerHeight")?.toString()?.toDoubleOrNull() ?: 1080.0
-                        // Scroll to the target viewport (scroll-relative) so lazy-loaded
-                        // content renders before capture. Use the returned scrollY so the
-                        // screenshot rect matches the actual post-scroll position.
-                        val actualScrollY = driver.scrollToViewport(viewportIndex.toDouble())
-                        val rect = ai.platon.pulsar.common.math.geometric.RectD(
-                            0.0, actualScrollY, w, h
-                        )
-                        driver.screenshot(rect)
+                        // The viewport geometry logic lives in the driver;
+                        // non-Browser4WebDriver drivers keep the legacy inline path.
+                        val b4Driver = driver as? Browser4WebDriver
+                        if (b4Driver != null) {
+                            b4Driver.screenshotViewport(viewportIndex.toDouble())
+                        } else {
+                            val w = driver.evaluateValue("window.innerWidth")?.toString()?.toDoubleOrNull() ?: 1920.0
+                            val h = driver.evaluateValue("window.innerHeight")?.toString()?.toDoubleOrNull() ?: 1080.0
+                            // Scroll to the target viewport (scroll-relative) so lazy-loaded
+                            // content renders before capture. Use the returned scrollY so the
+                            // screenshot rect matches the actual post-scroll position.
+                            val actualScrollY = driver.scrollToViewport(viewportIndex.toDouble())
+                            val rect = ai.platon.pulsar.common.math.geometric.RectD(
+                                0.0, actualScrollY, w, h
+                            )
+                            driver.screenshot(rect)
+                        }
                     }
 
                     else -> throw IllegalArgumentException("screenshot allows none or one of: 'selector' | 'fullPage' | 'viewport'")
@@ -1717,42 +1731,24 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "consoleMessages" -> {
                 validateArgs(args, allowed("level"), emptySet(), functionName)
                 val level = paramString(args, "level", functionName, required = false) ?: "info"
-                val script = """
-                    (function() {
-                        if (!window.__b4_console_intercepted) {
-                            window.__b4_console = window.__b4_console || [];
-                            var levels = ['log', 'warn', 'error', 'info', 'debug'];
-                            levels.forEach(function(lvl) {
-                                var original = console[lvl];
-                                console[lvl] = function() {
-                                    var args = Array.prototype.slice.call(arguments);
-                                    window.__b4_console.push({
-                                        level: lvl,
-                                        text: args.map(function(a) {
-                                            return typeof a === 'object' ? JSON.stringify(a) : String(a);
-                                        }).join(' '),
-                                        timestamp: Date.now()
-                                    });
-                                    original.apply(console, arguments);
-                                };
-                            });
-                            window.__b4_console_intercepted = true;
-                        }
-                        var minPriority = { error: 0, warn: 1, info: 2, log: 2, debug: 3 };
-                        var min = minPriority['""" + level + """'] !== undefined ? minPriority['""" + level + """'] : 2;
-                        var filtered = (window.__b4_console || []).filter(function(e) {
-                            var p = minPriority[e.level] !== undefined ? minPriority[e.level] : 2;
-                            return p <= min;
-                        });
-                        return JSON.stringify(filtered);
-                    })()
-                """.trimIndent()
-                driver.evaluateValueDetail(script)
+                // The console interception/buffer logic lives in the driver;
+                // non-Browser4WebDriver drivers evaluate the shared JS builder.
+                val b4Driver = driver as? Browser4WebDriver
+                if (b4Driver != null) {
+                    b4Driver.consoleMessages(level)
+                } else {
+                    driver.evaluateValueDetail(Browser4WebDriver.consoleMessagesJs(level))
+                }
             }
 
             "consoleClear" -> {
                 validateArgs(args, emptySet(), emptySet(), functionName)
-                driver.evaluateValueDetail("window.__b4_console = []; 'Console cleared'")
+                val b4Driver = driver as? Browser4WebDriver
+                if (b4Driver != null) {
+                    b4Driver.consoleClear()
+                } else {
+                    driver.evaluateValueDetail(Browser4WebDriver.consoleClearJs())
+                }
             }
 
             "executeCdpCommand" -> {

@@ -149,6 +149,75 @@ class Browser4WebDriverTest {
     }
 
     // -------------------------------------------------------------------------
+    // selectOption target probe
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("selectOptionTargetError accepts an existing target")
+    fun selectOptionTargetErrorAcceptsExistingTarget() {
+        assertNull(Browser4WebDriver.selectOptionTargetError("#size", true))
+    }
+
+    @Test
+    @DisplayName("selectOptionTargetError reports an unresolved locator for null")
+    fun selectOptionTargetErrorReportsUnresolvedLocator() {
+        assertEquals(
+            "Option target could not be resolved (not found or locator failure): #missing",
+            Browser4WebDriver.selectOptionTargetError("#missing", null)
+        )
+    }
+
+    @Test
+    @DisplayName("selectOptionTargetError reports a missing target for false")
+    fun selectOptionTargetErrorReportsMissingTarget() {
+        assertEquals(
+            "Option target not found: #missing",
+            Browser4WebDriver.selectOptionTargetError("#missing", false)
+        )
+    }
+
+    // -------------------------------------------------------------------------
+    // submitFormFallbackJs
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("submitFormFallbackJs embeds the escaped selector and submits the nearest form")
+    fun submitFormFallbackJsSubmitsNearestForm() {
+        val js = Browser4WebDriver.submitFormFallbackJs("input#q")
+        assertTrue(js.contains("document.querySelector('input#q')"), "expected selector: $js")
+        assertTrue(js.contains("'keydown'"), "expected keydown dispatch: $js")
+        assertTrue(js.contains("'keypress'"), "expected keypress dispatch: $js")
+        assertTrue(js.contains("'keyup'"), "expected keyup dispatch: $js")
+        assertTrue(js.contains("form.requestSubmit()"), "expected requestSubmit: $js")
+        assertTrue(js.contains("form.submit()"), "expected submit fallback: $js")
+    }
+
+    @Test
+    @DisplayName("submitFormFallbackJs escapes quotes in the selector")
+    fun submitFormFallbackJsEscapesSelector() {
+        val js = Browser4WebDriver.submitFormFallbackJs("input[name='q']")
+        assertTrue(js.contains("document.querySelector('input[name=\\'q\\']')"), "expected escaped selector: $js")
+    }
+
+    // -------------------------------------------------------------------------
+    // consoleMessagesJs / consoleClearJs
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("consoleMessagesJs embeds the level filter and the buffer")
+    fun consoleMessagesJsEmbedsLevelAndBuffer() {
+        val js = Browser4WebDriver.consoleMessagesJs("error")
+        assertTrue(js.contains("minPriority['error']"), "expected level embedding: $js")
+        assertTrue(js.contains("window.__b4_console"), "expected buffer: $js")
+    }
+
+    @Test
+    @DisplayName("consoleClearJs clears the buffer")
+    fun consoleClearJsClearsBuffer() {
+        assertTrue(Browser4WebDriver.consoleClearJs().contains("window.__b4_console = []"))
+    }
+
+    // -------------------------------------------------------------------------
     // Storage state helpers (loadStorageState override)
     // -------------------------------------------------------------------------
 

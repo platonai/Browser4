@@ -2,12 +2,14 @@ package ai.platon.pulsar.chrome
 
 import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.api.model.BrowserTab
+import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.api.model.WebDriverException
 import ai.platon.pulsar.chrome.network.RobustRPC
 import ai.platon.pulsar.chrome.protocol.Keyboard
 import ai.platon.pulsar.chrome.protocol.util.withNodeObjectId
 import ai.platon.pulsar.chrome.util.ChromeDriverException
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.urls.URLUtils
 import com.fasterxml.jackson.annotation.JsonInclude
@@ -80,6 +82,12 @@ open class Browser4WebDriver(
 
     companion object {
         private val logger = getLogger(Browser4WebDriver::class)
+
+        /** DOM-ready budget for the post-navigation body wait (see [waitForNavigationSettled]). */
+        private const val NAVIGATION_DOM_READY_TIMEOUT_MS = 10_000L
+
+        /** Settle delay after the post-navigation body wait (see [waitForNavigationSettled]). */
+        private const val NAVIGATION_DOM_SETTLE_DELAY_MS = 1_000L
 
         private val storageStateMapper: ObjectMapper = jacksonObjectMapper()
             .setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
@@ -187,6 +195,90 @@ open class Browser4WebDriver(
                 el.dispatchEvent(new Event('change', { bubbles: true }));
             }
             """.trimIndent()
+
+        /**
+         * Interpret the `evaluateValue(selector, "function(){ return this != null; }")`
+         * probe used by the [selectOption] override.  The upstream selectOption
+         * reports success even when no element matches, which silently swallows
+         * typos and stale refs; the probe distinguishes:
+         * - `true` — the target exists, proceed;
+         * - `null` — the locator could not be resolved (missing element or a
+         *   locator failure), while driver/session/transport failures throw
+         *   inside evaluateValue rather than returning null;
+         * - anything else (`false`) — the locator resolved to a non-element.
+         *
+         * @return null when the target exists, otherwise the user-facing error message.
+         */
+        internal fun selectOptionTargetError(selector: String, exists: Any?): String? = when (exists) {
+            true -> null
+            null -> "Option target could not be resolved (not found or locator failure): $selector"
+            else -> "Option target not found: $selector"
+        }
+
+        /**
+         * The IIFE used by [submitFormFallback] (and the executor's fallback) to
+         * submit the nearest form of the element matched by [selector] with DOM
+         * keyboard events and `requestSubmit()`/`submit()` — a last-resort path
+         * for JS-heavy pages that intercept both CDP Enter and the browser's
+         * implicit form submission.
+         */
+        fun submitFormFallbackJs(selector: String): String =
+            """
+            (function(){
+                var el=document.querySelector('${escapeJsSelector(selector)}');
+                if(!el)return false;
+                el.focus();
+                var o={key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true};
+                el.dispatchEvent(new KeyboardEvent('keydown',o));
+                el.dispatchEvent(new KeyboardEvent('keypress',o));
+                el.dispatchEvent(new KeyboardEvent('keyup',o));
+                var form=el.closest('form');
+                if(form){try{form.requestSubmit();}catch(e){}form.submit();}
+                return true;
+            })()
+            """.trimIndent()
+
+        /**
+         * The IIFE used by [consoleMessages] (and the executor's fallback) to read
+         * the buffered console messages, filtering to [level] and above
+         * (error=0, warn=1, info=2, log=2, debug=3).  Intercepts
+         * console.log/warn/error/info/debug on first call and buffers subsequent
+         * messages on `window.__b4_console`.
+         */
+        fun consoleMessagesJs(level: String): String =
+            """
+            (function() {
+                if (!window.__b4_console_intercepted) {
+                    window.__b4_console = window.__b4_console || [];
+                    var levels = ['log', 'warn', 'error', 'info', 'debug'];
+                    levels.forEach(function(lvl) {
+                        var original = console[lvl];
+                        console[lvl] = function() {
+                            var args = Array.prototype.slice.call(arguments);
+                            window.__b4_console.push({
+                                level: lvl,
+                                text: args.map(function(a) {
+                                    return typeof a === 'object' ? JSON.stringify(a) : String(a);
+                                }).join(' '),
+                                timestamp: Date.now()
+                            });
+                            original.apply(console, arguments);
+                        };
+                    });
+                    window.__b4_console_intercepted = true;
+                }
+                var minPriority = { error: 0, warn: 1, info: 2, log: 2, debug: 3 };
+                var min = minPriority['$level'] !== undefined ? minPriority['$level'] : 2;
+                var filtered = (window.__b4_console || []).filter(function(e) {
+                    var p = minPriority[e.level] !== undefined ? minPriority[e.level] : 2;
+                    return p <= min;
+                });
+                return JSON.stringify(filtered);
+            })()
+            """.trimIndent()
+
+        /** The expression used by [consoleClear] (and the executor's fallback). */
+        fun consoleClearJs(): String = "window.__b4_console = []; 'Console cleared'"
 
         /**
          * Normalize a cookie from a storage-state JSON payload for
@@ -653,6 +745,191 @@ open class Browser4WebDriver(
     }
 
     // ---------------------------------------------------------------------------
+    // Navigation settle — after a navigation-triggering action, detect whether
+    // the page started navigating and wait for the DOM to settle.  Moved from
+    // BrowserTabToolExecutor.waitForPotentialNavigation so every driver caller
+    // (not just the tool layer) gets the same post-navigation wait.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * After a navigation-triggering action, detect whether the page started
+     * navigating and wait for the DOM to settle before returning.
+     *
+     * Algorithm:
+     * 1. Check if the URL already changed — if so the navigation is complete,
+     *    wait for `body` + a short settle delay.
+     * 2. If the URL is unchanged, eval `document.readyState`. If "loading", the
+     *    navigation is in flight — poll readyState until 'complete' (bounded by
+     *    [pollTimeoutMillis]).
+     * 3. Otherwise no navigation occurred — return immediately (no unnecessary
+     *    delay).
+     *
+     * Do NOT use [waitForNavigation] here: the no-arg overload's predicate is
+     * `"" != currentUrl()`, true as soon as the page has any URL, so it returns
+     * immediately without waiting; and the oldUrl overload can never complete
+     * for a same-URL navigation (reload, same-URL goto, fragment/SPA
+     * navigation that keeps the URL). Polling `document.readyState` covers both
+     * URL-changing and same-URL navigations.
+     *
+     * @param urlBefore The URL observed before the action, used to detect a
+     *   completed URL-changing navigation.
+     * @param pollTimeoutMillis Upper bound for the readyState poll when the URL
+     *   is unchanged and the document is still loading.
+     */
+    @Throws(WebDriverException::class)
+    suspend fun waitForNavigationSettled(urlBefore: String, pollTimeoutMillis: Long = 30_000L) {
+        // Wait for a while for the action effects
+        delay(200)
+
+        try {
+            val urlAfter = currentUrl()
+            if (urlAfter != urlBefore) {
+                // URL already changed — navigation completed, wait for DOM to be ready.
+                // Use a shorter timeout here since the navigation itself has already
+                // finished; we only need the new page's body element to appear.
+                waitForSelector("body", NAVIGATION_DOM_READY_TIMEOUT_MS)
+                delay(NAVIGATION_DOM_SETTLE_DELAY_MS)
+                return
+            }
+
+            // URL unchanged — check if the document is currently loading
+            val readyState = evaluateValue("document.readyState") as? String
+            if (readyState == "loading") {
+                // Navigation is in flight. Do NOT use waitForNavigation(urlBefore, ...)
+                // here: its predicate is `currentUrl() != urlBefore`, which can
+                // never become true for a same-URL navigation (reload, same-URL
+                // goto, fragment/SPA navigation that keeps the URL) — the wait
+                // would burn the whole timeout silently. Poll document.readyState
+                // instead, which covers both same-URL and URL-changing navigations.
+                var sawComplete = false
+                val deadline = System.currentTimeMillis() + pollTimeoutMillis
+                while (System.currentTimeMillis() < deadline) {
+                    val state = evaluateValue("document.readyState") as? String
+                    if (state == "complete") {
+                        sawComplete = true
+                        break
+                    }
+                    delay(200)
+                }
+
+                // A URL change is expected only for link/form navigations; a
+                // same-URL navigation (e.g. refresh) legitimately keeps the URL.
+                if (sawComplete) {
+                    // The document became ready — the navigation completed. The
+                    // body should already exist; a short DOM-ready budget is
+                    // enough (same as the URL-changing branch above). Do NOT
+                    // use the full pollTimeoutMillis here: the poll already
+                    // consumed that budget, and stacking another wait doubles
+                    // the dead time when the body never appears.
+                    waitForSelector("body", NAVIGATION_DOM_READY_TIMEOUT_MS)
+                    delay(NAVIGATION_DOM_SETTLE_DELAY_MS)
+                } else {
+                    // The document never became ready — the navigation appears
+                    // to have failed (e.g. the page context is wedged and evals
+                    // return null). Do NOT pile waitForSelector("body", 30s) on
+                    // top of the exhausted poll: the page is stuck, another
+                    // full-timeout wait would double the dead time for every
+                    // navigation-triggering action. Surface the warning and let
+                    // the caller recover (reload, reopen the tab).
+                    val finalUrl = currentUrl()
+                    logger.warn(
+                        "waitForNavigationSettled: document never became ready after the action " +
+                            "(url='{}'). Navigation may have failed silently.",
+                        finalUrl
+                    )
+                }
+            } else {
+                // No navigation detected. The action may have been a no-op (e.g. retry
+                // computed a wrong targetIndex). Log at debug for diagnostics.
+                logger.debug(
+                    "waitForNavigationSettled: no navigation detected. " +
+                        "urlBefore='{}', urlAfter='{}', readyState='{}'",
+                    urlBefore,
+                    urlAfter,
+                    readyState
+                )
+            }
+        } catch (e: Exception) {
+            // Best-effort: navigation detection failures should not break the command
+            logger.debug("waitForNavigationSettled: exception while checking navigation: {}", e.message)
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Enter-submit fallback — a CDP-dispatched Enter does not reliably trigger
+    // the browser's implicit form submission (HTML §4.10.2.2), and JS-heavy
+    // SPAs may intercept both.  submitFormFallback is the last-resort path used
+    // by the tool layer after `press("Enter")` did not navigate.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Submit the nearest form of the element matched by [selector] by dispatching
+     * DOM keyboard events (keydown/keypress/keyup) and calling
+     * `form.requestSubmit()` (with `form.submit()` fallback).  Used when a
+     * CDP-dispatched Enter did not cause navigation — JS-heavy SPAs may intercept
+     * both the trusted key event and the implicit form submission.
+     *
+     * @param selector A CSS selector for the filled element whose form is submitted.
+     * @return false when the element is not found, true otherwise (form may or may
+     *   not exist — the dispatch still runs).
+     */
+    @Throws(WebDriverException::class)
+    suspend fun submitFormFallback(selector: String): Boolean {
+        val result = evaluate(submitFormFallbackJs(selector))
+        return result == true
+    }
+
+    // ---------------------------------------------------------------------------
+    // Console message buffer — intercepts console.log/warn/error/info/debug on
+    // first call and buffers subsequent messages on window.__b4_console.
+    // Moved from BrowserTabToolExecutor so the buffer behavior is driver-owned
+    // and reusable outside the tool layer.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Read the buffered browser console messages filtered to [level] and above
+     * (error=0, warn=1, info=2, log=2, debug=3).  Intercepts the console on
+     * first call and buffers subsequent messages.
+     */
+    @Throws(WebDriverException::class)
+    suspend fun consoleMessages(level: String = "info"): JsEvaluation? =
+        evaluateValueDetail(consoleMessagesJs(level))
+
+    /**
+     * Clear the buffered browser console messages.
+     */
+    @Throws(WebDriverException::class)
+    suspend fun consoleClear(): JsEvaluation? =
+        evaluateValueDetail(consoleClearJs())
+
+    // ---------------------------------------------------------------------------
+    // Viewport screenshot — capture a screenshot of the [n]-th viewport, scrolling
+    // first so lazy-loaded content renders before capture.  Moved from
+    // BrowserTabToolExecutor.screenshot(viewport=...) so the geometry logic is
+    // driver-owned and reusable outside the tool layer.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Capture a screenshot of the [viewportIndex]-th viewport (0-based, negative
+     * scrolls up from the current position).  Scrolls to the target viewport so
+     * lazy-loaded content renders before capture, then captures the viewport-sized
+     * rect at the actual post-scroll position.
+     *
+     * @return The screenshot data (format matches the driver's screenshot()).
+     */
+    @Throws(WebDriverException::class)
+    suspend fun screenshotViewport(viewportIndex: Double): String? {
+        val w = evaluateValue("window.innerWidth")?.toString()?.toDoubleOrNull() ?: 1920.0
+        val h = evaluateValue("window.innerHeight")?.toString()?.toDoubleOrNull() ?: 1080.0
+        // Scroll to the target viewport (scroll-relative) so lazy-loaded content
+        // renders before capture. Use the returned scrollY so the screenshot
+        // rect matches the actual post-scroll position.
+        val actualScrollY = scrollToViewport(viewportIndex)
+        val rect = RectD(0.0, actualScrollY, w, h)
+        return screenshot(rect)
+    }
+
+    // ---------------------------------------------------------------------------
     // Storage state — the upstream pulsar-browser implementation races the
     // per-origin navigation and can evaluate `window.localStorage` against an
     // opaque-origin provisional document (`SecurityError: Access is denied for
@@ -987,6 +1264,34 @@ open class Browser4WebDriver(
     private fun randomDragDelayMillis(): Long = Random.nextLong(120L, 301L)
 
     // ---------------------------------------------------------------------------
+    // selectOption fix — the upstream pulsar-browser selectOption reports
+    // success even when no element matches, which silently swallows typos and
+    // stale refs.  This override probes the target first (via the driver's own
+    // locator path, so CSS/XPath/backend:nodeId/eN all work) and fails loudly
+    // before delegating.  Only the missing-target case is treated as "not
+    // found" — driver, session and transport failures keep propagating (they
+    // throw inside evaluateValue rather than returning null).
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Select [values] in the option element identified by [selector], failing
+     * loudly when the target does not exist (the upstream implementation
+     * reports success even for a missing element, silently swallowing typos
+     * and stale refs).
+     *
+     * @param selector A CSS selector, XPath, or "backend:nodeId" locator for the select element.
+     * @param values The option values to select.
+     * @return The selected option values.
+     * @throws WebDriverException if the element cannot be located or the selection fails.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun selectOption(selector: String, values: List<String>): List<String> {
+        val exists = evaluateValue(selector, "function(){ return this != null; }")
+        selectOptionTargetError(selector, exists)?.let { throw IllegalArgumentException(it) }
+        return super.selectOption(selector, values)
+    }
+
+    // ---------------------------------------------------------------------------
     // Dialog state fix — upstream dialogAccept/dialogDismiss call CDP
     // Page.handleJavaScriptDialog directly but never drain DialogHandler's
     // pending queue, and DialogHandler.onDialogClosed only logs.  The
@@ -994,6 +1299,25 @@ open class Browser4WebDriver(
     // handled dialog keeps failing screenshots/health-checks until the session
     // is closed. These overrides acknowledge the queue head after CDP succeeds.
     // ---------------------------------------------------------------------------
+
+    /**
+     * Fail loudly when a native JavaScript dialog (alert/confirm/prompt) is
+     * blocking the page.  Read-state operations that require JS execution via
+     * CDP (ariaSnapshot, evaluate, select*, …) queue behind an open dialog and
+     * never complete; this guard surfaces a clear error so the caller knows to
+     * accept or dismiss the dialog first.
+     *
+     * @throws IllegalStateException when a dialog is pending.
+     */
+    fun requireNoPendingDialog() {
+        val dialog = dialogHandler.peekPendingDialog() ?: return
+        val type = dialog.type
+        val message = if (dialog.message.length > 80) dialog.message.take(80) + "..." else dialog.message
+        throw IllegalStateException(
+            "Page is blocked by a native $type dialog${if (message.isNotEmpty()) ": \"$message\"" else ""}. " +
+                "Use dialog-accept or dialog-dismiss to handle the dialog before reading page state."
+        )
+    }
 
     /**
      * Accept the current JavaScript dialog, then acknowledge exactly the dialog
