@@ -8,9 +8,9 @@ import kotlin.time.Duration.Companion.minutes
  * Which inner execution engine [RobustBrowserAgent] uses for a run.
  *
  * - [OBSERVE_ACT] — legacy observe→act loop (ARIA snapshot + JSON action
- *   description); unchanged default.
+ *   description). DEPRECATED, kept for backward compatibility only.
  * - [CLI_TOOL_LOOP] — native function-calling loop driving browser4-cli
- *   subprocesses via `b4.run` (design v0.2).
+ *   subprocesses via `b4.run` (design v0.2). Default.
  */
 enum class RunEngine {
     OBSERVE_ACT,
@@ -20,8 +20,9 @@ enum class RunEngine {
     companion object {
         /**
          * Parse from the `browser4.agent.runEngine` system property value.
-         * The default is now [CLI_TOOL_LOOP]; opt back into the legacy engine
-         * with `observe-act` / `v1` / `legacy`.
+         * The default is now [CLI_TOOL_LOOP]; the legacy engine can still be
+         * selected with `observe-act` / `v1` / `legacy` — DEPRECATED, kept for
+         * backward compatibility only.
          */
         fun parse(value: String?): RunEngine = when (value?.trim()?.lowercase()) {
             "observe-act", "observe_act", "v1", "legacy" -> OBSERVE_ACT
@@ -113,11 +114,12 @@ data class AgentConfig(
      * Configurable via `-Dbrowser4.agent.toolLoop.maxIterations=<n>`.
      */
     val toolLoopMaxIterations: Int =
-        System.getProperty("browser4.agent.toolLoop.maxIterations", "12").toInt().coerceAtLeast(1),
+        System.getProperty("browser4.agent.toolLoop.maxIterations", "40").toInt().coerceAtLeast(1),
     /**
      * Inner execution engine for a run (design v0.2). Default is now
-     * [RunEngine.CLI_TOOL_LOOP]; opt back into the legacy engine with
-     * `-Dbrowser4.agent.runEngine=observe-act`.
+     * [RunEngine.CLI_TOOL_LOOP]; the legacy engine is still selectable via
+     * `-Dbrowser4.agent.runEngine=observe-act` — DEPRECATED, kept for
+     * backward compatibility only.
      */
     val runEngine: RunEngine =
         RunEngine.parse(System.getProperty("browser4.agent.runEngine", "cli")),

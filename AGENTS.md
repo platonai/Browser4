@@ -54,6 +54,88 @@ browser4-cli (Rust)  ──MCP over HTTP──▶  browser4-rest (Kotlin/Spring)
 | `cdp-protocol` | Chrome DevTools Protocol JSON definitions |
 | `coworker/` | File-queue automation for task-driven AI workflows |
 
+## Development Environment (Running from Source)
+
+When developing or running the CLI from the source tree (not an installed
+binary), the following applies.
+
+### Invocation wrappers
+
+| Shell | Command | Notes |
+|-------|---------|-------|
+| PowerShell (Windows) | `./b4w.ps1 <command>` | Primary dev wrapper; builds from source if needed |
+| Git Bash (Windows) | `./b4w.sh <command>` | Quotes args automatically for pwsh safety |
+| Git Bash (alt) | `pwsh ./b4w.ps1 <command>` | Direct PowerShell invocation |
+| Linux / macOS | `./b4w.sh <command>` | Same script works cross-platform |
+| Any (installed) | `browser4-cli <command>` | After `browser4-cli install` |
+
+> **Important:** The `$(./b4w.ps1) <command>` syntax shown in some task
+> instructions does **not** work in bash — `$(…)` is command substitution, not
+> invocation. Use `pwsh ./b4w.ps1 <command>` or `./b4w.sh <command>` instead.
+
+### First-run latency from a source tree
+
+The first launch builds the runtime bundle via Maven (~1–3 min, before the
+spinner appears) and then starts the Browser4 backend (Spring Boot + JVM,
+~10s). Subsequent commands are instant — the server stays alive between
+invocations. The spinner shows stage-level progress (JVM → Spring Boot → MCP
+tools).
+
+### Prerequisites for development
+
+- **[Rust](https://rustup.rs/)** — via `rustup`; needed to compile the CLI binary.
+- **Java 25+** — required by the Browser4 backend server.
+- **[Git](https://git-scm.com/)** — for cloning the repository.
+
+Verify your setup with:
+
+```bash
+cargo --version && java -version
+```
+
+### Running the CLI from source
+
+When running from source (not a globally installed binary), use `cargo run`
+from the CLI directory:
+
+```bash
+cd cli/browser4-cli
+cargo build                     # build the binary
+cargo run -- <command>          # run a command (the -- separates cargo args from CLI args)
+cargo run -- goto "https://example.com"
+cargo run -- snapshot -v 0
+```
+
+**Note:** All docs use `browser4-cli` as the generic command name. If running
+from source, substitute `cargo run --` (with the leading
+`cd cli/browser4-cli &&` if not already in that directory).
+
+**From repo root (no `cd` required):**
+
+```bash
+cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>
+```
+
+This pattern works from any directory — no need to `cd` first.
+
+### Output Redirection in Dev Mode
+
+The working directory during `cargo run` is `cli/browser4-cli/`, so relative
+file paths must account for this. Use `--quiet` to suppress cargo build output:
+
+```bash
+# From repo root: redirect query results to a file
+cd cli/browser4-cli && cargo run --quiet -- htmlsnapshot query --sql @../../query.sql --result-only > ../../results.json
+
+# From cli/browser4-cli/: same pattern with shorter relative paths
+cargo run --quiet -- htmlsnapshot query --sql @query.sql --result-only > results.json
+```
+
+> **Tip:** `--quiet` passes through to cargo and suppresses the "Finished" /
+> "Running" build-status lines that would otherwise pollute the output file.
+> Without `--quiet`, those lines appear on stderr but `2>&1` captures them
+> along with the data — use `--quiet` instead of `2>&1` for clean output.
+
 ## Build & Test
 
 ### Quick commands

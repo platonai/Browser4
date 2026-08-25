@@ -83,15 +83,38 @@ class SystemToolExecutor(
             ?: content.lineSequence().take(5).joinToString("\n")
     }
 
-    private fun readBundledDoc(name: String): String? {
+    /**
+     * Read one bundled browser4-cli document or return null when missing.
+     *
+     * Unlike [skillDoc] (which renders a "not found" help message), this is
+     * for embedding document content into system prompts (e.g. the resident
+     * CLI quick reference): the caller decides the fallback.
+     */
+    fun skillDocStrict(name: String): String? =
+        readBundledDoc(name)?.take(MAX_SKILL_DOC_CHARS)
+
+    /** Path-traversal-safe name check shared by the doc readers; null when invalid. */
+    private fun sanitizeDocName(name: String): String? {
         val safe = name.trim()
             .removePrefix("/")
             .removePrefix("skills/")
             .removePrefix("browser4-cli/")
-        require(safe.isNotBlank() && !safe.contains("..") && !safe.contains('\\')) {
-            "Invalid skill doc name: $name"
-        }
-        return javaClass.getResourceAsStream("/skills/browser4-cli/$safe")
+        return safe.takeIf { it.isNotBlank() && !it.contains("..") && !it.contains('\\') }
+    }
+
+    /**
+     * Read a bundled browser4-cli document: top-level first
+     * (`/skills/browser4-cli/<name>`), then `references/` — reference docs
+     * live in `skills/browser4-cli/references/` in the repo and are bundled
+     * at that path.
+     */
+    private fun readBundledDoc(name: String): String? {
+        val safe = sanitizeDocName(name) ?: throw IllegalArgumentException("Invalid skill doc name: $name")
+        val direct = javaClass.getResourceAsStream("/skills/browser4-cli/$safe")
+            ?.bufferedReader(Charsets.UTF_8)
+            ?.use { it.readText() }
+        if (direct != null) return direct
+        return javaClass.getResourceAsStream("/skills/browser4-cli/references/$safe")
             ?.bufferedReader(Charsets.UTF_8)
             ?.use { it.readText() }
     }
@@ -173,8 +196,8 @@ class SystemToolExecutor(
 
         /** Curated list of bundled `skills/browser4-cli` documents. */
         private val AVAILABLE_DOCS = listOf(
-            "SKILL.md", "agent.md", "attach.md", "browser-state-import.md", "crawl.md",
-            "css-selector-bridge.md", "development.md", "htmlsnapshot.md",
+            "SKILL.md", "quickstart.md", "agent.md", "attach.md", "browser-state-import.md", "config.md",
+            "crawl.md", "css-selector-bridge.md", "htmlsnapshot.md",
             "htmlsnapshot-scenarios.md", "htmlsnapshot-scenarios-advanced.md",
             "htmlsnapshot-scenarios-amazon.md", "htmlsnapshot-scenarios-audit.md",
             "htmlsnapshot-scenarios-extraction.md", "load-options-guide.md", "loop.md",

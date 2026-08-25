@@ -455,8 +455,9 @@ class AgentStateManager(
     }
 
     fun resolveSessionLogDir(sessionId: String): Path {
-        val sessionLogDir = logDir.resolve("task-$sessionId")
-        java.nio.file.Files.createDirectories(sessionLogDir)
+        val shortId = sessionId.take(8)
+        val sessionLogDir = logDir.resolve("task-$shortId")
+        Files.createDirectories(sessionLogDir)
         return sessionLogDir
     }
 

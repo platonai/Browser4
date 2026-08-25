@@ -67,6 +67,36 @@ class SystemToolExecutorTest {
     }
 
     @Test
+        @DisplayName("skillDoc serves the distilled quickstart.md resident reference")
+    fun skillDocReadsQuickstart() {
+        val content = executor.skillDoc("quickstart.md")
+
+        assertTrue(content.contains("Core Loop"), "quickstart must carry the core loop, got: ${content.take(80)}")
+        assertTrue(content.contains("snapshot vs htmlsnapshot"), "quickstart must carry the key decision tree")
+        assertTrue(content.length < 20_000, "quickstart must stay small (resident prompt budget), got ${content.length} chars")
+    }
+
+    @Test
+        @DisplayName("skillDocStrict returns null for a missing document (caller decides fallback)")
+    fun skillDocStrictReturnsNullWhenMissing() {
+        assertNull(executor.skillDocStrict("does-not-exist.md"))
+        assertNotNull(executor.skillDocStrict("SKILL.md"), "existing docs must resolve")
+        assertNotNull(executor.skillDocStrict("quickstart.md"), "quickstart must resolve for the resident prompt")
+    }
+
+    @Test
+        @DisplayName("skillDoc resolves reference docs under references/ (latent path bug fixed)")
+    fun skillDocResolvesReferenceDocs() {
+        val snapshot = executor.skillDoc("snapshot.md")
+        assertTrue(
+            snapshot.contains("snapshot"),
+            "reference docs live under skills/browser4-cli/references/ and must resolve, got: ${snapshot.take(80)}"
+        )
+        val xsql = executor.skillDoc("x-sql.md")
+        assertTrue(xsql.contains("X-SQL"), "x-sql.md must resolve too, got: ${xsql.take(80)}")
+    }
+
+    @Test
         @DisplayName("skillDocMetadata returns frontmatter only, not the full SKILL.md body")
     fun skillDocMetadataReturnsFrontmatterOnly() {
         val metadata = executor.skillDocMetadata("SKILL.md")

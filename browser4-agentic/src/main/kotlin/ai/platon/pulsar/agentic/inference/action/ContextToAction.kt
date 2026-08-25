@@ -2,36 +2,27 @@ package ai.platon.pulsar.agentic.inference.action
 
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.AgenticEvents
-import ai.platon.pulsar.agentic.inference.AgentMessageList
-import ai.platon.pulsar.agentic.inference.AgentTokenBudget
-import ai.platon.pulsar.agentic.inference.forceLlmMaxInputTokenLength
-import ai.platon.pulsar.agentic.inference.RequestTokenLimiter
-import ai.platon.pulsar.agentic.inference.RequestTokenLimitExceededException
-import ai.platon.pulsar.agentic.inference.TokenBudgetExceededException
-import ai.platon.pulsar.agentic.inference.ToolExposeMode
-import ai.platon.pulsar.agentic.inference.collapseToLegacyString
-import ai.platon.pulsar.agentic.inference.toChatMessages
-import ai.platon.pulsar.agentic.inference.chat.AgentToolCallLoop
-import ai.platon.pulsar.agentic.inference.chat.ToolLoopCompressor
-import ai.platon.pulsar.agentic.inference.chat.ToolLoopOverflowException
+import ai.platon.pulsar.agentic.inference.*
+import ai.platon.pulsar.agentic.inference.chat.*
 import ai.platon.pulsar.agentic.model.ActionDescription
 import ai.platon.pulsar.agentic.model.ExecutionContext
+import ai.platon.pulsar.agentic.observability.InferenceMetrics
 import ai.platon.pulsar.agentic.tools.AgentToolManager
+import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.ExperimentalApi
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.event.EventBus
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.agentic.observability.InferenceMetrics
 import ai.platon.pulsar.external.BrowserChatModel
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
 import ai.platon.pulsar.skeleton.llm.TestChatModelFactory
 import dev.langchain4j.data.image.Image
-import dev.langchain4j.data.message.ImageContent
 import dev.langchain4j.data.message.ChatMessage
+import dev.langchain4j.data.message.ImageContent
 import dev.langchain4j.data.message.UserMessage
 import dev.langchain4j.model.chat.request.ChatRequest
 import dev.langchain4j.model.chat.response.ChatResponse
@@ -84,7 +75,7 @@ open class ContextToAction(
      * exceed the legacy 5 and would otherwise restart mid-chain.
      */
     private val toolLoopMaxIterations: Int =
-        conf.getLong("browser4.agent.toolLoop.maxIterations", 12).toInt().coerceIn(1, 100)
+        conf.getLong("browser4.agent.toolLoop.maxIterations", 12).toInt().coerceIn(1, 40)
 
     /** Automatic tool-loop context compression (mirrors deepseek-harness compaction). */
     private val toolLoopCompressionEnabled: Boolean =
@@ -114,6 +105,65 @@ open class ContextToAction(
     private val toolLoopFailOnOverflow: Boolean =
         conf.getBoolean("browser4.agent.toolLoop.failOnOverflow", false)
 
+    /** Web-context optimization: fold repeated page content (references/diffs). */
+    private val pageViewDedupEnabled: Boolean =
+        conf.getBoolean("browser4.agent.toolLoop.pageViewDedupEnabled", true)
+    private val pageViewDiffEnabled: Boolean =
+        conf.getBoolean("browser4.agent.toolLoop.pageViewDiffEnabled", true)
+    private val pageViewDiffMaxChars: Int =
+        conf.getLong("browser4.agent.toolLoop.pageViewDiffMaxChars", 3_000L).toInt().coerceAtLeast(500)
+    private val pageViewDigestChars: Int =
+        conf.getLong("browser4.agent.toolLoop.pageViewDigestChars", 300L).toInt().coerceAtLeast(100)
+    private val duplicateFoldEnabled: Boolean =
+        conf.getBoolean("browser4.agent.toolLoop.duplicateFoldEnabled", true)
+    private val viewToolNames: Set<String> =
+        (conf.get("browser4.agent.toolLoop.viewToolNames")
+            ?: "ariaSnapshot,textContent,snapshot,dump,htmlsnapshot,extract")
+            .split(',').map { it.trim() }.filter { it.isNotBlank() }.toSet()
+    /** Keep the round holding the most recent full page view out of compaction. */
+    private val retainLatestPageView: Boolean =
+        conf.getBoolean("browser4.agent.toolLoop.retainLatestPageView", true)
+    /** Cumulative tool-result token budget per request (0 = off). */
+    private val maxToolResultTokens: Long =
+        conf.getLong("browser4.agent.toolLoop.maxToolResultTokens", 20_000L).coerceAtLeast(0L)
+    /**
+     * Tool-result names exempt from pruning and the result-token budget —
+     * knowledge documents (e.g. `system_skillDoc`) must reach the model whole.
+     */
+    private val protectedToolNames: Set<String> =
+        (conf.get("browser4.agent.toolLoop.protectedToolNames") ?: "system_skillDoc")
+            .split(',').map { it.trim() }.filter { it.isNotBlank() }.toSet()
+
+    /** Compaction traceability ledger (compaction-traceability-design.md). */
+    private val compactionLedgerEnabled: Boolean =
+        conf.getBoolean("browser4.agent.toolLoop.compactionLedgerEnabled", true)
+    /** Reject a compaction summary no smaller than the content it shadows. */
+    private val requireShrink: Boolean =
+        conf.getBoolean("browser4.agent.toolLoop.requireShrink", true)
+    /** Extra summarization attempts after blank / shrink / structure failures. */
+    private val summarizationRetries: Int =
+        conf.getLong("browser4.agent.toolLoop.summarizationRetries", 1L).toInt().coerceIn(0, 5)
+    /** Context-window overflow recovery retries (0 = off). */
+    private val maxOverflowRetries: Int =
+        conf.getLong("browser4.agent.toolLoop.maxOverflowRetries", 1L).toInt().coerceIn(0, 5)
+    /** Structured audit logging of compaction transactions. */
+    private val auditCompaction: Boolean =
+        conf.getBoolean("browser4.agent.toolLoop.auditCompaction", true)
+
+    /**
+     * Initial tool set for the native tool-calling loop: `core` (default —
+     * page/agent/system domains only), `all` (legacy full exposure), or an
+     * explicit comma-separated pattern list (`domain.*`, `domain.method`, `method`).
+     */
+    private val initialToolSet: String =
+        conf.get("browser4.agent.toolLoop.initialToolSet") ?: "core"
+
+    /** On-demand tool disclosure (`system.listTools` / `system.exposeTools`). */
+    private val toolDisclosureEnabled: Boolean =
+        conf.getBoolean("browser4.agent.toolLoop.toolDisclosureEnabled", true)
+    private val toolDisclosureListingLimit: Int =
+        conf.getLong("browser4.agent.toolLoop.toolDisclosureListingLimit", 200L).toInt().coerceIn(10, 1_000)
+
     /**
      * Set by the tool-calling loop's [AgentToolCallLoop.onToolExecuted] callback
      * while [generateResponseRawWithLangChain4jUnbounded] runs — tells the
@@ -130,6 +180,23 @@ open class ContextToAction(
         } else {
             val specs = toolManager.getLangChain4jToolSpecifications()
             val registry = toolManager.getLangChain4jToolRegistry()
+            // Progressive disclosure: expose a curated initial set and let the
+            // model pull in the rest on demand (system.listTools/exposeTools).
+            // Selection works on ToolSpecs (domain/method intact) and is then
+            // converted to the native spec list.
+            val initialSpecs = if (toolDisclosureEnabled) {
+                ToolSpecificationConverter.toToolSpecifications(
+                    ToolDisclosureTools.selectInitialSpecs(
+                        toolManager.getAllExposedToolSpecs(), initialToolSet,
+                    )
+                )
+            } else {
+                specs
+            }
+            val disclosureRegistry = if (toolDisclosureEnabled && initialSpecs.size < specs.size) specs else emptyList()
+            // One shared traceability ledger across compressor, deduper and
+            // loop: references stay resolvable after compression.
+            val compactionLedger = CompactionLedger(enabled = compactionLedgerEnabled)
             val compressor = if (toolLoopCompressionEnabled) {
                 ToolLoopCompressor(
                     enabled = true,
@@ -138,19 +205,40 @@ open class ContextToAction(
                     pruneThresholdChars = toolLoopPruneThresholdChars,
                     pruneHeadChars = toolLoopPruneHeadChars,
                     pruneTailChars = toolLoopPruneTailChars,
+                    retainLatestPageView = retainLatestPageView,
+                    viewToolNames = viewToolNames,
+                    maxResultTokens = maxToolResultTokens,
+                    protectedToolNames = protectedToolNames,
+                    ledger = compactionLedger,
+                    requireShrink = requireShrink,
+                    summarizationRetries = summarizationRetries,
+                    audit = auditCompaction,
                 ) { prefix -> summarizeToolLoop(prefix, specs) }
             } else {
                 null
             }
-            ai.platon.pulsar.agentic.inference.chat.AgentToolCallLoop(
+            AgentToolCallLoop(
                 model = chatModel,
-                toolSpecifications = specs,
+                toolSpecifications = initialSpecs,
+                allToolSpecifications = disclosureRegistry,
+                disclosureListingLimit = toolDisclosureListingLimit,
                 coordinator = ai.platon.pulsar.agentic.tools.langchain4j.ToolExecutionCoordinator(
                     toolManager, registry
                 ),
                 maxIterations = toolLoopMaxIterations,
                 requestTokenLimiter = requestTokenLimiter,
                 compressor = compressor,
+                pageViewDeduper = PageViewDeduper(
+                    enabled = pageViewDedupEnabled,
+                    diffEnabled = pageViewDiffEnabled,
+                    diffMaxChars = pageViewDiffMaxChars,
+                    digestChars = pageViewDigestChars,
+                    duplicateFoldEnabled = duplicateFoldEnabled,
+                    viewToolNames = viewToolNames,
+                    ledger = compactionLedger,
+                ),
+                maxOverflowRetries = maxOverflowRetries,
+                compactionLedger = compactionLedger,
                 onToolExecuted = { lastLoopExecutedTools = true },
             )
         }

@@ -5,6 +5,7 @@
 > 补充两段式取消与版本对齐、修正动机表述。
 > 原则：v1（observe→act 引擎）保留为显式可选（`--engine=observe-act` / `-Dbrowser4.agent.runEngine=observe-act`），
 > 通过 `AgentConfig.runEngine` 切换；**默认引擎已是 CLI_TOOL_LOOP（2026-08-23 起）**。
+> 注：`observe-act` 现已全线标记 **DEPRECATED**（仅向后兼容保留），新开发一律使用默认 `cli` 引擎。
 > 设计参考：`D:\workspace\ds-harness\deepseek-harness\docs-dev\process-management-analysis.md`（2026-08-22），
 > 进程管理部分对齐其三层能力缝（tool → service → subprocess）与进程树管控细节。
 > 补充参考：`D:\codebase\codex\docs-dev\process-management.md`（Codex 进程管理分析），

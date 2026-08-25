@@ -5,16 +5,18 @@ This directory contains the Maven Wrapper configuration for the Browser4 project
 ## Files
 
 ### `jvm.config`
-JVM options passed to the Maven launcher. Currently enables native access for all unnamed modules:
+JVM options passed to the Maven launcher:
 
 ```
 --enable-native-access=ALL-UNNAMED
+-Djdk.net.URLClassPath.disableClassPathURLCheck=true
 ```
 
-This flag is required for Java native interoperability features used by the project.
+- `--enable-native-access=ALL-UNNAMED` — required for the Java native interoperability features used by the project.
+- `-Djdk.net.URLClassPath.disableClassPathURLCheck=true` — workaround for surefire failures on Java 25: the surefire-booter JAR manifest contains absolute paths that Java 25's URLClassPath rejects. The flag must be on the Maven JVM itself (not just the forked test JVM's `argLine`), which is why it lives in `jvm.config`.
 
 ### `maven.config`
-Default Maven CLI options applied to every `mvnw` invocation. Currently contains commented-out settings for parallel builds (`-T 1C`) and Kotlin incremental compilation. These are disabled because kapt (Spring/JPA annotation processing) forces non-incremental mode and some plugins (kapt, remote-resources) are not marked thread-safe.
+Default Maven CLI options applied to every `mvnw` invocation (Maven 4 default options). Currently contains commented-out settings for parallel builds (`-T 1C`) and Kotlin incremental compilation. These are disabled because kapt (Spring/JPA annotation processing) forces non-incremental mode — the Kotlin daemon ignores `-Dkotlin.incremental=true` while kapt is active — and some plugins (kapt, remote-resources) are not marked thread-safe. The commented entries are kept for the day kapt is removed or incremental-kapt (`kapt.use.k2=true`) becomes stable.
 
 See: https://maven.apache.org/configure.html#maven-config-file
 
@@ -27,6 +29,8 @@ Maven Wrapper version and distribution settings:
 | Distribution type | `only-script` (scripts only, no bundled JAR) |
 | Maven version | 3.9.16 |
 | Distribution URL | Apache Maven Central |
+
+> Note: the versions above are the pinned Maven toolchain versions, not the Browser4 project version (tracked in the root `pom.xml`).
 
 ## Usage
 

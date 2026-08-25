@@ -1,25 +1,23 @@
 package ai.platon.pulsar.agentic.agents
 
-import ai.platon.pulsar.chrome.dom.util.DomDebug
 import ai.platon.pulsar.agentic.*
-import ai.platon.pulsar.agentic.inference.RequestTokenLimitExceededException
-import ai.platon.pulsar.agentic.inference.TokenBudgetExceededException
-import ai.platon.pulsar.agentic.inference.chat.AgentToolCallLoop
-import ai.platon.pulsar.agentic.inference.chat.ToolLoopCompressor
-import ai.platon.pulsar.agentic.inference.detail.*
-import ai.platon.pulsar.agentic.model.ActionDescription
-import ai.platon.pulsar.agentic.model.AgentHistory
-import ai.platon.pulsar.agentic.model.ExecutionContext
-import ai.platon.pulsar.agentic.model.ToolCall
+import ai.platon.pulsar.agentic.common.AgentPaths
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.AgenticEvents
+import ai.platon.pulsar.agentic.inference.RequestTokenLimitExceededException
+import ai.platon.pulsar.agentic.inference.TokenBudgetExceededException
+import ai.platon.pulsar.agentic.inference.chat.*
+import ai.platon.pulsar.agentic.inference.detail.*
+import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.tools.builtin.TaskCompletion
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolExecutionCoordinator
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecification
+import ai.platon.pulsar.chrome.dom.util.DomDebug
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.MultiSinkMessageWriter
 import ai.platon.pulsar.common.Strings
+import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -27,18 +25,15 @@ import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
 import com.fasterxml.jackson.databind.node.JsonNodeFactory
 import dev.langchain4j.agent.tool.ToolExecutionRequest
-import dev.langchain4j.data.message.AiMessage
-import dev.langchain4j.data.message.ChatMessage
-import dev.langchain4j.data.message.SystemMessage
-import dev.langchain4j.data.message.ToolExecutionResultMessage
-import dev.langchain4j.data.message.UserMessage
+import dev.langchain4j.data.message.*
 import dev.langchain4j.model.chat.request.ChatRequest
+import dev.langchain4j.model.chat.response.ChatResponse
 import kotlinx.coroutines.*
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
 import java.time.Instant
-import java.util.UUID
+import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -56,6 +51,139 @@ private const val CLI_CONTINUE_NUDGE =
 private const val CLI_TOOL_PROGRESS_EVENT_INTERVAL = 5
 /** Explicit tool domains exposed to the CLI engine (design v0.2 §4.4). */
 private val CLI_ENGINE_DOMAINS = setOf("coding", "b4", "system")
+
+/** Whole domains kept in the CLI engine's INITIAL tool set. */
+private val CLI_CORE_DOMAINS = setOf("b4", "system")
+
+/**
+ * Curated coding core exposed initially for CODING tasks (progressive
+ * disclosure): the daily drivers. The long tail (symbols/references,
+ * kt-symbols/kt-references, scaffold family, impact, runCode, lspServers,
+ * tokenStats, ...) is reachable via system.listTools / system.exposeTools.
+ */
+private val CLI_CORE_CODING_METHODS = setOf(
+    "shell", "shellOutput", "shellStatus",
+    "read", "write", "append", "replace", "insertAfter", "editLines", "delete", "mkdir",
+    "listDir", "glob", "grep", "stat", "diff", "changeSummary",
+    "validate", "workspaceRoot", "devTask",
+)
+
+/**
+ * Coding-domain methods exposed initially for BROWSING tasks: the most common
+ * FILE tools only (helper scripts for eval, small data files, locating
+ * things). The coding long tail — shell*, mvnBuild, validate, devTask,
+ * editLines/insertAfter, symbols, kt-symbols, scaffold family, impact, ... —
+ * stays hidden and is reachable via system.listTools / system.exposeTools
+ * on demand.
+ */
+private val CLI_BROWSING_CODING_METHODS = setOf(
+    "read", "write", "append", "replace",
+    "listDir", "glob", "grep",
+    "stat", "mkdir", "delete",
+)
+
+/**
+ * System methods the CLI engine's contracts depend on — always present in the
+ * INITIAL tool set regardless of `browser4.agent.toolLoop.initialToolSet`:
+ * `system.taskComplete` is the engine's only completion signal, and the CLI
+ * system prompt instructs the model to load the bundled SKILL.md via
+ * `system.skillDoc`.
+ */
+private val CLI_CONTRACT_SYSTEM_METHODS = setOf("taskComplete", "skillDoc")
+
+/**
+ * The CLI engine's tool set, derived from the full reverse registry plus the
+ * authoritative system-domain specs.
+ *
+ * The hardcoded `TOOL_CALL_SPECIFICATION` advertises only `system.help`, so
+ * the registry alone would never carry `system.taskComplete` /
+ * `system.skillDoc` — the tools the CLI engine's completion and SKILL.md
+ * contracts depend on. Those come from [SystemToolExecutor.getToolSpecs] and
+ * are force-included in the initial set whatever [initialToolSet] says
+ * (strict function-calling models only call declared tools).
+ *
+ * Pure logic — no IO — so it is unit-testable without an agent session.
+ */
+internal data class CliEngineToolSet(
+    /** Reverse registry (tool name → ToolSpec) for the execution coordinator. */
+    val registry: Map<String, ToolSpec>,
+    /** Full CLI-domain specifications (disclosure registry / prompt tracing). */
+    val specs: List<dev.langchain4j.agent.tool.ToolSpecification>,
+    /** The curated initial set actually sent to the model. */
+    val initialSpecs: List<dev.langchain4j.agent.tool.ToolSpecification>,
+    /** Disclosure registry; non-empty enables system.listTools / exposeTools. */
+    val disclosureSpecs: List<dev.langchain4j.agent.tool.ToolSpecification>,
+    /** The mode the initial selection actually used (after fallback). */
+    val usedMode: String,
+)
+
+/**
+ * Build the CLI engine's tool set.
+ *
+ * Task-adaptive initial exposure: browsing tasks (default) get the web-access
+ * tools (`b4.*`), the system contract tools and the most common file tools;
+ * coding tasks additionally get the full curated coding core (shell, build,
+ * validate, devTask, ...). The long tail is always reachable via
+ * `system.listTools` / `system.exposeTools`.
+ *
+ * @param allRegistry The full reverse registry (tool name → ToolSpec) from
+ *   [AgentToolManager.getLangChain4jToolRegistry].
+ * @param systemSpecs The authoritative system-domain specs from
+ *   [SystemToolExecutor.getToolSpecs] (help/skillDoc/taskComplete).
+ * @param codingMode True when the task was classified as a pure coding task
+ *   (set by the task runner via `CodingTaskDetector` before the run).
+ * @param coreMethodAllowlist Explicit per-domain method allowlist; when null
+ *   the task-adaptive allowlist is used ([CLI_BROWSING_CODING_METHODS] for
+ *   browsing tasks, [CLI_CORE_CODING_METHODS] for coding tasks).
+ */
+internal fun buildCliEngineToolSet(
+    allRegistry: Map<String, ToolSpec>,
+    systemSpecs: List<ToolSpec>,
+    initialToolSet: String,
+    disclosureEnabled: Boolean,
+    codingMode: Boolean = false,
+    coreDomains: Set<String> = CLI_CORE_DOMAINS,
+    coreMethodAllowlist: Map<String, Set<String>>? = null,
+): CliEngineToolSet {
+    // Task-adaptive coding allowlist; explicit allowlists (callers/tests) win.
+    val effectiveAllowlist = coreMethodAllowlist
+        ?: if (codingMode) mapOf("coding" to CLI_CORE_CODING_METHODS)
+        else mapOf("coding" to CLI_BROWSING_CODING_METHODS)
+
+    // CLI-domain specs: the registry minus the hardcoded system section
+    // (only system.help), plus the executor's authoritative system specs
+    // (help/skillDoc/taskComplete). Duplicates collapse on the sanitized
+    // tool name, keeping the first occurrence (the registry's merged help).
+    val cliDomainSpecs = (
+        allRegistry.values.filter { it.domain in CLI_ENGINE_DOMAINS && it.domain != "system" } +
+            systemSpecs
+        ).distinctBy { ToolSpecificationConverter.toolName(it.domain, it.method) }
+    val registry = ToolSpecificationConverter.toRegistry(cliDomainSpecs)
+    val specs = ToolSpecificationConverter.toToolSpecifications(cliDomainSpecs)
+
+    if (!disclosureEnabled) {
+        return CliEngineToolSet(registry, specs, specs, emptyList(), initialToolSet)
+    }
+
+    var selected = ToolDisclosureTools.selectInitialSpecs(cliDomainSpecs, initialToolSet, coreDomains, effectiveAllowlist)
+    var usedMode = initialToolSet
+    if (selected.isEmpty()) {
+        // Misconfigured pattern list (non-CLI domains, or tokens that
+        // matched nothing): degrade to the default core set instead of
+        // leaving the model with no initial tools beyond the meta pair.
+        selected = ToolDisclosureTools.selectInitialSpecs(cliDomainSpecs, "core", coreDomains, effectiveAllowlist)
+        usedMode = "core"
+    }
+
+    // The completion + skill-doc contract survives every initialToolSet mode.
+    val contractSpecs = systemSpecs
+        .filter { it.method in CLI_CONTRACT_SYSTEM_METHODS }
+        .filter { s -> selected.none { it.domain == s.domain && it.method == s.method } }
+    val initialSpecs = ToolSpecificationConverter.toToolSpecifications(contractSpecs + selected)
+
+    val disclosureSpecs = if (initialSpecs.size < specs.size) specs else emptyList()
+    return CliEngineToolSet(registry, specs, initialSpecs, disclosureSpecs, usedMode)
+}
 
 open class RobustBrowserAgent(
     session: AgenticSession, val maxSteps: Int = 100, config: AgentConfig = AgentConfig(maxSteps = maxSteps)
@@ -92,7 +220,10 @@ open class RobustBrowserAgent(
     }
 
     /**
-     * Complete-prompt + per-tool run tracing for the CLI engine. Writes:
+     * Complete-prompt + per-tool run tracing for the CLI engine. Writes into
+     * `<APP_DATA_DIR>/logs/agent/<start-time>/<agent-uuid>/` (typically
+     * `~/.browser4/logs/agent/...`; see [AgentPaths]); in development a
+     * `logs/agent` symlink at the project root points there:
      * - `cli-prompt/<ts>.<seq>.request.json` — the EXACT message list plus the
      *   tool specifications sent to the model on every round-trip;
      * - `cli-tool-trace.jsonl` — every executed tool with arguments, full
@@ -100,7 +231,9 @@ open class RobustBrowserAgent(
      * - `cli-events.jsonl` — run-level events (start, overflow, completion).
      * Gated by [AgentConfig.logInferenceToFile] (default true).
      */
-    private val cliLoopTracer by lazy { CliLoopTracer(uuid, startTime, config.logInferenceToFile) }
+    private val cliLoopTracer by lazy {
+        CliLoopTracer(uuid, startTime, config.logInferenceToFile, cliViewToolNames(session.sessionConfig))
+    }
 
     private val noopLimit: Int get() = (noopLimitOverride ?: config.consecutiveNoOpLimit).coerceAtLeast(1)
 
@@ -627,29 +760,73 @@ open class RobustBrowserAgent(
         completionRef: AtomicReference<ActionDescription?>,
         toolExecutions: AtomicInteger,
     ): AgentToolCallLoop {
-        val allSpecs = agentToolManager.getLangChain4jToolSpecifications()
-        val allRegistry = agentToolManager.getLangChain4jToolRegistry()
-        // Explicit domain whitelist (robust to tool-name renames): filter the
-        // reverse registry by ToolSpec.domain, then keep matching specs.
-        val registry = allRegistry.filterValues { it.domain in CLI_ENGINE_DOMAINS }
-        val specs = allSpecs.filter { it.name() in registry.keys }
+        val conf = session.sessionConfig
+        val initialToolSet = conf.get("browser4.agent.toolLoop.initialToolSet") ?: "core"
+        val disclosureEnabled = conf.getBoolean("browser4.agent.toolLoop.toolDisclosureEnabled", true)
+        val toolSet = buildCliEngineToolSet(
+            allRegistry = agentToolManager.getLangChain4jToolRegistry(),
+            systemSpecs = agentToolManager.system.getToolSpecs().values.toList(),
+            initialToolSet = initialToolSet,
+            disclosureEnabled = disclosureEnabled,
+            // Task-adaptive initial exposure (see buildCliEngineToolSet): set
+            // by StatefulAgentRunner via CodingTaskDetector before the run.
+            codingMode = codingMode,
+        )
+        if (toolSet.usedMode != initialToolSet) {
+            logger.warn(
+                "cli-agent initialToolSet '{}' matched no CLI tools; falling back to '{}'",
+                initialToolSet, toolSet.usedMode
+            )
+        }
         val taskCompleteName = ToolSpecificationConverter.toolName("system", "taskComplete")
-        logger.info("cli-agent tools exposed: {} (of {} total)", specs.size, allSpecs.size)
+        // One traceability ledger shared by compressor, deduper and loop
+        // (compaction-traceability-design.md): references stay resolvable
+        // after compression. Every durable rewrite is mirrored to the
+        // disk-side audit trail (cli-compactions.jsonl).
+        val compactionLedger = CompactionLedger(
+            enabled = conf.getBoolean("browser4.agent.toolLoop.compactionLedgerEnabled", true),
+            onEntry = { entry -> cliLoopTracer.logLedgerEntry(entry) },
+        )
+        logger.info(
+            "cli-agent tools exposed: {} initial (of {} CLI-domain, disclosure={}, mode='{}', profile={})",
+            toolSet.initialSpecs.size, toolSet.specs.size, toolSet.disclosureSpecs.isNotEmpty(),
+            toolSet.usedMode, if (codingMode) "coding" else "browsing",
+        )
         return AgentToolCallLoop(
             model = cta.chatModel,
-            toolSpecifications = specs,
-            coordinator = ToolExecutionCoordinator(agentToolManager, registry),
+            toolSpecifications = toolSet.initialSpecs,
+            allToolSpecifications = toolSet.disclosureSpecs,
+            disclosureListingLimit = conf.getLong("browser4.agent.toolLoop.toolDisclosureListingLimit", 200L)
+                .toInt().coerceIn(10, 1_000),
+            coordinator = ToolExecutionCoordinator(agentToolManager, toolSet.registry),
             // Browser tasks routinely exceed the default 12-round internal cap
             // (open → snapshot → type → submit → wait → extract); give the CLI
             // engine a higher ceiling, overflow is handled by the outer loop
             // (the model resumes from the executed-tools digest).
-            maxIterations = config.toolLoopMaxIterations.coerceAtLeast(20),
+            maxIterations = config.toolLoopMaxIterations.coerceAtLeast(40),
             requestTokenLimiter = cta.requestTokenLimiter,
-            compressor = cliToolLoopCompressor(specs),
+            // One shared traceability ledger across compressor, deduper and
+            // loop (compaction-traceability-design.md).
+            compressor = cliToolLoopCompressor(toolSet.specs, compactionLedger),
+            // Web-context optimization: repeated page views fold into
+            // references/diffs instead of resending full snapshots.
+            pageViewDeduper = cliPageViewDeduper(compactionLedger),
+            maxOverflowRetries = conf.getLong("browser4.agent.toolLoop.maxOverflowRetries", 1L)
+                .toInt().coerceIn(0, 5),
+            compactionLedger = compactionLedger,
             // Complete prompt + run tracing: dump the exact request and every
-            // tool execution (see CliLoopTracer).
-            onBeforeGenerate = { msgs -> cliLoopTracer.logPrompt(msgs, specs) },
+            // tool execution (see CliLoopTracer). The specs are the ones the
+            // model request actually carries (exposed set + meta tools), NOT
+            // the full registry — the dump must reconstruct the real prompt.
+            onBeforeGenerate = { msgs, specs -> cliLoopTracer.logPrompt(msgs, specs) },
+            onModelResponse = { seq, response -> cliLoopTracer.logResponse(seq, response) },
             onToolResult = { req, result, durationMs -> cliLoopTracer.logTool(req, result, durationMs) },
+            // Page-view timeline: log every view tool execution with its
+            // final (decorated) form so URL/fingerprint survive compaction
+            // as a disk-side, machine-readable link index.
+            onToolDecorated = { req, raw, decorated ->
+                cliLoopTracer.logPageView(req, raw, decorated)
+            },
             onToolExecuted = {
                 val executed = toolExecutions.incrementAndGet()
                 // The CLI engine can execute dozens of tools inside a single
@@ -669,16 +846,20 @@ open class RobustBrowserAgent(
                 if (name == taskCompleteName) {
                     runCatching {
                         val completion = TaskCompletion.fromJson(argsJson)
-                        completionRef.set(
-                            ActionDescription(
-                                instruction = instruction,
-                                isDecidedComplete = true,
-                                summary = completion.summary,
-                                keyFindings = completion.keyFindings,
-                                filesChanged = completion.filesChanged,
-                                problems = completion.problems,
+                        if (completion.summary.isBlank()) {
+                            logger.warn("cli-agent taskComplete rejected: blank summary")
+                        } else {
+                            completionRef.set(
+                                ActionDescription(
+                                    instruction = instruction,
+                                    isDecidedComplete = true,
+                                    summary = completion.summary,
+                                    keyFindings = completion.keyFindings,
+                                    filesChanged = completion.filesChanged,
+                                    problems = completion.problems,
+                                )
                             )
-                        )
+                        }
                     }.onFailure { logger.warn("cli-agent taskComplete parse failed: {}", it.message) }
                 }
             },
@@ -708,22 +889,31 @@ open class RobustBrowserAgent(
      * Under the agent's aux log dir (`<aux>/agent/<startTime>/<uuid>/`):
      * - `cli-prompt/<ts>.<seq>.request.json` — one file per model round-trip:
      *   the EXACT `messages` list (system prompt, history, tool-call messages
-     *   and full tool results) plus the tool specifications the model saw;
+     *   and full tool results) plus the tool specifications the model saw
+     *   (the exposed set + disclosure meta tools — NOT the full registry),
+     *   with an `estimatedTokens` fallback (chars/4 of the compact payload);
+     * - `cli-usage.jsonl` — one line per model request: requestSeq (pairs with
+     *   the request dump), real provider input/output/total tokens, finish
+     *   reason;
      * - `cli-tool-trace.jsonl` — one line per executed tool: name, arguments,
      *   full result text, duration;
+     * - `page-timeline.jsonl` — one line per page view: tool, callId,
+     *   viewType (full/reference/diff), url, title, fingerprint — a
+     *   machine-readable link index that survives context compaction;
+     * - `cli-compactions.jsonl` — one line per compaction-ledger entry
+     *   (registered/folded/pruned/compacted with token accounts);
      * - `cli-events.jsonl` — run-level events: run.start / overflow / complete.
      */
     private class CliLoopTracer(
         agentUuid: UUID,
         agentStartTime: Instant,
         private val enabled: Boolean,
+        private val viewToolNames: Set<String>,
     ) {
         private val logger = getLogger(CliLoopTracer::class)
 
         private val runDir: Path by lazy {
-            AppPaths.detectAuxiliaryLogDir().resolve("agent")
-                .resolve(AppPaths.fromTime(agentStartTime))
-                .resolve(agentUuid.toString())
+            AgentPaths.resolveTraceRunDir(agentStartTime, agentUuid)
         }
 
         private val jsonlWriter by lazy { MultiSinkMessageWriter(runDir) }
@@ -732,6 +922,7 @@ open class RobustBrowserAgent(
         }
         private val promptSeq = AtomicInteger(0)
         private val toolSeq = AtomicInteger(0)
+        private val pageSeq = AtomicInteger(0)
 
         /** Dump the exact prompt (messages + tool specs) sent to the model. */
         fun logPrompt(
@@ -741,7 +932,7 @@ open class RobustBrowserAgent(
             if (!enabled) return
             try {
                 val requestSeq = promptSeq.incrementAndGet()
-                val payload = mapOf(
+                val basePayload = mapOf(
                     "requestSeq" to requestSeq,
                     "timestamp" to AppPaths.fromNow(),
                     "toolSpecifications" to toolSpecifications.map { spec ->
@@ -756,6 +947,11 @@ open class RobustBrowserAgent(
                     "messages" to messages.map { serializeMessage(it) },
                     "messageCount" to messages.size,
                 )
+                // Fallback estimate persisted with the dump so token totals
+                // stay answerable even when the provider reports no usage
+                // (compact JSON chars / 4, English-heavy heuristic).
+                val estimatedChars = pulsarObjectMapper().writeValueAsString(basePayload).length
+                val payload = basePayload + ("estimatedTokens" to (estimatedChars / 4).coerceAtLeast(1))
                 val path = promptDir.resolve("${AppPaths.fromNow()}.$requestSeq.request.json")
                 Files.writeString(
                     path,
@@ -763,6 +959,29 @@ open class RobustBrowserAgent(
                 )
             } catch (e: Exception) {
                 logger.warn("Failed to write CLI prompt log: {}", e.message)
+            }
+        }
+
+        /**
+         * Persist the real provider token usage for one model request, paired
+         * with its request dump via `requestSeq`. Append-only JSONL so every
+         * round's usage survives (the loop sums usage across rounds).
+         */
+        fun logResponse(requestSeq: Int, response: ChatResponse) {
+            if (!enabled) return
+            try {
+                val usage = response.tokenUsage()
+                val payload = mapOf(
+                    "timestamp" to AppPaths.fromNow(),
+                    "requestSeq" to requestSeq,
+                    "inputTokens" to usage?.inputTokenCount(),
+                    "outputTokens" to usage?.outputTokenCount(),
+                    "totalTokens" to usage?.totalTokenCount(),
+                    "finishReason" to response.finishReason()?.name,
+                )
+                jsonlWriter.writeTo(payload, runDir.resolve("cli-usage.jsonl"))
+            } catch (e: Exception) {
+                logger.warn("Failed to write CLI usage trace: {}", e.message)
             }
         }
 
@@ -782,6 +1001,135 @@ open class RobustBrowserAgent(
             } catch (e: Exception) {
                 logger.warn("Failed to write CLI tool trace: {}", e.message)
             }
+        }
+
+        /**
+         * Append one page view to the disk-side page timeline. Only view tools
+         * ([viewToolNames]) are recorded; [raw] is the executed result and
+         * [decorated] the message actually appended (identical → `full`,
+         * duplicate fold → `reference`, diff → `diff`). URL/title are
+         * best-effort extractions (from the CLI arguments, then from the
+         * result text) so the timeline stays a machine-readable link index
+         * even after the conversation is compacted.
+         */
+        fun logPageView(
+            request: ToolExecutionRequest,
+            raw: ToolExecutionResultMessage,
+            decorated: ToolExecutionResultMessage,
+        ) {
+            if (!enabled) return
+            val tool = request.name()
+            if (!PageViewDeduper.matchesViewTool(tool, viewToolNames)) return
+            try {
+                val rawText = raw.text()
+                if (rawText.isBlank()) return
+                val decoratedText = decorated.text()
+                val viewType = when {
+                    decoratedText == rawText -> "full"
+                    decoratedText.contains(PageViewDeduper.DUPLICATE_MARKER) -> "reference"
+                    decoratedText.contains(PageViewDeduper.DIFF_MARKER) -> "diff"
+                    else -> "full"
+                }
+                val payload = mapOf(
+                    "timestamp" to AppPaths.fromNow(),
+                    "seq" to pageSeq.incrementAndGet(),
+                    "tool" to tool,
+                    "callId" to raw.id(),
+                    "viewType" to viewType,
+                    "url" to extractPageUrl(request.arguments(), rawText),
+                    "title" to extractPageTitle(rawText),
+                    "fingerprint" to PageViewDeduper.fingerprintOf(rawText),
+                    "textChars" to rawText.length,
+                    "arguments" to (request.arguments() ?: "{}"),
+                )
+                jsonlWriter.writeTo(payload, runDir.resolve("page-timeline.jsonl"))
+            } catch (e: Exception) {
+                logger.warn("Failed to write CLI page timeline trace: {}", e.message)
+            }
+        }
+
+        /**
+         * Mirror one compaction-ledger entry to `cli-compactions.jsonl` — the
+         * durable audit trail of every conversation rewrite (registered /
+         * folded / pruned / compacted with token accounts). Survives the
+         * in-memory ledger being discarded with the loop.
+         */
+        fun logLedgerEntry(entry: CompactionLedger.Entry) {
+            if (!enabled) return
+            try {
+                val payload = when (entry) {
+                    is CompactionLedger.Entry.ResultRegistered -> mapOf(
+                        "type" to "registered",
+                        "callId" to entry.callId,
+                        "messageIndex" to entry.messageIndex,
+                    )
+                    is CompactionLedger.Entry.Folded -> mapOf(
+                        "type" to "folded",
+                        "callId" to entry.callId,
+                        "originalIndex" to entry.originalIndex,
+                        "compactIndex" to entry.compactIndex,
+                    )
+                    is CompactionLedger.Entry.Pruned -> mapOf(
+                        "type" to "pruned",
+                        "callId" to entry.callId,
+                        "shadowedIndex" to entry.shadowedIndex,
+                        "replacementIndex" to entry.replacementIndex,
+                        "shadowedTokens" to entry.shadowedTokens,
+                        "removedTokens" to entry.removedTokens,
+                    )
+                    is CompactionLedger.Entry.Compacted -> mapOf(
+                        "type" to "compacted",
+                        "compactionId" to entry.compactionId,
+                        "reason" to entry.reason,
+                        "shadowedRange" to "${entry.shadowedRange.first}-${entry.shadowedRange.last}",
+                        "replacementIndex" to entry.replacementIndex,
+                        "shadowedTokens" to entry.shadowedTokens,
+                        "replacementTokens" to entry.replacementTokens,
+                        "failure" to entry.failure,
+                    )
+                }
+                jsonlWriter.writeTo(
+                    mapOf("timestamp" to AppPaths.fromNow()) + payload,
+                    runDir.resolve("cli-compactions.jsonl"),
+                )
+            } catch (e: Exception) {
+                logger.warn("Failed to write CLI compaction ledger trace: {}", e.message)
+            }
+        }
+
+        /** Best-effort page URL: from the CLI arguments, then from the result text. */
+        private fun extractPageUrl(argumentsJson: String?, resultText: String): String? {
+            argumentsJson?.let { args ->
+                URL_IN_TEXT.find(args)?.value?.trimEnd('"', '\'', ')', ']')?.let { return it }
+            }
+            val fromText = resultText.lineSequence()
+                .mapNotNull { line ->
+                    URL_LINE_PATTERN.find(line)?.groupValues?.get(1)?.trim()
+                        ?.takeIf { it.isNotBlank() }
+                }
+                .firstOrNull()
+            return fromText?.trimEnd('"', '\'', ')', ']')
+        }
+
+        /** Best-effort page title from the result text (first `title:`-ish line). */
+        private fun extractPageTitle(resultText: String): String? =
+            resultText.lineSequence()
+                .mapNotNull { line -> TITLE_LINE_PATTERN.find(line)?.groupValues?.get(1)?.trim() }
+                .firstOrNull()
+                ?.takeIf { it.isNotBlank() }
+                ?.take(200)
+
+        companion object {
+            /** Any http(s) URL inside the b4.run command string. */
+            private val URL_IN_TEXT = Regex("""https?://[^\s"')\]]+""")
+            /** `url: <value>` / `page url: <value>` / `URL = <value>` style lines. */
+            private val URL_LINE_PATTERN = Regex(
+                """(?im)^\s*(?:page\s+)?(?:url|URL)\s*[:=]\s*(\S.*)$"""
+            )
+            /** `title: <value>` / `page title: <value>` style lines. */
+            private val TITLE_LINE_PATTERN = Regex(
+                """(?im)^\s*(?:page\s+)?title\s*[:=]\s*(.+)$"""
+            )
         }
 
         /** Append a run-level event (run.start / overflow / complete). */
@@ -823,6 +1171,7 @@ open class RobustBrowserAgent(
     /** Auto context compression for the CLI tool loop (long multi-step tasks). */
     private fun cliToolLoopCompressor(
         specs: List<dev.langchain4j.agent.tool.ToolSpecification>,
+        ledger: CompactionLedger,
     ): ToolLoopCompressor? {
         val conf = session.sessionConfig
         if (!conf.getBoolean("browser4.agent.toolLoop.compressionEnabled", true)) return null
@@ -838,8 +1187,47 @@ open class RobustBrowserAgent(
                 .toInt().coerceAtLeast(0),
             pruneTailChars = conf.getLong("browser4.agent.toolLoop.pruneTailChars", 400L)
                 .toInt().coerceAtLeast(0),
+            retainLatestPageView = conf.getBoolean("browser4.agent.toolLoop.retainLatestPageView", true),
+            viewToolNames = cliViewToolNames(conf),
+            maxResultTokens = conf.getLong("browser4.agent.toolLoop.maxToolResultTokens", 20_000L)
+                .coerceAtLeast(0L),
+            // Knowledge documents (system.skillDoc results) must reach the
+            // model whole — never shred them into head+tail shards.
+            protectedToolNames = (conf.get("browser4.agent.toolLoop.protectedToolNames")
+                ?: "system_skillDoc")
+                .split(',').map { it.trim() }.filter { it.isNotBlank() }.toSet(),
+            ledger = ledger,
+            requireShrink = conf.getBoolean("browser4.agent.toolLoop.requireShrink", true),
+            summarizationRetries = conf.getLong("browser4.agent.toolLoop.summarizationRetries", 1L)
+                .toInt().coerceIn(0, 5),
+            audit = conf.getBoolean("browser4.agent.toolLoop.auditCompaction", true),
         ) { prefix -> summarizeCliLoop(prefix, specs) }
     }
+
+    /**
+     * Web-context deduper for the CLI agent: folds repeated page content at
+     * append time. See docs-dev/copilot/web-page-context-optimization-design.md.
+     */
+    private fun cliPageViewDeduper(ledger: CompactionLedger): PageViewDeduper? {
+        val conf = session.sessionConfig
+        if (!conf.getBoolean("browser4.agent.toolLoop.pageViewDedupEnabled", true)) return null
+        return PageViewDeduper(
+            enabled = true,
+            diffEnabled = conf.getBoolean("browser4.agent.toolLoop.pageViewDiffEnabled", true),
+            diffMaxChars = conf.getLong("browser4.agent.toolLoop.pageViewDiffMaxChars", 3_000L)
+                .toInt().coerceAtLeast(500),
+            digestChars = conf.getLong("browser4.agent.toolLoop.pageViewDigestChars", 300L)
+                .toInt().coerceAtLeast(100),
+            duplicateFoldEnabled = conf.getBoolean("browser4.agent.toolLoop.duplicateFoldEnabled", true),
+            viewToolNames = cliViewToolNames(conf),
+            ledger = ledger,
+        )
+    }
+
+    private fun cliViewToolNames(conf: ImmutableConfig): Set<String> =
+        (conf.get("browser4.agent.toolLoop.viewToolNames")
+            ?: "ariaSnapshot,textContent,snapshot,dump,htmlsnapshot,extract")
+            .split(',').map { it.trim() }.filter { it.isNotBlank() }.toSet()
 
     private suspend fun summarizeCliLoop(
         prefix: List<ChatMessage>,
@@ -876,20 +1264,26 @@ open class RobustBrowserAgent(
         return ResolveResult(context, ActResultHelper.complete(completion))
     }
 
-    /** System prompt for the CLI tool-loop engine: role + SKILL metadata + hygiene rules. */
+    /** System prompt for the CLI tool-loop engine: role + resident quick reference + hygiene rules. */
     private fun cliAgentSystemPrompt(): String = buildString {
         append(
             """
             You are a browser automation agent. Drive the browser EXCLUSIVELY through the
-            browser4-cli tool via b4.run(...). Do not guess CLI syntax — fetch the bundled
-            SKILL.md on demand with system.skillDoc("SKILL.md") and consult
-            system.skillDoc(name) for topic reference docs.
+            browser4-cli tool via b4.run(...). A distilled CLI quick reference is embedded
+            below — for full details fetch the bundled SKILL.md on demand with
+            system.skillDoc("SKILL.md") and consult system.skillDoc(name) for topic
+            reference docs.
             Use coding.* tools for file/workspace work when needed, and system.skillDoc(name)
             to read reference documents on demand.
             """.trimIndent()
         )
-        append("\n\n### Bundled skill (metadata)\n\n")
-        append(agentToolManager.system.skillDocMetadata("SKILL.md"))
+        append("\n\n### CLI Quick Reference (resident)\n\n")
+        // Resident distilled skill: guaranteed present in every request (even
+        // after compression), while the full SKILL.md stays on-demand.
+        append(
+            agentToolManager.system.skillDocStrict("quickstart.md")
+                ?: agentToolManager.system.skillDocMetadata("SKILL.md")
+        )
         append(
             """
 

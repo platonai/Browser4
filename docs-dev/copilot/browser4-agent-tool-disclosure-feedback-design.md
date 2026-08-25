@@ -217,3 +217,43 @@ data class ToolOutcome(
 - 信封裁剪丢长输出 → 全量在 `stateHistoryPath` 持久化日志（渲染器已有指引行）。
 - 生成化披露与硬编码串并存期 → 双轨 diff 单测守护，稳定后删硬编码串。
 - gate 硬校验误伤诚实报告（如工具输出了非标准 exit code）→ 校验先告警再判失败，日志留证据，`browser4.agent.finishGateCheck=warn|strict` 可调。
+
+---
+
+## 8. TOOL_CALLING 模式落地：初始工具集优化 + 循环内渐进披露（2026-08-21 已实现）
+
+> 问题：原生工具调用模式下，`AgentToolCallLoop` 每轮把**全部**工具规格（coding ×51、b4、shell、fs、插件等 ≈80+ 个完整 JSON Schema）随请求发给模型——每轮数万 token，且与任务无关的工具稀释了模型决策。
+
+### 8.1 机制
+
+```
+初始集（curated core）──▶ 每轮请求只带 初始集 + 2 个元工具（~200 token）
+                                │
+   模型需要更多工具：system.listTools(domain?)  ──▶ 列出未暴露工具（名 + 一行描述）
+                     system.exposeTools(names[]) ──▶ 循环内拦截并扩容 exposed 集合
+                                │
+                   下一轮请求自动携带扩容后的工具规格
+```
+
+- **初始集**：`browser4.agent.toolLoop.initialToolSet` = `core`（默认：tab/browser/agent/system 整域）| `all`（旧行为全量）| 显式模式列表（`domain.*`、`domain.method`、裸 `method`；`core`/`all` 可作 token 与模式混用，如 `core,coding.ktSymbols`；模式全部落空时自动回退 `core` 并告警）；
+- CLI 引擎（`RobustBrowserAgent`）初始集按任务画像自适应：b4/system 整域恒在；
+  - 网页任务（默认）→ coding 只暴露最常用文件工具 10 个（read/write/append/replace/listDir/glob/grep/stat/mkdir/delete），shell*/mvnBuild/validate/devTask 等编码工具不进入初始集；
+  - 编码任务（`CodingTaskDetector` 判定）→ coding 暴露核心 20 个（read/write/replace/mvnBuild/shell/validate/devTask/...）；
+  - 长尾（symbols/kt*/scaffold*/impact/...）两种画像下都按需暴露（`system.listTools`/`system.exposeTools`）；
+  - `system.taskComplete` 与 `system.skillDoc` 为契约工具，无论 `initialToolSet` 为何值都强制包含（system 域规格取自 `SystemToolExecutor`，硬编码 `TOOL_CALL_SPECIFICATION` 只有 `system.help`）；
+- **元工具**由 `AgentToolCallLoop` 拦截合成，不经过协调器：`exposeTools` 就地扩容 `exposedToolSpecs`，下一轮请求即生效；裸方法名仅在跨域唯一时解析（歧义跳过并报告）；结果消息自解释（已启用/跳过清单）；
+- 与既有机制正交：`PageViewDeduper`（结果折叠）、`ToolLoopCompressor`（压缩）、`RequestTokenLimiter`（限额）不受影响。
+
+### 8.2 实现与测试
+
+- 新增 `inference/chat/ToolDisclosure.kt`（`ToolDisclosureTools`：元工具规格、`selectInitialSpecs`、`listToolsResult`/`exposeToolsResult` 合成、参数解析——纯逻辑）；
+- 修改 `AgentToolCallLoop`：`allToolSpecifications` + `disclosureListingLimit` 构造参数；请求携带 `exposedToolSpecs + metaSpecs`；执行循环拦截两个元工具；元工具不计入 overflow digest；
+- 修改 `ContextToAction` / `RobustBrowserAgent`：配置键 + 初始集计算（ToolSpec 层选择 → 转换器统一命名）；
+- 配置键：`browser4.agent.toolLoop.initialToolSet`（默认 core）、`toolDisclosureEnabled`（默认 true）、`toolDisclosureListingLimit`（默认 200）；
+- 测试：`ToolDisclosureTest`（9 用例）+ `AgentToolCallLoopTest` 增补 2 例（初始请求只带核心集+元工具；exposeTools 后下一请求携带扩容规格）；browser4-agentic 全量 758 测试全绿。
+
+### 8.3 关键注意点
+
+- 工具名是转换器的**消毒形式**（`system_listTools`、`coding_read`，`.` → `_`），所有匹配按该形式；
+- 初始集选择在 `ToolSpec` 层做（domain/method 完整），再转原生规格；
+- 默认值变更会影响既有任务（coding 长尾不再自动可见）——回退：`initialToolSet=all` 或 `toolDisclosureEnabled=false`。

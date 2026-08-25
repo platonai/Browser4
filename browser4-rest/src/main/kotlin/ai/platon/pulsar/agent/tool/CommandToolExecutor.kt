@@ -51,8 +51,8 @@ class CommandToolExecutor(
                     "When async=true (default), returns a task ID immediately. " +
                     "When async=false, blocks until done and returns the CommandStatus as JSON. " +
                     "noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. " +
-                    "engine optionally selects the agent execution engine: 'cli' for the CLI tool-loop engine " +
-                    "(default: observe-act)."
+                    "engine optionally selects the agent execution engine: 'cli' (default) for the CLI tool-loop engine; " +
+                    "'observe-act' is the DEPRECATED legacy engine."
         )
 
         toolSpec["status"] = ToolSpec(

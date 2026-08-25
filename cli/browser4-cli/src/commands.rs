@@ -3014,7 +3014,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "wait", description: "Block until the agent task completes (default timeout: 600s)", is_bool: true, short: None },
                 OptionDef { name: "wait-timeout", description: "Max seconds to block with --wait before giving up (default: 600; the task keeps running server-side after a timeout)", is_bool: false, short: None },
                 OptionDef { name: "noop-limit", description: "Override the consecutive no-op abort threshold (default: 5; long coding tasks benefit from 8-10)", is_bool: false, short: None },
-                OptionDef { name: "engine", description: "Agent execution engine (default: cli; use observe-act for the legacy engine)", is_bool: false, short: None },
+                OptionDef { name: "engine", description: "Agent execution engine (default: cli; observe-act is the DEPRECATED legacy engine)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "command_run".to_string(),

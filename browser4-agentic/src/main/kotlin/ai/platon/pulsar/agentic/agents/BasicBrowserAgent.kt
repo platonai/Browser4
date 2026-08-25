@@ -15,7 +15,6 @@ import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecification
 import ai.platon.pulsar.coding.CodingWorkspace
-import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.alwaysTrue
 import ai.platon.pulsar.common.event.EventBus
 import ai.platon.pulsar.common.getLogger
@@ -741,9 +740,5 @@ open class BasicBrowserAgent(
 
     }
 
-    private fun getAgentLogDir(): Path {
-        val agentId = uuid.toString()
-        val auxLogDir = AppPaths.detectAuxiliaryLogDir().resolve("agent")
-        return auxLogDir.resolve(AppPaths.fromTime(startTime)).resolve(agentId)
-    }
+    private fun getAgentLogDir(): Path = AgentPaths.resolveTraceRunDir(startTime, uuid)
 }

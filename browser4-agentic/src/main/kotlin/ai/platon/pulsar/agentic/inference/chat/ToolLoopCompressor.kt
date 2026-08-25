@@ -26,6 +26,32 @@ import dev.langchain4j.data.message.UserMessage
  *    which is the Kotlin analogue of their tool-pairing-balanced cut.
  *
  * System and leading user messages (instruction/history) are never removed.
+ *
+ * Web-task extensions (design: docs-dev/copilot/web-page-context-optimization-design.md):
+ * - [retainLatestPageView]: the round holding the most recent FULL page view
+ *   is never compacted — the page state is the model's working context;
+ * - [enforceResultTokenBudget]: caps the cumulative estimated tokens of tool
+ *   results per request, shrinking the OLDEST results first and protecting
+ *   the newest one;
+ * - prune skips already-compact forms (PageViewDeduper references/diffs).
+ *
+ * Traceability & transaction extensions (design:
+ * docs-dev/copilot/compaction-traceability-design.md):
+ * - every prune/compaction is recorded on [ledger] so historical references
+ *   stay resolvable after compression (structural, not digest-only);
+ * - compaction is transactional: stability check before commit, mandatory
+ *   shrink (summary must be smaller than the shadowed span), and structure
+ *   validation of the checkpoint (required `## sections`);
+ * - [compactForOverflow] forces one useful reduction for provider-confirmed
+ *   context-window overflow (prune first, then compact with a zero tail).
+ *
+ * Knowledge-document protection: tool results whose name is in
+ * [protectedToolNames] (e.g. `system_skillDoc` — the on-demand SKILL.md
+ * loader) are exempt from head/middle/tail pruning and from the cumulative
+ * result-token budget, so the model can actually READ the loaded document
+ * instead of a 1.2 KB shard of it. They remain eligible for whole-region
+ * compaction ([compressIfNeeded]) — after which the model can simply
+ * re-fetch the document.
  */
 class ToolLoopCompressor(
     val enabled: Boolean,
@@ -34,6 +60,20 @@ class ToolLoopCompressor(
     val pruneThresholdChars: Int,
     val pruneHeadChars: Int,
     val pruneTailChars: Int,
+    val retainLatestPageView: Boolean = false,
+    val viewToolNames: Set<String> = emptySet(),
+    val maxResultTokens: Long = 0,
+    /** Tool-result names exempt from pruning and the result-token budget. */
+    val protectedToolNames: Set<String> = emptySet(),
+    /** Traceability ledger; when null no audit trail is recorded. */
+    private val ledger: CompactionLedger? = null,
+    /** Reject a summary that is not smaller than the content it shadows. */
+    val requireShrink: Boolean = true,
+    /** Extra summarization attempts after a blank / shrink / structure failure. */
+    val summarizationRetries: Int = 1,
+    /** Structured audit logging of every compaction transaction. */
+    val audit: Boolean = true,
+    /** Trailing-lambda-friendly summarizer — must stay the LAST parameter. */
     private val summarizer: ToolLoopSummarizer,
 ) {
     private val logger = getLogger(ToolLoopCompressor::class.java)
@@ -92,17 +132,63 @@ class ToolLoopCompressor(
     /**
      * Model-free per-result pruning: for each over-budget tool result keep
      * [pruneHeadChars] + marker + [pruneTailChars]. Returns whether anything
-     * was rewritten. Never touches other message types.
+     * was rewritten. Never touches other message types, and skips already
+     * compact forms (PageViewDeduper references/diffs) and protected
+     * knowledge-document results ([protectedToolNames]).
      */
     fun pruneToolResults(messages: MutableList<ChatMessage>): Boolean {
         if (!enabled) return false
         var changed = false
         for (index in messages.indices) {
             val message = messages[index] as? ToolExecutionResultMessage ?: continue
+            if (message.toolName() in protectedToolNames) continue
             val text = message.text()
             if (text.length <= pruneThresholdChars) continue
+            if (PageViewDeduper.isCompactForm(text)) continue
             val replacement = text.take(pruneHeadChars) + PRUNE_MARKER + text.takeLast(pruneTailChars)
             messages[index] = ToolExecutionResultMessage.from(message.id(), message.toolName(), replacement)
+            val before = estimateTokens(text)
+            val after = estimateTokens(replacement)
+            ledger?.recordPruned(message.id(), index, index, before, (before - after).coerceAtLeast(0))
+            changed = true
+        }
+        return changed
+    }
+
+    /**
+     * Cumulative tool-result budget: when the estimated tokens of all tool
+     * results exceed [maxResultTokens], shrink the OLDEST results (head +
+     * marker + tail) until the budget fits. The newest result is always
+     * protected — it is the model's working state. Compact reference/diff
+     * forms are already small and are skipped, as are protected
+     * knowledge-document results ([protectedToolNames]). Returns whether
+     * anything was rewritten. No-op when [maxResultTokens] <= 0.
+     */
+    fun enforceResultTokenBudget(messages: MutableList<ChatMessage>): Boolean {
+        if (!enabled || maxResultTokens <= 0) return false
+        val resultIndices = messages.indices.filter { messages[it] is ToolExecutionResultMessage }
+        if (resultIndices.isEmpty()) return false
+        var total = resultIndices.sumOf { estimateTokens((messages[it] as ToolExecutionResultMessage).text()) }
+        if (total <= maxResultTokens) return false
+
+        var changed = false
+        val newestIndex = resultIndices.last()
+        for (index in resultIndices) {
+            if (total <= maxResultTokens) break
+            if (index == newestIndex) continue
+            val message = messages[index] as ToolExecutionResultMessage
+            if (message.toolName() in protectedToolNames) continue
+            val text = message.text()
+            if (text.length <= pruneThresholdChars) continue
+            if (PageViewDeduper.isCompactForm(text)) continue
+            val replacement = text.take(pruneHeadChars) + PRUNE_MARKER + text.takeLast(pruneTailChars)
+            total -= estimateTokens(text)
+            messages[index] = ToolExecutionResultMessage.from(message.id(), message.toolName(), replacement)
+            total += estimateTokens(replacement)
+            ledger?.recordPruned(
+                message.id(), index, index,
+                estimateTokens(text), (estimateTokens(text) - estimateTokens(replacement)).coerceAtLeast(0),
+            )
             changed = true
         }
         return changed
@@ -115,10 +201,40 @@ class ToolLoopCompressor(
      * newest rounds whose combined estimate reaches [retainTokens]; the cut is
      * always at a round boundary. Returns whether a compaction landed.
      */
-    suspend fun compressIfNeeded(messages: MutableList<ChatMessage>): Boolean {
+    suspend fun compressIfNeeded(messages: MutableList<ChatMessage>): Boolean =
+        compressCore(messages, retainTokens, "pressure")
+
+    /**
+     * Provider-confirmed context-window overflow recovery: force one useful
+     * reduction below the normal pressure threshold — prune every over-budget
+     * result first, then compact with a ZERO retained tail (deepseek-harness
+     * `context-overflow` trigger analogue). Returns whether any durable
+     * reduction landed. The caller retries the request afterwards.
+     */
+    suspend fun compactForOverflow(messages: MutableList<ChatMessage>): Boolean {
+        if (!enabled) return false
+        val pruned = pruneToolResults(messages)
+        val compacted = compressCore(messages, 0L, "context-overflow")
+        return pruned || compacted
+    }
+
+    /**
+     * Transactional core shared by pressure and overflow compaction:
+     * prepare (measure + snapshot the shadowed span) → summarize with
+     * validation retries (blank / shrink / structure) → stability check →
+     * commit (atomic replace + ledger record). Every abandoned attempt is
+     * recorded on the ledger and leaves the conversation untouched.
+     */
+    private suspend fun compressCore(
+        messages: MutableList<ChatMessage>,
+        retainTokensOverride: Long,
+        reason: String,
+    ): Boolean {
         if (!enabled) return false
         val total = estimateTotal(messages)
-        if (total <= thresholdTokens) return false
+        // Overflow bypasses the pressure threshold: the provider already
+        // rejected the request, so any useful reduction is worth landing.
+        if (total <= thresholdTokens && reason != "context-overflow") return false
 
         val rounds = findRounds(messages)
         if (rounds.isEmpty()) return false
@@ -131,7 +247,28 @@ class ToolLoopCompressor(
         for (roundIndex in rounds.indices.reversed()) {
             accumulated += estimateTotal(messages.subList(rounds[roundIndex].start, rounds[roundIndex].end + 1))
             keepFrom = roundIndex
-            if (accumulated >= retainTokens) break
+            if (accumulated >= retainTokensOverride) break
+        }
+        // Web-task extension: never compact the round holding the most recent
+        // FULL page view — the page state is the model's working context, and
+        // references/diffs in later rounds may point back at it. A compact
+        // reference/diff form does NOT count as a full view: when the newest
+        // view result is a diff, the full snapshot round is the one to keep.
+        if (retainLatestPageView && viewToolNames.isNotEmpty() && keepFrom < rounds.size) {
+            val latestFullViewRound = rounds.indexOfLast { round ->
+                messages.subList(round.start, round.end + 1).any {
+                    it is ToolExecutionResultMessage
+                        && PageViewDeduper.matchesViewTool(it.toolName(), viewToolNames)
+                        && !PageViewDeduper.isCompactForm(it.text())
+                }
+            }
+            val latestViewRound = rounds.indexOfLast { round ->
+                messages.subList(round.start, round.end + 1).any {
+                    it is ToolExecutionResultMessage && PageViewDeduper.matchesViewTool(it.toolName(), viewToolNames)
+                }
+            }
+            val target = if (latestFullViewRound >= 0) latestFullViewRound else latestViewRound
+            if (target in 0 until keepFrom) keepFrom = target
         }
         if (keepFrom == 0) return false
 
@@ -141,29 +278,111 @@ class ToolLoopCompressor(
         val compactedRounds = rounds.take(keepFrom)
 
         val prefix = messages.subList(0, compactableEnd).toList()
-        val summary = try {
-            summarizer.summarize(prefix)
-        } catch (e: Exception) {
-            logger.warn("🧹 tool-loop compaction summarization failed: {}", e.brief())
+        val shadowed = messages.subList(compactableStart, compactableEnd).toList()
+        val shadowedTokens = estimateTotal(shadowed)
+        val shadowedRange = compactableStart until compactableEnd
+
+        // Summarize with validation retries: blank output, a summary no
+        // smaller than the shadowed span, or a structure-invalid checkpoint
+        // all fail the attempt (deepseek-harness shrink enforcement).
+        var summary: String? = null
+        var lastFailure: String? = null
+        for (attempt in 0..summarizationRetries.coerceAtLeast(0)) {
+            val candidate = try {
+                summarizer.summarize(prefix)
+            } catch (e: Exception) {
+                logger.warn("🧹 tool-loop compaction summarization failed: {}", e.brief())
+                lastFailure = "summarization failed: ${e.message ?: e.javaClass.simpleName}"
+                null
+            }
+            if (candidate.isNullOrBlank()) {
+                lastFailure = "blank summary"
+                continue
+            }
+            val candidateFramed = frame(candidate)
+            if (requireShrink && estimateTokens(candidateFramed) >= shadowedTokens) {
+                lastFailure = "summary not smaller than shadowed content"
+                continue
+            }
+            if (!summaryStructureValid(candidate)) {
+                lastFailure = "summary missing required sections"
+                continue
+            }
+            summary = candidate
+            break
+        }
+        if (summary == null) {
+            ledger?.recordCompacted(reason, shadowedRange, -1, shadowedTokens, 0L, failure = lastFailure)
+            logger.warn("🧹 tool-loop compaction abandoned ({}): {}", reason, lastFailure)
             return false
         }
-        if (summary.isBlank()) return false
 
-        val framed = "$CHECKPOINT_PREAMBLE\n\n$SUMMARY_OPEN_TAG\n${summary.trim()}\n$SUMMARY_CLOSE_TAG"
+        // Stability check: the shadowed span must still hold the exact
+        // messages the summary was built from (a concurrent rewrite would
+        // shift indices and replace the wrong history).
+        if (messages.subList(compactableStart, compactableEnd) != shadowed) {
+            ledger?.recordCompacted(
+                reason, shadowedRange, -1, shadowedTokens, 0L,
+                failure = "surface changed during summarization",
+            )
+            logger.warn("🧹 tool-loop compaction abandoned ({}): surface changed during summarization", reason)
+            return false
+        }
+
+        val framed = frame(summary)
         val before = estimateTotal(messages)
+        val replacementIndex = compactableStart
         messages.subList(compactableStart, compactableEnd).clear()
-        messages.add(compactableStart, UserMessage.from(framed))
+        messages.add(replacementIndex, UserMessage.from(framed))
         val after = estimateTotal(messages)
-        logger.info(
-            "🧹 tool-loop compaction: compacted {} round(s) ({}-{}), est {} -> {} tokens",
-            compactedRounds.size, compactedRounds.first().start, compactedRounds.last().end, before, after
-        )
+        val replacementTokens = estimateTokens(framed)
+        val compactionId = ledger?.recordCompacted(
+            reason, shadowedRange, replacementIndex, shadowedTokens, replacementTokens,
+        ) ?: "n/a"
+        if (audit) {
+            logger.info(
+                "🧹 tool-loop compaction ({}): compacted {} round(s) (seqs {}-{}), " +
+                    "shadowed ~{} tokens -> checkpoint ~{} tokens (id={}), est {} -> {} tokens",
+                reason, compactedRounds.size, compactableStart, compactableEnd - 1,
+                shadowedTokens, replacementTokens, compactionId, before, after,
+            )
+        }
         return true
     }
+
+    /** Frame raw summary text as a durable checkpoint user-message body. */
+    private fun frame(summary: String): String =
+        "$CHECKPOINT_PREAMBLE\n\n$SUMMARY_OPEN_TAG\n${summary.trim()}\n$SUMMARY_CLOSE_TAG"
+
+    /**
+     * Whether the summary carries every section the compaction instruction
+     * requires. The checkpoint is the model's only trace of the compacted
+     * history, so a summary that drops a section (e.g. Page State) is
+     * rejected and the attempt is retried/abandoned instead of landed.
+     */
+    private fun summaryStructureValid(summary: String): Boolean =
+        REQUIRED_SUMMARY_SECTIONS.all { summary.contains(it) }
 
     companion object {
         /** Fixed marker substituted for every removed tool-result middle span. */
         const val PRUNE_MARKER = "\n\n[... tool result middle pruned ...]\n\n"
+
+        /**
+         * Every `## section` heading the compaction instruction mandates.
+         * A checkpoint missing any of these is rejected by structure
+         * validation (see [ToolLoopCompressor.summaryStructureValid]).
+         */
+        val REQUIRED_SUMMARY_SECTIONS = listOf(
+            "## Primary Request and Intent",
+            "## Key Technical Concepts",
+            "## Files and Code",
+            "## Errors and Fixes",
+            "## Pending Jobs",
+            "## Current Work",
+            "## Page State",
+            "## Next Step",
+            "## Critical Context",
+        )
 
         const val SUMMARY_OPEN_TAG = "<compacted-summary>"
         const val SUMMARY_CLOSE_TAG = "</compacted-summary>"
@@ -207,6 +426,11 @@ class ToolLoopCompressor(
                 "## Current Work\n" +
                 "- [precisely what was in progress at this checkpoint]\n" +
                 "\n" +
+                "## Page State\n" +
+                "- [for every distinct page viewed: FULL absolute URL (never truncated or elided), title, " +
+                "fingerprint and what changed since the previous view (diff highlights); " +
+                "write \"(none)\" if no page was viewed]\n" +
+                "\n" +
                 "## Next Step\n" +
                 "- [the single next action, directly in line with the most recent request, or \"(none)\"]\n" +
                 "\n" +
@@ -217,6 +441,9 @@ class ToolLoopCompressor(
                 "- Write concise English engineering prose. Preserve exact file paths, commands, error strings, identifiers, numeric values, function signatures, and syntax fragments.\n" +
                 "- Capture user feedback and explicit instructions faithfully, especially corrections.\n" +
                 "- Do NOT mention this summarization request or that the context was compacted.\n" +
+                "- If a SKILL document (e.g. SKILL.md or a reference doc loaded via system.skillDoc) was loaded " +
+                "earlier and its content is no longer available in the conversation, note in " +
+                "\"## Critical Context\" that it must be reloaded via system.skillDoc(name) when its details are needed.\n" +
                 "- Output only the checkpoint text: do not call any tool or take any other action.\n" +
                 "- If the conversation already contains a <compacted-summary> block, it is a PRIOR checkpoint. Do not copy it forward verbatim: preserve still-true facts, drop stale ones, and merge newer information into a single consolidated summary under the same structure."
     }

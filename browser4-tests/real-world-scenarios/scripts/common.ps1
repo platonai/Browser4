@@ -730,6 +730,8 @@ Whenever you encounter a problem:
 3. Continue the task whenever reasonably possible.
 4. Record all findings, even if a workaround exists.
 
+如遇到任何项目开发相关问题，阅读项目根目录下的 AGENTS.md。
+
 ## Deliverables
 
 ### A. Task Result

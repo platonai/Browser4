@@ -18,24 +18,14 @@ Browser automation CLI for AI agents — Chrome/Chromium via CDP with accessibil
 
 ### Invocation
 
-The docs use `browser4-cli` as the generic command name. From within the Browser4
-source tree use one of the following:
+The docs use `browser4-cli` as the generic command name. After installing
+(`browser4-cli install`), invoke commands directly:
 
-| Shell | Command | Notes |
-|-------|---------|-------|
-| PowerShell (Windows) | `./b4w.ps1 <command>` | Primary dev wrapper; builds from source if needed |
-| Git Bash (Windows) | `./b4w.sh <command>` | Quotes args automatically for pwsh safety |
-| Git Bash (alt) | `pwsh ./b4w.ps1 <command>` | Direct PowerShell invocation |
-| Linux / macOS | `./b4w.sh <command>` | Same script works cross-platform |
-| Any (installed) | `browser4-cli <command>` | After `browser4-cli install` |
-
-> **Important:** The `$(./b4w.ps1) <command>` syntax shown in some task
-> instructions does **not** work in bash — `$(…)` is command substitution, not
-> invocation.  Use `pwsh ./b4w.ps1 <command>` or `./b4w.sh <command>` instead.
+```bash
+browser4-cli open --headless <url>
+```
 
 ## 1. Core Loop
-
-> **⚡ First-run latency:** From a source tree, the first launch builds the runtime bundle via Maven (~1–3 min, before the spinner appears) and then starts the Browser4 backend (Spring Boot + JVM, ~10s). Subsequent commands are instant — the server stays alive between invocations. The spinner shows stage-level progress (JVM → Spring Boot → MCP tools) so you can see what's happening.
 
 > **🖥️ Headless mode is the default for AI agents:** Always open browsers in **headless mode** (`--headless`) unless the user **explicitly** asks to see the browser window (e.g., "show me the browser", "open visibly", "I want to watch", or "headed"). Headless mode is faster, uses fewer resources, and avoids unnecessary GUI windows. Use `--headed` **only** when the user specifically requests a visible browser. See the Display Mode section below (§2 Key Concepts) for details.
 
@@ -150,52 +140,17 @@ writable (e.g. sandboxed shells), the CLI automatically falls back to
 
 ### Configuration
 
-The `config` command manages persistent CLI defaults stored in
-`~/.browser4/config.json` (honours `BROWSER4_CLI_STATE_DIR`). These are global
-fallbacks — an explicit flag or environment variable always wins per invocation.
-
-| Key | Purpose | Overridden by |
-|-----|---------|---------------|
-| `server` | Default Browser4 server URL | `--server` / `BROWSER4_CLI_SERVER` |
-| `timeout` | Default HTTP timeout (seconds) | `--timeout` |
-| `proxy` | Default download proxy URL | `--proxy` |
-| `session` | Default session name | `-s` / `--session` / `BROWSER4_CLI_SESSION` |
+CLI defaults (`config.json`) and server-side runtime overrides are managed by
+the `config` command family:
 
 ```bash
 browser4-cli config                              # List all values + config file path
-browser4-cli config list                         # Same as above
-browser4-cli config get server                   # Print one value ("(not set)" if unset)
 browser4-cli config set server http://localhost:8182
-browser4-cli config set timeout 45               # Positive integer seconds
-browser4-cli config delete session               # Reset a key to its default
+browser4-cli config set agent.llm.maxRequestTokens 800000   # server-side runtime override
 ```
 
-Notes:
-- `config get` / `set` / `delete` use the spaced form (`config get server`), not `config-get server`.
-- `timeout` must be a positive integer; `0` and unknown keys are rejected with a non-zero exit.
-- `config set server` sets the persistent default; a later `--server` flag or `BROWSER4_CLI_SERVER` still overrides it for that invocation.
-
-### Server-side Config Keys (runtime overrides)
-
-`agent.llm.maxRequestTokens` (per-request LLM token limit, default 500,000) and
-`agent.token.budget.total` (cumulative token budget per agent run, default
-5,000,000) are **server-side** config keys handled by the same `config` command
-family. When an agent task exceeds either limit it halts with a status report;
-raising the limit this way allows the task to continue — a runtime override,
-effective immediately, no server restart.
-
-```bash
-browser4-cli config get agent.llm.maxRequestTokens   # Show default / configured / override / effective
-browser4-cli config set agent.llm.maxRequestTokens 800000  # Raise the limit
-browser4-cli config set agent.llm.maxRequestTokens unlimited # Disable enforcement
-browser4-cli config delete agent.llm.maxRequestTokens      # Clear override, back to config values
-browser4-cli config set agent.token.budget.total 10000000  # Raise the per-run budget
-```
-
-Notes:
-- Unlike local keys, these are not stored in `config.json` — they route to the running server's unified REST config interface (`GET/PUT/DELETE /api/config/{key}`, `GET /api/config` to list all), so the server must be up.
-- The override is runtime-only — lost on server restart, which falls back to the key's value in the server configuration.
-- Accepted values: a non-negative integer, `0`, or `unlimited` (= 0, disables enforcement). Unknown keys and invalid values are rejected server-side with 404/400.
+See **[config.md](references/config.md)** for the full reference: keys,
+overrides, and server-side config key semantics.
 
 ### Tab Management
 
@@ -288,7 +243,7 @@ browser4-cli -s ext-session tab-select 0
 | `download`, `wait --download` | Download management | `download --dir <path>` configures the browser download folder; `wait --download` blocks until a download completes | — |
 | `profiler start`, `profiler stop` | V8 CPU profiling via CDP | Profile page interactions and save `.cpuprofile` (Chrome DevTools / speedscope compatible) | — |
 | `profiles list` | List browser profile directories | See what profiles exist under `~/.browser4/browser/chrome` before `open --profile` | — |
-| `config` | Persistent CLI defaults (server, timeout, proxy, session) | Set default server URL, timeout, proxy, or session name. See §Configuration. | — |
+| `config` | Persistent CLI defaults (server, timeout, proxy, session) | Set default server URL, timeout, proxy, or session name. See [config.md](references/config.md). | — |
 | `status`, `doctor`, `doctor log`, `doctor metrics`, `doctor status` | Server health & diagnostics | Check server version/health, LLM config, tail/grep backend logs, browse metrics, and read every status-panel report from the terminal. `doctor status` prints the aggregated status report (health, build, runtime, LLM, sessions, Pulsar sessions, swarm, URL pool, browsers & tabs, driver pools, privacy contexts, plugins, **skills**, metrics, log files) in layers: summary by default, full detail with `--verbose`, one report with `--section <name>`, machine-readable JSON with `--json`. `status` also prints the web status panel URL (`http://<server>:8182/status`) — a live dashboard of the same reports (auto-refreshes; `?refresh=<ms>` changes the interval). The page-screenshots panel at `http://<server>:8182/pages.html` shows every open page: active tabs are captured automatically (click to re-capture), inactive tabs capture on click, and swarm pages are placeholders only. | — |
 
 ### Refreshing This Skill
@@ -735,6 +690,9 @@ See **[agent.md](references/agent.md)** for full details including LLM key confi
 
 Organized by task — follow the link that matches what you're trying to do:
 
+**Start here (distilled core):**
+[quickstart.md](references/quickstart.md) — distilled resident quick reference (core loop, copy-paste template, key commands, snapshot vs htmlsnapshot, critical warnings). Embedded in the CLI engine's system prompt; full details live in this SKILL.md.
+
 **Interact with pages (accessibility tree & element refs):**
 [snapshot.md](references/snapshot.md) — `snapshot`, `snapshot grep`, `-v` viewport paging, `--auto-diff`, `-i` interactive mode, element refs
 
@@ -771,18 +729,13 @@ Organized by task — follow the link that matches what you're trying to do:
 **Troubleshoot:**
 [shell-quoting.md](references/shell-quoting.md) — avoid shell-quoting breakage for complex JS/X-SQL on Windows / Git Bash
 
-**Developers:**
-[development.md](references/development.md) — build the CLI from source (Rust, Java 25+)
+**Manage configuration:**
+[config.md](references/config.md) — `config` command family: CLI defaults and server-side runtime overrides
 
 ## Installation
 
-**Cross-platform (Node.js):**
-```bash
-npm install -g browser4-cli
-browser4-cli install
-```
-
 **Windows (PowerShell):**
+
 ```powershell
 irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
 browser4-cli install
