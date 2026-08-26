@@ -402,6 +402,12 @@
                 <artifactId>pulsar-h2</artifactId>
                 <version>${pulsar-h2.version}</version>
             </dependency>
+            <!-- SQLite JDBC: agent memory FTS derived index (memory-index.sqlite) -->
+            <dependency>
+                <groupId>org.xerial</groupId>
+                <artifactId>sqlite-jdbc</artifactId>
+                <version>${sqlite-jdbc.version}</version>
+            </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-jsoup</artifactId>
@@ -568,6 +574,9 @@
         <pulsar-jsoup.version>1.14.3</pulsar-jsoup.version>
         <browser4-base.version>4.11.5</browser4-base.version>
         <cdt-kotlin-client.version>4.8.0</cdt-kotlin-client.version>
+
+        <!-- Agent memory system: SQLite FTS derived index (design: docs-dev/copilot/robust-browser-agent-memory-system-design.md) -->
+        <sqlite-jdbc.version>3.53.2.1</sqlite-jdbc.version>
     </properties>
 
 </project>

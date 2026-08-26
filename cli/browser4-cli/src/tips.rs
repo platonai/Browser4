@@ -242,6 +242,9 @@ const TIPS_AGENT: &[Tip] = &[
     Tip {
         text: "Use `agent run --wait --wait-timeout <seconds>` to block for a result — long browsing tasks may need more than the 600s default",
     },
+    Tip {
+        text: "`agent run` tasks keep a progressive memory — repeated tasks reuse past selectors and blockers (see the `## Memory` section in the task prompt)",
+    },
 ];
 
 const TIPS_ATTACH: &[Tip] = &[

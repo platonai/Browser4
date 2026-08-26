@@ -8,7 +8,16 @@ import ai.platon.pulsar.agentic.inference.RequestTokenLimitExceededException
 import ai.platon.pulsar.agentic.inference.TokenBudgetExceededException
 import ai.platon.pulsar.agentic.inference.chat.*
 import ai.platon.pulsar.agentic.inference.detail.*
+import ai.platon.pulsar.agentic.memory.AgentMemory
+import ai.platon.pulsar.agentic.memory.MemoryConfig
+import ai.platon.pulsar.agentic.memory.MemoryScope
+import ai.platon.pulsar.agentic.memory.MemoryToolExecutor
+import ai.platon.pulsar.agentic.memory.MemoryToolTarget
+import ai.platon.pulsar.agentic.memory.Sanitizer
+import ai.platon.pulsar.agentic.memory.external.ExternalMemoryConfig
+import ai.platon.pulsar.agentic.memory.external.MemoryExternalToolExecutor
 import ai.platon.pulsar.agentic.model.*
+import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.builtin.TaskCompletion
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolExecutionCoordinator
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
@@ -49,11 +58,11 @@ private const val CLI_CONTINUE_NUDGE =
         "Otherwise continue working with tools. Do not answer in plain text unless you are done."
 /** How often the CLI tool loop emits a liveness event (every N tool executions). */
 private const val CLI_TOOL_PROGRESS_EVENT_INTERVAL = 5
-/** Explicit tool domains exposed to the CLI engine (design v0.2 §4.4). */
-private val CLI_ENGINE_DOMAINS = setOf("coding", "b4", "system")
+/** Explicit tool domains exposed to the CLI engine (design v0.2 §4.4; memory §7.1). */
+private val CLI_ENGINE_DOMAINS = setOf("coding", "b4", "system", "memory")
 
 /** Whole domains kept in the CLI engine's INITIAL tool set. */
-private val CLI_CORE_DOMAINS = setOf("b4", "system")
+private val CLI_CORE_DOMAINS = setOf("b4", "system", "memory")
 
 /**
  * Curated coding core exposed initially for CODING tasks (progressive
@@ -218,6 +227,71 @@ open class RobustBrowserAgent(
     internal val agentWorkspaceDir: Path by lazy {
         baseDir.resolve("workspace").also { Files.createDirectories(it) }
     }
+
+    /**
+     * Test/runtime override of the agent memory root directory (defaults to
+     * `<APP_DATA>/memory`). Lets tests isolate the memory files, and lets
+     * multi-tenant deployments relocate them.
+     */
+    @Volatile
+    internal var agentMemoryRootDirOverride: Path? = null
+
+    /**
+     * Generic agent memory (design: robust-browser-agent-memory-system-design.md):
+     * L0 event log + query + scratchpad + run-start recall, wired into the CLI
+     * engine loop below. Lazy: agents that never run the CLI loop pay nothing.
+     */
+    internal val agentMemory: AgentMemory by lazy {
+        val memory = AgentMemory(
+            MemoryScope(agentUuid = uuid.toString()),
+            rootDir = agentMemoryRootDirOverride ?: AgentMemory.defaultRootDir(),
+        )
+        if (MemoryConfig.enabled) {
+            // memory.* tools: the executor is stateless, so one global
+            // registration suffices; per-agent dispatch binds the target.
+            if (CustomToolRegistry.instance.get("memory") == null) {
+                CustomToolRegistry.instance.register(
+                    MemoryToolExecutor(),
+                    MemoryToolExecutor().getToolSpecs().values.toList(),
+                )
+            }
+            agentToolManager.registerCustomTarget("memory", MemoryToolTarget(memory))
+
+            // L2 external memory bridge (M4): wait for the discovery handshake
+            // (bounded), then register the discovered tools so the model can
+            // call them through the normal tool loop.
+            memory.externalBridge?.let { bridge ->
+                val external = ExternalMemoryConfig.fromSystem()
+                runBlocking { bridge.awaitConnected(external.connectTimeoutMs) }
+                if (bridge.getToolSpecs().isNotEmpty()) {
+                    if (CustomToolRegistry.instance.get(external.toolPrefix) == null) {
+                        val executor = MemoryExternalToolExecutor(bridge, external.toolPrefix)
+                        CustomToolRegistry.instance.register(
+                            executor, executor.getToolSpecs().values.toList(),
+                        )
+                    }
+                    agentToolManager.registerCustomTarget(external.toolPrefix, bridge)
+                } else {
+                    logger.warn(
+                        "External memory bridge connected with no tools; registration skipped"
+                    )
+                }
+            }
+        }
+        memoryInitialized.set(true)
+        memory
+    }
+
+    internal val isAgentMemoryInitialized: Boolean get() = memoryInitialized.get()
+
+    private val memoryInitialized = AtomicBoolean(false)
+
+    /**
+     * Start time of the most recent CLI-engine run, for memory completion
+     * duration accounting ([AgentMemorySink.completed]).
+     */
+    @Volatile
+    private var cliRunStartedAt: Instant? = null
 
     /**
      * Complete-prompt + per-tool run tracing for the CLI engine. Writes into
@@ -394,6 +468,7 @@ open class RobustBrowserAgent(
      * Observes the page given an instruction, returning zero or more ObserveResult objects describing
      * candidate elements and potential actions (if returnAction=true).
      */
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     override suspend fun observe(options: ObserveOptions): List<ObserveResult> {
         val context = stateManager.getOrCreateActiveContext(options, "observe")
 
@@ -453,6 +528,12 @@ open class RobustBrowserAgent(
                     session.unbindDriver(driver)
                 }
             }.onFailure { logger.warn("Failed to close bound WebDriver: ${it.message}") }
+
+            // Close the agent memory (event log buffers + search index).
+            if (isAgentMemoryInitialized) {
+                runCatching { agentMemory.close() }
+                    .onFailure { logger.warn("Failed to close agent memory: ${it.message}") }
+            }
         }
     }
 
@@ -549,14 +630,23 @@ open class RobustBrowserAgent(
         return ResolveResult(activeContext, actResult)
     }
 
+
     private suspend fun doRunAgentLoop(
         initActionOptions: ActionOptions, initContext: ExecutionContext, attempt: Int
     ): ResolveResult {
         initializeResolution(initContext, attempt)
-        if (effectiveRunEngine == RunEngine.CLI_TOOL_LOOP) {
-            return doRunCliAgentLoop(initActionOptions, initContext)
-        }
 
+        return if (effectiveRunEngine == RunEngine.CLI_TOOL_LOOP) {
+            doRunCliAgentLoop(initActionOptions, initContext)
+        } else {
+            doRunAgentLoopLegacy(initActionOptions, initContext, attempt)
+        }
+    }
+
+    @Deprecated("This is the legacy branch for doRunAgentLoop, and will be removed in the further")
+    private suspend fun doRunAgentLoopLegacy(
+        initActionOptions: ActionOptions, initContext: ExecutionContext, attempt: Int
+    ): ResolveResult {
         var consecutiveNoOps = 0
         // Text-only stall fuse: consecutive responses without ANY tool call and
         // without a completion marker. Text-only responses deliberately don't
@@ -656,14 +746,33 @@ open class RobustBrowserAgent(
     ): ResolveResult {
         var context = initContext
         val startTime = Instant.now()
+        cliRunStartedAt = startTime
         val completionRef = AtomicReference<ActionDescription?>()
         val toolExecutions = AtomicInteger(0)
         try {
             val action = initActionOptions.copy(fromRunLoop = true)
+            // Initialize the agent memory BEFORE building the tool loop: the
+            // memory.* tool specs are registered into CustomToolRegistry on
+            // first access, and buildCliToolLoop snapshots the registry for
+            // the whole run — a lazy init after this point would leave the
+            // memory tools undisclosed to the model.
+            val taskId = context.sid
+            agentMemory.currentTaskId = taskId
             val loop = buildCliToolLoop(action.action, completionRef, toolExecutions)
             cliLoopTracer.logEvent("run.start", mapOf("instruction" to action.action))
+            // Agent memory: observe the run and inject the recall section
+            // (design §5 — static for the whole run, KV prefix preserved).
+            val urlCandidate = Sanitizer.extractUrl(action.action)
+            agentMemory.sink.taskStarted(
+                taskId, uuid.toString(), action.action, "cli",
+                urlCandidate = urlCandidate,
+            )
+            agentMemory.recordTaskDomain(urlCandidate)
+            val memorySection = agentMemory.recall.recall(
+                action.action, agentMemory.scope, excludeTaskId = taskId,
+            )
             var messages: List<ChatMessage> = listOf(
-                SystemMessage.from(cliAgentSystemPrompt()),
+                SystemMessage.from(cliAgentSystemPrompt() + memorySection),
                 UserMessage.from(action.action),
             )
             var textOnlyStreak = 0
@@ -681,8 +790,14 @@ open class RobustBrowserAgent(
             // 3. Pure text-only streak with no tools ever executed = stall.
             while (!isClosed && turn < maxTurns) {
                 val toolsBefore = toolExecutions.get()
+                // Working memory: re-inject the scratchpad as the tail message
+                // every round (replace-tail — all earlier prefixes stay intact
+                // for KV reuse, and the compressor never touches the tail).
+                val scratchpadText = agentMemory.scratchpad.render()
+                val roundMessages =
+                    if (scratchpadText != null) messages + UserMessage.from(scratchpadText) else messages
                 val response = withTimeout(config.llmInferenceTimeoutMs.milliseconds) {
-                    loop.generate(messages)
+                    loop.generate(roundMessages)
                 }
                 val completion = completionRef.get()
                 if (completion != null && completion.isDecidedComplete) {
@@ -742,6 +857,11 @@ open class RobustBrowserAgent(
             }
             val stopReason = if (turn >= maxTurns) StopReason.MAX_STEPS else StopReason.NOOP_LIMIT
             logger.info("⛔ cli-agent.no-completion sid={} stop={}", context.sid, stopReason)
+            agentMemory.sink.failed(
+                context.sid, uuid.toString(),
+                "CLI agent stopped without completion: $stopReason", step = turn,
+            )
+            agentMemory.consolidator?.schedule(context.sid)
             val actResult = buildFinalActResult(initContext.instruction, context, startTime, stopReason)
             return ResolveResult(context, actResult)
         } catch (e: CancellationException) {
@@ -751,6 +871,9 @@ open class RobustBrowserAgent(
             )
             return ResolveResult(context, ActResultHelper.failed(e, initContext.instruction))
         } catch (e: Exception) {
+            // Failure memory event (user cancellation is deliberately excluded).
+            agentMemory.sink.failed(context.sid, uuid.toString(), e.message ?: e.javaClass.simpleName)
+            agentMemory.consolidator?.schedule(context.sid)
             throw handleResolutionFailure(e, context, startTime)
         }
     }
@@ -820,12 +943,41 @@ open class RobustBrowserAgent(
             // the full registry — the dump must reconstruct the real prompt.
             onBeforeGenerate = { msgs, specs -> cliLoopTracer.logPrompt(msgs, specs) },
             onModelResponse = { seq, response -> cliLoopTracer.logResponse(seq, response) },
-            onToolResult = { req, result, durationMs -> cliLoopTracer.logTool(req, result, durationMs) },
+            onToolResult = { req, result, durationMs ->
+                cliLoopTracer.logTool(req, result, durationMs)
+                // Agent memory: every executed tool becomes a ToolExecuted
+                // event (sanitized at the sink boundary).
+                val memory = agentMemory
+                if (MemoryConfig.enabled) {
+                    memory.sink.toolExecuted(
+                        memory.currentTaskId ?: "unknown", uuid.toString(), req.name(),
+                        req.arguments() ?: "{}",
+                        ok = !result.text().trimStart().startsWith("[fail]"),
+                        result.text(), durationMs, req.id() ?: "",
+                    )
+                }
+            },
             // Page-view timeline: log every view tool execution with its
             // final (decorated) form so URL/fingerprint survive compaction
-            // as a disk-side, machine-readable link index.
+            // as a disk-side, machine-readable link index — and mirror the
+            // same view into the agent memory (PageViewed events).
             onToolDecorated = { req, raw, decorated ->
                 cliLoopTracer.logPageView(req, raw, decorated)
+                val memory = agentMemory
+                if (MemoryConfig.enabled) {
+                    val text = decorated.text()
+                    val viewType = when {
+                        text == raw.text() -> "full"
+                        text.contains(PageViewDeduper.DUPLICATE_MARKER) -> "reference"
+                        text.contains(PageViewDeduper.DIFF_MARKER) -> "diff"
+                        else -> "full"
+                    }
+                    val url = Sanitizer.extractUrl(text) ?: Sanitizer.extractUrl(req.arguments())
+                    memory.sink.pageViewed(
+                        memory.currentTaskId ?: "unknown", uuid.toString(),
+                        url ?: "", "", viewType, sha256Brief(text),
+                    )
+                }
             },
             onToolExecuted = {
                 val executed = toolExecutions.incrementAndGet()
@@ -1261,8 +1413,25 @@ open class RobustBrowserAgent(
         )
         onTaskCompletion(completion, context)
         stateManager.addToHistory(context.agentState)
+        // Agent memory: record the successful completion (idempotent per task)
+        // and schedule the L0→L1 knowledge deposit (PEM fusion, M3).
+        agentMemory.sink.completed(
+            context.sid, uuid.toString(), completion.summary ?: "",
+            completion.keyFindings, completion.filesChanged, completion.problems,
+            durationMs = cliRunStartedAt?.let { Duration.between(it, Instant.now()).toMillis() } ?: 0,
+        )
+        // User preference memory: explicit statements in the summary only
+        // (e.g. "以后用中文输出" — no implicit inference).
+        agentMemory.applyUserPreferences(completion.summary)
+        agentMemory.consolidator?.schedule(context.sid)
         return ResolveResult(context, ActResultHelper.complete(completion))
     }
+
+    /** Short SHA-256 hex (16 chars) of a text — page-view fingerprint. */
+    private fun sha256Brief(text: String): String = runCatching {
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray())
+        digest.take(8).joinToString("") { "%02x".format(it) }
+    }.getOrDefault(Integer.toHexString(text.hashCode()))
 
     /** System prompt for the CLI tool-loop engine: role + resident quick reference + hygiene rules. */
     private fun cliAgentSystemPrompt(): String = buildString {
@@ -1301,12 +1470,16 @@ open class RobustBrowserAgent(
             - Your working directory is ${agentWorkspaceDir}; write helper files
               (e.g. JS for eval) with relative paths — never create files in the
               repository root.
+            - When you need to remember something across steps, write it with
+              memory_note (the note stays visible and survives compression).
+              When past tasks might be relevant, search them with memory_search.
             - When the task is finished, call system.taskComplete(
               summary=..., keyFindings=[...], filesChanged=[...], problems=[...]).
             """.trimIndent()
         )
     }
 
+    @Deprecated("This is the legacy branch for agent.run(), and will be removed in the further")
     private suspend fun step(action: ActionOptions, context: ExecutionContext, noOpsIn: Int): StepProcessingResult {
         var consecutiveNoOps = noOpsIn
 
@@ -1339,7 +1512,7 @@ open class RobustBrowserAgent(
     }
 
     // ─── Step preparation ─────────────────────────────────────────────────────
-
+    @Deprecated("This is the legacy branch for agent.run(), and will be removed in the further")
     private suspend fun prepareStep(
         action: ActionOptions, ctxIn: ExecutionContext, noOpsIn: Int
     ): PrepareStepResult {

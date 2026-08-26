@@ -96,11 +96,11 @@
             <artifactId>kotlin-sdk-server-jvm</artifactId>
             <version>${mcp-sdk.version}</version>
         </dependency>
+        <!-- MCP client: external memory bridge (M4) + MCP HTTP E2E tests -->
         <dependency>
             <groupId>io.modelcontextprotocol</groupId>
             <artifactId>kotlin-sdk-client-jvm</artifactId>
             <version>${mcp-sdk.version}</version>
-            <scope>test</scope>
         </dependency>
         <!-- Ktor CIO engine for embedded MCP HTTP server (lightweight, pure Kotlin) -->
         <dependency>
@@ -108,12 +108,11 @@
             <artifactId>ktor-server-cio-jvm</artifactId>
             <version>3.2.3</version>
         </dependency>
-        <!-- Ktor client CIO engine for MCP HTTP E2E tests -->
+        <!-- Ktor client CIO engine: MCP HTTP transports (external memory bridge) + MCP HTTP E2E tests -->
         <dependency>
             <groupId>io.ktor</groupId>
             <artifactId>ktor-client-cio-jvm</artifactId>
             <version>3.2.3</version>
-            <scope>test</scope>
         </dependency>
         <!-- Observability: OpenTelemetry for distributed tracing (optional) -->
         <dependency>
@@ -173,6 +172,13 @@
         <dependency>
             <groupId>org.yaml</groupId>
             <artifactId>snakeyaml</artifactId>
+        </dependency>
+
+        <!-- Agent memory system: SQLite FTS derived index (memory-index.sqlite).
+             Version managed by browser4-dependencies BOM (sqlite-jdbc.version). -->
+        <dependency>
+            <groupId>org.xerial</groupId>
+            <artifactId>sqlite-jdbc</artifactId>
         </dependency>
     </dependencies>
 

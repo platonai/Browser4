@@ -106,7 +106,7 @@ Lists stored knowledge entries (diagnostic/debug tool).
 
 ## 5. Critical Warnings
 
-> **Warning:** Phase 1 (MVP) requires the agent to explicitly call `experience_save` after task completion. The automatic engine hook (`onTaskComplete`) is Phase 2+. Forgetting to save means knowledge is lost.
+> **Note:** The automatic engine hook is **live** (since 2026-08-24): `RobustBrowserAgent` auto-deposits completed/failed tasks into the knowledge store (`MemoryConsolidator` → PEM fusion) and auto-injects recalled knowledge into the run-start `## Memory` section. Calling `experience_save` yourself is still supported for richer traces and diagnostics, but forgetting it no longer loses knowledge.
 
 > **Warning:** `experience_query` before `open_session` is supported — it operates on the file system, not the browser. Use it to plan your task before launching Chrome.
 

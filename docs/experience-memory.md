@@ -338,3 +338,4 @@ A `PatternPromotion` can advance when `confirmed_sites ≥ minSitesRequired` and
 
 - [Skill: browser4-experience](../skills/browser4-experience/SKILL.md) — Agent-facing usage guide
 - [CLAUDE.md](../CLAUDE.md) — Project context and conventions
+- [Generic Agent Memory System](../docs-dev/copilot/robust-browser-agent-memory-system-design.md) — PEM is the **L1 knowledge layer** of the generic agent memory system: since 2026-08-24 the engine automatically deposits completed tasks (`MemoryConsolidator` → `PemKnowledgeProvider`) and fuses PEM knowledge into the run-start recall section; the `experience_*` MCP tools remain for deep queries and diagnostics.

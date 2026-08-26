@@ -684,6 +684,26 @@ browser4-cli agent result <task-id>
 
 **Listing tasks:** `browser4-cli agent list` shows all tracked tasks with ID, description, started/finished times, and status.
 
+### Agent Memory (progressive)
+
+`agent run` tasks run inside a memory-equipped engine (see
+`docs-dev/copilot/robust-browser-agent-memory-system-design.md`):
+
+- **Run-start recall:** every task begins with an automatic `## Memory` section
+  in the system prompt — L0 fact hits from past tasks, L1 PEM knowledge
+  (selectors/blockers with confidence), and user preferences. Treat it as a
+  directory: verify before use, and fetch details via `memory.read`.
+- **Working memory:** write stable cross-step conclusions with `memory_note`
+  (`key` ≤ 32 chars of `[a-zA-Z0-9_.-]`, value ≤ 200 chars; the tool name is
+  `memory_note` with an underscore). Notes are re-injected every round and
+  survive context compression.
+- **Search history:** `memory_search "query"` finds past tasks/tool executions;
+  `memory_read <taskId> [seq]` fetches a bounded event window; `memory_forget
+  <taskId>` explicitly removes a task (privacy/correction).
+- **Auto-deposit:** completed and failed tasks are automatically saved to the
+  knowledge store (`experience_*` tools remain available for deeper queries
+  and diagnostics). No manual `experience_save` needed.
+
 See **[agent.md](references/agent.md)** for full details including LLM key configuration, error recovery, and `extract`/`summarize` synchronous variants.
 
 ## 7. Reference Map
