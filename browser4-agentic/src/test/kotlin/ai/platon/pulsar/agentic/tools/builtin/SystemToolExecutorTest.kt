@@ -67,17 +67,49 @@ class SystemToolExecutorTest {
     }
 
     @Test
-        @DisplayName("skillDoc serves the distilled quickstart.md resident reference")
+    @DisplayName("skillDoc serves the distilled quickstart.md resident reference")
     fun skillDocReadsQuickstart() {
         val content = executor.skillDoc("quickstart.md")
 
         assertTrue(content.contains("Core Loop"), "quickstart must carry the core loop, got: ${content.take(80)}")
         assertTrue(content.contains("snapshot vs htmlsnapshot"), "quickstart must carry the key decision tree")
-        assertTrue(content.length < 20_000, "quickstart must stay small (resident prompt budget), got ${content.length} chars")
+        assertTrue(
+            content.length < 20_000,
+            "quickstart must stay small (resident prompt budget), got ${content.length} chars"
+        )
     }
 
     @Test
-        @DisplayName("skillDocStrict returns null for a missing document (caller decides fallback)")
+    @DisplayName("quickstart stays in sync with SKILL.md on key facts (distillation drift guard)")
+    fun quickstartStaysInSyncWithSkill() {
+        val quickstart = executor.skillDoc("quickstart.md")
+        val skill = executor.skillDoc("SKILL.md")
+
+        listOf(
+            "DOM_LOAD_AND_SELECT", "--auto-diff", "generate-locator",
+            "--headless", "BROWSER4_RUNTIME_DIR", "htmlsnapshot",
+        ).forEach { token ->
+            assertTrue(
+                quickstart.contains(token) && skill.contains(token),
+                "$token must appear in both quickstart.md and SKILL.md"
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("skillDocStrict strips frontmatter for the resident embed")
+    fun skillDocStrictStripsFrontmatter() {
+        val content = executor.skillDocStrict("quickstart.md")
+
+        assertNotNull(content, "quickstart must resolve for the resident prompt")
+        val resident = content!!
+        assertFalse(resident.startsWith("---"), "resident embed must not carry YAML frontmatter")
+        assertFalse(resident.contains("x-role:"), "frontmatter fields must not leak into the resident prompt")
+        assertTrue(resident.contains("Core Loop"), "the body must survive frontmatter stripping")
+    }
+
+    @Test
+    @DisplayName("skillDocStrict returns null for a missing document (caller decides fallback)")
     fun skillDocStrictReturnsNullWhenMissing() {
         assertNull(executor.skillDocStrict("does-not-exist.md"))
         assertNotNull(executor.skillDocStrict("SKILL.md"), "existing docs must resolve")

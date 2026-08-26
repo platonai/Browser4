@@ -90,8 +90,12 @@ class SystemToolExecutor(
      * for embedding document content into system prompts (e.g. the resident
      * CLI quick reference): the caller decides the fallback.
      */
-    fun skillDocStrict(name: String): String? =
-        readBundledDoc(name)?.take(MAX_SKILL_DOC_CHARS)
+    fun skillDocStrict(name: String): String? {
+        val content = readBundledDoc(name) ?: return null
+        // Resident embedding: drop the YAML frontmatter (metadata for humans/tooling,
+        // useless in prompts) so every request does not pay for boilerplate.
+        return stripFrontmatter(content).take(MAX_SKILL_DOC_CHARS)
+    }
 
     /** Path-traversal-safe name check shared by the doc readers; null when invalid. */
     private fun sanitizeDocName(name: String): String? {
@@ -130,6 +134,19 @@ class SystemToolExecutor(
             return null
         }
         return trimmed.substring(3, end).trim()
+    }
+
+    /** Strip the leading YAML frontmatter block, keeping only the document body. */
+    private fun stripFrontmatter(content: String): String {
+        val trimmed = content.trimStart('\uFEFF', ' ', '\r', '\n')
+        if (!trimmed.startsWith("---")) {
+            return content
+        }
+        val end = trimmed.indexOf("\n---", 3)
+        if (end < 0) {
+            return content
+        }
+        return trimmed.substring(end + 4).trimStart('\r', '\n')
     }
 
     /**

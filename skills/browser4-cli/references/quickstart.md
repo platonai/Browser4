@@ -92,7 +92,4 @@ X-SQL essentials: CSS selectors use **single quotes** (`'h2'`); `@url` is unquot
 
 ## Context Discipline
 
-- Prefer `snapshot -v 0 --stdout` and targeted `htmlsnapshot get` over full-page dumps;
-- Use references/diffs when re-examining the same page (the system folds them); pass a refresh argument when a forced re-fetch is needed;
-- For full syntax and references call `system.skillDoc("SKILL.md")` / `system.skillDoc("<topic>.md")` (snapshot, htmlsnapshot, x-sql, crawl, swarm, agent…);
-- If SKILL documents were compressed (noted in the checkpoint), reload them with `system.skillDoc`.
+- When re-examining the same page, use references/diffs (the system folds them); pass a refresh argument only when a forced re-fetch is needed.
