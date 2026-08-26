@@ -129,6 +129,15 @@ browser4-cli summarize "summarize the product reviews"
 browser4-cli summarize --selector "#content"
 ```
 
+## Flags
+
+| Flag | Applies to | Description |
+|------|-----------|-------------|
+| `--wait` | `agent run` | Block until the task reaches a terminal state, then print the result |
+| `--wait-timeout <secs>` | `agent run` | Wait window in seconds (default 600; env `BROWSER4_CLI_AGENT_WAIT_TIMEOUT_SECS`) |
+| `--schema <json>` | `extract` | Enforce a JSON output schema for the extraction |
+| `--selector <css>` | `summarize` | Scope summarization to elements matching a CSS selector |
+
 ## Errors & Recovery
 
 | Symptom | Recovery |

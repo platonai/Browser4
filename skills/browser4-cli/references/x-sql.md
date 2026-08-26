@@ -6,6 +6,8 @@ tier: catalog
 
 # X-SQL Reference: DOM & String Functions
 
+## Overview
+
 This directory contains the X-SQL function reference, split by function group. Use the links below to read only the section you need.
 
 **SQL constraint:** All queries extracting page data MUST use this pattern:

@@ -1,10 +1,21 @@
 ---
 name: browser4-fix-bug
+title: "browser4-fix-bug"
+tier: procedure
 description: "Fix bugs in code using a compile-test-fix loop: run the build/tests, read the error, locate the faulty lines, edit, and re-verify until green. Use when the user reports a build failure, test failure, crash, or asks to fix an error in Browser4 plugins, Kotlin, TS/JS, Python, or scripts."
 allowed-tools: coding.shell coding.read coding.readLines coding.replace coding.replaceRegex coding.editLines coding.insertAfter coding.diff coding.changeSummary coding.revert coding.diagnostics coding.references coding.symbols coding.lspServers tab.eval tab.console
 ---
 
 # browser4-fix-bug
+
+## Quick Start
+
+```text
+coding.shell(command="mvn -pl <module> -am compile -DskipTests")     # 1. reproduce the error
+coding.readLines(path=<file>, startLine=<line-8>, endLine=<line+8>)  # 2. read the failing code
+coding.replace(path=<file>, old="...", new="...")                    # 3. smallest possible edit
+coding.shell(command="mvn -pl <module> -am compile -DskipTests")     # 4. re-verify until green
+```
 
 Drive a bug from "it fails" to "it passes" with a disciplined compile-test-fix loop.
 Never guess — read the actual error, make the smallest edit, and re-verify.
@@ -15,6 +26,49 @@ Never guess — read the actual error, make the smallest edit, and re-verify.
 - A plugin, skill script, JS, or shell script errors at runtime
 - User says "fix this error", "the build is broken", "tests fail", "it crashes"
 - LSP diagnostics (`coding.diagnostics`) report errors in a file
+
+## How It Works
+
+The compile-test-fix loop is error-driven: reproduce the failure, read the exact error, locate the faulty lines with minimal context, make the smallest possible edit, and re-verify. Never guess — every iteration starts from the actual error output.
+
+## Patterns
+
+### 1. Build/compile failure
+
+```text
+coding.shell(command="mvn -pl <module> -am compile -DskipTests")
+coding.readLines(path=<file>, startLine=<line-8>, endLine=<line+8>)
+coding.replace(path=<file>, old="...", new="...")
+coding.shell(command="mvn -pl <module> -am compile -DskipTests")
+```
+
+### 2. Failing test
+
+```text
+coding.shell(command="mvn test -pl <module> -Dtest=<TestClass>")
+coding.readLines(path=<test-file>, startLine=<line-8>, endLine=<line+8>)
+coding.replace(path=<file>, old="...", new="...")
+```
+
+### 3. Runtime error in plugin/script
+
+```text
+coding.diagnostics(path=<file>)
+coding.readLines(path=<file>, startLine=<line-8>, endLine=<line+8>)
+coding.replace(path=<file>, old="...", new="...")
+```
+
+## Flags
+
+`coding` tools take structured arguments, not CLI flags — see Workflow below for each tool's parameters.
+
+## Errors & Recovery
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Build still fails after an edit | Edit didn't address the real error | Re-read the error output; check the exact line numbers |
+| Edit had no effect | Wrong file or path | Verify the path with `coding.readLines` before editing |
+| Loop never goes green | Fix introduced a new error | Revert (`coding.revert`), then make a smaller edit |
 
 ## Workflow
 

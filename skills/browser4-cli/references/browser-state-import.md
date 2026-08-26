@@ -1,10 +1,20 @@
 ---
-title: "Import Browser State — Copy System Browser State into Browser4"
+title: "Import Browser State"
 description: "Reuse logged-in state (cookies, localStorage) or an entire profile from your system Chrome/Edge inside Browser4-managed sessions. Covers attach + state-save/state-load, the deprecated SYSTEM_DEFAULT mode, and full-profile copy via PROTOTYPE or open --profile."
 tier: procedure
 ---
 
 # Import Browser State
+
+## Quick Start
+
+```bash
+browser4-cli state-save my-state.json            # save the current session's web state (cookies + localStorage)
+browser4-cli open --fresh https://example.com    # launch a Browser4-managed browser
+browser4-cli state-load my-state.json            # restore cookies + localStorage into it
+```
+
+The recommended end-to-end path — attach to your running system browser, save its state, then load it into a managed browser — is step [1](#1-recommended-copy-web-state-cookies--localstorage) below.
 
 Copy the state of your **system browser** (the Chrome/Edge you use daily) into a
 **Browser4-managed browser** (a browser launched by `open`, using an isolated
@@ -16,6 +26,32 @@ Two levels of "state" exist:
 |---|---|---|
 | **Web state** | Cookies + localStorage — enough to restore logins | ✅ Fully supported via `state-save` / `state-load` |
 | **Full profile** | History, passwords, extensions, IndexedDB, cache, settings | ⚠️ Manual profile-directory copy only (with caveats) |
+
+## When to Use
+
+Use this when you need **logged-in state** (cookies + localStorage) from your system Chrome/Edge inside a Browser4-managed session — e.g. to access authenticated pages without logging in again. Prefer `state-save`/`state-load` web-state copies; full profile copies are manual, fragile, and only for special cases.
+
+## How It Works
+
+`state-save` serializes the session's cookies and localStorage into a JSON file; `state-load` writes them back into a browser session's cookie jar and storage, so logins survive without re-authentication. Full profile copies instead copy the entire system Chrome profile directory (history, extensions, passwords) — manual and fragile.
+
+## Patterns
+
+- [1. Web state copy (recommended)](#1-recommended-copy-web-state-cookies--localstorage) — attach → `state-save` → `open` → `state-load`
+- [2. `SYSTEM_DEFAULT` profile mode](#2-system_default-profile-mode-deprecated) — deprecated; kept for legacy setups
+- [3. Full profile copy](#3-full-profile-copy-prototype-mode--open---profile) — manual profile-directory copy for history/passwords/extensions
+
+## Flags
+
+The `state-save` / `state-load` / `attach` commands take positional arguments only; see [storage-state.md](storage-state.md) and [attach.md](attach.md) for their full command references.
+
+## Errors & Recovery
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Cookies restored but login still fails | Page not reloaded after `state-load` | `open` / reload the page so cookies are sent with the next request |
+| `state-load` has no effect | State was saved from a different profile/origin | Save from the exact session you attached to; check the JSON's origins |
+| Full profile copy broken | Chrome profile locked or version mismatch | Close the source browser first; copy only the needed subdirectories |
 
 ## 1. Recommended: copy web state (cookies + localStorage)
 

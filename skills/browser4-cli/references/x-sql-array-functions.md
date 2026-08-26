@@ -6,6 +6,8 @@ tier: catalog
 
 # X-SQL: ArrayFunctions — Array Operations
 
+## Overview
+
 > **Parent:** [x-sql.md](x-sql.md) — full function index and quick-reference patterns
 >
 > **Related:** [DomFunctions](x-sql-dom-functions.md) | [DomSelectFunctions](x-sql-dom-select-functions.md) | [StringFunctions](x-sql-string-functions.md)
@@ -13,6 +15,14 @@ tier: catalog
 **Source:** `ArrayFunctions.kt` | **Namespace:** `ARRAY` | **3 functions**
 
 > **SQL constraint:** All queries must use `SELECT ... FROM DOM_LOAD_AND_SELECT(url, cssQuery)`. No CTEs, subqueries, `EXPLODE`, or other table sources are supported.
+
+## Quick Index
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| [ARRAY_JOIN_TO_STRING](#array_join_to_string) | string | Join all array elements with a separator |
+| [ARRAY_FIRST_NOT_BLANK](#array_first_not_blank) | element | First element that is not blank (non-whitespace) |
+| [ARRAY_FIRST_NOT_EMPTY](#array_first_not_empty) | element | First element that is not empty |
 
 ---
 

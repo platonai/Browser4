@@ -6,15 +6,26 @@ tier: procedure
 
 # HTML Snapshot Scenarios — Amazon Discovery & Extraction
 
-These three scenarios form a complete Amazon extraction workflow: discover the home page structure → extract search results → extract product details. Each scenario is self-contained and emphasizes a **discovery-first** approach — use `summary` and `inspect` to find selectors before committing to extraction queries.
+## Quick Start
 
-> **Note:** CSS selectors are tied to live websites and may break over time. See [SKILL.md §5](../SKILL.md#5-critical-warnings). Always run `summary` + `inspect` first when targeting a new locale or product category.
->
-> **Last verified:** 2026-07-10 (Amazon.com, US locale). Selectors may differ by locale, device, or after Amazon layout updates.
+```bash
+browser4-cli open --headless "https://www.amazon.com"
+browser4-cli htmlsnapshot summary                  # home page structure overview
+browser4-cli htmlsnapshot inspect --selector ":root"   # discover selectors
+browser4-cli htmlsnapshot get all text "h2"        # extract results
+```
 
-> **Parent document:** [htmlsnapshot-scenarios.md](htmlsnapshot-scenarios.md) — full scenario index, patterns & tips, and command reference.
+Always run `summary` + `inspect` first when targeting a new locale or product category — selectors differ by locale and change when Amazon updates its layout.
 
-## Scenarios
+## When to Use
+
+Use these recipes when your target is **Amazon** (or a structurally similar marketplace): home page discovery, search-results extraction, and product-detail extraction. The parent [scenario index](htmlsnapshot-scenarios.md) compares all scenario families.
+
+## How It Works
+
+The Amazon workflow is discovery-first by necessity: `summary` reveals the current page structure, `inspect` finds stable selectors for the search results grid and product detail sections, and `get all`/`query` extract only after selectors are verified. Selectors are re-discovered per locale and after layout changes.
+
+## Patterns
 
 | # | Scenario | Primary Commands | Key Pattern |
 |---|----------|------------------|-------------|
@@ -23,6 +34,26 @@ These three scenarios form a complete Amazon extraction workflow: discover the h
 | 16 | Amazon Product Detail Extraction | `summary`, `inspect`, `get`, `grep`, `export` | Full product page data collection |
 
 ---
+
+## Flags
+
+The scenarios use `htmlsnapshot` flags and load options (e.g. `-i 1h` to avoid quota burns) — see [htmlsnapshot.md](htmlsnapshot.md) for the full flag reference.
+
+## Errors & Recovery
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Empty results or CAPTCHA/503 pages | Amazon detects rapid repeated requests | Add `-i 1h` (or longer) to load options; wait 5-10 minutes before retrying |
+| Selectors match nothing after an update | Amazon changed its layout | Re-run `summary` + `inspect` to re-discover selectors |
+| Wrong locale content extracted | Locale/device-specific layout | Target the exact locale URL and re-discover selectors for it |
+
+These three scenarios form a complete Amazon extraction workflow: discover the home page structure → extract search results → extract product details. Each scenario is self-contained and emphasizes a **discovery-first** approach — use `summary` and `inspect` to find selectors before committing to extraction queries.
+
+> **Note:** CSS selectors are tied to live websites and may break over time. See [SKILL.md §5](../SKILL.md#5-critical-warnings). Always run `summary` + `inspect` first when targeting a new locale or product category.
+>
+> **Last verified:** 2026-07-10 (Amazon.com, US locale). Selectors may differ by locale, device, or after Amazon layout updates.
+
+> **Parent document:** [htmlsnapshot-scenarios.md](htmlsnapshot-scenarios.md) — full scenario index, patterns & tips, and command reference.
 
 ## 14. Amazon Home Page Discovery
 
@@ -47,34 +78,18 @@ browser4-cli htmlsnapshot summary
 ```yaml
 url: https://www.amazon.com
 title: "Amazon.com. Spend less. Smile more."
-metaDescription: "Free shipping on millions of items. Get the best of Shopping and Entertainment with Prime..."
+metaDescription: "Free shipping on millions of items..."
 headings:
-  - level: h1
-    text: "Amazon"
-  - level: h2
-    text: "Today's Deals"
-  - level: h2
-    text: "Recommendations"
-  - level: h2
-    text: "Top categories"
-  - level: h2
-    text: "New & interesting finds"
+  - h1: "Amazon"
+  - h2: "Today's Deals", "Recommendations", "Top categories", "New & interesting finds"
 forms: 2
 tables: 18
 lists: 24
-textStats:
-  totalTextNodes: 2143
-  totalTextChars: 142890
+textStats: { totalTextNodes: 2143, totalTextChars: 142890 }
 keyContent:
-  - selector: "#nav-search-bar-form"
-    textPreview: "Search Amazon"
-    textLength: 24
-  - selector: "#nav-xshop"
-    textPreview: "Today's Deals  Customer Service  Gift Cards  Sell"
-    textLength: 98
-  - selector: "#gw-card-container"
-    textPreview: "Shop by Category  Electronics  Home  Kitchen  Books"
-    textLength: 412
+  - "#nav-search-bar-form"     # search form
+  - "#nav-xshop"               # navigation bar
+  - "#gw-card-container"       # main content grid
 ```
 
 **Why `summary` here:** The summary instantly reveals that Amazon's home page has 2 forms (the search box and probably a sign-in), 18 tables (product grids and comparison sections), and 24 lists (navigation and recommendations). The `headings` section shows the page's content sections at a glance. The `keyContent` blocks identify the most text-dense regions — the search form (`#nav-search-bar-form`), the navigation bar (`#nav-xshop`), and the main content grid (`#gw-card-container`). Without `summary`, you would need to scroll through thousands of lines of HTML or visually scan a heavily cluttered page.
@@ -92,24 +107,6 @@ browser4-cli htmlsnapshot inspect "#nav-xshop"
 **Output (example):**
 ```
 ### Inspect: ":root" (78 matching containers, 10 analyzed)
-
-  Sample structure (3 of 10):
-  -- Container 1: div#nav-belt
-      div#nav-logo
-       a#nav-logo-sprites  ""
-      div#nav-search-bar-form
-       div.nav-search-field
-        input#twotabsearchtextbox  ""
-       div.nav-search-submit
-        input.nav-input[type="submit"]  "Go"
-      div#nav-tools
-       span#nav-link-accountList  "Hello, sign in"
-  -- Container 2: div#nav-main
-      div#nav-xshop
-       a.nav-a             "Today's Deals"
-       a.nav-a             "Customer Service"
-       a.nav-a             "Gift Cards"
-       a.nav-a             "Sell"
 
   Suggested selectors (recurring across containers):
    10/10 (100%)  h2                                              → "Today's Deals"
@@ -179,20 +176,12 @@ browser4-cli htmlsnapshot summary
 ```yaml
 url: https://www.amazon.com/s?k=wireless+mouse
 title: "Amazon.com: wireless mouse"
-headings:
-  - level: h1
-    text: "Results"
-  - level: h2
-    text: "Sponsored"
-  - level: h2
-    text: "Related searches"
+headings: [h1 "Results", h2 "Sponsored", h2 "Related searches"]
 forms: 4
 tables: 1
 lists: 48
 keyContent:
-  - selector: ".s-main-slot"
-    textPreview: "Results  Price and other details may vary based on product..."
-    textLength: 560
+  - ".s-main-slot"    # main results slot
 ```
 
 The summary confirms: this is a search-results page (h1 "Results"), there are 48 list items (roughly the number of products), and the main content lives in `.s-main-slot`.
@@ -210,24 +199,6 @@ browser4-cli htmlsnapshot inspect ".s-result-item[data-component-type='s-search-
 **Output (example):**
 ```
 ### Inspect: ".s-result-item[data-component-type='s-search-result']" (48 matches, 10 analyzed)
-
-  Sample structure (3 of 48):
-  -- Element 1: div.s-result-item[data-component-type="s-search-result"]
-      div.s-card-container
-       div.a-section
-        h2.a-size-mini.a-spacing-none
-         a.a-link-normal.s-underline-text    "Logitech M720 Triathlon"
-        div.a-row
-         a.a-link-normal.s-no-hover
-          i.a-icon-star-small
-           span.a-icon-alt                  "4.6 out of 5 stars"
-          span.a-size-base                  "2,345"
-        div.a-row.a-spacing-micro
-         a.a-link-normal
-          span.a-price
-           span.a-offscreen                 "$34.99"
-        div.s-image
-         img.s-image                        "https://m.media-amazon.com/images/I/..."
 
   Suggested selectors (recurring across matches):
    10/10 (100%)  h2 a.a-link-normal                              → "Logitech M720..."
@@ -356,31 +327,14 @@ browser4-cli htmlsnapshot summary
 ```yaml
 url: https://www.amazon.com/dp/B08PP5MSVB
 title: "Apple AirPods Pro (2nd Generation) Wireless Earbuds, Up to 2X More Active Noise Cancelling..."
-metaDescription: "Amazon.com: Apple AirPods Pro (2nd Generation) ..."
-headings:
-  - level: h1
-    text: "Apple AirPods Pro (2nd Generation)"
-  - level: h2
-    text: "About this item"
-  - level: h2
-    text: "Product information"
-  - level: h2
-    text: "Customer reviews"
-  - level: h2
-    text: "Compare with similar items"
+headings: [h1 "Apple AirPods Pro (2nd Generation)", h2 "About this item", "Product information", "Customer reviews", "Compare with similar items"]
 forms: 1
 tables: 2
 lists: 6
 keyContent:
-  - selector: "#productTitle"
-    textPreview: "Apple AirPods Pro (2nd Generation)"
-    textLength: 42
-  - selector: "#feature-bullets"
-    textPreview: "Active Noise Cancellation, Adaptive Transparency..."
-    textLength: 890
-  - selector: "#productDetails_techSpec_section_1"
-    textPreview: "Brand  Apple  Manufacturer  Apple  Model Name  AirPods Pro  ..."
-    textLength: 1240
+  - "#productTitle"                       # product title
+  - "#feature-bullets"                    # feature bullets (largest text block)
+  - "#productDetails_techSpec_section_1"  # technical specs table
 ```
 
 The summary reveals: the product title lives in `#productTitle`, there are 2 tables (technical specs + pricing), 6 lists (feature bullets, related products), and the feature bullets section is the largest text block. This tells you exactly where to look before writing any selectors.
@@ -402,20 +356,8 @@ browser4-cli htmlsnapshot inspect "#productDetails_techSpec_section_1"
 ```
 ### Inspect: "#centerCol" (1 element)
 
-  -- Element: div#centerCol
-       h1#title.a-size-large    "Apple AirPods Pro (2nd Generation)"
-        span#productTitle       "Apple AirPods Pro (2nd Generation)"
-       div#averageCustomerReviews
-        i.a-icon-star
-         span.a-icon-alt        "4.6 out of 5 stars"
-        span#acrCustomerReviewText  "12,345"
-       div#corePriceDisplay_desktop_feature_div
-        span.a-price
-         span.a-offscreen       "$199.99"
-       div#availability
-        span.a-declarative      "In Stock"
-       div#bylineInfo
-        a#bylineInfo            "Apple"
+  Key selectors: h1#title, span#productTitle, span.a-icon-alt, span#acrCustomerReviewText,
+  span.a-offscreen, span.a-declarative, a#bylineInfo
 
 ### Inspect: "#feature-bullets" (8 list items)
 

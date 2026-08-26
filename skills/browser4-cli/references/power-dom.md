@@ -1,14 +1,28 @@
 ---
-title: "PowerCSS — Visual Feature Selectors with :expr()"
+title: "PowerCSS — Visual Feature Selectors with `:expr()`"
 description: "Reference for PowerCSS :expr() pseudo-selector. Query DOM elements by their computed visual features — size, position, and content density — in CSS selectors and X-SQL queries."
 tier: catalog
 ---
 
 # PowerCSS — Visual Feature Selectors with `:expr()`
 
+## Overview
+
 > **Used in:** [X-SQL](x-sql.md) — `DOM_FIRST_TEXT(DOM, 'img:expr(width>400)')`, [HTML Snapshot](htmlsnapshot.md), [SKILL.md](../SKILL.md)
 >
 > **Underlying engine:** [jsoup](https://jsoup.org/) — parses HTML into the same DOM as modern browsers. See [jsoup selector-syntax](https://jsoup.org/cookbook/extracting-data/selector-syntax) and [CSS reference](https://www.w3schools.com/cssref/css_selectors.php).
+
+---
+
+## Quick Index
+
+| Section | Type | Description |
+|---------|------|-------------|
+| [Numerical Features](#numerical-features) | numbers | 13 computed node features (size, position, content density) usable in `:expr()` |
+| [`:expr()` Pseudo-Selector](#expr-pseudo-selector) | selector | Filter elements by mathematical expressions over features |
+| [Operators](#operators) | operators | Arithmetic and boolean/comparison operators for expressions |
+| [Real-World Patterns](#real-world-patterns) | recipes | E-commerce image extraction, noise filtering, layout detection |
+| [CLI Usage](#cli-usage) | usage | Using PowerCSS selectors from browser4-cli commands |
 
 ---
 

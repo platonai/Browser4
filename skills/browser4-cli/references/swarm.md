@@ -160,6 +160,17 @@ browser4-cli swarm close   # equivalent to close when swarm session is active
 
 Also accessible via: `close`, `close-all`, or `kill-all`. The swarm session is included in `close-all` enumeration — if `close-all` reports "0 session(s)" but swarm tasks are still tracked, the swarm session was already closed.
 
+## Flags
+
+| Flag | Applies to | Description |
+|------|-----------|-------------|
+| `--display-mode <mode>` | `swarm create` | Browser display mode for the session (e.g. `HEADLESS`) |
+| `--clear-stale` | `swarm create` | Clear stale tasks from previous sessions |
+| `--sql <query>` | `swarm query` | X-SQL query template; `@file` reads from file |
+| `--seed-file <file>` | `swarm query` / `swarm submit` | Read target URLs from a file |
+| `--refresh` | `swarm query` | Re-fetch pages instead of reusing the cache |
+| `--wait` | `swarm query` | Block until all submitted jobs complete |
+
 ## Task Lifecycle States
 
 Swarm tasks progress through these states:

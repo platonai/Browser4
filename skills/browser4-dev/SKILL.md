@@ -1,10 +1,22 @@
 ---
 name: browser4-dev
+title: "browser4-dev"
+tier: procedure
 description: "Develop features inside the Browser4 repository itself: add CLI commands, agent tool domains, REST endpoints, tests, and skills; analyze impact, plan dev tasks, check CDP pitfalls, and verify builds. Use when the user asks to add a new browser4-cli command, new tool domain, REST endpoint, modify Browser4's own Kotlin/Rust code, or check which modules a change affects."
 allowed-tools: coding.scaffoldFlow coding.scaffoldFromExample coding.mvnBuild coding.devTask coding.impact coding.moduleGraph coding.trapCheck coding.protect coding.scaffold coding.write coding.read coding.readLines coding.replace coding.replaceRegex coding.editLines coding.insertAfter coding.revert coding.validate coding.shell coding.ktSymbols coding.ktReferences coding.ktInheritance coding.diagnostics coding.references coding.symbols coding.tokenStats coding.estimateTokens
 ---
 
 # browser4-dev
+
+## Quick Start
+
+Add a new `browser4-cli` command with one call:
+
+```text
+coding.scaffoldFlow(type="b4-cli-command", name="my-command", verify=true)
+```
+
+`scaffoldFlow` generates the whole chain — `commands.rs` CommandDef, backend MCP alias, tool executor, and test — from a single name; `verify=true` runs the type-appropriate build check. For other work (agent tool, REST endpoint, test class, skill), use the matching `type` and see Workflows below.
 
 Develop features inside the Browser4 repository itself, following the repository's
 own conventions (AGENTS.md) — with multi-file skeletons generated from the
@@ -18,6 +30,45 @@ repository's real reference implementations, so the output never goes stale.
 - User wants to add a test class or a skill
 - User wants to modify Browser4's own Kotlin/Rust code and verify it compiles
 - User wants to know which modules a change affects, or plan a whole dev task
+
+## How It Works
+
+`scaffoldFlow` derives multi-file skeletons from the repository's real reference implementations, so generated code matches current conventions instead of stale templates. `moduleGraph`/`impact` rebuild the dependency picture from the live `pom.xml` files, and `mvnBuild` verifies with structured diagnostics. Follow AGENTS.md conventions at every step.
+
+## Patterns
+
+### 1. Add a new CLI command
+
+```text
+coding.scaffoldFlow(type="b4-cli-command", name="my-command", verify=true)
+coding.mvnBuild(module="browser4-rest")
+```
+
+### 2. Add a REST endpoint
+
+```text
+coding.scaffoldFlow(type="rest-endpoint", name="my-resource", verify=true)
+```
+
+### 3. Modify browser driver code
+
+```text
+coding.trapCheck(path="browser4-core/browser4-browser/src/.../PulsarWebDriver.kt")
+coding.impact(path=<file>)
+coding.mvnBuild(module="browser4-core/browser4-browser")
+```
+
+## Flags
+
+`coding` tools take structured arguments, not CLI flags — see Workflows below for each tool's parameters.
+
+## Errors & Recovery
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `mvnBuild` fails after scaffolding | Generated code conflicts with existing code | Read diagnostics, fix the conflicting file, re-run |
+| `scaffoldFlow` rejects `verify=true` | Type-specific build check failed | Run without verify, inspect, then re-run after fixing |
+| Unknown blast radius | Skipped `moduleGraph`/`impact` | Run them first — see Workflow 0 |
 
 ## Workflows
 

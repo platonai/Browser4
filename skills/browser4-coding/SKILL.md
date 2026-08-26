@@ -1,10 +1,28 @@
 ---
 name: browser4-coding
+title: "browser4-coding"
+tier: procedure
 description: "Create and validate Browser4 plugins, skills, JS scripts, and shell scripts; and develop Browser4 ITSELF (self-development): build modules, extract live skeletons, analyze impact, plan dev tasks, and check CDP pitfalls. Use when the user asks to write a Browser4 plugin or skill, write browser JS or build scripts, modify Browser4's own Kotlin/Rust code, or validate repo consistency."
 allowed-tools: coding.scaffold coding.scaffoldFlow coding.scaffoldFromExample coding.validate coding.write coding.read coding.replace coding.replaceRegex coding.editLines coding.insertAfter coding.revert coding.shell coding.mvnBuild coding.ktSymbols coding.ktReferences coding.ktInheritance coding.impact coding.moduleGraph coding.devTask coding.trapCheck coding.protect coding.tokenStats coding.estimateTokens tab.eval tab.console
 ---
 
 # browser4-coding
+
+## Quick Start
+
+Create and validate a plugin, or a skill:
+
+```text
+coding.scaffold(type="plugin", pluginName="My Plugin", domain="media",
+                basePackage="ai.platon.pulsar.myplugin",
+                toolMethod="detectMedia", toolDescription="Detect media on the page")
+coding.validate(type="plugin", path="browser4-plugins/browser4-myplugin")
+
+coding.scaffold(type="skill", name="my-skill", description="What it does")
+coding.validate(type="skill", path="skills/my-skill/SKILL.md")
+```
+
+For self-development work (modifying Browser4 itself), start with `coding.scaffoldFlow` — see Workflows below.
 
 The programming-agent kernel for Browser4: sandboxed shell + filesystem, artifact scaffolding/validation (plugins, skills, browser JS, scripts), and a full self-development toolset for modifying Browser4's own code (live module graph, impact analysis, Maven builds with structured diagnostics, CDP pitfall awareness, high-level dev-task planning).
 
@@ -14,6 +32,45 @@ The programming-agent kernel for Browser4: sandboxed shell + filesystem, artifac
 - User wants to validate any of the above
 - User wants to modify Browser4's own code (Kotlin modules, Rust CLI, poms) — use the self-development tools below
 - User wants to check repo governance (versions, module registration) or the CDP pitfalls before editing the browser driver
+
+## How It Works
+
+The `coding` tools fall into three layers: **artifact tools** generate and validate plugins, skills, JS, and scripts (templates from real code so they never go stale); **self-development tools** inspect and modify Browser4 itself (live module graph, impact analysis, Maven builds, CDP trap checks); and **shell/filesystem tools** provide a sandboxed environment for anything else.
+
+## Patterns
+
+### 1. Create and validate a new plugin
+
+```text
+coding.scaffold(type="plugin", pluginName="...", domain="...", basePackage="...", toolMethod="...", toolDescription="...")
+coding.validate(type="plugin", path="browser4-plugins/browser4-xxx")
+coding.mvnBuild(module="browser4-plugins/browser4-xxx")
+```
+
+### 2. Copy an existing plugin's structure
+
+```text
+coding.scaffoldFromExample(path="browser4-plugins/browser4-seo")
+coding.validate(type="plugin", path="browser4-plugins/browser4-xxx")
+```
+
+### 3. Repo governance check before merging
+
+```text
+coding.validate(type="repo-consistency")
+```
+
+## Flags
+
+`coding` is a tool set, not a CLI — there are no command-line flags. Tool parameters are documented per tool in the sections below.
+
+## Errors & Recovery
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `coding.validate` fails | Missing/incorrect required parameters | Read the validation output and fix the named field |
+| `coding.mvnBuild` fails | Compile errors in generated code | Read the structured diagnostics and fix the faulty file |
+| `scaffoldFromExample` renames wrong classes | Ambiguous class stem | Pass explicit per-class keys (e.g. `SeoService=CustomService`) |
 
 ## Artifact Tools (plugins / skills / js / scripts)
 

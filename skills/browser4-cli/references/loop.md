@@ -80,6 +80,34 @@ browser4-cli loop -- snapshot -i 600
 browser4-cli loop -- screenshot --full-page -i 1800
 ```
 
+## Patterns
+
+### Named loops
+
+Run multiple independent loops concurrently with `--name` — each has its own state file under `~/.browser4/loops/<name>.json`:
+
+```bash
+browser4-cli loop --name health --shell "curl -s https://api.example.com/health" -i 300
+browser4-cli loop --list
+```
+
+### Start paused
+
+Create a loop that is persisted but does not start until resumed:
+
+```bash
+browser4-cli loop --pause --shell "echo hi" -i 60 --name demo
+browser4-cli loop --resume --name demo
+```
+
+### Resume after interruption
+
+Pick up a loop after a crash or Ctrl+C with `--resume` (optionally `--name` to target a named loop) — see [Persistence and resume](#persistence-and-resume) for the full state-file workflow.
+
+### Stop and clean up
+
+`--stop` stops a running/paused loop and clears its persisted state; `--stop-all` clears every loop at once.
+
 ## Flags
 
 | Flag | Short | Type | Default | Description |

@@ -6,7 +6,19 @@ tier: catalog
 
 # Storage Management
 
+## Overview
+
 Manage cookies, localStorage, sessionStorage, and browser storage state.
+
+## Quick Index
+
+| Topic | Section | Description |
+|-------|---------|-------------|
+| Save / restore full state | [Storage State](#storage-state) | `state-save` / `state-load` (cookies + localStorage) |
+| Cookies | [Cookies](#cookies) | `cookie-list`, `cookie-get`, `cookie-set`, `cookie-delete`, `cookie-clear` |
+| Local storage | [Local Storage](#local-storage) | list / get / set / delete / clear localStorage commands |
+| Session storage | [Session Storage](#session-storage) | list / get / set / delete / clear sessionStorage commands |
+| Common patterns | [Common Patterns](#common-patterns) | auth state reuse, save/restore roundtrip |
 
 ## Storage State
 

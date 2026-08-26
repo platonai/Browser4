@@ -6,6 +6,42 @@ tier: procedure
 
 # Skills Command Reference
 
+## Quick Start
+
+```bash
+browser4-cli skills list              # bundled skills available to the agent
+browser4-cli skills get browser4-cli  # unpack a bundled skill's files to disk
+browser4-cli skill-list               # skills installed on the server
+browser4-cli skill-install <id>       # install a backend skill
+```
+
+## When to Use
+
+Use `skills ...` (bundled) to refresh or inspect the AI agent's local instruction files; use `skill-...` (backend) to install and manage server-side skills. The two-systems table below tells you which command family your task needs.
+
+## How It Works
+
+Bundled skills are instruction files **compiled into the CLI binary** at build time — `skills get` unpacks them to disk for inspection. Backend skills live in the server's skill registry and are managed at runtime with `skill-*` commands. The two systems are independent: refreshing one never touches the other.
+
+## Patterns
+
+### Refresh a bundled skill locally
+
+```bash
+browser4-cli skills get browser4-cli   # unpack the skill files to disk
+```
+
+### Install / uninstall a backend skill
+
+```bash
+browser4-cli skill-install <id>        # install from the server registry
+browser4-cli skill-uninstall <id>      # remove it again
+```
+
+## Flags
+
+The `skills` / `skill-*` commands take positional arguments only (`get <id>`, `install <id>`, …); no flags are currently defined.
+
 Browser4 has two independent skill systems — know which one you need:
 
 | System | Commands | What it manages | Where skills live |
@@ -240,5 +276,5 @@ browser4-cli skill-uninstall old-experiment
 ## See also
 
 - [browser4-cli SKILL.md](../SKILL.md) — the main bundled skill (use `skills get browser4-cli`)
-- [SKILL Document Methodology](../../methodology.md) — principles for writing skill documents
-- [Plugin Development](../../docs-dev/plugin-development.md) — plugin system (related to installable skills)
+- [SKILL Document Methodology](../methodology.md) — principles for writing skill documents
+- [Plugin Development](../../../docs-dev/plugin-development.md) — plugin system (related to installable skills)

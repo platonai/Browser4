@@ -6,6 +6,19 @@ tier: procedure
 
 # Shell Quoting on Windows — Workaround Guide
 
+## Quick Start
+
+Avoid the quoting trap entirely — never inline complex expressions on Windows:
+
+```bash
+browser4-cli htmlsnapshot query --sql @query.sql    # SQL from file (recommended)
+browser4-cli htmlsnapshot query --sql-stdin         # SQL from stdin
+browser4-cli eval --file script.js                  # JS from file
+browser4-cli eval --base64 "…"                      # JS as base64
+```
+
+[When to Use](#when-to-use) below explains when you are at risk; [Patterns](#patterns) has the full workaround recipes.
+
 When running `browser4-cli` under Git Bash (or any POSIX shell on Windows), inline expressions pass through **four layers of quote interpretation**: Bash → `cargo run` → CLI argument parser → browser's JS engine. Each layer strips or reinterprets quotes, making correct escaping nearly impossible for complex JavaScript or X-SQL.
 
 > **This is the trap warned about in [SKILL.md §5 Critical Warnings](../SKILL.md).** That section states the problem in one line; this file is the detailed workaround workflow. The warning text is not repeated here.
@@ -68,7 +81,7 @@ browser4-cli htmlsnapshot query "https://example.com/products" --sql @query.sql
 echo 'a[href]' | browser4-cli htmlsnapshot inspect --stdin
 ```
 
-## Options Cheat Sheet
+## Flags / Options Cheat Sheet
 
 | Instead of | Use | Example |
 |---|---|---|
@@ -81,6 +94,14 @@ echo 'a[href]' | browser4-cli htmlsnapshot inspect --stdin
 | `htmlsnapshot inspect --selector "..."` | `@file` | `htmlsnapshot inspect @selectors.txt` |
 | | `--stdin` | `echo 'a[href]' \| htmlsnapshot inspect --stdin` |
 | | `--selector-base64` | `--selector-base64 <base64>` |
+
+## Errors & Recovery
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `--sql "…"` output is mangled or empty | Shell reinterprets nested quotes (Windows/Git Bash) | Use `--sql @file.sql` or `--sql-stdin` |
+| `eval "…"` returns `null` or syntax errors | Quotes stripped across the 4 shell layers | Use `--file` / `--stdin` / `--base64` |
+| `htmlsnapshot inspect --selector "…"` breaks on special chars | `$`, backticks, or quotes in the selector | Use `@file`, `--stdin`, or `--selector-base64` |
 
 ## PowerShell-Specific: `@` Splatting
 

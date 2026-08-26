@@ -6,6 +6,8 @@ tier: catalog
 
 # X-SQL: DomSelectFunctions — CSS Selector-Based Extraction
 
+## Overview
+
 > **Parent:** [x-sql.md](x-sql.md) — full function index and quick-reference patterns
 >
 > **Related:** [DOM_LOAD_AND_SELECT](x-sql-dom-load-select.md) | [DomFunctions](x-sql-dom-functions.md) | [StringFunctions](x-sql-string-functions.md)

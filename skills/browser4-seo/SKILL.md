@@ -1,11 +1,19 @@
 ---
 name: browser4-seo
-title: "Browser4 SEO — Page Metadata Extraction & Audit"
+title: "Browser4 SEO"
 description: "Extract and audit SEO metadata from the current browser page. Use when the user wants to check a page's SEO health, review meta tags, Open Graph, Twitter Cards, canonical links, structured data (JSON-LD), or diagnose why a page ranks poorly."
 tier: procedure
 ---
 
 # Browser4 SEO
+
+## Quick Start
+
+```bash
+browser4-cli goto "https://example.com"     # load the page to audit
+browser4-cli plugin-list                    # confirm browser4-seo is installed
+# then call seo.extractMeta() — full SEO metadata extraction (see Tools below)
+```
 
 Extract and audit SEO metadata from the current page using the `browser4-seo` plugin's two tools.
 
@@ -23,6 +31,42 @@ Do NOT use this skill for:
 
 - General content extraction — use the `browser4-cli` HTML snapshot / X-SQL instead.
 - Performance auditing (Core Web Vitals) — this plugin only covers SEO metadata, not performance metrics.
+
+## How It Works
+
+The `browser4-seo` plugin exposes two tools that operate on the page currently loaded in the browser session: `seo.extractMeta()` returns every SEO metadata field (title, description, canonical, Open Graph, Twitter Cards, JSON-LD), and `seo.checkIssues()` compares the page against SEO best practices and returns a health report.
+
+## Patterns
+
+### 1. Quick SEO health check
+
+```text
+seo.checkIssues()   # returns a prioritized issue list
+```
+
+### 2. Full metadata extraction
+
+```text
+seo.extractMeta()   # all fields: title, description, canonical, OG, Twitter, JSON-LD
+```
+
+### 3. Diagnose poor ranking
+
+```text
+seo.checkIssues()   # start with the issue report, then fix the top items
+```
+
+## Flags
+
+Neither `seo.extractMeta()` nor `seo.checkIssues()` takes arguments — both operate on the page currently loaded in the browser session.
+
+## Errors & Recovery
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Tool call fails with "plugin not found" | `browser4-seo` not installed | `browser4-cli plugin-list`; install the plugin |
+| `extractMeta` returns empty fields | No page loaded in the session | `browser4-cli goto <url>` first |
+| `checkIssues` reports everything missing | Page is a JS shell | The plugin reads the loaded DOM — ensure the page finished rendering |
 
 ## Prerequisites
 

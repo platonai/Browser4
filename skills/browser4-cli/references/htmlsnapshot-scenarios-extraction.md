@@ -6,13 +6,26 @@ tier: procedure
 
 # HTML Snapshot Scenarios — Data Extraction
 
-Practical recipes for extracting structured data from listing and detail pages using `htmlsnapshot get`, `htmlsnapshot query`, and `htmlsnapshot export`.
+## Quick Start
 
-> **Note:** CSS selectors are tied to live websites and may break over time. See [SKILL.md §5](../SKILL.md#5-critical-warnings).
+```bash
+browser4-cli open --headless "<target-url>"
+browser4-cli htmlsnapshot summary                  # page structure overview (WPSI)
+browser4-cli htmlsnapshot inspect --selector ":root"   # discover selectors
+browser4-cli htmlsnapshot get all text "<css>"     # extract all matches
+```
 
-> **Parent document:** [htmlsnapshot-scenarios.md](htmlsnapshot-scenarios.md) — full scenario index, patterns & tips, and command reference.
+The numbered scenarios below apply this loop to e-commerce, news, job boards, academic literature, and real-estate pages.
 
-## Scenarios
+## When to Use
+
+Use these recipes when you need **structured data** from listing and detail pages — e-commerce, news, job boards, academic literature, or real estate. The parent [scenario index](htmlsnapshot-scenarios.md) compares all scenario families.
+
+## How It Works
+
+Extraction scenarios use the same building blocks: `get` extracts the first match of a CSS selector, `get all` every match, `query` runs X-SQL over the snapshot for correlated fields, and `export` archives raw HTML for offline analysis or trend tracking.
+
+## Patterns
 
 | # | Scenario | Primary Commands | Domain |
 |---|----------|------------------|--------|
@@ -23,6 +36,24 @@ Practical recipes for extracting structured data from listing and detail pages u
 | 8 | Real Estate Listing Monitor | `get`, `query` | Property |
 
 ---
+
+## Flags
+
+The scenarios use `htmlsnapshot` flags (`--sql`, `-limit`/`-offset`, `--file`) — see [htmlsnapshot.md](htmlsnapshot.md) for the full flag reference.
+
+## Errors & Recovery
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `get` returns empty | Selector doesn't match or snapshot stale | Re-capture, then `inspect` to verify the selector |
+| `query` fails with SQL syntax error | Shell mangled inline `--sql` | Use `--sql @file.sql` (see [shell-quoting.md](shell-quoting.md)) |
+| Missing correlated fields | Wrong query granularity | See the X-SQL quickstart in [x-sql.md](x-sql.md) and `DOM_LOAD_AND_SELECT` |
+
+Practical recipes for extracting structured data from listing and detail pages using `htmlsnapshot get`, `htmlsnapshot query`, and `htmlsnapshot export`.
+
+> **Note:** CSS selectors are tied to live websites and may break over time. See [SKILL.md §5](../SKILL.md#5-critical-warnings).
+
+> **Parent document:** [htmlsnapshot-scenarios.md](htmlsnapshot-scenarios.md) — full scenario index, patterns & tips, and command reference.
 
 ## 1. E-Commerce Product Monitoring
 

@@ -35,6 +35,69 @@ Use **crawl** for sequential multi-page workflows with built-in link discovery, 
 
 Crawl loads seed URLs, optionally follows links up to a configurable depth, deduplicates visited pages, and optionally runs an X-SQL query against each page. Results are aggregated and formatted as table, CSV, or JSON. Use `--background` for async execution.
 
+## Common patterns
+
+### Bulk product detail extraction
+
+```bash
+# Extract product URLs from search results (via eval or X-SQL), write to urls.txt
+browser4-cli crawl --seed-file urls.txt --depth 0 --refresh \
+  --sql @extract.sql --format csv -o products.csv
+```
+
+`extract.sql`:
+```sql
+SELECT
+  DOM_BASE_URI(dom) AS url,
+  DOM_FIRST_TEXT(dom, '#productTitle') AS title,
+  DOM_FIRST_TEXT(dom, '.a-price .a-offscreen') AS price,
+  DOM_FIRST_TEXT(dom, '#acrCustomerReviewText') AS rating,
+  DOM_FIRST_TEXT(dom, '#feature-bullets') AS features
+FROM DOM_LOAD_AND_SELECT(@url, 'body')
+```
+
+### Shallow crawl with extraction (list page + detail pages)
+
+```bash
+browser4-cli crawl "https://example.com/products" \
+  --out-link-selector "a.product-link" \
+  --top-links 50 \
+  --depth 1 \
+  --sql "SELECT DOM_FIRST_TEXT(dom, 'h1') AS title, DOM_FIRST_TEXT(dom, '.price') AS price FROM DOM_LOAD_AND_SELECT(@url, 'body')" \
+  --format json
+```
+
+### Deep crawl (depth > 1) — recursive link following
+
+```bash
+browser4-cli crawl "https://example.com/docs" \
+  --out-link-selector "a[href]" \
+  --out-link-pattern ".*/docs/.*" \
+  --depth 3 \
+  --top-links 30
+```
+
+### Fresh crawl with quality requirements
+
+```bash
+browser4-cli crawl "https://example.com" \
+  --out-link-selector "a[href]" \
+  --refresh \
+  --args "-requireSize 100000 -scrollCount 5"
+```
+
+### X-SQL from stdin (avoids shell quoting)
+
+```bash
+browser4-cli crawl --seed-file urls.txt --depth 0 --sql-stdin --format table < query.sql
+```
+
+### X-SQL from file (@ prefix)
+
+```bash
+browser4-cli crawl --seed-file urls.txt --depth 0 --sql @extract.sql --format csv -o out.csv
+```
+
 ## Modes
 
 ### Link discovery mode (depth >= 1)
@@ -185,69 +248,6 @@ Crawl completed. 3 pages found.
   depth=0 | https://example.com/page1 | Page 1 Title
   depth=0 | https://example.com/page2 | Page 2 Title
   depth=0 | https://example.com/page3 | Page 3 Title
-```
-
-## Common patterns
-
-### Bulk product detail extraction
-
-```bash
-# Extract product URLs from search results (via eval or X-SQL), write to urls.txt
-browser4-cli crawl --seed-file urls.txt --depth 0 --refresh \
-  --sql @extract.sql --format csv -o products.csv
-```
-
-`extract.sql`:
-```sql
-SELECT
-  DOM_BASE_URI(dom) AS url,
-  DOM_FIRST_TEXT(dom, '#productTitle') AS title,
-  DOM_FIRST_TEXT(dom, '.a-price .a-offscreen') AS price,
-  DOM_FIRST_TEXT(dom, '#acrCustomerReviewText') AS rating,
-  DOM_FIRST_TEXT(dom, '#feature-bullets') AS features
-FROM DOM_LOAD_AND_SELECT(@url, 'body')
-```
-
-### Shallow crawl with extraction (list page + detail pages)
-
-```bash
-browser4-cli crawl "https://example.com/products" \
-  --out-link-selector "a.product-link" \
-  --top-links 50 \
-  --depth 1 \
-  --sql "SELECT DOM_FIRST_TEXT(dom, 'h1') AS title, DOM_FIRST_TEXT(dom, '.price') AS price FROM DOM_LOAD_AND_SELECT(@url, 'body')" \
-  --format json
-```
-
-### Deep crawl (depth > 1) — recursive link following
-
-```bash
-browser4-cli crawl "https://example.com/docs" \
-  --out-link-selector "a[href]" \
-  --out-link-pattern ".*/docs/.*" \
-  --depth 3 \
-  --top-links 30
-```
-
-### Fresh crawl with quality requirements
-
-```bash
-browser4-cli crawl "https://example.com" \
-  --out-link-selector "a[href]" \
-  --refresh \
-  --args "-requireSize 100000 -scrollCount 5"
-```
-
-### X-SQL from stdin (avoids shell quoting)
-
-```bash
-browser4-cli crawl --seed-file urls.txt --depth 0 --sql-stdin --format table < query.sql
-```
-
-### X-SQL from file (@ prefix)
-
-```bash
-browser4-cli crawl --seed-file urls.txt --depth 0 --sql @extract.sql --format csv -o out.csv
 ```
 
 ## Testing locally with MockSite
@@ -441,6 +441,6 @@ browser4-cli crawl list --clear
   function for loading pages in X-SQL queries
 - [Swarm reference](swarm.md) — parallel scraping and X-SQL extraction across
   multiple browser contexts
-- [Multi-product extraction guide](../../docs/multi-product-extraction.md) —
+- [Multi-product extraction guide](../../../docs/multi-product-extraction.md) —
   choosing between crawl, swarm, and other approaches for bulk data extraction
 - [LoadOptions Guide](load-options-guide.md) — full LoadOptions reference

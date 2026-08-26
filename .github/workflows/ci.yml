@@ -103,6 +103,10 @@ jobs:
           }
           Write-Host "`nAll $($scripts.Count) scripts parsed successfully." -ForegroundColor Green
 
+      - name: Skill document conformance (methodology M1-M8)
+        shell: pwsh
+        run: ./bin/skill-doc-lint.ps1
+
       - name: Run Tests
         id: run-tests
         if: inputs.skip_tests != true

@@ -1,10 +1,25 @@
 ---
 title: "Configuration"
 description: "Reference for the config command family: persistent CLI defaults (server, timeout, proxy, session) and server-side runtime config keys (agent.llm.maxRequestTokens, agent.token.budget.total)."
-tier: procedure
+tier: catalog
 ---
 
 # Configuration
+
+## Overview
+
+The `config` command family manages two kinds of settings: persistent CLI defaults in `~/.browser4/config.json` (honouring `BROWSER4_CLI_STATE_DIR`) and server-side runtime overrides routed to the running backend. Read this when you need to change a default server, timeout, proxy, session name, or an agent token limit.
+
+## Quick Index
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `server` | CLI default | Default Browser4 server URL (overridden by `--server` / `BROWSER4_CLI_SERVER`) |
+| `timeout` | CLI default | Default HTTP timeout in seconds (overridden by `--timeout`) |
+| `proxy` | CLI default | Default download proxy URL (overridden by `--proxy`) |
+| `session` | CLI default | Default session name (overridden by `-s` / `--session`) |
+| `agent.llm.maxRequestTokens` | server-side | Per-request LLM token limit (default 500,000) |
+| `agent.token.budget.total` | server-side | Cumulative token budget per agent run (default 5,000,000) |
 
 ## CLI Defaults (config.json)
 

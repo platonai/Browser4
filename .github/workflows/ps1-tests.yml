@@ -43,3 +43,7 @@ jobs:
       - name: Run PowerShell tests
         shell: pwsh
         run: ./bin/test.ps1 ps
+
+      - name: Skill document conformance (methodology M1-M8)
+        shell: pwsh
+        run: ./bin/skill-doc-lint.ps1

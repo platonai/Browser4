@@ -6,6 +6,8 @@ tier: catalog
 
 # HTML Snapshot — Static DOM Extraction, Inspection & X-SQL Querying
 
+## Overview
+
 The `htmlsnapshot` family operates on a **static HTML snapshot** — the raw HTML of the current page parsed into a queryable DOM. Unlike interactive `snapshot` (accessibility-tree refs for `click`/`type`/`fill`), `htmlsnapshot` extracts structured data via CSS selectors and X-SQL queries.
 
 ## Comparison: snapshot vs htmlsnapshot

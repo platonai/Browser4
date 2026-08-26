@@ -1,5 +1,5 @@
 ---
-name: scent-miner
+name: browser4-web-miner
 title: "WebMiner — Convert Detail Web Pages into Interactive Views"
 description: "Groups similar web pages together and produces an interactive HTML report with clusters of related pages, plus Excel spreadsheets for analysis. Use when the user wants to cluster downloaded HTML files, convert detail web pages into interactive views, or analyze a folder of web pages locally."
 tier: procedure
@@ -7,10 +7,62 @@ tier: procedure
 
 # WebMiner — Convert Detail Web Pages into Interactive Views
 
+## Quick Start
+
+```bash
+browser4-cli webminer install            # one-time install (Java 17+ auto-detected)
+browser4-cli webminer all <html-dir>     # full pipeline: encode → cluster → views
+```
+
 WebMiner groups similar web pages together and produces an interactive HTML
 report with clusters of related pages — plus Excel spreadsheets for further
 analysis. Give it a folder of downloaded HTML files, and it handles the rest.
 Everything runs locally; no data leaves your machine.
+
+## When to Use
+
+Use WebMiner when you have a **folder of downloaded HTML pages** and want to cluster them into interactive views and Excel reports — fully local, no LLM tokens. It complements rather than replaces `browser4-cli crawl`/`swarm` (which acquire pages): WebMiner analyzes pages you already have. Not for single-page extraction — use `htmlsnapshot` for that.
+
+## How It Works
+
+WebMiner runs a three-stage local pipeline: **encode** converts each HTML page into a 69-dimension feature vector, **cluster** groups similar pages with SMILE KMeans (k auto-detected), and **views** renders an interactive HTML report plus Excel spreadsheets. Everything runs locally on your machine — no data leaves it, and no LLM tokens are consumed.
+
+## Patterns
+
+### 1. Full pipeline on a folder of pages
+
+```bash
+browser4-cli webminer all <html-dir>
+```
+
+### 2. Rebuild views from an existing run
+
+```bash
+browser4-cli webminer views <result-dir>
+```
+
+### 3. Try it on the sample dataset
+
+```bash
+browser4-cli webminer run-example
+```
+
+## Flags
+
+| Flag | Applies to | Description |
+|------|-----------|-------------|
+| `--max-files <n>` | `webminer all` | Limit the number of HTML files processed (default 40) |
+| `--output <dir>` | `webminer all` | Override the output directory |
+| `--resume [<project-id>]` | `webminer all` | Resume a previous run |
+
+## Errors & Recovery
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `webminer install` fails | No Java 17+ on PATH | Install JDK 17+ or point `JAVA_HOME` at it |
+| `webminer all` finds no pages | Directory has no `.html` files | Check the input directory path and file extensions |
+| Pipeline crashes on large corpora | Free tier limit (< 1,000 pages) | Reduce the corpus or use `--max-files`; see the commercial Spark tier for scale |
+| Views land in an unexpected temp dir | The views stage uses the app task-output root | Use `webminer views <result-dir>` to rebuild beside the result dir |
 
 ## Using from the Browser4 CLI
 

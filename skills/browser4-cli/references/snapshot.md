@@ -60,18 +60,6 @@ browser4-cli snapshot --stdout --page N                                    # pag
 browser4-cli snapshot grep [OPTIONS] <pattern>                             # search snapshot content with regex
 ```
 
-### Options
-
-| Option | Description |
-|---|---|
-| `--viewport N`, `-v N` | Capture viewport N (0 = current visible screen; negative = above). Paginates long pages into fixed-height chunks. |
-| `--stdout` | Print snapshot to stdout instead of saving to file. |
-| `--auto-diff` | Diff against the previous snapshot — shows added/removed/changed elements. |
-| `--interactive`, `-i` | Interactive mode — strips generic `<div>` containers for cleaner output. |
-| `--json` | Single-line JSON envelope on stdout only. All tips, hints, and warnings are suppressed. |
-| `--quiet`, `-q` | Suppress all normal output; only errors appear on stderr. |
-| `--page N` | When used with `--stdout`, show only page N of the output. |
-
 ## Viewport Pagination
 
 Long pages are split into fixed-height **viewports** (roughly one screen each). Viewport indices are scroll-relative: `-v 0` captures the screen currently visible in the browser, `-v 1` the screen below it, and `-v -1` the screen above. Right after a fresh navigation the page is at the top, so `-v 0` is the top of the page in the common workflow.
@@ -202,11 +190,32 @@ browser4-cli snapshot -v 2     # further down
 browser4-cli snapshot -v 0 --json   # clean JSON for scripts/agents
 ```
 
+## Flags / Options
+
+| Option | Description |
+|---|---|
+| `--viewport N`, `-v N` | Capture viewport N (0 = current visible screen; negative = above). Paginates long pages into fixed-height chunks. |
+| `--stdout` | Print snapshot to stdout instead of saving to file. |
+| `--auto-diff` | Diff against the previous snapshot — shows added/removed/changed elements. |
+| `--interactive`, `-i` | Interactive mode — strips generic `<div>` containers for cleaner output. |
+| `--json` | Single-line JSON envelope on stdout only. All tips, hints, and warnings are suppressed. |
+| `--quiet`, `-q` | Suppress all normal output; only errors appear on stderr. |
+| `--page N` | When used with `--stdout`, show only page N of the output. |
+
+## Errors & Recovery
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `snapshot --stdout` dumps a huge tree | Full page captured; stdout output is not paginated by default | Use `-v 0` or `--stdout --page N`; or `snapshot grep` for targeted reads |
+| `snapshot grep` finds nothing | Pattern doesn't match the accessibility tree (refs/labels, not raw HTML) | Match against element names and labels; use `htmlsnapshot grep` for raw HTML |
+| Missing elements in `-i` mode | Interactive mode strips generic `<div>` containers | Use `--viewport 0` or `htmlsnapshot` for shopping/search pages |
+| Stale refs after interaction | Refs are single-use handles | Re-snapshot after any interaction — see [SKILL.md §5](../SKILL.md#5-critical-warnings) |
+
 ## Critical Warnings
 
-> **Warning:** Don't cat snapshot files — they can exceed 256KB. Use viewport pagination (`snapshot -v 0`), `snapshot grep <pattern>`, or `snapshot --stdout --page 1` instead.
+> **Note:** Warning: don't cat snapshot files (they can exceed 256KB) — see [SKILL.md §5](../SKILL.md#5-critical-warnings)
 
-> **Warning:** Refs are single-use for navigation and DOM-mutating commands. Re-snapshot after `click` (on links/buttons), `goto`, `reload`, and tab switches. Never store refs across navigations.
+> **Note:** Warning: refs are single-use — re-snapshot after any interaction — see [SKILL.md §5](../SKILL.md#5-critical-warnings)
 
 > **Warning:** Interactive mode (`snapshot -i`) strips generic `<div>` containers. Many e-commerce product cards use generic divs, not semantic elements. Prefer `--viewport 0` or `htmlsnapshot` for shopping/search pages.
 
