@@ -292,6 +292,7 @@ open class ContextToAction(
         Files.createDirectories(baseDir)
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     @ExperimentalApi
     open suspend fun generate(messages: AgentMessageList, context: ExecutionContext): ActionDescription {
         onWillGenerate(context, messages)
@@ -425,6 +426,7 @@ open class ContextToAction(
      * Collapses system/user messages to two plain strings and calls
      * [BrowserChatModel.call].
      */
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     private suspend fun generateResponseRawLegacy(
         messages: AgentMessageList,
         screenshotB64: String? = null,
@@ -432,6 +434,7 @@ open class ContextToAction(
         generateResponseRawLegacyUnbounded(messages, screenshotB64)
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     private suspend fun generateResponseRawLegacyUnbounded(
         messages: AgentMessageList,
         screenshotB64: String? = null,

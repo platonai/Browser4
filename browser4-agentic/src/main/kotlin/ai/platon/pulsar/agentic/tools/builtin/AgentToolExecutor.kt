@@ -95,16 +95,6 @@ class AgentToolExecutor : AbstractToolExecutor() {
         val agent = requireNotNull(receiver as? PerceptiveAgent) { "Target must be a PerceptiveAgent" }
 
         return when (functionName) {
-            // agent.act(action: String)
-            "act" -> {
-                validateArgs(args, allowed = setOf("action"), required = setOf("action"), functionName)
-                agent.act(paramString(args, "action", functionName)!!)
-            }
-            // agent.observe(instruction: String)
-            "observe" -> {
-                validateArgs(args, allowed = setOf("instruction"), required = setOf("instruction"), functionName)
-                agent.observe(paramString(args, "instruction", functionName)!!)
-            }
             // agent.extract(instruction: String) OR agent.extract(instruction: String, schema: Map<String,String>)
             "extract" -> {
                 requireLLMConfigured(agent)

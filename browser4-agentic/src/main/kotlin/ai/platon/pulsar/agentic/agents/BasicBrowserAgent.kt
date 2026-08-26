@@ -31,7 +31,7 @@ import java.util.*
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration.Companion.milliseconds
 
-open class BasicBrowserAgent(
+open class BasicBrowserAgent constructor(
     override val session: AgenticSession,
     val config: AgentConfig
 ) : PerceptiveAgent {
@@ -172,11 +172,13 @@ open class BasicBrowserAgent(
      * Observes the page given an instruction, returning zero or more ObserveResult objects describing
      * candidate elements and potential actions (if returnAction=true).
      */
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     override suspend fun observe(instruction: String): List<ObserveResult> {
         val opts = ObserveOptions(instruction = instruction, returnAction = null)
         return observe(opts)
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     override suspend fun observe(options: ObserveOptions): List<ObserveResult> {
         onWillObserve(options)
 
@@ -187,6 +189,7 @@ open class BasicBrowserAgent(
         return result.observeResults
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     protected suspend fun doObserve(options: ObserveOptions): ObserveActResult {
         val context = stateManager.getOrCreateActiveContext(options, "observe")
 
@@ -373,11 +376,13 @@ open class BasicBrowserAgent(
         return result
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     data class ObserveActResult(
         val observeResults: List<ObserveResult>,
         val actionDescription: ActionDescription,
     )
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     protected fun onWillObserve(options: ObserveOptions) {
         val agentId = this.uuid.toString()
         // Emit AgentEventBus event for SSE streaming
@@ -396,6 +401,7 @@ open class BasicBrowserAgent(
         )
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     protected fun onDidObserve(options: ObserveOptions, result: ObserveActResult) {
         val agentId = this.uuid.toString()
 
@@ -601,6 +607,7 @@ open class BasicBrowserAgent(
         )
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     private suspend fun doObserveAct(options: ActionOptions): ActResult {
         val options = when {
             !options.fromRunLoop -> options.copy(action = promptBuilder.buildObserveActToolUsePrompt(options.action))
@@ -674,6 +681,7 @@ open class BasicBrowserAgent(
         return ActResultHelper.failed(IllegalStateException(msg), options.action)
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     private suspend fun doObserveActObserve(
         options: Any, context: ExecutionContext, multistep: Boolean
     ): ObserveActResult {
@@ -696,7 +704,7 @@ open class BasicBrowserAgent(
         val interactiveElements = context.agentState.browserUseState.getAllInteractiveElements()
         // P4.5: coding tasks never draw CDP highlights — doing so would bind a
         // driver and launch a browser for a pure file/build task.
-        val drawOverlay = !codingMode && (alwaysTrue() || (observeOptions?.drawOverlay ?: false))
+        val drawOverlay = !codingMode && (observeOptions?.drawOverlay ?: false)
         try {
             if (drawOverlay) {
                 snapshotService.addHighlights(interactiveElements)

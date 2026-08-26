@@ -118,6 +118,7 @@ data class ExtractResult(
     }
 }
 
+@Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
 data class ObserveOptions(
     // the user's instruction
     val instruction: String? = null,
@@ -138,6 +139,7 @@ data class ObserveOptions(
     val fromResolve: Boolean = false
 )
 
+@Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
 data class ObserveResult constructor(
     // the domain of the tool call, `browser`, `tab`, `fs`, `agent`, etc
     val domain: String? = null,
@@ -227,6 +229,7 @@ interface PerceptiveAgent : AutoCloseable {
      * @param instruction The observation instruction from the user.
      * @return Zero or more observation results describing candidate elements and potential actions.
      */
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     @MCP
     suspend fun observe(instruction: String): List<ObserveResult>
 
@@ -238,6 +241,7 @@ interface PerceptiveAgent : AutoCloseable {
      * @param options Observation options including the instruction and flags.
      * @return A list of observation results; empty if nothing actionable is found.
      */
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     suspend fun observe(options: ObserveOptions): List<ObserveResult>
 
     /**
