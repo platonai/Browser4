@@ -157,7 +157,7 @@ class ToolDisclosureTest {
         assertFalse(codingOnly.text().contains("tab_navigate"))
 
         val limited = ToolDisclosureTools.listToolsResult("id1", allByName, emptySet(), limit = 2)
-        assertTrue(limited.text().contains("以及另外"), "over-limit listings must report the remainder")
+        assertTrue(limited.text().contains("and 9 more"), "over-limit listings must report the remainder")
     }
 
     @Test
@@ -171,9 +171,9 @@ class ToolDisclosureTest {
         )
 
         assertEquals(listOf("coding_read"), exposed.map { it.name() })
-        assertTrue(msg.text().contains("已启用: coding_read"))
-        assertTrue(msg.text().contains("coding_unknown(未知或歧义)"))
-        assertTrue(msg.text().contains("coding_read(已暴露)"), "re-requesting an exposed tool must be reported, not duplicated")
+        assertTrue(msg.text().contains("Enabled: coding_read"))
+        assertTrue(msg.text().contains("coding_unknown (unknown or ambiguous)"))
+        assertTrue(msg.text().contains("coding_read (already exposed)"), "re-requesting an exposed tool must be reported, not duplicated")
         assertEquals(1, exposed.size, "no duplicates in the exposed set")
     }
 
@@ -187,6 +187,6 @@ class ToolDisclosureTest {
         val msg = ToolDisclosureTools.exposeToolsResult("id1", """{"toolNames":["read"]}""", byName, exposed)
 
         assertEquals(emptyList(), exposed, "ambiguous bare names must not silently pick a tool")
-        assertTrue(msg.text().contains("read(未知或歧义)"))
+        assertTrue(msg.text().contains("read (unknown or ambiguous)"))
     }
 }

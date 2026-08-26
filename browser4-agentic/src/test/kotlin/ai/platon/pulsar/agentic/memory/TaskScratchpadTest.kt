@@ -38,9 +38,8 @@ class TaskScratchpadTest {
     @DisplayName("evicts LRU entries when over budget")
     fun testEviction() {
         val pad = TaskScratchpad(maxChars = 200)
-        var i = 0
         // Each entry costs ~key(6) + value(50) + 4 chars; 20 entries far exceed 200.
-        repeat(20) { pad.note("key%02d".format(i), "value-" + "x".repeat(45)) }
+        repeat(20) { idx -> pad.note("key%02d".format(idx), "value-" + "x".repeat(45)) }
         assertTrue(pad.size() < 20, "LRU eviction should have kicked in")
         assertNull(pad.get("key00"), "oldest entry must be evicted first")
     }
