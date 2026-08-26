@@ -486,6 +486,20 @@ onToolDecorated→PageViewed / 停止与异常→Failed）+ `completeCliRun`→C
     PowerShell 模块解析问题，与记忆系统无关；模型绕行 coding_shell 仍完成任务）；
     记忆按 agent uuid 隔离（后端重启 → 新 agent → 干净记忆）符合作用域设计。
 
+**第十一轮（验收补全 + 收尾，2026-08-26）**：
+28. **§16-D 失败沉淀结论**：失败路径（stop/异常 → Failed 事件 + 合并器沉淀）代码与成功路径
+    对称，单测充分覆盖（PemKnowledgeProviderTest 失败分类、TwoRun 失败用例）；真实环境
+    下**引擎级失败不可自然构造**（模型总能完成任务或调 taskComplete——stall/不可能域名
+    任务均被模型"成功处理"），故失败沉淀以单测为准，真实环境仅验证了成功路径。
+29. **§16-E 关闭开关回归通过**：`BROWSER4_SERVER_OPTS=-Dbrowser4.agent.memory.enabled=false`
+    重启后端后：任务正常完成（Example Domain），memory 事件**零新增**、system prompt
+    **无 `## Memory` 注入区**、工具规格 **0 个 memory 工具**——行为与实现前一致。
+    （注：`BROWSER4_AGENT_MEMORY_ENABLED` 环境变量无效——`MemoryConfig` 读系统属性，
+    需经 `BROWSER4_SERVER_OPTS` 注入 `-D` 参数。）
+30. **后续工作已提 issue**：#580（L1 注入区观察 + 短任务 cli-prompt 缺失）、#581（桥接
+    共享实例收敛）、#582（跨站点提升 E2E 验证）、#583（tracer 双写合并评估）、#584
+    （规模/运维：月分片、AgentMetrics、管理端点）。
+
 ## 16. 真实环境验收手册（e2e，需 LLM 密钥 + 运行中后端）
 
 引擎级闭环已由 `AgentMemoryTwoRunIntegrationTest` 覆盖（无 LLM）；以下验收在**真实环境**
