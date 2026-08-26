@@ -11,24 +11,28 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Test
 
 class ExecutorsNamedArgsTest {
 
     @Test
-    fun agent_act_uses_named_args() {
+    fun agent_done_uses_named_args() {
         val agent = mockk<PerceptiveAgent>(relaxed = true)
         val executor = AgentToolExecutor()
-        val tc = ToolCall(domain = "agent", method = "act", arguments = mutableMapOf("action" to "Do it"))
+        // done: completion signal, no args, no LLM required
+        val ok = runBlocking { executor.callFunctionOn(ToolCall("agent", "done", mutableMapOf()), agent) }
+        assertEquals(true, ok.value)
 
-        runBlocking { executor.callFunctionOn(tc, agent) }
-        coVerify { agent.act("Do it") }
-
-        // missing param throws
+        // The observe-act engine branches (act/observe) were removed in favor
+        // of the CLI tool loop — they must be rejected loudly, not silently
+        // fall through to the mock.
         runBlocking {
-            val r = executor.callFunctionOn(ToolCall("agent", "act", mutableMapOf()), agent)
-            assertNotNull(r.exception)
+            val act = executor.callFunctionOn(ToolCall("agent", "act", mutableMapOf("action" to "Do it")), agent)
+            assertNotNull(act.exception)
+            val observe = executor.callFunctionOn(ToolCall("agent", "observe", mutableMapOf("instruction" to "x")), agent)
+            assertNotNull(observe.exception)
         }
     }
 
