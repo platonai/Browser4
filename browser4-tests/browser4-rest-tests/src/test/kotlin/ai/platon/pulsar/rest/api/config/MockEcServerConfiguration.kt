@@ -8,13 +8,16 @@ import org.springframework.boot.SpringApplication
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.context.annotation.Lazy
+import java.net.HttpURLConnection
+import java.net.URI
 
 /**
  * Test configuration that automatically starts and stops the mock EC server for tests.
  *
- * The mock server binds to a random OS-assigned port (port 0). The actual port is
- * communicated to test code via the `mock.server.port` system property, which can be
- * read through [ai.platon.pulsar.test.server.MockServerPorts].
+ * The mock server binds to a random OS-assigned port (port 0, forced via a command-line
+ * argument so the classpath `config/application.properties` `server.port=8182` cannot
+ * override it). The actual port is communicated to test code via the `mock.server.port`
+ * system property, which can be read through [ai.platon.pulsar.test.server.MockServerPorts].
  *
  * Must be eagerly initialized (@Lazy(false)) even when spring.main.lazy-initialization
  * is true — the [InitializingBean.afterPropertiesSet] lifecycle callback that starts the
@@ -33,6 +36,7 @@ class MockEcServerConfiguration : InitializingBean, DisposableBean {
         const val MOCK_SERVER_PORT = 0
         const val MOCK_SERVER_STARTUP_TIMEOUT_MS = 60000L // 60 seconds
         const val MOCK_SERVER_PORT_PROPERTY = "mock.server.port"
+        private const val PROBE_TIMEOUT_MS = 1200
     }
 
     private var serverThread: Thread? = null
@@ -46,12 +50,18 @@ class MockEcServerConfiguration : InitializingBean, DisposableBean {
     }
 
     private fun startMockEcServer() {
-        // If mock.server.port is already set, assume a server is already running
-        val existingPort = System.getProperty(MOCK_SERVER_PORT_PROPERTY)
-        if (existingPort != null) {
-            log.info("Mock server port already set to $existingPort, assuming mock EC server is running")
-            isServerStarted = true
+        // If mock.server.port is already set AND a server actually responds there,
+        // assume an externally-managed server is running (e.g. -Dmock.server.port=<port>).
+        // A stale property left behind by a previous test class's stopped server must
+        // NOT suppress startup — probe the port before trusting it.
+        val existingPort = System.getProperty(MOCK_SERVER_PORT_PROPERTY)?.toIntOrNull()
+        if (existingPort != null && existingPort > 0 && isPortResponding(existingPort)) {
+            log.info("Mock server already running on port $existingPort, reusing it")
+            isServerStarted = false
             return
+        }
+        if (existingPort != null) {
+            log.info("Mock server port property is set to $existingPort but no server responds there; starting a fresh mock EC server")
         }
 
         try {
@@ -76,7 +86,10 @@ class MockEcServerConfiguration : InitializingBean, DisposableBean {
             serverThread = Thread {
                 try {
                     log.info("Starting MockSiteApplication with port 0 (random)...")
-                    mockServerContext = app.run()
+                    // Force the port via a command-line argument — command-line args have
+                    // higher precedence than classpath application.properties, which would
+                    // otherwise override setDefaultProperties(server.port=0) with 8182.
+                    mockServerContext = app.run("--server.port=$MOCK_SERVER_PORT")
 
                     // Read the actual bound port and communicate it to test code
                     val environment = mockServerContext?.environment
@@ -128,6 +141,27 @@ class MockEcServerConfiguration : InitializingBean, DisposableBean {
         }
     }
 
+    /**
+     * Probe whether a mock server is actually listening on the given port.
+     * A stale `mock.server.port` system property from a previously stopped server
+     * must not be mistaken for a running server.
+     */
+    private fun isPortResponding(port: Int): Boolean {
+        return try {
+            val url = URI.create("http://localhost:$port/ec/").toURL()
+            val conn = url.openConnection() as HttpURLConnection
+            conn.connectTimeout = PROBE_TIMEOUT_MS
+            conn.readTimeout = PROBE_TIMEOUT_MS
+            conn.requestMethod = "GET"
+            val code = conn.responseCode
+            log.info("Mock server port probe on $port returned HTTP $code")
+            code in 200..399
+        } catch (e: Exception) {
+            log.info("Mock server port probe on $port failed: ${e.message}")
+            false
+        }
+    }
+
     private fun stopMockEcServer() {
         mockServerContext?.let { context ->
             try {
@@ -148,6 +182,13 @@ class MockEcServerConfiguration : InitializingBean, DisposableBean {
             } catch (e: Exception) {
                 log.error("Error interrupting mock EC server thread", e)
             }
+        }
+
+        // Clear the port property we own so the next test class does not mistake the
+        // stopped server for a running one (stale-property skip bug).
+        if (isServerStarted) {
+            System.clearProperty(MOCK_SERVER_PORT_PROPERTY)
+            log.info("Cleared $MOCK_SERVER_PORT_PROPERTY system property")
         }
 
         mockServerContext = null
