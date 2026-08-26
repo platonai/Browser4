@@ -32,13 +32,19 @@ class CliBinaryResolver(
 
     fun resolve(): Path {
         explicitPath?.let { p ->
-            if (Files.exists(p)) return p
+            if (Files.exists(p)) return p.toAbsolutePath()
             logger.warn("Configured browser4-cli path does not exist: {}", p)
         }
 
-        bundled()?.let { return it }
-        pathLookup()?.let { return it }
-        devWrapper()?.let { return it }
+        // ALWAYS return an absolute path: the shell invocation builds
+        // `& '<binary>' ...` and must not depend on the child's working
+        // directory. The bundled candidate in particular is relative
+        // (`bin/browser4-cli.exe`), and b4.run defaults the child cwd to the
+        // coding workspace — a relative binary there fails with
+        // "The module 'bin' could not be loaded" on Windows.
+        bundled()?.let { return it.toAbsolutePath() }
+        pathLookup()?.let { return it.toAbsolutePath() }
+        devWrapper()?.let { return it.toAbsolutePath() }
 
         throw CliUnavailableException(
             "browser4-cli not found. Install it via 'browser4-cli install' (or set " +
