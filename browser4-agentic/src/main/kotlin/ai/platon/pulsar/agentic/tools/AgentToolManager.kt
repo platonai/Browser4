@@ -327,18 +327,31 @@ class AgentToolManager constructor(
             "tab" -> executor.callFunctionOn(normalized, driver)
             "browser" -> {
                 // A closeTab without index/tabId means "close the current tab".
-                // Resolve it against the session-bound driver: browser.frontDriver
-                // is not reliably maintained (it dangles after the previously
-                // active tab is destroyed and depends on the bringToFront CDP
-                // round-trip), so a stale frontDriver makes closeTab silently
-                // destroy nothing.  The bound driver is what every other tool
-                // operates on, so it defines "current" here.
+                // The user-visible current tab is browser.frontDriver (tab-list
+                // marks it active); browser.frontDriver is not reliably
+                // maintained (it dangles after the previously active tab is
+                // destroyed and depends on the bringToFront CDP round-trip),
+                // so fall back to the session-bound driver and finally to the
+                // first live driver.  Each candidate is validated against the
+                // driver map — closing a dangling driver is a silent no-op
+                // that leaves every tab open.
                 val resolved = if (normalized.method == "closeTab" && !targetsSpecificTab(normalized.arguments)) {
-                    (driver as? AbstractWebDriver)?.let { current ->
+                    val browser = (driver as? AbstractWebDriver)?.browser
+                        ?: session.boundBrowser
+                    val target = (browser as? AbstractBrowser)?.let { b ->
+                        (b.frontDriver as? AbstractWebDriver)
+                            ?.takeIf { b.drivers.containsKey(it.guid) }
+                            ?: (driver as? AbstractWebDriver)
+                            ?.takeIf { b.drivers.containsKey(it.guid) }
+                            ?: b.listDrivers().firstOrNull()
+                    }
+                    if (target != null) {
                         normalized.copy(
-                            arguments = (normalized.arguments + ("tabId" to current.guid)).toMutableMap()
+                            arguments = (normalized.arguments + ("tabId" to target.guid)).toMutableMap()
                         )
-                    } ?: normalized
+                    } else {
+                        throw IllegalArgumentException("No browser tabs are currently open")
+                    }
                 } else normalized
                 executor.callFunctionOn(resolved, driver.browser)
             }
@@ -427,6 +440,22 @@ class AgentToolManager constructor(
         if (browser == null) {
             logger.warn("! switchTab did not return a WebDriver and no browser is bound")
             return
+        }
+
+        // BrowserToolExecutor.switchTab returns the resolved tab's GUID so the
+        // session binds the exact driver the executor brought to front.  The
+        // driver itself is not serializable, and re-resolving from `index`
+        // would hit listDrivers() again — whose iteration order is unstable
+        // (ConcurrentHashMap) and can differ from the resolver's earlier call,
+        // silently binding a different tab than the one that was switched to.
+        val returnedGuid = (evaluate.value as? Map<*, *>)?.get("guid")?.toString()
+        if (!returnedGuid.isNullOrBlank()) {
+            val resolved = browser.drivers[returnedGuid]
+            if (resolved != null) {
+                bindSwappedDriver(resolved)
+                return
+            }
+            logger.warn("! switchTab returned guid {} but no driver with that guid is registered", returnedGuid)
         }
 
         // Resolve from tabId (GUID) or index — the same arguments that

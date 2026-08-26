@@ -103,7 +103,12 @@ class BrowserToolExecutorTest {
         every { browser.drivers } returns emptyMap()
 
         val liveDriver = mockk<AbstractWebDriver>(relaxed = true)
+        every { liveDriver.guid } returns "LIVE-GUID"
         coEvery { browser.listDrivers() } returns listOf(liveDriver)
+        // A successful destroyDriver removes the driver from the live list.
+        coEvery { browser.destroyDriver(any()) } answers {
+            coEvery { browser.listDrivers() } returns emptyList()
+        }
 
         val result = executor.callFunctionOn(
             ToolCall("browser", "closeTab", mutableMapOf()),

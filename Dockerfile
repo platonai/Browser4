@@ -34,6 +34,18 @@ RUN --mount=type=cache,target=/root/.m2 \
 # (host filesystem), which does not have the freshly-built JAR.
 RUN cp ${STANDALONE_MODULE}/target/Browser4.jar /build/app.jar
 
+# Build the browser4-swarm plugin and collect it for the runtime plugins/
+# directory.  The asset-standalone reactor does not include plugin modules,
+# so build the plugin explicitly (its provided deps resolve against the
+# host classpath at runtime).  Browser4StandaloneApplication loads every
+# JAR in ./plugins/ via PluginClasspathEnhancer, which registers the swarm
+# facade (SwarmFacadeMount) and makes /api/swarm/* available.
+RUN --mount=type=cache,target=/root/.m2 \
+    mvn -q package -pl browser4-plugins/browser4-swarm -am -DskipTests -B && \
+    mkdir -p /build/plugins && \
+    cp browser4-plugins/browser4-swarm/target/browser4-swarm-*.jar /build/plugins/ && \
+    echo "Plugins collected:" && ls -la /build/plugins
+
 # Validate the JAR before proceeding to the runtime stage.
 RUN jar xf /build/app.jar META-INF/MANIFEST.MF && \
     grep -q 'Start-Class: ai.platon.pulsar.apps.Browser4StandaloneApplicationKt' META-INF/MANIFEST.MF || \
@@ -84,6 +96,10 @@ ENV JAVA_OPTS="-Xms2G -Xmx10G -XX:+UseG1GC" \
 
 # Copy build artifact
 COPY --from=builder /build/app.jar app.jar
+
+# Runtime plugins (loaded from ./plugins/ relative to the working directory
+# by PluginClasspathEnhancer at startup)
+COPY --from=builder /build/plugins/ /app/plugins/
 
 # Expose port (documentation only)
 EXPOSE 8182

@@ -1423,13 +1423,20 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
         "Expected form URL in three-tab list:\n{three_tab_output}"
     );
 
-    // ── 5. tab-select by index — verify the correct tab activates ────
-    let form_index = extract_tab_index(&three_tab_output, &form_url).to_string();
-    run_command(ctx, &["tab-select", &form_index]);
+    // ── 5. tab-select by GUID — verify the correct tab activates ────
+    // GUID is used instead of index: indexes come from listDrivers() iteration
+    // order, which is unstable (ConcurrentHashMap), so an index-based select
+    // can silently activate a different tab than the one the test intends.
+    let form_guid = extract_tab_guid(&three_tab_output, &form_url);
+    assert!(
+        !form_guid.is_empty(),
+        "Expected a GUID for the form tab in three-tab list:\n{three_tab_output}"
+    );
+    run_command(ctx, &["tab-select", "--guid", &form_guid]);
     let current_url = eval_text(ctx, "document.location.href");
     assert!(
         current_url.contains(&form_url),
-        "Expected tab-select {form_index} to activate '{form_url}', got:\n{current_url}"
+        "Expected tab-select --guid {form_guid} to activate '{form_url}', got:\n{current_url}"
     );
 
     // Switch back to the other tab by GUID for the close tests
@@ -1481,13 +1488,24 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
 
     // ── 7. tab-close current tab (no args) — verify tab count drops ──
     // We are currently on the interactive tab (first tab, front after close).
-    // Switch to form tab first, then close it without args.
-    let form_idx_after = extract_tab_index(&after_close_output, &form_url).to_string();
-    let select_result = run_command(ctx, &["tab-select", &form_idx_after]);
+    // Switch to form tab by GUID (indexes depend on listDrivers() iteration
+    // order, which is unstable), verify the switch landed, then close it
+    // without args.
+    let form_guid_after = extract_tab_guid(&after_close_output, &form_url);
+    assert!(
+        !form_guid_after.is_empty(),
+        "Expected a GUID for the form tab after GUID-based close:\n{after_close_output}"
+    );
+    let select_result = run_command(ctx, &["tab-select", "--guid", &form_guid_after]);
     assert_eq!(
         select_result.exit_code, 0,
-        "Expected tab-select {form_idx_after} to succeed before no-arg tab-close:\nstdout: {}\nstderr: {}",
+        "Expected tab-select --guid {form_guid_after} to succeed before no-arg tab-close:\nstdout: {}\nstderr: {}",
         select_result.stdout, select_result.stderr
+    );
+    let current_url = eval_text(ctx, "document.location.href");
+    assert!(
+        current_url.contains(&form_url),
+        "Expected the form tab to be current before no-arg tab-close, got:\n{current_url}"
     );
     run_command(ctx, &["tab-close"]); // closes current tab (form)
     let deadline2 = std::time::Instant::now() + std::time::Duration::from_millis(5_000);

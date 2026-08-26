@@ -85,7 +85,13 @@ class BrowserToolExecutor : AbstractToolExecutor() {
                 // targets the correct page.
                 kotlinx.coroutines.delay(200)
                 logger.info("""👀 Switched to tab {}""", driver.guid)
-                driver
+                // Return the resolved GUID so AgentToolManager binds the SAME
+                // driver it resolved here.  The WebDriver itself is not
+                // serializable (AbstractToolExecutor wraps it in a description
+                // map that loses the identity), and re-resolving from `index`
+                // later can hit a different listDrivers() order, binding the
+                // wrong tab (ConcurrentHashMap iteration order is unstable).
+                mapOf("guid" to driver.guid)
             }
 
             "newTab" -> {
@@ -98,7 +104,18 @@ class BrowserToolExecutor : AbstractToolExecutor() {
 
             "closeTab" -> {
                 val driver = resolveTabDriver(browser, args, functionName, allowCurrentTab = true)
+                val guid = driver.guid
                 browser.destroyDriver(driver)
+                // destroyDriver swallows CDP close failures (runCatching around
+                // closeMe), so a failed close would otherwise report success
+                // while every tab stays open.  Verify the tab is actually gone
+                // and surface the failure (AGENTS.md: no silent failures).
+                val stillOpen = browser.listDrivers().any { it.guid == guid }
+                if (stillOpen) {
+                    throw IllegalStateException(
+                        "Failed to close tab '$guid': the tab is still open after destroyDriver"
+                    )
+                }
                 true
             }
 
