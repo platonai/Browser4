@@ -5,6 +5,13 @@ name: PR Quality Gate
 # PowerShell test scripts, and enforces a minimum JaCoCo coverage floor.
 # Heavy / Integration / E2E tests are intentionally excluded here (they run in
 # ci.yml on release tags and in nightly.yml) to keep PR validation quick.
+#
+# NOTE: For pull requests from FORKS, GitHub holds this workflow until a
+# maintainer approves it (first-time contributor protection for public repos).
+# Until approved, the run shows as "action_required" with zero jobs and no
+# logs — that is the expected waiting state, NOT a failure. Approve it from
+# the Actions tab ("Approve and run") or, for automation, with:
+#   POST /repos/{owner}/{repo}/actions/runs/{run_id}/approve
 
 on:
   pull_request:

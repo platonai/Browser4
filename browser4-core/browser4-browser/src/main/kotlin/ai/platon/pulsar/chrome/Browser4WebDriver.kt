@@ -3,18 +3,24 @@ package ai.platon.pulsar.chrome
 import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.api.model.BrowserTab
 import ai.platon.pulsar.api.model.BrowserUseState
+import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.api.model.PageTarget
 import ai.platon.pulsar.api.model.SnapshotOptions
 import ai.platon.pulsar.api.model.WebDriverException
 import ai.platon.pulsar.chrome.network.RobustRPC
 import ai.platon.pulsar.chrome.protocol.Keyboard
+import ai.platon.pulsar.chrome.protocol.util.withNodeObjectId
+import ai.platon.pulsar.chrome.util.ChromeDriverException
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.common.math.geometric.RectD
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.urls.URLUtils
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import kotlinx.coroutines.delay
+import kotlin.random.Random
 
 /**
  * Browser4-specific extension of [PulsarWebDriver].
@@ -61,8 +67,30 @@ open class Browser4WebDriver(
     browser: PulsarBrowser
 ) : PulsarWebDriver(uniqueID, chromeTab, browserProtocol, browser) {
 
+    /**
+     * Viewport center of a drag element, plus the stable CSS path used to
+     * re-locate it inside the drag script (where CDP node object ids are
+     * not available for the target), a frame-residency flag, and the viewport
+     * size at resolution time (used to confirm the target is actually
+     * visible after an asynchronous scroll commit).
+     */
+    internal data class DragCenter(
+        val x: Double,
+        val y: Double,
+        val cssPath: String,
+        val inFrame: Boolean,
+        val viewportWidth: Int = 0,
+        val viewportHeight: Int = 0,
+    )
+
     companion object {
         private val logger = getLogger(Browser4WebDriver::class)
+
+        /** DOM-ready budget for the post-navigation body wait (see [waitForNavigationSettled]). */
+        private const val NAVIGATION_DOM_READY_TIMEOUT_MS = 10_000L
+
+        /** Settle delay after the post-navigation body wait (see [waitForNavigationSettled]). */
+        private const val NAVIGATION_DOM_SETTLE_DELAY_MS = 1_000L
 
         private val storageStateMapper: ObjectMapper = jacksonObjectMapper()
             .setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
@@ -172,6 +200,90 @@ open class Browser4WebDriver(
             """.trimIndent()
 
         /**
+         * Interpret the `evaluateValue(selector, "function(){ return this != null; }")`
+         * probe used by the [selectOption] override.  The upstream selectOption
+         * reports success even when no element matches, which silently swallows
+         * typos and stale refs; the probe distinguishes:
+         * - `true` — the target exists, proceed;
+         * - `null` — the locator could not be resolved (missing element or a
+         *   locator failure), while driver/session/transport failures throw
+         *   inside evaluateValue rather than returning null;
+         * - anything else (`false`) — the locator resolved to a non-element.
+         *
+         * @return null when the target exists, otherwise the user-facing error message.
+         */
+        internal fun selectOptionTargetError(selector: String, exists: Any?): String? = when (exists) {
+            true -> null
+            null -> "Option target could not be resolved (not found or locator failure): $selector"
+            else -> "Option target not found: $selector"
+        }
+
+        /**
+         * The IIFE used by [submitFormFallback] (and the executor's fallback) to
+         * submit the nearest form of the element matched by [selector] with DOM
+         * keyboard events and `requestSubmit()`/`submit()` — a last-resort path
+         * for JS-heavy pages that intercept both CDP Enter and the browser's
+         * implicit form submission.
+         */
+        fun submitFormFallbackJs(selector: String): String =
+            """
+            (function(){
+                var el=document.querySelector('${escapeJsSelector(selector)}');
+                if(!el)return false;
+                el.focus();
+                var o={key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true};
+                el.dispatchEvent(new KeyboardEvent('keydown',o));
+                el.dispatchEvent(new KeyboardEvent('keypress',o));
+                el.dispatchEvent(new KeyboardEvent('keyup',o));
+                var form=el.closest('form');
+                if(form){try{form.requestSubmit();}catch(e){}form.submit();}
+                return true;
+            })()
+            """.trimIndent()
+
+        /**
+         * The IIFE used by [consoleMessages] (and the executor's fallback) to read
+         * the buffered console messages, filtering to [level] and above
+         * (error=0, warn=1, info=2, log=2, debug=3).  Intercepts
+         * console.log/warn/error/info/debug on first call and buffers subsequent
+         * messages on `window.__b4_console`.
+         */
+        fun consoleMessagesJs(level: String): String =
+            """
+            (function() {
+                if (!window.__b4_console_intercepted) {
+                    window.__b4_console = window.__b4_console || [];
+                    var levels = ['log', 'warn', 'error', 'info', 'debug'];
+                    levels.forEach(function(lvl) {
+                        var original = console[lvl];
+                        console[lvl] = function() {
+                            var args = Array.prototype.slice.call(arguments);
+                            window.__b4_console.push({
+                                level: lvl,
+                                text: args.map(function(a) {
+                                    return typeof a === 'object' ? JSON.stringify(a) : String(a);
+                                }).join(' '),
+                                timestamp: Date.now()
+                            });
+                            original.apply(console, arguments);
+                        };
+                    });
+                    window.__b4_console_intercepted = true;
+                }
+                var minPriority = { error: 0, warn: 1, info: 2, log: 2, debug: 3 };
+                var min = minPriority['$level'] !== undefined ? minPriority['$level'] : 2;
+                var filtered = (window.__b4_console || []).filter(function(e) {
+                    var p = minPriority[e.level] !== undefined ? minPriority[e.level] : 2;
+                    return p <= min;
+                });
+                return JSON.stringify(filtered);
+            })()
+            """.trimIndent()
+
+        /** The expression used by [consoleClear] (and the executor's fallback). */
+        fun consoleClearJs(): String = "window.__b4_console = []; 'Console cleared'"
+
+        /**
          * Normalize a cookie from a storage-state JSON payload for
          * `Network.setCookies`.  Mirrors the upstream pulsar-browser
          * normalization so states saved by `tab.saveStorageState()` round-trip
@@ -226,6 +338,171 @@ open class Browser4WebDriver(
          */
         fun isDocumentOriginReady(evaluatedOrigin: String?, targetOrigin: String): Boolean =
             !evaluatedOrigin.isNullOrBlank() && evaluatedOrigin.trim() == targetOrigin
+
+        /**
+         * Parse the JSON produced by [dragCenterJs] into a [DragCenter].
+         * Returns null when the value is missing, malformed, or lacks a usable
+         * CSS path (which makes the element unre-locatable at drag time).
+         */
+        internal fun parseDragCenter(value: Any?): DragCenter? {
+            val json = value as? String ?: return null
+            val node = runCatching { pulsarObjectMapper().readTree(json) }.getOrNull() ?: return null
+            val x = node.get("x")?.takeIf { it.isNumber }?.asDouble() ?: return null
+            val y = node.get("y")?.takeIf { it.isNumber }?.asDouble() ?: return null
+            val cssPath = node.get("cssPath")?.asText()?.takeIf { it.isNotBlank() } ?: return null
+            return DragCenter(
+                x = x,
+                y = y,
+                cssPath = cssPath,
+                inFrame = node.get("inFrame")?.asBoolean() ?: false,
+                viewportWidth = node.get("vw")?.takeIf { it.isNumber }?.asInt() ?: 0,
+                viewportHeight = node.get("vh")?.takeIf { it.isNumber }?.asInt() ?: 0,
+            )
+        }
+
+        /**
+         * The `function()` body evaluated with `this` bound to a drag element.
+         * Returns the element's viewport center, a stable CSS path that
+         * re-locates the same element from the top document at drag time, and
+         * whether the element lives in a frame (drag coordinates and
+         * `document.elementFromPoint` are frame-relative then, so frame
+         * residents must be rejected explicitly rather than silently mis-dragged).
+         */
+        internal fun dragCenterJs(): String =
+            """
+            function() {
+                if (!(this instanceof Element)) {
+                    return JSON.stringify({ cssPath: '' });
+                }
+                const r = this.getBoundingClientRect();
+                const path = [];
+                let el = this;
+                while (el && el.nodeType === 1) {
+                    let part = el.tagName.toLowerCase();
+                    if (el.id) {
+                        part += '#' + CSS.escape(el.id);
+                        path.unshift(part);
+                        break;
+                    }
+                    if (el.parentElement) {
+                        const sameTag = Array.prototype.filter.call(
+                            el.parentElement.children,
+                            (c) => c.tagName === el.tagName
+                        );
+                        if (sameTag.length > 1) {
+                            part += ':nth-of-type(' + (sameTag.indexOf(el) + 1) + ')';
+                        }
+                    }
+                    path.unshift(part);
+                    el = el.parentElement;
+                }
+                return JSON.stringify({
+                    x: r.left + r.width / 2,
+                    y: r.top + r.height / 2,
+                    cssPath: path.join(' > '),
+                    inFrame: this.ownerDocument !== document,
+                    vw: window.innerWidth,
+                    vh: window.innerHeight
+                });
+            }
+            """.trimIndent()
+
+        /**
+         * Build the drag sequence script executed with `this` bound to the
+         * source element (via CDP `callFunctionOn`).  The target is re-located
+         * by [targetCssPath] and must still be hit by the resolved viewport
+         * point — otherwise the drag fails loudly instead of dispatching on an
+         * unrelated element (occluded by an overlay, `pointer-events: none`,
+         * or moved by an async layout shift).
+         *
+         * All failures are reported before any event is dispatched, so a retry
+         * of the outer RPC block re-runs the sequence idempotently.
+         *
+         * [delays] must contain exactly 4 randomized inter-event delays (ms).
+         */
+        internal fun buildDragSequenceScript(
+            targetCssPath: String,
+            sourceX: Double,
+            sourceY: Double,
+            targetX: Double,
+            targetY: Double,
+            delays: List<Long>,
+        ): String {
+            require(delays.size == 4) { "drag sequence requires exactly 4 delays" }
+            val targetJson = pulsarObjectMapper().writeValueAsString(targetCssPath)
+            // CDP Runtime.callFunctionOn requires a *function declaration*, not
+            // an expression — an IIFE is rejected with "Given expression does
+            // not evaluate to a function".  `async function()` + awaitPromise
+            // gives us the same async sequencing inside a valid declaration.
+            return """
+                async function() {
+                    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+                    const source = this;
+                    if (typeof DataTransfer === 'undefined' || typeof DragEvent === 'undefined') {
+                        return JSON.stringify({
+                            ok: false,
+                            error: 'HTML5 drag-and-drop APIs are not available in the current page context'
+                        });
+                    }
+                    const target = document.querySelector($targetJson);
+                    if (!target) {
+                        return JSON.stringify({
+                            ok: false,
+                            error: 'Target element was not found at drag time'
+                        });
+                    }
+                    const hit = document.elementFromPoint($targetX, $targetY);
+                    // The hit must be the target itself or one of its
+                    // descendants (b.contains(a): the target contains the
+                    // hit).  A hit on an *ancestor* means the target is not
+                    // hittable at that point (pointer-events:none, or it
+                    // moved) — dispatching there would silently drop onto the
+                    // wrong element.
+                    const related = (a, b) => a === b || (!!a && !!b && b.contains(a));
+                    if (!related(hit, target)) {
+                        return JSON.stringify({
+                            ok: false,
+                            error: 'Target element is occluded or moved: the resolved point is covered by another element'
+                        });
+                    }
+                    const dataTransfer = new DataTransfer();
+                    const fire = (element, type, clientX, clientY) => {
+                        const event = new DragEvent(type, {
+                            bubbles: true,
+                            cancelable: true,
+                            composed: true,
+                            dataTransfer,
+                            clientX,
+                            clientY
+                        });
+                        element.dispatchEvent(event);
+                    };
+                    fire(source, 'dragstart', $sourceX, $sourceY);
+                    await sleep(${delays[0]});
+                    fire(hit, 'dragenter', $targetX, $targetY);
+                    await sleep(${delays[1]});
+                    fire(hit, 'dragover', $targetX, $targetY);
+                    await sleep(${delays[2]});
+                    fire(hit, 'drop', $targetX, $targetY);
+                    await sleep(${delays[3]});
+                    fire(source, 'dragend', $targetX, $targetY);
+                    return JSON.stringify({ ok: true });
+                }
+            """.trimIndent()
+        }
+
+        /**
+         * Interpret the `callFunctionOn` result value of a drag script.
+         * Returns null on success, or a user-facing error message.
+         */
+        internal fun dragScriptErrorMessage(result: Any?): String? {
+            val json = result as? String ?: return "Failed to execute drag script"
+            val parsed = runCatching { pulsarObjectMapper().readTree(json) }.getOrNull()
+            if (parsed?.get("ok")?.asBoolean() == true) {
+                return null
+            }
+            return parsed?.get("error")?.asText() ?: "Unknown drag failure"
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -533,6 +810,191 @@ open class Browser4WebDriver(
     }
 
     // ---------------------------------------------------------------------------
+    // Navigation settle — after a navigation-triggering action, detect whether
+    // the page started navigating and wait for the DOM to settle.  Moved from
+    // BrowserTabToolExecutor.waitForPotentialNavigation so every driver caller
+    // (not just the tool layer) gets the same post-navigation wait.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * After a navigation-triggering action, detect whether the page started
+     * navigating and wait for the DOM to settle before returning.
+     *
+     * Algorithm:
+     * 1. Check if the URL already changed — if so the navigation is complete,
+     *    wait for `body` + a short settle delay.
+     * 2. If the URL is unchanged, eval `document.readyState`. If "loading", the
+     *    navigation is in flight — poll readyState until 'complete' (bounded by
+     *    [pollTimeoutMillis]).
+     * 3. Otherwise no navigation occurred — return immediately (no unnecessary
+     *    delay).
+     *
+     * Do NOT use [waitForNavigation] here: the no-arg overload's predicate is
+     * `"" != currentUrl()`, true as soon as the page has any URL, so it returns
+     * immediately without waiting; and the oldUrl overload can never complete
+     * for a same-URL navigation (reload, same-URL goto, fragment/SPA
+     * navigation that keeps the URL). Polling `document.readyState` covers both
+     * URL-changing and same-URL navigations.
+     *
+     * @param urlBefore The URL observed before the action, used to detect a
+     *   completed URL-changing navigation.
+     * @param pollTimeoutMillis Upper bound for the readyState poll when the URL
+     *   is unchanged and the document is still loading.
+     */
+    @Throws(WebDriverException::class)
+    suspend fun waitForNavigationSettled(urlBefore: String, pollTimeoutMillis: Long = 30_000L) {
+        // Wait for a while for the action effects
+        delay(200)
+
+        try {
+            val urlAfter = currentUrl()
+            if (urlAfter != urlBefore) {
+                // URL already changed — navigation completed, wait for DOM to be ready.
+                // Use a shorter timeout here since the navigation itself has already
+                // finished; we only need the new page's body element to appear.
+                waitForSelector("body", NAVIGATION_DOM_READY_TIMEOUT_MS)
+                delay(NAVIGATION_DOM_SETTLE_DELAY_MS)
+                return
+            }
+
+            // URL unchanged — check if the document is currently loading
+            val readyState = evaluateValue("document.readyState") as? String
+            if (readyState == "loading") {
+                // Navigation is in flight. Do NOT use waitForNavigation(urlBefore, ...)
+                // here: its predicate is `currentUrl() != urlBefore`, which can
+                // never become true for a same-URL navigation (reload, same-URL
+                // goto, fragment/SPA navigation that keeps the URL) — the wait
+                // would burn the whole timeout silently. Poll document.readyState
+                // instead, which covers both same-URL and URL-changing navigations.
+                var sawComplete = false
+                val deadline = System.currentTimeMillis() + pollTimeoutMillis
+                while (System.currentTimeMillis() < deadline) {
+                    val state = evaluateValue("document.readyState") as? String
+                    if (state == "complete") {
+                        sawComplete = true
+                        break
+                    }
+                    delay(200)
+                }
+
+                // A URL change is expected only for link/form navigations; a
+                // same-URL navigation (e.g. refresh) legitimately keeps the URL.
+                if (sawComplete) {
+                    // The document became ready — the navigation completed. The
+                    // body should already exist; a short DOM-ready budget is
+                    // enough (same as the URL-changing branch above). Do NOT
+                    // use the full pollTimeoutMillis here: the poll already
+                    // consumed that budget, and stacking another wait doubles
+                    // the dead time when the body never appears.
+                    waitForSelector("body", NAVIGATION_DOM_READY_TIMEOUT_MS)
+                    delay(NAVIGATION_DOM_SETTLE_DELAY_MS)
+                } else {
+                    // The document never became ready — the navigation appears
+                    // to have failed (e.g. the page context is wedged and evals
+                    // return null). Do NOT pile waitForSelector("body", 30s) on
+                    // top of the exhausted poll: the page is stuck, another
+                    // full-timeout wait would double the dead time for every
+                    // navigation-triggering action. Surface the warning and let
+                    // the caller recover (reload, reopen the tab).
+                    val finalUrl = currentUrl()
+                    logger.warn(
+                        "waitForNavigationSettled: document never became ready after the action " +
+                            "(url='{}'). Navigation may have failed silently.",
+                        finalUrl
+                    )
+                }
+            } else {
+                // No navigation detected. The action may have been a no-op (e.g. retry
+                // computed a wrong targetIndex). Log at debug for diagnostics.
+                logger.debug(
+                    "waitForNavigationSettled: no navigation detected. " +
+                        "urlBefore='{}', urlAfter='{}', readyState='{}'",
+                    urlBefore,
+                    urlAfter,
+                    readyState
+                )
+            }
+        } catch (e: Exception) {
+            // Best-effort: navigation detection failures should not break the command
+            logger.debug("waitForNavigationSettled: exception while checking navigation: {}", e.message)
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Enter-submit fallback — a CDP-dispatched Enter does not reliably trigger
+    // the browser's implicit form submission (HTML §4.10.2.2), and JS-heavy
+    // SPAs may intercept both.  submitFormFallback is the last-resort path used
+    // by the tool layer after `press("Enter")` did not navigate.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Submit the nearest form of the element matched by [selector] by dispatching
+     * DOM keyboard events (keydown/keypress/keyup) and calling
+     * `form.requestSubmit()` (with `form.submit()` fallback).  Used when a
+     * CDP-dispatched Enter did not cause navigation — JS-heavy SPAs may intercept
+     * both the trusted key event and the implicit form submission.
+     *
+     * @param selector A CSS selector for the filled element whose form is submitted.
+     * @return false when the element is not found, true otherwise (form may or may
+     *   not exist — the dispatch still runs).
+     */
+    @Throws(WebDriverException::class)
+    suspend fun submitFormFallback(selector: String): Boolean {
+        val result = evaluate(submitFormFallbackJs(selector))
+        return result == true
+    }
+
+    // ---------------------------------------------------------------------------
+    // Console message buffer — intercepts console.log/warn/error/info/debug on
+    // first call and buffers subsequent messages on window.__b4_console.
+    // Moved from BrowserTabToolExecutor so the buffer behavior is driver-owned
+    // and reusable outside the tool layer.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Read the buffered browser console messages filtered to [level] and above
+     * (error=0, warn=1, info=2, log=2, debug=3).  Intercepts the console on
+     * first call and buffers subsequent messages.
+     */
+    @Throws(WebDriverException::class)
+    suspend fun consoleMessages(level: String = "info"): JsEvaluation? =
+        evaluateValueDetail(consoleMessagesJs(level))
+
+    /**
+     * Clear the buffered browser console messages.
+     */
+    @Throws(WebDriverException::class)
+    suspend fun consoleClear(): JsEvaluation? =
+        evaluateValueDetail(consoleClearJs())
+
+    // ---------------------------------------------------------------------------
+    // Viewport screenshot — capture a screenshot of the [n]-th viewport, scrolling
+    // first so lazy-loaded content renders before capture.  Moved from
+    // BrowserTabToolExecutor.screenshot(viewport=...) so the geometry logic is
+    // driver-owned and reusable outside the tool layer.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Capture a screenshot of the [viewportIndex]-th viewport (0-based, negative
+     * scrolls up from the current position).  Scrolls to the target viewport so
+     * lazy-loaded content renders before capture, then captures the viewport-sized
+     * rect at the actual post-scroll position.
+     *
+     * @return The screenshot data (format matches the driver's screenshot()).
+     */
+    @Throws(WebDriverException::class)
+    suspend fun screenshotViewport(viewportIndex: Double): String? {
+        val w = evaluateValue("window.innerWidth")?.toString()?.toDoubleOrNull() ?: 1920.0
+        val h = evaluateValue("window.innerHeight")?.toString()?.toDoubleOrNull() ?: 1080.0
+        // Scroll to the target viewport (scroll-relative) so lazy-loaded content
+        // renders before capture. Use the returned scrollY so the screenshot
+        // rect matches the actual post-scroll position.
+        val actualScrollY = scrollToViewport(viewportIndex)
+        val rect = RectD(0.0, actualScrollY, w, h)
+        return screenshot(rect)
+    }
+
+    // ---------------------------------------------------------------------------
     // Storage state — the upstream pulsar-browser implementation races the
     // per-origin navigation and can evaluate `window.localStorage` against an
     // opaque-origin provisional document (`SecurityError: Access is denied for
@@ -664,6 +1126,306 @@ open class Browser4WebDriver(
             )
         }.onFailure {
             // Best-effort safety net — a failure here must not fail the press itself.
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Drag & drop fix — the upstream pulsar-browser:4.11.x drag() dispatches
+    // synthetic (untrusted) DragEvents from JS, which never reach listeners
+    // registered by the page's own scripts (isolated-world dispatch does not
+    // cross into the main world for drag events).  This override runs the same
+    // event sequence through callFunctionOn in the main world (no isolated-world
+    // context id), so page-registered listeners receive the full drag lifecycle
+    // (dragstart → dragenter → dragover → drop → dragend).
+    //
+    // Hardening over the initial fix:
+    // - The source element is bound as `this` (a real CDP node reference), so
+    //   the dragstart/dragend always fire on the intended node.
+    // - The target is re-located by a stable CSS path and must still be hit by
+    //   its resolved viewport point (elementFromPoint).  Occluded targets,
+    //   pointer-events:none targets, and targets moved by an async layout shift
+    //   fail loudly instead of silently dispatching on an unrelated element.
+    // - Elements inside frames are rejected explicitly: their coordinates are
+    //   frame-relative and elementFromPoint runs in the top document, so a
+    //   frame drag would silently target the wrong element.
+    // - Press/release points are jittered and inter-event delays randomized,
+    //   so the synthetic sequence does not fingerprint as a constant-pattern
+    //   automation (see dragAndDrop for the same anti-detection intent).
+    // - All failure paths return before any event is dispatched, keeping the
+    //   outer RPC retry idempotent.
+    //
+    // Known limitation (unchanged): the events remain synthetic
+    // (isTrusted=false); libraries that gate on isTrusted (SortableJS,
+    // react-dnd) still won't respond — a browser-level limitation.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Drag the element identified by [sourceSelector] onto the element identified
+     * by [targetSelector].
+     *
+     * Upstream drag() dispatches synthetic DragEvents through `JsHandler`,
+     * which evaluates in an **isolated world** — the events never reach
+     * main-world page listeners, so the drag silently does nothing.
+     *
+     * This override runs the same event sequence through
+     * [BrowserProtocol.callFunctionOn] with the source bound as the call
+     * receiver (main world, no isolated-world context id), so page-registered
+     * listeners receive the full drag lifecycle
+     * (dragstart → dragenter → dragover → drop → dragend), verified against a
+     * live listener probe.
+     *
+     * Notes on what was tried and ruled out:
+     * - CDP `Input.dispatchDragEvent` + manual DragData: accepted by Chrome,
+     *   but libraries require `dragstart`, which CDP never emits.
+     * - Trusted CDP mouse sequences (press → move → release): headless Chrome
+     *   never starts the native drag state machine, so no dragstart fires.
+     * - Synthetic events are `isTrusted=false`; libraries that gate on
+     *   isTrusted (SortableJS, react-dnd) will not respond.  That is a
+     *   browser-level limitation, not fixable from the driver.
+     *
+     * @param sourceSelector A CSS selector, XPath, or "backend:nodeId" locator for the drag source.
+     * @param targetSelector A CSS selector, XPath, or "backend:nodeId" locator for the drop target.
+     * @throws WebDriverException if either element cannot be located, lives in a
+     *   frame, is occluded/moved at drag time, or the script fails.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun drag(sourceSelector: String, targetSelector: String): Unit {
+        // Phase 1 — resolve (retryable pieces are covered by their own RPC
+        // layers; deterministic failures like a missing element must surface
+        // directly instead of being wrapped by the outer retry machinery).
+        // Only the target is scrolled into view: the source is bound as a real
+        // CDP node, so it needs no viewport presence.  PageHandler's
+        // scrollIntoViewIfNeeded prefers a *smooth* JS scroll (animated), whose
+        // geometry stays in transit for hundreds of ms — unusable for
+        // point-based validation — so use an instant scroll here instead.
+        runCatching {
+            evaluateValue(
+                targetSelector,
+                "function(){ this.scrollIntoView({ block: 'center', behavior: 'instant' }); return true; }",
+            )
+        }
+
+        val source = resolveDragCenter(sourceSelector)
+            ?: throw WebDriverException("Source element was not found: $sourceSelector", driver = this@Browser4WebDriver)
+        // The target must be *visible*: even an instant scroll commits
+        // asynchronously on the renderer, so poll until the resolved center
+        // lands inside the viewport (or give up and let the script report the
+        // real failure).  Re-scrolling inside the poll would restart any
+        // in-flight scroll animation, so the poll only waits and re-reads.
+        val target = resolveDragTargetInViewport(targetSelector)
+            ?: throw WebDriverException("Target element was not found: $targetSelector", driver = this@Browser4WebDriver)
+
+        if (source.inFrame || target.inFrame) {
+            throw WebDriverException(
+                "Drag into/from elements inside frames is not supported: '$sourceSelector' -> '$targetSelector'",
+                driver = this@Browser4WebDriver
+            )
+        }
+
+        val sourceNode = rpc.invokeOnPage("drag") { page.dom.queryLocator(sourceSelector) }
+            ?: throw WebDriverException("Source element was not found: $sourceSelector", driver = this@Browser4WebDriver)
+
+        // Humanize the sequence: jitter the press/release points (±2px) and
+        // randomize inter-event delays (120-300ms, the same magnitude as the
+        // type() bucket).  Constant centers and fixed delays are a fingerprint
+        // for synthetic drags.
+        val sourcePoint = Pair(source.x + randomOffset(2.0), source.y + randomOffset(2.0))
+        val targetPoint = Pair(target.x + randomOffset(2.0), target.y + randomOffset(2.0))
+        val delays = List(4) { randomDragDelayMillis() }
+
+        val script = buildDragSequenceScript(
+            targetCssPath = target.cssPath,
+            sourceX = sourcePoint.first,
+            sourceY = sourcePoint.second,
+            targetX = targetPoint.first,
+            targetY = targetPoint.second,
+            delays = delays,
+        )
+
+        // Phase 2 — execute the sequence.  The source element is bound as
+        // `this` (a real CDP node reference) and userGesture=true keeps
+        // user-activation-gated APIs available to page dragstart listeners.
+        // Page-side failures (occlusion, missing target) are deterministic:
+        // they must propagate immediately with their real message.  Only
+        // transient CDP failures are retried, manually, inside this block.
+        withNodeObjectId(browserProtocol, sourceNode) { sourceObjectId ->
+            var lastCdpFailure: ChromeDriverException? = null
+            repeat(3) { attempt ->
+                try {
+                    val result = browserProtocol.callFunctionOn(
+                        script,
+                        objectId = sourceObjectId,
+                        returnByValue = true,
+                        userGesture = true,
+                        awaitPromise = true,
+                    )
+                    val scriptError = dragScriptErrorMessage(result?.result?.value)
+                    if (scriptError == null) {
+                        return@repeat
+                    }
+                    throw WebDriverException(
+                        "Failed to drag '$sourceSelector' to '$targetSelector': $scriptError",
+                        driver = this@Browser4WebDriver
+                    )
+                } catch (e: WebDriverException) {
+                    throw e
+                } catch (e: ChromeDriverException) {
+                    lastCdpFailure = e
+                    if (attempt < 2) {
+                        delay(200)
+                    }
+                }
+            }
+            lastCdpFailure?.let { throw it }
+        }
+
+        gap("drag")
+    }
+
+    /**
+     * Resolve the viewport center, stable CSS path, and frame residency of
+     * [selector] via the driver's locator path.  Supports CSS selectors, XPath,
+     * `backend:nodeId` and `eN` snapshot refs (the upstream evaluateValue
+     * locator resolution), so drag works with every locator format the rest of
+     * the CLI accepts. Returns null when the element does not exist or cannot
+     * be re-located by CSS path.
+     */
+    private suspend fun resolveDragCenter(selector: String): DragCenter? {
+        val value = evaluateValue(selector, dragCenterJs())
+        return parseDragCenter(value)
+    }
+
+    /**
+     * Resolve [selector] like [resolveDragCenter], but keep polling until the
+     * element's center is inside the viewport (scroll commits and smooth-scroll
+     * animations are asynchronous, so a single read can observe stale
+     * geometry).  Never re-scrolls inside the poll — that would restart any
+     * in-flight scroll animation.  Returns the last resolution when the
+     * element never becomes visible; the drag script then reports the real
+     * failure (e.g. occluded) instead of this helper guessing.
+     */
+    private suspend fun resolveDragTargetInViewport(selector: String): DragCenter? {
+        var last: DragCenter? = null
+        repeat(15) {
+            last = resolveDragCenter(selector) ?: return null
+            val visible = last.viewportWidth <= 0 || (
+                last.x >= 0 &&
+                    last.y >= 0 &&
+                    last.x <= last.viewportWidth &&
+                    last.y <= last.viewportHeight
+                )
+            if (visible) {
+                return last
+            }
+            delay(150)
+        }
+        return last
+    }
+
+    /** Uniform random offset in [-range, range], used to jitter drag points. */
+    private fun randomOffset(range: Double): Double = Random.nextDouble(-range, range)
+
+    /** Randomized inter-event delay for the drag sequence, 120-300 ms. */
+    private fun randomDragDelayMillis(): Long = Random.nextLong(120L, 301L)
+
+    // ---------------------------------------------------------------------------
+    // selectOption fix — the upstream pulsar-browser selectOption reports
+    // success even when no element matches, which silently swallows typos and
+    // stale refs.  This override probes the target first (via the driver's own
+    // locator path, so CSS/XPath/backend:nodeId/eN all work) and fails loudly
+    // before delegating.  Only the missing-target case is treated as "not
+    // found" — driver, session and transport failures keep propagating (they
+    // throw inside evaluateValue rather than returning null).
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Select [values] in the option element identified by [selector], failing
+     * loudly when the target does not exist (the upstream implementation
+     * reports success even for a missing element, silently swallowing typos
+     * and stale refs).
+     *
+     * @param selector A CSS selector, XPath, or "backend:nodeId" locator for the select element.
+     * @param values The option values to select.
+     * @return The selected option values.
+     * @throws WebDriverException if the element cannot be located or the selection fails.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun selectOption(selector: String, values: List<String>): List<String> {
+        val exists = evaluateValue(selector, "function(){ return this != null; }")
+        selectOptionTargetError(selector, exists)?.let { throw IllegalArgumentException(it) }
+        return super.selectOption(selector, values)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Dialog state fix — upstream dialogAccept/dialogDismiss call CDP
+    // Page.handleJavaScriptDialog directly but never drain DialogHandler's
+    // pending queue, and DialogHandler.onDialogClosed only logs.  The
+    // tool-layer "blocked by a native dialog" guard checks that queue, so a
+    // handled dialog keeps failing screenshots/health-checks until the session
+    // is closed. These overrides acknowledge the queue head after CDP succeeds.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Fail loudly when a native JavaScript dialog (alert/confirm/prompt) is
+     * blocking the page.  Read-state operations that require JS execution via
+     * CDP (ariaSnapshot, evaluate, select*, …) queue behind an open dialog and
+     * never complete; this guard surfaces a clear error so the caller knows to
+     * accept or dismiss the dialog first.
+     *
+     * @throws IllegalStateException when a dialog is pending.
+     */
+    fun requireNoPendingDialog() {
+        val dialog = dialogHandler.peekPendingDialog() ?: return
+        val type = dialog.type
+        val message = if (dialog.message.length > 80) dialog.message.take(80) + "..." else dialog.message
+        throw IllegalStateException(
+            "Page is blocked by a native $type dialog${if (message.isNotEmpty()) ": \"$message\"" else ""}. " +
+                "Use dialog-accept or dialog-dismiss to handle the dialog before reading page state."
+        )
+    }
+
+    /**
+     * Accept the current JavaScript dialog, then acknowledge exactly the dialog
+     * CDP handled (queue head) so later pending entries stay intact.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun dialogAccept(promptText: String?): Unit {
+        super.dialogAccept(promptText)
+        acknowledgeHandledDialog()
+    }
+
+    /**
+     * Dismiss (Cancel) the current JavaScript dialog, then acknowledge exactly
+     * the dialog CDP handled (see [dialogAccept]).
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun dialogDismiss(): Unit {
+        super.dialogDismiss()
+        acknowledgeHandledDialog()
+    }
+
+    /**
+     * Remove only the head of [DialogHandler]'s pending queue — the dialog CDP
+     * just handled.  Unlike draining the whole queue, later entries (dialogs
+     * queued after this one) are preserved.  The queue is only appended by
+     * `Page.javascriptDialogOpening` and never emptied by the upstream dialog
+     * path, so it must be acknowledged explicitly after a CDP
+     * `Page.handleJavaScriptDialog` call.
+     */
+    private fun acknowledgeHandledDialog() {
+        val acknowledged = dialogHandler.getPendingDialog()
+        if (acknowledged != null) {
+            logger.debug(
+                "Acknowledged dialog handled by CDP: type={} message={}",
+                acknowledged.type,
+                acknowledged.message,
+            )
+        } else {
+            // The opening event may still be in flight over the WebSocket, or
+            // the dialog was opened before DialogHandler subscribed.  Nothing
+            // to remove — the stale-entry risk this fix guards against does
+            // not apply to a queue that is already empty.
+            logger.debug("No pending dialog event to acknowledge after CDP dialog handling")
         }
     }
 }

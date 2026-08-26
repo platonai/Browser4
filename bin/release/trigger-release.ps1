@@ -17,6 +17,12 @@
     (delegating to version.mjs), shows the changes since the previous release,
     and creates + pushes a vX.Y.Z tag that triggers the release workflow.
 
+    main is the single release source: the tag must be created from the latest
+    origin/main commit. The script verifies HEAD matches origin/main and warns
+    (asking for confirmation in -Apply mode) when it does not — release.yml
+    hard-fails any release whose tag does not point at the latest main, so the
+    workflow never rewrites main to match a tag.
+
     By default the script runs in DRY RUN mode: it performs all read-only
     checks, previews the tag and release notes, and exits without changing
     anything. Pass -Apply to actually create and push the tag.
@@ -128,6 +134,37 @@ if ($status) {
             exit 0
         }
     }
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# Main-branch guard: releases must be tagged from the latest
+# origin/main. main is the single release source — release.yml verifies
+# the tag points at the latest origin/main and aborts the workflow
+# otherwise. Fail fast here instead of pushing a tag that CI will reject.
+# ═══════════════════════════════════════════════════════════════════
+
+Write-Host ""
+Write-Host "Verifying HEAD is the latest $remote/main ..."
+git fetch $remote main 2>$null
+
+$headSha = git rev-parse HEAD
+$mainSha = git rev-parse "$remote/main" 2>$null
+
+if ($null -eq $mainSha -or -not $mainSha) {
+    Write-Warning "Could not resolve $remote/main (fetch failed?). Skipping main-branch check."
+} elseif ($headSha -ne $mainSha) {
+    Write-Warning "HEAD ($headSha) does not match $remote/main ($mainSha)."
+    Write-Warning "Releases must be tagged from the latest main commit — release.yml will abort the workflow if the tag is off main."
+    Write-Warning "Run 'git checkout main && git pull' (or push your commits to main) before tagging."
+    if (-not $isDryRun) {
+        $continue = Read-Host "Continue anyway? (y/n)"
+        if ($continue -ne 'y') {
+            Write-Host "Cancelled"
+            exit 0
+        }
+    }
+} else {
+    Write-Host "[OK] HEAD is the latest $remote/main ($mainSha)"
 }
 
 # Read and process version

@@ -2,6 +2,8 @@
 
 pub mod commands;
 pub mod config;
+pub mod daemon;
+pub mod java;
 pub mod managed_processes;
 pub mod skills;
 pub mod state;

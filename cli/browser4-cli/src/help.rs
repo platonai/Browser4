@@ -94,6 +94,13 @@ pub fn public_command_name(name: &str) -> &str {
         "skills-path" => "skills path",
         "skills-unpack" => "skills unpack",
         "window-new" => "window new",
+        "webminer-install" => "webminer install",
+        "webminer-update" => "webminer update",
+        "webminer-version" => "webminer version",
+        "webminer-uninstall" => "webminer uninstall",
+        "webminer-run-example" => "webminer run-example",
+        "webminer-all" => "webminer all",
+        "webminer-views" => "webminer views",
         _ => name,
     }
 }
@@ -1316,6 +1323,18 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Use --force to re-download even when the requested version is already installed."
                 .to_string(),
         );
+        lines.push(
+            "  - Also unpacks the bundled AI-agent skill files into the versioned install"
+                .to_string(),
+        );
+        lines.push(
+            "    directory (<install_dir>/skills) and into ~/.agents/skills for AI agents;"
+                .to_string(),
+        );
+        lines.push(
+            "    files that are already up to date are skipped."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli install".to_string());
@@ -1340,6 +1359,18 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(
             "  - Supports the same mirror selection and proxy configuration as `install`."
+                .to_string(),
+        );
+        lines.push(
+            "  - Also unpacks/refreshes the bundled skill files into the versioned install"
+                .to_string(),
+        );
+        lines.push(
+            "    directory and into ~/.agents/skills for AI agents, so the on-disk skills"
+                .to_string(),
+        );
+        lines.push(
+            "    match the upgraded CLI binary."
                 .to_string(),
         );
         lines.push(String::new());
@@ -1593,6 +1624,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(
             "  - Closes the active swarm session and releases browser resources.".to_string(),
         );
+        lines.push("  - Pending (queued/processing) tasks are aborted and marked as failed (closed),".to_string());
+        lines.push("    so they don't stay \"queued\" forever and leak across sessions.".to_string());
         lines.push("  - Equivalent to `close` when a swarm session is active.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
@@ -2175,10 +2208,25 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    `browser4-cli install`. Use `skills path` to locate them on disk.".to_string(),
+            "    `browser4-cli install` and refreshed by `upgrade` (idempotent — unchanged"
+                .to_string(),
         );
-        lines
-            .push("  - Set BROWSER4_SKILLS_DIR to override the skills directory path.".to_string());
+        lines.push(
+            "    files are skipped). Use `skills path` to locate them on disk."
+                .to_string(),
+        );
+        lines.push(
+            "  - `install` / `upgrade` also copy the bundled skills into ~/.agents/skills"
+                .to_string(),
+        );
+        lines.push(
+            "    so AI agents (e.g. Codex) can load them automatically."
+                .to_string(),
+        );
+        lines.push(
+            "  - Set BROWSER4_SKILLS_DIR to override the skills directory path."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli skills".to_string());

@@ -200,6 +200,15 @@ jobs:
 
           echo "::endgroup::"
 
+      - name: Collect container logs on failure
+        if: failure() && steps.e2e-cli.outcome == 'failure'
+        shell: bash
+        continue-on-error: true
+        run: |
+          echo "::group::📜 browser4-test container logs (tail 500)"
+          docker logs ${{ env.CONTAINER_NAME }} --tail 500 2>&1 || echo "(container logs unavailable)"
+          echo "::endgroup::"
+
       - name: Pipeline Summary
         if: always()
         shell: bash

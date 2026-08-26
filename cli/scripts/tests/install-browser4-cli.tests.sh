@@ -263,14 +263,53 @@ test "test_local_binary returns error for nonexistent" bash -c "
     ! test_local_binary '/nonexistent/path/binary' 2>/dev/null
 "
 
-echo ""
+test "pick_backend_action returns install when not installed" bash -c "
+    source '$FUNC_TEST_SCRIPT' >/dev/null 2>&1
+    [[ \"\$(pick_backend_action 'Installed bundle: not installed (run browser4-cli install)')\" == 'install' ]]
+"
 
-# ── --skip-if-installed behavior ───────────────────────
+test "pick_backend_action returns upgrade when installed" bash -c "
+    source '$FUNC_TEST_SCRIPT' >/dev/null 2>&1
+    [[ \"\$(pick_backend_action 'Installed bundle: v4.13.0 (at 2026-01-01T00:00:00Z)')\" == 'upgrade' ]]
+"
+
+test "pick_backend_action defaults to upgrade on empty status" bash -c "
+    source '$FUNC_TEST_SCRIPT' >/dev/null 2>&1
+    [[ \"\$(pick_backend_action '')\" == 'upgrade' ]]
+"
+
+echo ""
 
 echo "--- --skip-if-installed ---" | cyan
 
 test "--skip-if-installed flag accepted" bash -c "
     bash '$INSTALL_SCRIPT' --skip-if-installed --dry-run 2>&1 | grep -qi 'DRY-RUN\|Already\|Install'
+"
+
+echo ""
+
+# ── Backend install/upgrade ────────────────────────────
+
+echo "--- Backend install/upgrade ---" | cyan
+
+test "--help mentions --skip-backend" bash -c "
+    bash '$INSTALL_SCRIPT' --help 2>&1 | grep -q 'skip-backend'
+"
+
+test "--skip-backend flag accepted" bash -c "
+    bash '$INSTALL_SCRIPT' --skip-backend --dry-run 2>&1 | grep -qi 'skip-backend\|DRY-RUN'
+"
+
+test "--dry-run prints backend plan" bash -c "
+    bash '$INSTALL_SCRIPT' --dry-run --no-path 2>&1 | grep -q 'Would run:'
+"
+
+test "--skip-backend suppresses backend plan" bash -c "
+    ! bash '$INSTALL_SCRIPT' --skip-backend --dry-run --no-path 2>&1 | grep -q 'Would run:'
+"
+
+test "--version passes tag to backend plan" bash -c "
+    bash '$INSTALL_SCRIPT' --dry-run --no-path --version v4.11.0 2>&1 | grep -q 'Would run:.*--tag v4\.11\.0'
 "
 
 echo ""

@@ -258,7 +258,7 @@ browser4-cli skills path                    # Print skills directory path
 browser4-cli skills unpack                  # Unpack bundled skill files to disk
 ```
 
-Set `BROWSER4_SKILLS_DIR` to override the skills directory location. Skill files are unpacked automatically during `browser4-cli install`. Use `skills unpack` to refresh or relocate skill files without reinstalling.
+Set `BROWSER4_SKILLS_DIR` to override the skills directory location. Skill files are unpacked automatically during `browser4-cli install` (and refreshed by `upgrade`) into the versioned installation directory; unchanged files are skipped, so re-running is cheap. `install` / `upgrade` also copy the bundled skills into `~/.agents/skills` so AI agents (e.g. Codex) can load them automatically (override with `BROWSER4_AGENTS_SKILLS_DIR`). Use `skills unpack` to refresh or relocate skill files without reinstalling.
 
 ## 4. Decision Trees
 
@@ -336,10 +336,13 @@ Need to process multiple pages?
 
 WebMiner runs ML clustering on downloaded HTML files to produce structured spreadsheets and interactive reports — **no LLM tokens, everything runs locally.**
 
+webminer is a first-class Browser4 CLI citizen — `browser4-cli webminer <command>` installs and runs the tool without PowerShell:
+
 ```
 Have HTML files and want structured data — without tokens?
 ├─ < 1,000 pages (small to medium)? → WebMiner Free (SMILE ML engine)
-│  java -jar scent-miner.jar all ./html-pages/
+│  browser4-cli webminer install
+│  browser4-cli webminer all ./html-pages/
 │  → Interactive HTML report + Excel spreadsheets — everything local, zero cost
 ├─ > 1,000 pages (production scale)? → WebMiner Commercial (Apache Spark ML)
 │  Same encode → cluster → views pipeline, distributed across machines
@@ -357,9 +360,24 @@ Have HTML files and want structured data — without tokens?
 
 **Commercial tier (Apache Spark ML):** Distributed clustering for production workloads. Scales to 100K+ pages/day. Same pipeline, enterprise throughput.
 
-> **Install:** `.\webminer.ps1 install` (PowerShell — the script ships with the [web-miner](https://github.com/platonai/web-miner) project, not this repo) or download from [web-miner releases](https://github.com/platonai/web-miner/releases). Requires JDK 17+.
+**CLI usage (no backend, no PowerShell needed):**
 
-See **[scent-miner/SKILL.md](../scent-miner/SKILL.md)** for the full reference.
+| Command | Purpose |
+|---------|---------|
+| `webminer` | Show installed version, Java 17+ status, and subcommand list |
+| `webminer install [version]` | Download + verify `scent-miner.jar` (GitHub → OSS mirror), install to `~/.scent/webminer` |
+| `webminer update` | Update to the latest release |
+| `webminer version` | Show installed and latest versions |
+| `webminer uninstall` | Remove the installed release |
+| `webminer run-example` | Download the sample dataset and run the full pipeline (needs 7-Zip) |
+| `webminer all <html-dir>` | Full pipeline: encode → cluster → views (`--max-files`, `--output`, `--resume`) |
+| `webminer views <result-dir>` | Rebuild the interactive views from an existing run |
+
+Requires JDK 17+ (auto-detected from `JAVA_HOME`, common paths, or `PATH`). Any other command is forwarded verbatim to `scent-miner.jar` (e.g. `webminer encode <dir>`).
+
+> **Install:** `browser4-cli webminer install` (or the legacy launcher `.\webminer.ps1 install` from the [web-miner](https://github.com/platonai/web-miner) project). The JAR is also downloadable from [web-miner releases](https://github.com/platonai/web-miner/releases).
+
+See **[web-miner/SKILL.md](../browser4-web-miner/SKILL.md)** for the full reference.
 
 ### 4e. X-SQL Quickstart Template
 
@@ -758,11 +776,14 @@ Organized by task — follow the link that matches what you're trying to do:
 
 ```powershell
 irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
-browser4-cli install
 ```
 
 **Linux / macOS (bash):**
 ```bash
 curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
-browser4-cli install
 ```
+
+The bootstrap scripts also install the Browser4 backend (runtime bundle)
+automatically: `browser4-cli install` on a fresh machine, or
+`browser4-cli upgrade` when a backend already exists (add `--skip-backend`
+to install the CLI only).

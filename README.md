@@ -1,6 +1,15 @@
 # 🤖 Browser4
 
-[![License: APACHE2](https://img.shields.io/badge/license-APACHE2-green?style=flat-square)](https://github.com/platonai/browser4/blob/main/LICENSE)
+<p align="center">
+  <a href="https://github.com/platonai/Browser4/actions/workflows/ci.yml"><img alt="CI build" src="https://img.shields.io/github/actions/workflow/status/platonai/Browser4/ci.yml?branch=main&style=flat-square"></a>
+  <a href="https://github.com/platonai/Browser4/releases"><img alt="Release" src="https://img.shields.io/github/v/release/platonai/Browser4?style=flat-square"></a>
+  <a href="https://github.com/platonai/Browser4"><img alt="Stars" src="https://img.shields.io/github/stars/platonai/Browser4?style=flat-square"></a>
+  <a href="https://central.sonatype.com/artifact/ai.platon.pulsar/browser4-core"><img alt="Maven Central" src="https://img.shields.io/maven-central/v/ai.platon.pulsar/browser4-core?style=flat-square"></a>
+  <a href="https://www.npmjs.com/package/browser4-cli"><img alt="npm" src="https://img.shields.io/npm/v/browser4-cli?style=flat-square"></a>
+  <a href="https://browser4.io"><img alt="Website" src="https://img.shields.io/website?url=https%3A%2F%2Fbrowser4.io&style=flat-square"></a>
+  <a href="https://github.com/platonai/Browser4"><img alt="Top language" src="https://img.shields.io/github/languages/top/platonai/Browser4?style=flat-square"></a>
+  <a href="https://github.com/platonai/Browser4/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-APACHE2-green?style=flat-square"></a>
+</p>
 
 ---
 
@@ -64,6 +73,15 @@ Read https://browser4.io/SKILL.md and install browser4-cli (if not installed) fo
 5. write the result to a markdown file
 ```
 
+## DeepSeek Harness integration
+
+https://github.com/platonai/dsh-browser4
+
+```
+dsh plugin --profile web add dsh-browser4                  # npm registry
+dsh plugin --profile web add github:platonai/dsh-browser4  # GitHub
+```
+
 ## 🧭 Tool Selection Guide
 
 Choosing the right tool for your task:
@@ -114,13 +132,14 @@ Need to process multiple pages?
 
 ### How to Turn HTML into Spreadsheets — Zero Tokens
 
-[WebMiner](https://github.com/platonai/web-miner) runs ML clustering on downloaded HTML files to produce structured spreadsheets and interactive reports — **no LLM tokens, everything runs locally.**
+[WebMiner](https://github.com/platonai/web-miner) runs ML clustering on downloaded HTML files to produce structured spreadsheets and interactive reports — **no LLM tokens, everything runs locally.** webminer is a first-class Browser4 CLI citizen: `browser4-cli webminer install` + `browser4-cli webminer all <html-dir>` runs the whole pipeline without PowerShell.
 
 ```
 Have HTML files and want structured data — without tokens?
 ├─ < 20 pages? → browser4-cli crawl --seed-file urls.txt --depth 0 --sql @query.sql
 ├─ < 1,000 pages (small to medium)? → WebMiner Free (SMILE ML engine)
-│  java -jar scent-miner.jar all ./pages/
+│  browser4-cli webminer install
+│  browser4-cli webminer all ./pages/
 │  → Interactive HTML report + Excel spreadsheets — local, zero cost
 ├─ > 1,000 pages (production scale)? → WebMiner Commercial (Apache Spark ML)
 │  Same encode → cluster → views pipeline, distributed across machines
@@ -131,7 +150,7 @@ Have HTML files and want structured data — without tokens?
        Then feed the HTML directory to WebMiner
 ```
 
-> **Pipeline:** `encode` (HTML → feature vectors → CSV) → `cluster` (KMeans, auto-detected K) → `views` (HTML report + Excel). Free tier uses the [SMILE](https://haifengl.github.io/) ML library for single-machine clustering (< 1,000 pages). Requires JDK 17+. See [web-miner](https://github.com/platonai/web-miner) for install instructions.
+> **Pipeline:** `encode` (HTML → feature vectors → CSV) → `cluster` (KMeans, auto-detected K) → `views` (HTML report + Excel). Free tier uses the [SMILE](https://haifengl.github.io/) ML library for single-machine clustering (< 1,000 pages). Requires JDK 17+ (auto-detected). See [web-miner](https://github.com/platonai/web-miner) and `browser4-cli help webminer` for usage.
 
 ---
 
@@ -146,18 +165,19 @@ npm install -g browser4-cli
 browser4-cli install
 ```
 
-Or bootstrap the native binary directly with a single command:
+Or bootstrap the native binary directly with a single command. The scripts
+also install the Browser4 backend (runtime bundle) afterwards — running
+`browser4-cli install` on a fresh machine, or `browser4-cli upgrade` when a
+backend is already present (pass `--skip-backend` to skip this step):
 
 **Windows (PowerShell):**
 ```powershell
 irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
-browser4-cli install
 ```
 
 **Linux / macOS (bash):**
 ```bash
 curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
-browser4-cli install
 ```
 
 ## 💡 CLI Guide for Humans
@@ -748,6 +768,8 @@ Join our community for support, feedback, and collaboration!
 
 We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
+<img width="400" height="400" alt="群聊：dsh-Browser4社区交流3群" src="https://github.com/user-attachments/assets/c15fe635-0e9f-4ac2-b038-abec6bd6bbe4" />
+
 ---
 
 ## 📜 Documentation
@@ -776,3 +798,9 @@ If you need this type of URL, please contact your proxy service provider.
 ## License
 
 Apache 2.0 License. See [LICENSE](LICENSE) for details.
+
+## Links
+
+* [omdsh-dev/dsh-data-agent](https://github.com/omdsh-dev/dsh-data-agent) - DSH Data Agent · Analyze data through conversation
+* [ccch1mneyyy/dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI) - DSH TUI · Text-based User Interface
+

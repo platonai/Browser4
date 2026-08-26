@@ -46,7 +46,7 @@ jobs:
         shell: bash
         run: |
           echo "::group::🧪 WebMiner PowerShell Tests"
-          pwsh -NoProfile -ExecutionPolicy Bypass -File skills/scent-miner/scripts/tests/webminer.tests.ps1
+          pwsh -NoProfile -ExecutionPolicy Bypass -File skills/browser4-web-miner/scripts/tests/webminer.tests.ps1
           echo "::endgroup::"
 
       - name: Verify Dependencies

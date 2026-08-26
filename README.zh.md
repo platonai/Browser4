@@ -1,6 +1,15 @@
 # 🤖 Browser4
 
-[![License: APACHE2](https://img.shields.io/badge/license-APACHE2-green?style=flat-square)](https://github.com/platonai/browser4/blob/main/LICENSE)
+<p align="center">
+  <a href="https://github.com/platonai/Browser4/actions/workflows/ci.yml"><img alt="CI build" src="https://img.shields.io/github/actions/workflow/status/platonai/Browser4/ci.yml?branch=main&style=flat-square"></a>
+  <a href="https://github.com/platonai/Browser4/releases"><img alt="Release" src="https://img.shields.io/github/v/release/platonai/Browser4?style=flat-square"></a>
+  <a href="https://github.com/platonai/Browser4"><img alt="Stars" src="https://img.shields.io/github/stars/platonai/Browser4?style=flat-square"></a>
+  <a href="https://central.sonatype.com/artifact/ai.platon.pulsar/browser4-core"><img alt="Maven Central" src="https://img.shields.io/maven-central/v/ai.platon.pulsar/browser4-core?style=flat-square"></a>
+  <a href="https://www.npmjs.com/package/browser4-cli"><img alt="npm" src="https://img.shields.io/npm/v/browser4-cli?style=flat-square"></a>
+  <a href="https://browser4.io"><img alt="Website" src="https://img.shields.io/website?url=https%3A%2F%2Fbrowser4.io&style=flat-square"></a>
+  <a href="https://github.com/platonai/Browser4"><img alt="Top language" src="https://img.shields.io/github/languages/top/platonai/Browser4?style=flat-square"></a>
+  <a href="https://github.com/platonai/Browser4/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-APACHE2-green?style=flat-square"></a>
+</p>
 
 ---
 
@@ -68,6 +77,15 @@ Read https://browser4.io/SKILL.md and install browser4-cli (if not installed) fo
 5. write the result to a markdown file
 ```
 
+## DeepSeek Harness 集成
+
+https://github.com/platonai/dsh-browser4
+
+```
+dsh plugin --profile web add dsh-browser4                  # npm registry
+dsh plugin --profile web add github:platonai/dsh-browser4  # GitHub
+```
+
 ## 🧭 工具选择指南
 
 根据任务类型选择最合适的工具：
@@ -132,12 +150,13 @@ browser4-cli snapshot -i
 
 ### 如何把 HTML 转成电子表格——零 Token
 
-[WebMiner](https://github.com/platonai/web-miner) 会对下载下来的 HTML 文件做机器学习聚类，生成结构化电子表格和交互式报告——**不消耗 LLM token，全部本地运行。**
+[WebMiner](https://github.com/platonai/web-miner) 会对下载下来的 HTML 文件做机器学习聚类，生成结构化电子表格和交互式报告——**不消耗 LLM token，全部本地运行。** webminer 是 Browser4 CLI 的一等公民：`browser4-cli webminer install` + `browser4-cli webminer all <html-dir>` 即可跑完整流程，无需 PowerShell。
 
 ```
 已经有 HTML 文件，想要结构化数据，而且不想花 token？
 ├─ < 1,000 页（小中规模）？→ WebMiner Free（SMILE ML 引擎）
-│  java -jar scent-miner.jar all ./pages/
+│  browser4-cli webminer install
+│  browser4-cli webminer all ./pages/
 │  → 交互式 HTML 报告 + Excel 电子表格，本地运行，零成本
 ├─ > 1,000 页（生产规模）？→ WebMiner Commercial（Apache Spark ML）
 │  同样是 encode → cluster → views 流程，但可分布式扩展到多台机器
@@ -148,7 +167,7 @@ browser4-cli snapshot -i
        然后把 HTML 目录交给 WebMiner
 ```
 
-> **Pipeline：** `encode`（HTML → 特征向量 → CSV）→ `cluster`（KMeans，自动检测 K）→ `views`（HTML 报告 + Excel）。免费版使用 [SMILE](https://haifengl.github.io/) ML 库进行单机聚类（< 1,000 页）。需要 JDK 17+。安装说明见 [web-miner](https://github.com/platonai/web-miner)。
+> **Pipeline：** `encode`（HTML → 特征向量 → CSV）→ `cluster`（KMeans，自动检测 K）→ `views`（HTML 报告 + Excel）。免费版使用 [SMILE](https://haifengl.github.io/) ML 库进行单机聚类（< 1,000 页）。需要 JDK 17+（自动检测）。用法见 [web-miner](https://github.com/platonai/web-miner) 与 `browser4-cli help webminer`。
 
 ---
 
@@ -163,18 +182,16 @@ npm install -g browser4-cli
 browser4-cli install
 ```
 
-或者用单条命令直接引导安装原生二进制：
+或者用单条命令直接引导安装原生二进制。脚本随后会自动安装 Browser4 后端（运行时包）——全新机器执行 `browser4-cli install`，已安装后端则执行 `browser4-cli upgrade` 升级到最新版（可用 `--skip-backend` 跳过此步骤）：
 
 **Windows（PowerShell）：**
 ```powershell
 irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
-browser4-cli install
 ```
 
 **Linux / macOS（bash）：**
 ```bash
 curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
-browser4-cli install
 ```
 
 ## 💡 面向人的 CLI 指南
@@ -760,6 +777,8 @@ Browser4 自带一个轻量级 **MockSite** 服务器，用于提供静态 HTML 
 
 欢迎贡献代码和文档！详情见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
+<img width="400" height="400" alt="群聊：dsh-Browser4社区交流3群" src="https://github.com/user-attachments/assets/c15fe635-0e9f-4ac2-b038-abec6bd6bbe4" />
+
 ---
 
 ## 📜 文档
@@ -788,3 +807,10 @@ export PROXY_ROTATION_URL=https://your-proxy-provider.com/rotation-endpoint
 ## 许可证
 
 Apache 2.0 License。详见 [LICENSE](LICENSE)。
+
+## 友链
+
+* [omdsh-dev/dsh-data-agent](https://github.com/omdsh-dev/dsh-data-agent) - DSH Data Agent · 用对话分析数据
+* [ccch1mneyyy/dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI) - DSH TUI · 一个美观且实用的 Claude Code 风格 TUI 插件
+
+

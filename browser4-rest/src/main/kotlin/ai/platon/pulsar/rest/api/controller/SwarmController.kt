@@ -7,6 +7,7 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeStatusRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.SwarmFacade
 import ai.platon.pulsar.agentic.tools.advanced.crawl.SwarmFacadeRegistry
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
+import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.rest.api.entities.SessionResponse
 import ai.platon.pulsar.rest.api.entities.toSessionResponse
@@ -48,6 +49,27 @@ class SwarmController(
     @PostMapping
     fun open(@RequestBody capabilities: Map<String, String?>?): SessionResponse {
         return sessionManager.ensureSwarmSession(capabilities).toSessionResponse()
+    }
+
+    /**
+     * Close the swarm session and abort all of its pending tasks.
+     *
+     * Pending tasks belong to the live swarm session and can never be consumed
+     * after it closes; without this cleanup they stay "queued" forever and leak
+     * across sessions. Closed tasks are marked as failed with a clear reason.
+     *
+     * @return The number of aborted pending tasks.
+     * */
+    @DeleteMapping
+    fun close(): Map<String, Any> {
+        // The swarm session is core infrastructure owned by the REST session
+        // manager; the facade only owns the task store, so abort its pending
+        // tasks here and release the session below.
+        val aborted = facade().abortPendingTasks("Swarm session was closed; task dropped")
+        runCatching { sessionManager.deleteSession(SWARM_SESSION_ID) }
+            .onFailure { logger.warn("Failed to close the swarm session: {}", it.message) }
+        logger.info("Swarm session closed, {} pending task(s) aborted", aborted)
+        return mapOf("closed" to true, "abortedPendingTasks" to aborted)
     }
 
     /**

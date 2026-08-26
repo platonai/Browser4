@@ -3586,6 +3586,10 @@ pub(super) fn test_swarm_close_session(ctx: &mut E2ECtx) {
         "Expected close_session call with SWARM session ID, got {:?}",
         snapshot.close_session_calls
     );
+    assert_eq!(
+        snapshot.swarm_close_calls, 1,
+        "swarm close must ask the backend to abort pending tasks (DELETE /api/swarm)"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -4076,6 +4080,10 @@ const INSTALL_TAG: &str = "--tag=v4.10.0";
 pub(super) fn test_install_downloads_and_installs(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
+    // The harness points BROWSER4_AGENTS_SKILLS_DIR at this temp dir so the
+    // test never touches the real ~/.agents.
+    let agents_skills_dir = ctx.workspace_dir.join("agents-skills");
+
     let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
     let download_server = FixtureDownloadServer::start(bundle_bytes, "v4.10.0");
     ctx.set_env("BROWSER4_RELEASES_BASE_URL", &download_server.base_url());
@@ -4122,10 +4130,44 @@ pub(super) fn test_install_downloads_and_installs(ctx: &mut E2ECtx) {
     // Verify the runtime was extracted (lib/ subdirectory inside the versioned install).
     let lib_dir = ctx.runtime_dir.join("runtime").join("v4.10.0").join("lib");
     assert!(lib_dir.is_dir(), "Expected runtime lib dir after install");
+
+    // Verify bundled skill files were installed alongside the runtime.
+    let skills_skill_md = ctx
+        .runtime_dir
+        .join("runtime")
+        .join("v4.10.0")
+        .join("skills")
+        .join("browser4-cli")
+        .join("SKILL.md");
+    assert!(
+        skills_skill_md.is_file(),
+        "Expected bundled skills unpacked to {}",
+        skills_skill_md.display()
+    );
+    assert!(
+        result.stderr.contains("Unpacked"),
+        "Expected skill unpack message in stderr:\n{}",
+        result.stderr
+    );
+
+    // Verify bundled skills were also installed into the AI-agent skills dir.
+    let agents_skill_md = agents_skills_dir.join("browser4-cli").join("SKILL.md");
+    assert!(
+        agents_skill_md.is_file(),
+        "Expected bundled skills installed to AI-agent skills dir {}",
+        agents_skill_md.display()
+    );
+    assert!(
+        result.stderr.contains("for AI agents"),
+        "Expected AI-agent skills install message in stderr:\n{}",
+        result.stderr
+    );
 }
 
 pub(super) fn test_install_skips_when_already_installed(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+
+    let agents_skills_dir = ctx.workspace_dir.join("agents-skills");
 
     let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
     let download_server = FixtureDownloadServer::start(bundle_bytes, "v4.10.0");
@@ -4142,6 +4184,24 @@ pub(super) fn test_install_skips_when_already_installed(ctx: &mut E2ECtx) {
         second.stdout.contains("already installed"),
         "Expected 'already installed' in:\n{}",
         second.stdout
+    );
+    // Skills are still re-synced on the reuse path, but nothing is rewritten.
+    assert!(
+        second.stderr.contains("already up to date"),
+        "Expected 'already up to date' skill sync message in stderr:\n{}",
+        second.stderr
+    );
+    // The AI-agent skills dir is refreshed too (idempotent no-op).
+    let agents_skill_md = agents_skills_dir.join("browser4-cli").join("SKILL.md");
+    assert!(
+        agents_skill_md.is_file(),
+        "Expected AI-agent skills still present at {}",
+        agents_skill_md.display()
+    );
+    assert!(
+        second.stderr.contains("already up to date for AI agents"),
+        "Expected AI-agent skills 'up to date' message in stderr:\n{}",
+        second.stderr
     );
 }
 
@@ -4205,6 +4265,9 @@ pub(super) fn test_install_specific_tag(ctx: &mut E2ECtx) {
 pub(super) fn test_upgrade_already_latest(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
+    // Never touch npm or download/execute the real install scripts.
+    ctx.set_env("BROWSER4_CLI_SKIP_SELF_UPGRADE", "1");
+
     let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
     let download_server = FixtureDownloadServer::start(bundle_bytes, "v4.10.0");
     ctx.set_env("BROWSER4_RELEASES_BASE_URL", &download_server.base_url());
@@ -4224,6 +4287,12 @@ pub(super) fn test_upgrade_already_latest(ctx: &mut E2ECtx) {
 
 pub(super) fn test_upgrade_to_new_version(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+
+    // Never touch npm or download/execute the real install scripts.
+    ctx.set_env("BROWSER4_CLI_SKIP_SELF_UPGRADE", "1");
+
+    // The harness points BROWSER4_AGENTS_SKILLS_DIR at this temp dir.
+    let agents_skills_dir = ctx.workspace_dir.join("agents-skills");
 
     // Install an older version first.
     let (old_bundle, _) = build_fake_runtime_bundle("v4.9.0");
@@ -4248,6 +4317,40 @@ pub(super) fn test_upgrade_to_new_version(ctx: &mut E2ECtx) {
     assert!(
         result.stderr.contains("Restart the server"),
         "Expected restart hint in stderr:\n{}",
+        result.stderr
+    );
+    // The upgraded runtime version also received the bundled skills.  The
+    // active tag is read from current.tag: when latest-tag resolution flakes
+    // the CLI falls back to an `unknown-<timestamp>` identifier, and skills
+    // are unpacked into whichever versioned dir the runtime landed in.
+    let current_tag_path = ctx.runtime_dir.join("runtime").join("current.tag");
+    let active_tag = fs::read_to_string(&current_tag_path)
+        .unwrap_or_else(|e| panic!("expected current.tag after upgrade: {e}"));
+    let skills_skill_md = ctx
+        .runtime_dir
+        .join("runtime")
+        .join(active_tag.trim())
+        .join("skills")
+        .join("browser4-cli")
+        .join("SKILL.md");
+    assert!(
+        skills_skill_md.is_file(),
+        "Expected bundled skills unpacked into the upgraded install (tag '{}') at {}\nstderr:\n{}",
+        active_tag.trim(),
+        skills_skill_md.display(),
+        result.stderr
+    );
+    // The AI-agent skills dir is refreshed by the upgrade too.
+    let agents_skill_md = agents_skills_dir.join("browser4-cli").join("SKILL.md");
+    assert!(
+        agents_skill_md.is_file(),
+        "Expected AI-agent skills refreshed after upgrade at {}\nstderr:\n{}",
+        agents_skill_md.display(),
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("for AI agents"),
+        "Expected AI-agent skills message in upgrade stderr:\n{}",
         result.stderr
     );
 }

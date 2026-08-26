@@ -207,6 +207,7 @@ struct FixturePages {
     form_html: String,
     mouse_html: String,
     keyboard_html: String,
+    drag_html: String,
 }
 
 impl FixtureServer {
@@ -228,6 +229,7 @@ impl FixtureServer {
             form_html: load_html_fixture(FORM_FIXTURE_FILE),
             mouse_html: load_html_fixture(MOUSE_FIXTURE_FILE),
             keyboard_html: load_html_fixture(KEYBOARD_FIXTURE_FILE),
+            drag_html: load_html_fixture(DRAG_FIXTURE_FILE),
         });
 
         thread::spawn(move || {
@@ -286,6 +288,21 @@ fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePage
         .and_then(|line| line.split_whitespace().nth(1))
         .unwrap_or("/");
 
+    // Slow endpoints used by the swarm concurrency scenario (issue #577):
+    // they hold a browser slot for several seconds so a small privacy context
+    // pool is deterministically exhausted by concurrent tasks.
+    if path.starts_with("/slow/") {
+        std::thread::sleep(Duration::from_secs(6));
+        let slow_body = pages.interactive_html.clone();
+        let slow_response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            slow_body.len(),
+            slow_body
+        );
+        let _ = stream.write_all(slow_response.as_bytes());
+        return;
+    }
+
     let (status, content_type, body) = if path == INTERACTIVE_PATH || path == "/" {
         (
             "200 OK",
@@ -315,6 +332,12 @@ fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePage
             "200 OK",
             "text/html; charset=utf-8",
             pages.keyboard_html.clone(),
+        )
+    } else if path == DRAG_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.drag_html.clone(),
         )
     } else {
         (
@@ -632,6 +655,8 @@ struct MockBrowser4State {
     health_status: Option<(u16, String, String)>, // (status_code, content_type, body)
     close_session_calls: Vec<String>,
     close_all_sessions_calls: Vec<serde_json::Value>,
+    /// Number of DELETE /api/swarm calls (swarm close cleanup, issue #577).
+    swarm_close_calls: u32,
     crawl_submissions: Vec<serde_json::Value>,
     crawl_cancel_calls: Vec<String>,
     crawl_clear_calls: u32,
@@ -1208,6 +1233,18 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 "200 OK",
                 "application/json",
                 &serde_json::json!(task_id).to_string(),
+            );
+        }
+        _ if method == "DELETE" && route == "/api/swarm" => {
+            state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .swarm_close_calls += 1;
+            write_http_response(
+                &mut stream,
+                "200 OK",
+                "application/json",
+                r#"{"closed":true,"abortedPendingTasks":0}"#,
             );
         }
         _ if method == "GET"
@@ -1999,6 +2036,16 @@ impl E2ECtx {
         format!("{}{}", self.fixture_base_url, KEYBOARD_PATH)
     }
 
+    fn drag_url(&self) -> String {
+        format!("{}{}", self.fixture_base_url, DRAG_PATH)
+    }
+
+    /// A slow fixture URL (served after a fixed delay) used to hold browser
+    /// slots in the swarm concurrency scenario.
+    fn slow_url(&self, i: usize) -> String {
+        format!("{}/slow/{}", self.fixture_base_url, i)
+    }
+
     fn clear_step_timings(&mut self) {
         self.step_timings.clear();
     }
@@ -2270,6 +2317,13 @@ fn run_cli_process_internal(
         .current_dir(&ctx.workspace_dir)
         .env("BROWSER4_CLI_STATE_DIR", &ctx.state_dir)
         .env("BROWSER4_RUNTIME_DIR", &ctx.runtime_dir)
+        // Point the AI-agent skills install (~/.agents/skills) at a temp dir
+        // so install/upgrade scenarios never touch the real user home.
+        // Scenarios may override this via ctx.set_env.
+        .env(
+            "BROWSER4_AGENTS_SKILLS_DIR",
+            ctx.workspace_dir.join("agents-skills"),
+        )
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -2506,6 +2560,14 @@ fn cli_process_timeout(full_args: &[&str]) -> Duration {
 
     if full_args.iter().any(|arg| *arg == "list") {
         Duration::from_secs(240)
+    } else if full_args.iter().any(|arg| *arg == "--wait") {
+        // `swarm query --wait` polls until all jobs reach a terminal state,
+        // up to the CLI's own 5-minute cap (main.rs wait_for_swarm_jobs
+        // max_wait = 300 s). The harness must not kill the command before the
+        // CLI gives up: with a small privacy context pool, concurrent swarm
+        // jobs legitimately wait through 30-44 s retry delays, and a tighter
+        // harness timeout turns a valid run into a false failure.
+        Duration::from_secs(300)
     } else {
         Duration::from_secs(120)
     }

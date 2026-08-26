@@ -43,8 +43,13 @@ abstract class AbstractAgenticContext(
         sessions.values.filterIsInstance<AgenticSession>().firstOrNull() ?: createSession()
 
     override fun getOrCreateSession(settings: PulsarSettings): AgenticSession {
+        // The reuse check comes first and is unchanged: an existing session is
+        // returned as-is and no new PulsarSession is created. Only the create
+        // branch changed — a newly created session now has the settings applied
+        // (label + display mode, profile mode, SPA, ...). The settings used to
+        // be silently dropped here, e.g. `mcp.http.headless=true` had no effect.
         // TODO: consider changed settings, for example, REST-level sessionId requires associated PulsarSession
-        return sessions.values.filterIsInstance<AgenticSession>().firstOrNull() ?: createSession()
+        return sessions.values.filterIsInstance<AgenticSession>().firstOrNull() ?: createSession(settings)
     }
 
     /**

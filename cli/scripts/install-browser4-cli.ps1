@@ -52,6 +52,12 @@
   Force reinstallation even if the binary is already installed at the target path.
   Overrides -SkipIfInstalled and bypasses locked-file workarounds.
 
+.PARAMETER SkipBackend
+  Skip installing/upgrading the Browser4 backend (runtime bundle).
+  By default, after the CLI binary is in place the script runs
+  `browser4-cli install` (or `browser4-cli upgrade` when a backend is
+  already installed).
+
 .PARAMETER Locate
   Print detection results (OS, architecture, script location, China locale)
   and exit without installing. Useful for diagnostics.
@@ -103,6 +109,7 @@ param(
     [switch]$SkipIfInstalled,
     [switch]$SkipLocal,
     [switch]$Force,
+    [switch]$SkipBackend,
     [switch]$Locate
 )
 
@@ -605,6 +612,89 @@ function Add-DirectoryToUserPath {
 }
 
 # ----------------------------------------------
+# Backend (runtime bundle) install / upgrade
+# ----------------------------------------------
+
+<#
+.SYNOPSIS
+  Decide which backend command to run based on `browser4-cli status` output.
+  Returns "install" when no runtime bundle is installed, otherwise "upgrade".
+#>
+function Get-BackendAction {
+    param([string]$StatusOutput)
+    if ($StatusOutput -match 'Installed bundle: not installed') {
+        return "install"
+    }
+    return "upgrade"
+}
+
+<#
+.SYNOPSIS
+  Install or upgrade the Browser4 backend (runtime bundle) with the CLI
+  binary that was just installed:
+    - no backend installed yet -> browser4-cli install
+    - backend already present  -> browser4-cli upgrade (to the latest)
+  Passes -Version through as --tag so the backend matches the CLI version.
+  Non-fatal: failures print guidance and leave the CLI usable.
+#>
+function Install-Backend {
+    param([string]$CliPath, [string]$Tag)
+
+    if ($SkipBackend) {
+        Write-Step "Skipping backend install/upgrade (-SkipBackend)"
+        return
+    }
+
+    Write-Step "Checking for an existing Browser4 backend..."
+
+    $statusOutput = ""
+    try {
+        $statusOutput = (& $CliPath status 2>&1 | Out-String)
+    } catch {
+        # Binary missing or not runnable yet (e.g. --dry-run) -- fall through.
+        $statusOutput = ""
+    }
+
+    $action = Get-BackendAction -StatusOutput $statusOutput
+
+    $backendArgs = @($action)
+    if ($Tag) { $backendArgs += @('--tag', $Tag) }
+
+    if ($action -eq 'install') {
+        Write-Step "No backend installed -- running 'browser4-cli install'..."
+    } else {
+        Write-Step "Backend already installed -- running 'browser4-cli upgrade'..."
+    }
+
+    if ($DryRun) {
+        Write-Check "[DRY-RUN] Would run: $CliPath $($backendArgs -join ' ')"
+        return
+    }
+
+    if ($Silent) {
+        $backendOutput = ""
+        try {
+            $backendOutput = (& $CliPath @backendArgs 2>&1 | Out-String)
+        } catch {
+            $backendOutput = $_.Exception.Message
+        }
+        if ($LASTEXITCODE -eq 0) {
+            Write-Check "Backend $action succeeded ($($backendArgs -join ' '))."
+        } else {
+            Write-WarnMsg "Backend $action failed ($($backendArgs -join ' ')). Retry with: browser4-cli $($backendArgs -join ' ')"
+            Write-Host $backendOutput -ForegroundColor Red
+        }
+    } else {
+        & $CliPath @backendArgs
+        if ($LASTEXITCODE -eq 0) {
+            Write-Check "Backend $action succeeded ($($backendArgs -join ' '))."
+        } else {
+            Write-WarnMsg "Backend $action failed ($($backendArgs -join ' ')). Retry with: browser4-cli $($backendArgs -join ' ')"
+        }
+    }
+}
+
+# ----------------------------------------------
 # Main
 # ----------------------------------------------
 
@@ -799,6 +889,12 @@ Please check:
     } else {
         Write-Summary "[DRY-RUN] Installation plan complete" -Color Yellow
     }
+
+    # Install / upgrade the Browser4 backend (runtime bundle) using the CLI
+    # binary we just installed.  Fresh machines get `browser4-cli install`;
+    # machines that already have a backend get `browser4-cli upgrade`.
+    Write-Summary ""
+    Install-Backend -CliPath $binaryPath -Tag $Version
 
     Write-Summary ""
     Write-Summary "Run 'browser4-cli --help' to get started." -Color Cyan

@@ -16,7 +16,9 @@ import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.common.urls.UrlAware
 import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.persist.AbstractWebPage
+import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.persist.WebDBException
+import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.common.message.PageLoadStatusFormatter
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
@@ -24,6 +26,7 @@ import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import ai.platon.pulsar.skeleton.session.PulsarSession
+import ai.platon.pulsar.skeleton.workflow.common.url.CompletableHyperlink
 import ai.platon.pulsar.skeleton.workflow.common.url.ListenableUrl
 import com.codahale.metrics.Gauge
 import kotlinx.coroutines.*
@@ -36,6 +39,7 @@ import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFilePermissions
 import java.time.Duration
 import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentSkipListSet
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -114,6 +118,12 @@ open class StreamingTaskRunner(
     autoClose: Boolean = true,
 ) : AbstractTaskRunner(session, autoClose) {
     companion object {
+        /**
+         * Fallback retry budget when neither the page nor the link declares one.
+         * Matches the default of `-nMaxRetry` in LoadOptions.
+         * */
+        private const val DEFAULT_MAX_RETRIES = 3
+
         private var globalState = GlobalCrawlState()
 
         init {
@@ -163,6 +173,14 @@ open class StreamingTaskRunner(
     private val isProxyEnabled get() = ProxyPoolManager.isProxyEnabled(sessionConfig)
     private val proxyPool: ProxyPool? get() = if (isProxyEnabled) context.getBeanOrNull(ProxyPool::class) else null
     private var proxyOutOfService = 0
+
+    /**
+     * Retry budgets for tasks whose load attempts produced no page at all
+     * (timeout or exception), keyed by the url to fetch. Page objects carry
+     * their own [WebPage.fetchRetries] counter, so this map is only for the
+     * null-page case.
+     * */
+    private val nullPageRetryCounts = ConcurrentHashMap<UrlAware, Int>()
 
     /**
      * Override the main loop concurrency.
@@ -611,6 +629,12 @@ open class StreamingTaskRunner(
 
         if (page != null) {
             collectStatAfterLoad(page)
+
+            // Reset the null-page retry budget once the task reaches a state
+            // that is neither retrying nor canceled.
+            if (!page.isCanceled && !page.protocolStatus.isRetry) {
+                nullPageRetryCounts.remove(url)
+            }
         }
 
         emit(CrawlEvents.loaded, url, page)
@@ -836,6 +860,27 @@ open class StreamingTaskRunner(
 
     private suspend fun handleCanceled(url: UrlAware, page: WebPage?) {
         globalState.globalMetrics.cancels.mark()
+
+        if (page != null) {
+            page.fetchRetries++
+            if (page.fetchRetries > maxRetriesOf(url, page)) {
+                // A task that is canceled over and over (e.g. privacy contexts
+                // recycling) must eventually stop being re-queued, otherwise it
+                // loops forever and never reaches a terminal state. Mark the
+                // page as failed (and clear the canceled flag) so downstream
+                // consumers (e.g. a scrape hyperlink) can report the task as
+                // failed instead of leaving it in an endless "canceled" state.
+                globalState.globalMetrics.gone.mark()
+                page.isCanceled = false
+                page.protocolStatus = ProtocolStatus.failed(ProtocolStatusCodes.SC_REQUEST_TIMEOUT)
+                if (taskLogger.isInfoEnabled) {
+                    val message = PageLoadStatusFormatter(page, prefix = "Gone")
+                    taskLogger.info("{}, cancel budget exhausted, no more retries", message)
+                }
+                return
+            }
+        }
+
         val delay = page?.retryDelay?.takeIf { !it.isZero } ?: Duration.ofSeconds(10)
         // Delay fetching the page.
         fetchDelayed(url, delay)
@@ -859,30 +904,90 @@ open class StreamingTaskRunner(
     }
 
     private fun handleRetry0(url: UrlAware, page: WebPage?) {
-        val nextRetryNumber = 1 + (page?.fetchRetries ?: 0)
-        if (page != null && nextRetryNumber > page.maxRetries) {
-            // should not go here, because the page should be marked as GONE
+        if (page == null) {
+            handleNullPageRetry(url)
+            return
+        }
+
+        val nextRetryNumber = 1 + page.fetchRetries
+        if (nextRetryNumber > maxRetriesOf(url, page)) {
+            // The retry budget is exhausted: stop re-queueing the task and mark
+            // the page as failed so downstream consumers (e.g. a scrape
+            // hyperlink) reach a terminal state and can report the real failure
+            // reason instead of the task retrying forever. Previously
+            // page.fetchRetries was never advanced in the streaming loop, so
+            // this guard never tripped and tasks like PrivacyException-driven
+            // crawl retries ran unbounded.
             globalState.globalMetrics.gone.mark()
+            page.protocolStatus = ProtocolStatus.failed(ProtocolStatusCodes.SC_REQUEST_TIMEOUT)
             if (taskLogger.isInfoEnabled) {
-                val message = PageLoadStatusFormatter(page, prefix = "Gone (unexpected)")
-                taskLogger.info("{}, gone unexpected, no retry", message)
+                val message = PageLoadStatusFormatter(page, prefix = "Gone")
+                taskLogger.info("{}, retry budget exhausted ({}), no more retries", message, nextRetryNumber)
             }
             return
         }
 
-        val delay = page?.retryDelay?.takeIf { !it.isZero } ?: retryDelayPolicy(nextRetryNumber, url)
-//        val delayCache = globalState.globalCache.urlPool.delayCache
-//        // erase -refresh options
-//        url.args = url.args?.replace("-refresh", "-refresh-erased")
-//        delayCache.add(DelayUrl(url, delay))
+        // Advance the retry counter so the next attempt's number grows and the
+        // budget above is eventually exhausted. The streaming loop never
+        // incremented this counter (the WebDB fetch schedule that does it in
+        // batch mode is not used here), which caused unbounded retries.
+        page.fetchRetries++
+
+        val delay = page.retryDelay?.takeIf { !it.isZero } ?: retryDelayPolicy(nextRetryNumber, url)
         fetchDelayed(url, delay)
 
         globalState.globalMetrics.retries.mark()
-        if (page != null && taskLogger.isInfoEnabled) {
+        if (taskLogger.isInfoEnabled) {
             val symbol = PopularEmoji.FENCER
             val prefix = "$symbol Trying ${nextRetryNumber}th ${delay.readable()} later | "
             taskLogger.info("{}, retrying", PageLoadStatusFormatter(page, prefix = prefix))
         }
+    }
+
+    /**
+     * Handle a retry for an attempt that produced no page at all (timeout or
+     * exception in [loadWithTimeout]). There is no page object to carry
+     * [WebPage.fetchRetries], so the retry budget is tracked on the runner.
+     * */
+    private fun handleNullPageRetry(url: UrlAware) {
+        val attempts = nullPageRetryCounts.merge(url, 1, Int::plus) ?: 1
+        val maxRetries = maxRetriesOf(url, null)
+        if (attempts > maxRetries) {
+            globalState.globalMetrics.gone.mark()
+            if (taskLogger.isInfoEnabled) {
+                taskLogger.info("Null page for {}: retry budget exhausted ({}), no more retries", url, attempts)
+            }
+            return
+        }
+
+        fetchDelayed(url, retryDelayPolicy(attempts, url))
+        globalState.globalMetrics.retries.mark()
+        if (taskLogger.isInfoEnabled) {
+            val symbol = PopularEmoji.FENCER
+            taskLogger.info("{} Null page for {}, retrying ({}/{})", symbol, url, attempts, maxRetries)
+        }
+    }
+
+    /**
+     * The maximum number of retries for a task. Uses the page's budget when
+     * available, otherwise the link's `nMaxRetry`, otherwise a sane default.
+     * The page's [WebPage.maxRetries] may be 0 (e.g. pages created without
+     * [ai.platon.pulsar.skeleton.common.options.LoadOptions]), which would make
+     * `nextRetryNumber > maxRetries` true on the very first retry — too
+     * aggressive, so a 0 value is treated as unset.
+     * */
+    private fun maxRetriesOf(url: UrlAware, page: WebPage?): Int {
+        val pageMaxRetries = page?.maxRetries ?: 0
+        if (pageMaxRetries > 0) {
+            return pageMaxRetries
+        }
+
+        val linkMaxRetries = (url as? CompletableHyperlink<*>)?.nMaxRetry ?: 0
+        if (linkMaxRetries > 0) {
+            return linkMaxRetries
+        }
+
+        return DEFAULT_MAX_RETRIES
     }
 
     private fun fetchDelayed(url: UrlAware, delay: Duration) {

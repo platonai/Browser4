@@ -161,6 +161,65 @@ pub(super) fn test_open_recovery_after_browser_kill(ctx: &mut E2ECtx) {
     run_command(ctx, &["close"]);
 }
 
+/// Mirror scenario of the headed-window diagnostic: after `open --headless`,
+/// every Browser4-managed chrome process must run with `--headless` — an
+/// extra headed (GUI) browser may never appear. This pins the regression
+/// where the backend's MCP-over-HTTP session fell back to `DisplayMode.GUI`
+/// (its configuration lacked `browser.display.mode`), so every backend
+/// start popped up a visible window even though the CLI session was headless.
+///
+/// Windows-only: the probe inspects chrome process command lines and main
+/// window handles, which is only implemented on Windows. On other platforms
+/// it reports "unknown" and the scenario is a no-op.
+#[cfg(windows)]
+pub(super) fn test_open_headless_no_headed_browser(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    // Open a headless session against the local fixture (no external
+    // network dependency).
+    let open_result = run_command(
+        ctx,
+        &["open", "--headless", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
+    assert!(
+        open_result.stdout.contains("Session opened:"),
+        "Expected session to open headless. Output:\n{}",
+        open_result.stdout
+    );
+
+    // The browser process appears a moment after navigation settles — poll
+    // the Browser4-managed chrome window state instead of assuming a single
+    // read is current.
+    let mut state = browser4_cli::daemon::browser4_window_state();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !state.found_browser && Instant::now() < deadline {
+        sleep(Duration::from_millis(500));
+        state = browser4_cli::daemon::browser4_window_state();
+    }
+
+    assert!(
+        state.found_browser,
+        "Expected a Browser4-managed chrome process after open --headless. Window state: {state:?}"
+    );
+    assert!(
+        !state.headed_browser,
+        "open --headless must not launch any headed (GUI) browser, but a Browser4-managed \
+         chrome process runs without --headless. Window state: {state:?}"
+    );
+    assert!(
+        !state.headed_window_visible,
+        "open --headless must not produce a visible browser window. Window state: {state:?}"
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+#[cfg(not(windows))]
+pub(super) fn test_open_headless_no_headed_browser(_ctx: &mut E2ECtx) {
+    // The window-state probe is Windows-only; on other platforms this
+    // scenario is a documented no-op.
+}
+
 pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     run_command(
@@ -1816,6 +1875,134 @@ pub(super) fn test_mouse_drag_variants(ctx: &mut E2ECtx) {
         },
         2_000,
         "Expected drag source2→target2 to complete",
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+/// Test the drag hardening scenarios on the dedicated drag fixture:
+/// basic DnD with dataTransfer payload, occluded target, pointer-events:none
+/// target, off-viewport auto-scroll, async layout shift, and frame-resident
+/// targets.  The hardening guarantees that occluded/moved/frame targets fail
+/// loudly instead of silently dispatching on an unrelated element.
+pub(super) fn test_drag_hardening(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.drag_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["resize", "1280", "900"]);
+    sleep(Duration::from_secs(1));
+
+    // ── 1. Basic drag: full lifecycle + dataTransfer payload ────────
+    run_command(ctx, &["drag", "#basic-source", "#basic-target"]);
+    assume_wait_for_state(
+        ctx,
+        |s| {
+            let order = s["basic"]["order"].as_array().map(|events| {
+                events
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            });
+            s["basic"]["dragstart"].as_str() == Some("basic-source")
+                && s["basic"]["drop"]["target"].as_str() == Some("basic-target")
+                && s["basic"]["drop"]["source"]
+                    .as_str()
+                    .is_some_and(|p| p.contains("basic source"))
+                && s["basic"]["dragend"].as_str().is_some()
+                && order.as_deref().is_some_and(|o| {
+                    o.contains("dragstart")
+                        && o.contains("dragenter")
+                        && o.contains("dragover")
+                        && o.contains("drop")
+                        && o.contains("dragend")
+                })
+        },
+        5_000,
+        "Expected basic drag to complete with full lifecycle and payload",
+    );
+
+    // ── 2. Occluded target: must fail loudly, no events dispatched ──
+    run_command_expecting_failure(
+        ctx,
+        &["drag", "#occluded-source", "#occluded-target"],
+        "occluded",
+    );
+    assume_wait_for_state(
+        ctx,
+        |s| s["occluded"]["dragstart"].as_str().is_none(),
+        2_000,
+        "Expected no drag events on the occluded source (validation must run before dispatch)",
+    );
+
+    // ── 3. pointer-events:none target: must fail loudly ─────────────
+    run_command_expecting_failure(
+        ctx,
+        &["drag", "#pe-source", "#pe-target"],
+        "occluded",
+    );
+    assume_wait_for_state(
+        ctx,
+        |s| s["pe"]["dragstart"].as_str().is_none(),
+        2_000,
+        "Expected no drag events on the pointer-events:none source",
+    );
+
+    // ── 4. Off-viewport target: driver must scroll and succeed ──────
+    run_command(ctx, &["drag", "#far-source", "#far-target"]);
+    assume_wait_for_state(
+        ctx,
+        |s| {
+            s["far"]["dragstart"].as_str() == Some("far-source")
+                && s["far"]["drop"]["target"].as_str() == Some("far-target")
+                && s["far"]["drop"]["source"]
+                    .as_str()
+                    .is_some_and(|p| p.contains("far source"))
+                && s["far"]["dragend"].as_str().is_some()
+        },
+        5_000,
+        "Expected off-viewport drag to scroll into view and complete",
+    );
+
+    // ── 5. Async layout shift: overlay inserted on demand ───────────
+    // Drag succeeds while the target is unobstructed...
+    run_command(ctx, &["drag", "#shift-source", "#shift-target"]);
+    assume_wait_for_state(
+        ctx,
+        |s| {
+            s["shift"]["dragstart"].as_str() == Some("shift-source")
+                && s["shift"]["drop"]["target"].as_str() == Some("shift-target")
+        },
+        5_000,
+        "Expected shift drag to complete before the overlay appears",
+    );
+    // ...then the overlay is inserted (async layout shift) and the same drag
+    // must fail loudly instead of dropping on the overlay.
+    run_command(ctx, &["click", "#insert-shift-overlay"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["shift"]["overlayVisible"].as_bool() == Some(true),
+        3_000,
+        "Expected shift overlay to become visible",
+    );
+    run_command_expecting_failure(
+        ctx,
+        &["drag", "#shift-source", "#shift-target"],
+        "occluded",
+    );
+
+    // ── 6. Frame-resident target: explicit failure, never silent ────
+    // A plain CSS selector pointing inside the iframe cannot be resolved (or
+    // is rejected as frame-resident); either way the drag must not silently
+    // succeed.
+    let frame_result = run_command_allowing_failure(
+        ctx,
+        &["drag", "#frame-source", "#frame-drop"],
+    );
+    let combined = format!("{}\n{}", frame_result.stdout, frame_result.stderr);
+    assert_ne!(frame_result.exit_code, 0, "Expected frame drag to fail, got:\n{combined}");
+    assert!(
+        combined.contains("frame") || combined.contains("not found"),
+        "Expected a frame/not-found error message, got:\n{combined}"
     );
 
     run_command(ctx, &["close"]);

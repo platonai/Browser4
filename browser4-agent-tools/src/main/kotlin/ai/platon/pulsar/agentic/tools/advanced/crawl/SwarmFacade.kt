@@ -32,4 +32,17 @@ interface SwarmFacade {
      * Count tasks, optionally filtered by status code (0 = all).
      */
     fun count(statusCode: Int): Int
+
+    /**
+     * Abort all pending (non-terminal) tasks with a clear failure reason.
+     *
+     * Pending tasks belong to a live swarm session: once that session is closed
+     * they can never be consumed again, so they must not stay "queued" forever
+     * (which also leaks them across sessions and restarts). This marks them as
+     * failed with SC_GONE and persists the transition.
+     *
+     * @param reason the human-readable reason to record in the response message
+     * @return the number of aborted tasks
+     */
+    fun abortPendingTasks(reason: String): Int
 }

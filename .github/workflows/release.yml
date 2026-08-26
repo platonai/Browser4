@@ -108,6 +108,35 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
 
+      - name: Verify release tag is on the latest main
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}"
+          TAG="${TAG#refs/tags/}"
+
+          # main is the single release source: the tag must point at the
+          # latest origin/main commit. If main has moved on, the tag was
+          # created from stale code and the release is aborted — never
+          # force-resync main to a tag (that rewrites history and drops
+          # commits merged in during the release window).
+          git fetch origin main
+          TAG_SHA=$(git rev-parse HEAD)
+          MAIN_SHA=$(git rev-parse origin/main)
+
+          if [ "$TAG_SHA" != "$MAIN_SHA" ]; then
+            echo "❌ Release tag $TAG does not point at the latest origin/main commit."
+            echo "   tag:  $TAG_SHA"
+            echo "   main: $MAIN_SHA"
+            echo ""
+            echo "   Releases must be tagged from the latest main:"
+            echo "     git checkout main && git pull"
+            echo "     .\\bin\\release\\trigger-release.ps1 -Apply"
+            exit 1
+          fi
+          echo "✅ Tag $TAG points at the latest origin/main ($MAIN_SHA)"
+
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
@@ -480,11 +509,16 @@ jobs:
 
           # Override JAVA_OPTS for CI — the Dockerfile default (-Xmx10G)
           # exceeds GitHub Actions' 7 GB runner memory and will crash the JVM.
+          # Headless Chrome renders through shared memory (/dev/shm); the
+          # Docker default of 64MB is too small for multiple tabs and makes
+          # the GPU/renderer processes crash or wedge (Runtime.evaluate
+          # hangs), which stalls navigation-triggering e2e tests.
           docker run -d \
             --name ${{ env.CONTAINER_NAME }} \
             --network ${{ env.NETWORK_NAME }} \
             -p 8182:8182 \
             --add-host=host.docker.internal:host-gateway \
+            --shm-size=1g \
             -e OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" \
             -e JAVA_OPTS="-Xms512M -Xmx3G -XX:+UseG1GC" \
             --health-cmd="curl -f http://localhost:8182/actuator/health || exit 1" \
@@ -1534,66 +1568,6 @@ jobs:
 
           echo "✅ Aliyun OSS CDN updated to ${TAG_NAME}"
 
-  sync-main-to-tag:
-    name: Sync main branch to release tag
-    needs: [prepare, publish-github-release]
-    if: |
-      always() &&
-      needs.prepare.outputs.dry_run != 'true' &&
-      needs.prepare.outputs.bundle_only != 'true' &&
-      needs.prepare.outputs.is_prerelease != 'true' &&
-      needs.publish-github-release.result == 'success'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Hard reset main to release tag
-        id: sync
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          TAG="${{ needs.prepare.outputs.tag }}"
-          echo "Resetting origin/main to tag: $TAG"
-
-          git fetch origin main
-          git checkout main
-          git reset --hard "refs/tags/$TAG"
-
-          if git push --force origin main 2>&1; then
-            echo "sync_status=success" >> "$GITHUB_OUTPUT"
-            echo "✅ origin/main has been reset to $TAG"
-          else
-            echo "sync_status=failed" >> "$GITHUB_OUTPUT"
-            echo "::warning::Could not force-push main to $TAG. Branch protection may have rejected the push, or the token may not have sufficient permissions. Release artifacts are unaffected — main was NOT updated."
-          fi
-
-      - name: Sync main summary
-        if: always()
-        shell: bash
-        run: |
-          STATUS="${{ steps.sync.outputs.sync_status }}"
-          if [ "$STATUS" = "success" ]; then
-            ICON="✅"
-            NOTE="main is now at ${{ needs.prepare.outputs.tag }}"
-          else
-            ICON="⚠️"
-            NOTE="Push rejected — release is unaffected, but main was NOT updated. This is expected if branch protection blocks the GITHUB_TOKEN."
-          fi
-          {
-            echo "## $ICON Sync main → ${{ needs.prepare.outputs.tag }}"
-            echo ""
-            echo "- **Tag**: ${{ needs.prepare.outputs.tag }}"
-            echo "- **Version**: ${{ needs.prepare.outputs.version }}"
-            echo "- **Result**: $NOTE"
-          } >> "$GITHUB_STEP_SUMMARY"
-
   cleanup-on-failure:
     name: Report failed release
     needs:
@@ -1604,7 +1578,6 @@ jobs:
       - smoke-test-runtime-bundle
       - publish-cli-npm
       - publish-github-release
-      - sync-main-to-tag
     if: failure()
     runs-on: ubuntu-latest
     permissions:

@@ -59,6 +59,16 @@ curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4
 5. **Add to PATH** — on Windows, updates the user `PATH` registry; on Unix,
    appends an `export PATH` line to your shell rc file.
 6. **Verify** the binary can run `--version`.
+7. **Install the Browser4 backend** (runtime bundle) using the freshly
+   installed CLI:
+   - no backend installed yet → `browser4-cli install`
+   - a backend is already present → `browser4-cli upgrade` (upgrades the
+     CLI + runtime to the latest version)
+   - when `--version TAG` was given, the backend is installed/upgraded with
+     the matching `--tag TAG`
+   - pass `--skip-backend` / `-SkipBackend` to skip this step entirely
+   - a failed backend step is non-fatal — the CLI stays installed and you
+     can retry with `browser4-cli install` / `browser4-cli upgrade`
 
 No admin/sudo is required for the default install locations. The scripts never
 modify system state outside the chosen install directory and your shell
@@ -145,6 +155,7 @@ detection and fallback.
 | `-AddToPath` | `bool` | `$true` | Whether to append the install directory to the user `PATH`. |
 | `-Silent` | `switch` | off | Suppress all non-error output. |
 | `-DryRun` | `switch` | off | Print what would be done without making changes. |
+| `-SkipBackend` | `switch` | off | Skip installing/upgrading the Browser4 backend (runtime bundle). |
 
 ### Bash (`install-browser4-cli.sh`)
 
@@ -156,6 +167,7 @@ detection and fallback.
 | `--no-path` | Skip adding the install directory to your shell rc file. |
 | `--silent`, `-s` | Suppress non-error output. |
 | `--dry-run` | Print what would be done without making changes. |
+| `--skip-backend` | Skip installing/upgrading the Browser4 backend. |
 | `--help`, `-h` | Show usage. |
 
 ---
@@ -215,13 +227,13 @@ modification entirely.
 ### Silent CI / Docker installs
 
 ```bash
-# Bash — silent, specific version, no PATH modification
-curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash -s -- --silent --no-path --version v4.11.0
+# Bash — silent, specific version, no PATH modification, CLI only
+curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash -s -- --silent --no-path --version v4.11.0 --skip-backend
 ```
 
 ```powershell
-# PowerShell — silent, specific version, custom directory
-powershell -ExecutionPolicy Bypass -File install-browser4-cli.ps1 -Silent -Version "v4.11.0" -InstallDir "C:\tools\browser4"
+# PowerShell — silent, specific version, custom directory, CLI only
+powershell -ExecutionPolicy Bypass -File install-browser4-cli.ps1 -Silent -Version "v4.11.0" -InstallDir "C:\tools\browser4" -SkipBackend
 ```
 
 ### Force a specific download mirror
@@ -257,7 +269,9 @@ powershell -ExecutionPolicy Bypass -File install-browser4-cli.ps1 -DryRun
 ## Upgrade
 
 To upgrade to a newer version, run the installer again. It will overwrite the
-existing binary with the latest (or the `--version` you specify).
+existing binary with the latest (or the `--version` you specify) and then run
+`browser4-cli upgrade` so the backend is upgraded to the latest release too
+(pass `--skip-backend` / `-SkipBackend` to upgrade the CLI only).
 
 ---
 
@@ -291,8 +305,12 @@ Remove the PATH entry you added during install:
 | **Downloads** | ~10-20 MB native binary | ~200 MB runtime archive |
 | **Purpose** | Bootstrap the CLI tool | Set up the backend server |
 
-Once the CLI is installed via these scripts, use `browser4-cli install` to
-download the runtime bundle, or just run `browser4-cli open <url>` — it
+The installer scripts now call `browser4-cli install` automatically after
+placing the binary (or `browser4-cli upgrade` when a backend is already
+installed), so a single one-liner bootstraps the whole stack. Pass
+`--skip-backend` / `-SkipBackend` to install only the CLI. The backend can
+always be installed or upgraded later with `browser4-cli install` /
+`browser4-cli upgrade` — or just run `browser4-cli open <url>`, which
 auto-installs the runtime on first use.
 
 ---

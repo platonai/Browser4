@@ -94,6 +94,11 @@ checks and previews the tag and release notes; it never creates or pushes anythi
   version consistency across all files (VERSION, pom.xml, Cargo.toml, package.json)
   and confirm the current version is the next patch after the last GitHub release.
   Warns (and, in `-Apply` mode, asks for confirmation) if issues are found.
+- **Main-branch guard**: main is the single release source — the tag must be
+  created from the latest `origin/main` commit. The script fetches `origin/main`
+  and warns (asking for confirmation in `-Apply` mode) when `HEAD` is off main;
+  `release.yml` independently hard-fails any release whose tag does not point at
+  the latest main, so the workflow never force-resyncs main to a tag.
 - Creates and pushes a `v{version}` tag (e.g. `v4.13.0`), which triggers
   the release workflow via the `on.push.tags` trigger.
 - Shows changes since the previous release tag for release notes.
@@ -194,9 +199,13 @@ Invoke-Pester .\bin\release\tests\monitor-release.tests.ps1
 
 ## Typical Release Workflow
 
-1. Ensure all tests pass.
+1. Ensure all tests pass and your changes are merged into `main`.
 2. Run `check-publish-status.ps1` to verify the current version is published.
 3. Run `node bin/version.mjs bump <major|minor|patch>` to bump the version and commit.
-4. Run `.\bin\release\trigger-release.ps1 -Apply` to push the tag and start the CI release build.
+4. On `main`, run `.\bin\release\trigger-release.ps1 -Apply` to push the tag and start the CI release build.
+   The tag must point at the latest `origin/main` — the script warns if it does
+   not, and `release.yml` aborts the release if the tag is off main.
 5. Wait for CI to build and publish to GitHub Releases.
-6. Run `node bin/version.mjs bump patch` to bump the version for the next bug-fix cycle.
+6. Run `.\bin\release\monitor-release.ps1 -Apply` (or `node bin/version.mjs bump patch`)
+   to bump the version for the next bug-fix cycle. main is never rewritten to
+   match the tag; it simply moves forward with the next `-SNAPSHOT` version.

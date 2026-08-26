@@ -21,12 +21,38 @@ open class LoginHandler(
 
     private val logger = getLogger(this)
 
+    /**
+     * Wait until the document finishes navigating.
+     *
+     * driver.waitForNavigation() must not be used here: the no-arg overload's
+     * predicate is `"" != currentUrl()`, which is true as soon as the page has
+     * any URL — it returns immediately without waiting at all; and the oldUrl
+     * overload can never complete for a same-URL navigation (login redirects
+     * that keep the URL, SPA route changes). Poll document.readyState until
+     * 'complete' instead, which covers both URL-changing and same-URL
+     * navigations.
+     */
+    private suspend fun waitForNavigationComplete(driver: WebDriver, timeoutMillis: Long = 30_000L) {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        while (System.currentTimeMillis() < deadline) {
+            val state = try {
+                driver.evaluateValue("document.readyState") as? String
+            } catch (e: Exception) {
+                null
+            }
+            if (state == "complete") {
+                return
+            }
+            delay(200)
+        }
+    }
+
     @Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE")
     override suspend fun invoke(page: WebPage, driver: WebDriver): Any? {
         logger.info("Navigating to login page ... | {}", loginUrl)
 
         driver.navigate(loginUrl)
-        driver.waitForNavigation()
+        waitForNavigationComplete(driver)
         if (!driver.currentUrl().contains("login")) {
             logger.info("Already logged in")
             return null
@@ -36,7 +62,7 @@ open class LoginHandler(
 
         warnUpUrl?.let {
             driver.navigate(it)
-            driver.waitForNavigation(timeout = Duration.ofSeconds(10))
+            waitForNavigationComplete(driver, 10_000L)
         }
 
         if (!driver.currentUrl().contains("login")) {
@@ -62,7 +88,7 @@ open class LoginHandler(
         driver.click(submitSelector, count = 2)
 
         logger.info("Cookies before login: {}", driver.getCookies())
-        driver.waitForNavigation()
+        waitForNavigationComplete(driver)
         logger.info("Cookies after login: {}", driver.getCookies())
 
         return null

@@ -35,6 +35,51 @@ browser4-cli (Rust)  ──MCP over HTTP──▶  browser4-rest (Kotlin/Spring)
 - **Cursor positioning:** `DOM.focus()` + `Input.dispatchMouseEvent` (click) may leave cursor at 0. Fix: `setSelectionRange(99999, 99999)` after focus+click.
 - **`Input.insertText` racing:** 0ms delay between chars drops `input` events. Fix: use same inter-char delay as `type()` via `randomDelayMillis("type")` (90-240ms).
 
+### Direct CDP methods: mandatory review gates
+
+Any method that implements behavior by calling CDP directly (or by evaluating
+JavaScript that synthesizes browser events) — `drag`, `press`, `click`, dialog
+handling, screenshots, scroll, storage restore, etc. — must satisfy ALL of the
+following before it is considered done. "It works on my machine" is not
+sufficient; each gate below has burned this project before.
+
+1. **Anti-bot detection** — the page can observe the automation, and many sites
+   actively fingerprint it. Consider:
+   - `event.isTrusted` is `false` for JS-synthesized events; if a trusted path
+     exists (CDP `Input.*`, `userGesture=true`), prefer it or document why not.
+   - Fixed inter-event delays and exact element-center coordinates are
+     fingerprints; randomize delays (via `randomDelayMillis` or an equivalent
+     bucket) and jitter coordinates like real input would.
+   - The full input story: real drags/clicks have trusted `mousedown` →
+     `mousemove` → `mouseup` context; a synthetic event sequence with no
+     trusted accompaniment is itself detectable.
+2. **Negative impact** — check the failure modes, not just the happy path:
+   - No silent failures: a method must fail loudly rather than dispatch onto
+     an unrelated element (occlusion, `pointer-events:none`, layout shift,
+     frames). Validate before dispatching so retries stay idempotent.
+   - Error messages must surface the real cause to the CLI/user instead of
+     being swallowed or wrapped by retry machinery.
+   - Retry safety: blocks inside `invokeOnPage`/`invokeOnElement` must be
+     idempotent or the deterministic failures must bypass the retry.
+   - Don't regress error semantics of the upstream method you override.
+3. **Cross-platform compatibility** — headless vs GUI Chrome, Docker/CI,
+   Windows/Linux/macOS all behave differently:
+   - Scroll commits and layout updates are asynchronous (`scrollIntoViewIfNeeded`
+     may prefer smooth animation); poll for the observable state instead of
+     assuming a single read is current.
+   - Event dispatch timing, renderer scheduling, and viewport geometry differ
+     under load and in containers; never rely on a single hardcoded delay.
+   - CDP API availability varies by Chrome version; provide fallbacks or
+     explicit errors, never a silent no-op.
+4. **Real-webpage testing** — unit tests alone are insufficient:
+   - Add a fixture page (under
+     `browser4-tests/pulsar-tests-common/src/main/resources/static/b4/`) that
+     exercises the real behavior: event order, payloads, occluded/disabled/
+     off-viewport/frame targets, async layout changes.
+   - Prove it against a real browser through the e2e harness
+     (`cargo test --test e2e -- --scenario=...`, `requires_browser4: true`),
+     not only against mocks.
+
 ## Project Structure
 
 | Module | Description |
@@ -331,4 +376,4 @@ When adding a new CLI option or changing command behavior, always check these lo
 
 ---
 
-*Last updated: 2026-07-14*
+*Last updated: 2026-08-25*

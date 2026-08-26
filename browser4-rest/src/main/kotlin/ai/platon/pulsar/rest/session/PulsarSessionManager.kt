@@ -389,6 +389,17 @@ class PulsarSessionManager(
             return markSessionActive(session)
         }
 
+        // The browser process may be perfectly healthy while only the driver
+        // link (the CDP connection to the backend tab) is dead — e.g. the
+        // machine slept and the websocket died, or the backend tab was closed.
+        // Rebind a fresh driver to the SAME browser instance first: the Chrome
+        // profile (cookies, manual logins) is preserved, so the session comes
+        // back where it was instead of as a fresh anonymous browser.
+        if (recoverLostDriverLink(session)) {
+            logger.info("Recovered session {} by rebinding a new driver to the same browser", sessionId)
+            return markSessionActive(session)
+        }
+
         val recreatedSession = recreateUnhealthySession(sessionId, capabilities, session)
         return if (checkHealthyBlocking(recreatedSession).isOK) {
             markSessionActive(recreatedSession)
@@ -1133,8 +1144,16 @@ class PulsarSessionManager(
                 resolvedId, pulsarSession.id, pulsarSession.display
             )
 
-            // Close session
-            pulsarSession.close()
+            // Close the session AND deregister it from the context's session
+            // registry. A plain close() leaves a zombie session in
+            // context.sessions; `ensureSwarmSession` looks sessions up by label
+            // and would otherwise return the closed swarm session forever,
+            // leaving every new swarm task "queued" and never consumed.
+            runCatching { pulsarSession.context.closeSession(pulsarSession) }
+                .onFailure { e ->
+                    logger.warn("Failed to deregister session {}, falling back to plain close: {}", sessionId, e.message)
+                    pulsarSession.close()
+                }
             // Close the companion browser if it exists
             if (browser != null) {
                 // might be already closed by the session, but we ensure it's closed here to release resources

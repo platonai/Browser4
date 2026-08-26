@@ -121,10 +121,50 @@ pub fn get_skills_dir() -> PathBuf {
     crate::state::resolve_runtime_data_dir().join("skills")
 }
 
+/// Resolve the AI-agent skills directory (`~/.agents/skills`).
+///
+/// Agents such as Codex load skills from `~/.agents/skills/<skill>/SKILL.md`,
+/// so `browser4-cli install` unpacks the bundled skills there as well.
+///
+/// Honours `BROWSER4_AGENTS_SKILLS_DIR` as an override (same validation as
+/// `BROWSER4_SKILLS_DIR`).  Returns `None` only when no override is set and
+/// the home directory cannot be resolved.
+pub fn agents_skills_dir() -> Option<PathBuf> {
+    if let Ok(override_dir) = std::env::var("BROWSER4_AGENTS_SKILLS_DIR") {
+        let trimmed = override_dir.trim().to_string();
+        if !trimmed.is_empty() {
+            // Reject values that look like CLI flags.
+            if trimmed.starts_with('-') {
+                eprintln!(
+                    "browser4-cli: ignoring BROWSER4_AGENTS_SKILLS_DIR=\"{}\" — \
+                    directory names that start with '-' are not allowed. \
+                    Using default agents skills directory.",
+                    trimmed
+                );
+            } else {
+                return Some(
+                    PathBuf::from(&trimmed)
+                        .canonicalize()
+                        .unwrap_or_else(|_| PathBuf::from(trimmed)),
+                );
+            }
+        }
+    }
+    dirs::home_dir().map(|home| home.join(".agents").join("skills"))
+}
+
+/// Number of bundled skill files.
+pub fn bundled_skill_file_count() -> usize {
+    SKILL_FILES.len()
+}
+
 /// Unpack all bundled skill files to `dest_dir`.
 ///
-/// Creates the directory structure and writes each file.  Returns the number
-/// of files written.
+/// Creates the directory structure and writes each file.  Files that already
+/// exist with identical content are skipped (write-if-changed), so repeated
+/// unpack runs are cheap and idempotent — `install` / `upgrade` can re-sync
+/// without rewriting unchanged files.  Returns the number of files actually
+/// written.
 pub fn unpack_skills_to(dest_dir: &std::path::Path) -> Result<usize, String> {
     let mut count = 0;
     for f in SKILL_FILES {
@@ -133,8 +173,14 @@ pub fn unpack_skills_to(dest_dir: &std::path::Path) -> Result<usize, String> {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create directory {}: {e}", parent.display()))?;
         }
-        std::fs::write(&file_path, f.content)
-            .map_err(|e| format!("Failed to write {}: {e}", file_path.display()))?;
+        // Skip files whose on-disk content already matches the bundled copy.
+        match std::fs::read(&file_path) {
+            Ok(existing) if existing == f.content.as_bytes() => continue,
+            _ => {}
+        }
+        std::fs::write(&file_path, f.content).map_err(|e| {
+            format!("Failed to write {}: {e}", file_path.display())
+        })?;
         count += 1;
     }
     Ok(count)

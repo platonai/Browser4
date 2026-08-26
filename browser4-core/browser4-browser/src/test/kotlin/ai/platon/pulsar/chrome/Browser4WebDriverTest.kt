@@ -1,10 +1,21 @@
 package ai.platon.pulsar.chrome
 
+import ai.platon.pulsar.api.BrowserProtocol
+import ai.platon.pulsar.api.model.BrowserSettings
+import ai.platon.pulsar.api.model.BrowserTab
+import ai.platon.pulsar.chrome.protocol.DialogEvent
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import org.mockito.kotlin.mock
+import org.mockito.kotlin.whenever
+import org.mockito.kotlin.wheneverBlocking
+import java.util.Queue
 
 /**
  * Unit tests for the pure helpers in [Browser4WebDriver.Companion].
@@ -138,6 +149,75 @@ class Browser4WebDriverTest {
     }
 
     // -------------------------------------------------------------------------
+    // selectOption target probe
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("selectOptionTargetError accepts an existing target")
+    fun selectOptionTargetErrorAcceptsExistingTarget() {
+        assertNull(Browser4WebDriver.selectOptionTargetError("#size", true))
+    }
+
+    @Test
+    @DisplayName("selectOptionTargetError reports an unresolved locator for null")
+    fun selectOptionTargetErrorReportsUnresolvedLocator() {
+        assertEquals(
+            "Option target could not be resolved (not found or locator failure): #missing",
+            Browser4WebDriver.selectOptionTargetError("#missing", null)
+        )
+    }
+
+    @Test
+    @DisplayName("selectOptionTargetError reports a missing target for false")
+    fun selectOptionTargetErrorReportsMissingTarget() {
+        assertEquals(
+            "Option target not found: #missing",
+            Browser4WebDriver.selectOptionTargetError("#missing", false)
+        )
+    }
+
+    // -------------------------------------------------------------------------
+    // submitFormFallbackJs
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("submitFormFallbackJs embeds the escaped selector and submits the nearest form")
+    fun submitFormFallbackJsSubmitsNearestForm() {
+        val js = Browser4WebDriver.submitFormFallbackJs("input#q")
+        assertTrue(js.contains("document.querySelector('input#q')"), "expected selector: $js")
+        assertTrue(js.contains("'keydown'"), "expected keydown dispatch: $js")
+        assertTrue(js.contains("'keypress'"), "expected keypress dispatch: $js")
+        assertTrue(js.contains("'keyup'"), "expected keyup dispatch: $js")
+        assertTrue(js.contains("form.requestSubmit()"), "expected requestSubmit: $js")
+        assertTrue(js.contains("form.submit()"), "expected submit fallback: $js")
+    }
+
+    @Test
+    @DisplayName("submitFormFallbackJs escapes quotes in the selector")
+    fun submitFormFallbackJsEscapesSelector() {
+        val js = Browser4WebDriver.submitFormFallbackJs("input[name='q']")
+        assertTrue(js.contains("document.querySelector('input[name=\\'q\\']')"), "expected escaped selector: $js")
+    }
+
+    // -------------------------------------------------------------------------
+    // consoleMessagesJs / consoleClearJs
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("consoleMessagesJs embeds the level filter and the buffer")
+    fun consoleMessagesJsEmbedsLevelAndBuffer() {
+        val js = Browser4WebDriver.consoleMessagesJs("error")
+        assertTrue(js.contains("minPriority['error']"), "expected level embedding: $js")
+        assertTrue(js.contains("window.__b4_console"), "expected buffer: $js")
+    }
+
+    @Test
+    @DisplayName("consoleClearJs clears the buffer")
+    fun consoleClearJsClearsBuffer() {
+        assertTrue(Browser4WebDriver.consoleClearJs().contains("window.__b4_console = []"))
+    }
+
+    // -------------------------------------------------------------------------
     // Storage state helpers (loadStorageState override)
     // -------------------------------------------------------------------------
 
@@ -228,5 +308,198 @@ class Browser4WebDriverTest {
         assertFalse(
             Browser4WebDriver.isDocumentOriginReady("https://www.example.com", "http://127.0.0.1:47815")
         )
+    }
+
+    @Test
+    @DisplayName("parseDragCenter reads resolved coordinates, css path and frame flag")
+    fun parseDragCenterReadsCoordinates() {
+        assertEquals(
+            Browser4WebDriver.DragCenter(12.5, 48.0, "div#board > span.item", false, 1280, 900),
+            Browser4WebDriver.parseDragCenter(
+                """{"x":12.5,"y":48,"cssPath":"div#board > span.item","inFrame":false,"vw":1280,"vh":900}"""
+            )
+        )
+    }
+
+    @Test
+    @DisplayName("parseDragCenter flags frame-resident elements")
+    fun parseDragCenterFlagsFrameResidents() {
+        val center = Browser4WebDriver.parseDragCenter(
+            """{"x":1,"y":2,"cssPath":"iframe#f > div","inFrame":true}"""
+        )
+        assertTrue(center?.inFrame == true, "expected inFrame=true, got $center")
+        // Absent inFrame defaults to false; absent viewport size defaults to 0.
+        val center2 = Browser4WebDriver.parseDragCenter("""{"x":1,"y":2,"cssPath":"div"}""")
+        assertTrue(center2?.inFrame == false, "expected inFrame=false, got $center2")
+        assertTrue(center2?.viewportWidth == 0 && center2?.viewportHeight == 0, "expected zero viewport, got $center2")
+    }
+
+    @Test
+    @DisplayName("parseDragCenter rejects malformed or incomplete results")
+    fun parseDragCenterRejectsMalformedResults() {
+        assertNull(Browser4WebDriver.parseDragCenter("not-json"))
+        assertNull(Browser4WebDriver.parseDragCenter("""{"x":12.5}"""))
+        assertNull(Browser4WebDriver.parseDragCenter("""{"x":12.5,"y":48,"cssPath":""}"""))
+        assertNull(Browser4WebDriver.parseDragCenter(null))
+    }
+
+    @Test
+    @DisplayName("dragCenterJs resolves center, css path, frame residency and viewport")
+    fun dragCenterJsContainsResolutionLogic() {
+        val js = Browser4WebDriver.dragCenterJs()
+        assertTrue(js.contains("getBoundingClientRect"), "expected rect resolution: $js")
+        assertTrue(js.contains("CSS.escape"), "expected id escaping: $js")
+        assertTrue(js.contains("nth-of-type"), "expected sibling disambiguation: $js")
+        assertTrue(js.contains("inFrame: this.ownerDocument !== document"), "expected frame detection: $js")
+        assertTrue(js.contains("cssPath: path.join(' > ')"), "expected css path output: $js")
+        assertTrue(js.contains("vw: window.innerWidth"), "expected viewport width output: $js")
+        assertTrue(js.contains("vh: window.innerHeight"), "expected viewport height output: $js")
+    }
+
+    @Test
+    @DisplayName("buildDragSequenceScript is a CDP-compatible function declaration")
+    fun buildDragSequenceScriptIsFunctionDeclaration() {
+        val script = Browser4WebDriver.buildDragSequenceScript(
+            targetCssPath = "div#target",
+            sourceX = 1.0,
+            sourceY = 1.0,
+            targetX = 1.0,
+            targetY = 1.0,
+            delays = listOf(1L, 1L, 1L, 1L),
+        )
+        // Runtime.callFunctionOn rejects expressions (IIFEs) with
+        // "Given expression does not evaluate to a function".
+        assertTrue(script.trimStart().startsWith("async function() {"), "expected function declaration: $script")
+        assertFalse(script.contains("(async () =>"), "must not use an IIFE: $script")
+    }
+
+    @Test
+    @DisplayName("buildDragSequenceScript fires the full lifecycle in order")
+    fun buildDragSequenceScriptFiresFullLifecycleInOrder() {
+        val script = Browser4WebDriver.buildDragSequenceScript(
+            targetCssPath = "div#target",
+            sourceX = 10.0,
+            sourceY = 20.0,
+            targetX = 30.0,
+            targetY = 40.0,
+            delays = listOf(150L, 200L, 250L, 180L),
+        )
+        val dragstart = script.indexOf("'dragstart'")
+        val dragenter = script.indexOf("'dragenter'")
+        val dragover = script.indexOf("'dragover'")
+        val drop = script.indexOf("'drop'")
+        val dragend = script.indexOf("'dragend'")
+        assertTrue(dragstart in 0 until dragenter, "dragstart must precede dragenter")
+        assertTrue(dragenter in 0 until dragover, "dragenter must precede dragover")
+        assertTrue(dragover in 0 until drop, "dragover must precede drop")
+        assertTrue(drop in 0 until dragend, "drop must precede dragend")
+    }
+
+    @Test
+    @DisplayName("buildDragSequenceScript embeds randomized delays and jittered points")
+    fun buildDragSequenceScriptEmbedsRandomizedDelays() {
+        val delays = listOf(111L, 222L, 333L, 444L)
+        val script = Browser4WebDriver.buildDragSequenceScript(
+            targetCssPath = "div#target",
+            sourceX = 10.5,
+            sourceY = 20.25,
+            targetX = 30.75,
+            targetY = 40.0,
+            delays = delays,
+        )
+        delays.forEach { delay ->
+            assertTrue(script.contains("sleep($delay)"), "expected embedded delay $delay: $script")
+        }
+        assertTrue(script.contains("elementFromPoint(30.75, 40.0)"), "expected jittered target point: $script")
+    }
+
+    @Test
+    @DisplayName("buildDragSequenceScript guards against occluded or moved targets")
+    fun buildDragSequenceScriptGuardsOcclusion() {
+        val script = Browser4WebDriver.buildDragSequenceScript(
+            targetCssPath = "div#target",
+            sourceX = 1.0,
+            sourceY = 1.0,
+            targetX = 1.0,
+            targetY = 1.0,
+            delays = listOf(1L, 1L, 1L, 1L),
+        )
+        assertTrue(script.contains("b.contains(a)"), "expected containment check: $script")
+        assertFalse(script.contains("a.contains(b)"), "ancestor hits must not count as related: $script")
+        assertTrue(script.contains("occluded or moved"), "expected occlusion error message: $script")
+        assertTrue(
+            script.contains("'Target element was not found at drag time'"),
+            "expected not-found-at-drag-time guard: $script"
+        )
+    }
+
+    @Test
+    @DisplayName("buildDragSequenceScript JSON-escapes the target css path")
+    fun buildDragSequenceScriptJsonEscapesCssPath() {
+        val script = Browser4WebDriver.buildDragSequenceScript(
+            targetCssPath = "div#it's",
+            sourceX = 1.0,
+            sourceY = 1.0,
+            targetX = 1.0,
+            targetY = 1.0,
+            delays = listOf(1L, 1L, 1L, 1L),
+        )
+        // The css path must be embedded as a JSON string literal so quotes are safe.
+        assertTrue(script.contains("""document.querySelector("div#it's")"""), "expected JSON-quoted path: $script")
+    }
+
+    @Test
+    @DisplayName("dragScriptErrorMessage reports success, script and page failures")
+    fun dragScriptErrorMessageReportsFailures() {
+        assertNull(Browser4WebDriver.dragScriptErrorMessage("""{"ok":true}"""))
+        assertEquals(
+            "Target element is occluded or moved",
+            Browser4WebDriver.dragScriptErrorMessage("""{"ok":false,"error":"Target element is occluded or moved"}""")
+        )
+        assertEquals("Unknown drag failure", Browser4WebDriver.dragScriptErrorMessage("""{"ok":false}"""))
+        assertEquals("Failed to execute drag script", Browser4WebDriver.dragScriptErrorMessage(42))
+        assertEquals("Failed to execute drag script", Browser4WebDriver.dragScriptErrorMessage(null))
+    }
+
+    @Test
+    @DisplayName("dialog acknowledgement preserves later queued dialogs")
+    fun dialogAcknowledgementPreservesLaterDialogs() = runBlocking {
+        val driver = dialogDriver()
+        val first = DialogEvent("first", "alert", "about:blank", "", false)
+        val second = DialogEvent("second", "alert", "about:blank", "", false)
+        pendingDialogs(driver).addAll(listOf(first, second))
+
+        driver.dialogDismiss()
+
+        assertSame(second, driver.dialogHandler.peekPendingDialog())
+    }
+
+    @Test
+    @DisplayName("failed CDP dialog action keeps the pending dialog")
+    fun failedDialogActionKeepsPendingDialog() = runBlocking {
+        val protocol = mock<BrowserProtocol>()
+        val driver = dialogDriver(protocol)
+        val pending = DialogEvent("pending", "alert", "about:blank", "", false)
+        pendingDialogs(driver).add(pending)
+        val failure = IllegalStateException("CDP failed")
+        wheneverBlocking { protocol.handleJavaScriptDialog(true, null) }.thenThrow(failure)
+
+        val thrown = runCatching { driver.dialogAccept(null) }.exceptionOrNull()
+
+        assertSame(failure, thrown)
+        assertSame(pending, driver.dialogHandler.peekPendingDialog())
+    }
+
+    private fun dialogDriver(protocol: BrowserProtocol = mock()): Browser4WebDriver {
+        val browser = mock<PulsarBrowser>()
+        whenever(browser.settings).thenReturn(BrowserSettings())
+        return Browser4WebDriver("test", BrowserTab(), protocol, browser)
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun pendingDialogs(driver: Browser4WebDriver): Queue<DialogEvent> {
+        val field = driver.dialogHandler.javaClass.getDeclaredField("pendingDialogs")
+        field.isAccessible = true
+        return field.get(driver.dialogHandler) as Queue<DialogEvent>
     }
 }

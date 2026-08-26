@@ -37,7 +37,9 @@ import java.time.Instant
  *
  * Moved from browser4-rest into the `browser4-swarm` plugin. The swarm session
  * is consumed through [SwarmSessionProvider] so this class never depends on
- * REST module classes.
+ * REST module classes. Session lifecycle (create/close) stays with the REST
+ * session manager; this service only tracks tasks and aborts the pending ones
+ * when the session changes.
  */
 open class SwarmService(
     private val sessionProvider: SwarmSessionProvider,
@@ -45,7 +47,30 @@ open class SwarmService(
 
     private val logger = LoggerFactory.getLogger(SwarmService::class.java)
 
-    val session: GenericAgenticSession get() = sessionProvider.session()
+    /**
+     * The id of the swarm session the pending tasks belong to. When the swarm
+     * session is closed and a new one is created, this id changes and all
+     * pending tasks of the old session are aborted — they can never be
+     * consumed again, and leaving them "queued" forever leaks them across
+     * sessions.
+     * */
+    @Volatile
+    private var swarmSessionId: Long = -1
+
+    val session: GenericAgenticSession
+        get() {
+            val s = sessionProvider.session()
+            val previousId = swarmSessionId
+            if (previousId != -1L && previousId != s.id) {
+                logger.info(
+                    "Swarm session changed (#{} -> #{}), aborting pending tasks of the old session",
+                    previousId, s.id
+                )
+                abortPendingTasks("Swarm session was closed; task dropped")
+            }
+            swarmSessionId = s.id
+            return s
+        }
 
     /**
      * The response status index, the key is the status code, the value is the response's id.
@@ -143,6 +168,24 @@ open class SwarmService(
                     logger.debug("Skipping expired swarm task {} during restore (created={})", id, response.createdTime)
                     return@restore
                 }
+
+                // Non-terminal entries can never resume after a restart: the
+                // worker state (hyperlinks, url pool entries) is gone, so a
+                // queued/processing task would sit in the cache forever and
+                // leak across sessions. Mark them as failed with a clear reason.
+                if (!response.isDone) {
+                    logger.info(
+                        "Swarm task {} was interrupted by a restart and cannot resume; marking as failed",
+                        id
+                    )
+                    response.statusCode = ResourceStatus.SC_GONE
+                    response.isDone = true
+                    response.finishTime = now
+                    response.lastModifiedTime = now
+                    response.message = response.message
+                        ?: "Task was interrupted by a restart and cannot resume. Re-submit the task to retry."
+                }
+
                 responseCache.put(id, response)
                 responseStatusIndex[response.statusCode].add(id)
             }
@@ -171,8 +214,9 @@ open class SwarmService(
     }
 
     /**
-     * Transition swarm tasks that have been stuck in CREATED (queued) state
-     * for longer than [staleTaskTimeoutSeconds] to a TIMEOUT/failed state.
+     * Transition swarm tasks that have been stuck in a non-terminal state
+     * (CREATED/queued or picked up but never finished) for longer than
+     * [staleTaskTimeoutSeconds] to a TIMEOUT/failed state.
      *
      * This catches tasks whose workers hung during fetch (e.g. "Protocol not found"
      * for localhost URLs or other unreachable hosts) and never updated their status.
@@ -181,27 +225,33 @@ open class SwarmService(
     private fun transitionStaleTasks() {
         val now = Instant.now()
         val staleCutoff = now.minusSeconds(staleTaskTimeoutSeconds)
-        val createdStatusCode = ResourceStatus.SC_CREATED
 
         val stale = responseCache.asMap().entries.filter {
             val r = it.value
-            r.statusCode == createdStatusCode
-                && !r.isDone
-                && r.createdTime?.isBefore(staleCutoff) == true
-                && r.startedTime == null // hasn't been picked up by a worker at all
+            // Use lastModifiedTime when available: a task picked up by a worker
+            // has a startedTime, so checking createdTime alone would never catch
+            // tasks whose workers hung mid-fetch. Every status/event update
+            // refreshes lastModifiedTime, so tasks that are actively progressing
+            // (e.g. waiting between bounded retry attempts) are never affected.
+            val lastTouched = r.lastModifiedTime ?: r.createdTime
+            !r.isDone
+                && lastTouched?.isBefore(staleCutoff) == true
         }
 
         for ((id, response) in stale) {
+            responseStatusIndex[response.statusCode]?.remove(id)
             response.statusCode = ResourceStatus.SC_REQUEST_TIMEOUT
             response.pageStatusCode = ProtocolStatusCodes.SC_REQUEST_TIMEOUT
             response.finishTime = now
             response.lastModifiedTime = now
             response.isDone = true
-            responseStatusIndex[createdStatusCode]?.remove(id)
+            response.message = response.message
+                ?: "Task timed out: no progress for ${staleTaskTimeoutSeconds}s. " +
+                "The worker may have hung during fetch. Re-submit the task to retry."
             responseStatusIndex[response.statusCode]?.add(id)
             persistence.append(response)
             logger.warn(
-                "Swarm task {} auto-timed-out after {}s in CREATED state " +
+                "Swarm task {} auto-timed-out after no progress for {}s " +
                 "(staleTaskTimeoutSeconds={}). Likely cause: worker hung during fetch.",
                 id, staleTaskTimeoutSeconds, staleTaskTimeoutSeconds
             )
@@ -209,7 +259,7 @@ open class SwarmService(
 
         if (stale.isNotEmpty()) {
             logger.info(
-                "Transitioned {} stale swarm task(s) from CREATED to TIMEOUT " +
+                "Transitioned {} stale swarm task(s) to TIMEOUT " +
                 "(threshold: {}s)", stale.size, staleTaskTimeoutSeconds
             )
         }
@@ -219,11 +269,18 @@ open class SwarmService(
      * Submit a scraping task
      * */
     override fun submit(request: ScrapeRequest): String {
-        val hyperlink = createScrapeHyperlink(request)
+        // Resolve the session BEFORE the task is cached: the session getter
+        // detects swarm session replacement and aborts pending tasks, and the
+        // freshly submitted task must never be aborted by that check.
+        val s = session
+        require(s is GenericAgenticSession) {
+            "Expected GenericAgenticSession but got ${s::class.simpleName} (uuid=${s.uuid})"
+        }
+        val hyperlink = createScrapeHyperlink(request, s)
         responseCache.put(hyperlink.uuid, hyperlink.response)
         hyperlink.response.id = hyperlink.uuid
         persistence.append(hyperlink.response)
-        session.submit(hyperlink)
+        s.submit(hyperlink)
         logger.debug("Swarm task submitted: {} sql={}", hyperlink.uuid, request.sql)
         return hyperlink.uuid
     }
@@ -233,6 +290,39 @@ open class SwarmService(
      * */
     override fun submit(query: QueryRequest): String {
         return submit(ScrapeRequest(query.toSQL()))
+    }
+
+    /**
+     * Abort all pending (non-terminal) tasks with a clear failure reason.
+     *
+     * Pending tasks belong to a live swarm session: once that session is closed
+     * they can never be consumed again, so they must not stay "queued" forever
+     * (which also leaks them across sessions and restarts). This marks them as
+     * failed with [ResourceStatus.SC_GONE] and persists the transition.
+     *
+     * @param reason the human-readable reason to record in the response message
+     * @return the number of aborted tasks
+     */
+    override fun abortPendingTasks(reason: String): Int {
+        val now = Instant.now()
+        val pending = responseCache.asMap().entries.filter { !it.value.isDone }
+
+        for ((id, response) in pending) {
+            responseStatusIndex[response.statusCode]?.remove(id)
+            response.statusCode = ResourceStatus.SC_GONE
+            response.pageStatusCode = ProtocolStatusCodes.SC_REQUEST_TIMEOUT
+            response.finishTime = now
+            response.lastModifiedTime = now
+            response.isDone = true
+            response.message = response.message ?: reason
+            responseStatusIndex[response.statusCode]?.add(id)
+            persistence.append(response)
+        }
+
+        if (pending.isNotEmpty()) {
+            logger.info("Aborted {} pending swarm task(s): {}", pending.size, reason)
+        }
+        return pending.size
     }
 
     /**
@@ -273,8 +363,8 @@ open class SwarmService(
         )
     }
 
-    private fun createScrapeHyperlink(request: ScrapeRequest): ScrapeHyperlink {
-        return ScrapeHyperlinkFactory.create(request, session) { link ->
+    private fun createScrapeHyperlink(request: ScrapeRequest, agenticSession: GenericAgenticSession): ScrapeHyperlink {
+        return ScrapeHyperlinkFactory.create(request, agenticSession) { link ->
             responseCache.put(link.uuid, link.response)
             responseStatusIndex[link.response.statusCode].add(link.uuid)
             persistence.append(link.response)

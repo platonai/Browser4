@@ -24,7 +24,9 @@ mod config;
 mod daemon;
 mod help;
 mod http;
+mod java;
 mod managed_processes;
+mod webminer;
 mod skills;
 mod snapshot;
 mod snapshot_diff;
@@ -43,6 +45,7 @@ use serde_json::{json, Value};
 
 use args::{
     build_command_args, build_short_option_map, parse_batch_args, parse_batch_json_commands,
+    COMMAND_ARG_ALIASES,
     parse_command_string, parse_global_flags, parse_raw_args, GlobalFlags,
 };
 use commands::{commands_map, is_element_reference};
@@ -58,9 +61,10 @@ use help::{
 };
 use http::{
     call_tool, call_tool_with_result, call_tool_with_timeout_override, cancel_crawl,
-    clear_all_crawls, clear_crawls, crawl_request_timeout, get_command_result, get_command_status,
-    get_crawl_result, get_crawl_status, get_swarm_result, get_swarm_status, is_stale_session_error,
-    make_client, submit_batch_commands, submit_crawl, submit_plain_command,
+    clear_all_crawls, clear_crawls, close_swarm_session, crawl_request_timeout,
+    get_command_result, get_command_status, get_crawl_result, get_crawl_status,
+    get_swarm_result, get_swarm_status, is_stale_session_error, make_client,
+    submit_batch_commands, submit_crawl, submit_plain_command,
     submit_plain_command_with_options, submit_swarm_payload,
     submit_swarm_query, CallToolResult,
 };
@@ -81,6 +85,10 @@ const TEST_TEMPORARY_PROFILE_ENV: &str = "BROWSER4_CLI_TEST_TEMPORARY_PROFILE";
 const AGENT_RUN_FAILURE_POLL_ATTEMPTS: usize = 10;
 const AGENT_RUN_FAILURE_POLL_INTERVAL_MS: u64 = 250;
 const SWARM_SESSION_ID: &str = "SWARM";
+/// When set to "1"/"true", `upgrade` skips the CLI self-upgrade step (npm /
+/// install scripts).  The e2e harness sets this so install/upgrade scenarios
+/// never touch npm or download/execute the real install scripts.
+const CLI_SELF_UPGRADE_SKIP_ENV: &str = "BROWSER4_CLI_SKIP_SELF_UPGRADE";
 
 // ---------------------------------------------------------------------------
 // JSON output support (--json global flag)
@@ -487,6 +495,14 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "profiler-start",
         "profiler-stop",
         "download",
+        "webminer",
+        "webminer-install",
+        "webminer-update",
+        "webminer-version",
+        "webminer-uninstall",
+        "webminer-run-example",
+        "webminer-all",
+        "webminer-views",
     ]
     .into()
 }
@@ -10316,6 +10332,33 @@ async fn handle_swarm_create(
     Ok(())
 }
 
+/// Mark locally tracked pending swarm tasks as "failed (closed)".
+///
+/// Pending tasks (never polled, queued, or processing) can never complete
+/// after their swarm session closes — the backend drops them, so the local
+/// tracking must reflect that instead of showing them "queued" forever.
+/// Completed/failed tasks are left untouched.
+///
+/// Returns the number of tasks marked.
+fn mark_local_swarm_tasks_closed(list: &mut state::AsyncTaskList) -> usize {
+    let mut marked = 0usize;
+    for t in list
+        .tasks
+        .iter_mut()
+        .filter(|t| t.command == "swarm-submit" || t.command == "swarm-query")
+    {
+        let is_pending = t.last_status.is_empty()
+            || t.last_status == "queued"
+            || t.last_status == "processing"
+            || t.last_status == "pending";
+        if is_pending {
+            t.last_status = "failed (closed)".to_string();
+            marked += 1;
+        }
+    }
+    marked
+}
+
 async fn handle_swarm_close(
     client: &Client,
     base_url: &str,
@@ -10334,6 +10377,22 @@ async fn handle_swarm_close(
     };
     json_field("session_id", json!(&session_id));
 
+    // Ask the backend to abort pending swarm tasks BEFORE closing the session,
+    // so they don't stay "queued" forever and leak across sessions. Best-effort:
+    // older backends without the DELETE /api/swarm endpoint (or an unreachable
+    // backend) must not break the close itself.
+    let mut aborted_pending: Option<i64> = None;
+    match close_swarm_session(client, base_url).await {
+        Ok(payload) => {
+            if let Ok(parsed) = serde_json::from_str::<Value>(&payload) {
+                aborted_pending = parsed.get("abortedPendingTasks").and_then(|v| v.as_i64());
+            }
+        }
+        Err(e) => {
+            eprintln!("Note: could not clean up pending swarm tasks on the backend: {e}");
+        }
+    }
+
     // Count tracked swarm tasks before closing (for the summary).
     let existing = read_async_tasks(None);
     let swarm_task_count = existing
@@ -10341,6 +10400,12 @@ async fn handle_swarm_close(
         .iter()
         .filter(|t| t.command == "swarm-submit" || t.command == "swarm-query")
         .count();
+
+    // Mark locally tracked pending tasks as failed (closed) so `swarm list`
+    // reflects the cleanup even when the backend was unreachable.
+    let mut list = existing;
+    let locally_closed = mark_local_swarm_tasks_closed(&mut list);
+    let _ = write_async_tasks(&list, None);
 
     // Close the swarm session — ignore errors if already closed.
     let _ = call_tool(
@@ -10353,11 +10418,22 @@ async fn handle_swarm_close(
     clear_state(None, effective_name);
 
     json_field("closed", json!(true));
+    json_field("aborted_pending_tasks", json!(aborted_pending.unwrap_or(0)));
     if swarm_task_count > 0 {
-        cli_println!(
-            "Swarm session closed. Browser terminated. {} tracked task(s) retained for history. Use `swarm list --clear` to remove.",
-            swarm_task_count
-        );
+        let cleanup_msg = match aborted_pending {
+            Some(n) if n > 0 => format!(" {n} pending task(s) aborted on the backend."),
+            Some(_) => " All pending tasks were already finished.".to_string(),
+            None => String::new(),
+        };
+        if locally_closed > 0 {
+            cli_println!(
+                "Swarm session closed. Browser terminated.{cleanup_msg} {locally_closed} locally tracked pending task(s) marked as failed (closed)."
+            );
+        } else {
+            cli_println!(
+                "Swarm session closed. Browser terminated.{cleanup_msg} {swarm_task_count} tracked task(s) retained for history. Use `swarm list --clear` to remove."
+            );
+        }
         json_field("tracked_tasks_retained", json!(swarm_task_count));
     } else {
         cli_println!("Swarm session closed. Browser terminated.");
@@ -10890,22 +10966,31 @@ async fn handle_swarm_result(
         "resultSet": result_set,
         "pageContentBytes": parsed.get("pageContentBytes").unwrap_or(&json!(null)),
         "error": parsed.get("error").unwrap_or(&json!(null)),
+        "message": parsed.get("message").unwrap_or(&json!(null)),
+        "statusCode": parsed.get("statusCode").unwrap_or(&json!(null)),
     });
     cli_println!(
         "{}",
         serde_json::to_string_pretty(&payload).unwrap_or_default()
     );
 
-    // Guide users when resultSet is empty — distinguish "page never fetched"
-    // from "page fetched but nothing extracted" so the hint doesn't mislead
-    // `swarm query` users whose task was silently dropped/evicted.
-    if is_empty
-        && !parsed
-            .get("error")
-            .and_then(|v| v.as_str())
-            .map(|s| !s.is_empty())
-            .unwrap_or(false)
-    {
+    // Surface the failure reason for terminal non-success tasks so a completed
+    // task with an empty resultSet explains WHY it is empty (page never
+    // fetched, aborted, timed out, ...) instead of guessing.
+    let has_message = parsed
+        .get("message")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+    if is_empty && has_message {
+        cli_println!("Note: {}", parsed["message"].as_str().unwrap_or_default());
+    }
+
+    // Guide users when resultSet is empty and no explicit failure reason was
+    // provided — distinguish "page never fetched" from "page fetched but
+    // nothing extracted" so the hint doesn't mislead `swarm query` users whose
+    // task was silently dropped/evicted.
+    if is_empty && !has_message && !parsed.get("error").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
         let page_content_bytes = parsed
             .get("pageContentBytes")
             .and_then(|v| v.as_i64())
@@ -14017,6 +14102,91 @@ fn format_install_output(runtime: &InstalledBrowser4Runtime) -> Vec<String> {
     lines
 }
 
+/// Outcome of syncing bundled skill files into a runtime install directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SkillsSyncOutcome {
+    /// Number of files written because they were missing or outdated.
+    files_written: usize,
+    /// Total number of bundled skill files.
+    files_total: usize,
+}
+
+/// Format the user-facing message for a skill sync.  Pure function so the
+/// branching logic can be unit-tested.
+fn format_skills_sync_message(outcome: SkillsSyncOutcome, skills_dir: &Path) -> String {
+    if outcome.files_written > 0 {
+        format!(
+            "📦 Unpacked {} skill files to {}",
+            outcome.files_written,
+            skills_dir.display()
+        )
+    } else {
+        format!(
+            "✅ Bundled skill files already up to date at {} ({} files)",
+            skills_dir.display(),
+            outcome.files_total
+        )
+    }
+}
+
+/// Unpack bundled skill files into the runtime's versioned install directory
+/// (`<install_dir>/skills`) so the skills on disk always match the CLI binary.
+///
+/// Runs on every `install` / `upgrade`, including when the runtime was
+/// already present: the CLI binary may embed newer skills than the installed
+/// runtime (e.g. after upgrading the binary alone).  Write-if-changed keeps
+/// re-syncs cheap.  The skills directory sits alongside the runtime, so it
+/// is versioned with the install and `skills path` finds it automatically.
+fn sync_skills_for_runtime(runtime: &InstalledBrowser4Runtime) -> Result<SkillsSyncOutcome, String> {
+    let skills_dir = runtime.install_dir.join("skills");
+    let files_total = skills::bundled_skill_file_count();
+    let files_written = skills::unpack_skills_to(&skills_dir)?;
+    Ok(SkillsSyncOutcome {
+        files_written,
+        files_total,
+    })
+}
+
+/// Format the user-facing message for an AI-agent skills sync (`~/.agents/skills`).
+/// Pure function so the branching logic can be unit-tested.
+fn format_agents_skills_sync_message(outcome: SkillsSyncOutcome, agents_dir: &Path) -> String {
+    if outcome.files_written > 0 {
+        format!(
+            "🤖 Installed {} skill files for AI agents to {}",
+            outcome.files_written,
+            agents_dir.display()
+        )
+    } else {
+        format!(
+            "🤖 Bundled skill files already up to date for AI agents at {}",
+            agents_dir.display()
+        )
+    }
+}
+
+/// Unpack bundled skill files into the AI-agent skills directory
+/// (`~/.agents/skills`, overridable via `BROWSER4_AGENTS_SKILLS_DIR`).
+///
+/// Agents such as Codex load skills from there automatically, so `install` /
+/// `upgrade` keep it in sync with the CLI binary's embedded skills.  Like the
+/// versioned-dir sync this is idempotent (write-if-changed).  Returns `Ok(None)`
+/// when no agents directory can be resolved (no override and no home dir).
+fn sync_skills_to_agents_dir() -> Result<Option<(SkillsSyncOutcome, PathBuf)>, String> {
+    let Some(agents_dir) = skills::agents_skills_dir() else {
+        eprintln!("⚠  Could not resolve the home directory; skipping AI-agent skills install.");
+        return Ok(None);
+    };
+    let files_total = skills::bundled_skill_file_count();
+    let files_written = skills::unpack_skills_to(&agents_dir)?;
+    Ok(Some((
+        SkillsSyncOutcome {
+            files_written,
+            files_total,
+        },
+        agents_dir,
+    )))
+}
+
 async fn handle_install(tool_params: &Value) -> Result<(), String> {
     let tag = tool_params.get("tag").and_then(|value| value.as_str());
     let force = tool_params
@@ -14050,15 +14220,33 @@ async fn handle_install(tool_params: &Value) -> Result<(), String> {
 
     // Unpack bundled skill files into the versioned installation directory.
     // The skills directory is at <install_dir>/skills/ alongside the runtime.
-    if !runtime.reused_existing {
-        let skills_dir = runtime.install_dir.join("skills");
-        match skills::unpack_skills_to(&skills_dir) {
-            Ok(n) => {
-                eprintln!("📦 Unpacked {n} skill files to {}", skills_dir.display());
-            }
-            Err(e) => {
-                eprintln!("⚠  Failed to unpack skill files: {e}");
-            }
+    // This runs on every install — including the reuse fast-path — so the
+    // on-disk skills always match the CLI binary that is installed.  Failure
+    // is non-fatal: the runtime bundle is already installed at this point.
+    let skills_dir = runtime.install_dir.join("skills");
+    match sync_skills_for_runtime(&runtime) {
+        Ok(outcome) => {
+            eprintln!("{}", format_skills_sync_message(outcome, &skills_dir));
+            json_field("skills_dir", json!(skills_dir.display().to_string()));
+            json_field("skills_files_unpacked", json!(outcome.files_written));
+            json_field("skills_files_total", json!(outcome.files_total));
+        }
+        Err(e) => {
+            eprintln!("⚠  Failed to unpack skill files: {e}");
+        }
+    }
+
+    // Also install the bundled skills into the AI-agent skills directory
+    // (`~/.agents/skills`) so agents like Codex can load them automatically.
+    match sync_skills_to_agents_dir() {
+        Ok(Some((outcome, agents_dir))) => {
+            eprintln!("{}", format_agents_skills_sync_message(outcome, &agents_dir));
+            json_field("agents_skills_dir", json!(agents_dir.display().to_string()));
+            json_field("agents_skills_files_unpacked", json!(outcome.files_written));
+        }
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("⚠  Failed to install skill files for AI agents: {e}");
         }
     }
 
@@ -14177,11 +14365,200 @@ fn handle_skills_unpack(tool_params: &Value) -> Result<(), String> {
 
     match skills::unpack_skills_to(&dest_dir) {
         Ok(n) => {
-            cli_println!("Unpacked {} skill files to {}", n, dest_dir.display());
+            if n > 0 {
+                cli_println!("Unpacked {} skill files to {}", n, dest_dir.display());
+            } else {
+                cli_println!(
+                    "Bundled skill files already up to date at {}",
+                    dest_dir.display()
+                );
+            }
             Ok(())
         }
         Err(e) => Err(format!("Failed to unpack skill files: {e}")),
     }
+}
+
+// ---------------------------------------------------------------------------
+// webminer (WebMiner) command handlers
+// ---------------------------------------------------------------------------
+
+/// Forward raw CLI tokens (everything after the command name) to
+/// `java -jar scent-miner.jar`, optionally prefixing a jar command name.
+/// A non-zero child exit code is surfaced as a command failure.
+fn forward_webminer_run(raw_args: &[String], jar_command: Option<&str>) -> Result<(), CliError> {
+    let mut forward: Vec<String> = Vec::new();
+    if let Some(cmd) = jar_command {
+        forward.push(cmd.to_string());
+    }
+    // raw_args[0] is the (possibly rewritten) command name.
+    forward.extend(raw_args.iter().skip(1).cloned());
+
+    match webminer::run_pipeline(&forward) {
+        Ok(0) => Ok(()),
+        Ok(code) => Err(CliError(
+            ExitCode::General,
+            format!("webminer exited with code {code}"),
+        )),
+        Err(e) => Err(CliError(ExitCode::General, e)),
+    }
+}
+
+/// Print the installed/latest/Java summary (shared by `version` and the
+/// bare `webminer` status view).
+async fn print_webminer_status(show_usage: bool) -> Result<(), CliError> {
+    let status = webminer::version_status().await;
+    json_field("installed", json!(status.installed));
+    json_field(
+        "install_dir",
+        json!(status.install_dir.display().to_string()),
+    );
+    json_field(
+        "latest",
+        json!(status.latest.as_ref().map(|l| &l.tag_name)),
+    );
+
+    cli_println!();
+    cli_println!("  webminer (WebMiner) — cluster HTML pages into interactive views");
+    cli_println!("  ----------------------------------------------------------------");
+    match &status.installed {
+        Some(version) => {
+            let size = status
+                .jar_bytes
+                .map(|b| format!("{:.1} MB", b as f64 / 1_048_576.0))
+                .unwrap_or_else(|| "(JAR missing)".to_string());
+            cli_println!("  Installed : {version}  ({size})");
+            cli_println!("  Location  : {}", status.install_dir.display());
+        }
+        None => {
+            cli_println!("  Installed : (none) — run `browser4-cli webminer install`");
+        }
+    }
+    match java::find_java17() {
+        Ok(java) => cli_println!("  Java 17+  : {}", java.display()),
+        Err(e) => cli_println!("  Java 17+  : not found ({e})"),
+    }
+    match (&status.latest, &status.latest_error) {
+        (Some(latest), _) => {
+            let size = latest
+                .jar_size
+                .map(|b| format!("{:.1} MB", b as f64 / 1_048_576.0))
+                .unwrap_or_else(|| "?".to_string());
+            cli_println!("  Latest    : {}  ({size})", latest.tag_name);
+            if let Some(published) = &latest.published_at {
+                cli_println!("  Published : {published}");
+            }
+            if status.installed.as_deref() != Some(latest.tag_name.as_str()) {
+                cli_println!();
+                cli_println!("  Update available! Run: browser4-cli webminer update");
+            }
+        }
+        (None, Some(err)) => {
+            cli_println!("  Latest    : (cannot reach GitHub or OSS mirror: {err})");
+        }
+        (None, None) => {}
+    }
+    if show_usage {
+        cli_println!();
+        cli_println!("  Subcommands:");
+        cli_println!("    install [version]   Download and install scent-miner.jar (GitHub → OSS mirror)");
+        cli_println!("    update              Update to the latest release");
+        cli_println!("    version             Show installed and latest versions");
+        cli_println!("    uninstall           Remove the installed release");
+        cli_println!("    run-example         Download the sample dataset and run the full pipeline (needs 7-Zip)");
+        cli_println!("    all <html-dir>      Run the full pipeline on downloaded HTML files");
+        cli_println!("    views <result-dir>  Rebuild the interactive views from an existing run");
+        cli_println!();
+        cli_println!("  Other commands are forwarded to scent-miner.jar. See `browser4-cli help webminer`.");
+    }
+    cli_println!();
+    Ok(())
+}
+
+async fn handle_webminer(raw_args: &[String]) -> Result<(), CliError> {
+    // Bare `webminer` → status + usage.  Anything else is forwarded
+    // verbatim to scent-miner.jar: known subcommands (install, all, views …)
+    // are rewritten to webminer-<sub> before dispatch, so this branch
+    // covers arbitrary JAR commands like `webminer encode <dir>`.
+    if raw_args.len() <= 1 {
+        return print_webminer_status(true).await;
+    }
+    forward_webminer_run(raw_args, None)
+}
+
+async fn handle_webminer_install(tool_params: &Value) -> Result<(), CliError> {
+    let version = tool_params.get("version").and_then(|v| v.as_str());
+    let force = tool_params
+        .get("force")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let outcome = webminer::install(version, force)
+        .await
+        .map_err(CliError::from)?;
+    json_field("tag", json!(&outcome.tag));
+    json_field(
+        "install_dir",
+        json!(outcome.install_dir.display().to_string()),
+    );
+    json_field("reused_existing", json!(outcome.reused_existing));
+    json_field("source_url", json!(&outcome.source_url));
+    if outcome.reused_existing {
+        cli_println!("✓ webminer {} is already installed.", outcome.tag);
+    } else {
+        cli_println!(
+            "✓ webminer {} installed to {}",
+            outcome.tag,
+            outcome.install_dir.display()
+        );
+    }
+    Ok(())
+}
+
+async fn handle_webminer_update() -> Result<(), CliError> {
+    let outcome = webminer::update().await.map_err(CliError::from)?;
+    json_field("tag", json!(&outcome.tag));
+    json_field("reused_existing", json!(outcome.reused_existing));
+    if outcome.reused_existing {
+        cli_println!("✓ webminer is up to date ({}).", outcome.tag);
+    } else {
+        cli_println!("✓ webminer updated to {}.", outcome.tag);
+    }
+    Ok(())
+}
+
+async fn handle_webminer_version() -> Result<(), CliError> {
+    print_webminer_status(false).await
+}
+
+fn handle_webminer_uninstall() -> Result<(), CliError> {
+    let root = webminer::uninstall().map_err(CliError::from)?;
+    json_field("install_dir", json!(root.display().to_string()));
+    if root.is_dir() {
+        cli_println!("No webminer installation found at {}.", root.display());
+    } else {
+        cli_println!("✓ Removed webminer installation at {}.", root.display());
+    }
+    Ok(())
+}
+
+async fn handle_webminer_run_example(raw_args: &[String]) -> Result<(), CliError> {
+    let forward: Vec<String> = raw_args.iter().skip(1).cloned().collect();
+    match webminer::run_example(&forward).await {
+        Ok(0) => Ok(()),
+        Ok(code) => Err(CliError(
+            ExitCode::General,
+            format!("webminer exited with code {code}"),
+        )),
+        Err(e) => Err(CliError(ExitCode::General, e)),
+    }
+}
+
+async fn handle_webminer_all(raw_args: &[String]) -> Result<(), CliError> {
+    forward_webminer_run(raw_args, Some("all"))
+}
+
+async fn handle_webminer_views(raw_args: &[String]) -> Result<(), CliError> {
+    forward_webminer_run(raw_args, Some("views"))
 }
 
 // ---------------------------------------------------------------------------
@@ -15329,15 +15706,144 @@ fn format_upgrade_output(runtime: &InstalledBrowser4Runtime, force: bool) -> Vec
     ]
 }
 
-/// Check whether `npm` is available on PATH.
-fn is_npm_available() -> bool {
-    std::process::Command::new("npm")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
+/// Names to try when invoking npm.
+///
+/// On Windows npm ships as `npm.cmd` (a batch shim) — plain `npm` is not
+/// resolvable because CreateProcess does not consult PATHEXT.
+fn npm_command_names() -> &'static [&'static str] {
+    #[cfg(windows)]
+    {
+        &["npm.cmd", "npm"]
+    }
+    #[cfg(not(windows))]
+    {
+        &["npm"]
+    }
+}
+
+/// Locate a working npm invocation, or `None` when npm is not on PATH.
+fn resolve_npm() -> Option<&'static str> {
+    npm_command_names().iter().copied().find(|name| {
+        std::process::Command::new(name)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    })
+}
+
+/// Whether the CLI self-upgrade step should be skipped entirely.
+///
+/// The e2e harness sets this so install/upgrade scenarios never touch npm or
+/// download/execute the real install scripts from the public CDN.
+fn self_upgrade_skip_requested() -> bool {
+    std::env::var(CLI_SELF_UPGRADE_SKIP_ENV)
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
+}
+
+/// URL of the platform-specific install script used to self-upgrade the CLI.
+fn cli_install_script_url() -> &'static str {
+    #[cfg(windows)]
+    {
+        "https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1"
+    }
+    #[cfg(not(windows))]
+    {
+        "https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh"
+    }
+}
+
+/// Download the CLI install script to `target` using the CLI's own HTTP stack.
+///
+/// This avoids depending on PowerShell's `irm` (or curl) for the script fetch:
+/// `irm` can be blocked by execution policy, antivirus, or a broken PATH even
+/// when plain HTTPS from the CLI works fine.
+fn download_cli_install_script(url: &str, target: &Path) -> Result<(), String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("Cannot build HTTP client: {e}"))?;
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|e| format!("Download failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Download failed with status: {}", response.status()));
+    }
+    let bytes = response.bytes().map_err(|e| format!("Read failed: {e}"))?;
+    if bytes.is_empty() {
+        return Err("Downloaded install script is empty.".to_string());
+    }
+    std::fs::write(target, &bytes)
+        .map_err(|e| format!("Cannot write {}: {e}", target.display()))?;
+    Ok(())
+}
+
+/// Candidate PowerShell executables, most preferred first.
+///
+/// The absolute Windows PowerShell path comes first: it is immune to a PATH
+/// where a non-executable `powershell.exe` shadow (e.g. a leftover shim or
+/// decoy file) makes CreateProcess fail with "Access is denied (os error 5)".
+#[cfg(windows)]
+fn windows_powershell_candidates() -> Vec<String> {
+    let system_root = std::env::var("SystemRoot")
+        .or_else(|_| std::env::var("WINDIR"))
+        .unwrap_or_else(|_| r"C:\Windows".to_string());
+    let system_root = system_root.trim_end_matches('\\');
+    vec![
+        format!(r"{system_root}\System32\WindowsPowerShell\v1.0\powershell.exe"),
+        "powershell.exe".to_string(),
+        "pwsh.exe".to_string(),
+    ]
+}
+
+/// Arguments for running the downloaded install script under PowerShell.
+///
+/// `-SkipBackend` stops the script from re-running `browser4-cli install` —
+/// the runtime upgrade is handled by the caller right after this step.
+#[cfg(windows)]
+fn windows_install_script_args(script_path: &Path, tag: Option<&str>) -> Vec<String> {
+    let mut args = vec![
+        "-NoProfile".to_string(),
+        "-NonInteractive".to_string(),
+        "-ExecutionPolicy".to_string(),
+        "Bypass".to_string(),
+        "-File".to_string(),
+        script_path.display().to_string(),
+        "-SkipBackend".to_string(),
+        "-Silent".to_string(),
+    ];
+    if let Some(tag) = tag {
+        args.push("-Version".to_string());
+        args.push(tag.to_string());
+    }
+    args
+}
+
+/// Actionable guidance for a failed install-script spawn, keyed on the error
+/// kind (never the localized message text).
+fn upgrade_spawn_advice(err: &std::io::Error) -> &'static str {
+    match err.kind() {
+        std::io::ErrorKind::NotFound => {
+            "PowerShell was not found on this system. Install Node.js and run \
+             'npm install -g browser4-cli', or run the install script manually \
+             from https://browser4.io."
+        }
+        std::io::ErrorKind::PermissionDenied => {
+            "Windows refused to start the shell (access denied). This is usually \
+             caused by antivirus or AppLocker blocking PowerShell, or by a \
+             non-executable 'powershell.exe' earlier in PATH. Run the install \
+             script manually from an elevated PowerShell: irm \
+             https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex"
+        }
+        _ => {
+            "Run 'npm install -g browser4-cli' or the install script manually \
+             from https://browser4.io."
+        }
+    }
 }
 
 /// Upgrade the `browser4-cli` binary itself.
@@ -15345,8 +15851,10 @@ fn is_npm_available() -> bool {
 /// Strategy:
 /// 1. If `npm` is on PATH, use `npm install -g browser4-cli` (fast, atomic, handles running binary).
 /// 2. Otherwise, use the platform-specific install script from the README.
-///    - Windows: PowerShell with `irm … | iex`
-///    - Linux / macOS: `curl … | bash`
+///    - Windows: download the script with the CLI's own HTTP stack (immune to
+///      a blocked `irm` or PowerShell), then run it via PowerShell resolved by
+///      absolute path first, with `powershell` / `pwsh` on PATH as fallbacks.
+///    - Linux / macOS: `curl … | bash`.
 ///
 /// On Unix the running binary can be safely replaced in-place (the old inode
 /// stays alive until this process exits).  On Windows the install script may
@@ -15355,8 +15863,17 @@ fn is_npm_available() -> bool {
 ///
 /// All failures are non-fatal — a warning is printed and the runtime upgrade continues.
 async fn upgrade_cli_binary(tag: Option<&str>) {
+    // Test / e2e isolation: never touch npm or execute the real install scripts.
+    if self_upgrade_skip_requested() {
+        eprintln!(
+            "Skipping browser4-cli self-upgrade ({} is set).",
+            CLI_SELF_UPGRADE_SKIP_ENV
+        );
+        return;
+    }
+
     // ── 1. npm (preferred) ──
-    if is_npm_available() {
+    if let Some(npm) = resolve_npm() {
         eprintln!("Upgrading browser4-cli binary via npm...");
 
         let package_spec = match tag {
@@ -15369,7 +15886,7 @@ async fn upgrade_cli_binary(tag: Option<&str>) {
         };
 
         let result = tokio::task::spawn_blocking(move || {
-            std::process::Command::new("npm")
+            std::process::Command::new(npm)
                 .args(["install", "-g", &package_spec])
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
@@ -15403,56 +15920,102 @@ async fn upgrade_cli_binary(tag: Option<&str>) {
 
     #[cfg(windows)]
     {
-        let result = tokio::task::spawn_blocking(|| {
-            std::process::Command::new("powershell.exe")
-                .args([
-                    "-NoProfile",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-Command",
-                    "irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex",
-                ])
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .output()
-        })
-        .await;
+        // a) Fetch the script with our own HTTP stack — works even when
+        //    PowerShell / `irm` is blocked.
+        let script_url = cli_install_script_url().to_string();
+        let tmp_dir =
+            std::env::temp_dir().join(format!("browser4-cli-upgrade-{}", std::process::id()));
+        let script_path = tmp_dir.join("install-browser4-cli.ps1");
 
-        match result {
-            Ok(Ok(output)) if output.status.success() => {
-                cli_println!("✅ browser4-cli upgraded via install script.");
-            }
-            Ok(Ok(output)) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let combined = if stderr.is_empty() {
-                    String::from_utf8_lossy(&output.stdout).trim().to_string()
-                } else {
-                    stderr.trim().to_string()
-                };
-                eprintln!("⚠  Install script failed: {combined}");
-                if combined.to_lowercase().contains("access")
-                    || combined.to_lowercase().contains("denied")
-                    || combined.to_lowercase().contains("locked")
-                {
-                    eprintln!("   The binary may be locked because browser4-cli is running.");
-                    eprintln!(
-                        "   Close all browser4-cli processes and run 'browser4-cli upgrade' again,"
-                    );
-                    eprintln!(
-                        "   or install the latest version manually from https://browser4.io."
-                    );
-                }
-                eprintln!("   The runtime upgrade will still proceed.");
-            }
+        let download_result = {
+            let script_path = script_path.clone();
+            tokio::task::spawn_blocking(move || -> Result<(), String> {
+                std::fs::create_dir_all(&tmp_dir).map_err(|e| {
+                    format!("Cannot create temp directory {}: {e}", tmp_dir.display())
+                })?;
+                download_cli_install_script(&script_url, &script_path)
+            })
+            .await
+        };
+
+        match download_result {
+            Ok(Ok(())) => {}
             Ok(Err(e)) => {
-                eprintln!("⚠  Failed to run install script: {e}");
+                eprintln!("⚠  Could not download the install script: {e}");
+                eprintln!("   Run it manually from an elevated PowerShell:");
+                eprintln!("     irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex");
                 eprintln!("   The runtime upgrade will still proceed.");
+                return;
             }
             Err(e) => {
-                eprintln!("⚠  Failed to spawn PowerShell: {e}");
+                eprintln!("⚠  Install-script download task failed: {e}");
                 eprintln!("   The runtime upgrade will still proceed.");
+                return;
             }
         }
+
+        // b) Run the script.  Prefer the absolute Windows PowerShell path so a
+        //    poisoned PATH cannot break the spawn; fall back to `powershell`
+        //    / `pwsh` on PATH (PowerShell Core).
+        let mut last_spawn_error: Option<std::io::Error> = None;
+        for shell in windows_powershell_candidates() {
+            let args = windows_install_script_args(&script_path, tag);
+            let result = tokio::task::spawn_blocking(move || {
+                std::process::Command::new(&shell)
+                    .args(&args)
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .output()
+            })
+            .await;
+
+            match result {
+                Ok(Ok(output)) if output.status.success() => {
+                    cli_println!("✅ browser4-cli upgraded via install script.");
+                    return;
+                }
+                Ok(Ok(output)) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let combined = if stderr.is_empty() {
+                        String::from_utf8_lossy(&output.stdout).trim().to_string()
+                    } else {
+                        stderr.trim().to_string()
+                    };
+                    eprintln!("⚠  Install script failed: {combined}");
+                    if combined.to_lowercase().contains("access")
+                        || combined.to_lowercase().contains("denied")
+                        || combined.to_lowercase().contains("locked")
+                    {
+                        eprintln!("   The binary may be locked because browser4-cli is running.");
+                        eprintln!("   Close all browser4-cli processes and run 'browser4-cli upgrade' again,");
+                        eprintln!("   or install the latest version manually from https://browser4.io.");
+                    }
+                    eprintln!("   The runtime upgrade will still proceed.");
+                    return;
+                }
+                Ok(Err(e)) => {
+                    // Spawn failed for this shell — remember it and try the
+                    // next candidate before giving up.
+                    last_spawn_error = Some(e);
+                }
+                Err(e) => {
+                    eprintln!("⚠  Failed to run install script (task error): {e}");
+                    eprintln!("   The runtime upgrade will still proceed.");
+                    return;
+                }
+            }
+        }
+
+        match last_spawn_error {
+            Some(e) => {
+                eprintln!("⚠  Failed to run install script: {e}");
+                eprintln!("   {}", upgrade_spawn_advice(&e));
+            }
+            None => {
+                eprintln!("⚠  Install script did not run (no usable PowerShell found).");
+            }
+        }
+        eprintln!("   The runtime upgrade will still proceed.");
     }
     #[cfg(not(windows))]
     {
@@ -15490,6 +16053,7 @@ async fn upgrade_cli_binary(tag: Option<&str>) {
                     eprintln!("   Install npm first, or run the install script manually.");
                 } else {
                     eprintln!("⚠  Failed to run install script: {e}");
+                    eprintln!("   {}", upgrade_spawn_advice(&e));
                 }
                 eprintln!("   The runtime upgrade will still proceed.");
             }
@@ -15550,6 +16114,37 @@ async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
     );
     json_field("reused_existing", json!(runtime.reused_existing));
     json_field("source_url", json!(&runtime.download_url));
+
+    // Unpack bundled skill files into the (possibly new) versioned install
+    // directory.  `upgrade` may have just replaced the CLI binary with one
+    // that embeds newer skills, so always re-sync — write-if-changed makes
+    // the no-op case cheap.  Failure is non-fatal.
+    let skills_dir = runtime.install_dir.join("skills");
+    match sync_skills_for_runtime(&runtime) {
+        Ok(outcome) => {
+            eprintln!("{}", format_skills_sync_message(outcome, &skills_dir));
+            json_field("skills_dir", json!(skills_dir.display().to_string()));
+            json_field("skills_files_unpacked", json!(outcome.files_written));
+            json_field("skills_files_total", json!(outcome.files_total));
+        }
+        Err(e) => {
+            eprintln!("⚠  Failed to unpack skill files: {e}");
+        }
+    }
+
+    // Keep the AI-agent skills directory (`~/.agents/skills`) in sync too.
+    match sync_skills_to_agents_dir() {
+        Ok(Some((outcome, agents_dir))) => {
+            eprintln!("{}", format_agents_skills_sync_message(outcome, &agents_dir));
+            json_field("agents_skills_dir", json!(agents_dir.display().to_string()));
+            json_field("agents_skills_files_unpacked", json!(outcome.files_written));
+        }
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("⚠  Failed to install skill files for AI agents: {e}");
+        }
+    }
+
     Ok(())
 }
 
@@ -17288,6 +17883,15 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "config-get"
         && command != "config-set"
         && command != "config-delete"
+        // webminer runs a local Java tool — no Browser4 server needed.
+        && command != "webminer"
+        && command != "webminer-install"
+        && command != "webminer-update"
+        && command != "webminer-version"
+        && command != "webminer-uninstall"
+        && command != "webminer-run-example"
+        && command != "webminer-all"
+        && command != "webminer-views"
 }
 
 /// Commands that require a web page to already be loaded in the browser.
@@ -17515,6 +18119,28 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         }
         return None;
     }
+    // "webminer" works standalone (webminer) AND as a prefix
+    // (webminer install / all / views ...).  Known subcommands are
+    // rewritten to their flat forms; unknown ones (arbitrary JAR commands
+    // like `webminer encode <dir>`) fall through so the bare command
+    // handler can forward them verbatim to scent-miner.jar.
+    if prefix == "webminer" {
+        let known_subs = [
+            "install",
+            "update",
+            "version",
+            "uninstall",
+            "run-example",
+            "all",
+            "views",
+        ];
+        if known_subs.contains(&sub.as_str()) {
+            let mut rewritten = vec![format!("webminer-{}", sub)];
+            rewritten.extend(args[2..].iter().cloned());
+            return Some(rewritten);
+        }
+        return None;
+    }
     let rewritten_command = match prefix {
         "swarm" => format!("swarm-{}", sub),
         "agent" => format!("agent-{}", sub),
@@ -17620,6 +18246,13 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "profiler-start" => Some("profiler start"),
         "profiler-stop" => Some("profiler stop"),
         "profiles-list" => Some("profiles list"),
+        "webminer-install" => Some("webminer install"),
+        "webminer-update" => Some("webminer update"),
+        "webminer-version" => Some("webminer version"),
+        "webminer-uninstall" => Some("webminer uninstall"),
+        "webminer-run-example" => Some("webminer run-example"),
+        "webminer-all" => Some("webminer all"),
+        "webminer-views" => Some("webminer views"),
         _ => None,
     }
 }
@@ -17876,7 +18509,7 @@ fn compile_batch_request(
             Some(&nested_bool_opts),
         );
         let arg_names: Vec<&str> = cmd_def.args.iter().map(|arg| arg.name).collect();
-        let parsed = match build_command_args(&raw_parsed, &arg_names) {
+        let parsed = match build_command_args(&raw_parsed, &arg_names, COMMAND_ARG_ALIASES) {
             Ok(parsed) => parsed,
             Err(error) => {
                 if push_batch_local_failure(&mut entries, spec, error, bail) {
@@ -18940,7 +19573,8 @@ async fn run(
     let (short_to_long, bool_opts) = build_short_option_map(cmd_def.options);
     let raw_parsed = parse_raw_args(&global.args, Some(&short_to_long), Some(&bool_opts));
     let arg_names: Vec<&str> = cmd_def.args.iter().map(|a| a.name).collect();
-    let parsed = build_command_args(&raw_parsed, &arg_names).map_err(|e| e.to_string())?;
+    let parsed =
+        build_command_args(&raw_parsed, &arg_names, COMMAND_ARG_ALIASES).map_err(|e| e.to_string())?;
 
     // Validate required positional arguments (fast-fail for malformed commands).
     validate_required_args(cmd_def, &parsed)?;
@@ -18962,6 +19596,21 @@ async fn run(
     // Resolve tool name and parameters
     let tool_name = (cmd_def.tool_name_fn)(&parsed);
     let mut tool_params = (cmd_def.tool_params_fn)(&parsed);
+
+    // Early validation for cookie/storage domain options — an explicitly
+    // provided but invalid domain (e.g. "." or "a b.com") must fail loudly
+    // instead of silently falling back to "no domain", which would broaden
+    // the cookie filter or target the wrong page domain.  Only the commands
+    // whose tool_params_fn sets the `_invalid_domain` sentinel are checked
+    // (state-save/state-load accept no --domain option and never set it).
+    if matches!(command, "cookie-set" | "cookie-delete" | "cookie-list") {
+        if let Some(bad) = tool_params.get("_invalid_domain").and_then(|v| v.as_str()) {
+            return Err(CliError(
+                ExitCode::Usage,
+                format!("invalid cookie/storage domain: '{bad}'"),
+            ));
+        }
+    }
 
     // Early validation for grep commands — at least one of <pattern> or -e
     // must be provided, so catch the missing-pattern case before server start.
@@ -19068,6 +19717,30 @@ async fn run(
         }
         "config-delete" => {
             handle_config_delete(&client, &base_url, &tool_params).await?;
+        }
+        "webminer" => {
+            handle_webminer(&global.args).await?;
+        }
+        "webminer-install" => {
+            handle_webminer_install(&tool_params).await?;
+        }
+        "webminer-update" => {
+            handle_webminer_update().await?;
+        }
+        "webminer-version" => {
+            handle_webminer_version().await?;
+        }
+        "webminer-uninstall" => {
+            handle_webminer_uninstall()?;
+        }
+        "webminer-run-example" => {
+            handle_webminer_run_example(&global.args).await?;
+        }
+        "webminer-all" => {
+            handle_webminer_all(&global.args).await?;
+        }
+        "webminer-views" => {
+            handle_webminer_views(&global.args).await?;
         }
         "install" => {
             handle_install(&tool_params).await?;
@@ -22211,6 +22884,110 @@ mod tests {
     }
 
     #[test]
+    fn test_format_skills_sync_message_unpacked() {
+        let msg = format_skills_sync_message(
+            SkillsSyncOutcome {
+                files_written: 12,
+                files_total: 33,
+            },
+            Path::new("/tmp/browser4/skills"),
+        );
+        assert!(msg.contains("Unpacked 12 skill files to"), "got: {msg}");
+        assert!(msg.contains("/tmp/browser4/skills"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_format_skills_sync_message_up_to_date() {
+        let msg = format_skills_sync_message(
+            SkillsSyncOutcome {
+                files_written: 0,
+                files_total: 33,
+            },
+            Path::new("/tmp/browser4/skills"),
+        );
+        assert!(msg.contains("already up to date"), "got: {msg}");
+        assert!(msg.contains("33"), "expected total in message, got: {msg}");
+    }
+
+    #[test]
+    fn test_format_agents_skills_sync_message_unpacked() {
+        let msg = format_agents_skills_sync_message(
+            SkillsSyncOutcome {
+                files_written: 33,
+                files_total: 33,
+            },
+            Path::new("/home/user/.agents/skills"),
+        );
+        assert!(
+            msg.contains("Installed 33 skill files for AI agents to"),
+            "got: {msg}"
+        );
+        assert!(msg.contains("/home/user/.agents/skills"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_format_agents_skills_sync_message_up_to_date() {
+        let msg = format_agents_skills_sync_message(
+            SkillsSyncOutcome {
+                files_written: 0,
+                files_total: 33,
+            },
+            Path::new("/home/user/.agents/skills"),
+        );
+        assert!(
+            msg.contains("already up to date for AI agents"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_agents_skills_dir_env_override() {
+        let tmp = test_temp_dir();
+        let guard = set_env("BROWSER4_AGENTS_SKILLS_DIR", tmp.path().to_str().unwrap());
+        let resolved = skills::agents_skills_dir().expect("agents dir");
+        let expected = tmp.path().canonicalize().unwrap_or_else(|_| tmp.path().to_path_buf());
+        assert_eq!(resolved, expected, "override should be used as-is");
+
+        // Reject flag-looking values and fall back to the default.
+        drop(guard);
+        let guard = set_env("BROWSER4_AGENTS_SKILLS_DIR", "--bad");
+        let home = dirs::home_dir().expect("home dir");
+        assert_eq!(
+            skills::agents_skills_dir().expect("default agents dir"),
+            home.join(".agents").join("skills"),
+            "flag-like override should fall back to ~/.agents/skills"
+        );
+        drop(guard);
+    }
+
+    #[test]
+    fn test_unpack_skills_to_is_idempotent() {
+        let tmp = test_temp_dir();
+        let total = skills::bundled_skill_file_count();
+        assert!(total > 0, "expected bundled skills embedded by build.rs");
+
+        // First unpack writes every bundled file.
+        let first = skills::unpack_skills_to(tmp.path()).expect("first unpack");
+        assert_eq!(first, total, "first unpack should write every file");
+
+        // Second unpack skips identical files — nothing rewritten.
+        let second = skills::unpack_skills_to(tmp.path()).expect("second unpack");
+        assert_eq!(second, 0, "second unpack should skip identical files");
+
+        // Tampering with one file forces a rewrite of exactly that file.
+        let skill_md = tmp.path().join("browser4-cli").join("SKILL.md");
+        let original = std::fs::read(&skill_md).expect("read SKILL.md");
+        std::fs::write(&skill_md, b"tampered").expect("tamper SKILL.md");
+        let third = skills::unpack_skills_to(tmp.path()).expect("third unpack");
+        assert_eq!(third, 1, "only the tampered file should be rewritten");
+        assert_eq!(
+            std::fs::read(&skill_md).expect("re-read SKILL.md"),
+            original,
+            "SKILL.md should be restored to the bundled content"
+        );
+    }
+
+    #[test]
     fn test_format_upgrade_output_already_latest() {
         let runtime = make_test_runtime(true);
         let lines = format_upgrade_output(&runtime, false);
@@ -25196,6 +25973,91 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    // -----------------------------------------------------------------------
+    // swarm close cleanup tests (issue #577)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mark_local_swarm_tasks_closed_marks_only_pending_swarm_tasks() {
+        let mut list = state::AsyncTaskList {
+            tasks: vec![
+                state::AsyncTaskEntry {
+                    task_id: "t1".to_string(),
+                    command: "swarm-query".to_string(),
+                    description: "https://example.com".to_string(),
+                    submitted_at: "s1".to_string(),
+                    last_status: "queued".to_string(),
+                    completed_at: None,
+                },
+                state::AsyncTaskEntry {
+                    task_id: "t2".to_string(),
+                    command: "swarm-submit".to_string(),
+                    description: "https://example.org".to_string(),
+                    submitted_at: "s2".to_string(),
+                    last_status: "processing".to_string(),
+                    completed_at: None,
+                },
+                state::AsyncTaskEntry {
+                    task_id: "t3".to_string(),
+                    command: "swarm-submit".to_string(),
+                    description: "https://example.net".to_string(),
+                    submitted_at: "s3".to_string(),
+                    last_status: String::new(), // never polled
+                    completed_at: None,
+                },
+                state::AsyncTaskEntry {
+                    task_id: "t4".to_string(),
+                    command: "swarm-query".to_string(),
+                    description: "https://example.edu".to_string(),
+                    submitted_at: "s4".to_string(),
+                    last_status: "completed".to_string(),
+                    completed_at: Some("c4".to_string()),
+                },
+                state::AsyncTaskEntry {
+                    task_id: "t5".to_string(),
+                    command: "swarm-query".to_string(),
+                    description: "https://example.io".to_string(),
+                    submitted_at: "s5".to_string(),
+                    last_status: "failed (timeout)".to_string(),
+                    completed_at: Some("c5".to_string()),
+                },
+                state::AsyncTaskEntry {
+                    task_id: "t6".to_string(),
+                    command: "crawl".to_string(),
+                    description: "https://example.xyz".to_string(),
+                    submitted_at: "s6".to_string(),
+                    last_status: "queued".to_string(),
+                    completed_at: None,
+                },
+            ],
+        };
+
+        let marked = mark_local_swarm_tasks_closed(&mut list);
+
+        assert_eq!(marked, 3, "pending swarm tasks must be marked");
+        let status = |id: &str| {
+            list.tasks
+                .iter()
+                .find(|t| t.task_id == id)
+                .unwrap()
+                .last_status
+                .clone()
+        };
+        assert_eq!(status("t1"), "failed (closed)");
+        assert_eq!(status("t2"), "failed (closed)");
+        assert_eq!(status("t3"), "failed (closed)");
+        assert_eq!(status("t4"), "completed", "completed tasks must be untouched");
+        assert_eq!(status("t5"), "failed (timeout)", "failed tasks must be untouched");
+        assert_eq!(status("t6"), "queued", "non-swarm tasks must be untouched");
+    }
+
+    #[test]
+    fn mark_local_swarm_tasks_closed_handles_empty_list() {
+        let mut list = state::AsyncTaskList::default();
+        let marked = mark_local_swarm_tasks_closed(&mut list);
+        assert_eq!(marked, 0);
+    }
+
     // =========================================================================
     // attach --extension tests
     // =========================================================================
@@ -25811,6 +26673,240 @@ mod tests {
         );
     }
 
+    // webminer (WebMiner) command rewriting / dispatch helpers
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn rewrite_prefixed_command_supports_webminer_install() {
+        let rewritten = rewrite_prefixed_command(&[
+            "webminer".to_string(),
+            "install".to_string(),
+            "v0.0.7".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "webminer-install");
+        assert_eq!(rewritten[1], "v0.0.7");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_webminer_all_and_views() {
+        let rewritten = rewrite_prefixed_command(&[
+            "webminer".to_string(),
+            "all".to_string(),
+            "./html-pages".to_string(),
+            "--max-files".to_string(),
+            "50".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "webminer-all");
+        assert_eq!(rewritten[1], "./html-pages");
+        assert_eq!(rewritten[2], "--max-files");
+        assert_eq!(rewritten[3], "50");
+
+        let rewritten = rewrite_prefixed_command(&[
+            "webminer".to_string(),
+            "views".to_string(),
+            "out/kmeans-result/p1".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "webminer-views");
+        assert_eq!(rewritten[1], "out/kmeans-result/p1");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_webminer_management_subs() {
+        for sub in ["update", "version", "uninstall", "run-example"] {
+            let rewritten =
+                rewrite_prefixed_command(&["webminer".to_string(), sub.to_string()]).unwrap();
+            assert_eq!(rewritten[0], format!("webminer-{sub}"));
+            assert_eq!(rewritten.len(), 1);
+        }
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_webminer_unknown_subcommand_passes_through() {
+        // Unknown subcommands (arbitrary JAR commands) must NOT be rewritten —
+        // the bare `webminer` handler forwards them verbatim.
+        let result = rewrite_prefixed_command(&[
+            "webminer".to_string(),
+            "encode".to_string(),
+            "./html-pages".to_string(),
+        ]);
+        assert!(result.is_none(), "unknown webminer subcommands pass through");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_webminer_bare_is_not_rewritten() {
+        assert!(rewrite_prefixed_command(&["webminer".to_string()]).is_none());
+    }
+
+    #[test]
+    fn preferred_spaced_command_form_includes_webminer_subcommands() {
+        assert_eq!(
+            preferred_spaced_command_form("webminer-install"),
+            Some("webminer install")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("webminer-update"),
+            Some("webminer update")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("webminer-version"),
+            Some("webminer version")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("webminer-uninstall"),
+            Some("webminer uninstall")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("webminer-run-example"),
+            Some("webminer run-example")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("webminer-all"),
+            Some("webminer all")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("webminer-views"),
+            Some("webminer views")
+        );
+        // The bare group command stays valid (status/help view), like `skills`.
+        assert_eq!(preferred_prefixed_group_form("webminer"), None);
+    }
+
+    #[test]
+    fn no_snapshot_commands_includes_webminer() {
+        let cmds = no_snapshot_commands();
+        for name in [
+            "webminer",
+            "webminer-install",
+            "webminer-update",
+            "webminer-version",
+            "webminer-uninstall",
+            "webminer-run-example",
+            "webminer-all",
+            "webminer-views",
+        ] {
+            assert!(cmds.contains(name), "{name} should be in no_snapshot_commands");
+        }
+    }
+
+    #[test]
+    fn should_ensure_server_running_excludes_webminer() {
+        // webminer runs a local Java tool — it must never auto-start the
+        // Browser4 server.
+        for name in [
+            "webminer",
+            "webminer-install",
+            "webminer-update",
+            "webminer-version",
+            "webminer-uninstall",
+            "webminer-run-example",
+            "webminer-all",
+            "webminer-views",
+        ] {
+            assert!(
+                !should_ensure_server_running(name),
+                "{name} should not ensure the server is running"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // CLI self-upgrade (upgrade_cli_binary) tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn npm_command_names_prefer_cmd_shim_on_windows() {
+        #[cfg(windows)]
+        assert_eq!(npm_command_names(), &["npm.cmd", "npm"]);
+        #[cfg(not(windows))]
+        assert_eq!(npm_command_names(), &["npm"]);
+    }
+
+    #[test]
+    fn self_upgrade_skip_requested_respects_env() {
+        assert!(!self_upgrade_skip_requested(), "default must not skip");
+        let _guard = set_env(CLI_SELF_UPGRADE_SKIP_ENV, "1");
+        assert!(self_upgrade_skip_requested(), "'1' must skip");
+        let _guard2 = set_env(CLI_SELF_UPGRADE_SKIP_ENV, "true");
+        assert!(self_upgrade_skip_requested(), "'true' must skip");
+        let _guard3 = set_env(CLI_SELF_UPGRADE_SKIP_ENV, "0");
+        assert!(!self_upgrade_skip_requested(), "'0' must not skip");
+    }
+
+    #[test]
+    fn cli_install_script_url_matches_platform() {
+        let url = cli_install_script_url();
+        assert!(url.starts_with("https://"));
+        #[cfg(windows)]
+        assert!(url.ends_with(".ps1"), "Windows URL must be the .ps1 script: {url}");
+        #[cfg(not(windows))]
+        assert!(url.ends_with(".sh"), "Unix URL must be the .sh script: {url}");
+    }
+
+    #[test]
+    fn windows_powershell_candidates_prefer_absolute_path() {
+        #[cfg(windows)]
+        {
+            let candidates = windows_powershell_candidates();
+            assert_eq!(candidates.len(), 3, "expected 3 candidates, got {candidates:?}");
+            let first = Path::new(&candidates[0]);
+            assert!(first.is_absolute(), "first candidate must be absolute: {candidates:?}");
+            assert_eq!(
+                first.file_name().and_then(|n| n.to_str()),
+                Some("powershell.exe"),
+                "first candidate must be the Windows PowerShell exe: {candidates:?}"
+            );
+            assert_eq!(candidates[1], "powershell.exe");
+            assert_eq!(candidates[2], "pwsh.exe");
+        }
+        #[cfg(not(windows))]
+        {
+            assert!(windows_powershell_candidates().is_empty());
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_install_script_args_without_tag() {
+        let args = windows_install_script_args(Path::new(r"C:\tmp\install.ps1"), None);
+        assert_eq!(
+            args,
+            vec![
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                r"C:\tmp\install.ps1",
+                "-SkipBackend",
+                "-Silent",
+            ]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_install_script_args_with_tag() {
+        let args = windows_install_script_args(Path::new(r"C:\tmp\install.ps1"), Some("v4.13.10"));
+        assert_eq!(
+            args,
+            vec![
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                r"C:\tmp\install.ps1",
+                "-SkipBackend",
+                "-Silent",
+                "-Version",
+                "v4.13.10",
+            ]
+        );
+    }
+
     #[test]
     fn handle_doctor_status_unknown_section_is_reported() {
         let base_url = spawn_status_mock_server("200 OK", STATUS_REPORT_SAMPLE);
@@ -25843,5 +26939,29 @@ mod tests {
         // Verbose still emits the full raw document for machines.
         let output = output.expect("json output accumulated");
         assert!(output.contains_key("status_report"));
+    }
+
+    #[test]
+    fn upgrade_spawn_advice_is_actionable_per_error_kind() {
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let advice = upgrade_spawn_advice(&denied);
+        assert!(
+            advice.contains("access denied") || advice.contains("antivirus"),
+            "PermissionDenied advice should point at AV/AppLocker/PATH: {advice}"
+        );
+
+        let not_found = std::io::Error::from(std::io::ErrorKind::NotFound);
+        let advice = upgrade_spawn_advice(&not_found);
+        assert!(
+            advice.contains("not found"),
+            "NotFound advice should say PowerShell is missing: {advice}"
+        );
+
+        let other = std::io::Error::new(std::io::ErrorKind::Other, "boom");
+        let advice = upgrade_spawn_advice(&other);
+        assert!(
+            advice.contains("npm install -g browser4-cli"),
+            "fallback advice should offer npm: {advice}"
+        );
     }
 }
