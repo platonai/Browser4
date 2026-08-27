@@ -97,6 +97,19 @@ if ($Agent -and $Agent -ne 'auto') {
 $repoRoot = (git rev-parse --show-toplevel 2>$null)
 Set-Location $repoRoot
 
+# ── Non-interactive confirmation ────────────────────────────────────
+# Every prompt routes through Confirm-Step. When BROWSER4_RELEASE_YES
+# is set (CI / automation / non-TTY shells), all prompts auto-confirm
+# (or auto-skip for the optional release message) instead of calling
+# Read-Host, which fails in NonInteractive mode.
+function Confirm-Step {
+    param([string]$Prompt, [string]$Default = '')
+    if ($env:BROWSER4_RELEASE_YES) {
+        return if ($Default) { $Default } else { 'y' }
+    }
+    return Read-Host $Prompt
+}
+
 # Import common utility script
 . (Join-Path $repoRoot "bin" "common" "Util.ps1")
 
@@ -128,7 +141,7 @@ $status = git status --porcelain
 if ($status) {
     Write-Warning "Uncommitted changes detected"
     if (-not $isDryRun) {
-        $continue = Read-Host "Continue anyway? (y/n)"
+        $continue = Confirm-Step "Continue anyway? (y/n)"
         if ($continue -ne 'y') {
             Write-Host "Cancelled"
             exit 0
@@ -157,7 +170,7 @@ if ($null -eq $mainSha -or -not $mainSha) {
     Write-Warning "Releases must be tagged from the latest main commit — release.yml will abort the workflow if the tag is off main."
     Write-Warning "Run 'git checkout main && git pull' (or push your commits to main) before tagging."
     if (-not $isDryRun) {
-        $continue = Read-Host "Continue anyway? (y/n)"
+        $continue = Confirm-Step "Continue anyway? (y/n)"
         if ($continue -ne 'y') {
             Write-Host "Cancelled"
             exit 0
@@ -229,7 +242,7 @@ try {
         Write-Host $checkOutput
     }
     if (-not $isDryRun) {
-        $confirm = Read-Host "Continue anyway? (y/n)"
+        $confirm = Confirm-Step "Continue anyway? (y/n)"
         if ($confirm -ne 'y') {
             Write-Host "Cancelled"
             exit 0
@@ -276,7 +289,7 @@ if ($parseOk) {
         }
 
         if (-not $isDryRun) {
-            $confirm = Read-Host "Continue anyway? (y/n)"
+            $confirm = Confirm-Step "Continue anyway? (y/n)"
             if ($confirm -ne 'y') {
                 Write-Host "Cancelled"
                 exit 0
@@ -296,7 +309,7 @@ if ($existingTag) {
     } else {
         Write-Host "Tag '$newTag' already exists"
 
-        $confirm = Read-Host "Do you want to overwrite it? (y/n)"
+        $confirm = Confirm-Step "Do you want to overwrite it? (y/n)"
         if ($confirm -ne 'y') {
             Write-Host "Cancelled"
             exit 0
@@ -625,13 +638,13 @@ if ($isDryRun) {
 # ── APPLY: prompt for message if still missing, then create + push ──────
 if ([string]::IsNullOrWhiteSpace($effectiveMessage)) {
     Write-Host ""
-    $effectiveMessage = Read-Host "Enter release message (optional, press Enter to skip)"
+    $effectiveMessage = Confirm-Step "Enter release message (optional, press Enter to skip)" ''
     $tagType = if ([string]::IsNullOrWhiteSpace($effectiveMessage)) { "lightweight" } else { "annotated" }
 }
 
 # Confirm creation
 Write-Host ""
-$confirm = Read-Host "Create and push $tagType tag '$newTag'? (y/n)"
+$confirm = Confirm-Step "Create and push $tagType tag '$newTag'? (y/n)"
 if ($confirm -ne 'y') {
     Write-Host "Cancelled"
     exit 0
