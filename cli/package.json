@@ -9,8 +9,9 @@
     "skills"
   ],
   "bin": {
-    "browser4-cli": "bin/browser4-cli.js",
-    "browser4": "bin/browser4-cli.js"
+    "b4": "bin/browser4-cli.js",
+    "browser4": "bin/browser4-cli.js",
+    "browser4-cli": "bin/browser4-cli.js"
   },
   "scripts": {
     "sync:readme": "node scripts/sync-readme.mjs sync",
