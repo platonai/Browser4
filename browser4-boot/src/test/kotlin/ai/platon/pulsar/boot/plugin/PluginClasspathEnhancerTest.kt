@@ -1,5 +1,6 @@
 package ai.platon.pulsar.boot.plugin
 
+import ai.platon.pulsar.skeleton.plugin.Browser4Version
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -62,12 +63,12 @@ class PluginClasspathEnhancerTest {
     @Test
     fun `selectJars excludes plugins requiring a newer SDK major`() {
         val futureJar = createPluginJar("future-1.0.0.jar", "future-plugin", sdkVersion = "9.0.0")
-        val currentJar = createPluginJar("current-1.0.0.jar", "current-plugin", sdkVersion = "4.14.0")
+        val currentJar = createPluginJar("current-1.0.0.jar", "current-plugin", sdkVersion = Browser4Version.version)
 
         val selected = PluginClasspathEnhancer.selectJars(
             listOf(futureJar, currentJar),
             PluginLoadPolicy(enableAll = false, enabledNames = emptySet(), disabledNames = emptySet()),
-            hostVersion = "4.14.0",
+            hostVersion = Browser4Version.version,
         )
 
         assertEquals(listOf(currentJar), selected)
@@ -82,7 +83,7 @@ class PluginClasspathEnhancerTest {
         val selected = PluginClasspathEnhancer.selectJars(
             listOf(oldJar, sameMajorJar, noSdkJar),
             PluginLoadPolicy(enableAll = false, enabledNames = emptySet(), disabledNames = emptySet()),
-            hostVersion = "4.14.0",
+            hostVersion = Browser4Version.version,
         )
 
         assertEquals(listOf(oldJar, sameMajorJar, noSdkJar), selected)

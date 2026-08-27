@@ -256,7 +256,9 @@ class CodingToolExecutorTest {
         @Test
         @DisplayName("scaffold plugin maps 'name' to pluginName")
         fun testScaffoldPluginNameMapping() = runBlocking {
-            coEvery { fs.readFile(any()) } returns ""
+            // Fixed, version-independent sample — tests must not track the
+            // repo's current project version.
+            coEvery { fs.readFile(any()) } returns "4.13.4-SNAPSHOT"
 
             val tc = ToolCall(
                 domain = "coding",
@@ -279,9 +281,39 @@ class CodingToolExecutorTest {
         }
 
         @Test
+        @DisplayName("scaffold plugin fails loudly when the repo VERSION file is unreadable")
+        fun testScaffoldPluginFailsLoudlyWithoutVersion() = runBlocking {
+            // No hardcoded fallback version: when the caller cannot determine the
+            // project version (VERSION unreadable), scaffolding must fail loudly
+            // instead of emitting a plugin pinned to a stale version.
+            coEvery { fs.readFile(any()) } returns ""
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "scaffold",
+                arguments = mutableMapOf(
+                    "type" to "plugin",
+                    "name" to "browser4-pageinfo",
+                    "domain" to "pageinfo",
+                    "basePackage" to "ai.platon.pulsar.pageinfo",
+                    "toolMethod" to "extractPageInfo",
+                    "toolDescription" to "Extract page info"
+                )
+            )
+
+            val result = executor.callFunctionOn(tc, target)
+            val exception = result.exception
+            assertNotNull(exception, "scaffold must fail when VERSION is unreadable")
+            assertTrue(
+                exception!!.message.orEmpty().contains("pdkVersion"),
+                "error must point at the missing pdkVersion: ${exception.message}"
+            )
+        }
+
+        @Test
         @DisplayName("scaffoldToDir writes scaffold files into the workspace dir")
         fun testScaffoldToDirWritesFiles() = runBlocking {
-            coEvery { fs.readFile(any()) } returns ""
+            coEvery { fs.readFile(any()) } returns "4.13.4-SNAPSHOT"
             coEvery { fs.writeFile(any(), any()) } returns "written"
 
             val tc = ToolCall(
@@ -310,7 +342,7 @@ class CodingToolExecutorTest {
         @DisplayName("scaffoldToDir registers the module in the aggregator pom and verifies when asked")
         fun testScaffoldToDirRegistersModuleAndVerifies() = runBlocking {
             coEvery { fs.readFile(any()) } returnsMany listOf(
-                "", // VERSION (unreadable)
+                "4.13.4-SNAPSHOT", // VERSION
                 "<modules>\n    </modules>" // browser4-plugins/pom.xml
             )
             coEvery { fs.writeFile(any(), any()) } returns "✓ Wrote 10 chars"
@@ -347,7 +379,7 @@ class CodingToolExecutorTest {
             // P2.1 regression: taking the LAST module line made the indent creep
             // 8 → 12 → 16 spaces on every scaffold.
             coEvery { fs.readFile(any()) } returnsMany listOf(
-                "", // VERSION
+                "4.13.4-SNAPSHOT", // VERSION
                 "<modules>\n        <module>browser4-captcha</module>\n    </modules>", // aggregator (8-space base)
                 "Error: unreadable", // ModuleMap.kt
             )
@@ -405,7 +437,7 @@ class CodingToolExecutorTest {
                 }
             """.trimIndent()
             coEvery { fs.readFile(any()) } returnsMany listOf(
-                "", // VERSION
+                "4.13.4-SNAPSHOT", // VERSION
                 "<modules>\n    </modules>", // aggregator
                 moduleMap, // ModuleMap.kt
             )

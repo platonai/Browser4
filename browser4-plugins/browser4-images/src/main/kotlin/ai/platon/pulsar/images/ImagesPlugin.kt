@@ -18,6 +18,7 @@ package ai.platon.pulsar.images
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.images.config.ImageAutoConfiguration
 import ai.platon.pulsar.skeleton.plugin.Browser4Plugin
+import ai.platon.pulsar.skeleton.plugin.Browser4Version
 import ai.platon.pulsar.skeleton.plugin.PluginManifest
 
 /**
@@ -41,7 +42,7 @@ open class ImagesPlugin(
     override val manifest: PluginManifest = PluginManifest(
         name = "browser4-images",
         version = "4.12.0-rc.1",
-        sdkVersion = "4.14.0-SNAPSHOT",
+        sdkVersion = Browser4Version.version,
         description = "Image detection and bulk download for Browser4",
         dependsOn = listOf("browser4-protocol", "browser4-agentic"),
         autoConfigurationClasses = listOf(

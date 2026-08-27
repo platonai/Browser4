@@ -8,6 +8,13 @@ import org.junit.jupiter.api.assertThrows
 
 class ArtifactScaffoldsTest {
 
+    /**
+     * Fixed, version-independent sample for the plugin's browser4-pdk parent
+     * version. Tests must NOT track the repo's current project version — a
+     * hardcoded "current" version would force test edits on every version bump.
+     */
+    private val PDK_VERSION = "4.20.0"
+
     // --- Plugin scaffold ---
 
     @Test
@@ -18,7 +25,8 @@ class ArtifactScaffoldsTest {
             domain = "seo",
             basePackage = "ai.platon.pulsar.seo",
             toolMethod = "extractMeta",
-            toolDescription = "Extract SEO metadata from the page"
+            toolDescription = "Extract SEO metadata from the page",
+            pdkVersion = PDK_VERSION
         )
 
         assertTrue(result.containsKey("pom.xml"))
@@ -39,7 +47,8 @@ class ArtifactScaffoldsTest {
             domain = "seo",
             basePackage = "ai.platon.pulsar.seo",
             toolMethod = "extractMeta",
-            toolDescription = "Extract SEO metadata from the page"
+            toolDescription = "Extract SEO metadata from the page",
+            pdkVersion = PDK_VERSION
         )
 
         val pom = result["pom.xml"]!!
@@ -56,7 +65,8 @@ class ArtifactScaffoldsTest {
             domain = "seo",
             basePackage = "ai.platon.pulsar.seo",
             toolMethod = "extractMeta",
-            toolDescription = "Extract SEO metadata from the page"
+            toolDescription = "Extract SEO metadata from the page",
+            pdkVersion = PDK_VERSION
         )
 
         val script = result["build.ps1"]!!
@@ -80,7 +90,8 @@ class ArtifactScaffoldsTest {
             domain = "seo",
             basePackage = "ai.platon.pulsar.seo",
             toolMethod = "extractMeta",
-            toolDescription = "Extract SEO metadata"
+            toolDescription = "Extract SEO metadata",
+            pdkVersion = PDK_VERSION
         )
 
         val js = result["src/main/resources/seo/extractMeta.js"]!!
@@ -97,7 +108,8 @@ class ArtifactScaffoldsTest {
             domain = "seo",
             basePackage = "ai.platon.pulsar.seo",
             toolMethod = "extractMeta",
-            toolDescription = "Extract SEO metadata"
+            toolDescription = "Extract SEO metadata",
+            pdkVersion = PDK_VERSION
         )
 
         val service = result["src/main/kotlin/ai/platon/pulsar/seo/service/SeoService.kt"]!!
@@ -115,7 +127,8 @@ class ArtifactScaffoldsTest {
             domain = "test",
             basePackage = "ai.platon.pulsar.test",
             toolMethod = "doTest",
-            toolDescription = "Test tool"
+            toolDescription = "Test tool",
+            pdkVersion = PDK_VERSION
         )
 
         val pom = result["pom.xml"]!!
@@ -132,13 +145,14 @@ class ArtifactScaffoldsTest {
             domain = "test",
             basePackage = "ai.platon.pulsar.test",
             toolMethod = "doTest",
-            toolDescription = "Test tool"
+            toolDescription = "Test tool",
+            pdkVersion = PDK_VERSION
         )
 
         val json = result["src/main/resources/META-INF/browser4-plugin.json"]!!
         assertTrue(json.contains("\"name\": \"test-plugin\""))
         assertTrue(json.contains("\"version\""))
-        assertTrue(json.contains("\"sdkVersion\": \"4.14.0-SNAPSHOT\""), "sdkVersion must match the current SDK: $json")
+        assertTrue(json.contains("\"sdkVersion\": \"$PDK_VERSION\""), "sdkVersion must use the caller-supplied pdkVersion: $json")
         assertTrue(json.contains("\"dependsOn\""))
         assertTrue(json.contains("\"autoConfigurationClasses\""))
         assertTrue(json.contains("ai.platon.pulsar.test.config.TestPluginAutoConfiguration"))
@@ -154,7 +168,8 @@ class ArtifactScaffoldsTest {
             domain = "seo",
             basePackage = "ai.platon.pulsar.seo",
             toolMethod = "extractMeta",
-            toolDescription = "Extract SEO metadata"
+            toolDescription = "Extract SEO metadata",
+            pdkVersion = PDK_VERSION
         )
 
         val imports = result["src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports"]!!
@@ -169,7 +184,8 @@ class ArtifactScaffoldsTest {
             domain = "seo",
             basePackage = "ai.platon.pulsar.seo",
             toolMethod = "extractMeta",
-            toolDescription = "Extract SEO metadata"
+            toolDescription = "Extract SEO metadata",
+            pdkVersion = PDK_VERSION
         )
 
         val executorFile = result.entries.find { it.key.endsWith("SeoToolExecutor.kt") }!!.value
@@ -190,7 +206,8 @@ class ArtifactScaffoldsTest {
             domain = "seo",
             basePackage = "ai.platon.pulsar.seo",
             toolMethod = "extractMeta",
-            toolDescription = "Extract SEO metadata"
+            toolDescription = "Extract SEO metadata",
+            pdkVersion = PDK_VERSION
         )
 
         val configFile = result.entries.find { it.key.endsWith("SeoConfig.kt") }!!.value
@@ -311,7 +328,8 @@ class ArtifactScaffoldsTest {
             "domain" to "test",
             "basePackage" to "ai.platon.pulsar.test",
             "toolMethod" to "doTest",
-            "toolDescription" to "Test"
+            "toolDescription" to "Test",
+            "pdkVersion" to PDK_VERSION
         ))
 
         assertTrue(result.size > 1)
@@ -319,20 +337,36 @@ class ArtifactScaffoldsTest {
     }
 
     @Test
-    @DisplayName("scaffold dispatch defaults pdkVersion to the current project version")
-    fun scaffoldDispatchPluginDefaultPdkVersion() {
+    @DisplayName("scaffold dispatch requires pdkVersion for type=plugin")
+    fun scaffoldDispatchPluginRequiresPdkVersion() {
         // Regression: a stale hardcoded fallback (4.13.6-SNAPSHOT) produced
         // plugins that could not resolve the browser4-pdk parent from the repo.
+        // The caller must supply the current project version explicitly.
+        assertThrows<IllegalArgumentException> {
+            ArtifactScaffolds.scaffold("plugin", mapOf(
+                "pluginName" to "test-plugin",
+                "domain" to "test",
+                "basePackage" to "ai.platon.pulsar.test",
+                "toolMethod" to "doTest",
+                "toolDescription" to "Test"
+            ))
+        }
+    }
+
+    @Test
+    @DisplayName("scaffold dispatch passes the caller-supplied pdkVersion into the plugin pom")
+    fun scaffoldDispatchPluginUsesCallerPdkVersion() {
         val result = ArtifactScaffolds.scaffold("plugin", mapOf(
             "pluginName" to "test-plugin",
             "domain" to "test",
             "basePackage" to "ai.platon.pulsar.test",
             "toolMethod" to "doTest",
-            "toolDescription" to "Test"
+            "toolDescription" to "Test",
+            "pdkVersion" to PDK_VERSION
         ))
 
         val pom = result["pom.xml"]!!
-        assertTrue(pom.contains("<version>4.14.0-SNAPSHOT</version>"), "pom must reference the current pdk version: $pom")
+        assertTrue(pom.contains("<version>$PDK_VERSION</version>"), "pom must reference the caller-supplied pdk version: $pom")
         assertFalse(pom.contains("4.13.6"), "stale pdk version leaked: $pom")
     }
 
@@ -398,6 +432,3 @@ class ArtifactScaffoldsTest {
         assertEquals("myPlugin", ArtifactScaffolds.toCamelCase("my-plugin"))
     }
 }
-
-
-

@@ -18,20 +18,20 @@ class PluginCompatibilityTest {
 
     @Test
     fun sameMajorIsCompatible() {
-        val verdict = PluginCompatibility.check(manifest("4.12.0"), hostVersion = "4.14.0")
+        val verdict = PluginCompatibility.check(manifest("4.12.0"), hostVersion = Browser4Version.version)
         assertInstanceOf(PluginCompatibility.Compatible::class.java, verdict)
         assertEquals("4.12.0", verdict.sdkVersion)
     }
 
     @Test
     fun sameVersionIsCompatible() {
-        val verdict = PluginCompatibility.check(manifest("4.14.0-SNAPSHOT"), hostVersion = "4.14.0-SNAPSHOT")
+        val verdict = PluginCompatibility.check(manifest(Browser4Version.version), hostVersion = Browser4Version.version)
         assertInstanceOf(PluginCompatibility.Compatible::class.java, verdict)
     }
 
     @Test
     fun olderMajorIsWarnedButNotBlocked() {
-        val verdict = PluginCompatibility.check(manifest("3.9.0"), hostVersion = "4.14.0")
+        val verdict = PluginCompatibility.check(manifest("3.9.0"), hostVersion = Browser4Version.version)
         val warn = assertInstanceOf(PluginCompatibility.Warn::class.java, verdict)
         assertEquals("3.9.0", warn.sdkVersion)
         assert(warn.reason.contains("backward compatibility"))
@@ -39,15 +39,15 @@ class PluginCompatibilityTest {
 
     @Test
     fun newerMajorIsBlocked() {
-        val verdict = PluginCompatibility.check(manifest("5.0.0"), hostVersion = "4.14.0")
+        val verdict = PluginCompatibility.check(manifest("5.0.0"), hostVersion = Browser4Version.version)
         val blocked = assertInstanceOf(PluginCompatibility.Blocked::class.java, verdict)
         assert(blocked.reason.contains("requires SDK 5.0.0"))
-        assert(blocked.reason.contains("4.14.0"))
+        assert(blocked.reason.contains(Browser4Version.version))
     }
 
     @Test
     fun missingSdkVersionIsWarnedWithNullVersion() {
-        val verdict = PluginCompatibility.check(manifest(null), hostVersion = "4.14.0")
+        val verdict = PluginCompatibility.check(manifest(null), hostVersion = Browser4Version.version)
         val warn = assertInstanceOf(PluginCompatibility.Warn::class.java, verdict)
         assertEquals(null, warn.sdkVersion)
         assert(warn.reason.contains("no sdkVersion"))
@@ -55,7 +55,7 @@ class PluginCompatibilityTest {
 
     @Test
     fun unparseableSdkVersionIsWarnedNotBlocked() {
-        val verdict = PluginCompatibility.check(manifest("latest"), hostVersion = "4.14.0")
+        val verdict = PluginCompatibility.check(manifest("latest"), hostVersion = Browser4Version.version)
         val warn = assertInstanceOf(PluginCompatibility.Warn::class.java, verdict)
         assert(warn.reason.contains("unparseable"))
     }
@@ -70,7 +70,7 @@ class PluginCompatibilityTest {
 
     @Test
     fun snapshotPluginWithNewerMajorIsStillBlocked() {
-        val verdict = PluginCompatibility.check(manifest("5.0.0-SNAPSHOT"), hostVersion = "4.14.0-SNAPSHOT")
+        val verdict = PluginCompatibility.check(manifest("5.0.0-SNAPSHOT"), hostVersion = Browser4Version.version)
         assertInstanceOf(PluginCompatibility.Blocked::class.java, verdict)
     }
 }

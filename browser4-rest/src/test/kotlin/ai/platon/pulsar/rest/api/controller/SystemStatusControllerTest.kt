@@ -24,6 +24,7 @@ import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.rest.session.SessionKind
 import ai.platon.pulsar.rest.session.SessionStatus
 import ai.platon.pulsar.skeleton.context.PulsarContext
+import ai.platon.pulsar.skeleton.plugin.Browser4Version
 import ai.platon.pulsar.skeleton.plugin.PluginManifest
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
@@ -244,7 +245,7 @@ class SystemStatusControllerTest {
             name = "browser4-wordcount",
             version = "1.0.0",
             description = "Count words",
-            sdkVersion = "4.14.0",
+            sdkVersion = Browser4Version.version,
         )
         val pluginInfos = listOf(
             PluginInfo(
@@ -281,7 +282,7 @@ class SystemStatusControllerTest {
         val first = items[0]
         assertEquals("browser4-wordcount", first["name"])
         assertEquals("1.0.0", first["version"])
-        assertEquals("4.14.0", first["sdkVersion"])
+        assertEquals(Browser4Version.version, first["sdkVersion"])
         assertEquals(true, first["loaded"])
         assertEquals(true, first["enabled"])
         assertEquals(1024L, first["fileSize"])

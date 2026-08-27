@@ -1267,7 +1267,8 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     .mapValues { it.value?.toString() ?: "" }
                     .filterValues { it.isNotEmpty() }
                     .toMutableMap()
-                // Same defaults as scaffold: pdk version from VERSION, name → pluginName.
+                // Same as scaffold: pdk version comes from VERSION (required for
+                // plugins — no hardcoded fallback), name → pluginName.
                 if (type == "plugin" && !params.containsKey("pdkVersion")) {
                     val versionFile = fs.readFile("VERSION")
                     if (!versionFile.startsWith("Error:") && versionFile.isNotBlank()) {

@@ -29,9 +29,13 @@ object ArtifactScaffolds {
             basePackage = params["basePackage"] ?: "ai.platon.pulsar.my",
             toolMethod = params["toolMethod"] ?: "doAction",
             toolDescription = params["toolDescription"] ?: "Performs an action",
-            // Keep in sync with the repo VERSION file; CodingToolExecutor reads
-            // VERSION first and only falls back here when the file is unavailable.
-            pdkVersion = params["pdkVersion"] ?: "4.14.0-SNAPSHOT"
+            // pdkVersion is caller-supplied (CodingToolExecutor reads the repo
+            // VERSION file). No hardcoded fallback: a stale default version
+            // produces plugins that cannot resolve the browser4-pdk parent.
+            pdkVersion = params["pdkVersion"]
+                ?: throw IllegalArgumentException(
+                    "pdkVersion is required for plugin scaffolds — supply the current project version (e.g. read from the repo VERSION file)"
+                )
         )
         "skill" -> mapOf("_content" to skillScaffold(
             name = params["name"] ?: "my-skill",
@@ -68,7 +72,9 @@ object ArtifactScaffolds {
      * @param basePackage Kotlin base package (e.g., "ai.platon.pulsar.seo")
      * @param toolMethod first tool method name (e.g., "extractMeta")
      * @param toolDescription human-readable description of the tool
-     * @param pdkVersion the browser4-pdk parent version to use (defaults to the current project version)
+     * @param pdkVersion the browser4-pdk parent version to use (required —
+     *   the caller supplies the current project version, e.g. from the repo
+     *   VERSION file; no hardcoded default)
      * @return map of relative file paths to file content
      */
     fun pluginScaffold(
@@ -77,7 +83,7 @@ object ArtifactScaffolds {
         basePackage: String,
         toolMethod: String,
         toolDescription: String,
-        pdkVersion: String = "4.14.0-SNAPSHOT"
+        pdkVersion: String
     ): Map<String, String> {
         // Match the ecosystem naming convention: real plugins strip the "browser4-"
         // prefix for class names (browser4-seo -> SeoConfig/SeoAutoConfiguration/SeoToolExecutor).
