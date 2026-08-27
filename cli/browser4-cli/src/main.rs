@@ -15441,40 +15441,57 @@ async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
     }
 
     // ── 1. npm global uninstall ──
+    // On Windows npm ships as `npm.cmd` (a batch shim) — a bare `npm` is
+    // not resolvable by CreateProcess (it does not consult PATHEXT), so
+    // resolve the real command name first.  Otherwise npm is reported as
+    // "not installed" and a globally installed package is silently left
+    // behind while the CLI claims uninstall succeeded.
+    let npm = resolve_npm();
     let (npm_removed, npm_error) = if dry_run {
         // Check whether npm would find the package, but don't remove anything.
-        let installed = Command::new("npm")
-            .args(["list", "-g", "browser4-cli", "--depth=0"])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .output()
-            .map(|o| o.status.success())
+        let installed = npm
+            .map(|npm| {
+                Command::new(npm)
+                    .args(["list", "-g", "browser4-cli", "--depth=0"])
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::null())
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
+            })
             .unwrap_or(false);
         (installed, None)
     } else {
-        let mut cmd = Command::new("npm");
-        cmd.args(["uninstall", "-g", "browser4-cli"])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-        match run_with_timeout(cmd, 60) {
-            Ok(output) => {
-                if output.status.success() {
-                    (true, None)
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    let msg = if stderr.is_empty() { stdout } else { stderr };
-                    if npm_not_installed_message(&msg) {
+        match npm {
+            Some(npm) => {
+                let mut cmd = Command::new(npm);
+                cmd.args(["uninstall", "-g", "browser4-cli"])
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped());
+                match run_with_timeout(cmd, 60) {
+                    Ok(output) => {
+                        if output.status.success() {
+                            (true, None)
+                        } else {
+                            let stderr =
+                                String::from_utf8_lossy(&output.stderr).trim().to_string();
+                            let stdout =
+                                String::from_utf8_lossy(&output.stdout).trim().to_string();
+                            let msg = if stderr.is_empty() { stdout } else { stderr };
+                            if npm_not_installed_message(&msg) {
+                                (false, None)
+                            } else {
+                                (false, Some(msg))
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        // npm not on PATH or spawn failed — treat as not installed
                         (false, None)
-                    } else {
-                        (false, Some(msg))
                     }
                 }
             }
-            Err(_) => {
-                // npm not on PATH or spawn failed — treat as not installed
-                (false, None)
-            }
+            None => (false, None),
         }
     };
 
