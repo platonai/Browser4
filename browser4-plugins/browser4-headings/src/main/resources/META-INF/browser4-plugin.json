@@ -1,7 +1,7 @@
 {
   "name": "browser4-headings",
   "version": "1.0.0",
-  "sdkVersion": "4.14.0-SNAPSHOT",
+  "sdkVersion": "4.14.0-rc.1",
   "description": "Extract page headings (h1-h6) with levels",
   "dependsOn": ["browser4-skeleton", "browser4-protocol", "browser4-agentic"],
   "autoConfigurationClasses": ["ai.platon.pulsar.headings.config.HeadingsAutoConfiguration"]

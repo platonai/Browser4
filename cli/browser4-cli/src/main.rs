@@ -16434,7 +16434,7 @@ async fn handle_doctor(
                         cli_println!(
                             "  ⚠  Backend is a development snapshot — it may be unstable."
                         );
-                    } else if ver.contains("-rc.") {
+                    } else if ver.contains("-rc") {
                         cli_println!("  ℹ  Backend is a release candidate — suitable for testing, not production.");
                     }
                     // Compare backend version against installed runtime tag.

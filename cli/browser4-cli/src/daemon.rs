@@ -905,7 +905,7 @@ fn expected_runtime_tag() -> Option<String> {
 
 /// Canonicalize a runtime version string for comparison:
 /// - `"v4.13.5"` → `"4.13.5"` (release tags)
-/// - `"local"`, `"4.13.6-SNAPSHOT"`, `""` → `"local"` (source-built bundle)
+/// - `"local"`, `"4.13.6-SNAPSHOT"`, `"4.13.7-rc.1"`, `""` → `"local"` (source-built bundle)
 fn canonical_runtime_version(tag: &str) -> String {
     let trimmed = tag.trim().to_ascii_lowercase();
     let without_v = trimmed.strip_prefix('v').unwrap_or(&trimmed).to_string();
@@ -913,6 +913,7 @@ fn canonical_runtime_version(tag: &str) -> String {
         || without_v == "local"
         || without_v.contains("-snapshot")
         || without_v.contains("-dev")
+        || without_v.contains("-rc")
     {
         "local".to_string()
     } else {
@@ -6348,6 +6349,8 @@ mod tests {
         assert_eq!(canonical_runtime_version("local"), "local");
         assert_eq!(canonical_runtime_version("LOCAL"), "local");
         assert_eq!(canonical_runtime_version("4.13.6-SNAPSHOT"), "local");
+        assert_eq!(canonical_runtime_version("4.13.7-rc.1"), "local");
+        assert_eq!(canonical_runtime_version("4.12.0-rc.3-SNAPSHOT"), "local");
         assert_eq!(canonical_runtime_version(""), "local");
         assert_eq!(canonical_runtime_version("  v4.13.5  "), "4.13.5");
     }
@@ -6360,9 +6363,11 @@ mod tests {
         // Release vs release: exact version matters.
         assert!(server_version_mismatch("v4.13.5", "v4.13.6"));
         assert!(!server_version_mismatch("v4.13.5", "4.13.5"));
-        // Any source-built marker compares equal to "local".
+        // Any source-built marker (SNAPSHOT, rc, "local") compares equal to "local".
         assert!(!server_version_mismatch("4.13.6-SNAPSHOT", "local"));
         assert!(!server_version_mismatch("local", "4.14.0-SNAPSHOT"));
+        assert!(!server_version_mismatch("local", "4.13.7-rc.1"));
+        assert!(!server_version_mismatch("4.13.7-rc.1", "local"));
         // Same version is never a mismatch.
         assert!(!server_version_mismatch("v4.13.5", "v4.13.5"));
     }
