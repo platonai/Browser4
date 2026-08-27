@@ -2006,6 +2006,15 @@ struct E2ECtx {
     step_timings: Vec<TimedStep>,
     /// Extra environment variables to set for every CLI child process.
     extra_env: Vec<(String, String)>,
+    /// `true` once a CLI-managed Browser4 backend has been started in this
+    /// test process. The backend JVM's working directory lives inside
+    /// `runtime_dir` (the CLI spawns it from the installed runtime), and on
+    /// Linux/macOS deleting that directory while the JVM is running orphans
+    /// its cwd: every later `ProcessBuilder` launch then fails with
+    /// `posix_spawn failed, error: 2 (No such file or directory)` (JDK 21+
+    /// spawn mechanism). `reset_cli_artifacts` must therefore keep
+    /// `runtime_dir` intact once a local backend may be running from it.
+    backend_cwd_in_runtime_dir: bool,
 }
 
 impl E2ECtx {
@@ -2151,6 +2160,10 @@ impl E2ETestResources {
                 );
             }
             self.local_browser4_started = true;
+            // The backend JVM runs with its working directory inside
+            // runtime_dir; record that so reset_cli_artifacts does not
+            // delete the live cwd (see E2ECtx.backend_cwd_in_runtime_dir).
+            self.ctx.backend_cwd_in_runtime_dir = true;
             let step_name = if started_via_maven {
                 "browser4 cli startup trigger"
             } else {
@@ -3625,12 +3638,25 @@ fn reset_cli_artifacts(ctx: &mut E2ECtx) {
     let _ = fs::remove_dir_all(ctx.workspace_dir.join(".browser4-cli"));
     // Clean the runtime dir too so that tests that set up an installed
     // runtime (e.g. test_status_installed_runtime) don't leak state into
-    // subsequent scenarios that expect a clean slate.
-    let _ = fs::remove_dir_all(&ctx.runtime_dir);
-    fs::create_dir_all(&ctx.runtime_dir).ok();
+    // subsequent scenarios that expect a clean slate.  But keep it when a
+    // CLI-managed backend is (or may be) running from it: its JVM cwd lives
+    // inside runtime_dir, and on Linux/macOS deleting a running process's
+    // cwd makes every later process spawn fail with `posix_spawn failed,
+    // error: 2 (No such file or directory)` (JDK 21+ launch mechanism).
+    // Scenarios that genuinely need an empty runtime dir (status tests,
+    // install tests) clear it themselves.
+    if !ctx.backend_cwd_in_runtime_dir {
+        let _ = fs::remove_dir_all(&ctx.runtime_dir);
+        fs::create_dir_all(&ctx.runtime_dir).ok();
+    }
     // Clear scenario-specific env vars that persist across tests so each
     // test starts with a predictable environment.  Tests that need these
     // vars must set them explicitly after calling reset_cli_artifacts.
+    // BROWSER4_RUNTIME_DIR may have been redirected by isolate_runtime_dir
+    // (install scenarios) or canonicalized by status scenarios; restore the
+    // shared runtime dir so nothing leaks into later scenarios.
+    let shared_runtime_dir = ctx.runtime_dir.to_string_lossy().into_owned();
+    ctx.set_env("BROWSER4_RUNTIME_DIR", &shared_runtime_dir);
     ctx.set_env("BROWSER4_RELEASES_BASE_URL", "");
     ctx.set_env("BROWSER4_MIRRORS_CONFIG", "");
     ctx.set_env("BROWSER4_CLI_DISABLE_MIRROR_SPEED_TEST", "");
@@ -4115,6 +4141,7 @@ fn create_e2e_test_resources() -> E2ETestResources {
             upload_file_path,
             step_timings: Vec::new(),
             extra_env,
+            backend_cwd_in_runtime_dir: false,
         },
     }
 }
