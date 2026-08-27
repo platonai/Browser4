@@ -180,7 +180,7 @@ browser4-cli plugin-markdown read --url <url> [--requireMd true] [--llms true] [
 
 合计约 **1.5–2 周**，与 gap 分析 C 档估算（1–2 周）一致；P1 先行可独立交付，P2 依赖 P1 的提取器。
 
-> **实施状态（2026-08-28）**：P1 ✅ 完成（提取器 + 后端工具 + CLI 命令 + 9 个单测 + 2 个 e2e 场景）；P2 ✅ 完成（ReaderService 管线 + `markdown.read` 工具 + `plugin-markdown read` e2e 场景 + 10 个单测）；P3 ⏳ 站点适配矩阵与真实站点验证待做。
+> **实施状态（2026-08-28）**：P1 ✅ 完成（提取器 + 后端工具 + CLI 命令 + 9 个单测 + 2 个 e2e 场景）；P2 ✅ 完成（ReaderService 管线 + `markdown.read` 工具 + `plugin-markdown read` e2e 场景 + 10 个单测）；P3 ✅ 完成（真实站点适配矩阵 10 站点见 `docs/readability-site-matrix.md`，高杂讯 fixture 见 `HtmlSnapshotMockController./htmlsnapshot-test/readability-article`；改进项 backlog 见矩阵文档 §3）。
 
 ## 10. 风险与缓解
 
