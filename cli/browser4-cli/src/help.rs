@@ -35,6 +35,7 @@ pub fn public_command_name(name: &str) -> &str {
         "htmlsnapshot-summary" => "htmlsnapshot summary",
         "htmlsnapshot-grep" => "htmlsnapshot grep",
         "htmlsnapshot-inspect" => "htmlsnapshot inspect",
+        "htmlsnapshot-readability" => "htmlsnapshot readability",
         "snapshot-grep" => "snapshot grep",
         "snapshot-list" => "snapshot list",
         "snapshot-clean" => "snapshot clean",
@@ -897,6 +898,40 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  # Read selector from file or stdin (avoids quoting issues on Windows)".to_string(),
         );
         lines.push("  browser4-cli htmlsnapshot inspect --stdin < selector.txt".to_string());
+    }
+
+    if cmd.name == "htmlsnapshot-readability" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Extracts the main article content (title, byline, site name, excerpt, cleaned".to_string(),
+        );
+        lines.push(
+            "    HTML, plain text) using a deterministic Readability-style heuristic — no LLM,".to_string(),
+        );
+        lines.push("    no tokens, works offline on the stored snapshot.".to_string());
+        lines.push(
+            "  - Reads the stored HTML snapshot (run `htmlsnapshot` first). An optional URL".to_string(),
+        );
+        lines.push(
+            "    fetches that page independently, like `htmlsnapshot query`'s @url mode.".to_string(),
+        );
+        lines.push(
+            "  - Fails loudly when the page has no article-like content (text below threshold).".to_string(),
+        );
+        lines.push(
+            "  - Use --text-only for just the plain text, and --json for the full result".to_string(),
+        );
+        lines.push("    (content HTML included).".to_string());
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  # Extract the article from the current page's snapshot".to_string());
+        lines.push("  browser4-cli htmlsnapshot readability".to_string());
+        lines.push("  # Plain text only, no pagination".to_string());
+        lines.push("  browser4-cli htmlsnapshot readability --text-only --all".to_string());
+        lines.push("  # Fetch a specific article URL independently".to_string());
+        lines.push(
+            "  browser4-cli htmlsnapshot readability \"https://example.com/article\"".to_string(),
+        );
     }
 
     if cmd.name == "loop" {
@@ -1796,6 +1831,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(format_with_gap(
             "  htmlsnapshot inspect [selector] [--max N] [--depth D]",
             "Analyze DOM structure and suggest CSS selectors for recurring patterns",
+            50,
+        ));
+        lines.push(format_with_gap(
+            "  htmlsnapshot readability [url] [--text-only] [--page N] [--page-size N] [--all]",
+            "Extract the main article content with a Readability-style heuristic (no LLM)",
             50,
         ));
         lines.push(String::new());
@@ -3403,6 +3443,18 @@ mod tests {
         assert!(help.contains("--offset"));
         assert!(help.contains("--limit"));
         assert!(!help.contains("browser4-cli htmlsnapshot-get-all"));
+    }
+
+    #[test]
+    fn test_generate_command_help_htmlsnapshot_readability() {
+        let cmds = all_commands();
+        let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-readability").unwrap();
+        let help = generate_command_help(cmd);
+        assert!(help.contains("browser4-cli htmlsnapshot readability"));
+        assert!(help.contains("Readability-style heuristic"));
+        assert!(help.contains("browser4-cli htmlsnapshot readability --text-only --all"));
+        assert!(help.contains("browser4-cli htmlsnapshot readability \"https://example.com/article\""));
+        assert!(!help.contains("browser4-cli htmlsnapshot-readability"));
     }
 
     #[test]

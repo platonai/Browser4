@@ -445,6 +445,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "htmlsnapshot-summary",
         "htmlsnapshot-grep",
         "htmlsnapshot-inspect",
+        "htmlsnapshot-readability",
         "scroll",
         "resize",
         "skills",
@@ -8393,6 +8394,108 @@ fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
     })
+}
+
+// ---------------------------------------------------------------------------
+// htmlsnapshot readability handler
+// ---------------------------------------------------------------------------
+
+async fn handle_html_snapshot_readability(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        let mut params = tool_params.clone();
+        params["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, &tool_name, params).await }
+    })
+    .await?;
+
+    let data: Value = serde_json::from_str(&result)
+        .map_err(|e| format!("Failed to parse readability result: {e}"))?;
+
+    let title = data.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    let byline = data.get("byline").and_then(|v| v.as_str()).unwrap_or("");
+    let site_name = data.get("siteName").and_then(|v| v.as_str()).unwrap_or("");
+    let excerpt = data.get("excerpt").and_then(|v| v.as_str()).unwrap_or("");
+    let url = data.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    let length = data.get("length").and_then(|v| v.as_i64()).unwrap_or(0);
+    let confidence = data.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let text_content = data.get("textContent").and_then(|v| v.as_str()).unwrap_or("");
+
+    let text_only = tool_params
+        .get("text-only")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if !text_only {
+        let heading = if !title.is_empty() { title } else { url };
+        if !heading.is_empty() {
+            cli_println!("### {}", heading);
+        } else {
+            cli_println!("### Readability Extraction");
+        }
+
+        let mut meta: Vec<String> = Vec::new();
+        if !byline.is_empty() {
+            meta.push(format!("by {}", byline));
+        }
+        if !site_name.is_empty() {
+            meta.push(site_name.to_string());
+        }
+        if !url.is_empty() {
+            meta.push(url.to_string());
+        }
+        meta.push(format!("{} chars", length));
+        if !meta.is_empty() {
+            cli_println!("{}", meta.join(" · "));
+        }
+        if confidence > 0.0 {
+            cli_println!(
+                "confidence {:.0}% — {}",
+                confidence * 100.0,
+                if confidence < 0.6 {
+                    "article region is a small part of the page; the rest was noise"
+                } else {
+                    "most of the page text was captured"
+                }
+            );
+        }
+        if !excerpt.is_empty() {
+            cli_println!("");
+            cli_println!("{}", excerpt);
+        }
+        cli_println!("");
+    }
+
+    // Print the article text (paginated unless --all).
+    let (page, page_size, show_all) = parse_page_opts(tool_params);
+    if skip_pagination(show_all) || text_content.is_empty() {
+        cli_println!("{}", text_content);
+    } else {
+        let (page_content, meta) = paginate_output(text_content, page, page_size);
+        cli_println!("{}", page_content);
+        if meta.is_truncated {
+            cli_println!("{}", format_pagination_footer(&meta));
+        }
+    }
+
+    json_field("title", json!(title));
+    json_field("byline", json!(byline));
+    json_field("siteName", json!(site_name));
+    json_field("url", json!(url));
+    json_field("length", json!(length));
+    json_field("confidence", json!(confidence));
+    json_field("text", json!(text_content));
+    json_field("content", data.get("content").cloned().unwrap_or(Value::Null));
+
+    Ok(())
 }
 
 async fn handle_html_snapshot_grep(
@@ -20529,6 +20632,16 @@ async fn run(
             )
             .await?;
         }
+        "htmlsnapshot-readability" => {
+            handle_html_snapshot_readability(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
         "snapshot-grep" => {
             let grep_options = parse_grep_options(&tool_params)?;
             handle_snapshot_grep(
@@ -21248,6 +21361,7 @@ mod tests {
         assert!(no_snapshot_commands().contains("htmlsnapshot-summary"));
         assert!(no_snapshot_commands().contains("htmlsnapshot-grep"));
         assert!(no_snapshot_commands().contains("htmlsnapshot-inspect"));
+        assert!(no_snapshot_commands().contains("htmlsnapshot-readability"));
     }
 
     #[test]

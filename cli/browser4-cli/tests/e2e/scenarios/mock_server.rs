@@ -5615,6 +5615,107 @@ pub(super) fn test_htmlsnapshot_inspect_with_options(ctx: &mut E2ECtx) {
     );
 }
 
+/// `htmlsnapshot readability` sends `html_snapshot_readability` and renders metadata.
+pub(super) fn test_htmlsnapshot_readability(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    let result = run_command(ctx, &["htmlsnapshot", "readability"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot readability to succeed:\n{}",
+        result.stderr
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let readability_call = tool_calls
+        .iter()
+        .find(|call| call.tool == "html_snapshot_readability")
+        .expect("expected html_snapshot_readability tool call");
+    assert!(
+        readability_call.arguments.get("sessionId").is_some(),
+        "expected sessionId in html_snapshot_readability arguments, got: {:?}",
+        readability_call.arguments
+    );
+}
+
+/// `htmlsnapshot readability <url>` passes the url through to the tool.
+pub(super) fn test_htmlsnapshot_readability_with_url(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    let result = run_command(
+        ctx,
+        &["htmlsnapshot", "readability", "https://example.com/article"],
+    );
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot readability with url to succeed:\n{}",
+        result.stderr
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let readability_call = tool_calls
+        .iter()
+        .find(|call| call.tool == "html_snapshot_readability")
+        .expect("expected html_snapshot_readability tool call");
+    assert_eq!(
+        readability_call
+            .arguments
+            .get("url")
+            .and_then(|v| v.as_str()),
+        Some("https://example.com/article"),
+        "expected url=https://example.com/article, got: {:?}",
+        readability_call.arguments
+    );
+}
+
+/// `plugin-markdown read --url <url>` routes through the dynamic plugin
+/// command system and calls the `markdown_read` MCP tool.
+pub(super) fn test_plugin_markdown_read(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    let result = run_command(
+        ctx,
+        &["plugin-markdown", "read", "--url", "https://example.com/article"],
+    );
+    assert_eq!(
+        result.exit_code, 0,
+        "expected plugin-markdown read to succeed:\n{}",
+        result.stderr
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let read_call = tool_calls
+        .iter()
+        .find(|call| call.tool == "markdown_read")
+        .expect("expected markdown_read tool call from plugin-markdown read");
+    assert_eq!(
+        read_call.arguments.get("url").and_then(|v| v.as_str()),
+        Some("https://example.com/article"),
+        "expected url=https://example.com/article, got: {:?}",
+        read_call.arguments
+    );
+    assert!(
+        read_call.arguments.get("sessionId").is_some(),
+        "expected sessionId in markdown_read arguments, got: {:?}",
+        read_call.arguments
+    );
+}
+
 /// When the server returns an error for html_snapshot_capture, the CLI propagates it.
 pub(super) fn test_htmlsnapshot_error_propagation(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);

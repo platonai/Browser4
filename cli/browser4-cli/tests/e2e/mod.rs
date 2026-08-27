@@ -918,7 +918,7 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             &mut stream,
             "200 OK",
             "application/json",
-            r#"["open_session","list_sessions","browser_navigate","agent_extract","agent_summarize","crawl_submit"]"#,
+            r#"{"tools":["open_session","list_sessions","browser_navigate","agent_extract","agent_summarize","crawl_submit","markdown_read"]}"#,
         ),
         ("POST", "/mcp/call-tool") => {
             let payload: serde_json::Value =
@@ -1150,6 +1150,12 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 }
                 "html_snapshot_inspect" => {
                     r#"{"selector":".product","matchCount":5,"analyzed":5,"autoDiscovered":false,"suggestedSelectors":[{"selector":".product h2","count":5,"score":100,"type":"text"}]}"#.to_string()
+                }
+                "html_snapshot_readability" => {
+                    r#"{"url":"https://mock.browser4.local","title":"Mock Article Title","byline":"Mock Author","siteName":"Mock Site","excerpt":"A mock excerpt.","length":1234,"confidence":0.85,"textContent":"This is the extracted article text from the mock server.","content":"<article><h1>Mock Article Title</h1><p>This is the extracted article text from the mock server.</p></article>"}"#.to_string()
+                }
+                "markdown_read" => {
+                    r##"{"markdown":"# Mock Read Article\n\nRead via the markdown plugin pipeline.","title":"Mock Read Article","byline":"","siteName":"","url":"https://mock.browser4.local","source":"extractor","charCount":64,"outline":[]}"##.to_string()
                 }
                 "execute_cdp_command" => {
                     let method = arguments
@@ -4475,6 +4481,7 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "htmlsnapshot-summary",
         "htmlsnapshot-grep",
         "htmlsnapshot-inspect",
+        "htmlsnapshot-readability",
         // crawl commands
         "crawl",
         "crawl-cancel",

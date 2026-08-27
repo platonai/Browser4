@@ -21,6 +21,7 @@ import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.markdown.integration.MarkdownBrowseEventHandler
 import ai.platon.pulsar.markdown.service.MarkdownConverter
+import ai.platon.pulsar.markdown.service.ReaderService
 import ai.platon.pulsar.markdown.service.SiteCrawler
 import ai.platon.pulsar.markdown.tools.MarkdownToolExecutor
 import ai.platon.pulsar.skeleton.event.BrowseEventHandlers
@@ -109,6 +110,15 @@ open class MarkdownAutoConfiguration(
         return SiteCrawler(markdownConfig, markdownConverter, markdownHttpClient)
     }
 
+    @Bean(name = ["readerService"])
+    @ConditionalOnMissingBean(name = ["readerService"])
+    open fun readerService(
+        markdownHttpClient: OkHttpClient,
+        siteCrawler: SiteCrawler,
+    ): ReaderService {
+        return ReaderService(markdownHttpClient, siteCrawler)
+    }
+
     @Bean(name = ["markdownBrowseEventHandler"])
     @ConditionalOnMissingBean(name = ["markdownBrowseEventHandler"])
     open fun markdownBrowseEventHandler(
@@ -124,7 +134,8 @@ open class MarkdownAutoConfiguration(
         markdownConfig: MarkdownConfig,
         markdownConverter: MarkdownConverter,
         siteCrawler: SiteCrawler,
+        readerService: ReaderService,
     ): MarkdownToolExecutor {
-        return MarkdownToolExecutor(markdownConfig, markdownConverter, siteCrawler)
+        return MarkdownToolExecutor(markdownConfig, markdownConverter, siteCrawler, readerService)
     }
 }

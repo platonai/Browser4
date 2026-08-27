@@ -67,6 +67,15 @@ const TIPS_HTMLSNAPSHOT_GET: &[Tip] = &[
     },
 ];
 
+const TIPS_READABILITY: &[Tip] = &[
+    Tip {
+        text: "Use `htmlsnapshot readability` to extract the main article in one step — no CSS selectors, no LLM tokens. Deterministic Readability-style heuristic on the stored snapshot",
+    },
+    Tip {
+        text: "`htmlsnapshot readability <url>` fetches a specific page independently, like `htmlsnapshot query`'s @url mode",
+    },
+];
+
 const TIPS_HTMLSNAPSHOT_QUERY: &[Tip] = &[
     Tip {
         text: "X-SQL has ~200 functions across DOM_*, STR_*, and ARRAY_* namespaces — see skills/browser4-cli/references/x-sql.md",
@@ -398,6 +407,7 @@ fn tips_for_command(command: &str) -> &'static [Tip] {
         "htmlsnapshot-grep" => TIPS_HTMLSNAPSHOT_GREP,
         "htmlsnapshot-inspect" => TIPS_INSPECT,
         "htmlsnapshot-summary" => TIPS_INSPECT,
+        "htmlsnapshot-readability" => TIPS_READABILITY,
         "click" | "dblclick" | "hover" | "fill" | "type" | "press" | "check" | "uncheck"
         | "drag" | "keydown" | "keyup" => TIPS_INTERACTION,
         "goto" | "open" | "go-back" | "go-forward" | "reload" => TIPS_NAVIGATION,
@@ -535,6 +545,7 @@ mod tests {
         assert!(!tips_for_command("htmlsnapshot-grep").is_empty());
         assert!(!tips_for_command("htmlsnapshot-export").is_empty());
         assert!(!tips_for_command("htmlsnapshot-inspect").is_empty());
+        assert!(!tips_for_command("htmlsnapshot-readability").is_empty());
         // Eval
         assert!(!tips_for_command("eval").is_empty());
         // AI

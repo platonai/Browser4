@@ -437,6 +437,7 @@ browser4-cli cdp Runtime.evaluate --json '{"expression":"document.title"}'
 | `htmlsnapshot summary` | 生成压缩版 Web Page Summary Index（WPSI）。 |
 | `htmlsnapshot grep <pattern>` | 用 grep 风格参数搜索已存储 HTML。 |
 | `htmlsnapshot inspect [selector]` | 发现重复 DOM 模式和候选选择器。支持 `--max`、`--depth`、`--stdin`、`--selector-base64`。 |
+| `htmlsnapshot readability [url]` | 用 Readability 式启发式算法一步提取正文——无需 LLM、零 token。支持 `--text-only` 与分页。 |
 
 重要规则：
 
@@ -444,6 +445,7 @@ browser4-cli cdp Runtime.evaluate --json '{"expression":"document.title"}'
 - 需要重复 DOM 提取时用 `htmlsnapshot`
 - 推荐使用 `htmlsnapshot query --sql @query.sql`，避免 shell 转义问题
 - 需要关联型列表提取时，优先使用 `htmlsnapshot query`，而不是多次 `get all`
+- 需要一步提取正文（无需手写选择器）时，用 `htmlsnapshot readability`
 
 ```bash
 browser4-cli htmlsnapshot
@@ -452,6 +454,7 @@ browser4-cli htmlsnapshot get all text ".result-title" --offset 10 --limit 5
 browser4-cli htmlsnapshot inspect ".s-result-item" --depth 6 --max 20
 browser4-cli htmlsnapshot export --file page.html --clean
 browser4-cli htmlsnapshot query --sql @query.sql
+browser4-cli htmlsnapshot readability --text-only --all
 ```
 
 深入了解 X-SQL 可参见 [skills/browser4-cli/references/htmlsnapshot.md](skills/browser4-cli/references/htmlsnapshot.md) 与 [skills/browser4-cli/references/x-sql-dom-load-select.md](skills/browser4-cli/references/x-sql-dom-load-select.md)。

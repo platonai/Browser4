@@ -32,9 +32,10 @@ browser4-cli htmlsnapshot export [--file <path>] [--clean]  # save snapshot HTML
 browser4-cli htmlsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]  # extract ALL matches; html paginated at 2K lines, text not paginated
 browser4-cli htmlsnapshot grep [OPTIONS] <pattern> [--page N] [--page-size N] [--all]  # search snapshot HTML with regex; paginated by default (2K lines)
 browser4-cli htmlsnapshot inspect [selector] [--max N] [--depth D]  # analyze DOM structure, suggest CSS selectors
+browser4-cli htmlsnapshot readability [url] [--text-only] [--page N] [--page-size N] [--all]  # one-step article extraction (no LLM, no selectors)
 ```
 
-`htmlsnapshot` (capture) always fetches a fresh snapshot, caches it, and returns enriched metadata including image/link counts and a list of interactive elements (with tag, class, id, aria attributes, and bounding box). Subsequent `get`/`query`/`export`/`inspect` reuse the cache until the next capture or page navigation.
+`htmlsnapshot` (capture) always fetches a fresh snapshot, caches it, and returns enriched metadata including image/link counts and a list of interactive elements (with tag, class, id, aria attributes, and bounding box). Subsequent `get`/`query`/`export`/`inspect`/`readability` reuse the cache until the next capture or page navigation.
 
 > **Note:** `htmlsnapshot get` looks up the page using the browser's current URL (after any redirects/navigations), so it works correctly on search-results pages and post-form-submission pages.
 
@@ -304,6 +305,55 @@ When `selector` matches only **1 element** (e.g. default `:root`, or `body`), **
 - **Avoid quoting hell:** Use `--sql @file.sql` (file), `--sql-stdin` (piped), or `--sql-base64` (encoded) instead of inline `--sql "..."` on Windows — quoted CSS selectors and `!=` operators break inline SQL.
 - **Base64 for portability:** `--sql "$(base64 -w0 query.sql)" --sql-base64` passes SQL safely through any shell, CI pipeline, or HTTP transport with zero quoting issues.
 - **`@file` paths resolve relative to CWD first**, then fall back to the Browser4 repo root — so `cargo run` from `cli/browser4-cli` still finds `query.sql` at the workspace root.
+
+## Readability — One-step article extraction
+
+Extracts the main article content from the stored HTML snapshot using a deterministic, Readability-style heuristic (the same family of algorithms behind Firefox Reader View). **No LLM, no tokens, no CSS selectors required.**
+
+```bash
+# Extract the article from the current page's stored snapshot
+browser4-cli htmlsnapshot readability
+
+# Plain text only (no metadata header), no pagination
+browser4-cli htmlsnapshot readability --text-only --all
+
+# Fetch and extract a specific article URL independently
+browser4-cli htmlsnapshot readability "https://example.com/article"
+```
+
+### Output
+
+Prints a metadata header (title, byline, site name, URL, character count, confidence) followed by the article text, paginated at 2000 lines by default. Use `--text-only` for just the text and `--json` for the full result (cleaned content HTML included under `content`).
+
+| Field | Meaning |
+|---|---|
+| `title` | Page title (falls back to the article H1) |
+| `byline` | Author, when discoverable (`meta[name=author]`, `rel=author`) |
+| `siteName` | Site name, when discoverable (`og:site_name`) |
+| `excerpt` | Meta description, when available |
+| `length` | Article plain-text character count |
+| `confidence` | Coverage ratio — fraction of the page's text captured by the article region |
+| `content` | Cleaned article HTML (classes stripped by default) |
+| `textContent` | Article plain text |
+
+### How it works
+
+1. Pre-clean: scripts, styles, forms, navigation landmarks, and hidden elements are dropped.
+2. Candidate scoring: containers accumulate paragraph text density; link-heavy regions (nav, link farms) score near zero.
+3. The best container is chosen (preferring a real article region over the whole `<body>`), then sanitized: noise widgets, empty elements, and class/id attributes are removed.
+4. Metadata (title, byline, site name, excerpt) is extracted from the document head.
+
+### Positioning vs other commands
+
+- **`readability`** = heuristic article extraction (offline, deterministic, zero tokens) — best for long-form articles and news pages.
+- **`get text "<selector>"`** = explicit CSS extraction — use when you know the structure.
+- **`extract`** = LLM-based natural-language extraction — use for complex instructions (needs an LLM key).
+- **`export --clean`** = whole-page minimal HTML for LLM consumption.
+
+### Error handling
+
+- Fails loudly when the page has no article-like content (text below the ~500-char threshold or no article structure). Try a page with substantial text, or fall back to `htmlsnapshot get text "<selector>"` / `htmlsnapshot inspect`.
+- Needs a prior capture, like `get`/`inspect`/`summary` — unless a URL argument is given (fetches independently, like `query`'s `@url` mode).
 
 ## Error Handling
 

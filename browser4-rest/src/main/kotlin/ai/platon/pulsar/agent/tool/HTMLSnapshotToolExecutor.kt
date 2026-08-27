@@ -9,6 +9,7 @@ import ai.platon.pulsar.rest.api.service.ScrapeService
 import ai.platon.pulsar.rest.mcp.controller.*
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryIndexService
+import ai.platon.pulsar.skeleton.workflow.parse.html.ReadabilityExtractor
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.node.ArrayNode
 import ai.platon.pulsar.rest.session.ManagedSession
@@ -135,6 +136,17 @@ class HTMLSnapshotToolExecutor(
             returnType = "String",
             description = "Inspect the HTML snapshot and suggest CSS selectors for recurring patterns."
         )
+
+        toolSpec["readability"] = ToolSpec(
+            domain = domain,
+            method = "readability",
+            arguments = listOf(
+                ToolSpec.Arg("sessionId", "String", null),
+                ToolSpec.Arg("url", "String", null),
+            ),
+            returnType = "String",
+            description = "Extract the main article content (title, byline, site name, excerpt, cleaned HTML, plain text) from the stored HTML snapshot using a Readability-style heuristic. When url is given, the page is fetched independently; otherwise the current session page is used."
+        )
     }
 
     override suspend fun callFunctionOn(
@@ -150,6 +162,7 @@ class HTMLSnapshotToolExecutor(
             "export" -> export(args, receiver)
             "summary" -> summary(args, receiver)
             "inspect" -> inspect(args, receiver)
+            "readability" -> readability(args, receiver)
             else -> throw IllegalArgumentException("Unsupported html_snapshot method: $functionName")
         }
     }
@@ -457,6 +470,54 @@ class HTMLSnapshotToolExecutor(
             val maxDepth = paramInt(args, "depth", "inspect", required = false, default = 5) ?: 5
 
             inspectDocument(document, selector, maxMatches, maxDepth)
+        }
+    }
+
+    /**
+     * Extract the main article content from the stored HTML snapshot using a
+     * Readability-style heuristic (deterministic, no LLM).
+     *
+     * @param args `url` (optional) — fetch a specific page independently, like
+     *   `html_snapshot_query`'s `@url` mode. Without it, the current session
+     *   page is used (stored snapshot, or a fresh capture when absent).
+     * @return JSON with title, byline, siteName, excerpt, length, confidence,
+     *   textContent and cleaned article content HTML.
+     */
+    private suspend fun readability(args: Map<String, Any?>, receiver: Any = Any()): String {
+        val managed = resolveSession(args, receiver)
+
+        return managed.withLock {
+            val pulsarSession = managed.agenticSession
+            val requestedUrl = paramString(args, "url", "readability", required = false)
+                ?.takeIf { it.isNotBlank() }
+
+            val page = if (requestedUrl != null) {
+                val normUrl = pulsarSession.normalize(requestedUrl)
+                pulsarSession.getOrNull(normUrl.urlString) ?: pulsarSession.capture(managed.driver, normUrl.urlString)
+            } else {
+                val current = pulsarSession.normalize(driver.currentUrl())
+                pulsarSession.getOrNull(current.urlString) ?: pulsarSession.capture(managed.driver)
+            }
+
+            val document = pulsarSession.parse(page)
+
+            val result = ReadabilityExtractor().extract(document.document)
+                ?: throw IllegalArgumentException(
+                    "No readable article content found on this page (text below threshold or no article-like structure). " +
+                        "Try a page with substantial text, or use `htmlsnapshot get text \"<selector>\"` for explicit extraction."
+                )
+
+            pulsarObjectMapper().createObjectNode().apply {
+                put("url", result.url.ifBlank { page.url })
+                put("title", result.title)
+                put("byline", result.byline)
+                put("siteName", result.siteName)
+                put("excerpt", result.excerpt)
+                put("length", result.length)
+                put("confidence", result.confidence)
+                put("textContent", result.textContent)
+                put("content", result.content)
+            }.toString()
         }
     }
 

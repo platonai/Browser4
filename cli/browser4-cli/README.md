@@ -197,6 +197,7 @@ extensions) are also possible via `open --profile` or PROTOTYPE mode. See
 | `htmlsnapshot export` | Export snapshot HTML to a local file (--clean strips scripts/styles/non-standard attrs) |
 | `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from the stored HTML snapshot |
 | `htmlsnapshot grep [OPTIONS] <pattern>` | Search snapshot HTML with regex patterns and grep-style output |
+| `htmlsnapshot readability [url]` | Extract the main article content with a Readability-style heuristic (no LLM) |
 | `generate-locator <ref>` | Generate a unique CSS selector path for an element |
 | `diff snapshot [before] [after]` | Diff two saved accessibility snapshots (defaults to the two most recent) |
 

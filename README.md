@@ -425,6 +425,7 @@ browser4-cli cdp Runtime.evaluate --json '{"expression":"document.title"}'
 | `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI). |
 | `htmlsnapshot grep <pattern>` | Search stored HTML with grep-style flags. |
 | `htmlsnapshot inspect [selector]` | Discover recurring DOM patterns and selector candidates. Supports `--max`, `--depth`, `--stdin`, `--selector-base64`. |
+| `htmlsnapshot readability [url]` | Extract the main article content with a Readability-style heuristic — no LLM, no tokens. Supports `--text-only` and pagination. |
 
 Important rules:
 
@@ -432,6 +433,7 @@ Important rules:
 - use `htmlsnapshot` when you need repeated DOM extraction
 - `htmlsnapshot query --sql @query.sql` is the recommended way to avoid shell quoting issues
 - for correlated list extraction, prefer `htmlsnapshot query` over repeated `get all`
+- for one-step article extraction (no selectors needed), use `htmlsnapshot readability`
 
 ```bash
 browser4-cli htmlsnapshot
@@ -440,6 +442,7 @@ browser4-cli htmlsnapshot get all text ".result-title" --offset 10 --limit 5
 browser4-cli htmlsnapshot inspect ".s-result-item" --depth 6 --max 20
 browser4-cli htmlsnapshot export --file page.html --clean
 browser4-cli htmlsnapshot query --sql @query.sql
+browser4-cli htmlsnapshot readability --text-only --all
 ```
 
 For deep X-SQL usage, see [skills/browser4-cli/references/htmlsnapshot.md](skills/browser4-cli/references/htmlsnapshot.md) and [skills/browser4-cli/references/x-sql-dom-load-select.md](skills/browser4-cli/references/x-sql-dom-load-select.md).

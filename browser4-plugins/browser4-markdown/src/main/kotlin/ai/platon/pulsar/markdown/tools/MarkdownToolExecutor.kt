@@ -22,6 +22,8 @@ import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.markdown.config.MarkdownConfig
 import ai.platon.pulsar.markdown.service.MarkdownConverter
 import ai.platon.pulsar.markdown.service.MarkdownUtils
+import ai.platon.pulsar.markdown.service.ReaderService
+import ai.platon.pulsar.markdown.service.ReadOptions
 import ai.platon.pulsar.markdown.service.SiteCrawler
 import kotlin.reflect.KClass
 import java.nio.file.Path
@@ -34,11 +36,14 @@ import java.nio.file.Path
  * - `markdown.crawl()` — crawl a site starting from the current page, saving each page as markdown
  * - `markdown.crawlFrom(url)` — crawl a site starting from a specific URL
  * - `markdown.fetch(url)` — fetch a single URL via HTTP and convert to markdown (no browser)
+ * - `markdown.read(url)` — zero-token article reading: llms.txt → content negotiation →
+ *   Readability extraction → markdown (no browser)
  */
 open class MarkdownToolExecutor(
     private val config: MarkdownConfig,
     private val converter: MarkdownConverter,
     private val siteCrawler: SiteCrawler,
+    private val readerService: ReaderService,
 ) : AbstractToolExecutor() {
     private val logger = getLogger(MarkdownToolExecutor::class)
 
@@ -177,6 +182,40 @@ open class MarkdownToolExecutor(
                 - isInternal: whether the link points to the same domain
 
                 Use this to explore a site's link structure before deciding what to crawl.
+            """.trimIndent()
+        )
+
+        toolSpec["read"] = ToolSpec(
+            domain = domain,
+            method = "read",
+            arguments = listOf(
+                ToolSpec.Arg("url", "String", null),
+                ToolSpec.Arg("requireMd", "Boolean", "false"),
+                ToolSpec.Arg("llms", "Boolean", "false"),
+                ToolSpec.Arg("outline", "Boolean", "false"),
+                ToolSpec.Arg("filter", "String", null),
+                ToolSpec.Arg("allowedDomains", "List<String>", "[]"),
+            ),
+            returnType = "ReadResult",
+            description = "Read a URL as markdown without a browser or LLM. Tries llms.txt discovery, then Accept: text/markdown content negotiation, then heuristic Readability extraction of the article body converted to markdown.",
+            help = """
+                markdown.read(url)
+                markdown.read(url, requireMd: Boolean?, llms: Boolean?, outline: Boolean?, filter: String?, allowedDomains: List<String>?)
+
+                Zero-token article reading pipeline:
+                1. llms.txt — when llms=true, fetch llms.txt / llms-full.txt from the site root.
+                2. Content negotiation — request with Accept: text/markdown; a markdown response is used as-is.
+                3. Heuristic extraction — Readability-style article extraction, then HTML→markdown.
+
+                Flags:
+                - requireMd: fail when no markdown source (llms/negotiation) was found
+                - llms: prefer llms.txt / llms-full.txt discovery
+                - outline: include a heading outline of the article
+                - filter: keep only article sections whose heading contains this substring
+                - allowedDomains: domain whitelist (SSRF protection); empty allows any host
+
+                Returns markdown, title, byline, siteName, url, source (llms|negotiation|extractor),
+                charCount, and optional outline.
             """.trimIndent()
         )
     }
@@ -356,9 +395,40 @@ open class MarkdownToolExecutor(
                 )
             }
 
+            "read" -> {
+                val url = paramString(args, "url", functionName)!!
+                val requireMd = paramBool(args, "requireMd", functionName, required = false, default = false) ?: false
+                val llms = paramBool(args, "llms", functionName, required = false, default = false) ?: false
+                val outline = paramBool(args, "outline", functionName, required = false, default = false) ?: false
+                val filter = paramString(args, "filter", functionName, required = false)
+                val allowedDomains = paramStringList(args, "allowedDomains", functionName, required = false)
+
+                val result = readerService.read(
+                    url,
+                    ReadOptions(
+                        requireMd = requireMd,
+                        llms = llms,
+                        outline = outline,
+                        filter = filter?.takeIf { it.isNotBlank() },
+                        allowedDomains = allowedDomains,
+                    ),
+                )
+
+                mapOf(
+                    "markdown" to result.markdown,
+                    "title" to result.title,
+                    "byline" to result.byline,
+                    "siteName" to result.siteName,
+                    "url" to result.url,
+                    "source" to result.source,
+                    "charCount" to result.charCount,
+                    "outline" to result.outline,
+                )
+            }
+
             else -> throw IllegalArgumentException(
                 "Unsupported markdown method: $functionName. " +
-                    "Supported: convert, crawl, crawlFrom, fetch, discoverLinks."
+                    "Supported: convert, crawl, crawlFrom, fetch, discoverLinks, read."
             )
         }
     }

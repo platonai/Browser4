@@ -4104,6 +4104,29 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "htmlsnapshot-readability",
+            description: "Readability: extract the main article content (title, byline, site name, excerpt, cleaned HTML, plain text) from the stored HTML snapshot using a Readability-style heuristic. Use `htmlsnapshot` first to capture the page into storage. Supports an optional URL to fetch independently.",
+            category: Category::Snapshot,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "url", description: "URL to extract from. Defaults to the current session's page URL (stored snapshot or fresh capture)", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "text-only", short: None, is_bool: true, description: "Print only the extracted plain text, without the metadata header" },
+                OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
+                OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "html_snapshot_readability".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(url) = get_opt_str(args, "url") { p["url"] = json!(url); }
+                p
+            },
+        },
+        CommandDef {
             name: "generate-locator",
             description: "Generate the best CSS selector (id, class, or nth-of-type path) for a snapshot ref or CSS selector",
             category: Category::Core,
@@ -6802,9 +6825,33 @@ mod tests {
             "htmlsnapshot-summary",
             "htmlsnapshot-grep",
             "htmlsnapshot-inspect",
+            "htmlsnapshot-readability",
         ] {
             assert!(map.contains_key(*expected), "Missing command: {}", expected);
         }
+    }
+
+    #[test]
+    fn test_html_snapshot_readability_params() {
+        let map = commands_map();
+        let cmd = map.get("htmlsnapshot-readability").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "html_snapshot_readability");
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(
+            params.as_object().unwrap().is_empty(),
+            "readability params should be empty without a url"
+        );
+    }
+
+    #[test]
+    fn test_html_snapshot_readability_url_param() {
+        let map = commands_map();
+        let cmd = map.get("htmlsnapshot-readability").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com/article"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://example.com/article");
     }
 
     #[test]
@@ -6944,6 +6991,7 @@ mod tests {
             "htmlsnapshot-summary",
             "htmlsnapshot-grep",
             "htmlsnapshot-inspect",
+            "htmlsnapshot-readability",
         ] {
             let cmd = map.get(*name).unwrap();
             assert_eq!(cmd.category, Category::Snapshot);

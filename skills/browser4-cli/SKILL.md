@@ -135,6 +135,7 @@ Tab commands (`tab-list`, `tab-new`, `tab-select`, `tab-close`, `window new`) sc
 | `is visible\|enabled\|checked <sel>` | Element state assertions | Verify visibility, enabled-ness, or checked state before acting | — |
 | `dialog-accept`, `dialog-dismiss`, `dialog-status` | Native JS dialog handling | After clicking buttons that trigger alert/confirm/prompt; `dialog-status` inspects the pending dialog | — |
 | `htmlsnapshot get`, `get all` | Extract text/html/attr via CSS selectors from stored HTML | **Page content & text extraction** — get article text, headings, attributes. Use `htmlsnapshot` when you need to read or extract page content. | [htmlsnapshot.md](references/htmlsnapshot.md) |
+| `htmlsnapshot readability` | One-step article extraction via a Readability-style heuristic (no LLM, no selectors) | Get the main article (title, byline, text) from the stored snapshot in one call; `htmlsnapshot readability <url>` fetches a page independently | [htmlsnapshot.md](references/htmlsnapshot.md) |
 | `htmlsnapshot query` | X-SQL queries for structured extraction | Multi-field, filtered, sorted data | [x-sql.md](references/x-sql.md) |
 | `eval` | Execute JavaScript in the page | Live DOM access, complex transforms | — |
 | `eval --ref` | Execute JS scoped to a specific element | Element property extraction (text, attrs, styles) | **⚠️ Expression MUST be an arrow function: `element => element.textContent`** |
@@ -172,7 +173,7 @@ Skill files are unpacked during `browser4-cli install` (and refreshed by `upgrad
 
 Choosing how to extract or process data? The full decision trees, comparisons, and the X-SQL quickstart template live in **[decision-trees.md](references/decision-trees.md)**. The essentials:
 
-- **4a. Extraction method:** interact → `snapshot` + refs; read content → `htmlsnapshot`; live DOM → `eval --json`; natural language → `extract`; many pages → `crawl`/`swarm`. `htmlsnapshot get`/`inspect`/`summary`/`grep`/`export` need a prior capture; `query` fetches independently (`DOM_LOAD_AND_SELECT(@url, ...)`).
+- **4a. Extraction method:** interact → `snapshot` + refs; read content → `htmlsnapshot`; one-step article (no selectors, no LLM) → `htmlsnapshot readability`; live DOM → `eval --json`; natural language → `extract`; many pages → `crawl`/`swarm`. `htmlsnapshot get`/`inspect`/`summary`/`grep`/`export`/`readability` need a prior capture; `query` and `readability <url>` fetch independently (`DOM_LOAD_AND_SELECT(@url, ...)`).
 - **4b. Bulk/scale:** one list page → `query`; known URLs → `crawl --seed-file`; follow links → `crawl <url> --depth N`; parallel → `swarm`; scheduled → `loop`.
 - **4c. Query granularity:** `get` = first match; `get all` = all matches (unaligned arrays — don't combine); `query` = correlated multi-field rows.
 - **4d. Structuring pages (WebMiner):** `< 1,000 pages` → `webminer all` (free, local, zero tokens); `> 1,000 pages` → WebMiner Commercial (Spark). Acquire pages first with `crawl`/`swarm`, then feed the HTML directory in.
