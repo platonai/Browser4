@@ -22,7 +22,7 @@ class SystemToolExecutorTest {
     }
 
     @Test
-        @DisplayName("help for help method returns detailed help")
+    @DisplayName("help for help method returns detailed help")
     fun helpForHelpMethodReturnsDetailedHelp() {
         val help = executor.help("help")
 
@@ -32,7 +32,7 @@ class SystemToolExecutorTest {
     }
 
     @Test
-        @DisplayName("help with domain and method delegates to agent tool manager")
+    @DisplayName("help with domain and method delegates to agent tool manager")
     fun helpWithDomainAndMethodDelegatesToAgentToolManager() = runBlocking {
         every { agentToolManager.help("fs", "writeString") } returns "File system help"
 
@@ -42,7 +42,7 @@ class SystemToolExecutorTest {
     }
 
     @Test
-        @DisplayName("system help method executes correctly")
+    @DisplayName("system help method executes correctly")
     fun systemHelpMethodExecutesCorrectly() = runBlocking {
         every { agentToolManager.help("tab", "click") } returns "Click help text"
 
@@ -58,7 +58,7 @@ class SystemToolExecutorTest {
     }
 
     @Test
-        @DisplayName("skillDoc reads bundled browser4-cli SKILL.md from classpath")
+    @DisplayName("skillDoc reads bundled browser4-cli SKILL.md from classpath")
     fun skillDocReadsBundledSkill() {
         val content = executor.skillDoc("SKILL.md")
 
@@ -117,7 +117,7 @@ class SystemToolExecutorTest {
     }
 
     @Test
-        @DisplayName("skillDoc resolves reference docs under references/ (latent path bug fixed)")
+    @DisplayName("skillDoc resolves reference docs under references/ (latent path bug fixed)")
     fun skillDocResolvesReferenceDocs() {
         val snapshot = executor.skillDoc("snapshot.md")
         assertTrue(
@@ -129,7 +129,7 @@ class SystemToolExecutorTest {
     }
 
     @Test
-        @DisplayName("skillDocMetadata returns frontmatter only, not the full SKILL.md body")
+    @DisplayName("skillDocMetadata returns frontmatter only, not the full SKILL.md body")
     fun skillDocMetadataReturnsFrontmatterOnly() {
         val metadata = executor.skillDocMetadata("SKILL.md")
 
@@ -144,7 +144,7 @@ class SystemToolExecutorTest {
     }
 
     @Test
-        @DisplayName("skillDoc lists available documents for an unknown name")
+    @DisplayName("skillDoc lists available documents for an unknown name")
     fun skillDocUnknownNameListsAvailable() {
         val content = executor.skillDoc("does-not-exist.md")
 
@@ -154,14 +154,14 @@ class SystemToolExecutorTest {
     }
 
     @Test
-        @DisplayName("skillDoc rejects path traversal")
+    @DisplayName("skillDoc rejects path traversal")
     fun skillDocRejectsPathTraversal() {
         val thrown = runCatching { executor.skillDoc("../../secret") }.exceptionOrNull()
         assertTrue(thrown is IllegalArgumentException, "expected IllegalArgumentException, got: $thrown")
     }
 
     @Test
-        @DisplayName("taskComplete executes and returns a confirmation")
+    @DisplayName("taskComplete executes and returns a confirmation")
     fun taskCompleteReturnsConfirmation() = runBlocking {
         val tc = ToolCall(
             domain = "system",
@@ -181,14 +181,14 @@ class SystemToolExecutorTest {
     }
 
     @Test
-        @DisplayName("taskComplete rejects a blank summary")
+    @DisplayName("taskComplete rejects a blank summary")
     fun taskCompleteRejectsBlankSummary() {
         val thrown = runCatching { executor.taskComplete("   ", null, null, null) }.exceptionOrNull()
         assertTrue(thrown is IllegalArgumentException, "expected IllegalArgumentException, got: $thrown")
     }
 
     @Test
-        @DisplayName("TaskCompletion parses native tool-call arguments JSON")
+    @DisplayName("TaskCompletion parses native tool-call arguments JSON")
     fun taskCompletionFromJsonParses() {
         val completion = TaskCompletion.fromJson(
             """{"summary":"done","keyFindings":["k1"],"filesChanged":["f1"],"problems":["p1"]}"""
@@ -201,7 +201,7 @@ class SystemToolExecutorTest {
     }
 
     @Test
-        @DisplayName("domain property is system")
+    @DisplayName("domain property is system")
     fun domainPropertyIsSystem() {
         assertEquals("system", executor.domain)
     }
