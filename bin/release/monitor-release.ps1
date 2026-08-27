@@ -58,11 +58,19 @@
     copilot). Without it, the raw commit list is used.
 
 .PARAMETER SkipVersionBump
-    Skip the automatic post-release version bump (next patch). By default, after
-    a successful release the script bumps VERSION (and all pom.xml / Cargo.toml /
-    Cargo.lock / package.json) to X.Y.(Z+1)-SNAPSHOT and commits + pushes it as
-    "Auto-bump version to X.Y.(Z+1)-SNAPSHOT", so the next release starts from
-    the next patch. Pass this switch to leave the version untouched.
+    Skip the automatic post-release version bump. By default, after a successful
+    release the script bumps the version — an rc release advances to the next
+    rc candidate (rc.N -> rc.N+1), a patch release to the next patch SNAPSHOT
+    (X.Y.Z-SNAPSHOT -> X.Y.(Z+1)-SNAPSHOT) — across VERSION, all pom.xml,
+    Cargo.toml, Cargo.lock and package.json, then commits and pushes the bump
+    as "Auto-bump version to …". The bump rules are computed by
+    `node bin/version.mjs next`. Pass this switch to leave the version untouched.
+
+.PARAMETER NoSyncMain
+    By default the release trigger fast-forwards origin/main to the current
+    branch before tagging (release.yml requires the tag on the latest main).
+    Pass this switch to disable the automatic sync; the trigger script then
+    warns and asks for confirmation instead.
 
 .PARAMETER MaxMonitorMinutes
     Upper bound (in minutes) for the -NoWatch monitor loop. Default 0 = no limit.
@@ -91,6 +99,7 @@ param(
     [switch]$Apply,
     [switch]$DryRun,
     [switch]$SkipVersionBump,
+    [switch]$NoSyncMain,
     [int]$MaxMonitorMinutes = 0,
     [ValidateSet('auto', 'claude', 'kimi', 'codex', 'dsh', 'copilot')]
     [string]$Agent = ""
@@ -845,19 +854,37 @@ function Invoke-PostReleaseVersionBump {
     }
 
     $current = (Get-Content $versionFile -Raw).Trim()
-    if ($current -notmatch '^(\d+)\.(\d+)\.(\d+)(-SNAPSHOT)?$') {
-        Write-Host "  [bump] VERSION '$current' is not X.Y.Z(-SNAPSHOT) — skipping version bump." -ForegroundColor Yellow
+    if ($current -notmatch '^(\d+)\.(\d+)\.(\d+)(-(SNAPSHOT|rc\.\d+))?$') {
+        Write-Host "  [bump] VERSION '$current' is not X.Y.Z, X.Y.Z-SNAPSHOT or X.Y.Z-rc.N — skipping version bump." -ForegroundColor Yellow
         return
     }
 
-    $base = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
-    $nextPatch = [int]$Matches[3] + 1
-    $nextBase = "$($Matches[1]).$($Matches[2]).$nextPatch"
-    $nextSnapshot = "${nextBase}-SNAPSHOT"
+    # ── Compute the next version ──────────────────────────────────────────
+    # The bump rules live in version.mjs (`next`), the single source of
+    # truth: an rc release advances rc.N -> rc.N+1, a patch/SNAPSHOT release
+    # advances to the next patch SNAPSHOT. Fall back to the built-in rules
+    # (mirroring `version.mjs next`) only when node is unavailable.
+    $bumpKind = if ($current -match '-rc\.\d+$') { 'rc' } else { 'patch' }
+    $nextVer = $null
+    try {
+        $nextVer = (node (Join-Path $RepoRoot 'bin' 'version.mjs') next $bumpKind 2>$null | Select-Object -Last 1)
+        if ($nextVer) { $nextVer = $nextVer.Trim() }
+    } catch { $nextVer = $null }
+    if ([string]::IsNullOrWhiteSpace($nextVer)) {
+        if ($bumpKind -eq 'rc' -and $current -match '^(?<base>\d+\.\d+\.\d+)-rc\.(?<n>\d+)$') {
+            $nextVer = "$($Matches['base'])-rc.$([int]$Matches['n'] + 1)"
+        } elseif ($current -match '^(?<maj>\d+)\.(?<min>\d+)\.(?<pat>\d+)') {
+            $nextVer = "$($Matches['maj']).$($Matches['min']).$([int]$Matches['pat'] + 1)-SNAPSHOT"
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($nextVer)) {
+        Write-Host "  [bump] Could not compute the next version from '$current' — skipping version bump." -ForegroundColor Yellow
+        return
+    }
 
     Write-Host ""
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
-    Write-Host "  Post-release version bump: $current -> $nextSnapshot" -ForegroundColor Cyan
+    Write-Host "  Post-release version bump: $current -> $nextVer" -ForegroundColor Cyan
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 
     # ── Guard: working tree must be clean (except files we are about to touch) ──
@@ -883,7 +910,13 @@ function Invoke-PostReleaseVersionBump {
     }
 
     # ── Apply replacements ────────────────────────────────────────────────
-    $oldSnapshot = "$base-SNAPSHOT"
+    # Version-bearing strings differ per bump shape:
+    #   SNAPSHOT:  pom <version>X.Y.Z-SNAPSHOT</version>, <tag>vX.Y.Z</tag>,     CLI "X.Y.Z"
+    #   rc:        pom <version>X.Y.Z-rc.N</version>,   <tag>vX.Y.Z-rc.N</tag>, CLI "X.Y.Z-rc.N"
+    $oldCli = $current -replace '-SNAPSHOT$', ''
+    $newCli = $nextVer -replace '-SNAPSHOT$', ''
+    $oldTag = 'v' + $oldCli
+    $newTag = 'v' + $newCli
     $changed = [System.Collections.Generic.List[string]]::new()
 
     foreach ($rel in $targets) {
@@ -895,15 +928,15 @@ function Invoke-PostReleaseVersionBump {
 
         $updated = $content
         if ($rel -eq 'VERSION') {
-            $updated = $nextSnapshot + "`n"
+            $updated = $nextVer + "`n"
         } elseif ($rel -match 'pom\.xml$') {
-            # pom.xml carries <version>X.Y.Z-SNAPSHOT</version> plus the root
-            # <scm><tag>vX.Y.Z</tag></scm> — replace both forms.
-            $updated = $updated.Replace($oldSnapshot, $nextSnapshot)
-            $updated = $updated.Replace("v$base", "v$nextBase")
+            # Replace the tag first ("vX.Y.Z…") so the version replacement
+            # cannot corrupt it ("X.Y.Z" is a substring of "vX.Y.Z").
+            if ($oldTag -ne $newTag) { $updated = $updated.Replace($oldTag, $newTag) }
+            if ($current -ne $nextVer) { $updated = $updated.Replace($current, $nextVer) }
         } else {
-            # Cargo.toml / Cargo.lock / package.json carry the bare "X.Y.Z"
-            $updated = $updated.Replace('"' + $base + '"', '"' + $nextBase + '"')
+            # Cargo.toml / Cargo.lock / package.json carry the bare "X.Y.Z" (or "X.Y.Z-rc.N")
+            if ($oldCli -ne $newCli) { $updated = $updated.Replace('"' + $oldCli + '"', '"' + $newCli + '"') }
         }
 
         if ($updated -ne $content) {
@@ -918,12 +951,12 @@ function Invoke-PostReleaseVersionBump {
     }
 
     if ($changed.Count -eq 0) {
-        Write-Host "  [bump] No version files needed updating (already at $nextSnapshot?)." -ForegroundColor Green
+        Write-Host "  [bump] No version files needed updating (already at $nextVer?)." -ForegroundColor Green
         return
     }
 
     # ── Commit & push ─────────────────────────────────────────────────────
-    $commitMsg = "Auto-bump version to $nextSnapshot"
+    $commitMsg = "Auto-bump version to $nextVer"
     Push-Location $RepoRoot
     try {
         git add -- $changed
@@ -997,6 +1030,9 @@ if ($remote)      { $triggerArgs['remote'] = $remote }
 if ($message)     { $triggerArgs['message'] = $message }
 if (-not $isDryRun) { $triggerArgs['Apply'] = $true }
 if ($Agent)       { $triggerArgs['Agent'] = $Agent }
+# Sync main to the current branch by default so releasing from a dev branch
+# is a single command (trigger-release.ps1 fast-forwards main when possible).
+if (-not $NoSyncMain) { $triggerArgs['SyncMain'] = $true }
 
 # Capture all output streams so we can extract the tag
 $tagOutput = & $triggerScript @triggerArgs 2>&1

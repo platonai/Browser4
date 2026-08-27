@@ -108,7 +108,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
 
-      - name: Verify release tag is on the latest main
+      - name: Verify release tag is on the latest main or a release branch
         shell: bash
         run: |
           set -euo pipefail
@@ -116,26 +116,38 @@ jobs:
           TAG="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}"
           TAG="${TAG#refs/tags/}"
 
-          # main is the single release source: the tag must point at the
-          # latest origin/main commit. If main has moved on, the tag was
-          # created from stale code and the release is aborted — never
-          # force-resync main to a tag (that rewrites history and drops
+          # main is the primary release source, but registered release
+          # branches (X.Y.x, e.g. 4.14.x) may also carry releases when
+          # trigger-release.ps1 -SyncMain fast-forwards main. The tag must
+          # point at the latest commit of origin/main or of a release branch —
+          # never force-resync main to a tag (that rewrites history and drops
           # commits merged in during the release window).
           git fetch origin main
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*'
           TAG_SHA=$(git rev-parse HEAD)
-          MAIN_SHA=$(git rev-parse origin/main)
 
-          if [ "$TAG_SHA" != "$MAIN_SHA" ]; then
-            echo "❌ Release tag $TAG does not point at the latest origin/main commit."
-            echo "   tag:  $TAG_SHA"
-            echo "   main: $MAIN_SHA"
-            echo ""
-            echo "   Releases must be tagged from the latest main:"
-            echo "     git checkout main && git pull"
-            echo "     .\\bin\\release\\trigger-release.ps1 -Apply"
-            exit 1
+          MAIN_SHA=$(git rev-parse origin/main)
+          if [ "$TAG_SHA" = "$MAIN_SHA" ]; then
+            echo "✅ Tag $TAG points at the latest origin/main ($MAIN_SHA)"
+            exit 0
           fi
-          echo "✅ Tag $TAG points at the latest origin/main ($MAIN_SHA)"
+
+          # Release-branch fallback: X.Y.x branches (4.0.x … 4.14.x).
+          for REF in $(git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/*.x'); do
+            BRANCH_SHA=$(git rev-parse "$REF")
+            if [ "$TAG_SHA" = "$BRANCH_SHA" ]; then
+              echo "✅ Tag $TAG points at the latest $REF ($BRANCH_SHA)"
+              exit 0
+            fi
+          done
+
+          echo "❌ Release tag $TAG is neither the latest origin/main nor the latest release branch."
+          echo "   tag:     $TAG_SHA"
+          echo "   main:    $MAIN_SHA"
+          echo ""
+          echo "   Releases must be tagged from the latest main or a release branch:"
+          echo "     .\\bin\\release\\monitor-release.ps1 -Apply   (auto-syncs main via -SyncMain)"
+          exit 1
 
       - name: Setup Node.js
         uses: actions/setup-node@v5

@@ -60,10 +60,19 @@
     invokes an AI agent. A pinned backend overrides $env:BROWSER4_AGENT and the
     config.psd1 backend order for this invocation.
 
+.PARAMETER SyncMain
+    When HEAD is ahead of origin/main (fast-forward possible), automatically
+    fast-forward main to HEAD — switch main, merge --ff-only the current
+    branch, push, switch back — before tagging. Releases must be tagged from
+    the latest main (release.yml enforces it), so this makes releasing from a
+    dev branch a single command. Without it the script warns and asks for
+    confirmation when HEAD is off main.
+
 .EXAMPLE
     .\bin\release\trigger-release.ps1                       # dry run (preview only)
     .\bin\release\trigger-release.ps1 -Apply                # actually create + push
     .\bin\release\trigger-release.ps1 -Apply -message "Hotfix for login crash"
+    .\bin\release\trigger-release.ps1 -Apply -SyncMain      # auto-fast-forward main first
     .\bin\release\trigger-release.ps1 -Agent auto           # dry run, AI notes (auto backend)
     .\bin\release\trigger-release.ps1 -Agent dsh            # dry run, AI notes via dsh
 #>
@@ -73,6 +82,7 @@ param(
     [string]$message = "",
     [switch]$Apply,
     [switch]$DryRun,
+    [switch]$SyncMain,
     [ValidateSet('auto', 'claude', 'kimi', 'codex', 'dsh', 'copilot')]
     [string]$Agent = ""
 )
@@ -155,6 +165,10 @@ if ($status) {
 # origin/main. main is the single release source — release.yml verifies
 # the tag points at the latest origin/main and aborts the workflow
 # otherwise. Fail fast here instead of pushing a tag that CI will reject.
+#
+# When the current branch is ahead of main (fast-forward possible),
+# -SyncMain automates the sync: switch main → merge --ff-only → push →
+# switch back — so releasing from a dev branch is a single command.
 # ═══════════════════════════════════════════════════════════════════
 
 Write-Host ""
@@ -167,15 +181,52 @@ $mainSha = git rev-parse "$remote/main" 2>$null
 if ($null -eq $mainSha -or -not $mainSha) {
     Write-Warning "Could not resolve $remote/main (fetch failed?). Skipping main-branch check."
 } elseif ($headSha -ne $mainSha) {
-    Write-Warning "HEAD ($headSha) does not match $remote/main ($mainSha)."
-    Write-Warning "Releases must be tagged from the latest main commit — release.yml will abort the workflow if the tag is off main."
-    Write-Warning "Run 'git checkout main && git pull' (or push your commits to main) before tagging."
-    if (-not $isDryRun) {
-        $continue = Confirm-Step "Continue anyway? (y/n)"
-        if ($continue -ne 'y') {
-            Write-Host "Cancelled"
-            exit 0
+    # Can HEAD fast-forward main? (origin/main must be an ancestor of HEAD)
+    git merge-base --is-ancestor $mainSha $headSha 2>$null
+    $ffOk = ($LASTEXITCODE -eq 0)
+
+    if ($ffOk -and $SyncMain) {
+        if ($isDryRun) {
+            Write-Host "HEAD is ahead of $remote/main — would fast-forward main to HEAD (-SyncMain):" -ForegroundColor Cyan
+            Write-Host "  git switch main; git merge --ff-only $(git rev-parse --abbrev-ref HEAD); git push $remote main; switch back" -ForegroundColor DarkGray
+        } else {
+            Write-Host "HEAD is ahead of $remote/main — fast-forwarding main to HEAD (-SyncMain) ..." -ForegroundColor Cyan
+            $currentBranch = git rev-parse --abbrev-ref HEAD
+            git show-ref --verify --quiet refs/heads/main
+            $hadLocalMain = ($LASTEXITCODE -eq 0)
+            try {
+                if ($hadLocalMain) { git switch main } else { git switch -c main "$remote/main" }
+                git merge --ff-only $currentBranch
+                git push $remote main
+                git switch $currentBranch
+            } catch {
+                Write-Error "SyncMain failed: $_"
+                try { git switch $currentBranch } catch { }
+                exit 1
+            }
+            git fetch $remote main 2>$null
+            $mainSha = git rev-parse "$remote/main"
+            if ($headSha -ne $mainSha) {
+                Write-Error "SyncMain verification failed: $remote/main is still not at HEAD after sync."
+                exit 1
+            }
+            Write-Host "[OK] $remote/main fast-forwarded to HEAD ($mainSha)" -ForegroundColor Green
         }
+    } elseif ($ffOk) {
+        Write-Warning "HEAD ($headSha) does not match $remote/main ($mainSha)."
+        Write-Warning "Releases must be tagged from the latest main commit — release.yml will abort the workflow if the tag is off main."
+        Write-Warning "HEAD is ahead of main: pass -SyncMain to fast-forward main automatically (or push to main manually)."
+        if (-not $isDryRun) {
+            $continue = Confirm-Step "Continue anyway? (y/n)"
+            if ($continue -ne 'y') {
+                Write-Host "Cancelled"
+                exit 0
+            }
+        }
+    } else {
+        Write-Error "HEAD ($headSha) diverges from $remote/main ($mainSha): main has commits not in HEAD, so main cannot be fast-forwarded."
+        Write-Error "Merge $remote/main into this branch first (git merge $remote/main), then retry — a tag off main would be rejected by release.yml."
+        exit 1
     }
 } else {
     Write-Host "[OK] HEAD is the latest $remote/main ($mainSha)"

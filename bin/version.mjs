@@ -1511,6 +1511,37 @@ function cmdPrereleaseCheck() {
 }
 
 // ---------------------------------------------------------------------------
+// Subcommand: next (pure version computation — no writes, no git)
+// Used by monitor-release.ps1 so the post-release bump rules live in one place.
+//   node bin/version.mjs next            Next patch SNAPSHOT (X.Y.(Z+1)-SNAPSHOT)
+//   node bin/version.mjs next rc         Next -rc.N candidate (rc.N+1)
+//   node bin/version.mjs next release    Strip prerelease to the stable base (X.Y.Z)
+// ---------------------------------------------------------------------------
+
+function cmdNext(args) {
+  const kind = args[0] || "patch";
+  const version = readBackendVersion();
+  let next = null;
+
+  if (kind === "rc") {
+    next = bumpRc(version);
+  } else if (kind === "release") {
+    next = stripRc(stripSnapshot(version));
+  } else {
+    // patch: advance the stable base (ignoring any prerelease) to X.Y.(Z+1)-SNAPSHOT
+    const base = stripRc(stripSnapshot(version));
+    const nextBase = bumpSemverPart(base, "patch");
+    if (nextBase) next = `${nextBase}-SNAPSHOT`;
+  }
+
+  if (!next) {
+    console.error(`ERROR: cannot compute next ${kind} version from '${version}'`);
+    process.exit(1);
+  }
+  console.log(next);
+}
+
+// ---------------------------------------------------------------------------
 // Main: parse subcommand
 // ---------------------------------------------------------------------------
 
@@ -1522,6 +1553,9 @@ function printUsage() {
   console.log("  Version queries");
   console.log("    show              Print project version");
   console.log("    show -v           Print version + git hash, branch, date");
+  console.log("    next              Print next patch SNAPSHOT (pure computation)");
+  console.log("    next rc           Print next -rc.N candidate (pure computation)");
+  console.log("    next release      Print the stable base version (pure computation)");
   console.log("");
   console.log("  Version changes");
   console.log("    release           Strip -SNAPSHOT / -rc.N to finalize a release");
@@ -1564,6 +1598,9 @@ const rest = args.slice(1);
 switch (command) {
   case "show":
     cmdShow(rest);
+    break;
+  case "next":
+    cmdNext(rest);
     break;
   case "cli":
     cmdCli(rest);
