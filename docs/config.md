@@ -96,6 +96,149 @@ $env:BROWSER_MAX_OPEN_TABS = 8
 $env:BROWSER_DISPLAY_MODE = "HEADLESS"
 ```
 
+### Anthropic Claude
+
+```properties
+anthropic.api.key=sk-ant-...
+anthropic.model.name=claude-sonnet-4-6
+```
+
+Uses the native Anthropic Messages protocol (not OpenAI-compatible). Default model: `claude-sonnet-4-6`.
+
+### Google Gemini
+
+```properties
+google.generative.ai.api.key=your-key   # primary key name
+# gemini.api.key=your-key               # alias
+# google.api.key=your-key               # alias
+gemini.model.name=gemini-3.1-flash-lite
+```
+
+Uses the native Gemini protocol (not OpenAI-compatible). Default model: `gemini-3.1-flash-lite`.
+
+### xAI / Grok
+
+```properties
+xai.api.key=your-key
+xai.model.name=grok-4.5
+xai.base.url=https://api.x.ai/v1        # optional
+```
+
+### Groq
+
+```properties
+groq.api.key=your-key
+groq.model.name=llama-3.3-70b-versatile
+groq.base.url=https://api.groq.com/openai/v1   # optional
+```
+
+### Together AI
+
+```properties
+together.api.key=your-key
+together.model.name=meta-llama/Llama-3.3-70B-Instruct-Turbo
+together.base.url=https://api.together.xyz/v1  # optional
+```
+
+### Mistral
+
+```properties
+mistral.api.key=your-key
+mistral.model.name=mistral-large-latest
+mistral.base.url=https://api.mistral.ai/v1     # optional
+```
+
+### Perplexity
+
+```properties
+perplexity.api.key=your-key
+perplexity.model.name=llama-3.1-sonar-large-128k-online
+```
+
+### Fireworks AI
+
+```properties
+fireworks.api.key=your-key
+fireworks.model.name=accounts/fireworks/models/llama-v3p3-70b-instruct
+```
+
+### Alibaba DashScope / Qwen (阿里云-百炼)
+
+```properties
+dashscope.api.key=sk-...
+dashscope.model.name=qwen3.6-plus
+dashscope.base.url=https://dashscope.aliyuncs.com/compatible-mode/v1   # optional
+```
+
+### Zhipu AI / GLM (智谱AI)
+
+```properties
+zhipu.api.key=your-key
+zhipu.model.name=glm-5.1
+zhipu.base.url=https://open.bigmodel.cn/api/paas/v4/   # optional
+```
+
+### Moonshot / Kimi (月之暗面)
+
+```properties
+moonshot.api.key=your-key
+# kimi.api.key=your-key              # alias for moonshot
+moonshot.model.name=kimi-k2.6
+moonshot.base.url=https://api.moonshot.cn/v1   # optional
+```
+
+### Baichuan (百川智能)
+
+```properties
+baichuan.api.key=your-key
+baichuan.model.name=Baichuan4
+baichuan.base.url=https://api.baichuan-ai.com/v1   # optional
+```
+
+### 01.AI / Yi (零一万物)
+
+```properties
+yi.api.key=your-key
+# lingyi.api.key=your-key            # alias for yi
+yi.model.name=yi-large
+yi.base.url=https://api.lingyiwanwu.com/v1   # optional
+```
+
+### MiniMax / Hailuo (稀宇科技)
+
+```properties
+minimax.api.key=your-key
+minimax.model.name=MiniMax-M3
+```
+
+Uses the Anthropic Messages protocol (not OpenAI-compatible).
+
+### StepFun (阶跃星辰)
+
+```properties
+stepfun.api.key=your-key
+stepfun.model.name=step-3.5-flash
+stepfun.base.url=https://api.stepfun.com/v1   # optional
+```
+
+### Tencent Hunyuan (腾讯混元)
+
+```properties
+hunyuan.api.key=your-key
+# tencent.api.key=your-key           # alias for hunyuan
+hunyuan.model.name=hunyuan-pro
+hunyuan.base.url=https://api.lkeap.cloud.tencent.com/v1   # optional
+```
+
+### Baidu Qianfan / Ernie (百度千帆/文心)
+
+```properties
+qianfan.api.key=your-key
+# baidu.api.key=your-key             # alias for qianfan
+qianfan.model.name=ernie-4.0-8k
+qianfan.base.url=https://qianfan.baidubce.com/v2   # optional
+```
+
 #### ☕ Example – JVM Arguments
 
 Set configuration via command-line JVM args:
@@ -144,7 +287,7 @@ docker run -d -p 8182:8182 `
 ## ⚙️ Common Configuration Options
 
 * **`openrouter.api.key`**
-  Your OpenRouter API key. Check [LLM Configuration Guide](../docs/config/llm/llm-config.md) for more LLM providers.
+  Your OpenRouter API key. Check the [Providers section](#providers) above for all supported LLM providers.
 
 - **`browser.profile.mode`** (`DEFAULT` | `SYSTEM_DEFAULT` | `PROTOTYPE` | `SEQUENTIAL` | `TEMPORARY`)
   Defines how the user data directory is assigned for each browser instance.
