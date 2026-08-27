@@ -1,0 +1,69 @@
+name: Branch drift check
+
+# Warns when origin/main has commits that never flowed through the active
+# release branch (direct pushes to main, dependabot merges, hotfixes).
+#
+# main is a release mirror: substantive work happens on X.Y.x branches and
+# reaches main via trigger-release.ps1 -SyncMain fast-forwards at release
+# time. "main ahead of the release branch" means main was changed out-of-band —
+# the next release's fast-forward will then fail and must be merged manually.
+#
+# Advisory only: the job always succeeds; drift surfaces as workflow
+# warnings so CI stays green while the state is flagged.
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: Warn if main is ahead of the release branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Compare main against the active release branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main '+refs/heads/*:refs/remotes/origin/*'
+
+          # Active release branch = X.Y.x matching VERSION's major.minor
+          # (e.g. VERSION 4.14.0-rc.1 -> origin/4.14.x).
+          VERSION_LINE=$(grep -oE '^[0-9]+\.[0-9]+' VERSION || true)
+          if [ -z "$VERSION_LINE" ]; then
+            echo "::warning::Cannot derive the release branch from VERSION — skipping drift check"
+            exit 0
+          fi
+          RELEASE_BRANCH="origin/${VERSION_LINE}.x"
+          if ! git rev-parse --verify -q "$RELEASE_BRANCH" >/dev/null 2>&1; then
+            echo "::warning::Release branch $RELEASE_BRANCH not found — skipping drift check"
+            exit 0
+          fi
+
+          MAIN_AHEAD=$(git rev-list --count "$RELEASE_BRANCH..origin/main" 2>/dev/null || echo 0)
+          BRANCH_AHEAD=$(git rev-list --count "origin/main..$RELEASE_BRANCH" 2>/dev/null || echo 0)
+
+          echo "main vs $RELEASE_BRANCH: main ahead=$MAIN_AHEAD, branch ahead=$BRANCH_AHEAD"
+          echo "main:              $(git rev-parse --short origin/main)"
+          echo "$RELEASE_BRANCH: $(git rev-parse --short "$RELEASE_BRANCH")"
+
+          if [ "$MAIN_AHEAD" -gt 0 ]; then
+            echo "::warning::origin/main is $MAIN_AHEAD commit(s) ahead of $RELEASE_BRANCH — main was changed out-of-band (direct push / dependabot merge). Merge main into $RELEASE_BRANCH before the next release, otherwise -SyncMain fast-forward will fail."
+            echo ""
+            echo "Commits in main that are not in $RELEASE_BRANCH:"
+            git log --oneline --no-merges "$RELEASE_BRANCH..origin/main" | head -20
+            echo ""
+            echo "Suggested fix:  git checkout ${VERSION_LINE}.x && git merge origin/main"
+          else
+            echo "✅ No drift: main is not ahead of $RELEASE_BRANCH."
+          fi
