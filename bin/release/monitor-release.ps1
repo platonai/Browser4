@@ -229,10 +229,69 @@ function Extract-MinimalErrors {
         return "(No log output to analyze.)"
     }
 
+    # ── Helper: extract the message from a log line and strip ANSI escapes ──
+    function Get-CleanMessage {
+        param([string]$RawLine)
+        $parsed = Parse-GitHubLogLine -Line $RawLine
+        if ($parsed -and $parsed.Message) {
+            return ($parsed.Message -replace '\x1b\[[0-9;]*m', '').Trim()
+        }
+        return ($RawLine -replace '\x1b\[[0-9;]*m', '').Trim()
+    }
+
+    # ── Helper: test whether a cleaned message is shell script boilerplate ──
+    # These are structural shell / GHA workflow lines that happen to contain
+    # error-like words ("failed", "error") but are not themselves errors.
+    $boilerplatePatterns = @(
+        '^##\[(group|endgroup|debug|warning|notice)\]',   # GHA workflow commands
+        '^\s*if\s+\[',           # if [ condition ]
+        '^\s*if\s+\[\[',         # if [[ condition ]]
+        '^\s*then\b',            # then
+        '^\s*else\b',            # else
+        '^\s*elif\s',            # elif
+        '^\s*\bfi\b\s*$',        # fi
+        '^\s*\bdo\b\s*$',        # do
+        '^\s*\bdone\b\s*$',      # done
+        '^\s*\besac\b\s*$',      # esac
+        '^\s*echo\s',            # echo statements (reporting, not the error itself)
+        '^\s*printf\s',          # printf statements
+        '^\s*\w+=\S',            # variable assignments (VAR=value)
+        '^\s*export\s',          # export VAR=...
+        '^\s*\#\s'               # shell comments
+    )
+
+    function Test-IsBoilerplate {
+        param([string]$CleanMessage)
+        if ([string]::IsNullOrWhiteSpace($CleanMessage)) { return $true }
+        foreach ($bp in $boilerplatePatterns) {
+            if ($CleanMessage -match $bp) { return $true }
+        }
+        return $false
+    }
+
     # ── Pass 1: Extract specific failing test names ──────────────────────
     $testFailures = [System.Collections.Generic.List[string]]::new()
-    foreach ($tn in (Get-FailingTestNames -LogLines $lines)) {
-        $testFailures.Add($tn)
+    $seenTests    = @{}
+
+    # Rust test: "test test_e2e_session_lifecycle ... FAILED"
+    # Kotlin:    "Tests failed: 3, passed: 100"
+    # Go:        "--- FAIL: TestName"
+    # Generic:   "test_e2e_foo => FAILED"
+    foreach ($ln in $lines) {
+        $msg = Get-CleanMessage $ln
+
+        if ($msg -match 'test\s+(\S+)\s+\.\.\.\s+FAILED') {
+            $tn = $Matches[1]
+            if (-not $seenTests.ContainsKey($tn)) { $seenTests[$tn] = $true; $testFailures.Add($tn) }
+        }
+        if ($msg -match '(test_e2e_\S+)\s.*=>\s*FAILED') {
+            $tn = $Matches[1]
+            if (-not $seenTests.ContainsKey($tn)) { $seenTests[$tn] = $true; $testFailures.Add($tn) }
+        }
+        if ($msg -match '---\s+FAIL:\s+(\S+)') {
+            $tn = $Matches[1]
+            if (-not $seenTests.ContainsKey($tn)) { $seenTests[$tn] = $true; $testFailures.Add($tn) }
+        }
     }
 
     # ── Pass 2: Extract error blocks with context ────────────────────────
@@ -274,9 +333,16 @@ function Extract-MinimalErrors {
     try {
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $line = $lines[$i]
+            $msg = Get-CleanMessage $line
+
+            # Skip shell boilerplate: lines that contain error-indicator words
+            # but are really just workflow script code (if/fi/echo/##[group]/…).
+            if (Test-IsBoilerplate $msg) { continue }
+
+            # Match error patterns against the cleaned message (not the raw line).
             $matched = $false
             foreach ($pat in $errorPatterns) {
-                if ($line -match [regex]::Escape($pat)) {
+                if ($msg -match [regex]::Escape($pat)) {
                     $matched = $true
                     break
                 }
@@ -288,14 +354,17 @@ function Extract-MinimalErrors {
                 $start = [Math]::Max(0, $i - $ctxBefore)
                 $end   = [Math]::Min($lines.Count - 1, $i + $ctxAfter)
 
-                # Render block: for GH-format lines, strip the timestamp and show [Job/Step] prefix
+                # Render block: for GH-format lines, strip the timestamp and show [Job/Step] prefix.
+                # ANSI escapes must be stripped here too — matching already runs on cleaned
+                # messages, so the rendered diagnostics stay clean (raw ESC sequences would
+                # otherwise leak into the output and coworker task files).
                 $blockLines = foreach ($j in $start..$end) {
                     $ln = $lines[$j]
                     $p = Parse-GitHubLogLine -Line $ln
                     if ($p -and $p.Message -and $p.Message.Trim().Length -gt 0) {
-                        "[$($p.Job) / $($p.Step)] $($p.Message)"
+                        "[$($p.Job) / $($p.Step)] $($p.Message -replace '\x1b\[[0-9;]*m', '')"
                     } else {
-                        $ln
+                        $ln -replace '\x1b\[[0-9;]*m', ''
                     }
                 }
                 $block = ($blockLines -join "`n").Trim()
@@ -353,7 +422,10 @@ function Extract-MinimalErrors {
     if ($testFailures.Count -eq 0 -and $errorBlocks.Count -eq 0) {
         $output.Add("(No specific error patterns or test failures matched — last 40 log lines)")
         $tail = $lines | Select-Object -Last 40
-        foreach ($t in $tail) { $output.Add([string]$t) }
+        foreach ($t in $tail) {
+            $cleanLine = ([string]$t) -replace '\x1b\[[0-9;]*m', ''
+            $output.Add($cleanLine)
+        }
     }
 
     return $output -join "`n"

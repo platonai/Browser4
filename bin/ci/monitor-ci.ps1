@@ -256,70 +256,77 @@ function Extract-MinimalErrors {
     $errorBlocks = [System.Collections.Generic.List[string]]::new()
     $prevWasSeparator = $false
 
-    for ($i = 0; $i -lt $lines.Count; $i++) {
-        $line = $lines[$i]
-        $msg = Get-CleanMessage $line
+    # Create once, reuse for every block (was being recreated per match).
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $line = $lines[$i]
+            $msg = Get-CleanMessage $line
 
-        # Skip shell boilerplate: lines that contain error-indicator words
-        # but are really just workflow script code (if/fi/echo/##[group]/…).
-        if (Test-IsBoilerplate $msg) { continue }
+            # Skip shell boilerplate: lines that contain error-indicator words
+            # but are really just workflow script code (if/fi/echo/##[group]/…).
+            if (Test-IsBoilerplate $msg) { continue }
 
-        # Match error patterns against the cleaned message (not the raw line).
-        $matched = $false
-        foreach ($pat in $errorPatterns) {
-            if ($msg -match [regex]::Escape($pat)) {
-                $matched = $true
-                break
-            }
-        }
-
-        if ($matched) {
-            $ctxBefore = 2
-            $ctxAfter  = 3
-            $start = [Math]::Max(0, $i - $ctxBefore)
-            $end   = [Math]::Min($lines.Count - 1, $i + $ctxAfter)
-
-            # Render block: for GH-format lines, strip the timestamp and show [Job/Step] prefix
-            $blockLines = foreach ($j in $start..$end) {
-                $ln = $lines[$j]
-                $p = Parse-GitHubLogLine -Line $ln
-                if ($p -and $p.Message -and $p.Message.Trim().Length -gt 0) {
-                    "[$($p.Job) / $($p.Step)] $($p.Message)"
-                } else {
-                    $ln
-                }
-            }
-            $block = ($blockLines -join "`n").Trim()
-            if ($block.Length -lt 5) { continue }
-
-            $hash = [System.BitConverter]::ToString(
-                [System.Security.Cryptography.SHA256]::Create().ComputeHash(
-                    [System.Text.Encoding]::UTF8.GetBytes($block)
-                )
-            )
-
-            if (-not $seen.ContainsKey($hash)) {
-                $seen[$hash] = $true
-                if (-not $prevWasSeparator -and $errorBlocks.Count -gt 0) {
-                    $errorBlocks.Add("")
-                }
-                $errorBlocks.Add("══ block $($seen.Count) ══")
-                $errorBlocks.Add($block)
-                $prevWasSeparator = $false
-
-                if ($seen.Count -ge 50) {
-                    $errorBlocks.Add("")
-                    $truncMsg = "... (truncated at 50 blocks for token efficiency"
-                    if ($RunId) {
-                        $truncMsg += " — run `gh run view $RunId --log-failed` for full logs)"
-                    } else {
-                        $truncMsg += " — use `gh run view --log-failed` for full logs)"
-                    }
-                    $errorBlocks.Add($truncMsg)
+            # Match error patterns against the cleaned message (not the raw line).
+            $matched = $false
+            foreach ($pat in $errorPatterns) {
+                if ($msg -match [regex]::Escape($pat)) {
+                    $matched = $true
                     break
                 }
             }
+
+            if ($matched) {
+                $ctxBefore = 2
+                $ctxAfter  = 3
+                $start = [Math]::Max(0, $i - $ctxBefore)
+                $end   = [Math]::Min($lines.Count - 1, $i + $ctxAfter)
+
+                # Render block: for GH-format lines, strip the timestamp and show [Job/Step] prefix.
+                # ANSI escapes must be stripped here too — matching already runs on cleaned
+                # messages, so the rendered diagnostics stay clean (raw ESC sequences would
+                # otherwise leak into the output and coworker task files).
+                $blockLines = foreach ($j in $start..$end) {
+                    $ln = $lines[$j]
+                    $p = Parse-GitHubLogLine -Line $ln
+                    if ($p -and $p.Message -and $p.Message.Trim().Length -gt 0) {
+                        "[$($p.Job) / $($p.Step)] $($p.Message -replace '\x1b\[[0-9;]*m', '')"
+                    } else {
+                        $ln -replace '\x1b\[[0-9;]*m', ''
+                    }
+                }
+                $block = ($blockLines -join "`n").Trim()
+                if ($block.Length -lt 5) { continue }
+
+                $hash = [System.BitConverter]::ToString(
+                    $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($block))
+                )
+
+                if (-not $seen.ContainsKey($hash)) {
+                    $seen[$hash] = $true
+                    if (-not $prevWasSeparator -and $errorBlocks.Count -gt 0) {
+                        $errorBlocks.Add("")
+                    }
+                    $errorBlocks.Add("══ block $($seen.Count) ══")
+                    $errorBlocks.Add($block)
+                    $prevWasSeparator = $false
+
+                    if ($seen.Count -ge 50) {
+                        $errorBlocks.Add("")
+                        $truncMsg = "... (truncated at 50 blocks for token efficiency"
+                        if ($RunId) {
+                            $truncMsg += " — run `gh run view $RunId --log-failed` for full logs)"
+                        } else {
+                            $truncMsg += " — use `gh run view --log-failed` for full logs)"
+                        }
+                        $errorBlocks.Add($truncMsg)
+                        break
+                    }
+                }
+            }
         }
+    } finally {
+        $sha256.Dispose()
     }
 
     # ── Build output ──
@@ -343,7 +350,10 @@ function Extract-MinimalErrors {
     if ($testFailures.Count -eq 0 -and $errorBlocks.Count -eq 0) {
         $output.Add("(No specific error patterns or test failures matched — last 40 log lines)")
         $tail = $lines | Select-Object -Last 40
-        foreach ($t in $tail) { $output.Add([string]$t) }
+        foreach ($t in $tail) {
+            $cleanLine = ([string]$t) -replace '\x1b\[[0-9;]*m', ''
+            $output.Add($cleanLine)
+        }
     }
 
     return $output -join "`n"
@@ -369,7 +379,9 @@ function New-CoworkerFailureTask {
 
     # Write directly to 1ready/ so the task is immediately executable.
     # The old code wrote to 0draft/, which required a manual "coworker assign" step.
-    $taskDir = Join-Path $RepoRoot "coworker\tasks\main\1ready"
+    # NOTE: forward slashes — Join-Path with backslashes produces a literal
+    # backslash path on Linux/macOS (this script must stay cross-platform).
+    $taskDir = Join-Path $RepoRoot "coworker/tasks/main/1ready"
     if (-not (Test-Path $taskDir)) {
         New-Item -ItemType Directory -Path $taskDir -Force | Out-Null
     }
@@ -434,9 +446,16 @@ function New-CoworkerFailureTask {
 '@
     }
 
-    # ── Cap error body at 4000 chars ──
+    # ── Cap error body at 4000 chars (UTF-16 code units) ──
+    # Substring(0,4000) can split a surrogate pair mid-way, which then fails to
+    # encode as valid UTF-8. Trim one code unit when the cut lands on a high
+    # surrogate so the written file stays valid.
     $errorBody = if ($Errors.Length -gt 4000) {
-        $Errors.Substring(0, 4000) + "`n`n... (truncated — run `gh run view $RunId --log-failed` for full logs)"
+        $cut = $Errors.Substring(0, 4000)
+        if ($cut.Length -gt 0 -and [char]::IsHighSurrogate($cut[$cut.Length - 1])) {
+            $cut = $cut.Substring(0, $cut.Length - 1)
+        }
+        $cut + "`n`n... (truncated — run `gh run view $RunId --log-failed` for full logs)"
     } else {
         $Errors
     }
