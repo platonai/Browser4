@@ -224,9 +224,23 @@ if ($null -eq $mainSha -or -not $mainSha) {
             }
         }
     } else {
-        Write-Error "HEAD ($headSha) diverges from $remote/main ($mainSha): main has commits not in HEAD, so main cannot be fast-forwarded."
-        Write-Error "Merge $remote/main into this branch first (git merge $remote/main), then retry — a tag off main would be rejected by release.yml."
-        exit 1
+        # main has commits not in HEAD: main cannot be fast-forwarded. The
+        # release can still proceed from this branch (release.yml accepts
+        # release-branch tags), but the drift must be surfaced so main gets
+        # merged back afterwards — otherwise it silently rots.
+        $mainAhead = git rev-list --count "HEAD..$remote/main" 2>$null
+        if (-not $mainAhead) { $mainAhead = '?' }
+        Write-Warning "⚠  Drift: $remote/main is ahead of this branch by $mainAhead commit(s) — main has commits that never flowed through $(git rev-parse --abbrev-ref HEAD):"
+        git log --oneline --no-merges "HEAD..$remote/main" 2>$null | Select-Object -First 10 | ForEach-Object { Write-Warning "      $_" }
+        Write-Warning "    The release continues from this branch, but afterwards run:"
+        Write-Warning "      git merge $remote/main   (merge main back into this branch)"
+        if (-not $isDryRun) {
+            $continue = Confirm-Step "Continue with the release anyway? (y/n)"
+            if ($continue -ne 'y') {
+                Write-Host "Cancelled"
+                exit 0
+            }
+        }
     }
 } else {
     Write-Host "[OK] HEAD is the latest $remote/main ($mainSha)"
