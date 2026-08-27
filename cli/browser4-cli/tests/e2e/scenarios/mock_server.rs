@@ -867,6 +867,13 @@ pub(super) fn test_status_installed_runtime(ctx: &mut E2ECtx) {
 pub(super) fn test_status_no_installed_runtime(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
+    // reset_cli_artifacts keeps runtime_dir intact while a CLI-managed
+    // backend may be running from it (deleting a live JVM's cwd breaks all
+    // later process spawns on Linux/macOS).  This scenario genuinely needs
+    // an empty runtime dir, so clear it explicitly.
+    let _ = fs::remove_dir_all(&ctx.runtime_dir);
+    fs::create_dir_all(&ctx.runtime_dir).ok();
+
     let mock_server = MockBrowser4Server::start();
     ctx.browser4_base_url = mock_server.base_url();
 
@@ -4077,6 +4084,22 @@ pub(super) fn test_crawl_cancel_missing_id(ctx: &mut E2ECtx) {
 
 const INSTALL_TAG: &str = "--tag=v4.10.0";
 
+/// Redirect `BROWSER4_RUNTIME_DIR` at a fresh per-test subdir of the shared
+/// runtime dir and return it.
+///
+/// `reset_cli_artifacts` keeps the shared runtime dir intact once a
+/// CLI-managed backend may be running from it (deleting a live JVM's cwd
+/// breaks every later process spawn on Linux/macOS — `posix_spawn failed,
+/// error: 2`), so install/upgrade scenarios that need a clean install slate
+/// must isolate their installs instead of relying on a wiped runtime dir.
+fn isolate_runtime_dir(ctx: &mut E2ECtx, name: &str) -> PathBuf {
+    let dir = ctx.runtime_dir.join(format!("iso-{name}"));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("create isolated runtime dir");
+    ctx.set_env("BROWSER4_RUNTIME_DIR", &dir.to_string_lossy());
+    dir
+}
+
 pub(super) fn test_install_downloads_and_installs(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
@@ -4287,6 +4310,10 @@ pub(super) fn test_upgrade_already_latest(ctx: &mut E2ECtx) {
 
 pub(super) fn test_upgrade_to_new_version(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    // Install into an isolated runtime dir so a pre-existing runtime from
+    // earlier scenarios (kept alive while a CLI-managed backend runs) does
+    // not short-circuit the install/upgrade flow.
+    let runtime_dir = isolate_runtime_dir(ctx, "upgrade-to-new");
 
     // Never touch npm or download/execute the real install scripts.
     ctx.set_env("BROWSER4_CLI_SKIP_SELF_UPGRADE", "1");
@@ -4323,11 +4350,10 @@ pub(super) fn test_upgrade_to_new_version(ctx: &mut E2ECtx) {
     // active tag is read from current.tag: when latest-tag resolution flakes
     // the CLI falls back to an `unknown-<timestamp>` identifier, and skills
     // are unpacked into whichever versioned dir the runtime landed in.
-    let current_tag_path = ctx.runtime_dir.join("runtime").join("current.tag");
+    let current_tag_path = runtime_dir.join("runtime").join("current.tag");
     let active_tag = fs::read_to_string(&current_tag_path)
         .unwrap_or_else(|e| panic!("expected current.tag after upgrade: {e}"));
-    let skills_skill_md = ctx
-        .runtime_dir
+    let skills_skill_md = runtime_dir
         .join("runtime")
         .join(active_tag.trim())
         .join("skills")
@@ -4386,6 +4412,9 @@ pub(super) fn test_install_download_failure(ctx: &mut E2ECtx) {
 
 pub(super) fn test_install_mirror_failover(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    // Isolate installs from any runtime left by earlier scenarios (see
+    // isolate_runtime_dir).
+    let runtime_dir = isolate_runtime_dir(ctx, "mirror-failover");
 
     let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
     // Start the reachable mirror (serves the fake runtime bundle).
@@ -4394,7 +4423,7 @@ pub(super) fn test_install_mirror_failover(ctx: &mut E2ECtx) {
     let dead_port = find_free_port();
 
     // Write mirrors.json with two mirrors: first unreachable, second reachable.
-    let mirrors_path = ctx.runtime_dir.join("mirrors.json");
+    let mirrors_path = runtime_dir.join("mirrors.json");
     let mirrors_json = serde_json::json!({
         "mirrors": [
             {
@@ -4476,13 +4505,16 @@ pub(super) fn test_install_all_mirrors_unreachable(ctx: &mut E2ECtx) {
 
 pub(super) fn test_install_loads_mirrors_json_from_runtime_dir(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    // Isolate installs from any runtime left by earlier scenarios (see
+    // isolate_runtime_dir).
+    let runtime_dir = isolate_runtime_dir(ctx, "mirrors-default-location");
 
     let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
     let download_server = FixtureDownloadServer::start(bundle_bytes, "v4.10.0");
 
     // Write mirrors.json at the default location: {runtime_data_dir}/mirrors.json.
-    // ctx.runtime_dir IS the runtime data dir (set via BROWSER4_RUNTIME_DIR).
-    let mirrors_path = ctx.runtime_dir.join("mirrors.json");
+    // The isolated runtime dir IS the runtime data dir (set via BROWSER4_RUNTIME_DIR).
+    let mirrors_path = runtime_dir.join("mirrors.json");
     let mirrors_json = serde_json::json!({
         "mirrors": [
             {
