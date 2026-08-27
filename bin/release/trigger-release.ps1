@@ -105,7 +105,8 @@ Set-Location $repoRoot
 function Confirm-Step {
     param([string]$Prompt, [string]$Default = '')
     if ($env:BROWSER4_RELEASE_YES) {
-        return if ($Default) { $Default } else { 'y' }
+        if ($Default) { return $Default }
+        return 'y'
     }
     return Read-Host $Prompt
 }
