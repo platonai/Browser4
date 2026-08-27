@@ -427,6 +427,7 @@ open class RobustBrowserAgent(
      * @param observe The observation result containing the action to execute
      * @return Result of the action execution
      */
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     override suspend fun act(observe: ObserveResult): ActResult {
         return try {
             val ctx = agentScope.coroutineContext.minusKey(Job)
@@ -629,7 +630,6 @@ open class RobustBrowserAgent(
 
         return ResolveResult(activeContext, actResult)
     }
-
 
     private suspend fun doRunAgentLoop(
         initActionOptions: ActionOptions, initContext: ExecutionContext, attempt: Int

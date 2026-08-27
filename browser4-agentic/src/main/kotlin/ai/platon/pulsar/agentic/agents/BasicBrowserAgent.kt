@@ -240,6 +240,7 @@ open class BasicBrowserAgent constructor(
         return result
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     override suspend fun act(observe: ObserveResult): ActResult {
         val instruction = observe.agentState.instruction
         val context = stateManager.getActiveContext()

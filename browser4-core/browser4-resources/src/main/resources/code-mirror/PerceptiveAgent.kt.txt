@@ -284,6 +284,7 @@ interface PerceptiveAgent : AutoCloseable {
      * @param observe The observation result containing the candidate action.
      * @return The result of executing the derived tool call.
      */
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     suspend fun act(observe: ObserveResult): ActResult
 
     /**
