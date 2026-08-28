@@ -1,7 +1,7 @@
 {
   "name": "browser4-seo",
   "version": "4.14.0-rc.1",
-  "sdkVersion": "4.14.0-rc.1",
+  "sdkVersion": "4.14.0-rc.2",
   "description": "SEO metadata extraction and audit for Browser4 — extract title/meta/OG/Twitter/canonical/JSON-LD and flag common SEO issues",
   "dependsOn": ["browser4-protocol", "browser4-agentic"],
   "autoConfigurationClasses": ["ai.platon.pulsar.seo.config.SeoAutoConfiguration"]

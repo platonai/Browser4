@@ -1,7 +1,7 @@
 {
   "name": "browser4-captcha",
   "version": "1.0.0",
-  "sdkVersion": "4.14.0-rc.1",
+  "sdkVersion": "4.14.0-rc.2",
   "description": "CAPTCHA detection and solving plugin — supports reCAPTCHA, hCaptcha, Turnstile, and image CAPTCHAs via external solving services (CapSolver, 2Captcha, Anti-Captcha).",
   "dependsOn": ["browser4-skeleton", "browser4-protocol"],
   "autoConfigurationClasses": [
