@@ -57,9 +57,18 @@ import org.springframework.context.event.EventListener
  *   `http://host:8088/mcp/sse` (streamable-http transport)
  * - Cursor / Windsurf: same URL in their MCP server configuration
  * - Custom clients: use the MCP SDK's `StreamableHttpClientTransport`
+ * ## AOT training mode
+ *
+ * During the CLI's JVM AOT cache training run (`-Dbrowser4.aot.training=true`,
+ * see `ensure_aot_cache_trained` in `cli/browser4-cli`), this configuration is
+ * skipped entirely: the eager [mcpHttpServer] bean would otherwise create an
+ * agent session — and with it launch a browser — just to record class loading.
+ * The training run then boots the Spring context with the minimal surface and
+ * exits on context refresh (`spring.context.exit=onRefresh`).
  */
 @Configuration
 @ConditionalOnProperty(name = ["mcp.http.enabled"], havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(name = ["browser4.aot.training"], havingValue = "false", matchIfMissing = true)
 class McpHttpServerConfiguration(
     /**
      * The Spring-wired agentic context that owns browser sessions. Injecting

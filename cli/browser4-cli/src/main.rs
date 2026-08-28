@@ -50,9 +50,9 @@ use args::{
 };
 use commands::{commands_map, is_element_reference};
 use daemon::{
-    ensure_chrome_available, ensure_server_running, init_root_search_start_dir_from_startup,
-    install_browser4_runtime, is_local_port_open, read_current_tag, resolve_base_url,
-    resolve_channel_to_endpoint, InstalledBrowser4Runtime,
+    ensure_aot_cache_trained, ensure_chrome_available, ensure_server_running,
+    init_root_search_start_dir_from_startup, install_browser4_runtime, is_local_port_open,
+    read_current_tag, resolve_base_url, resolve_channel_to_endpoint, InstalledBrowser4Runtime,
 };
 use help::{
     commands_in_category, generate_command_help, generate_help, generate_help_entry,
@@ -14297,6 +14297,13 @@ async fn handle_install(tool_params: &Value) -> Result<(), String> {
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
     let runtime = install_browser4_runtime(tag, force).await?;
+
+    // Pre-train the JVM AOT cache in the background right after the runtime is
+    // committed, so a first `open` shortly after install already hits the
+    // cache.  Non-blocking and non-fatal; a failed training run self-heals on
+    // the next launch (its marker is reclaimed after a short grace period).
+    ensure_aot_cache_trained(&runtime);
+
     for line in format_install_output(&runtime) {
         cli_println!("{}", line);
     }
@@ -16204,6 +16211,13 @@ async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
 
     eprintln!("Upgrading Browser4 runtime...");
     let mut runtime = install_browser4_runtime(tag, force).await?;
+
+    // Pre-train the JVM AOT cache in the background right after the runtime is
+    // committed: the upgraded jar set changes the cache key, so the old cache
+    // is invalid and a fresh training run should start as early as possible.
+    // Non-blocking and non-fatal; a failed training run self-heals on the next
+    // launch (its marker is reclaimed after a short grace period).
+    ensure_aot_cache_trained(&runtime);
 
     // When no explicit tag was requested (`upgrade` → "latest"), the early-exit
     // fast-path in `install_browser4_runtime` does not fire, so `reused_existing`
