@@ -216,25 +216,30 @@ jobs:
           # Update VERSION file
           version_file.write_text(f"{release_version}\n", encoding="utf-8")
 
-          # Update all pom.xml files, skipping build outputs and archetype template resources
-          # (archetype-resources/pom.xml uses ${browser4-version} placeholders and must stay untouched)
-          updated_files = []
-          for pom_file in repo_root.rglob("pom.xml"):
-              rel_path = pom_file.relative_to(repo_root).as_posix()
-              if "/target/" in f"/{rel_path}/" or "archetype-resources" in rel_path:
-                  continue
-              original = pom_file.read_text(encoding="utf-8")
-              updated = original.replace(snapshot_version, release_version)
-              if updated != original:
-                  pom_file.write_text(updated, encoding="utf-8", newline="\n")
-                  updated_files.append(rel_path)
+          if snapshot_version == release_version:
+              # rc / final tags already carry the final version (e.g. 4.14.0-rc.2):
+              # there is nothing to strip — proceed straight to deploy.
+              print(f"✅ VERSION already equals release version {release_version}; skipping pom version replacement")
+          else:
+              # Update all pom.xml files, skipping build outputs and archetype template resources
+              # (archetype-resources/pom.xml uses ${browser4-version} placeholders and must stay untouched)
+              updated_files = []
+              for pom_file in repo_root.rglob("pom.xml"):
+                  rel_path = pom_file.relative_to(repo_root).as_posix()
+                  if "/target/" in f"/{rel_path}/" or "archetype-resources" in rel_path:
+                      continue
+                  original = pom_file.read_text(encoding="utf-8")
+                  updated = original.replace(snapshot_version, release_version)
+                  if updated != original:
+                      pom_file.write_text(updated, encoding="utf-8", newline="\n")
+                      updated_files.append(rel_path)
 
-          if not updated_files:
-              raise SystemExit(f"No pom.xml files contained snapshot version {snapshot_version}")
+              if not updated_files:
+                  raise SystemExit(f"No pom.xml files contained snapshot version {snapshot_version}")
 
-          print(f"Updated {len(updated_files)} pom.xml files:")
-          for path in updated_files:
-              print(f"  - {path}")
+              print(f"Updated {len(updated_files)} pom.xml files:")
+              for path in updated_files:
+                  print(f"  - {path}")
 
           print(f"Version replacement complete: {snapshot_version} → {release_version}")
           PY
