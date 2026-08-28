@@ -91,6 +91,14 @@ class ReaderServiceTest {
         }
     }
 
+    private fun redirectContext(path: String, location: String, status: Int = 302) {
+        server.createContext(path) { exchange ->
+            exchange.responseHeaders.add("Location", location)
+            exchange.sendResponseHeaders(status, -1)
+            exchange.close()
+        }
+    }
+
     // =========================================================================
     // Pipeline: extractor
     // =========================================================================
@@ -130,11 +138,123 @@ class ReaderServiceTest {
         context("/llms.txt") { "text/plain" to "# Systems Weekly\n\n- [Home](/)\n- [News](/news)\n" }
         context("/") { "text/html" to articleHtml }
 
-        val result = service.read("$baseUrl/", ReadOptions(llms = true))
+        val result = service.read("$baseUrl/", ReadOptions(llms = LlmsMode.DISCOVER))
 
         assertEquals("llms", result.source)
         assertEquals("Systems Weekly", result.title)
         assertTrue(result.markdown.contains("[News](/news)"))
+    }
+
+    @Test
+    fun `read discovers llms-txt by walking up the path`() {
+        context("/docs/llms.txt") { "text/plain" to "# Docs Index\n\n- [Guide](/docs/guide)\n" }
+        context("/docs/guide") { "text/html" to articleHtml }
+
+        val result = service.read("$baseUrl/docs/guide", ReadOptions(llms = LlmsMode.DISCOVER))
+
+        assertEquals("llms", result.source)
+        assertEquals("Docs Index", result.title)
+        assertTrue(result.markdown.contains("[Guide](/docs/guide)"))
+    }
+
+    @Test
+    fun `read llms index mode formats and filters links`() {
+        context("/llms.txt") {
+            "text/plain" to "# Docs\n\n- [Authentication](/docs/auth)\n- [Channels](/docs/channels)\n"
+        }
+
+        val result = service.read("$baseUrl/", ReadOptions(llms = LlmsMode.INDEX, filter = "auth"))
+
+        assertEquals("llms-index", result.source)
+        assertTrue(result.markdown.contains("[Authentication](http://127.0.0.1:${server.address.port}/docs/auth)"))
+        assertTrue(!result.markdown.contains("Channels"))
+    }
+
+    @Test
+    fun `read llms full mode filters sections`() {
+        context("/llms-full.txt") {
+            "text/plain" to "# Guide\n\nIntro.\n\n## Setup\n\nInstall.\n\n## Further reading\n\nNext.\n"
+        }
+
+        val result = service.read("$baseUrl/", ReadOptions(llms = LlmsMode.FULL, filter = "Setup"))
+
+        assertEquals("llms-full", result.source)
+        assertTrue(result.markdown.contains("## Setup"))
+        assertTrue(result.markdown.contains("Install."))
+        assertTrue(!result.markdown.contains("Further reading"))
+    }
+
+    // =========================================================================
+    // Markdown fallbacks: {path}.md sibling and llms.txt link routing
+    // =========================================================================
+
+    @Test
+    fun `read falls back to path-md sibling`() {
+        context("/docs/guide") { "text/html" to "<html><body><h1>HTML page</h1><p>tiny</p></body></html>" }
+        context("/docs/guide.md") { "text/markdown" to "# Markdown Guide\n\nServed from the .md sibling.\n" }
+
+        val result = service.read("$baseUrl/docs/guide")
+
+        assertEquals("path-markdown", result.source)
+        assertEquals("Markdown Guide", result.title)
+        assertTrue(result.markdown.contains("Served from the .md sibling"))
+    }
+
+    @Test
+    fun `read routes through llms-txt link to markdown source`() {
+        // No {path}.md sibling here on purpose: only the llms.txt link (matched
+        // via the slug heuristic) points at a markdown source, so routing must
+        // kick in before the extractor.
+        context("/docs/guide") { "text/html" to articleHtml }
+        context("/llms.txt") { "text/plain" to "# Docs\n\n- [Guide](/docs/guide-source.md)\n" }
+        context("/docs/guide-source.md") { "text/markdown" to "# Guide from llms link\n\nFull markdown.\n" }
+
+        val result = service.read("$baseUrl/docs/guide")
+
+        assertEquals("llms-link", result.source)
+        assertTrue(result.markdown.contains("Guide from llms link"))
+    }
+
+    // =========================================================================
+    // Redirect handling (hop-by-hop SSRF protection)
+    // =========================================================================
+
+    @Test
+    fun `read blocks cross-domain redirect hops`() {
+        redirectContext("/redirect", "http://evil.example.com/page")
+
+        val e = assertThrows(IllegalArgumentException::class.java) {
+            service.read("$baseUrl/redirect", ReadOptions(allowedDomains = listOf("127.0.0.1")))
+        }
+        assertTrue(e.message!!.contains("evil.example.com"))
+    }
+
+    @Test
+    fun `read follows allowed redirects and reports finalUrl`() {
+        redirectContext("/start", "/article")
+        context("/article") { "text/html" to articleHtml }
+
+        val result = service.read("$baseUrl/start")
+
+        assertEquals("extractor", result.source)
+        assertEquals("$baseUrl/article", result.finalUrl)
+        assertTrue(result.markdown.contains("Rust brings memory safety"))
+    }
+
+    // =========================================================================
+    // Body cap
+    // =========================================================================
+
+    @Test
+    fun `read truncates oversized bodies`() {
+        val big = "x".repeat(2 * 1024 * 1024 + 64)
+        context("/big") { "text/markdown" to big }
+
+        val result = service.read("$baseUrl/big")
+
+        assertEquals("negotiation", result.source)
+        assertTrue(result.truncated)
+        assertTrue(result.markdown.length <= 2 * 1024 * 1024)
     }
 
     // =========================================================================

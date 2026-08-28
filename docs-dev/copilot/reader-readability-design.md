@@ -182,6 +182,16 @@ browser4-cli plugin-markdown read --url <url> [--requireMd true] [--llms true] [
 
 > **实施状态（2026-08-28）**：P1 ✅ 完成（提取器 + 后端工具 + CLI 命令 + 9 个单测 + 2 个 e2e 场景）；P2 ✅ 完成（ReaderService 管线 + `markdown.read` 工具 + `plugin-markdown read` e2e 场景 + 10 个单测）；P3 ✅ 完成（真实站点适配矩阵 10 站点见 `docs/readability-site-matrix.md`，高杂讯 fixture 见 `HtmlSnapshotMockController./htmlsnapshot-test/readability-article`；改进项 backlog 见矩阵文档 §3）。
 
+> **agent-browser 对齐轮（2026-08-28）**：对照 `agent-browser`（Rust `cli/src/read.rs`）逐项补齐 `markdown.read` 管线：
+> 1. **llms.txt 逐级向上发现** — 从 URL 路径最深目录到站点根逐级探测 `llms.txt`/`llms-full.txt`（原实现只查根目录）；
+> 2. **llms 模式扩展** — `llms` 参数兼容 `true`（原语义，改名为 `discover`）并新增 `index`（llms.txt 格式化为可过滤链接索引）/ `full`（llms-full.txt 按章节过滤）；
+> 3. **`{path}.md` 兄弟回退** — 主响应为 HTML 时尝试 `<path>.md`（根路径为 `/index.md`）；
+> 4. **llms.txt 链接路由** — 自动解析 llms.txt 链接列表，按 doc-path 精确匹配 → origin+末段/slug 启发式定位目标文档的 markdown 源并抓取（`llms-link` 路径，requireMd 下仅接受 markdown 类型）；
+> 5. **逐跳重定向域校验** — 关闭 OkHttp 自动重定向，手动跟随（≤10 跳）并对每一跳执行 `allowedDomains` 校验（原实现只校验初始 URL）；
+> 6. **体积上限 2MB + `truncated` 标记**，输出新增 `finalUrl`（重定向后有效 URL）。
+>
+> 保留差异：HTML 兜底仍走 **Readability 文章级提取**（agent-browser 为整页 markdownish），这是本项目的质量优势；`timeoutMs` 参数新增（agent-browser 同款）。`ReaderServiceTest` 新增 8 个用例覆盖以上路径。
+
 ## 10. 风险与缓解
 
 | 风险 | 缓解 |

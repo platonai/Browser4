@@ -20,6 +20,7 @@ import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.markdown.config.MarkdownConfig
+import ai.platon.pulsar.markdown.service.LlmsMode
 import ai.platon.pulsar.markdown.service.MarkdownConverter
 import ai.platon.pulsar.markdown.service.MarkdownUtils
 import ai.platon.pulsar.markdown.service.ReaderService
@@ -37,7 +38,7 @@ import java.nio.file.Path
  * - `markdown.crawlFrom(url)` — crawl a site starting from a specific URL
  * - `markdown.fetch(url)` — fetch a single URL via HTTP and convert to markdown (no browser)
  * - `markdown.read(url)` — zero-token article reading: llms.txt → content negotiation →
- *   Readability extraction → markdown (no browser)
+ *   {path}.md / llms.txt-link fallbacks → Readability extraction → markdown (no browser)
  */
 open class MarkdownToolExecutor(
     private val config: MarkdownConfig,
@@ -191,31 +192,39 @@ open class MarkdownToolExecutor(
             arguments = listOf(
                 ToolSpec.Arg("url", "String", null),
                 ToolSpec.Arg("requireMd", "Boolean", "false"),
-                ToolSpec.Arg("llms", "Boolean", "false"),
+                ToolSpec.Arg("llms", "String", "false"),
                 ToolSpec.Arg("outline", "Boolean", "false"),
                 ToolSpec.Arg("filter", "String", null),
                 ToolSpec.Arg("allowedDomains", "List<String>", "[]"),
+                ToolSpec.Arg("timeoutMs", "Int", null),
             ),
             returnType = "ReadResult",
-            description = "Read a URL as markdown without a browser or LLM. Tries llms.txt discovery, then Accept: text/markdown content negotiation, then heuristic Readability extraction of the article body converted to markdown.",
+            description = "Read a URL as markdown without a browser or LLM (agent-browser read parity). Tries llms.txt discovery (walk-up, index/full modes), Accept: text/markdown content negotiation, {path}.md and llms.txt link fallbacks, then heuristic Readability extraction of the article body converted to markdown. Every redirect hop is checked against allowedDomains (SSRF protection); bodies are capped at 2 MB.",
             help = """
                 markdown.read(url)
-                markdown.read(url, requireMd: Boolean?, llms: Boolean?, outline: Boolean?, filter: String?, allowedDomains: List<String>?)
+                markdown.read(url, requireMd: Boolean?, llms: String?, outline: Boolean?, filter: String?, allowedDomains: List<String>?, timeoutMs: Int?)
 
                 Zero-token article reading pipeline:
-                1. llms.txt — when llms=true, fetch llms.txt / llms-full.txt from the site root.
+                1. llms.txt — llms="true"|"discover" returns the nearest llms.txt / llms-full.txt
+                   (walking the URL path up to the origin root); "index" formats llms.txt as a
+                   link index; "full" reads llms-full.txt.
                 2. Content negotiation — request with Accept: text/markdown; a markdown response is used as-is.
-                3. Heuristic extraction — Readability-style article extraction, then HTML→markdown.
+                3. Markdown fallbacks — a {path}.md sibling, then routing through the site's
+                   llms.txt to the document's markdown link.
+                4. Heuristic extraction — Readability-style article extraction, then HTML→markdown.
 
                 Flags:
-                - requireMd: fail when no markdown source (llms/negotiation) was found
-                - llms: prefer llms.txt / llms-full.txt discovery
-                - outline: include a heading outline of the article
-                - filter: keep only article sections whose heading contains this substring
-                - allowedDomains: domain whitelist (SSRF protection); empty allows any host
+                - requireMd: fail when no markdown source (llms/negotiation/path-md/llms-link) was found
+                - llms: "false" (default) — llms.txt used only as a routing fallback;
+                  "true"/"discover" — prefer raw llms.txt/llms-full.txt; "index"/"full" — modes above
+                - outline: include a heading outline of the content
+                - filter: keep only sections/links whose heading or title contains this substring
+                - allowedDomains: domain whitelist (SSRF protection, applied per redirect hop); empty allows any host
+                - timeoutMs: per-request timeout in milliseconds (default: client default)
 
-                Returns markdown, title, byline, siteName, url, source (llms|negotiation|extractor),
-                charCount, and optional outline.
+                Returns markdown, title, byline, siteName, url, finalUrl, source
+                (llms|llms-index|llms-full|negotiation|path-markdown|llms-link|text|extractor),
+                charCount, outline, and truncated (body hit the 2 MB cap).
             """.trimIndent()
         )
     }
@@ -398,19 +407,21 @@ open class MarkdownToolExecutor(
             "read" -> {
                 val url = paramString(args, "url", functionName)!!
                 val requireMd = paramBool(args, "requireMd", functionName, required = false, default = false) ?: false
-                val llms = paramBool(args, "llms", functionName, required = false, default = false) ?: false
+                val llmsMode = parseLlmsMode(args["llms"])
                 val outline = paramBool(args, "outline", functionName, required = false, default = false) ?: false
                 val filter = paramString(args, "filter", functionName, required = false)
                 val allowedDomains = paramStringList(args, "allowedDomains", functionName, required = false)
+                val timeoutMs = paramLong(args, "timeoutMs", functionName, required = false)
 
                 val result = readerService.read(
                     url,
                     ReadOptions(
                         requireMd = requireMd,
-                        llms = llms,
+                        llms = llmsMode,
                         outline = outline,
                         filter = filter?.takeIf { it.isNotBlank() },
                         allowedDomains = allowedDomains,
+                        timeoutMs = timeoutMs,
                     ),
                 )
 
@@ -420,15 +431,33 @@ open class MarkdownToolExecutor(
                     "byline" to result.byline,
                     "siteName" to result.siteName,
                     "url" to result.url,
+                    "finalUrl" to result.finalUrl,
                     "source" to result.source,
                     "charCount" to result.charCount,
                     "outline" to result.outline,
+                    "truncated" to result.truncated,
                 )
             }
 
             else -> throw IllegalArgumentException(
                 "Unsupported markdown method: $functionName. " +
                     "Supported: convert, crawl, crawlFrom, fetch, discoverLinks, read."
+            )
+        }
+    }
+
+    /**
+     * Parse the `llms` parameter: accepts the legacy boolean (`true`/`false`)
+     * as well as the agent-browser style `index` / `full` string modes.
+     */
+    private fun parseLlmsMode(raw: Any?): LlmsMode? {
+        return when (raw?.toString()?.lowercase()) {
+            null, "", "false" -> null
+            "true", "discover" -> LlmsMode.DISCOVER
+            "index" -> LlmsMode.INDEX
+            "full" -> LlmsMode.FULL
+            else -> throw IllegalArgumentException(
+                "Parameter 'llms' must be one of false|true|index|full for read | actual='$raw'"
             )
         }
     }
