@@ -27,8 +27,6 @@ management tooling, debugging, or configuring observability.
 | `browser4-agentic/src/test/resources/logback-test.xml` | Agentic tests — console only, log.level overridable |
 | `browser4-tests/browser4-rest-tests/src/test/resources/logback-test.xml` | REST integration tests |
 | `browser4-tests/browser4-e2e-tests/src/test/resources/logback-test.xml` | E2E tests — DEBUG on `skeleton.ai.agent` |
-| `browser4-tests/pulsar-e2e-tests/src/test/resources/logback-test.xml` | Pulsar E2E — same structure |
-| `browser4-tests/pulsar-it-tests/src/test/resources/logback-test.xml` | Pulsar IT — `skeleton.ai.agent` DEBUG |
 | `browser4-tests/pulsar-tests-common/src/test/resources/logback-test.xml` | Test common — minimal console |
 | `examples/browser4-examples/src/main/resources/logback.xml` | Examples — writes to `logs/pulsar.exam.log` |
 

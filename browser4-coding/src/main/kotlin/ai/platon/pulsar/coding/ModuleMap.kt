@@ -53,8 +53,6 @@ object ModuleMap {
         "browser4-tests",
         "browser4-tests/browser4-e2e-tests",
         "browser4-tests/browser4-rest-tests",
-        "browser4-tests/pulsar-e2e-tests",
-        "browser4-tests/pulsar-it-tests",
         "browser4-tests/pulsar-tests-common",
         "examples",
         "examples/browser4-examples",
@@ -70,7 +68,6 @@ object ModuleMap {
             "browser4-core/browser4-resources", "browser4-core/browser4-skeleton",
             "browser4-plugins", "browser4-rest", "browser4-tests",
             "browser4-tests/browser4-e2e-tests", "browser4-tests/browser4-rest-tests",
-            "browser4-tests/pulsar-e2e-tests", "browser4-tests/pulsar-it-tests",
             "browser4-tests/pulsar-tests-common", "examples/browser4-examples",
         ),
         "browser4-agent-tools" to listOf(
@@ -162,7 +159,6 @@ object ModuleMap {
         "browser4-tests/pulsar-tests-common" to listOf(
             "browser4-core/browser4-skeleton", "browser4-rest",
             "browser4-tests/browser4-e2e-tests", "browser4-tests/browser4-rest-tests",
-            "browser4-tests/pulsar-e2e-tests", "browser4-tests/pulsar-it-tests",
             "examples/browser4-examples",
         ),
     )

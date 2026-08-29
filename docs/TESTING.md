@@ -136,8 +136,7 @@ AND NOT ManualOnly
 | E2E         | `browser4-tests/*-e2e-tests` |
 
 > **注：** 原 `pulsar-it-tests` / `pulsar-e2e-tests` 的集成与 E2E 套件已迁移至底层库
-> （browser4-core 各模块与 `pulsar-tests-common`）。两个模块作为占位保留，各自仅保留
-> 一个 smoke 测试，以保证既有构建接线与 CI 引用在迁移期间继续可用。
+> （browser4-core 各模块与 `pulsar-tests-common`），占位模块已从本仓库移除。
 
 ---
 
@@ -177,7 +176,7 @@ AND NOT ManualOnly
 **核心原因：**
 
 * JUnit 5 Tags 四维度分类 > Failsafe 单维度命名约定
-* 物理模块隔离（`pulsar-it-tests/` 等）已实现统计分离；其测试套件已迁移至底层库
+* 测试套件已迁移至底层库（原 `pulsar-it-tests` / `pulsar-e2e-tests` 模块已移除）
 * `@SpringBootTest` 已解决生命周期管理
 * GitHub Actions 已编排外部服务（MongoDB、Docker Compose）
 * Failsafe 的 `<groups>` 无法表达多维度组合（如 "Fast 且不需要 AI 的集成测试"）
@@ -186,8 +185,7 @@ AND NOT ManualOnly
 
 ```bash
 mvn test                              # 快速单测
-mvn test -DrunITs=true                # 集成测试（pulsar-it-tests 模块 smoke 测试）
-mvn test -pl browser4-tests/pulsar-it-tests  # 按模块执行（smoke 测试）
+mvn test -DrunITs=true                # 运行底层库中的集成测试（Tag 驱动）
 mvn test -Dgroups="Integration,Fast"  # 按 Tag 组合过滤
 ```
 
