@@ -12,6 +12,7 @@
     </parent>
 
     <artifactId>browser4-headings</artifactId>
+    <name>Browser4 Headings</name>
     <packaging>jar</packaging>
 
     <dependencies>
