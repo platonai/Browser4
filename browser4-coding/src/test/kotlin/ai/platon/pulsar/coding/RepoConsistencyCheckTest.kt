@@ -206,6 +206,24 @@ class RepoConsistencyCheckTest {
         assertTrue(result.valid, "template placeholders must not fail governance: ${result.issues}")
     }
 
+    @Test
+    @DisplayName("build-injected ${'$'}{project.version} sdkVersion is exempt (browser4-pdk resource filtering)")
+    fun pluginSdkVersionBuildInjectedPlaceholderExempt() {
+        val manifest = """
+            {
+              "name": "browser4-a",
+              "version": "1.0.0",
+              "sdkVersion": "${'$'}{project.version}",
+              "dependsOn": ["browser4-skeleton"]
+            }
+        """.trimIndent()
+        val result = RepoConsistencyCheck.check(
+            version, rootPom, bomPom,
+            pluginManifestContents = listOf(manifest))
+        assertTrue(result.valid, "build-injected placeholder must not fail governance: ${result.issues}")
+        assertFalse(result.issues.any { it.message.contains("sdkVersion") }, "issues: ${result.issues}")
+    }
+
     // ---- isPluginManifestPath ----
 
     @Test

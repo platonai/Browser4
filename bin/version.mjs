@@ -1315,6 +1315,40 @@ async function cmdAuto(args) {
 // Subcommand: check
 // ---------------------------------------------------------------------------
 
+/**
+ * Scan every in-repo `META-INF/browser4-plugin.json` (excluding build output,
+ * hidden dirs, node_modules, and archetype template resources) and return its
+ * declared sdkVersion. Declarations starting with `${` are build-injected
+ * placeholders (browser4-pdk resources filtering) and are exempt from the
+ * literal-equality check.
+ */
+function scanPluginManifestSdkVersions() {
+  const results = [];
+  const excludedSegments = new Set(["target", "node_modules", "archetype-resources"]);
+  function walk(dir) {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const name = entry.name;
+      if (name.startsWith(".")) continue;
+      if (entry.isDirectory()) {
+        if (!excludedSegments.has(name)) walk(join(dir, name));
+      } else if (name === "browser4-plugin.json" && dir.endsWith("META-INF")) {
+        const full = join(dir, name);
+        const content = readFileSync(full, "utf-8");
+        const m = content.match(/"sdkVersion"\s*:\s*"([^"]*)"/);
+        results.push({ path: full, sdkVersion: m ? m[1] : null });
+      }
+    }
+  }
+  walk(REPO_ROOT);
+  return results;
+}
+
 function cmdCheck() {
   console.log("Version Consistency Check");
   console.log("==========================");
@@ -1396,6 +1430,39 @@ function cmdCheck() {
     checkItem("cli/Cargo.toml", "skipped", "File not found");
   }
 
+  // 5. Plugin manifest sdkVersion: literal values must equal VERSION;
+  //    ${...} placeholders are injected by the build (browser4-pdk filtering).
+  const manifests = scanPluginManifestSdkVersions();
+  if (manifests.length === 0) {
+    checkItem("plugin manifests", "skipped", "no META-INF/browser4-plugin.json found");
+  } else {
+    const placeholders = manifests.filter((m) => m.sdkVersion?.startsWith("${")).length;
+    let literalFailures = 0;
+    for (const m of manifests) {
+      const v = m.sdkVersion;
+      if (v == null) {
+        checkItem(`plugin ${m.path.slice(REPO_ROOT.length + 1)}`, "error", "missing sdkVersion");
+        literalFailures++;
+      } else if (!v.startsWith("${") && v !== versionFileVersion) {
+        checkItem(
+          `plugin ${m.path.slice(REPO_ROOT.length + 1)}`,
+          "failed",
+          `sdkVersion "${v}" (expected "${versionFileVersion}")`
+        );
+        literalFailures++;
+      }
+    }
+    if (literalFailures === 0) {
+      checkItem(
+        "plugin manifests",
+        "passed",
+        `${manifests.length} scanned (${placeholders} build-injected, ${manifests.length - placeholders} literal)`
+      );
+    } else {
+      allPassed = false;
+    }
+  }
+
   console.log("");
   if (allPassed) {
     console.log("✓ All version checks passed.");
@@ -1469,6 +1536,21 @@ function cmdPrereleaseCheck() {
     } catch {
       result.consistent = false;
       result.issues.push("package.json: cannot parse version");
+    }
+  }
+
+  // Plugin manifest sdkVersion: literal values must equal VERSION;
+  // ${...} placeholders are injected by the build (browser4-pdk filtering).
+  for (const m of scanPluginManifestSdkVersions()) {
+    const v = m.sdkVersion;
+    if (v == null) {
+      result.consistent = false;
+      result.issues.push(`${m.path}: missing sdkVersion`);
+    } else if (!v.startsWith("${") && v !== versionFileVersion) {
+      result.consistent = false;
+      result.issues.push(
+        `${m.path}: sdkVersion "${v}" (expected "${versionFileVersion}")`
+      );
     }
   }
 

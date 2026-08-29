@@ -30,6 +30,26 @@
     <build>
         <defaultGoal>package</defaultGoal>
 
+        <resources>
+            <!-- Filter ${project.version} into the plugin manifest so the
+                 built jar's sdkVersion matches the SDK it was built against
+                 (same pattern as browser4-pdk). -->
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>META-INF/browser4-plugin.json</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>META-INF/browser4-plugin.json</exclude>
+                </excludes>
+            </resource>
+        </resources>
+
         <plugins>
             <plugin>
                 <groupId>org.jetbrains.kotlin</groupId>

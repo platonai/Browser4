@@ -1291,12 +1291,32 @@ jobs:
         working-directory: ${{ env.CLI_PACKAGE_DIR }}
         shell: bash
         run: |
+          set -euo pipefail
           CLI_VERSION=$(node -p "require('./package.json').version")
+          PKG_NAME=$(node -p "require('./package.json').name")
           TAG_FLAG=""
           if [[ "$CLI_VERSION" == *"-"* ]]; then
             TAG_FLAG="--tag next"
           fi
-          npm publish --provenance $TAG_FLAG
+          if npm publish --provenance $TAG_FLAG; then
+            echo "Published $PKG_NAME@$CLI_VERSION to npm"
+          else
+            # Idempotency: a previous/concurrent run may already have published
+            # this exact version (npm refuses re-publish with E409). If the
+            # version is verifiable on npm, treat the step as successful.
+            FOUND=""
+            for attempt in 1 2 3; do
+              FOUND=$(npm view "$PKG_NAME@$CLI_VERSION" version 2>/dev/null || true)
+              [ "$FOUND" = "$CLI_VERSION" ] && break
+              sleep 5
+            done
+            if [ "$FOUND" = "$CLI_VERSION" ]; then
+              echo "::notice::$PKG_NAME@$CLI_VERSION already exists on npm — treating as published (idempotent re-run)"
+            else
+              echo "npm publish failed and $PKG_NAME@$CLI_VERSION is not verifiable on npm" >&2
+              exit 1
+            fi
+          fi
 
       - name: Verify npm package was published
         if: steps.cli_publish_check.outputs.should_publish == 'true'

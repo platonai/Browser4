@@ -94,6 +94,29 @@
     <build>
         <defaultGoal>install</defaultGoal>
 
+        <resources>
+            <!-- Filter ${project.version} into plugin manifests so the built
+                 jar's sdkVersion always equals the SDK version it was built
+                 against (in-repo plugins are versioned in lockstep with the
+                 repo VERSION). Only META-INF/browser4-plugin.json is filtered;
+                 everything else — including external plugins' literal
+                 sdkVersion values — passes through untouched. -->
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>META-INF/browser4-plugin.json</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>META-INF/browser4-plugin.json</exclude>
+                </excludes>
+            </resource>
+        </resources>
+
         <plugins>
             <!-- Kotlin compiler: must come before maven-compiler-plugin -->
             <plugin>

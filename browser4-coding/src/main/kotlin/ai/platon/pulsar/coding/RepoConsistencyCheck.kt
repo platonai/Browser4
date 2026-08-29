@@ -13,8 +13,10 @@ package ai.platon.pulsar.coding
  *    resolves to a real directory; and every on-disk module directory is
  *    registered somewhere in the root pom (so `-am` reactor builds can find it).
  * 5. **Plugin SDK versions** — every in-repo `browser4-plugin.json` declares
- *    `sdkVersion` equal to VERSION, so bundled plugins always match the SDK
- *    they are built with.
+ *    a literal `sdkVersion` equal to VERSION, or a build-injected placeholder
+ *    (`${project.version}`, substituted by browser4-pdk resource filtering);
+ *    bundled plugins therefore always match the SDK they are built with.
+ *    Literal drift from VERSION is an error.
  *
  * Pure string/regex analysis plus an existence callback — zero dependencies,
  * no network, no Maven invocation. Testable without a real checkout.
