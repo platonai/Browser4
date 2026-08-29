@@ -690,7 +690,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
-        <dokka.version>1.9.10</dokka.version>
+        <dokka.version>2.2.0</dokka.version>
 
         <jacoco-maven-plugin.version>0.8.15</jacoco-maven-plugin.version>
         <version.build-helper-maven-plugin>3.6.0</version.build-helper-maven-plugin>

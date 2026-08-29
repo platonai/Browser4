@@ -256,7 +256,11 @@ jobs:
         if: success() || (steps.tests.outcome == 'skipped')
         run: |
           echo "=== Deploying to Maven Central ==="
+          # dokka 1.9.x cannot run on JDK 25; the repo now pins dokka 2.2.0.
+          # Override on the CLI so a release tag that predates the pom bump
+          # still deploys (poms at the tag keep their own dokka.version).
           ./mvnw --batch-mode deploy -P deploy,release -DskipTests \
+            -Ddokka.version=2.2.0 \
             -Dgpg.passphrase="$GPG_PASSPHRASE" \
             -Dgpg.batch=true \
             -Dgpg.pinentry-mode=loopback \
