@@ -249,7 +249,7 @@ entries per test type).
 | Workflow | Artifact Name | Content |
 |---|---|---|
 | `.github/workflows/release.yml` | `smoke-test-logs-${{ matrix.artifact_name }}` | `${{ runner.temp }}/browser4-server-logs/` |
-| `.github/workflows/cross-platform-smoke.yml` | `smoke-test-logs-*` | Same pattern |
+| ~~`.github/workflows/cross-platform-smoke.yml`~~ | ~~`smoke-test-logs-*`~~ | ~~Same pattern~~ *(workflow removed — release.yml is the single smoke owner)* |
 | `.github/workflows/weekly-production-test.yml` | `production-test-logs-${{ matrix.name }}` | `.browser4-acceptance/` + `b4cli-*.txt` |
 | `.github/actions/run-tests/action.yml` | test reports | Maven Surefire XML reports |
 
