@@ -46,6 +46,7 @@ open class TextToAction(
      * @param driver The driver to use to collect the context, such as interactive elements
      * @return The action description
      * */
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     open suspend fun generateActions(
         action: String, driver: WebDriver, screenshotB64: String? = null
     ): List<ActionDescription> {
@@ -97,6 +98,7 @@ open class TextToAction(
         return toActionDescription(action, elements, agentState, response).toActionDescriptions()
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     fun modelResponseToActionDescription(
         instruction: String, agentState: AgentState, modelResponse: ModelResponse
     ): ActionDescription {
@@ -114,6 +116,7 @@ open class TextToAction(
         }
     }
 
+    @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
     private fun modelResponseToActionDescription0(
         instruction: String, agentState: AgentState, modelResponse: ModelResponse
     ): ActionDescription {
@@ -266,6 +269,7 @@ open class TextToAction(
             Files.createDirectories(baseDir)
         }
 
+        @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
         fun toActionDescription(
             instruction: String,
             elements: ModelObserveResponseElements,
@@ -281,6 +285,7 @@ open class TextToAction(
             )
         }
 
+        @Deprecated("Use RunEngine.CLI_TOOL_LOOP path instead")
         fun toObserveElement(ele: ModelObserveResponseElement, response: ModelResponse): ObserveElement {
             val arguments = ele.arguments
                 ?.mapNotNull { arg -> arg?.get("name") to arg?.get("value") }

@@ -27,6 +27,7 @@ internal class SessionActExecutor(
     )
     private val toolCallExecutor = BasicToolCallExecutor(executors.associateBy { it.domain })
 
+    @Deprecated("Not used anymore")
     suspend fun performAct(action: ActionDescription): ToolCallResult {
         val toolCall = action.toolCall ?: return ToolCallResult.NO_OP
 
@@ -43,6 +44,7 @@ internal class SessionActExecutor(
         )
     }
 
+    @Deprecated("Not used anymore")
     suspend fun performActs(actionDescriptions: String): List<ToolCallResult> {
         // Converts the prompt into a sequence of webdriver actions using TextToAction.
         val tta = TextToAction(conf)
