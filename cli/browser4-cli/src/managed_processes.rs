@@ -1149,6 +1149,9 @@ fn process_command_line(pid: u32) -> Option<String> {
 /// `@path` token, so marker-based process matching (e.g. the Browser4 main
 /// class) would miss the process entirely.  Append the referenced file's
 /// tokens to the command line so downstream matching sees the real arguments.
+// Only used in production on Windows (see `process_command_line`), but its
+// unit tests run on every platform, so keep it compiled everywhere.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn expand_windows_argfile(command_line: String) -> String {
     let mut expanded = String::new();
     for raw_token in command_line.split_whitespace() {
@@ -1341,11 +1344,11 @@ fn wait_for_exit_all(pids: &[u32], timeout_ms: u64, poll_interval_ms: u64) {
     if pids.is_empty() {
         return;
     }
-    let start = std::time::Instant::now();
-    let timeout = std::time::Duration::from_millis(timeout_ms);
-    let poll = std::time::Duration::from_millis(poll_interval_ms);
     #[cfg(windows)]
     {
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_millis(timeout_ms);
+        let poll = std::time::Duration::from_millis(poll_interval_ms);
         while start.elapsed() < timeout {
             let running = running_pids_snapshot();
             if !pids.iter().any(|p| running.contains(p)) {

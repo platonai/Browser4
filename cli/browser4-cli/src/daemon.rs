@@ -4008,12 +4008,6 @@ fn resolve_executable_pid(executable_name: &str) -> Option<String> {
     Some(pid)
 }
 
-// Stub for non-Windows platforms — never called; satisfies the compiler.
-#[cfg(not(target_os = "windows"))]
-fn resolve_executable_pid(_executable_name: &str) -> Option<String> {
-    None
-}
-
 /// On Windows, enumerate running processes via PowerShell (preferred) or
 /// the deprecated `wmic` as a fallback for older systems.
 #[cfg(target_os = "windows")]

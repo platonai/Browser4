@@ -10260,6 +10260,7 @@ fn parse_status_code_from_json(value: &Value) -> String {
 /// Uses the same lifecycle vocabulary as [`friendly_agent_status`] so that status strings
 /// written into the local task-tracking file are consistent with the labels shown in
 /// `agent list`.
+#[cfg(test)]
 fn extract_readable_agent_status(status: &Value) -> String {
     let process_state = status
         .get("processState")
@@ -15872,6 +15873,9 @@ fn self_upgrade_skip_requested() -> bool {
 }
 
 /// URL of the platform-specific install script used to self-upgrade the CLI.
+// Only called from the Windows upgrade path today, but its unit test checks
+// both platform variants, so keep it compiled everywhere.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn cli_install_script_url() -> &'static str {
     #[cfg(windows)]
     {
@@ -15888,6 +15892,7 @@ fn cli_install_script_url() -> &'static str {
 /// This avoids depending on PowerShell's `irm` (or curl) for the script fetch:
 /// `irm` can be blocked by execution policy, antivirus, or a broken PATH even
 /// when plain HTTPS from the CLI works fine.
+#[cfg(target_os = "windows")]
 fn download_cli_install_script(url: &str, target: &Path) -> Result<(), String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
@@ -27005,10 +27010,6 @@ mod tests {
             );
             assert_eq!(candidates[1], "powershell.exe");
             assert_eq!(candidates[2], "pwsh.exe");
-        }
-        #[cfg(not(windows))]
-        {
-            assert!(windows_powershell_candidates().is_empty());
         }
     }
 
