@@ -216,7 +216,7 @@ Skills are AI agent instruction files bundled into the CLI binary at compile tim
 
 ### webminer (WebMiner)
 
-`webminer` runs the [WebMiner](https://github.com/platonai/web-miner) ML clustering tool on local HTML files — no Browser4 server and no PowerShell needed. It installs, updates, and launches `scent-miner.jar` natively (Java 17+ is auto-detected from `JAVA_HOME`, common paths, or `PATH`).
+`webminer` runs the [WebMiner](https://github.com/platonai/web-miner) ML clustering tool on local HTML files — no Browser4 server and no PowerShell needed. It installs, updates, and launches `scent-miner.jar` natively (Java 17+ is auto-detected: `JAVA_HOME` → Browser4 runtime bundle JRE → common paths → `PATH`).
 
 | Command | Description |
 |---|---|
@@ -229,7 +229,7 @@ Skills are AI agent instruction files bundled into the CLI binary at compile tim
 | `webminer all <html-dir>` | Full pipeline (encode → cluster → views) with `--max-files`, `--output`, `--resume` |
 | `webminer views <result-dir>` | Rebuild interactive views from an existing clustering result |
 
-Any other command is forwarded verbatim to `scent-miner.jar` (e.g. `webminer encode <dir>`). The same `~/.scent/webminer` installation is shared with the `webminer.ps1` launcher from the [web-miner skill](../../skills/browser4-web-miner/SKILL.md).
+Any other command is forwarded verbatim to `scent-miner.jar` (e.g. `webminer encode <dir>`). The same `~/.scent/webminer` installation is used by the [web-miner skill](../../skills/browser4-web-miner/SKILL.md).
 
 ### Install / Admin
 

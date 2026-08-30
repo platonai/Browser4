@@ -68,10 +68,9 @@ browser4-cli webminer run-example
 
 WebMiner is a first-class Browser4 citizen: the `browser4-cli webminer`
 command installs, updates, and runs the tool natively (no PowerShell needed —
-the CLI locates a Java 17+ installation and launches `scent-miner.jar`
-directly). The JAR and its release metadata are installed to the same
-locations the launcher script uses (`~/.scent/webminer/`), so both entry
-points share one installation.
+the CLI locates a Java 17+ installation, preferring the JRE bundled with the
+Browser4 runtime, and launches `scent-miner.jar` directly). The JAR and its
+release metadata are installed to `~/.scent/webminer/`.
 
 ```bash
 browser4-cli webminer install            # Download and install the latest release
@@ -92,17 +91,16 @@ browser4-cli webminer views <result-dir> # Rebuild views from an existing run
 
 ## Installing WebMiner
 
-The `webminer.ps1` launcher can self-install and self-update from GitHub Releases:
+`browser4-cli webminer install` downloads, verifies, and installs the latest
+release (GitHub Releases with an Aliyun OSS mirror fallback; works on
+Windows, Linux, and macOS — no PowerShell needed):
 
 ```bash
-.\webminer.ps1 install              # Download and install the latest release
-.\webminer.ps1 update               # Check for and install the latest release
-.\webminer.ps1 version              # Show installed and latest available versions
-.\webminer.ps1 uninstall            # Remove the installed release
+browser4-cli webminer install            # Download and install the latest release
+browser4-cli webminer update             # Check for and install the latest release
+browser4-cli webminer version            # Show installed and latest available versions
+browser4-cli webminer uninstall          # Remove the installed release
 ```
-
-`browser4-cli webminer install/update/version/uninstall` are the
-cross-platform equivalents (they do not require PowerShell).
 
 Releases are installed to `~/.scent/webminer/` and checked against
 `https://github.com/platonai/web-miner/releases`. SHA-256 checksums are
@@ -123,7 +121,7 @@ pages, extracts it, and runs the full pipeline — no manual setup required
 beyond Java 17 and 7-Zip:
 
 ```bash
-.\webminer.ps1 run-example
+browser4-cli webminer run-example
 ```
 
 The dataset is cached at `~/.scent/test-data/amazon.com/` so subsequent runs
@@ -133,7 +131,7 @@ skip the download.
 
 ```bash
 # Full pipeline (one-shot)
-.\webminer.ps1 all /path/to/html/files
+browser4-cli webminer all /path/to/html/files
 
 # Or with the JAR directly
 java -jar scent-miner.jar all /path/to/html/files
@@ -171,8 +169,8 @@ java -jar scent-miner.jar views <html-dir>-ml-output/kmeans-result/p<timestamp>
    `<html-dir>-ml-output`:
    `%TEMP%\<app>-pereg\ml\tasks\unsupervised\result\p<timestamp>\predictionAndMinimalFeatures.views\`
    on Windows (the `<app>` prefix follows `-Dapp.name`: `pulsar` for a direct
-   `java -jar` run, `webminer` when launched through `webminer.ps1`).  The end
-   of the run prints the resolved absolute views path.
+   `java -jar` run, `webminer` when launched through `browser4-cli webminer`).
+   The end of the run prints the resolved absolute views path.
 
 So after `java -jar scent-miner.jar all ./html-pages/` the clustered results
 look like:

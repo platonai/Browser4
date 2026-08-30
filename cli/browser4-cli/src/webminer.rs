@@ -2,10 +2,9 @@
 //!
 //! webminer is an external Java tool ([platonai/web-miner]) that groups
 //! downloaded HTML pages into clusters and produces interactive HTML views
-//! plus Excel spreadsheets.  This module mirrors the behaviour of the
-//! PowerShell launcher shipped with the skill
-//! (`skills/browser4-web-miner/scripts/webminer.ps1`) in native Rust, so the CLI
-//! works on every platform without PowerShell:
+//! plus Excel spreadsheets.  This module implements the webminer launcher in
+//! native Rust (replacing the PowerShell launcher that previously shipped
+//! with the skill), so the CLI works on every platform without PowerShell:
 //!
 //! - **Management** — `install` / `update` / `version` / `uninstall` download
 //!   and verify `scent-miner.jar` from GitHub Releases with an Aliyun OSS
@@ -35,10 +34,9 @@ const OSS_LATEST_JSON: &str = "https://web-miner.oss-cn-beijing.aliyuncs.com/rel
 const OSS_LATEST_DOWNLOAD: &str = "https://web-miner.oss-cn-beijing.aliyuncs.com/releases/latest/download";
 
 /// `-Dapp.name` value used when launching the JAR.  The views task-output
-/// directory is `%TEMP%/<app>-pereg/ml/tasks/...`; the default matches the
-/// `webminer.ps1` launcher (`webminer`), so runs started through browser4-cli
-/// and the launcher share the same task-output root (a direct `java -jar`
-/// run uses `pulsar`).
+/// directory is `%TEMP%/<app>-pereg/ml/tasks/...`; the default is `webminer`,
+/// so runs started through browser4-cli use the webminer task-output root
+/// (a direct `java -jar` run uses `pulsar`).
 const APP_NAME: &str = "webminer";
 
 /// JVM `--add-opens` flags required by the webminer stack at runtime.
@@ -99,7 +97,7 @@ fn require_home() -> Result<PathBuf, String> {
     })
 }
 
-/// `~/.scent/webminer` — where releases are installed (same as webminer.ps1).
+/// `~/.scent/webminer` — where releases are installed.
 pub fn install_root() -> Result<PathBuf, String> {
     Ok(require_home()?.join(".scent").join("webminer"))
 }
@@ -134,7 +132,7 @@ pub fn read_installed_version() -> Result<Option<String>, String> {
 pub fn run_jar(jar: &Path, java_exe: &Path, forward: &[String]) -> Result<i32, String> {
     let mut cmd = Command::new(java_exe);
     // `-Dapp.name` selects the views task-output root (`%TEMP%/<app>-pereg/...`);
-    // honour APP_NAME like the webminer.ps1 launcher does.
+    // honour APP_NAME (the value the launcher used).
     let app_name = std::env::var("APP_NAME")
         .ok()
         .filter(|v| !v.trim().is_empty())
@@ -147,8 +145,8 @@ pub fn run_jar(jar: &Path, java_exe: &Path, forward: &[String]) -> Result<i32, S
     for arg in forward {
         cmd.arg(arg);
     }
-    // Mirror webminer.ps1: expose JAVA_HOME to the child when the java
-    // executable lives under `<home>/bin/`, so the JAR can locate the JDK.
+    // Expose JAVA_HOME to the child when the java executable lives under
+    // `<home>/bin/`, so the JAR can locate the JDK.
     if let Some(bin) = java_exe.parent() {
         if bin.file_name().map(|n| n == "bin").unwrap_or(false) {
             if let Some(home) = bin.parent() {
@@ -875,7 +873,7 @@ mod tests {
 
     #[test]
     fn install_root_layout_matches_launcher() {
-        // Verify the relative layout is identical to webminer.ps1:
+        // Verify the relative layout of the install:
         // $HOME/.scent/webminer/lib/scent-miner.jar
         let root = install_root().expect("home dir should resolve");
         let comps: Vec<_> = root.components().collect();
