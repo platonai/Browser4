@@ -1897,6 +1897,84 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "network-requests",
+            description: "List network requests tracked for the current tab, with optional filters (URL substring, resource type, HTTP method, status). Network tracking is enabled on first use; requests are kept in a bounded in-memory buffer.",
+            category: Category::Network,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "filter", description: "Only requests whose URL contains this text (case-insensitive)", is_bool: false, short: None },
+                OptionDef { name: "type", description: "Comma-separated resource types, e.g. xhr,fetch", is_bool: false, short: None },
+                OptionDef { name: "method", description: "HTTP method, e.g. POST", is_bool: false, short: None },
+                OptionDef { name: "status", description: "Status filter: 200, 2xx, or a range like 400-499", is_bool: false, short: None },
+                OptionDef { name: "clear", description: "Drop all tracked requests first", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_network_requests".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(f) = get_opt_str(args, "filter") { p["filter"] = json!(f); }
+                if let Some(t) = get_opt_str(args, "type") { p["type"] = json!(t); }
+                if let Some(m) = get_opt_str(args, "method") { p["method"] = json!(m); }
+                if let Some(s) = get_opt_str(args, "status") { p["status"] = json!(s); }
+                if get_bool(args, "clear").unwrap_or(false) { p["clear"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "network-request",
+            description: "Fetch the full detail of one tracked network request: request/response headers, timing, and the response body (fetched on demand).",
+            category: Category::Network,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "requestId", description: "The network request id shown by `network requests`", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_network_request".to_string(),
+            tool_params_fn: |args| {
+                json!({ "requestId": get_str(args, "requestId").unwrap_or_default() })
+            },
+        },
+        CommandDef {
+            name: "har-start",
+            description: "Start a HAR recording session on the current tab. Response bodies are captured per --content mode once recording is active; stop with `network har stop [path]`.",
+            category: Category::Network,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "content", description: "Which response bodies to embed: none (default), text (text-like MIME types), or all (binary base64)", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_har_start".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(c) = get_opt_str(args, "content") { p["contentMode"] = json!(c); }
+                p
+            },
+        },
+        CommandDef {
+            name: "har-stop",
+            description: "Stop the active HAR recording and save the HAR 1.2 document to a .har file (or print it to stdout without --path).",
+            category: Category::Network,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "path", description: "Output .har file path (default: har-<timestamp>.har in the current directory); omit to print the HAR JSON to stdout", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_har_stop".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(f) = get_opt_str(args, "path") { p["path"] = json!(f); }
+                p
+            },
+        },
+        CommandDef {
             name: "dialog-accept",
             description: "Accept a dialog",
             category: Category::Core,
@@ -5377,6 +5455,86 @@ mod tests {
         args.insert("file".to_string(), json!("out.cpuprofile"));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["file"], "out.cpuprofile");
+    }
+
+    #[test]
+    fn test_network_requests_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("network-requests").unwrap();
+        let mut args = HashMap::new();
+        args.insert("filter".to_string(), json!("api"));
+        args.insert("type".to_string(), json!("xhr,fetch"));
+        args.insert("method".to_string(), json!("POST"));
+        args.insert("status".to_string(), json!("2xx"));
+        args.insert("clear".to_string(), json!(true));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_network_requests");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["filter"], "api");
+        assert_eq!(params["type"], "xhr,fetch");
+        assert_eq!(params["method"], "POST");
+        assert_eq!(params["status"], "2xx");
+        assert_eq!(params["clear"], true);
+    }
+
+    #[test]
+    fn test_network_requests_params_empty_by_default() {
+        let map = commands_map();
+        let cmd = map.get("network-requests").unwrap();
+        let args = HashMap::new();
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_network_request_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("network-request").unwrap();
+        let mut args = HashMap::new();
+        args.insert("requestId".to_string(), json!("1234.5"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_network_request");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["requestId"], "1234.5");
+    }
+
+    #[test]
+    fn test_har_start_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("har-start").unwrap();
+        let mut args = HashMap::new();
+        args.insert("content".to_string(), json!("all"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_har_start");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["contentMode"], "all");
+
+        // Default content mode: none
+        let empty = HashMap::new();
+        let params = (cmd.tool_params_fn)(&empty);
+        assert!(params.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_har_stop_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("har-stop").unwrap();
+        let mut args = HashMap::new();
+        args.insert("path".to_string(), json!("capture.har"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_har_stop");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["path"], "capture.har");
+    }
+
+    #[test]
+    fn test_network_commands_are_network_category() {
+        let map = commands_map();
+        for name in ["download", "network-requests", "network-request", "har-start", "har-stop"] {
+            let cmd = map.get(name).unwrap();
+            assert_eq!(
+                cmd.category.as_str(),
+                "network",
+                "{} should be in the Network category",
+                name
+            );
+        }
     }
 
     #[test]

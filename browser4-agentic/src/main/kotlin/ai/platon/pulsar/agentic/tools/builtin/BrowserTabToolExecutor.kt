@@ -211,6 +211,70 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 Empties the in-browser console message buffer.
             """.trimIndent()
         )
+        toolSpec["networkRequests"] = ToolSpec(
+            domain = domain,
+            method = "networkRequests",
+            arguments = listOf(
+                ToolSpec.Arg("filter", "String?", "null"),
+                ToolSpec.Arg("type", "String?", "null"),
+                ToolSpec.Arg("method", "String?", "null"),
+                ToolSpec.Arg("status", "String?", "null"),
+                ToolSpec.Arg("clear", "Boolean", "false"),
+            ),
+            returnType = "List<TrackedNetworkRequest>",
+            description = "List network requests tracked for the current tab, optionally filtered.",
+            help = """
+                tab.networkRequests()
+                tab.networkRequests(filter: String? = null, type: String? = null, method: String? = null, status: String? = null, clear: Boolean = false)
+
+                Enables Network tracking on first use, then returns the requests observed so far.
+                filter — only requests whose URL contains this text (case-insensitive).
+                type — comma-separated CDP resource types, e.g. "xhr,fetch".
+                method — HTTP method, e.g. "POST".
+                status — "200", "2xx", or a range like "400-499".
+                clear — drop all tracked requests first.
+            """.trimIndent()
+        )
+        toolSpec["networkRequestDetail"] = ToolSpec(
+            domain = domain,
+            method = "networkRequestDetail",
+            arguments = listOf(ToolSpec.Arg("requestId", "String")),
+            returnType = "Map<String, Any?>",
+            description = "Fetch the full detail of one tracked network request, including headers, timing, and response body.",
+            help = """
+                tab.networkRequestDetail(requestId: String)
+
+                Returns request/response metadata plus the response body (fetched on demand) for the
+                request id shown by tab.networkRequests().
+            """.trimIndent()
+        )
+        toolSpec["harStart"] = ToolSpec(
+            domain = domain,
+            method = "harStart",
+            arguments = listOf(ToolSpec.Arg("contentMode", "String?", "none")),
+            returnType = "Map<String, Any?>",
+            description = "Start a HAR recording session on the current tab (bodies captured per content mode: none, text, or all).",
+            help = """
+                tab.harStart(contentMode: String = "none")
+
+                Starts recording network traffic into a HAR 1.2 document.
+                contentMode — which response bodies to embed: "none" (default), "text" (text-like MIME types), or "all" (binary base64).
+                Stop with tab.harStop() and write the returned "har" document to a .har file.
+            """.trimIndent()
+        )
+        toolSpec["harStop"] = ToolSpec(
+            domain = domain,
+            method = "harStop",
+            arguments = emptyList(),
+            returnType = "Map<String, Any?>",
+            description = "Stop the active HAR recording and return the complete HAR 1.2 document.",
+            help = """
+                tab.harStop()
+
+                Stops recording and returns { recording, contentMode, entries, har } where har is the
+                HAR 1.2 document. Serialize it to JSON to get a .har file.
+            """.trimIndent()
+        )
     }
 
     override fun help(method: String): String {
@@ -1782,6 +1846,42 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 @Suppress("UNCHECKED_CAST")
                 val params = args["params"] as? Map<String, Any?>
                 driver.executeCdpCommand(method, params)
+            }
+
+            // Network tracking & HAR recording (Browser4-specific; requires a
+            // Browser4WebDriver session — all production sessions are).
+            "networkRequests" -> {
+                validateArgs(args, allowed("filter", "type", "method", "status", "clear"), emptySet(), functionName)
+                val b4Driver = driver as? Browser4WebDriver
+                    ?: throw IllegalArgumentException("networkRequests requires a Browser4WebDriver session")
+                b4Driver.networkRequests(
+                    filter = paramString(args, "filter", functionName, required = false),
+                    type = paramString(args, "type", functionName, required = false),
+                    method = paramString(args, "method", functionName, required = false),
+                    status = paramString(args, "status", functionName, required = false),
+                    clear = paramBool(args, "clear", functionName, required = false, default = false) ?: false,
+                )
+            }
+
+            "networkRequestDetail" -> {
+                validateArgs(args, allowed("requestId"), setOf("requestId"), functionName)
+                val b4Driver = driver as? Browser4WebDriver
+                    ?: throw IllegalArgumentException("networkRequestDetail requires a Browser4WebDriver session")
+                b4Driver.networkRequestDetail(paramString(args, "requestId", functionName)!!)
+            }
+
+            "harStart" -> {
+                validateArgs(args, allowed("contentMode"), emptySet(), functionName)
+                val b4Driver = driver as? Browser4WebDriver
+                    ?: throw IllegalArgumentException("harStart requires a Browser4WebDriver session")
+                b4Driver.harStart(paramString(args, "contentMode", functionName, required = false) ?: "none")
+            }
+
+            "harStop" -> {
+                validateArgs(args, emptySet(), emptySet(), functionName)
+                val b4Driver = driver as? Browser4WebDriver
+                    ?: throw IllegalArgumentException("harStop requires a Browser4WebDriver session")
+                b4Driver.harStop()
             }
 
             "help" -> help()

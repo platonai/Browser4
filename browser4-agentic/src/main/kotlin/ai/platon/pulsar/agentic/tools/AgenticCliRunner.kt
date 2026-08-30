@@ -601,6 +601,10 @@ class AgenticCliRunner(
             "browser_is_enabled" to "is_enabled",
             "browser_is_checked" to "is_checked",
             "browser_dialog_status" to "dialog_status",
+            "browser_network_requests" to "network_requests",
+            "browser_network_request" to "network_request",
+            "browser_har_start" to "har_start",
+            "browser_har_stop" to "har_stop",
         )
 
         /**
@@ -636,6 +640,10 @@ class AgenticCliRunner(
             "is_enabled" to ToolCall("tab", "isEnabled", mutableMapOf()),
             "is_checked" to ToolCall("tab", "isChecked", mutableMapOf()),
             "dialog_status" to ToolCall("tab", "dialogStatus", mutableMapOf()),
+            "network_requests" to ToolCall("tab", "networkRequests", mutableMapOf()),
+            "network_request" to ToolCall("tab", "networkRequestDetail", mutableMapOf()),
+            "har_start" to ToolCall("tab", "harStart", mutableMapOf()),
+            "har_stop" to ToolCall("tab", "harStop", mutableMapOf()),
         )
 
         /**

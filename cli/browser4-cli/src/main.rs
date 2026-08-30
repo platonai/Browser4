@@ -496,6 +496,10 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "profiler-start",
         "profiler-stop",
         "download",
+        "network-requests",
+        "network-request",
+        "har-start",
+        "har-stop",
         "webminer",
         "webminer-install",
         "webminer-update",
@@ -5657,6 +5661,64 @@ async fn handle_profiler_stop(
     std::fs::write(&out_path, payload)
         .map_err(|e| format!("Failed to write {}: {}", out_path.display(), e))?;
     cli_println!("CPU profile saved to {}", out_path.display());
+    Ok(())
+}
+
+/// `network har stop [--path out.har]` — stop the active HAR recording and
+/// save the HAR 1.2 document. Without `--path`, print the HAR JSON to stdout.
+async fn handle_har_stop(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    use std::path::PathBuf;
+
+    let result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let mut params = json!({});
+        params["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, "browser_har_stop", params).await }
+    })
+    .await?;
+
+    // The backend returns { recording, contentMode, entries, har } as JSON.
+    let parsed: Value = serde_json::from_str(&result).unwrap_or(Value::String(result.clone()));
+    let entries = parsed
+        .get("entries")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let content_mode = parsed
+        .get("contentMode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("none")
+        .to_string();
+    let har = parsed.get("har").cloned().unwrap_or(parsed);
+    // Pretty-print only a real HAR document (a JSON object); anything else
+    // (e.g. a backend error or a mock response) is passed through verbatim.
+    let har_json = if har.is_object() {
+        serde_json::to_string_pretty(&har).unwrap_or_else(|_| result.clone())
+    } else {
+        result.clone()
+    };
+
+    match tool_params.get("path").and_then(|v| v.as_str()) {
+        Some(p) => {
+            let out_path = PathBuf::from(p);
+            std::fs::write(&out_path, har_json)
+                .map_err(|e| format!("Failed to write {}: {}", out_path.display(), e))?;
+            cli_println!(
+                "HAR saved to {} ({} entries, content mode: {})",
+                out_path.display(),
+                entries,
+                content_mode
+            );
+        }
+        None => {
+            cli_println!("{}", har_json);
+        }
+    }
     Ok(())
 }
 
@@ -18053,6 +18115,8 @@ fn is_page_dependent_command(command: &str) -> bool {
         | "scroll" | "resize"
         // Console — needs a page to intercept messages
         | "console"
+        // Network inspection / HAR — needs a live page with network traffic
+        | "network-requests" | "network-request" | "har-start" | "har-stop"
         // Storage commands — need page origin context
         | "cookie-list" | "cookie-get" | "cookie-set" | "cookie-delete" | "cookie-clear"
         | "localstorage-list" | "localstorage-get" | "localstorage-set"
@@ -18243,6 +18307,28 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         }
         return None;
     }
+    // `network requests|request <id>` and `network har start|stop [path]` —
+    // request inspection and HAR recording.
+    if prefix == "network" {
+        if sub == "har" {
+            let inner = args.get(2).map(|s| s.as_str());
+            let flat = match inner {
+                Some("start") => "har-start",
+                Some("stop") => "har-stop",
+                _ => return None,
+            };
+            let mut rewritten = vec![flat.to_string()];
+            rewritten.extend(args[3..].iter().cloned());
+            return Some(rewritten);
+        }
+        let known_subs = ["requests", "request"];
+        if known_subs.contains(&sub.as_str()) {
+            let mut rewritten = vec![format!("network-{}", sub)];
+            rewritten.extend(args[2..].iter().cloned());
+            return Some(rewritten);
+        }
+        return None;
+    }
     // `profiles list` — list browser profile directories.
     if prefix == "profiles" {
         let known_subs = ["list"];
@@ -18379,6 +18465,10 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "diff-snapshot" => Some("diff snapshot"),
         "profiler-start" => Some("profiler start"),
         "profiler-stop" => Some("profiler stop"),
+        "network-requests" => Some("network requests"),
+        "network-request" => Some("network request"),
+        "har-start" => Some("network har start"),
+        "har-stop" => Some("network har stop"),
         "profiles-list" => Some("profiles list"),
         "webminer-install" => Some("webminer install"),
         "webminer-update" => Some("webminer update"),
@@ -20697,6 +20787,15 @@ async fn run(
             )
             .await?;
         }
+        "har-stop" => {
+            handle_har_stop(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
         "generate-locator" => {
             handle_generate_locator(
                 &client,
@@ -21428,6 +21527,10 @@ mod tests {
             "profiler-start",
             "profiler-stop",
             "download",
+            "network-requests",
+            "network-request",
+            "har-start",
+            "har-stop",
         ] {
             assert!(cmds.contains(expected), "Missing no-snapshot command: {}", expected);
         }
@@ -22350,6 +22453,52 @@ mod tests {
         let rewritten = rewrite_prefixed_command(&["profiles".to_string(), "list".to_string()])
             .unwrap();
         assert_eq!(rewritten[0], "profiles-list");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_network_subcommands() {
+        let rewritten = rewrite_prefixed_command(&["network".to_string(), "requests".to_string()])
+            .unwrap();
+        assert_eq!(rewritten[0], "network-requests");
+
+        let rewritten = rewrite_prefixed_command(&[
+            "network".to_string(),
+            "requests".to_string(),
+            "--filter".to_string(),
+            "api".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "network-requests");
+        assert_eq!(rewritten[1], "--filter");
+        assert_eq!(rewritten[2], "api");
+
+        let rewritten = rewrite_prefixed_command(&[
+            "network".to_string(),
+            "request".to_string(),
+            "1234.5".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "network-request");
+        assert_eq!(rewritten[1], "1234.5");
+
+        let rewritten =
+            rewrite_prefixed_command(&["network".to_string(), "har".to_string(), "start".to_string()])
+                .unwrap();
+        assert_eq!(rewritten[0], "har-start");
+
+        let rewritten = rewrite_prefixed_command(&[
+            "network".to_string(),
+            "har".to_string(),
+            "stop".to_string(),
+            "./capture.har".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "har-stop");
+        assert_eq!(rewritten[1], "./capture.har");
+
+        // Unknown network subcommands are not rewritten.
+        assert!(rewrite_prefixed_command(&["network".to_string(), "foo".to_string()]).is_none());
+        assert!(rewrite_prefixed_command(&["network".to_string()]).is_none());
     }
 
     #[test]

@@ -2393,6 +2393,35 @@ pub(super) fn test_agent_browser_command_gaps(ctx: &mut E2ECtx) {
         window_new.stdout
     );
 
+    // ── 14-17. network requests / request detail / HAR start / stop ──────
+    let network_requests = run_command(
+        ctx,
+        &["network", "requests", "--filter", "api", "--status", "2xx"],
+    );
+    assert_eq!(
+        strip_snapshot_output(&network_requests.stdout),
+        "mock response for browser_network_requests",
+        "network requests should reach the backend tool"
+    );
+
+    let network_request = run_command(ctx, &["network", "request", "1234.5"]);
+    assert_eq!(
+        strip_snapshot_output(&network_request.stdout),
+        "mock response for browser_network_request"
+    );
+
+    let har_start = run_command(ctx, &["network", "har", "start", "--content", "all"]);
+    assert_eq!(
+        strip_snapshot_output(&har_start.stdout),
+        "mock response for browser_har_start"
+    );
+
+    let har_stop = run_command(ctx, &["network", "har", "stop"]);
+    assert_eq!(
+        strip_snapshot_output(&har_stop.stdout),
+        "mock response for browser_har_stop"
+    );
+
     // ── Verify recorded tool calls ────────────────────────────────────
     let tool_calls = mock_server.snapshot().tool_calls;
     let names: Vec<&str> = tool_calls.iter().map(|call| call.tool.as_str()).collect();
@@ -2408,12 +2437,31 @@ pub(super) fn test_agent_browser_command_gaps(ctx: &mut E2ECtx) {
         "browser_evaluate",
         "execute_cdp_command",
         "browser_tabs",
+        "browser_network_requests",
+        "browser_network_request",
+        "browser_har_start",
+        "browser_har_stop",
     ] {
         assert!(
             names.contains(&tool),
             "expected recorded tool call {tool}, got: {names:?}"
         );
     }
+
+    // Network filter args reach the backend.
+    let network_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_network_requests")
+        .collect();
+    assert_eq!(network_calls.len(), 1, "expected one network requests call");
+    assert_eq!(network_calls[0].arguments["filter"], "api");
+    assert_eq!(network_calls[0].arguments["status"], "2xx");
+    let har_start_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_har_start")
+        .collect();
+    assert_eq!(har_start_calls.len(), 1, "expected one har start call");
+    assert_eq!(har_start_calls[0].arguments["contentMode"], "all");
 
     // press-key aliases (key + keyboard) each issue their own call.
     let press_calls = tool_calls

@@ -720,6 +720,19 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         exclusion_reason: None,
         estimated_duration_ms: None,
     },
+    ScenarioDef {
+        name: "test_e2e_network_requests_and_har",
+        short_name: "test_network_requests_and_har",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: browser::test_network_requests_and_har,
+        group: Some("network"),
+        level: ScenarioLevel::Basic,
+        exclude_by_default: false,
+        exclusion_reason: None,
+        estimated_duration_ms: None,
+    },
     // ── Mouse fixture scenarios ──────────────────────────────────
     ScenarioDef {
         name: "test_e2e_mouse_click_variants",

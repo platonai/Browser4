@@ -1537,6 +1537,202 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
     run_command(ctx, &["close"]);
 }
 
+/// Network request inspection & HAR recording against a real browser.
+///
+/// Uses the `/network` fixture which issues two fetches on load:
+/// one that returns 200 JSON and one that 404s.
+pub(super) fn test_network_requests_and_har(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    // 1. Open the interactive fixture (any page works — traffic from THIS load
+    // is not tracked yet: network tracking is opt-in and enables the CDP
+    // Network domain on first use).
+    let open_result = run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
+    assert!(
+        open_result.stdout.contains("Session opened:"),
+        "Expected session to open. Output:\n{}",
+        open_result.stdout
+    );
+    sleep(Duration::from_secs(2));
+
+    // The FIRST session on a freshly launched backend can miss CDP Network
+    // events (a platform-level race in the base CDP stack, unrelated to
+    // network tracking). Close it and open again so tracking runs on a
+    // reliable session — this also exercises close+reopen for the scenario.
+    let close_result = run_command(ctx, &["close"]);
+    assert!(
+        close_result.stdout.contains("Session closed."),
+        "Expected session to close. Output:\n{}",
+        close_result.stdout
+    );
+    let reopen_result = run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
+    assert!(
+        reopen_result.stdout.contains("Session opened:"),
+        "Expected session to reopen. Output:\n{}",
+        reopen_result.stdout
+    );
+    sleep(Duration::from_secs(1));
+
+    // 2. First network command enables tracking; navigate to a DIFFERENT URL
+    // (goto short-circuits when already at the target URL) so the load and its
+    // fetches are observed.
+    let first_list = run_command(ctx, &["network", "requests"]);
+    assert!(
+        first_list.stdout.contains("["),
+        "network requests should print a JSON array, got:\n{}",
+        first_list.stdout
+    );
+
+    let goto_result = run_command(ctx, &["goto", &ctx.network_url()]);
+    assert!(
+        goto_result.stdout.contains("Navigated to")
+            || goto_result.stdout.contains("Page loaded")
+            || goto_result.exit_code == 0,
+        "goto should succeed, got:\n{}",
+        goto_result.stdout
+    );
+    sleep(Duration::from_secs(2));
+
+    // 3. Both fetches are now tracked.
+    let list = run_command(ctx, &["network", "requests"]);
+    assert!(
+        list.stdout.contains("network-endpoint-ok"),
+        "expected the 200 fetch in tracked requests, got:\n{}",
+        list.stdout
+    );
+    assert!(
+        list.stdout.contains("network-endpoint-missing"),
+        "expected the 404 fetch in tracked requests, got:\n{}",
+        list.stdout
+    );
+
+    // 4. Filters.
+    let filtered = run_command(ctx, &["network", "requests", "--filter", "network-endpoint-ok"]);
+    assert!(
+        filtered.stdout.contains("network-endpoint-ok") && !filtered.stdout.contains("network-endpoint-missing"),
+        "filter=network-endpoint-ok should keep only the ok request, got:\n{}",
+        filtered.stdout
+    );
+
+    let failed = run_command(ctx, &["network", "requests", "--status", "4xx"]);
+    assert!(
+        failed.stdout.contains("network-endpoint-missing"),
+        "--status 4xx should include the 404 fetch, got:\n{}",
+        failed.stdout
+    );
+    assert!(
+        !failed.stdout.contains("network-endpoint-ok"),
+        "--status 4xx should exclude the 200 fetch, got:\n{}",
+        failed.stdout
+    );
+
+    // 5. Request detail — parse the list as JSON to find the ok request id.
+    let list_json: serde_json::Value = serde_json::from_str(&strip_snapshot_output(&list.stdout))
+        .unwrap_or_else(|e| panic!("network requests output should be JSON: {e}\n{}", list.stdout));
+    let ok_entry = list_json
+        .as_array()
+        .and_then(|arr| {
+            arr.iter().find(|entry| {
+                entry["url"]
+                    .as_str()
+                    .is_some_and(|url| url.contains("network-endpoint-ok"))
+            })
+        })
+        .unwrap_or_else(|| panic!("expected an entry for network-endpoint-ok in:\n{}", list_json));
+    let request_id = ok_entry["requestId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("expected requestId in entry:\n{ok_entry}"));
+    let detail = run_command(ctx, &["network", "request", request_id]);
+    assert!(
+        detail.stdout.contains("responseBody"),
+        "request detail should include the response body, got:\n{}",
+        detail.stdout
+    );
+    assert!(
+        detail.stdout.contains("\"status\":\"ok\""),
+        "response body should contain the fixture payload, got:\n{}",
+        detail.stdout
+    );
+
+    // 6. HAR recording — traffic generated while recording is captured.
+    // Navigate away and back so new traffic flows while recording.
+    let start = run_command(ctx, &["network", "har", "start", "--content", "text"]);
+    assert!(
+        start.stdout.contains("recording"),
+        "har start should confirm recording, got:\n{}",
+        start.stdout
+    );
+
+    run_command(ctx, &["goto", &ctx.other_url()]);
+    run_command(ctx, &["goto", &ctx.network_url()]);
+    sleep(Duration::from_secs(2));
+
+    let har_path = ctx.state_dir.join("network-test.har");
+    let stop = run_command(
+        ctx,
+        &["network", "har", "stop", har_path.to_str().expect("har path")],
+    );
+    assert!(
+        stop.stdout.contains("HAR saved"),
+        "har stop should report the saved file, got:\n{}",
+        stop.stdout
+    );
+
+    let har_text = std::fs::read_to_string(&har_path)
+        .unwrap_or_else(|e| panic!("expected HAR file at {}: {e}", har_path.display()));
+    let har: serde_json::Value = serde_json::from_str(&har_text)
+        .unwrap_or_else(|e| panic!("HAR file should be valid JSON: {e}\n{}", har_text));
+    assert_eq!(har["log"]["version"], "1.2", "HAR version should be 1.2");
+    let entries = har["log"]["entries"]
+        .as_array()
+        .expect("HAR should have entries");
+    assert!(
+        entries.len() >= 2,
+        "expected at least 2 HAR entries, got {}",
+        entries.len()
+    );
+    let ok_entry = entries
+        .iter()
+        .find(|entry| {
+            entry["request"]["url"]
+                .as_str()
+                .is_some_and(|url| url.contains("network-endpoint-ok"))
+        })
+        .unwrap_or_else(|| panic!("expected a HAR entry for network-endpoint-ok in:\n{har_text}"));
+    assert_eq!(ok_entry["response"]["status"], 200);
+    let ok_body = ok_entry["response"]["content"]["text"].as_str().unwrap_or("");
+    assert!(
+        ok_body.contains("\"status\":\"ok\""),
+        "HAR text mode should embed the JSON body, got: {ok_body}"
+    );
+    let missing_entry = entries
+        .iter()
+        .find(|entry| {
+            entry["request"]["url"]
+                .as_str()
+                .is_some_and(|url| url.contains("network-endpoint-missing"))
+        })
+        .unwrap_or_else(|| panic!("expected a HAR entry for network-endpoint-missing in:\n{har_text}"));
+    assert_eq!(missing_entry["response"]["status"], 404);
+
+    // 7. Clear drops the tracked buffer.
+    run_command(ctx, &["network", "requests", "--clear"]);
+    let after_clear = run_command(ctx, &["network", "requests"]);
+    assert!(
+        !after_clear.stdout.contains("network-endpoint-ok"),
+        "after --clear the buffer should be empty, got:\n{}",
+        after_clear.stdout
+    );
+
+    run_command(ctx, &["close"]);
+}
+
 pub(super) fn test_cdp_live_command(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     run_command(

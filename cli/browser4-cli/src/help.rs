@@ -89,6 +89,10 @@ pub fn public_command_name(name: &str) -> &str {
         "is-visible" => "is visible",
         "profiler-start" => "profiler start",
         "profiler-stop" => "profiler stop",
+        "network-requests" => "network requests",
+        "network-request" => "network request",
+        "har-start" => "network har start",
+        "har-stop" => "network har stop",
         "profiles-list" => "profiles list",
         "skills-get" => "skills get",
         "skills-list" => "skills list",
@@ -118,6 +122,7 @@ pub const CATEGORY_TITLES: &[(&str, &str)] = &[
     ("tabs", "Tabs"),
     ("storage", "Storage"),
     ("devtools", "DevTools"),
+    ("network", "Network"),
     ("agent", "Agent"),
     ("swarm", "Swarm"),
     ("act", "Act"),
@@ -3599,8 +3604,11 @@ mod tests {
     fn test_generate_help_no_empty_categories() {
         let help = generate_help();
         // These categories should NOT appear since no commands use them
-        assert!(!help.contains("\nNetwork:"));
         assert!(!help.contains("\nConfiguration:"));
+        // The Network category (download, network requests, HAR) is displayed
+        assert!(help.contains("[Network]"));
+        assert!(help.contains("network requests"));
+        assert!(help.contains("network har start"));
     }
 
     // ── Quick reference tests ──────────────────────────────────────

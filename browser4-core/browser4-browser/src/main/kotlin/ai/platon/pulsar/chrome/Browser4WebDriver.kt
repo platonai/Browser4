@@ -7,7 +7,10 @@ import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.api.model.PageTarget
 import ai.platon.pulsar.api.model.SnapshotOptions
 import ai.platon.pulsar.api.model.WebDriverException
+import ai.platon.pulsar.chrome.network.HarContentMode
+import ai.platon.pulsar.chrome.network.NetworkObserver
 import ai.platon.pulsar.chrome.network.RobustRPC
+import ai.platon.pulsar.chrome.network.TrackedNetworkRequest
 import ai.platon.pulsar.chrome.protocol.Keyboard
 import ai.platon.pulsar.chrome.protocol.util.withNodeObjectId
 import ai.platon.pulsar.chrome.util.ChromeDriverException
@@ -525,6 +528,76 @@ open class Browser4WebDriver(
      * per-instance, so it is tracked independently from the parent's counters.
      */
     private val rpc = RobustRPC(this)
+
+    /**
+     * Lazy network observer for this tab.
+     *
+     * Network tracking and HAR recording are opt-in: the observer is created
+     * (and the CDP `Network` domain enabled) on the first `network*`/`har*`
+     * call, so tabs that never use the feature pay no overhead.
+     */
+    private val networkObserver: NetworkObserver by lazy {
+        NetworkObserver(browserProtocol)
+    }
+
+    /**
+     * List network requests tracked for this tab, optionally filtered.
+     *
+     * The CDP `Network` domain is enabled on first use; requests observed
+     * afterwards are retained in a bounded in-memory store (oldest evicted).
+     *
+     * @param filter Only requests whose URL contains this text (case-insensitive).
+     * @param type Only requests whose CDP resource type is in this comma-separated list (e.g. `xhr,fetch`).
+     * @param method Only requests with this HTTP method (case-insensitive).
+     * @param status Status filter: exact code (`200`), wildcard (`2xx`), or range (`400-499`).
+     * @param clear When true, drop all tracked requests first.
+     * @return The matching requests in observation order.
+     */
+    suspend fun networkRequests(
+        filter: String? = null,
+        type: String? = null,
+        method: String? = null,
+        status: String? = null,
+        clear: Boolean = false,
+    ): List<TrackedNetworkRequest> {
+        networkObserver.ensureEnabled()
+        return networkObserver.networkRequests(filter, type, method, status, clear)
+    }
+
+    /**
+     * Full detail of one tracked network request, including headers, timing,
+     * and the response body (fetched on demand when available).
+     *
+     * @param requestId The CDP network request id, as shown by [networkRequests].
+     * @throws IllegalArgumentException when the request id is unknown.
+     */
+    suspend fun networkRequestDetail(requestId: String): Map<String, Any?> {
+        networkObserver.ensureEnabled()
+        return networkObserver.networkRequestDetail(requestId)
+    }
+
+    /**
+     * Start a HAR recording session on this tab.
+     *
+     * @param contentMode Which response bodies to embed in the HAR: `none`,
+     * `text` (text-like MIME types only), or `all` (binary base64-encoded).
+     * @return Recording metadata.
+     */
+    suspend fun harStart(contentMode: String = "none"): Map<String, Any?> {
+        val mode = HarContentMode.parse(contentMode)
+        return networkObserver.harStart(mode)
+    }
+
+    /**
+     * Stop the active HAR recording and build the HAR 1.2 document from all
+     * requests observed so far.
+     *
+     * @return `{ recording, contentMode, entries, har }` where `har` is the
+     * HAR document (serialize to JSON to get a `.har` file).
+     */
+    suspend fun harStop(): Map<String, Any?> {
+        return networkObserver.harStop()
+    }
 
     /**
      * Capture the browser/page state, degrading gracefully when the page is unusable.
