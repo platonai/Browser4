@@ -11,7 +11,7 @@ tier: procedure
 
 ```bash
 browser4-cli goto "https://example.com"     # load the page to audit
-browser4-cli plugin-list                    # confirm browser4-seo is installed
+browser4-cli plugin-list                    # confirm browser4-seo is installed AND enabled
 # then call seo.extractMeta() — full SEO metadata extraction (see Tools below)
 ```
 
@@ -65,12 +65,13 @@ Neither `seo.extractMeta()` nor `seo.checkIssues()` takes arguments — both ope
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | Tool call fails with "plugin not found" | `browser4-seo` not installed | `browser4-cli plugin-list`; install the plugin |
+| Plugin installed but `seo.*` tools unavailable | Plugin is opt-in (default-disabled) | Enable it: `browser4.plugins.enable=browser4-seo` (or `browser4.plugins.enable-all=true`) and restart |
 | `extractMeta` returns empty fields | No page loaded in the session | `browser4-cli goto <url>` first |
 | `checkIssues` reports everything missing | Page is a JS shell | The plugin reads the loaded DOM — ensure the page finished rendering |
 
 ## Prerequisites
 
-The `browser4-seo` plugin must be installed on the Browser4 server. Check with:
+The `browser4-seo` plugin must be installed AND enabled on the Browser4 server. The plugin is opt-in (`defaultEnabled: false`): installing the JAR alone does not activate it. Enable it with `browser4.plugins.enable=browser4-seo` (or `browser4.plugins.enable-all=true`) and restart. Check with:
 
 ```bash
 browser4-cli plugin-list

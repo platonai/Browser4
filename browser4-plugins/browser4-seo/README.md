@@ -44,6 +44,24 @@ curl -X POST http://localhost:8182/api/plugins/install \
   -F "file=@target/browser4-seo-4.13.4-SNAPSHOT.jar"
 ```
 
+Then enable the plugin (see [Enable (opt-in)](#enable-opt-in)) and restart.
+
+## Enable (opt-in)
+
+The plugin is **default-disabled** (`defaultEnabled: false` in the manifest).
+Installing the JAR alone does not activate it — enable it explicitly:
+
+```bash
+# JVM system property
+-Dbrowser4.plugins.enable=browser4-seo
+
+# or Spring environment (application.properties / --browser4.plugins.enable=...)
+browser4.plugins.enable=browser4-seo
+
+# or activate every opt-in plugin
+browser4.plugins.enable-all=true
+```
+
 After restart, check logs for:
 
 ```
@@ -53,11 +71,12 @@ PluginManager: Found X PluginMount bean(s)
 
 ## Configuration
 
-All properties use the `seo.` prefix and are optional:
+All properties use the `seo.` prefix and are optional. They only take effect
+once the plugin is activated (see above):
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `seo.enabled` | `true` | Enable/disable the plugin |
+| `seo.enabled` | `true` | Extra on/off switch for the tools once the plugin is activated |
 | `seo.title.min-length` | `10` | Min recommended title length |
 | `seo.title.max-length` | `60` | Max recommended title length |
 | `seo.description.min-length` | `50` | Min recommended description length |
