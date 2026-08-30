@@ -1943,7 +1943,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "network-route",
-            description: "Route matching requests to a mock response or abort them (CDP Fetch interception). URL patterns: \"*\" matches all; plain text matches URLs containing it; \"*\" globs are supported (e.g. **/api/users).",
+            description: "Route matching requests to a mock response or abort them (CDP Fetch interception). URL patterns: \"*\" matches all; plain text matches URLs containing it; \"*\" globs are supported (e.g. **/api/users). Provide exactly one action: --abort or --body.",
             category: Category::Network,
             hidden: false,
             batch_supported: false,
@@ -1955,6 +1955,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "body", description: "Mock response body (e.g. a JSON string)", is_bool: false, short: None },
                 OptionDef { name: "content-type", description: "Content-Type for the mock response (e.g. application/json)", is_bool: false, short: None },
                 OptionDef { name: "resource-type", description: "Only intercept these CDP resource types (comma-separated, e.g. xhr,fetch)", is_bool: false, short: None },
+                OptionDef { name: "type", description: "Alias of --resource-type", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_network_route".to_string(),

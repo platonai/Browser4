@@ -1537,6 +1537,51 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
     run_command(ctx, &["close"]);
 }
 
+/// Poll `network requests` until every [expected] substring appears in the
+/// output or [deadline] passes, panicking with the last output on timeout.
+/// Polling replaces fixed sleeps: loaded CI machines get more time, fast ones
+/// less.
+fn poll_network_requests_until(
+    ctx: &mut E2ECtx,
+    expected: &[&str],
+    deadline: Instant,
+    context: &str,
+) -> String {
+    let mut last = String::new();
+    while Instant::now() < deadline {
+        let check = run_command(ctx, &["network", "requests"]);
+        last = check.stdout.clone();
+        if expected.iter().all(|needle| last.contains(needle)) {
+            return last;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    panic!(
+        "timed out waiting for {expected:?} in network requests ({context}); last output:\n{last}"
+    );
+}
+
+/// Poll the network fixture's `#results` element until it contains every
+/// [expected] substring or [deadline] passes, panicking with the last text.
+fn poll_network_results_until(
+    ctx: &mut E2ECtx,
+    expected: &[&str],
+    deadline: Instant,
+    context: &str,
+) -> String {
+    let mut last = String::new();
+    while Instant::now() < deadline {
+        last = eval_text(ctx, "document.getElementById('results').textContent");
+        if expected.iter().all(|needle| last.contains(needle)) {
+            return last;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    panic!(
+        "timed out waiting for {expected:?} in #results ({context}); last text:\n{last}"
+    );
+}
+
 /// Network request inspection & HAR recording against a real browser.
 ///
 /// Uses the `/network` fixture which issues two fetches on load:
@@ -1596,19 +1641,25 @@ pub(super) fn test_network_requests_and_har(ctx: &mut E2ECtx) {
         "goto should succeed, got:\n{}",
         goto_result.stdout
     );
-    sleep(Duration::from_secs(2));
 
-    // 3. Both fetches are now tracked.
-    let list = run_command(ctx, &["network", "requests"]);
-    assert!(
-        list.stdout.contains("network-endpoint-ok"),
-        "expected the 200 fetch in tracked requests, got:\n{}",
-        list.stdout
+    // 3. Both fetches are now tracked — poll instead of a fixed sleep so the
+    // assertion is robust under load.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let list_output = poll_network_requests_until(
+        ctx,
+        &["network-endpoint-ok", "network-endpoint-missing"],
+        deadline,
+        "after goto to /network",
     );
     assert!(
-        list.stdout.contains("network-endpoint-missing"),
+        list_output.contains("network-endpoint-ok"),
+        "expected the 200 fetch in tracked requests, got:\n{}",
+        list_output
+    );
+    assert!(
+        list_output.contains("network-endpoint-missing"),
         "expected the 404 fetch in tracked requests, got:\n{}",
-        list.stdout
+        list_output
     );
 
     // 4. Filters.
@@ -1632,8 +1683,9 @@ pub(super) fn test_network_requests_and_har(ctx: &mut E2ECtx) {
     );
 
     // 5. Request detail — parse the list as JSON to find the ok request id.
-    let list_json: serde_json::Value = serde_json::from_str(&strip_snapshot_output(&list.stdout))
-        .unwrap_or_else(|e| panic!("network requests output should be JSON: {e}\n{}", list.stdout));
+    let list_json: serde_json::Value =
+        serde_json::from_str(&strip_snapshot_output(&list_output))
+            .unwrap_or_else(|e| panic!("network requests output should be JSON: {e}\n{}", list_output));
     let ok_entry = list_json
         .as_array()
         .and_then(|arr| {
@@ -1670,7 +1722,15 @@ pub(super) fn test_network_requests_and_har(ctx: &mut E2ECtx) {
 
     run_command(ctx, &["goto", &ctx.other_url()]);
     run_command(ctx, &["goto", &ctx.network_url()]);
-    sleep(Duration::from_secs(2));
+    // Poll until the recording observed both fetches again, so the HAR below
+    // provably contains them (no fixed sleep).
+    let deadline = Instant::now() + Duration::from_secs(15);
+    poll_network_requests_until(
+        ctx,
+        &["network-endpoint-ok", "network-endpoint-missing"],
+        deadline,
+        "while HAR recording",
+    );
 
     let har_path = ctx.state_dir.join("network-test.har");
     let stop = run_command(
@@ -1734,8 +1794,13 @@ pub(super) fn test_network_requests_and_har(ctx: &mut E2ECtx) {
 
     run_command(ctx, &["goto", &ctx.other_url()]);
     run_command(ctx, &["goto", &ctx.network_url()]);
-    sleep(Duration::from_secs(2));
-    let results = eval_text(ctx, "document.getElementById('results').textContent");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let results = poll_network_results_until(
+        ctx,
+        &["ok: 200", r#"{"routed":true}"#],
+        deadline,
+        "route mock",
+    );
     assert!(
         results.contains("ok: 200") && results.contains(r#"{"routed":true}"#),
         "the ok fetch should receive the mocked body, got:\n{}",
@@ -1753,8 +1818,13 @@ pub(super) fn test_network_requests_and_har(ctx: &mut E2ECtx) {
     );
     run_command(ctx, &["goto", &ctx.other_url()]);
     run_command(ctx, &["goto", &ctx.network_url()]);
-    sleep(Duration::from_secs(2));
-    let results = eval_text(ctx, "document.getElementById('results').textContent");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let results = poll_network_results_until(
+        ctx,
+        &["missing: error"],
+        deadline,
+        "route abort",
+    );
     assert!(
         results.contains("missing: error"),
         "the aborted fetch should fail in the page, got:\n{}",
@@ -1769,8 +1839,13 @@ pub(super) fn test_network_requests_and_har(ctx: &mut E2ECtx) {
     );
     run_command(ctx, &["goto", &ctx.other_url()]);
     run_command(ctx, &["goto", &ctx.network_url()]);
-    sleep(Duration::from_secs(2));
-    let results = eval_text(ctx, "document.getElementById('results').textContent");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let results = poll_network_results_until(
+        ctx,
+        &["missing: 404"],
+        deadline,
+        "after unroute",
+    );
     assert!(
         results.contains("missing: 404"),
         "after unroute the missing fetch should 404 again, got:\n{}",

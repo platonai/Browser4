@@ -5666,6 +5666,49 @@ async fn handle_profiler_stop(
     Ok(())
 }
 
+/// Parsed `browser_har_stop` tool response.
+struct HarStopPayload {
+    /// Entry count from the recording wrapper, when present.
+    entries: u64,
+    /// Content mode the recording ran with, when present.
+    content_mode: String,
+    /// The text to write to a file or print: the pretty-printed HAR document
+    /// when the payload carries one, otherwise the raw result verbatim.
+    output: String,
+}
+
+/// Parse a `browser_har_stop` tool response. Only a payload carrying a real
+/// HAR document (a `har` object) is pretty-printed; anything else — a backend
+/// error, a mock response — passes through verbatim so it is never written as
+/// a fake HAR file with a misleading "saved" summary.
+fn parse_har_stop_payload(result: &str) -> HarStopPayload {
+    let parsed: Value = serde_json::from_str(result).unwrap_or(Value::String(result.to_string()));
+    let entries = parsed
+        .get("entries")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let content_mode = parsed
+        .get("contentMode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("none")
+        .to_string();
+    let is_har_document = parsed
+        .get("har")
+        .map(|v| v.is_object())
+        .unwrap_or(false);
+    let har = parsed.get("har").cloned().unwrap_or(parsed);
+    let output = if is_har_document {
+        serde_json::to_string_pretty(&har).unwrap_or_else(|_| result.to_string())
+    } else {
+        result.to_string()
+    };
+    HarStopPayload {
+        entries,
+        content_mode,
+        output,
+    }
+}
+
 /// `network har stop [--path out.har]` — stop the active HAR recording and
 /// save the HAR 1.2 document. Without `--path`, print the HAR JSON to stdout.
 async fn handle_har_stop(
@@ -5686,32 +5729,10 @@ async fn handle_har_stop(
     .await?;
 
     // The backend returns { recording, contentMode, entries, har } as JSON.
-    let parsed: Value = serde_json::from_str(&result).unwrap_or(Value::String(result.clone()));
-    let entries = parsed
-        .get("entries")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let content_mode = parsed
-        .get("contentMode")
-        .and_then(|v| v.as_str())
-        .unwrap_or("none")
-        .to_string();
-    // Only treat the payload as a HAR document when it actually carries one
-    // (a "har" object). Anything else — a backend error, a mock response —
-    // is passed through verbatim instead of being written as a fake HAR
-    // file with "0 entries".
-    let is_har_document = parsed
-        .get("har")
-        .map(|v| v.is_object())
-        .unwrap_or(false);
-    let har = parsed.get("har").cloned().unwrap_or(parsed);
-    // Pretty-print only a real HAR document; anything else (e.g. a backend
-    // error or a mock response) is passed through verbatim.
-    let har_json = if is_har_document {
-        serde_json::to_string_pretty(&har).unwrap_or_else(|_| result.clone())
-    } else {
-        result.clone()
-    };
+    let payload = parse_har_stop_payload(&result);
+    let entries = payload.entries;
+    let content_mode = payload.content_mode;
+    let har_json = payload.output;
 
     match tool_params.get("path").and_then(|v| v.as_str()) {
         Some(p) => {
@@ -18156,6 +18177,12 @@ fn validate_command_semantics(
             .get("body")
             .map(|v| !v.is_null() && !(v.as_str().unwrap_or("").is_empty()))
             .unwrap_or(false);
+        if abort && has_body {
+            return Err(
+                "network route cannot combine --abort with --body: choose exactly one action"
+                    .to_string(),
+            );
+        }
         if !abort && !has_body {
             return Err(
                 "network route requires at least one action: --abort or --body <text>".to_string(),
@@ -18163,11 +18190,21 @@ fn validate_command_semantics(
         }
     }
     if command == "har-start" {
-        if let Some(content) = parsed.get("content").and_then(|v| v.as_str()) {
-            if !matches!(content, "all" | "text" | "none") {
-                return Err(format!(
-                    "invalid --content '{content}' for har start. Valid options: all, text, none"
-                ));
+        match parsed.get("content") {
+            None => {}
+            Some(Value::String(content)) => {
+                if !matches!(content.as_str(), "all" | "text" | "none") {
+                    return Err(format!(
+                        "invalid --content '{content}' for har start. Valid options: all, text, none"
+                    ));
+                }
+            }
+            // parse_raw_args coerces "true"/"false" to booleans; a non-string
+            // --content would silently drop the option — reject it instead.
+            Some(_) => {
+                return Err(
+                    "invalid --content for har start. Valid options: all, text, none".to_string(),
+                );
             }
         }
     }
@@ -22163,6 +22200,25 @@ mod tests {
         assert!(!is_page_dependent_command("skills-path"));
     }
 
+    #[test]
+    fn is_page_dependent_for_network_commands() {
+        for name in [
+            "network-requests",
+            "network-request",
+            "network-route",
+            "network-unroute",
+            "har-start",
+            "har-stop",
+        ] {
+            assert!(
+                is_page_dependent_command(name),
+                "{name} should be page-dependent (it targets the active tab)"
+            );
+        }
+        // download only configures the browser's download behavior — no page needed.
+        assert!(!is_page_dependent_command("download"));
+    }
+
     // -----------------------------------------------------------------------
     // validate_required_args tests
     // -----------------------------------------------------------------------
@@ -22287,6 +22343,14 @@ mod tests {
         parsed.insert("urlPattern".to_string(), json!("**/api/users"));
         parsed.insert("body".to_string(), json!("{}"));
         assert!(validate_command_semantics("network-route", &parsed).is_ok());
+
+        // --abort and --body together are contradictory: rejected.
+        let mut parsed = HashMap::new();
+        parsed.insert("urlPattern".to_string(), json!("**/api/users"));
+        parsed.insert("abort".to_string(), json!(true));
+        parsed.insert("body".to_string(), json!("{}"));
+        let err = validate_command_semantics("network-route", &parsed).unwrap_err();
+        assert!(err.contains("cannot combine --abort with --body"), "got: {err}");
     }
 
     #[test]
@@ -22305,11 +22369,64 @@ mod tests {
         assert!(err.contains("banana"), "got: {err}");
         assert!(err.contains("all, text, none"), "got: {err}");
 
+        // A non-string --content (parse_raw_args coerces "true"/"false" to
+        // booleans) is rejected instead of silently dropped.
+        let mut parsed = HashMap::new();
+        parsed.insert("content".to_string(), json!(true));
+        let err = validate_command_semantics("har-start", &parsed).unwrap_err();
+        assert!(err.contains("invalid --content"), "got: {err}");
+
         // No --content at all is fine (defaults to none).
         let empty = HashMap::new();
         assert!(validate_command_semantics("har-start", &empty).is_ok());
         // Other commands are unaffected.
         assert!(validate_command_semantics("network-requests", &empty).is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_har_stop_payload tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn har_stop_payload_pretty_prints_har_document() {
+        let result = r#"{"recording":false,"contentMode":"text","entries":2,"har":{"log":{"version":"1.2","entries":[{"time":1}]}}}"#;
+        let payload = parse_har_stop_payload(result);
+        assert_eq!(payload.entries, 2);
+        assert_eq!(payload.content_mode, "text");
+        // The output is the pretty-printed `har` object only.
+        let output: Value = serde_json::from_str(&payload.output).unwrap();
+        assert_eq!(output["log"]["version"], "1.2");
+        assert_eq!(output["log"]["entries"][0]["time"], 1);
+        assert!(payload.output.contains('\n'), "output should be pretty-printed");
+    }
+
+    #[test]
+    fn har_stop_payload_passes_through_non_har_json() {
+        // A backend error object must not be written as a fake HAR file.
+        let result = r#"{"error":"recording not active"}"#;
+        let payload = parse_har_stop_payload(result);
+        assert_eq!(payload.entries, 0);
+        assert_eq!(payload.content_mode, "none");
+        assert_eq!(payload.output, result);
+    }
+
+    #[test]
+    fn har_stop_payload_passes_through_plain_text() {
+        // Mock servers return plain text; it must reach the user verbatim.
+        let result = "mock response for browser_har_stop";
+        let payload = parse_har_stop_payload(result);
+        assert_eq!(payload.entries, 0);
+        assert_eq!(payload.output, result);
+    }
+
+    #[test]
+    fn har_stop_payload_accepts_har_without_entries_wrapper() {
+        // A bare HAR document (no recording wrapper) is still a HAR.
+        let result = r#"{"har":{"log":{"version":"1.2","entries":[]}}}"#;
+        let payload = parse_har_stop_payload(result);
+        assert_eq!(payload.entries, 0);
+        let output: Value = serde_json::from_str(&payload.output).unwrap();
+        assert_eq!(output["log"]["version"], "1.2");
     }
 
     #[test]
