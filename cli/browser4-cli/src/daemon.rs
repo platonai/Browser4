@@ -1929,6 +1929,140 @@ async fn resolve_latest_tag(mirrors: &[DownloadMirror]) -> Option<(String, Lates
     None
 }
 
+/// Whether `tag` is a release-candidate tag such as `v4.14.0-rc.1`.
+///
+/// Only tags whose pre-release label starts with `rc` qualify — CI tags
+/// (`v4.14.0-ci.3`) and other pre-release labels (`alpha`, `beta`, `dry_run`)
+/// are deliberately excluded so the upgrade hint only points at real release
+/// candidates.
+fn is_rc_tag(tag: &str) -> bool {
+    let normalized = tag.trim_start_matches('v');
+    normalized
+        .split_once('-')
+        .map_or(false, |(_, label)| {
+            label.to_ascii_lowercase().starts_with("rc")
+        })
+}
+
+/// Compare two tags by their numeric core — the part before any `-`
+/// pre-release suffix.
+///
+/// This makes `v4.14.0-rc.1` compare equal to `v4.14.0` (a release candidate
+/// of the *current* stable version is not newer than it) and still greater
+/// than `v4.13.11`.  Plain [`compare_semver_tags`] would rank
+/// `v4.14.0-rc.1` above `v4.14.0` because the `rc.1` suffix leaks into the
+/// numeric parts, which produces a misleading "newer RC" hint.
+fn compare_base_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    let base_a = a.split('-').next().unwrap_or(a);
+    let base_b = b.split('-').next().unwrap_or(b);
+    compare_semver_tags(base_a, base_b)
+}
+
+/// Pick the newest tag in `tags` that is strictly newer than `stable_tag`.
+///
+/// "Newer" is judged on the numeric core ([`compare_base_versions`]) so a
+/// release candidate of the same version as the stable release never
+/// qualifies.  Ties between candidates of the same core version are broken
+/// by full tag comparison (so `v4.14.0-rc.2` wins over `v4.14.0-rc.1`).
+/// Returns `None` when no tag qualifies.
+fn pick_newest_tag_newer_than(tags: &[String], stable_tag: &str) -> Option<String> {
+    tags.iter()
+        .filter(|tag| compare_base_versions(tag, stable_tag) == std::cmp::Ordering::Greater)
+        .max_by(|a, b| compare_semver_tags(a, b))
+        .cloned()
+}
+
+/// Query the GitHub REST API for the newest release-candidate tag that is
+/// newer than `stable_tag`.
+///
+/// `GET /repos/{owner}/{repo}/releases?per_page=100` returns up to 100
+/// releases including prereleases (unlike `/releases/latest`, which only
+/// ever returns the newest stable release).  Only pre-release tags with an
+/// `rc` label are considered.  Best-effort — returns `None` on any error so
+/// the install/upgrade flow never fails over this.
+async fn resolve_newer_rc_tag_from_github_api(
+    owner: &str,
+    repo: &str,
+    stable_tag: &str,
+) -> Option<String> {
+    let url = format!("https://api.github.com/repos/{owner}/{repo}/releases?per_page=100");
+    let client = reqwest::Client::builder()
+        .user_agent("browser4-cli")
+        .build()
+        .ok()?;
+    let response = client
+        .get(&url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body = response.text().await.ok()?;
+    let releases: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let rc_tags: Vec<String> = releases
+        .as_array()?
+        .iter()
+        .filter(|release| {
+            release
+                .get("prerelease")
+                .and_then(|p| p.as_bool())
+                .unwrap_or(false)
+        })
+        .filter_map(|release| release.get("tag_name").and_then(|t| t.as_str()))
+        .filter(|tag| is_valid_version_tag(tag) && is_rc_tag(tag))
+        .map(String::from)
+        .collect();
+    pick_newest_tag_newer_than(&rc_tags, stable_tag)
+}
+
+/// Fetch `latest-rc.json` from a mirror and return the release-candidate tag.
+///
+/// Mirrors that publish release metadata (e.g. Aliyun OSS) host this file
+/// next to `latest-release.json`; it is only published when a pre-release
+/// (RC) release exists.
+async fn resolve_latest_rc_tag_from_oss_metadata(mirror: &DownloadMirror) -> Option<String> {
+    let base = mirror.base_url.trim_end_matches('/');
+    let metadata_url = format!("{base}/latest-rc.json");
+    let response = reqwest::get(&metadata_url).await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let info: LatestReleaseInfo = response.json().await.ok()?;
+    Some(info.tag)
+}
+
+/// Resolve the newest release-candidate tag that is newer than `stable_tag`.
+///
+/// Best-effort and non-fatal — returns `None` when no mirror can report a
+/// newer RC (e.g. mirrors that only publish stable metadata).  Tries each
+/// mirror in order:
+/// - GitHub mirrors: the REST releases list (includes prereleases).
+/// - Other mirrors: `{base_url}/latest-rc.json`.
+async fn resolve_newer_rc_tag(mirrors: &[DownloadMirror], stable_tag: &str) -> Option<String> {
+    for mirror in mirrors {
+        if !mirror.supports_latest_resolution {
+            continue;
+        }
+        if let Some((owner, repo)) = parse_github_owner_repo(mirror) {
+            if let Some(tag) =
+                resolve_newer_rc_tag_from_github_api(&owner, &repo, stable_tag).await
+            {
+                return Some(tag);
+            }
+            continue;
+        }
+        if let Some(tag) = resolve_latest_rc_tag_from_oss_metadata(mirror).await {
+            if compare_base_versions(&tag, stable_tag) == std::cmp::Ordering::Greater {
+                return Some(tag);
+            }
+        }
+    }
+    None
+}
+
 /// Build a `reqwest::Proxy` from the given URL string.
 /// The URL must include a scheme (http://, https://, or socks5://).
 fn proxy_from_url(raw: &str) -> Option<reqwest::Proxy> {
@@ -3154,6 +3288,19 @@ pub async fn install_browser4_runtime(
                 "Resolved latest release: {} (from mirror metadata)",
                 resolved
             );
+            // Best-effort: surface a newer release candidate (e.g. v4.14.0-rc.1)
+            // so users on the stable track can opt into the RC explicitly.
+            // Skipped when the currently installed tag already IS that RC
+            // (otherwise the hint would be confusing on the RC track).
+            if let Some(rc_tag) = resolve_newer_rc_tag(&mirrors, &resolved).await {
+                let already_on_rc = read_current_tag().as_deref() == Some(rc_tag.as_str());
+                if !already_on_rc {
+                    eprintln!(
+                        "💡 A newer release candidate is available: {rc_tag}\n   \
+                         To try it: browser4-cli upgrade --tag {rc_tag}"
+                    );
+                }
+            }
             requested_tag = Some(resolved);
             release_info = Some(info);
         } else {
@@ -8014,6 +8161,76 @@ mod tests {
             latest_path: None,
         };
         assert!(parse_github_owner_repo(&mirror).is_none());
+    }
+
+    // -------------------------------------------------------------------
+    // is_rc_tag
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_is_rc_tag_accepts_rc_labels() {
+        assert!(is_rc_tag("v4.14.0-rc.1"));
+        assert!(is_rc_tag("v4.14.0-rc"));
+        assert!(is_rc_tag("v4.14.0-RC.2"));
+        assert!(is_rc_tag("v4.14.0-rc.10"));
+    }
+
+    #[test]
+    fn test_is_rc_tag_rejects_non_rc_labels() {
+        assert!(!is_rc_tag("v4.14.0"));
+        assert!(!is_rc_tag("v4.14.0-ci.3"));
+        assert!(!is_rc_tag("v4.14.0-alpha.1"));
+        assert!(!is_rc_tag("v4.14.0-beta.2"));
+        assert!(!is_rc_tag("v4.14.0-dry_run.1"));
+        assert!(!is_rc_tag("not-a-tag"));
+        assert!(!is_rc_tag(""));
+    }
+
+    // -------------------------------------------------------------------
+    // compare_base_versions / pick_newest_tag_newer_than
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_compare_base_versions_ignores_prerelease_suffix() {
+        use std::cmp::Ordering;
+        assert_eq!(
+            compare_base_versions("v4.14.0-rc.1", "v4.13.11"),
+            Ordering::Greater
+        );
+        assert_eq!(compare_base_versions("v4.14.0-rc.1", "v4.14.0"), Ordering::Equal);
+        assert_eq!(compare_base_versions("v4.13.11-rc.9", "v4.13.11"), Ordering::Equal);
+        assert_eq!(
+            compare_base_versions("v4.13.11-rc.1", "v4.14.0-rc.2"),
+            Ordering::Less
+        );
+    }
+
+    #[test]
+    fn test_pick_newest_tag_newer_than_filters_and_orders() {
+        let tags = vec![
+            "v4.13.11-rc.5".to_string(),
+            "v4.14.0-rc.1".to_string(),
+            "v4.14.0-rc.2".to_string(),
+            "v4.12.0-rc.3".to_string(),
+        ];
+        assert_eq!(
+            pick_newest_tag_newer_than(&tags, "v4.13.11").as_deref(),
+            Some("v4.14.0-rc.2")
+        );
+    }
+
+    #[test]
+    fn test_pick_newest_tag_newer_than_ignores_same_base_version() {
+        // A release candidate of the *current* stable version is not newer.
+        let tags = vec!["v4.13.11-rc.1".to_string(), "v4.13.11-rc.2".to_string()];
+        assert_eq!(pick_newest_tag_newer_than(&tags, "v4.13.11"), None);
+    }
+
+    #[test]
+    fn test_pick_newest_tag_newer_than_none_when_empty_or_older() {
+        assert_eq!(pick_newest_tag_newer_than(&[], "v4.13.11"), None);
+        let tags = vec!["v4.12.0-rc.1".to_string()];
+        assert_eq!(pick_newest_tag_newer_than(&tags, "v4.13.11"), None);
     }
 
     // -------------------------------------------------------------------

@@ -1408,6 +1408,18 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    match the upgraded CLI binary."
                 .to_string(),
         );
+        lines.push(
+            "  - When upgrading to the latest stable release, a newer release candidate"
+                .to_string(),
+        );
+        lines.push(
+            "    (e.g. v4.14.0-rc.1) is advertised so you can opt into the RC track"
+                .to_string(),
+        );
+        lines.push(
+            "    explicitly with --tag."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli upgrade".to_string());

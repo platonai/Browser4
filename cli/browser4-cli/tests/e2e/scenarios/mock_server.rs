@@ -4381,6 +4381,76 @@ pub(super) fn test_upgrade_to_new_version(ctx: &mut E2ECtx) {
     );
 }
 
+pub(super) fn test_upgrade_shows_rc_hint(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    // Isolate so a pre-existing runtime from earlier scenarios does not
+    // short-circuit the install/upgrade flow.
+    isolate_runtime_dir(ctx, "upgrade-rc-hint");
+
+    // Never touch npm or download/execute the real install scripts.
+    ctx.set_env("BROWSER4_CLI_SKIP_SELF_UPGRADE", "1");
+
+    // ── Phase 1: a newer release candidate exists → the hint is shown ──
+    let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
+    let with_rc = FixtureDownloadServer::start_with_rc(bundle_bytes, "v4.10.0", "v4.11.0-rc.1");
+    ctx.set_env("BROWSER4_RELEASES_BASE_URL", &with_rc.base_url());
+
+    let result = run_command(ctx, &["upgrade"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "upgrade with RC metadata should succeed:\n{}",
+        result.stderr
+    );
+    // The stable release is still what gets installed.
+    assert!(
+        result.stdout.contains("upgraded successfully"),
+        "Expected 'upgraded successfully' in:\n{}",
+        result.stdout
+    );
+    // The RC hint names the candidate and the way to opt in.
+    assert!(
+        result.stderr.contains("release candidate"),
+        "Expected RC hint in stderr:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("v4.11.0-rc.1"),
+        "Expected RC tag in stderr:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("upgrade --tag v4.11.0-rc.1"),
+        "Expected actionable upgrade command in stderr:\n{}",
+        result.stderr
+    );
+    drop(with_rc);
+
+    // ── Phase 2: no RC published → no hint ──
+    let (bundle_bytes2, _dir_name2) = build_fake_runtime_bundle("v4.10.0");
+    let without_rc = FixtureDownloadServer::start(bundle_bytes2, "v4.10.0");
+    ctx.set_env("BROWSER4_RELEASES_BASE_URL", &without_rc.base_url());
+
+    let second = run_command(ctx, &["upgrade"]);
+    assert_eq!(second.exit_code, 0);
+    let combined = format!("{}\n{}", second.stdout, second.stderr);
+    assert!(
+        second.stdout.contains("already at the latest version"),
+        "Expected 'already at the latest version' in:\n{combined}"
+    );
+    assert!(
+        !second.stderr.contains("release candidate"),
+        "RC hint must not appear when no RC metadata is published:\n{}",
+        second.stderr
+    );
+    // The metadata endpoint must have been consulted (and found no RC).
+    let requests = without_rc.snapshot_requests();
+    assert!(
+        requests.iter().any(|p| p.contains("latest-rc.json")),
+        "Expected a latest-rc.json lookup, got: {:?}",
+        requests
+    );
+}
+
 pub(super) fn test_install_download_failure(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
