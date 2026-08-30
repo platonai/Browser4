@@ -32,7 +32,5 @@
         <module>browser4-markdown</module>
         <module>browser4-seo</module>
         <module>browser4-swarm</module>
-        <module>browser4-headings</module>
-        <module>browser4-wordcount</module>
     </modules>
 </project>
