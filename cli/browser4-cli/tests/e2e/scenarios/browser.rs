@@ -1721,7 +1721,64 @@ pub(super) fn test_network_requests_and_har(ctx: &mut E2ECtx) {
         .unwrap_or_else(|| panic!("expected a HAR entry for network-endpoint-missing in:\n{har_text}"));
     assert_eq!(missing_entry["response"]["status"], 404);
 
-    // 7. Clear drops the tracked buffer.
+    // 7. Routing — mock the ok endpoint's body, abort the missing one, then
+    // unroute and confirm the fixture sees the real responses again.
+    let route = run_command(
+        ctx,
+        &["network", "route", "**/api/network-endpoint-ok.json", "--body", r#"{"routed":true}"#, "--content-type", "application/json"],
+    );
+    assert!(
+        route.stdout.contains("routed"),
+        "network route should confirm the route, got:\n{}",
+        route.stdout
+    );
+
+    run_command(ctx, &["goto", &ctx.other_url()]);
+    run_command(ctx, &["goto", &ctx.network_url()]);
+    sleep(Duration::from_secs(2));
+    let results = eval_text(ctx, "document.getElementById('results').textContent");
+    assert!(
+        results.contains("ok: 200") && results.contains(r#"{"routed":true}"#),
+        "the ok fetch should receive the mocked body, got:\n{}",
+        results
+    );
+
+    let abort = run_command(
+        ctx,
+        &["network", "route", "**/api/network-endpoint-missing.json", "--abort"],
+    );
+    assert!(
+        abort.stdout.contains("routed"),
+        "network route --abort should confirm the route, got:\n{}",
+        abort.stdout
+    );
+    run_command(ctx, &["goto", &ctx.other_url()]);
+    run_command(ctx, &["goto", &ctx.network_url()]);
+    sleep(Duration::from_secs(2));
+    let results = eval_text(ctx, "document.getElementById('results').textContent");
+    assert!(
+        results.contains("missing: error"),
+        "the aborted fetch should fail in the page, got:\n{}",
+        results
+    );
+
+    let unroute = run_command(ctx, &["network", "unroute"]);
+    assert!(
+        unroute.stdout.contains("unrouted"),
+        "network unroute should confirm removal, got:\n{}",
+        unroute.stdout
+    );
+    run_command(ctx, &["goto", &ctx.other_url()]);
+    run_command(ctx, &["goto", &ctx.network_url()]);
+    sleep(Duration::from_secs(2));
+    let results = eval_text(ctx, "document.getElementById('results').textContent");
+    assert!(
+        results.contains("missing: 404"),
+        "after unroute the missing fetch should 404 again, got:\n{}",
+        results
+    );
+
+    // 8. Clear drops the tracked buffer.
     run_command(ctx, &["network", "requests", "--clear"]);
     let after_clear = run_command(ctx, &["network", "requests"]);
     assert!(

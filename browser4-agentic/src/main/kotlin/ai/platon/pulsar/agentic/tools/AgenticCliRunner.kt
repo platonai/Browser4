@@ -603,6 +603,8 @@ class AgenticCliRunner(
             "browser_dialog_status" to "dialog_status",
             "browser_network_requests" to "network_requests",
             "browser_network_request" to "network_request",
+            "browser_network_route" to "network_route",
+            "browser_network_unroute" to "network_unroute",
             "browser_har_start" to "har_start",
             "browser_har_stop" to "har_stop",
         )
@@ -642,6 +644,8 @@ class AgenticCliRunner(
             "dialog_status" to ToolCall("tab", "dialogStatus", mutableMapOf()),
             "network_requests" to ToolCall("tab", "networkRequests", mutableMapOf()),
             "network_request" to ToolCall("tab", "networkRequestDetail", mutableMapOf()),
+            "network_route" to ToolCall("tab", "networkRoute", mutableMapOf()),
+            "network_unroute" to ToolCall("tab", "networkUnroute", mutableMapOf()),
             "har_start" to ToolCall("tab", "harStart", mutableMapOf()),
             "har_stop" to ToolCall("tab", "harStop", mutableMapOf()),
         )

@@ -4519,6 +4519,8 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         // test_network_requests_and_har
         "network-requests",
         "network-request",
+        "network-route",
+        "network-unroute",
         "har-start",
         "har-stop",
         // test_htmlsnapshot_*

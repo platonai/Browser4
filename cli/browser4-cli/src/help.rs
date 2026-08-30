@@ -91,6 +91,8 @@ pub fn public_command_name(name: &str) -> &str {
         "profiler-stop" => "profiler stop",
         "network-requests" => "network requests",
         "network-request" => "network request",
+        "network-route" => "network route",
+        "network-unroute" => "network unroute",
         "har-start" => "network har start",
         "har-stop" => "network har stop",
         "profiles-list" => "profiles list",

@@ -218,6 +218,12 @@ const TIPS_NETWORK: &[Tip] = &[
     Tip {
         text: "Use `network requests --clear` before an interaction to watch only the requests it triggers",
     },
+    Tip {
+        text: "Mock API responses with `network route \"**/api/*\" --body '{\"ok\":true}' --content-type application/json`, and restore with `network unroute`",
+    },
+    Tip {
+        text: "Block noisy requests (ads, analytics) with `network route \"**/analytics*\" --abort --resource-type xhr,fetch`",
+    },
 ];
 
 const TIPS_CRAWL: &[Tip] = &[
@@ -440,7 +446,8 @@ fn tips_for_command(command: &str) -> &'static [Tip] {
         | "webminer-uninstall" | "webminer-run-example" | "webminer-all"
         | "webminer-views" => TIPS_WEBMINER,
         "attach" => TIPS_ATTACH,
-        "network-requests" | "network-request" | "har-start" | "har-stop" => TIPS_NETWORK,
+        "network-requests" | "network-request" | "network-route" | "network-unroute"
+        | "har-start" | "har-stop" => TIPS_NETWORK,
         "cookie-list" | "cookie-get" | "cookie-set" | "cookie-delete" | "cookie-clear" => {
             TIPS_COOKIE
         }

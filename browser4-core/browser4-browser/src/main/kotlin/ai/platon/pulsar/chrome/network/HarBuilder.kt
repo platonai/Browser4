@@ -63,6 +63,8 @@ object HarBuilder {
      * @param creatorName Name of the recording tool.
      * @param creatorVersion Version of the recording tool.
      * @param maxTotalBodyBytes Total budget for embedded bodies (overridable for tests).
+     * @param browser Browser metadata for the HAR `log.browser` object
+     * (`name`, `version`, …), matching the HAR 1.2 spec.
      */
     fun build(
         requests: List<TrackedNetworkRequest>,
@@ -71,6 +73,7 @@ object HarBuilder {
         creatorName: String = "Browser4",
         creatorVersion: String = "4.14",
         maxTotalBodyBytes: Long = MAX_TOTAL_BODY_BYTES.toLong(),
+        browser: Map<String, Any?>? = null,
     ): Map<String, Any?> {
         var embeddedBytes = totalBodyBytes
         val entries = mutableListOf<Map<String, Any?>>()
@@ -81,21 +84,23 @@ object HarBuilder {
                 entries.add(entry)
             }
         }
-        return mapOf(
-            "log" to mapOf(
-                "version" to "1.2",
-                "creator" to mapOf("name" to creatorName, "version" to creatorVersion),
-                "pages" to listOf(
-                    mapOf(
-                        "startedDateTime" to formatTimestamp(requests.firstOrNull()?.timestamp ?: System.currentTimeMillis()),
-                        "id" to "page_1",
-                        "title" to "",
-                        "pageTimings" to mapOf("onContentLoad" to -1, "onLoad" to -1),
-                    )
-                ),
-                "entries" to entries,
-            )
+        val log = mutableMapOf<String, Any?>(
+            "version" to "1.2",
+            "creator" to mapOf("name" to creatorName, "version" to creatorVersion),
+            "pages" to listOf(
+                mapOf(
+                    "startedDateTime" to formatTimestamp(requests.firstOrNull()?.timestamp ?: System.currentTimeMillis()),
+                    "id" to "page_1",
+                    "title" to "",
+                    "pageTimings" to mapOf("onContentLoad" to -1, "onLoad" to -1),
+                )
+            ),
+            "entries" to entries,
         )
+        if (browser != null) {
+            log["browser"] = browser
+        }
+        return mapOf("log" to log)
     }
 
     private fun buildEntry(

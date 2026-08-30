@@ -275,6 +275,42 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 HAR 1.2 document. Serialize it to JSON to get a .har file.
             """.trimIndent()
         )
+        toolSpec["networkRoute"] = ToolSpec(
+            domain = domain,
+            method = "networkRoute",
+            arguments = listOf(
+                ToolSpec.Arg("urlPattern", "String"),
+                ToolSpec.Arg("abort", "Boolean", "false"),
+                ToolSpec.Arg("body", "String?", "null"),
+                ToolSpec.Arg("contentType", "String?", "null"),
+                ToolSpec.Arg("resourceType", "String?", "null"),
+            ),
+            returnType = "Map<String, Any?>",
+            description = "Route matching requests to a mock response or abort them (CDP Fetch interception).",
+            help = """
+                tab.networkRoute(urlPattern: String, abort: Boolean = false, body: String? = null, contentType: String? = null, resourceType: String? = null)
+
+                Intercepts requests whose URL matches urlPattern ("*" matches all; plain text matches
+                URLs containing it; "*" globs like "**/api/users" are supported).
+                abort — fail matching requests instead of sending them.
+                body/contentType — answer matching requests with this mock response.
+                resourceType — only intercept these CDP resource types (comma-separated, e.g. "xhr,fetch").
+                Remove routes with tab.networkUnroute().
+            """.trimIndent()
+        )
+        toolSpec["networkUnroute"] = ToolSpec(
+            domain = domain,
+            method = "networkUnroute",
+            arguments = listOf(ToolSpec.Arg("urlPattern", "String?", "null")),
+            returnType = "Map<String, Any?>",
+            description = "Remove request routes; without a pattern every route is removed and Fetch interception is disabled.",
+            help = """
+                tab.networkUnroute(urlPattern: String? = null)
+
+                Removes the route registered with the exact urlPattern, or all routes (and disables
+                Fetch interception) when no pattern is given.
+            """.trimIndent()
+        )
     }
 
     override fun help(method: String): String {
@@ -1882,6 +1918,26 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 val b4Driver = driver as? Browser4WebDriver
                     ?: throw IllegalArgumentException("harStop requires a Browser4WebDriver session")
                 b4Driver.harStop()
+            }
+
+            "networkRoute" -> {
+                validateArgs(args, allowed("urlPattern", "abort", "body", "contentType", "resourceType"), setOf("urlPattern"), functionName)
+                val b4Driver = driver as? Browser4WebDriver
+                    ?: throw IllegalArgumentException("networkRoute requires a Browser4WebDriver session")
+                b4Driver.networkRoute(
+                    urlPattern = paramString(args, "urlPattern", functionName)!!,
+                    abort = paramBool(args, "abort", functionName, required = false, default = false) ?: false,
+                    body = paramString(args, "body", functionName, required = false),
+                    contentType = paramString(args, "contentType", functionName, required = false),
+                    resourceType = paramString(args, "resourceType", functionName, required = false),
+                )
+            }
+
+            "networkUnroute" -> {
+                validateArgs(args, allowed("urlPattern"), emptySet(), functionName)
+                val b4Driver = driver as? Browser4WebDriver
+                    ?: throw IllegalArgumentException("networkUnroute requires a Browser4WebDriver session")
+                b4Driver.networkUnroute(paramString(args, "urlPattern", functionName, required = false))
             }
 
             "help" -> help()

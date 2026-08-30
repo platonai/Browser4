@@ -156,10 +156,21 @@ class NetworkObserver(
      * Start a HAR recording session. Requests that finish afterwards get their
      * response bodies captured (subject to the content mode and size budgets).
      *
+     * The Network domain is re-enabled with larger buffers (like agent-browser)
+     * so Chrome keeps response bodies alive until [harStop] drains them.
+     *
      * @param contentMode Which bodies to embed: `none`, `text`, or `all`.
      */
     suspend fun harStart(contentMode: HarContentMode): Map<String, Any?> {
         ensureEnabled()
+        // Larger buffers so response bodies survive until the recording stops.
+        browserProtocol.executeCdpCommand(
+            "Network.enable",
+            mapOf(
+                "maxTotalBufferSize" to 100_000_000,
+                "maxResourceBufferSize" to 10_000_000,
+            ),
+        )
         synchronized(lock) {
             harRecording = true
             harContentMode = contentMode
@@ -186,13 +197,39 @@ class NetworkObserver(
             mode to requests.values.toList()
         }
         logger.info("HAR recording stopped (content={}, entries={})", mode.apiName, snapshot.size)
-        val har = HarBuilder.build(snapshot, mode)
+        val har = HarBuilder.build(snapshot, mode, browser = browserMetadata())
         return mapOf(
             "recording" to false,
             "contentMode" to mode.apiName,
             "entries" to snapshot.size,
             "har" to har,
         )
+    }
+
+    /**
+     * Best-effort browser metadata for the HAR `log.browser` object
+     * (`Browser.getVersion`). Returns null when unavailable.
+     */
+    private suspend fun browserMetadata(): Map<String, Any?>? {
+        return try {
+            when (val result = browserProtocol.executeCdpCommand("Browser.getVersion", null)) {
+                is Map<*, *> -> {
+                    val product = result["product"]?.toString() ?: return null
+                    val slash = product.indexOf('/')
+                    val name = if (slash > 0) product.substring(0, slash) else product
+                    val version = if (slash > 0) product.substring(slash + 1) else ""
+                    mapOf(
+                        "name" to name,
+                        "version" to version,
+                        "userAgent" to (result["userAgent"]?.toString() ?: ""),
+                    )
+                }
+                else -> null
+            }
+        } catch (e: Exception) {
+            logger.debug("Failed to query browser version for HAR: {}", e.message)
+            null
+        }
     }
 
     // ------------------------------------------------------------------

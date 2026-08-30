@@ -81,6 +81,18 @@ class HarBuilderTest {
     }
 
     @Test
+    @DisplayName("embeds browser metadata into log.browser when provided")
+    fun embedsBrowserMetadata() {
+        val browser = mapOf("name" to "Chrome", "version" to "151.0.0.0", "userAgent" to "Mozilla/5.0")
+        val har = HarBuilder.build(listOf(tracked()), HarContentMode.NONE, browser = browser)
+        val log = har["log"] as Map<String, Any?>
+        assertEquals(browser, log["browser"])
+
+        val without = HarBuilder.build(listOf(tracked()), HarContentMode.NONE)
+        assertNull(((without["log"] as Map<String, Any?>).get("browser")))
+    }
+
+    @Test
     @DisplayName("maps request metadata into the HAR entry")
     fun mapsRequestMetadata() {
         val entry = harOf(tracked(postData = "a=1"))

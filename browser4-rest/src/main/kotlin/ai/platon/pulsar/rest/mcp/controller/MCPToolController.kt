@@ -142,6 +142,8 @@ class MCPToolController(
             "browser_dialog_status" to "dialog_status",
             "browser_network_requests" to "network_requests",
             "browser_network_request" to "network_request",
+            "browser_network_route" to "network_route",
+            "browser_network_unroute" to "network_unroute",
             "browser_har_start" to "har_start",
             "browser_har_stop" to "har_stop",
         )
@@ -1148,6 +1150,8 @@ class MCPToolController(
             "dialog_status" -> return ToolCall("tab", "dialogStatus", args1)
             "network_requests" -> return ToolCall("tab", "networkRequests", args1)
             "network_request" -> return ToolCall("tab", "networkRequestDetail", args1)
+            "network_route" -> return ToolCall("tab", "networkRoute", args1)
+            "network_unroute" -> return ToolCall("tab", "networkUnroute", args1)
             "har_start" -> return ToolCall("tab", "harStart", args1)
             "har_stop" -> return ToolCall("tab", "harStop", args1)
         }

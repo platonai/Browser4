@@ -2422,6 +2422,22 @@ pub(super) fn test_agent_browser_command_gaps(ctx: &mut E2ECtx) {
         "mock response for browser_har_stop"
     );
 
+    // ── 18-19. network route / unroute ─────────────────────────────────
+    let route = run_command(
+        ctx,
+        &["network", "route", "**/api/users", "--body", "{\"users\":[]}", "--resource-type", "xhr"],
+    );
+    assert_eq!(
+        strip_snapshot_output(&route.stdout),
+        "mock response for browser_network_route"
+    );
+
+    let unroute = run_command(ctx, &["network", "unroute", "**/api/users"]);
+    assert_eq!(
+        strip_snapshot_output(&unroute.stdout),
+        "mock response for browser_network_unroute"
+    );
+
     // ── Verify recorded tool calls ────────────────────────────────────
     let tool_calls = mock_server.snapshot().tool_calls;
     let names: Vec<&str> = tool_calls.iter().map(|call| call.tool.as_str()).collect();
@@ -2439,6 +2455,8 @@ pub(super) fn test_agent_browser_command_gaps(ctx: &mut E2ECtx) {
         "browser_tabs",
         "browser_network_requests",
         "browser_network_request",
+        "browser_network_route",
+        "browser_network_unroute",
         "browser_har_start",
         "browser_har_stop",
     ] {
@@ -2447,6 +2465,22 @@ pub(super) fn test_agent_browser_command_gaps(ctx: &mut E2ECtx) {
             "expected recorded tool call {tool}, got: {names:?}"
         );
     }
+
+    // Route args reach the backend.
+    let route_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_network_route")
+        .collect();
+    assert_eq!(route_calls.len(), 1, "expected one route call");
+    assert_eq!(route_calls[0].arguments["urlPattern"], "**/api/users");
+    assert_eq!(route_calls[0].arguments["body"], "{\"users\":[]}");
+    assert_eq!(route_calls[0].arguments["resourceType"], "xhr");
+    let unroute_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_network_unroute")
+        .collect();
+    assert_eq!(unroute_calls.len(), 1, "expected one unroute call");
+    assert_eq!(unroute_calls[0].arguments["urlPattern"], "**/api/users");
 
     // Network filter args reach the backend.
     let network_calls: Vec<_> = tool_calls

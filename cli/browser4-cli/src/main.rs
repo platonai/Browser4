@@ -498,6 +498,8 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "download",
         "network-requests",
         "network-request",
+        "network-route",
+        "network-unroute",
         "har-start",
         "har-stop",
         "webminer",
@@ -18115,8 +18117,9 @@ fn is_page_dependent_command(command: &str) -> bool {
         | "scroll" | "resize"
         // Console — needs a page to intercept messages
         | "console"
-        // Network inspection / HAR — needs a live page with network traffic
-        | "network-requests" | "network-request" | "har-start" | "har-stop"
+        // Network inspection / HAR / routing — needs a live page with network traffic
+        | "network-requests" | "network-request" | "network-route" | "network-unroute"
+        | "har-start" | "har-stop"
         // Storage commands — need page origin context
         | "cookie-list" | "cookie-get" | "cookie-set" | "cookie-delete" | "cookie-clear"
         | "localstorage-list" | "localstorage-get" | "localstorage-set"
@@ -18321,7 +18324,7 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
             rewritten.extend(args[3..].iter().cloned());
             return Some(rewritten);
         }
-        let known_subs = ["requests", "request"];
+        let known_subs = ["requests", "request", "route", "unroute"];
         if known_subs.contains(&sub.as_str()) {
             let mut rewritten = vec![format!("network-{}", sub)];
             rewritten.extend(args[2..].iter().cloned());
@@ -18467,6 +18470,8 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "profiler-stop" => Some("profiler stop"),
         "network-requests" => Some("network requests"),
         "network-request" => Some("network request"),
+        "network-route" => Some("network route"),
+        "network-unroute" => Some("network unroute"),
         "har-start" => Some("network har start"),
         "har-stop" => Some("network har stop"),
         "profiles-list" => Some("profiles list"),
@@ -21529,6 +21534,8 @@ mod tests {
             "download",
             "network-requests",
             "network-request",
+            "network-route",
+            "network-unroute",
             "har-start",
             "har-stop",
         ] {
@@ -22480,6 +22487,21 @@ mod tests {
         .unwrap();
         assert_eq!(rewritten[0], "network-request");
         assert_eq!(rewritten[1], "1234.5");
+
+        let rewritten = rewrite_prefixed_command(&[
+            "network".to_string(),
+            "route".to_string(),
+            "**/api/users".to_string(),
+            "--body".to_string(),
+            "{\"users\":[]}".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "network-route");
+        assert_eq!(rewritten[1], "**/api/users");
+
+        let rewritten = rewrite_prefixed_command(&["network".to_string(), "unroute".to_string()])
+            .unwrap();
+        assert_eq!(rewritten[0], "network-unroute");
 
         let rewritten =
             rewrite_prefixed_command(&["network".to_string(), "har".to_string(), "start".to_string()])

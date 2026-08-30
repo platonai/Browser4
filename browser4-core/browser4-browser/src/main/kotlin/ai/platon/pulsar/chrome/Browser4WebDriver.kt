@@ -10,6 +10,7 @@ import ai.platon.pulsar.api.model.WebDriverException
 import ai.platon.pulsar.chrome.network.HarContentMode
 import ai.platon.pulsar.chrome.network.NetworkObserver
 import ai.platon.pulsar.chrome.network.RobustRPC
+import ai.platon.pulsar.chrome.network.RouteManager
 import ai.platon.pulsar.chrome.network.TrackedNetworkRequest
 import ai.platon.pulsar.chrome.protocol.Keyboard
 import ai.platon.pulsar.chrome.protocol.util.withNodeObjectId
@@ -541,6 +542,14 @@ open class Browser4WebDriver(
     }
 
     /**
+     * Lazy request router for this tab (CDP `Fetch` interception). Opt-in like
+     * network tracking: created on the first `network route`/`unroute` call.
+     */
+    private val routeManager: RouteManager by lazy {
+        RouteManager(browserProtocol)
+    }
+
+    /**
      * List network requests tracked for this tab, optionally filtered.
      *
      * The CDP `Network` domain is enabled on first use; requests observed
@@ -597,6 +606,45 @@ open class Browser4WebDriver(
      */
     suspend fun harStop(): Map<String, Any?> {
         return networkObserver.harStop()
+    }
+
+    /**
+     * Route matching requests to a mock response or abort them, via the CDP
+     * `Fetch` domain (agent-browser compatible).
+     *
+     * @param urlPattern URL pattern: `*` matches all; plain text matches URLs
+     * containing it; `*` globs are supported (e.g. `**` + `/api/users`).
+     * @param abort When true, matching requests fail instead of being sent.
+     * @param body Mock response body (plain text; JSON strings work as-is).
+     * @param contentType Content-Type for the mock response (e.g. `application/json`).
+     * @param resourceType Only intercept requests of these CDP resource types
+     * (comma-separated, e.g. `xhr,fetch`); empty matches all.
+     * @return `{ "routed": urlPattern }`.
+     */
+    suspend fun networkRoute(
+        urlPattern: String,
+        abort: Boolean = false,
+        body: String? = null,
+        contentType: String? = null,
+        resourceType: String? = null,
+    ): Map<String, Any?> {
+        val response = if (body != null) {
+            RouteManager.RouteResponse(body = body, contentType = contentType)
+        } else {
+            null
+        }
+        val types = resourceType?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
+        return routeManager.route(urlPattern, response, abort, types)
+    }
+
+    /**
+     * Remove routes. Without [urlPattern] every route is removed and Fetch
+     * interception is disabled.
+     *
+     * @return `{ "unrouted": urlPattern | "all" }`.
+     */
+    suspend fun networkUnroute(urlPattern: String? = null): Map<String, Any?> {
+        return routeManager.unroute(urlPattern)
     }
 
     /**

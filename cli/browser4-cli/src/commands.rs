@@ -1939,6 +1939,50 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "network-route",
+            description: "Route matching requests to a mock response or abort them (CDP Fetch interception). URL patterns: \"*\" matches all; plain text matches URLs containing it; \"*\" globs are supported (e.g. **/api/users).",
+            category: Category::Network,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "urlPattern", description: "URL pattern to intercept (e.g. **/api/users, or * for every request)", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "abort", description: "Fail matching requests instead of sending them", is_bool: true, short: None },
+                OptionDef { name: "body", description: "Mock response body (e.g. a JSON string)", is_bool: false, short: None },
+                OptionDef { name: "content-type", description: "Content-Type for the mock response (e.g. application/json)", is_bool: false, short: None },
+                OptionDef { name: "resource-type", description: "Only intercept these CDP resource types (comma-separated, e.g. xhr,fetch)", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_network_route".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({ "urlPattern": get_str(args, "urlPattern").unwrap_or_default() });
+                if get_bool(args, "abort").unwrap_or(false) { p["abort"] = json!(true); }
+                if let Some(b) = get_opt_str(args, "body") { p["body"] = json!(b); }
+                if let Some(c) = get_opt_str(args, "content-type") { p["contentType"] = json!(c); }
+                if let Some(t) = get_opt_str(args, "resource-type").or_else(|| get_opt_str(args, "type")) { p["resourceType"] = json!(t); }
+                p
+            },
+        },
+        CommandDef {
+            name: "network-unroute",
+            description: "Remove request routes; without a URL pattern every route is removed and Fetch interception is disabled.",
+            category: Category::Network,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "urlPattern", description: "The exact URL pattern to unroute (omit to remove all routes)", optional: true },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "browser_network_unroute".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(u) = get_opt_str(args, "urlPattern") { p["urlPattern"] = json!(u); }
+                p
+            },
+        },
+        CommandDef {
             name: "har-start",
             description: "Start a HAR recording session on the current tab. Response bodies are captured per --content mode once recording is active; stop with `network har stop [path]`.",
             category: Category::Network,
@@ -5524,9 +5568,60 @@ mod tests {
     }
 
     #[test]
+    fn test_network_route_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("network-route").unwrap();
+        let mut args = HashMap::new();
+        args.insert("urlPattern".to_string(), json!("**/api/users"));
+        args.insert("body".to_string(), json!("{\"users\":[]}"));
+        args.insert("content-type".to_string(), json!("application/json"));
+        args.insert("resource-type".to_string(), json!("xhr,fetch"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_network_route");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["urlPattern"], "**/api/users");
+        assert_eq!(params["body"], "{\"users\":[]}");
+        assert_eq!(params["contentType"], "application/json");
+        assert_eq!(params["resourceType"], "xhr,fetch");
+        assert!(!params.as_object().unwrap().contains_key("abort"));
+
+        // --abort flag and --type alias.
+        let mut args = HashMap::new();
+        args.insert("urlPattern".to_string(), json!("*"));
+        args.insert("abort".to_string(), json!(true));
+        args.insert("type".to_string(), json!("script"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["abort"], true);
+        assert_eq!(params["resourceType"], "script");
+    }
+
+    #[test]
+    fn test_network_unroute_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("network-unroute").unwrap();
+        let mut args = HashMap::new();
+        args.insert("urlPattern".to_string(), json!("**/api/users"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_network_unroute");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["urlPattern"], "**/api/users");
+
+        // Bare `network unroute` removes all routes.
+        let empty = HashMap::new();
+        let params = (cmd.tool_params_fn)(&empty);
+        assert!(params.as_object().unwrap().is_empty());
+    }
+
+    #[test]
     fn test_network_commands_are_network_category() {
         let map = commands_map();
-        for name in ["download", "network-requests", "network-request", "har-start", "har-stop"] {
+        for name in [
+            "download",
+            "network-requests",
+            "network-request",
+            "network-route",
+            "network-unroute",
+            "har-start",
+            "har-stop",
+        ] {
             let cmd = map.get(name).unwrap();
             assert_eq!(
                 cmd.category.as_str(),
