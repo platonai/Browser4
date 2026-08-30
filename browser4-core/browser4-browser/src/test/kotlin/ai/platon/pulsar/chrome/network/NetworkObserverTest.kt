@@ -17,6 +17,8 @@ import ai.platon.cdt.kt.protocol.types.network.ResourceType
 import ai.platon.cdt.kt.protocol.types.network.Response
 import ai.platon.cdt.kt.protocol.types.security.SecurityState
 import ai.platon.pulsar.api.BrowserProtocol
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -27,7 +29,10 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.inOrder
 import org.mockito.kotlin.mock
+import org.mockito.kotlin.never
+import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.mockito.kotlin.wheneverBlocking
@@ -148,6 +153,74 @@ class NetworkObserverTest {
     }
 
     @Test
+    @DisplayName("event listeners are registered before the Network domain is enabled")
+    fun ensureEnabledRegistersListenersBeforeEnabling() {
+        val protocol = mock<BrowserProtocol>()
+        stubListenerRegistration(protocol)
+        val observer = NetworkObserver(protocol)
+        runBlocking { observer.ensureEnabled() }
+
+        runBlocking {
+            val inOrder = inOrder(protocol)
+            inOrder.verify(protocol).onRequestWillBeSent(any())
+            inOrder.verify(protocol).onRequestWillBeSentExtraInfo(any())
+            inOrder.verify(protocol).onResponseReceived(any())
+            inOrder.verify(protocol).onResponseReceivedExtraInfo(any())
+            inOrder.verify(protocol).onLoadingFinished(any())
+            inOrder.verify(protocol).onLoadingFailed(any())
+            inOrder.verify(protocol).networkEnable()
+        }
+    }
+
+    @Test
+    @DisplayName("concurrent ensureEnabled calls enable the domain exactly once")
+    fun concurrentEnsureEnabledEnablesOnce() {
+        val (observer, protocol) = newObserver()
+        runBlocking {
+            val jobs = (1..8).map { launch { observer.ensureEnabled() } }
+            jobs.joinAll()
+            verify(protocol).networkEnable()
+        }
+    }
+
+    @Test
+    @DisplayName("ensureEnabled with buffers enables via Network.enable with the requested sizes")
+    fun ensureEnabledAppliesRequestedBuffers() {
+        val protocol = mock<BrowserProtocol>()
+        stubListenerRegistration(protocol)
+        val observer = NetworkObserver(protocol)
+        runBlocking {
+            observer.ensureEnabled(maxTotalBufferSize = 100_000_000L, maxResourceBufferSize = 10_000_000L)
+        }
+        runBlocking {
+            verify(protocol, never()).networkEnable()
+            verify(protocol).executeCdpCommand(
+                eq("Network.enable"),
+                eq(mapOf("maxTotalBufferSize" to 100_000_000L, "maxResourceBufferSize" to 10_000_000L)),
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("harStart re-applies large buffers when the domain was enabled without them")
+    fun harStartReappliesBuffersWhenAlreadyEnabled() {
+        val protocol = mock<BrowserProtocol>()
+        stubListenerRegistration(protocol)
+        val observer = NetworkObserver(protocol)
+        runBlocking { observer.ensureEnabled() }
+        runBlocking { observer.harStart(HarContentMode.TEXT) }
+        runBlocking { observer.harStart(HarContentMode.TEXT) }
+
+        runBlocking {
+            verify(protocol).networkEnable()
+            verify(protocol, times(1)).executeCdpCommand(
+                eq("Network.enable"),
+                eq(mapOf("maxTotalBufferSize" to 100_000_000L, "maxResourceBufferSize" to 10_000_000L)),
+            )
+        }
+    }
+
+    @Test
     @DisplayName("tracks a request through its lifecycle events")
     fun tracksRequestLifecycle() {
         val (observer, _) = newObserver()
@@ -247,6 +320,34 @@ class NetworkObserverTest {
         assertEquals(2, observer.networkRequests().size)
         assertTrue(observer.networkRequests(clear = true).isEmpty())
         assertEquals(0, observer.networkRequests().size)
+    }
+
+    @Test
+    @DisplayName("redirect hops are kept as separate entries; updates apply to the latest hop")
+    fun redirectHopsKeptAsSeparateEntries() {
+        val (observer, _) = newObserver()
+        observer.onRequestWillBeSent(requestWillBeSent("1", url = "https://example.com/old"))
+        observer.onRequestWillBeSent(requestWillBeSent("1", url = "https://example.com/new"))
+        observer.onResponseReceived(responseReceived("1"))
+        runBlocking { observer.onLoadingFinished(loadingFinished("1")) }
+
+        val requests = observer.networkRequests()
+        assertEquals(2, requests.size)
+        assertEquals(
+            listOf("https://example.com/old", "https://example.com/new"),
+            requests.map { it.url },
+        )
+        // The first hop never got response metadata...
+        assertNull(requests[0].status)
+        assertFalse(requests[0].finished)
+        // ...the latest hop carries it.
+        assertEquals(200, requests[1].status)
+        assertTrue(requests[1].finished)
+        // Detail resolves to the latest hop (the current one).
+        val detail = runBlocking { observer.networkRequestDetail("1") }
+        val latest = detail["request"] as TrackedNetworkRequest
+        assertEquals("https://example.com/new", latest.url)
+        assertEquals(200, latest.status)
     }
 
     @Test

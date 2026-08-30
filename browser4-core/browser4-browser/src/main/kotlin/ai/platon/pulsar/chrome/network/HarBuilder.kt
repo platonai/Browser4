@@ -80,7 +80,7 @@ object HarBuilder {
         for (request in requests) {
             val entry = buildEntry(request, contentMode, embeddedBytes, maxTotalBodyBytes)
             if (entry != null) {
-                embeddedBytes += embeddedSizeOf(request, contentMode, maxTotalBodyBytes)
+                embeddedBytes += embeddedSizeOf(request, contentMode, embeddedBytes, maxTotalBodyBytes)
                 entries.add(entry)
             }
         }
@@ -163,6 +163,9 @@ object HarBuilder {
         )
         if (body != null && contentMode != HarContentMode.NONE) {
             content["text"] = body
+            if (request.responseBodyBase64) {
+                content["encoding"] = "base64"
+            }
         }
         val redirectLocation = firstHeader(headers, "Location")
         return mapOf(
@@ -234,20 +237,20 @@ object HarBuilder {
         return TEXT_MIME_PATTERN.containsMatchIn(mimeType)
     }
 
+    /**
+     * Byte size actually embedded for this request under the current budgets:
+     * 0 when the body is skipped (mode, MIME, per-body cap, or remaining total
+     * budget). Mirrors [shouldEmbedBody] so the running total never counts
+     * bodies that were not embedded.
+     */
     private fun embeddedSizeOf(
         request: TrackedNetworkRequest,
         contentMode: HarContentMode,
+        embeddedBytes: Long,
         maxTotalBodyBytes: Long,
     ): Long {
-        if (contentMode == HarContentMode.NONE) return 0L
-        val body = request.responseBody ?: return 0L
-        val size = bodyByteLength(request, body)
-        if (size > MAX_BODY_BYTES) return 0L
-        if (contentMode == HarContentMode.TEXT) {
-            val mimeType = request.mimeType ?: return 0L
-            if (!TEXT_MIME_PATTERN.containsMatchIn(mimeType)) return 0L
-        }
-        return size
+        if (!shouldEmbedBody(request, contentMode, embeddedBytes, maxTotalBodyBytes)) return 0L
+        return bodyByteLength(request, request.responseBody ?: return 0L)
     }
 
     private fun bodyByteLength(request: TrackedNetworkRequest, body: String?): Long {

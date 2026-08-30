@@ -5696,10 +5696,18 @@ async fn handle_har_stop(
         .and_then(|v| v.as_str())
         .unwrap_or("none")
         .to_string();
+    // Only treat the payload as a HAR document when it actually carries one
+    // (a "har" object). Anything else — a backend error, a mock response —
+    // is passed through verbatim instead of being written as a fake HAR
+    // file with "0 entries".
+    let is_har_document = parsed
+        .get("har")
+        .map(|v| v.is_object())
+        .unwrap_or(false);
     let har = parsed.get("har").cloned().unwrap_or(parsed);
-    // Pretty-print only a real HAR document (a JSON object); anything else
-    // (e.g. a backend error or a mock response) is passed through verbatim.
-    let har_json = if har.is_object() {
+    // Pretty-print only a real HAR document; anything else (e.g. a backend
+    // error or a mock response) is passed through verbatim.
+    let har_json = if is_har_document {
         serde_json::to_string_pretty(&har).unwrap_or_else(|_| result.clone())
     } else {
         result.clone()
@@ -18133,6 +18141,39 @@ fn is_page_dependent_command(command: &str) -> bool {
     )
 }
 
+/// Semantic fast-fail checks that mirror backend validations, so the user
+/// gets a clear usage error without a server round-trip.
+fn validate_command_semantics(
+    command: &str,
+    parsed: &HashMap<String, Value>,
+) -> Result<(), String> {
+    if command == "network-route" {
+        let abort = parsed
+            .get("abort")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let has_body = parsed
+            .get("body")
+            .map(|v| !v.is_null() && !(v.as_str().unwrap_or("").is_empty()))
+            .unwrap_or(false);
+        if !abort && !has_body {
+            return Err(
+                "network route requires at least one action: --abort or --body <text>".to_string(),
+            );
+        }
+    }
+    if command == "har-start" {
+        if let Some(content) = parsed.get("content").and_then(|v| v.as_str()) {
+            if !matches!(content, "all" | "text" | "none") {
+                return Err(format!(
+                    "invalid --content '{content}' for har start. Valid options: all, text, none"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Validate that all required (non-optional) positional arguments are present
 /// in the parsed argument map.  Catches malformed commands (e.g. `htmlsnapshot grep`
 /// without a pattern) before the backend is started.
@@ -19807,6 +19848,7 @@ async fn run(
 
     // Validate required positional arguments (fast-fail for malformed commands).
     validate_required_args(cmd_def, &parsed)?;
+    validate_command_semantics(&command, &parsed)?;
 
     // Support --json after the command name (e.g. "tab-list --json").  When
     // --json appears before the command it is captured by parse_global_flags;
@@ -22220,6 +22262,54 @@ mod tests {
         let empty = HashMap::new();
         let err = validate_required_args(&cmd_def, &empty).unwrap_err();
         assert!(err.contains("Missing required argument"));
+    }
+
+    // -----------------------------------------------------------------------
+    // validate_command_semantics tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn validate_network_route_requires_an_action() {
+        let mut parsed = HashMap::new();
+        parsed.insert("urlPattern".to_string(), json!("**/api/users"));
+        // Neither --abort nor --body: rejected.
+        let err = validate_command_semantics("network-route", &parsed).unwrap_err();
+        assert!(err.contains("--abort or --body"), "got: {err}");
+
+        // --abort alone is enough.
+        let mut parsed = HashMap::new();
+        parsed.insert("urlPattern".to_string(), json!("*"));
+        parsed.insert("abort".to_string(), json!(true));
+        assert!(validate_command_semantics("network-route", &parsed).is_ok());
+
+        // --body alone is enough.
+        let mut parsed = HashMap::new();
+        parsed.insert("urlPattern".to_string(), json!("**/api/users"));
+        parsed.insert("body".to_string(), json!("{}"));
+        assert!(validate_command_semantics("network-route", &parsed).is_ok());
+    }
+
+    #[test]
+    fn validate_har_start_content_mode() {
+        for valid in ["all", "text", "none"] {
+            let mut parsed = HashMap::new();
+            parsed.insert("content".to_string(), json!(valid));
+            assert!(
+                validate_command_semantics("har-start", &parsed).is_ok(),
+                "content={valid} should be accepted"
+            );
+        }
+        let mut parsed = HashMap::new();
+        parsed.insert("content".to_string(), json!("banana"));
+        let err = validate_command_semantics("har-start", &parsed).unwrap_err();
+        assert!(err.contains("banana"), "got: {err}");
+        assert!(err.contains("all, text, none"), "got: {err}");
+
+        // No --content at all is fine (defaults to none).
+        let empty = HashMap::new();
+        assert!(validate_command_semantics("har-start", &empty).is_ok());
+        // Other commands are unaffected.
+        assert!(validate_command_semantics("network-requests", &empty).is_ok());
     }
 
     #[test]

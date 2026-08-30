@@ -570,7 +570,9 @@ open class Browser4WebDriver(
         clear: Boolean = false,
     ): List<TrackedNetworkRequest> {
         networkObserver.ensureEnabled()
-        return networkObserver.networkRequests(filter, type, method, status, clear)
+        // Strip captured bodies: list results carry metadata only; bodies are
+        // retrieved through networkRequestDetail.
+        return networkObserver.networkRequests(filter, type, method, status, clear).map { it.withoutBody() }
     }
 
     /**
@@ -628,6 +630,10 @@ open class Browser4WebDriver(
         contentType: String? = null,
         resourceType: String? = null,
     ): Map<String, Any?> {
+        require(urlPattern.isNotBlank()) { "networkRoute requires a non-blank urlPattern" }
+        require(abort || body != null) {
+            "networkRoute requires at least one action: --abort or --body"
+        }
         val response = if (body != null) {
             RouteManager.RouteResponse(body = body, contentType = contentType)
         } else {

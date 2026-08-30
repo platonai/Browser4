@@ -85,7 +85,8 @@ metadata-only entries.
 
 ### `network har stop [path]`
 
-Stop recording and emit the HAR 1.2 document. With `--path`, writes the file
+Stop recording and emit the HAR 1.2 document. With a path (positional, matching
+agent-browser's `har stop [path]`, or `--path`), writes the file
 (pretty-printed) and prints a summary; without it, prints the full HAR JSON to
 stdout (useful with `--json` for scripting).
 
@@ -172,9 +173,11 @@ browser4-cli network requests --type xhr --method POST
 ## Notes & Limitations
 
 - Tracking is per tab and per session; a new tab starts with an empty buffer.
-- Redirect hops and websocket frames are not expanded into separate entries
-  (the final request is recorded).
+- Redirect hops are kept as separate entries (one per `requestWillBeSent`, like
+  agent-browser), so a redirected request may appear multiple times with the
+  same request id and different URLs; the detail query resolves to the latest
+  hop. WebSocket frames are not tracked.
 - `Network.getResponseBody` is best-effort: bodies can be evicted by Chrome on
   navigation, in which case entries keep headers/timing metadata only.
-- The `har` document is produced by the backend; `network har stop --path`
+- The `har` document is produced by the backend; `network har stop <path>`
   writes the file on the machine running the CLI.

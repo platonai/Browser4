@@ -192,7 +192,17 @@ class HarBuilderTest {
         )
         val content = (entry["response"] as Map<String, Any?>)["content"] as Map<String, Any?>
         assertEquals("aGVsbG8=", content["text"])
+        assertEquals("base64", content["encoding"])
         assertEquals(5L, content["size"])
+    }
+
+    @Test
+    @DisplayName("text bodies are not marked base64-encoded")
+    fun textBodiesHaveNoEncoding() {
+        val entry = harOf(tracked(responseBody = """{"ok":true}"""), HarContentMode.TEXT)
+        val content = (entry["response"] as Map<String, Any?>)["content"] as Map<String, Any?>
+        assertEquals("""{"ok":true}""", content["text"])
+        assertNull(content["encoding"])
     }
 
     @Test

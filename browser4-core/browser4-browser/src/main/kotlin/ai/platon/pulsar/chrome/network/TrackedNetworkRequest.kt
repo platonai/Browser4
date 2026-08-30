@@ -75,4 +75,11 @@ data class TrackedNetworkRequest(
         if (!responseBodyBase64) return body
         return runCatching { String(java.util.Base64.getDecoder().decode(body), Charsets.UTF_8) }.getOrNull()
     }
+
+    /**
+     * A copy of this request with the response body stripped, for list results:
+     * body payloads are only exposed through the request-detail query (bodies
+     * can be megabytes; a listing must not ship them).
+     */
+    fun withoutBody(): TrackedNetworkRequest = copy(responseBody = null, responseBodyBase64 = false)
 }

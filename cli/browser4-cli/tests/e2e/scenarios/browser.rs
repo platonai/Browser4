@@ -1592,8 +1592,7 @@ pub(super) fn test_network_requests_and_har(ctx: &mut E2ECtx) {
     let goto_result = run_command(ctx, &["goto", &ctx.network_url()]);
     assert!(
         goto_result.stdout.contains("Navigated to")
-            || goto_result.stdout.contains("Page loaded")
-            || goto_result.exit_code == 0,
+            || goto_result.stdout.contains("Page loaded"),
         "goto should succeed, got:\n{}",
         goto_result.stdout
     );

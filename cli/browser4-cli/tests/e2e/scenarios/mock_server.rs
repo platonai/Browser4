@@ -2410,6 +2410,14 @@ pub(super) fn test_agent_browser_command_gaps(ctx: &mut E2ECtx) {
         "mock response for browser_network_request"
     );
 
+    // Numeric request ids (CDP ids can look like plain digits) must be
+    // forwarded as strings, not dropped by the arg parser.
+    let numeric_request = run_command(ctx, &["network", "request", "42238"]);
+    assert_eq!(
+        strip_snapshot_output(&numeric_request.stdout),
+        "mock response for browser_network_request"
+    );
+
     let har_start = run_command(ctx, &["network", "har", "start", "--content", "all"]);
     assert_eq!(
         strip_snapshot_output(&har_start.stdout),
@@ -2420,6 +2428,18 @@ pub(super) fn test_agent_browser_command_gaps(ctx: &mut E2ECtx) {
     assert_eq!(
         strip_snapshot_output(&har_stop.stdout),
         "mock response for browser_har_stop"
+    );
+
+    // `har stop [path]` accepts a positional path (agent-browser form).
+    let har_path = ctx.state_dir.join("mock-har-stop.har");
+    let har_stop_path = run_command(
+        ctx,
+        &["network", "har", "stop", har_path.to_str().expect("har path")],
+    );
+    assert!(
+        har_stop_path.stdout.contains("HAR saved"),
+        "har stop with a positional path should report the saved file, got:\n{}",
+        har_stop_path.stdout
     );
 
     // ── 18-19. network route / unroute ─────────────────────────────────
@@ -2496,6 +2516,27 @@ pub(super) fn test_agent_browser_command_gaps(ctx: &mut E2ECtx) {
         .collect();
     assert_eq!(har_start_calls.len(), 1, "expected one har start call");
     assert_eq!(har_start_calls[0].arguments["contentMode"], "all");
+    // Both request-detail ids arrive as strings (numeric ids included).
+    let detail_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_network_request")
+        .collect();
+    assert_eq!(detail_calls.len(), 2, "expected two network request calls");
+    assert_eq!(detail_calls[0].arguments["requestId"], "1234.5");
+    assert_eq!(detail_calls[1].arguments["requestId"], "42238");
+    // The positional har-stop path is consumed CLI-side (the backend returns
+    // the HAR document; the CLI writes the file), so the backend tool call
+    // carries no path argument.
+    let har_stop_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_har_stop")
+        .collect();
+    assert_eq!(har_stop_calls.len(), 2, "expected two har stop calls");
+    assert!(
+        har_stop_calls[1].arguments.get("path").is_none(),
+        "har-stop path should stay on the CLI side, got: {:?}",
+        har_stop_calls[1].arguments
+    );
 
     // press-key aliases (key + keyboard) each issue their own call.
     let press_calls = tool_calls

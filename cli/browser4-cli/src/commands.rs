@@ -1935,7 +1935,10 @@ pub fn all_commands() -> Vec<CommandDef> {
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_network_request".to_string(),
             tool_params_fn: |args| {
-                json!({ "requestId": get_str(args, "requestId").unwrap_or_default() })
+                // Request ids can look numeric (CDP ids are strings but some
+                // sources emit plain digits); get_string_value keeps them as
+                // text instead of dropping them like as_str does.
+                json!({ "requestId": get_string_value(args, "requestId").unwrap_or_default() })
             },
         },
         CommandDef {
@@ -2002,13 +2005,15 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "har-stop",
-            description: "Stop the active HAR recording and save the HAR 1.2 document to a .har file (or print it to stdout without --path).",
+            description: "Stop the active HAR recording and print the HAR 1.2 document to stdout, or save it to a .har file when a path is given.",
             category: Category::Network,
             hidden: false,
             batch_supported: false,
-            args: &[],
+            args: &[
+                ArgDef { name: "path", description: "Output .har file path (agent-browser compatible positional); omit to print the HAR JSON to stdout", optional: true },
+            ],
             options: &[
-                OptionDef { name: "path", description: "Output .har file path (default: har-<timestamp>.har in the current directory); omit to print the HAR JSON to stdout", is_bool: false, short: None },
+                OptionDef { name: "path", description: "Output .har file path (alias of the positional path); omit to print the HAR JSON to stdout", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_har_stop".to_string(),
@@ -5541,6 +5546,18 @@ mod tests {
     }
 
     #[test]
+    fn test_network_request_numeric_id_stays_string() {
+        // CDP request ids that look numeric are stored as JSON numbers by the
+        // arg parser; the tool params must still carry them as text.
+        let map = commands_map();
+        let cmd = map.get("network-request").unwrap();
+        let mut args = HashMap::new();
+        args.insert("requestId".to_string(), json!(42238));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["requestId"], "42238");
+    }
+
+    #[test]
     fn test_har_start_tool_name_and_params() {
         let map = commands_map();
         let cmd = map.get("har-start").unwrap();
@@ -5565,6 +5582,12 @@ mod tests {
         assert_eq!((cmd.tool_name_fn)(&args), "browser_har_stop");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["path"], "capture.har");
+
+        // The path is also available as an optional positional argument
+        // (agent-browser compatible `har stop [path]`), not only via --path.
+        assert_eq!(cmd.args.len(), 1);
+        assert_eq!(cmd.args[0].name, "path");
+        assert!(cmd.args[0].optional);
     }
 
     #[test]

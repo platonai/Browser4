@@ -178,6 +178,21 @@ class RouteManagerTest {
     }
 
     @Test
+    @DisplayName("the paused-request listener is registered exactly once across unroute-all cycles")
+    fun listenerRegisteredOnce() {
+        runBlocking {
+            val (manager, protocol) = newManager()
+            manager.route("**/api/users", response = RouteManager.RouteResponse(body = "{}"))
+            manager.unroute()
+            manager.route("*", abort = true)
+            manager.unroute()
+            manager.route("**/api/users", response = RouteManager.RouteResponse(body = "{}"))
+
+            verify(protocol, times(1)).onRequestPaused(any())
+        }
+    }
+
+    @Test
     @DisplayName("unmatched paused requests continue unchanged")
     fun unmatchedRequestsContinue() = runBlocking {
         val (manager, protocol) = newManager()

@@ -76,6 +76,10 @@ class RouteManager(
     @Volatile
     private var fetchEnabled = false
 
+    /** Guards [refreshFetch] so the paused-request listener is registered once. */
+    @Volatile
+    private var listenerRegistered = false
+
     /**
      * Add a route. Requests matching [urlPattern] (and, when given,
      * [resourceTypes]) are aborted when [abort] is true, otherwise answered
@@ -143,7 +147,15 @@ class RouteManager(
             return
         }
         if (!fetchEnabled) {
-            listeners += browserProtocol.onRequestPaused { event -> onRequestPaused(event) }
+            // Register the paused-request listener exactly once: it must
+            // survive unroute-all → route cycles, otherwise every paused
+            // request would be handled by a second listener too (the second
+            // failRequest/fulfillRequest on an already-resolved id would log
+            // "Invalid InterceptionId" noise).
+            if (!listenerRegistered) {
+                listeners += browserProtocol.onRequestPaused { event -> onRequestPaused(event) }
+                listenerRegistered = true
+            }
             fetchEnabled = true
         }
         browserProtocol.fetchEnable(
@@ -193,6 +205,11 @@ class RouteManager(
             browserProtocol.continueRequest(event.requestId)
         } catch (e: Exception) {
             logger.warn("Failed to handle Fetch.requestPaused: {}", e.message)
+            // Never leave the request paused: if the intended action failed
+            // (e.g. the interception id was already resolved elsewhere),
+            // continue the request unchanged so the page does not hang.
+            runCatching { browserProtocol.continueRequest(event.requestId) }
+                .onFailure { f -> logger.debug("Fallback continueRequest also failed: {}", f.message) }
         }
     }
 
