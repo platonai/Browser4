@@ -546,6 +546,29 @@ browser4-cli loop --shell "curl -s https://api.example.com/health" -i 60
 browser4-cli loop --list
 ```
 
+#### 网络检查、HAR 录制与请求路由
+
+查看页面实际加载了哪些网络请求（XHR/fetch、状态码、请求头、响应体），
+录制可被 Chrome DevTools 导入的 HAR 1.2 归档，并对匹配的请求做路由
+（mock 响应或中止）。完整指南见
+[`skills/browser4-cli/references/network.md`](skills/browser4-cli/references/network.md)。
+
+| 命令 | 说明 |
+|---|---|
+| `network requests` | 列出已跟踪的请求。支持 `--filter`、`--type`、`--method`、`--status`（`200`、`2xx`、`400-499`）、`--clear`。 |
+| `network request <id>` | 单个请求的完整详情：请求/响应头、时序与响应体（按需拉取）。 |
+| `network har start [--content <mode>]` | 开始 HAR 录制。内容模式：`none`、`text` 或 `all`（二进制 base64）。 |
+| `network har stop [path]` | 停止录制并输出 HAR JSON；给出路径时写入 `.har` 文件。 |
+| `network route <pattern> --body <text>\|--abort` | 拦截匹配的请求（mock 响应或让其失败），基于 CDP Fetch。支持 `--content-type`、`--resource-type`。 |
+| `network unroute [pattern]` | 移除路由；不带 pattern 时完全关闭拦截。 |
+
+```bash
+browser4-cli network requests --filter api --status 2xx
+browser4-cli network har start --content text
+browser4-cli network har stop ./capture.har
+browser4-cli network route "**/api/users" --body '{"users":[]}' --content-type application/json
+```
+
 #### 用于规模化处理的 Swarm 与 Crawl
 
 `co` 前缀可以作为 `swarm` 的别名使用。

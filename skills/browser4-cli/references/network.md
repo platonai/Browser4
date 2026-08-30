@@ -97,7 +97,8 @@ browser4-cli --json network har stop   # HAR JSON on stdout
 
 ### `network route <urlPattern> [--abort|--body <text>] [--content-type <mime>] [--resource-type <csv>]`
 
-Intercept matching requests via the CDP `Fetch` domain:
+Intercept matching requests via the CDP `Fetch` domain. Provide **exactly one
+action**: `--abort` or `--body` (combining both is rejected).
 
 | Option | Meaning |
 |--------|---------|
@@ -106,6 +107,7 @@ Intercept matching requests via the CDP `Fetch` domain:
 | `--body <text>` | Answer matching requests with this mock response body (e.g. a JSON string) |
 | `--content-type <mime>` | Content-Type header for the mock response (e.g. `application/json`) |
 | `--resource-type <csv>` | Only intercept these CDP resource types, e.g. `xhr,fetch` (also `script`, `image`, …) |
+| `--type <csv>` | Alias of `--resource-type` |
 
 Routes are matched in registration order; requests that match no route (or
 whose resource type filter rejects them) continue unchanged.
