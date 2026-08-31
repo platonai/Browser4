@@ -497,6 +497,12 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "profiler-start",
         "profiler-stop",
         "download",
+        "network-requests",
+        "network-request",
+        "network-route",
+        "network-unroute",
+        "har-start",
+        "har-stop",
         "webminer",
         "webminer-install",
         "webminer-update",
@@ -5658,6 +5664,93 @@ async fn handle_profiler_stop(
     std::fs::write(&out_path, payload)
         .map_err(|e| format!("Failed to write {}: {}", out_path.display(), e))?;
     cli_println!("CPU profile saved to {}", out_path.display());
+    Ok(())
+}
+
+/// Parsed `browser_har_stop` tool response.
+struct HarStopPayload {
+    /// Entry count from the recording wrapper, when present.
+    entries: u64,
+    /// Content mode the recording ran with, when present.
+    content_mode: String,
+    /// The text to write to a file or print: the pretty-printed HAR document
+    /// when the payload carries one, otherwise the raw result verbatim.
+    output: String,
+}
+
+/// Parse a `browser_har_stop` tool response. Only a payload carrying a real
+/// HAR document (a `har` object) is pretty-printed; anything else — a backend
+/// error, a mock response — passes through verbatim so it is never written as
+/// a fake HAR file with a misleading "saved" summary.
+fn parse_har_stop_payload(result: &str) -> HarStopPayload {
+    let parsed: Value = serde_json::from_str(result).unwrap_or(Value::String(result.to_string()));
+    let entries = parsed
+        .get("entries")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let content_mode = parsed
+        .get("contentMode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("none")
+        .to_string();
+    let is_har_document = parsed
+        .get("har")
+        .map(|v| v.is_object())
+        .unwrap_or(false);
+    let har = parsed.get("har").cloned().unwrap_or(parsed);
+    let output = if is_har_document {
+        serde_json::to_string_pretty(&har).unwrap_or_else(|_| result.to_string())
+    } else {
+        result.to_string()
+    };
+    HarStopPayload {
+        entries,
+        content_mode,
+        output,
+    }
+}
+
+/// `network har stop [--path out.har]` — stop the active HAR recording and
+/// save the HAR 1.2 document. Without `--path`, print the HAR JSON to stdout.
+async fn handle_har_stop(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    use std::path::PathBuf;
+
+    let result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let mut params = json!({});
+        params["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, "browser_har_stop", params).await }
+    })
+    .await?;
+
+    // The backend returns { recording, contentMode, entries, har } as JSON.
+    let payload = parse_har_stop_payload(&result);
+    let entries = payload.entries;
+    let content_mode = payload.content_mode;
+    let har_json = payload.output;
+
+    match tool_params.get("path").and_then(|v| v.as_str()) {
+        Some(p) => {
+            let out_path = PathBuf::from(p);
+            std::fs::write(&out_path, har_json)
+                .map_err(|e| format!("Failed to write {}: {}", out_path.display(), e))?;
+            cli_println!(
+                "HAR saved to {} ({} entries, content mode: {})",
+                out_path.display(),
+                entries,
+                content_mode
+            );
+        }
+        None => {
+            cli_println!("{}", har_json);
+        }
+    }
     Ok(())
 }
 
@@ -18288,6 +18381,9 @@ fn is_page_dependent_command(command: &str) -> bool {
         | "scroll" | "resize"
         // Console — needs a page to intercept messages
         | "console"
+        // Network inspection / HAR / routing — needs a live page with network traffic
+        | "network-requests" | "network-request" | "network-route" | "network-unroute"
+        | "har-start" | "har-stop"
         // Storage commands — need page origin context
         | "cookie-list" | "cookie-get" | "cookie-set" | "cookie-delete" | "cookie-clear"
         | "localstorage-list" | "localstorage-get" | "localstorage-set"
@@ -18299,6 +18395,55 @@ fn is_page_dependent_command(command: &str) -> bool {
         // Wait — needs timing on a page
         | "wait"
     )
+}
+
+/// Semantic fast-fail checks that mirror backend validations, so the user
+/// gets a clear usage error without a server round-trip.
+fn validate_command_semantics(
+    command: &str,
+    parsed: &HashMap<String, Value>,
+) -> Result<(), String> {
+    if command == "network-route" {
+        let abort = parsed
+            .get("abort")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let has_body = parsed
+            .get("body")
+            .map(|v| !v.is_null() && !(v.as_str().unwrap_or("").is_empty()))
+            .unwrap_or(false);
+        if abort && has_body {
+            return Err(
+                "network route cannot combine --abort with --body: choose exactly one action"
+                    .to_string(),
+            );
+        }
+        if !abort && !has_body {
+            return Err(
+                "network route requires at least one action: --abort or --body <text>".to_string(),
+            );
+        }
+    }
+    if command == "har-start" {
+        match parsed.get("content") {
+            None => {}
+            Some(Value::String(content)) => {
+                if !matches!(content.as_str(), "all" | "text" | "none") {
+                    return Err(format!(
+                        "invalid --content '{content}' for har start. Valid options: all, text, none"
+                    ));
+                }
+            }
+            // parse_raw_args coerces "true"/"false" to booleans; a non-string
+            // --content would silently drop the option — reject it instead.
+            Some(_) => {
+                return Err(
+                    "invalid --content for har start. Valid options: all, text, none".to_string(),
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Validate that all required (non-optional) positional arguments are present
@@ -18478,6 +18623,28 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         }
         return None;
     }
+    // `network requests|request <id>` and `network har start|stop [path]` —
+    // request inspection and HAR recording.
+    if prefix == "network" {
+        if sub == "har" {
+            let inner = args.get(2).map(|s| s.as_str());
+            let flat = match inner {
+                Some("start") => "har-start",
+                Some("stop") => "har-stop",
+                _ => return None,
+            };
+            let mut rewritten = vec![flat.to_string()];
+            rewritten.extend(args[3..].iter().cloned());
+            return Some(rewritten);
+        }
+        let known_subs = ["requests", "request", "route", "unroute"];
+        if known_subs.contains(&sub.as_str()) {
+            let mut rewritten = vec![format!("network-{}", sub)];
+            rewritten.extend(args[2..].iter().cloned());
+            return Some(rewritten);
+        }
+        return None;
+    }
     // `profiles list` — list browser profile directories.
     if prefix == "profiles" {
         let known_subs = ["list"];
@@ -18614,6 +18781,12 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "diff-snapshot" => Some("diff snapshot"),
         "profiler-start" => Some("profiler start"),
         "profiler-stop" => Some("profiler stop"),
+        "network-requests" => Some("network requests"),
+        "network-request" => Some("network request"),
+        "network-route" => Some("network route"),
+        "network-unroute" => Some("network unroute"),
+        "har-start" => Some("network har start"),
+        "har-stop" => Some("network har stop"),
         "profiles-list" => Some("profiles list"),
         "webminer-install" => Some("webminer install"),
         "webminer-update" => Some("webminer update"),
@@ -20010,6 +20183,7 @@ async fn run(
 
     // Validate required positional arguments (fast-fail for malformed commands).
     validate_required_args(cmd_def, &parsed)?;
+    validate_command_semantics(&command, &parsed)?;
 
     // Support --json after the command name (e.g. "tab-list --json").  When
     // --json appears before the command it is captured by parse_global_flags;
@@ -20995,6 +21169,15 @@ async fn run(
             )
             .await?;
         }
+        "har-stop" => {
+            handle_har_stop(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
         "generate-locator" => {
             handle_generate_locator(
                 &client,
@@ -21805,6 +21988,12 @@ mod tests {
             "profiler-start",
             "profiler-stop",
             "download",
+            "network-requests",
+            "network-request",
+            "network-route",
+            "network-unroute",
+            "har-start",
+            "har-stop",
         ] {
             assert!(cmds.contains(expected), "Missing no-snapshot command: {}", expected);
         }
@@ -22388,6 +22577,25 @@ mod tests {
         assert!(!is_page_dependent_command("skills-path"));
     }
 
+    #[test]
+    fn is_page_dependent_for_network_commands() {
+        for name in [
+            "network-requests",
+            "network-request",
+            "network-route",
+            "network-unroute",
+            "har-start",
+            "har-stop",
+        ] {
+            assert!(
+                is_page_dependent_command(name),
+                "{name} should be page-dependent (it targets the active tab)"
+            );
+        }
+        // download only configures the browser's download behavior — no page needed.
+        assert!(!is_page_dependent_command("download"));
+    }
+
     // -----------------------------------------------------------------------
     // validate_required_args tests
     // -----------------------------------------------------------------------
@@ -22487,6 +22695,115 @@ mod tests {
         let empty = HashMap::new();
         let err = validate_required_args(&cmd_def, &empty).unwrap_err();
         assert!(err.contains("Missing required argument"));
+    }
+
+    // -----------------------------------------------------------------------
+    // validate_command_semantics tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn validate_network_route_requires_an_action() {
+        let mut parsed = HashMap::new();
+        parsed.insert("urlPattern".to_string(), json!("**/api/users"));
+        // Neither --abort nor --body: rejected.
+        let err = validate_command_semantics("network-route", &parsed).unwrap_err();
+        assert!(err.contains("--abort or --body"), "got: {err}");
+
+        // --abort alone is enough.
+        let mut parsed = HashMap::new();
+        parsed.insert("urlPattern".to_string(), json!("*"));
+        parsed.insert("abort".to_string(), json!(true));
+        assert!(validate_command_semantics("network-route", &parsed).is_ok());
+
+        // --body alone is enough.
+        let mut parsed = HashMap::new();
+        parsed.insert("urlPattern".to_string(), json!("**/api/users"));
+        parsed.insert("body".to_string(), json!("{}"));
+        assert!(validate_command_semantics("network-route", &parsed).is_ok());
+
+        // --abort and --body together are contradictory: rejected.
+        let mut parsed = HashMap::new();
+        parsed.insert("urlPattern".to_string(), json!("**/api/users"));
+        parsed.insert("abort".to_string(), json!(true));
+        parsed.insert("body".to_string(), json!("{}"));
+        let err = validate_command_semantics("network-route", &parsed).unwrap_err();
+        assert!(err.contains("cannot combine --abort with --body"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_har_start_content_mode() {
+        for valid in ["all", "text", "none"] {
+            let mut parsed = HashMap::new();
+            parsed.insert("content".to_string(), json!(valid));
+            assert!(
+                validate_command_semantics("har-start", &parsed).is_ok(),
+                "content={valid} should be accepted"
+            );
+        }
+        let mut parsed = HashMap::new();
+        parsed.insert("content".to_string(), json!("banana"));
+        let err = validate_command_semantics("har-start", &parsed).unwrap_err();
+        assert!(err.contains("banana"), "got: {err}");
+        assert!(err.contains("all, text, none"), "got: {err}");
+
+        // A non-string --content (parse_raw_args coerces "true"/"false" to
+        // booleans) is rejected instead of silently dropped.
+        let mut parsed = HashMap::new();
+        parsed.insert("content".to_string(), json!(true));
+        let err = validate_command_semantics("har-start", &parsed).unwrap_err();
+        assert!(err.contains("invalid --content"), "got: {err}");
+
+        // No --content at all is fine (defaults to none).
+        let empty = HashMap::new();
+        assert!(validate_command_semantics("har-start", &empty).is_ok());
+        // Other commands are unaffected.
+        assert!(validate_command_semantics("network-requests", &empty).is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_har_stop_payload tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn har_stop_payload_pretty_prints_har_document() {
+        let result = r#"{"recording":false,"contentMode":"text","entries":2,"har":{"log":{"version":"1.2","entries":[{"time":1}]}}}"#;
+        let payload = parse_har_stop_payload(result);
+        assert_eq!(payload.entries, 2);
+        assert_eq!(payload.content_mode, "text");
+        // The output is the pretty-printed `har` object only.
+        let output: Value = serde_json::from_str(&payload.output).unwrap();
+        assert_eq!(output["log"]["version"], "1.2");
+        assert_eq!(output["log"]["entries"][0]["time"], 1);
+        assert!(payload.output.contains('\n'), "output should be pretty-printed");
+    }
+
+    #[test]
+    fn har_stop_payload_passes_through_non_har_json() {
+        // A backend error object must not be written as a fake HAR file.
+        let result = r#"{"error":"recording not active"}"#;
+        let payload = parse_har_stop_payload(result);
+        assert_eq!(payload.entries, 0);
+        assert_eq!(payload.content_mode, "none");
+        assert_eq!(payload.output, result);
+    }
+
+    #[test]
+    fn har_stop_payload_passes_through_plain_text() {
+        // Mock servers return plain text; it must reach the user verbatim.
+        let result = "mock response for browser_har_stop";
+        let payload = parse_har_stop_payload(result);
+        assert_eq!(payload.entries, 0);
+        assert_eq!(payload.output, result);
+    }
+
+    #[test]
+    fn har_stop_payload_accepts_har_without_entries_wrapper() {
+        // A bare HAR document (no recording wrapper) is still a HAR.
+        let result = r#"{"har":{"log":{"version":"1.2","entries":[]}}}"#;
+        let payload = parse_har_stop_payload(result);
+        assert_eq!(payload.entries, 0);
+        let output: Value = serde_json::from_str(&payload.output).unwrap();
+        assert_eq!(output["log"]["version"], "1.2");
     }
 
     #[test]
@@ -22727,6 +23044,67 @@ mod tests {
         let rewritten = rewrite_prefixed_command(&["profiles".to_string(), "list".to_string()])
             .unwrap();
         assert_eq!(rewritten[0], "profiles-list");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_network_subcommands() {
+        let rewritten = rewrite_prefixed_command(&["network".to_string(), "requests".to_string()])
+            .unwrap();
+        assert_eq!(rewritten[0], "network-requests");
+
+        let rewritten = rewrite_prefixed_command(&[
+            "network".to_string(),
+            "requests".to_string(),
+            "--filter".to_string(),
+            "api".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "network-requests");
+        assert_eq!(rewritten[1], "--filter");
+        assert_eq!(rewritten[2], "api");
+
+        let rewritten = rewrite_prefixed_command(&[
+            "network".to_string(),
+            "request".to_string(),
+            "1234.5".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "network-request");
+        assert_eq!(rewritten[1], "1234.5");
+
+        let rewritten = rewrite_prefixed_command(&[
+            "network".to_string(),
+            "route".to_string(),
+            "**/api/users".to_string(),
+            "--body".to_string(),
+            "{\"users\":[]}".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "network-route");
+        assert_eq!(rewritten[1], "**/api/users");
+
+        let rewritten = rewrite_prefixed_command(&["network".to_string(), "unroute".to_string()])
+            .unwrap();
+        assert_eq!(rewritten[0], "network-unroute");
+
+        let rewritten =
+            rewrite_prefixed_command(&["network".to_string(), "har".to_string(), "start".to_string()])
+                .unwrap();
+        assert_eq!(rewritten[0], "har-start");
+
+        let rewritten = rewrite_prefixed_command(&[
+            "network".to_string(),
+            "har".to_string(),
+            "stop".to_string(),
+            "./capture.har".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "har-stop");
+        assert_eq!(rewritten[1], "./capture.har");
+
+        // Unknown network subcommands are not rewritten.
+        assert!(rewrite_prefixed_command(&["network".to_string(), "foo".to_string()]).is_none());
+        assert!(rewrite_prefixed_command(&["network".to_string()]).is_none());
     }
 
     #[test]

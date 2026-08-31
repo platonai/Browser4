@@ -534,6 +534,30 @@ browser4-cli loop --shell "curl -s https://api.example.com/health" -i 60
 browser4-cli loop --list
 ```
 
+#### Network inspection, HAR recording & request routing
+
+Inspect what the page actually loaded (XHR/fetch calls, status codes, headers,
+response bodies), record a HAR 1.2 archive importable by Chrome DevTools, and
+route (mock/abort) matching requests. See
+[`skills/browser4-cli/references/network.md`](skills/browser4-cli/references/network.md)
+for the full guide.
+
+| Command | Description |
+|---|---|
+| `network requests` | List tracked requests. Supports `--filter`, `--type`, `--method`, `--status` (`200`, `2xx`, `400-499`), `--clear`. |
+| `network request <id>` | Full detail of one request: headers, timing, and the response body (fetched on demand). |
+| `network har start [--content <mode>]` | Start a HAR recording. Content mode: `none`, `text`, or `all` (binary base64). |
+| `network har stop [path]` | Stop recording and print the HAR JSON, or write it to a `.har` file when a path is given. |
+| `network route <pattern> --body <text>\|--abort` | Intercept matching requests (mock response or fail them) via CDP Fetch. Supports `--content-type`, `--resource-type`. |
+| `network unroute [pattern]` | Remove routes; without a pattern, disable interception entirely. |
+
+```bash
+browser4-cli network requests --filter api --status 2xx
+browser4-cli network har start --content text
+browser4-cli network har stop ./capture.har
+browser4-cli network route "**/api/users" --body '{"users":[]}' --content-type application/json
+```
+
 #### Swarm and crawl for scale
 
 The `co` prefix is accepted as an alias for `swarm`.

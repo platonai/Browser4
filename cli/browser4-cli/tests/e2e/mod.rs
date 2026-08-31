@@ -208,6 +208,7 @@ struct FixturePages {
     mouse_html: String,
     keyboard_html: String,
     drag_html: String,
+    network_html: String,
 }
 
 impl FixtureServer {
@@ -230,6 +231,7 @@ impl FixtureServer {
             mouse_html: load_html_fixture(MOUSE_FIXTURE_FILE),
             keyboard_html: load_html_fixture(KEYBOARD_FIXTURE_FILE),
             drag_html: load_html_fixture(DRAG_FIXTURE_FILE),
+            network_html: load_html_fixture(NETWORK_FIXTURE_FILE),
         });
 
         thread::spawn(move || {
@@ -338,6 +340,18 @@ fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePage
             "200 OK",
             "text/html; charset=utf-8",
             pages.drag_html.clone(),
+        )
+    } else if path == NETWORK_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.network_html.clone(),
+        )
+    } else if path == NETWORK_OK_ENDPOINT {
+        (
+            "200 OK",
+            "application/json; charset=utf-8",
+            r#"{"status":"ok","source":"fixture"}"#.to_string(),
         )
     } else {
         (
@@ -2116,6 +2130,10 @@ impl E2ECtx {
 
     fn drag_url(&self) -> String {
         format!("{}{}", self.fixture_base_url, DRAG_PATH)
+    }
+
+    fn network_url(&self) -> String {
+        format!("{}{}", self.fixture_base_url, NETWORK_PATH)
     }
 
     /// A slow fixture URL (served after a fixed delay) used to hold browser
@@ -4561,6 +4579,13 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "eval",
         // test_cdp_command
         "cdp",
+        // test_network_requests_and_har
+        "network-requests",
+        "network-request",
+        "network-route",
+        "network-unroute",
+        "har-start",
+        "har-stop",
         // test_htmlsnapshot_*
         "htmlsnapshot",
         "htmlsnapshot-capture",

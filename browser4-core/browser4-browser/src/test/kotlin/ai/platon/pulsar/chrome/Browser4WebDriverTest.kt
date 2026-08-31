@@ -490,6 +490,28 @@ class Browser4WebDriverTest {
         assertSame(pending, driver.dialogHandler.peekPendingDialog())
     }
 
+    @Test
+    @DisplayName("networkRoute rejects routes with no action (neither abort nor body)")
+    fun networkRouteRequiresAnAction() = runBlocking {
+        val driver = dialogDriver()
+        val thrown = runCatching { driver.networkRoute("**/api/*") }.exceptionOrNull()
+        assertTrue(
+            thrown is IllegalArgumentException && thrown.message.orEmpty().contains("abort or --body"),
+            "expected an action requirement error, got: $thrown"
+        )
+    }
+
+    @Test
+    @DisplayName("networkRoute rejects blank URL patterns")
+    fun networkRouteRejectsBlankPattern() = runBlocking {
+        val driver = dialogDriver()
+        val thrown = runCatching { driver.networkRoute("   ", abort = true) }.exceptionOrNull()
+        assertTrue(
+            thrown is IllegalArgumentException && thrown.message.orEmpty().contains("non-blank"),
+            "expected a blank-pattern error, got: $thrown"
+        )
+    }
+
     private fun dialogDriver(protocol: BrowserProtocol = mock()): Browser4WebDriver {
         val browser = mock<PulsarBrowser>()
         whenever(browser.settings).thenReturn(BrowserSettings())

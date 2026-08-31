@@ -126,6 +126,19 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 | `download [--dir <path>] [--behavior allow\|deny]` | Configure the browser download folder (`Browser.setDownloadBehavior`) |
 | `wait --download [--dir <path>] [--timeout <ms>]` | Poll the download directory until a download completes |
 
+### Network inspection, HAR & routing
+
+| Command | Description |
+|---|---|
+| `network requests [--filter <text>] [--type <csv>] [--method <m>] [--status <s>] [--clear]` | List tracked requests of the active tab (CDP `Network` domain, enabled lazily) |
+| `network request <id>` | Full detail of one request, including the response body (fetched on demand) |
+| `network har start [--content none\|text\|all]` | Start a HAR recording session; capture response bodies per content mode |
+| `network har stop [path]` | Stop recording; print the HAR JSON or write it to a `.har` file |
+| `network route <pattern> --body <text>\|--abort [--content-type <mime>] [--resource-type <csv>]` | Intercept matching requests via CDP `Fetch` (mock or fail them) |
+| `network unroute [pattern]` | Remove routes; without a pattern, disable Fetch interception |
+
+Full guide: [`skills/browser4-cli/references/network.md`](../../skills/browser4-cli/references/network.md).
+
 ### Browsers
 
 | Command | Description |

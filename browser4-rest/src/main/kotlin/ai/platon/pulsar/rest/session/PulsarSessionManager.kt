@@ -3,6 +3,8 @@ package ai.platon.pulsar.rest.session
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarBrowser
 import ai.platon.pulsar.chrome.PulsarWebDriver
+import ai.platon.pulsar.chrome.network.NetworkObserver
+import ai.platon.pulsar.chrome.network.RouteManager
 import ai.platon.pulsar.chrome.protocol.transport.ExtensionChromeService
 import ai.platon.pulsar.chrome.protocol.transport.ExtensionMessageSender
 import ai.platon.pulsar.common.B4Constants.BROWSER_PROFILE_MODE
@@ -754,6 +756,15 @@ class PulsarSessionManager(
                 }
                 if (tabs.isNotEmpty()) {
                     val driver = browser.newDriverForTab(tabs.first())
+                    // Claim the CDP event-listener slots for network tracking
+                    // and routing before any navigation runs on this driver
+                    // (the base NetworkManager registers its listeners on
+                    // navigation, and the dispatcher keeps one listener per
+                    // key — a later registration would silently never fire).
+                    if (driver is PulsarWebDriver) {
+                        NetworkObserver.forProtocol(driver.browserProtocol).preRegister()
+                        RouteManager.forProtocol(driver.browserProtocol).preRegister()
+                    }
                     driver.free()
                     // Initialize CDP so the driver is operational.
                     runBlocking { driver.browserProtocol.pageEnable() }
