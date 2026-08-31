@@ -4584,6 +4584,8 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         // webdb commands
         "webdb-export",
         "webdb-normalize",
+        // test_e2e_mock_profile_import_command
+        "profile-import",
         // test_mock_agent_browser_command_gaps
         "dialog-status",
         "errors",
