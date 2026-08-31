@@ -2,12 +2,15 @@ package ai.platon.pulsar.skeleton.session
 
 import ai.platon.pulsar.api.Browser
 import ai.platon.pulsar.api.BrowserId
+import ai.platon.pulsar.api.BrowserProfile
 import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.AppPaths.WEB_CACHE_DIR
+import ai.platon.pulsar.common.B4Constants.BROWSER_PROFILE_PATH
 import ai.platon.pulsar.common.browser.BrowserProfileMode
+import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_MODE
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_DISPLAY_MODE
 import ai.platon.pulsar.common.config.VolatileConfig
@@ -242,20 +245,33 @@ abstract class AbstractPulsarSession(
                 return b4Driver
             }
 
+            val profilePath = sessionConfig[BROWSER_PROFILE_PATH]?.toString()?.takeIf { it.isNotBlank() }
             val mode = BrowserProfileMode.fromString(sessionConfig[BROWSER_CONTEXT_MODE])
-            val browser = if (sessionConfig[BROWSER_DISPLAY_MODE] != null) {
-                // The session explicitly requested a display mode (e.g.
-                // `headed=true` from `open --headed`). The context-level browser
-                // manager launches with the server-wide configuration, which
-                // defaults to HEADLESS (see browser4-resources
-                // config/application.properties) and would silently ignore the
-                // session's choice. Launch with the session's own settings so
-                // the requested display mode actually reaches Chrome.
-                context.browserManager.launch(browserIdFor(mode), BrowserSettings(sessionConfig))
-            } else {
-                // No explicit display mode on the session — keep the legacy
-                // launch path so server-level defaults apply unchanged.
-                context.browserManager.launch(mode)
+            val browser = when {
+                profilePath != null -> {
+                    // `open --profile <path>`: launch Chrome with the given
+                    // directory as the user data dir. The path is used as-is,
+                    // so it must point at a full Chrome user data directory
+                    // (e.g. a copied system profile), not a Browser4-managed
+                    // context dir.
+                    val profile = BrowserProfile(Path.of(profilePath), Fingerprint.DEFAULT)
+                    context.browserManager.launch(BrowserId(profile), BrowserSettings(sessionConfig))
+                }
+                sessionConfig[BROWSER_DISPLAY_MODE] != null -> {
+                    // The session explicitly requested a display mode (e.g.
+                    // `headed=true` from `open --headed`). The context-level browser
+                    // manager launches with the server-wide configuration, which
+                    // defaults to HEADLESS (see browser4-resources
+                    // config/application.properties) and would silently ignore the
+                    // session's choice. Launch with the session's own settings so
+                    // the requested display mode actually reaches Chrome.
+                    context.browserManager.launch(browserIdFor(mode), BrowserSettings(sessionConfig))
+                }
+                else -> {
+                    // No explicit display mode on the session — keep the legacy
+                    // launch path so server-level defaults apply unchanged.
+                    context.browserManager.launch(mode)
+                }
             }
             val driver = browser.newDriver() as PulsarWebDriver
             // Swap in Browser4WebDriver so every session uses the extension
