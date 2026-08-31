@@ -1710,8 +1710,8 @@ pub(super) fn test_network_requests_and_har(ctx: &mut E2ECtx) {
         serde_json::from_str(&strip_snapshot_output(&detail.stdout))
             .unwrap_or_else(|e| panic!("network request output should be JSON: {e}\n{}", detail.stdout));
     assert_eq!(
-        detail_json["responseBody"],
-        serde_json::json!({"status": "ok", "source": "fixture"}),
+        detail_json["responseBody"].as_str(),
+        Some(r#"{"status":"ok","source":"fixture"}"#),
         "response body should contain the fixture payload, got:\n{}",
         detail.stdout
     );
