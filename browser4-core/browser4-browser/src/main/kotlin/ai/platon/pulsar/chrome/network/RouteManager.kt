@@ -7,7 +7,9 @@ import ai.platon.cdt.kt.protocol.types.fetch.RequestPattern
 import ai.platon.cdt.kt.protocol.types.network.ErrorReason
 import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.common.getLogger
+import java.lang.ref.WeakReference
 import java.util.Base64
+import java.util.WeakHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -47,10 +49,32 @@ import java.util.concurrent.CopyOnWriteArrayList
  * @param browserProtocol The tab's protocol facade, used for the Fetch domain.
  */
 class RouteManager(
-    private val browserProtocol: BrowserProtocol,
+    browserProtocol: BrowserProtocol,
 ) {
+    /**
+     * Weak reference to the tab protocol; see [NetworkObserver] for why.
+     */
+    private val browserProtocolRef = WeakReference(browserProtocol)
+    private val browserProtocol: BrowserProtocol
+        get() = browserProtocolRef.get() ?: error("RouteManager: tab protocol has been disposed")
+
     companion object {
         private val logger = getLogger(RouteManager::class)
+
+        /**
+         * One route manager per tab protocol, shared by every driver wrapping
+         * that tab — the base event dispatcher keeps only ONE listener per
+         * event key, so a second `Fetch.requestPaused` subscriber would
+         * silently never fire. Weak keys; the manager holds the protocol
+         * weakly so it never pins the map entry.
+         */
+        private val managersByProtocol =
+            java.util.Collections.synchronizedMap(WeakHashMap<BrowserProtocol, RouteManager>())
+
+        /** The manager for [browserProtocol], creating one on first use. */
+        fun forProtocol(browserProtocol: BrowserProtocol): RouteManager {
+            return managersByProtocol.computeIfAbsent(browserProtocol) { RouteManager(it) }
+        }
     }
 
     /** Mock response payload for a route. */
@@ -127,6 +151,19 @@ class RouteManager(
     /** Whether Fetch interception is currently enabled on the tab. */
     val isFetchEnabled: Boolean get() = fetchEnabled
 
+    /**
+     * Register the `Fetch.requestPaused` listener WITHOUT enabling Fetch
+     * interception. The base library's own `Fetch.requestPaused` subscriber
+     * (its `NetworkManager`) registers on first navigation, and the event
+     * dispatcher keeps only ONE listener per key — registering at driver
+     * creation claims the slot first. Idempotent.
+     */
+    fun preRegister() {
+        if (listenerRegistered) return
+        listeners += browserProtocol.onRequestPaused { event -> onRequestPaused(event) }
+        listenerRegistered = true
+    }
+
     // ------------------------------------------------------------------
     // Internals
     // ------------------------------------------------------------------
@@ -147,15 +184,12 @@ class RouteManager(
             return
         }
         if (!fetchEnabled) {
-            // Register the paused-request listener exactly once: it must
-            // survive unroute-all → route cycles, otherwise every paused
-            // request would be handled by a second listener too (the second
-            // failRequest/fulfillRequest on an already-resolved id would log
-            // "Invalid InterceptionId" noise).
-            if (!listenerRegistered) {
-                listeners += browserProtocol.onRequestPaused { event -> onRequestPaused(event) }
-                listenerRegistered = true
-            }
+            // The paused-request listener is registered once (see preRegister);
+            // it must survive unroute-all → route cycles, otherwise every
+            // paused request would be handled by a second listener too (the
+            // second failRequest/fulfillRequest on an already-resolved id
+            // would log "Invalid InterceptionId" noise).
+            preRegister()
             fetchEnabled = true
         }
         browserProtocol.fetchEnable(

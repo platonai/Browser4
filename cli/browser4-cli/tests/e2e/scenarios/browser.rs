@@ -1603,10 +1603,9 @@ pub(super) fn test_network_requests_and_har(ctx: &mut E2ECtx) {
     );
     sleep(Duration::from_secs(2));
 
-    // The FIRST session on a freshly launched backend can miss CDP Network
-    // events (a platform-level race in the base CDP stack, unrelated to
-    // network tracking). Close it and open again so tracking runs on a
-    // reliable session — this also exercises close+reopen for the scenario.
+    // Close and reopen so the scenario also covers tracking on a freshly
+    // created session (the observer is per tab; a new session must track
+    // independently of the previous one).
     let close_result = run_command(ctx, &["close"]);
     assert!(
         close_result.stdout.contains("Session closed."),

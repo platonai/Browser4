@@ -71,6 +71,17 @@ open class Browser4WebDriver(
     browser: PulsarBrowser
 ) : PulsarWebDriver(uniqueID, chromeTab, browserProtocol, browser) {
 
+    init {
+        // Claim the CDP event-listener slots before the base library's
+        // NetworkManager registers them on first navigation: its event
+        // dispatcher keeps only one listener per event key, so a listener
+        // registered later would silently never fire. Per-protocol sharing
+        // (see NetworkObserver.forProtocol) makes this a single registration
+        // per tab no matter how many drivers wrap it.
+        NetworkObserver.forProtocol(browserProtocol).preRegister()
+        RouteManager.forProtocol(browserProtocol).preRegister()
+    }
+
     /**
      * Viewport center of a drag element, plus the stable CSS path used to
      * re-locate it inside the drag script (where CDP node object ids are
@@ -531,22 +542,26 @@ open class Browser4WebDriver(
     private val rpc = RobustRPC(this)
 
     /**
-     * Lazy network observer for this tab.
+     * Network observer for this tab, shared by every driver wrapping the same
+     * tab protocol (see [NetworkObserver.forProtocol]).
      *
-     * Network tracking and HAR recording are opt-in: the observer is created
-     * (and the CDP `Network` domain enabled) on the first `network*`/`har*`
-     * call, so tabs that never use the feature pay no overhead.
+     * Network tracking and HAR recording are opt-in: the CDP `Network` domain
+     * is enabled on the first `network*`/`har*` call, so tabs that never use
+     * the feature pay no overhead. The event listeners themselves are
+     * registered eagerly at construction so they claim the dispatcher slot
+     * before the base library's `NetworkManager` does on first navigation.
      */
     private val networkObserver: NetworkObserver by lazy {
-        NetworkObserver(browserProtocol)
+        NetworkObserver.forProtocol(browserProtocol)
     }
 
     /**
-     * Lazy request router for this tab (CDP `Fetch` interception). Opt-in like
-     * network tracking: created on the first `network route`/`unroute` call.
+     * Request router for this tab (CDP `Fetch` interception), shared per tab
+     * protocol like the network observer; the `Fetch.requestPaused` listener
+     * is registered eagerly at construction for the same reason.
      */
     private val routeManager: RouteManager by lazy {
-        RouteManager(browserProtocol)
+        RouteManager.forProtocol(browserProtocol)
     }
 
     /**

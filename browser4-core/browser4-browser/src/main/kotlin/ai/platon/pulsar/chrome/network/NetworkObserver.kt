@@ -10,7 +10,9 @@ import ai.platon.cdt.kt.protocol.support.types.EventListener
 import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import java.lang.ref.WeakReference
 import java.util.Base64
+import java.util.WeakHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CompletableDeferred
 
@@ -45,8 +47,18 @@ import kotlinx.coroutines.CompletableDeferred
  * and body retrieval.
  */
 class NetworkObserver(
-    private val browserProtocol: BrowserProtocol,
+    browserProtocol: BrowserProtocol,
 ) {
+    /**
+     * Weak reference to the tab protocol. The per-protocol registry below
+     * holds this observer strongly, so a strong protocol reference here would
+     * pin the protocol (and its entry) forever. The protocol is kept alive by
+     * its driver anyway while the tab lives.
+     */
+    private val browserProtocolRef = WeakReference(browserProtocol)
+    private val browserProtocol: BrowserProtocol
+        get() = browserProtocolRef.get() ?: error("NetworkObserver: tab protocol has been disposed")
+
     companion object {
         private val logger = getLogger(NetworkObserver::class)
 
@@ -55,6 +67,27 @@ class NetworkObserver(
 
         /** Bodies larger than this are never captured for request detail. */
         const val MAX_DETAIL_BODY_BYTES = 1 * 1024 * 1024
+
+        /**
+         * One observer per tab protocol, shared by every driver wrapping that
+         * tab. The base library's event dispatcher keeps only ONE listener per
+         * event key (`ConcurrentSkipListSet` keyed by `Network.requestWillBeSent`
+         * etc.), so a second observer for the same protocol would silently
+         * never receive events — and the base `NetworkManager` grabs the slot
+         * on first navigation. Sharing per protocol keeps a single registration
+         * and a single tracked store per tab.
+         *
+         * Weak keys: when the tab (and its protocol) is garbage collected the
+         * entry disappears — no explicit cleanup needed. The observer holds the
+         * protocol weakly, so it never pins the map entry.
+         */
+        private val observersByProtocol =
+            java.util.Collections.synchronizedMap(WeakHashMap<BrowserProtocol, NetworkObserver>())
+
+        /** The observer for [browserProtocol], creating one on first use. */
+        fun forProtocol(browserProtocol: BrowserProtocol): NetworkObserver {
+            return observersByProtocol.computeIfAbsent(browserProtocol) { NetworkObserver(it) }
+        }
     }
 
     private val lock = Any()
@@ -82,6 +115,21 @@ class NetworkObserver(
 
     /** Whether a HAR recording is currently active. */
     val isHarRecording: Boolean get() = harRecording
+
+    /**
+     * Register the CDP event listeners WITHOUT enabling the Network domain.
+     *
+     * The base library registers its own `Network.*` listeners lazily on the
+     * first navigation — and its event dispatcher keeps only ONE listener per
+     * event key, so a listener registered afterwards would silently never be
+     * invoked. Registering at driver creation (before any navigation) claims
+     * the slot first; [ensureEnabled] later only flips the domain on.
+     *
+     * Idempotent; safe to call from every driver wrapping the same tab.
+     */
+    fun preRegister() {
+        registerListeners()
+    }
 
     /**
      * Enable the Network domain and attach event listeners. Idempotent and
@@ -177,7 +225,7 @@ class NetworkObserver(
         val methodUpper = method?.uppercase()?.takeIf { it.isNotBlank() }
         val statusMatcher = StatusFilter.parse(status)
 
-        return synchronized(lock) {
+        val result = synchronized(lock) {
             requests.filter { request ->
                 (filterLower == null || request.url.lowercase().contains(filterLower)) &&
                     (types.isEmpty() || request.resourceType.lowercase() in types) &&
@@ -185,6 +233,7 @@ class NetworkObserver(
                     statusMatcher.matches(request.status)
             }
         }
+        return result
     }
 
     /**

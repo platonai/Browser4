@@ -3,8 +3,11 @@ package ai.platon.pulsar.agentic.tools.builtin
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.api.AbstractBrowser
 import ai.platon.pulsar.api.AbstractWebDriver
-import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.api.Browser
+import ai.platon.pulsar.chrome.PulsarWebDriver
+import ai.platon.pulsar.chrome.network.NetworkObserver
+import ai.platon.pulsar.chrome.network.RouteManager
+import ai.platon.pulsar.common.getLogger
 import kotlin.reflect.KClass
 
 class BrowserToolExecutor : AbstractToolExecutor() {
@@ -97,6 +100,15 @@ class BrowserToolExecutor : AbstractToolExecutor() {
             "newTab" -> {
                 val url = paramString(args, "url", functionName) ?: "about:blank"
                 val driver = browser.newDriver()
+                // Claim the CDP event-listener slots for the new tab BEFORE
+                // the first navigation: the base library's NetworkManager
+                // registers its listeners on navigation and its event
+                // dispatcher keeps only ONE listener per event key, so a
+                // listener registered afterwards would silently never fire.
+                if (driver is PulsarWebDriver) {
+                    NetworkObserver.forProtocol(driver.browserProtocol).preRegister()
+                    RouteManager.forProtocol(driver.browserProtocol).preRegister()
+                }
                 // call navigate so JavaScript injection works
                 driver.navigate(url)
                 mapOf("guid" to driver.guid, "url" to driver.currentUrl())
