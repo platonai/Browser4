@@ -209,6 +209,7 @@ struct FixturePages {
     keyboard_html: String,
     drag_html: String,
     network_html: String,
+    download_html: String,
 }
 
 impl FixtureServer {
@@ -232,6 +233,7 @@ impl FixtureServer {
             keyboard_html: load_html_fixture(KEYBOARD_FIXTURE_FILE),
             drag_html: load_html_fixture(DRAG_FIXTURE_FILE),
             network_html: load_html_fixture(NETWORK_FIXTURE_FILE),
+            download_html: load_html_fixture(DOWNLOAD_FIXTURE_FILE),
         });
 
         thread::spawn(move || {
@@ -347,6 +349,23 @@ fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePage
             "text/html; charset=utf-8",
             pages.network_html.clone(),
         )
+    } else if path == DOWNLOAD_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.download_html.clone(),
+        )
+    } else if path == DOWNLOAD_FILE_PATH {
+        // Attachment download: Chrome saves this to the download directory
+        // configured via `download --dir` (Browser.setDownloadBehavior).
+        let body = DOWNLOAD_FILE_CONTENT.as_bytes();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: attachment; filename=\"download-me.txt\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.write_all(body);
+        return;
     } else if path == NETWORK_OK_ENDPOINT {
         (
             "200 OK",
@@ -735,6 +754,10 @@ struct MockBrowser4State {
     /// Track async chat submissions (prompt → task_id).
     chat_async_submissions: Vec<(String, String)>,
     next_chat_task_id: usize,
+    /// Recorded `POST /api/commands/{id}/cancel` calls (agent cancel).
+    agent_cancel_calls: Vec<String>,
+    /// Recorded `/api/config/{key}` REST calls as (method, key, value).
+    config_calls: Vec<(String, String, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1564,6 +1587,69 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 &format!("Mock chat result for task {task_id}."),
             );
         }
+        // ---- agent cancel REST endpoint ----
+        _ if method == "POST" && route.starts_with("/api/commands/") && route.ends_with("/cancel") => {
+            let task_id = route
+                .strip_prefix("/api/commands/")
+                .and_then(|rest| rest.strip_suffix("/cancel"))
+                .unwrap_or_default()
+                .to_string();
+            state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .agent_cancel_calls
+                .push(task_id.clone());
+            let response = serde_json::json!({
+                "cancelled": true,
+                "message": format!("Task {task_id} cancelled."),
+            })
+            .to_string();
+            write_http_response(&mut stream, "200 OK", "application/json", &response);
+        }
+        // ---- unified /api/config/{key} REST interface (config get/set/delete) ----
+        _ if route.starts_with("/api/config/") => {
+            let key = route
+                .strip_prefix("/api/config/")
+                .unwrap_or_default()
+                .to_string();
+            let value = path
+                .split_once('?')
+                .and_then(|(_, query)| query.strip_prefix("value="))
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+            state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .config_calls
+                .push((method.to_string(), key.clone(), value.clone()));
+            let response = match method.as_str() {
+                "PUT" => serde_json::json!({
+                    "key": key,
+                    "configured": null,
+                    "default": "8192",
+                    "override": value,
+                    "effective": value,
+                    "unlimited": false,
+                }),
+                _ => serde_json::json!({
+                    "key": key,
+                    "configured": null,
+                    "default": "8192",
+                    "override": null,
+                    "effective": "8192",
+                    "unlimited": false,
+                }),
+            }
+            .to_string();
+            write_http_response(&mut stream, "200 OK", "application/json", &response);
+        }
+        // ---- aggregated system status panel (doctor status) ----
+        ("GET", "/api/system/status") => write_http_response(
+            &mut stream,
+            "200 OK",
+            "application/json",
+            r#"{"health":{"status":"UP"},"build":{"version":"4.14.0-mock","buildTime":"2026-08-01T00:00:00Z"},"runtime":{"uptimeSeconds":60,"pid":4242},"llm":{"configured":true},"sessions":{"active":1,"total":2},"browsers":{"running":1},"drivers":{"attached":1},"privacy":{"contexts":1},"plugins":[{"name":"mock-plugin"}],"skills":[{"id":"mock-skill"}],"metrics":{"requests":7},"logs":{"entries":3}}"#,
+        ),
         _ => write_http_response(
             &mut stream,
             "404 Not Found",
@@ -2105,6 +2191,12 @@ impl E2ECtx {
         self.extra_env.retain(|(k, _)| k != key);
         self.extra_env.push((key.to_string(), value.to_string()));
     }
+
+    /// Remove an environment variable override previously applied via
+    /// [set_env], restoring the inherited value for later scenarios.
+    fn unset_env(&mut self, key: &str) {
+        self.extra_env.retain(|(k, _)| k != key);
+    }
 }
 
 impl E2ECtx {
@@ -2134,6 +2226,10 @@ impl E2ECtx {
 
     fn network_url(&self) -> String {
         format!("{}{}", self.fixture_base_url, NETWORK_PATH)
+    }
+
+    fn download_url(&self) -> String {
+        format!("{}{}", self.fixture_base_url, DOWNLOAD_PATH)
     }
 
     /// A slow fixture URL (served after a fixed delay) used to hold browser
@@ -4625,6 +4721,52 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "highlight",
         "set",
         "window-new",
+        // test_mock_config_commands
+        "config",
+        "config-list",
+        "config-get",
+        "config-set",
+        "config-delete",
+        // test_mock_agent_cancel_command
+        "agent-cancel",
+        // test_mock_snapshot_diff_command
+        "diff-snapshot",
+        // test_mock_profiles_list_command
+        "profiles-list",
+        // test_mock_code_command_family
+        "code-read",
+        "code-write",
+        "code-append",
+        "code-replace",
+        "code-delete",
+        "code-copy",
+        "code-move",
+        "code-list",
+        "code-stat",
+        "code-glob",
+        "code-grep",
+        "code-mkdir",
+        "code-diff",
+        "code-changes",
+        "code-shell",
+        "code-scaffold",
+        "code-validate",
+        "code-mvn",
+        "code-run",
+        "code-devtask",
+        "code-impact",
+        "code-workspace",
+        "code-javap",
+        // test_mock_vitals_commands
+        "vitals",
+        "web-vitals",
+        // test_mock_doctor_status_command
+        "doctor-status",
+        // test_live_download_command (real browser + download fixture)
+        "download",
+        // test_live_profiler_commands (real browser CDP profiler)
+        "profiler-start",
+        "profiler-stop",
     ]
     .into();
 

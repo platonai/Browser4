@@ -6415,3 +6415,476 @@ pub(super) fn test_e2e_wait_fn(ctx: &mut E2ECtx) {
 // tested via E2E because `--timeout` is always consumed as a global CLI flag
 // (see args.rs parse_global_flags). The unit tests in commands.rs cover the
 // custom-timeout logic via the tool_params_fn directly.
+
+// ---------------------------------------------------------------------------
+// agent-cancel (POST /api/commands/{id}/cancel)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_agent_cancel_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Submit an async agent task, then cancel it by id.
+    let submitted = run_command(ctx, &["agent", "run", "collect the latest updates"]);
+    let task_id = extract_submitted_task_id(&submitted.stdout);
+
+    let cancelled = run_command(ctx, &["agent", "cancel", &task_id]);
+    assert!(
+        cancelled.stdout.contains("cancelled"),
+        "Expected a cancellation confirmation in:\n{}",
+        cancelled.stdout
+    );
+
+    // The mock server must have received POST /api/commands/{id}/cancel.
+    let snapshot = mock_server.snapshot();
+    assert_eq!(
+        snapshot.agent_cancel_calls,
+        vec![task_id.clone()],
+        "Expected the cancel call to be recorded for {task_id}"
+    );
+
+    // Missing id is a hard CLI error before any HTTP request.
+    run_command_expecting_failure(ctx, &["agent", "cancel"], "Missing required argument");
+}
+
+// ---------------------------------------------------------------------------
+// config family (local config.json + server-side /api/config REST)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_config_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // ── Local keys: set → get → list → delete, all against the isolated
+    // state dir config.json (no server round trip). ──
+    let set = run_command(ctx, &["config", "set", "timeout", "42"]);
+    assert!(
+        set.stdout.contains("Set 'timeout' = '42'"),
+        "Expected config set confirmation in:\n{}",
+        set.stdout
+    );
+
+    let get = run_command(ctx, &["config", "get", "timeout"]);
+    assert!(
+        get.stdout.contains("42"),
+        "Expected config get to print the value in:\n{}",
+        get.stdout
+    );
+
+    let list = run_command(ctx, &["config", "list"]);
+    assert!(
+        list.stdout.contains("Config file:")
+            && list.stdout.contains("timeout") && list.stdout.contains("42"),
+        "Expected config list to show the key in:\n{}",
+        list.stdout
+    );
+
+    let del = run_command(ctx, &["config", "delete", "timeout"]);
+    assert!(
+        del.stdout.contains("Deleted 'timeout'"),
+        "Expected config delete confirmation in:\n{}",
+        del.stdout
+    );
+
+    // Unknown keys are rejected with the valid-keys hint.
+    run_command_expecting_failure(ctx, &["config", "set", "bogus-key", "1"], "Unknown config key");
+
+    // ── Server-side keys route to the unified /api/config/{key} REST API. ──
+    let server_get = run_command(ctx, &["config", "get", "agent.llm.maxRequestTokens"]);
+    assert!(
+        server_get
+            .stdout
+            .contains("Server config 'agent.llm.maxRequestTokens'"),
+        "Expected server config header in:\n{}",
+        server_get.stdout
+    );
+
+    let server_set = run_command(
+        ctx,
+        &["config", "set", "agent.llm.maxRequestTokens", "16000"],
+    );
+    assert!(
+        server_set.stdout.contains("16000"),
+        "Expected the runtime override in:\n{}",
+        server_set.stdout
+    );
+
+    let server_delete = run_command(ctx, &["config", "delete", "agent.llm.maxRequestTokens"]);
+    assert!(
+        server_delete
+            .stdout
+            .contains("Server config 'agent.llm.maxRequestTokens'"),
+        "Expected server config reset output in:\n{}",
+        server_delete.stdout
+    );
+
+    // Verify the REST traffic: GET, PUT (with ?value=), DELETE.
+    let calls = mock_server.snapshot().config_calls;
+    assert!(
+        calls.iter().any(|(method, key, _)| method == "GET" && key == "agent.llm.maxRequestTokens"),
+        "Expected a GET /api/config/agent.llm.maxRequestTokens call, got: {calls:?}"
+    );
+    assert!(
+        calls.iter().any(|(method, key, value)| method == "PUT"
+            && key == "agent.llm.maxRequestTokens"
+            && value == "16000"),
+        "Expected PUT /api/config/...?value=16000 call, got: {calls:?}"
+    );
+    assert!(
+        calls.iter().any(|(method, key, _)| method == "DELETE" && key == "agent.llm.maxRequestTokens"),
+        "Expected a DELETE /api/config/agent.llm.maxRequestTokens call, got: {calls:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// diff-snapshot (filesystem-only)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_snapshot_diff_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // diff-snapshot is a pure local-file command; craft two accessibility
+    // tree snapshots in the CLI's snapshot directory (the CLI runs with
+    // workspace_dir as its working directory).
+    let snap_dir = ctx.workspace_dir.join(".browser4-cli").join("snapshot");
+    std::fs::create_dir_all(&snap_dir).expect("create snapshot dir");
+    let before = snap_dir.join("before.yml");
+    let after = snap_dir.join("after.yml");
+    std::fs::write(
+        &before,
+        "- button \"Search\" [box=10,20,100,30] [ref=e1]:\n\
+         - textbox \"Query\" [box=10,60,100,30] [ref=e2]:\n\
+         \x20\x20- /value: \"hello\"\n\
+         - link \"Old\" [box=10,100,100,30] [ref=e4]:\n",
+    )
+    .expect("write before snapshot");
+    std::fs::write(
+        &after,
+        "- button \"Search\" [box=10,20,100,30] [ref=e1]:\n\
+         - textbox \"Query\" [box=10,60,100,30] [ref=e2]:\n\
+         \x20\x20- /value: \"hello2\"\n\
+         - link \"New\" [box=10,140,100,30] [ref=e3]:\n",
+    )
+    .expect("write after snapshot");
+
+    let diff = run_command(
+        ctx,
+        &[
+            "diff",
+            "snapshot",
+            before.to_str().expect("before path"),
+            after.to_str().expect("after path"),
+        ],
+    );
+    assert!(
+        diff.stdout.contains("Snapshot Diff"),
+        "Expected a diff header in:\n{}",
+        diff.stdout
+    );
+    assert!(
+        diff.stdout.contains("1 added, 1 removed, 1 modified"),
+        "Expected the change summary in:\n{}",
+        diff.stdout
+    );
+    assert!(
+        diff.stdout.contains("/value: \"hello\" → \"hello2\""),
+        "Expected the value change in:\n{}",
+        diff.stdout
+    );
+    assert!(
+        diff.stdout.contains("- link e4 \"Old\"") && diff.stdout.contains("+ link e3 \"New\""),
+        "Expected removed/added link entries in:\n{}",
+        diff.stdout
+    );
+
+    // Missing files produce a readable error instead of a panic.
+    let missing = snap_dir.join("missing.yml");
+    let bad = run_command_allowing_failure(
+        ctx,
+        &["diff", "snapshot", missing.to_str().expect("missing path"), "nope.yml"],
+    );
+    assert!(
+        bad.stdout.contains("Cannot read") || bad.exit_code != 0,
+        "Expected a readable error for missing files, got:\n{}",
+        bad.stdout
+    );
+}
+
+// ---------------------------------------------------------------------------
+// profiles-list (filesystem-only, honours HOME/USERPROFILE)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_profiles_list_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Redirect HOME/USERPROFILE so the CLI scans an isolated fake home, then
+    // restore the original values so later scenarios are unaffected.
+    let fake_home = ctx.workspace_dir.join("fake-home");
+    let chrome_base = fake_home.join(".browser4").join("browser").join("chrome");
+    std::fs::create_dir_all(chrome_base.join("prototype").join("google-chrome"))
+        .expect("create prototype profile");
+    std::fs::create_dir_all(chrome_base.join("default")).expect("create default profile");
+    let orig_home = std::env::var("HOME").ok();
+    let orig_userprofile = std::env::var("USERPROFILE").ok();
+    let fake_home_str = fake_home.to_string_lossy().into_owned();
+    ctx.set_env("HOME", &fake_home_str);
+    ctx.set_env("USERPROFILE", &fake_home_str);
+
+    let list = run_command(ctx, &["profiles", "list"]);
+    assert!(
+        list.stdout.contains("prototype"),
+        "Expected the prototype profile in:\n{}",
+        list.stdout
+    );
+    assert!(
+        list.stdout.contains("default"),
+        "Expected the default profile in:\n{}",
+        list.stdout
+    );
+
+    // Restore the inherited environment for later scenarios.
+    match orig_home {
+        Some(home) => ctx.set_env("HOME", &home),
+        None => ctx.unset_env("HOME"),
+    }
+    match orig_userprofile {
+        Some(up) => ctx.set_env("USERPROFILE", &up),
+        None => ctx.unset_env("USERPROFILE"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// code-* family (session-independent coding tools → coding_* MCP tools)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_code_command_family(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // No session is opened: code commands are session-independent and go
+    // straight to the backend's coding tools.
+    let file = "sample.txt";
+    let other = "other.txt";
+
+    // Content-bearing commands: positional content, plus the --stdin path.
+    run_command(ctx, &["code", "write", file, "hello world"]);
+    let write_stdin = run_command_with_stdin(
+        ctx,
+        &["code", "write", file, "--stdin"],
+        "content from stdin",
+    );
+    assert_eq!(write_stdin.exit_code, 0, "code write --stdin should succeed");
+
+    run_command(ctx, &["code", "append", file, "more"]);
+    run_command(ctx, &["code", "replace", file, "hello", "bye"]);
+    run_command(ctx, &["code", "read", file]);
+    run_command(ctx, &["code", "delete", other]);
+    run_command(ctx, &["code", "copy", file, other]);
+    run_command(ctx, &["code", "move", other, "moved.txt"]);
+    run_command(ctx, &["code", "list", "."]);
+    run_command(ctx, &["code", "stat", file]);
+    run_command(ctx, &["code", "glob", "**/*.kt"]);
+    run_command(ctx, &["code", "grep", "TODO", "."]);
+    run_command(ctx, &["code", "mkdir", "new-dir"]);
+    run_command(ctx, &["code", "diff", file]);
+    run_command(ctx, &["code", "changes"]);
+    run_command(ctx, &["code", "shell", "echo hi"]);
+    run_command(ctx, &["code", "scaffold", "js"]);
+    run_command(ctx, &["code", "validate", "js"]);
+    run_command(ctx, &["code", "mvn", "browser4-rest"]);
+    run_command(ctx, &["code", "run", "bash", "echo hi"]);
+    run_command(ctx, &["code", "devtask", "test dev task"]);
+    run_command(ctx, &["code", "impact", file]);
+    run_command(ctx, &["code", "workspace"]);
+    run_command(ctx, &["code", "javap", "java.lang.String"]);
+
+    // Every expected coding_* tool must have been called exactly once (the
+    // two code-write invocations count separately).
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let mut names: Vec<&str> = tool_calls.iter().map(|call| call.tool.as_str()).collect();
+    names.sort_unstable();
+    for tool in [
+        "coding_write",
+        "coding_append",
+        "coding_replace",
+        "coding_read",
+        "coding_delete",
+        "coding_copy",
+        "coding_move",
+        "coding_listDir",
+        "coding_stat",
+        "coding_glob",
+        "coding_grep",
+        "coding_mkdir",
+        "coding_diff",
+        "coding_changeSummary",
+        "coding_shell",
+        "coding_scaffold",
+        "coding_validate",
+        "coding_mvnBuild",
+        "coding_runCode",
+        "coding_devTask",
+        "coding_impact",
+        "coding_workspaceRoot",
+        "coding_classInfo",
+    ] {
+        let count = names.iter().filter(|n| **n == tool).count();
+        assert!(
+            count >= 1,
+            "expected at least one {tool} call, got: {names:?}"
+        );
+    }
+
+    // --stdin content must reach the backend as the `content` argument, and
+    // the CLI-only flag must not leak into the tool call.
+    let write_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "coding_write")
+        .collect();
+    assert_eq!(write_calls.len(), 2, "expected two coding_write calls");
+    let stdin_call = write_calls
+        .iter()
+        .find(|call| call.arguments.get("content").and_then(|v| v.as_str()) == Some("content from stdin"))
+        .unwrap_or_else(|| panic!("expected stdin content in coding_write args: {:?}", write_calls));
+    assert!(
+        stdin_call.arguments.get("stdin").is_none(),
+        "CLI-only --stdin flag must not be forwarded, got: {:?}",
+        stdin_call.arguments
+    );
+
+    // camelCase mapping: code-diff sends the path as `path`.
+    let diff_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "coding_diff")
+        .collect();
+    assert_eq!(diff_calls.len(), 1, "expected one coding_diff call");
+    assert_eq!(diff_calls[0].arguments["path"], "sample.txt");
+}
+
+// ---------------------------------------------------------------------------
+// vitals / web-vitals (dispatch + shared VITALS_JS evaluation)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_vitals_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result
+            .stdout
+            .contains("Session opened: swarm-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    let vitals = run_command(ctx, &["vitals"]);
+    assert_eq!(
+        strip_snapshot_output(&vitals.stdout),
+        "mock evaluation result",
+        "vitals should evaluate VITALS_JS through browser_evaluate"
+    );
+
+    let web_vitals = run_command(ctx, &["web-vitals"]);
+    assert_eq!(
+        strip_snapshot_output(&web_vitals.stdout),
+        "mock evaluation result",
+        "web-vitals (alias) should behave like vitals"
+    );
+
+    // Both commands must issue the same browser_evaluate call: the VITALS
+    // injection script with awaitPromise enabled.
+    let snapshot = mock_server.snapshot();
+    let evaluate_calls: Vec<_> = snapshot
+        .tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_evaluate")
+        .collect();
+    assert_eq!(
+        evaluate_calls.len(),
+        2,
+        "expected two browser_evaluate calls (vitals + web-vitals), got {evaluate_calls:?}"
+    );
+    for call in &evaluate_calls {
+        assert_eq!(
+            call.arguments.get("awaitPromise").and_then(|v| v.as_bool()),
+            Some(true),
+            "expected awaitPromise=true, got: {:?}",
+            call.arguments
+        );
+        let expression = call
+            .arguments
+            .get("expression")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        assert!(
+            expression.contains("web-vitals"),
+            "expected the web-vitals injection script, got a {} char expression",
+            expression.len()
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// doctor-status (aggregated /api/system/status panel)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_doctor_status_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Default view renders the summary layers of the canned report.
+    let status = run_command(ctx, &["doctor", "status"]);
+    assert!(
+        status.stdout.contains("Status Panel Report"),
+        "Expected the status panel header in:\n{}",
+        status.stdout
+    );
+    assert!(
+        status.stdout.contains("UP"),
+        "Expected the health layer in:\n{}",
+        status.stdout
+    );
+
+    // --section drills into one report layer.
+    let section = run_command(ctx, &["doctor", "status", "--section", "build"]);
+    assert!(
+        section.stdout.contains("4.14.0-mock"),
+        "Expected the build section content in:\n{}",
+        section.stdout
+    );
+
+    // Unknown sections are reported with the available list (the command
+    // itself still exits 0 — it degrades gracefully).
+    let unknown = run_command(ctx, &["doctor", "status", "--section", "bogus"]);
+    assert!(
+        unknown.stdout.contains("Unknown section"),
+        "Expected the unknown-section hint in:\n{}",
+        unknown.stdout
+    );
+
+    // --json embeds the raw report document.
+    let json_out = run_command(ctx, &["doctor", "status", "--json"]);
+    assert!(
+        json_out.stdout.contains("status_report")
+            && json_out.stdout.contains("mock-plugin"),
+        "Expected the raw report under status_report in:\n{}",
+        json_out.stdout
+    );
+}

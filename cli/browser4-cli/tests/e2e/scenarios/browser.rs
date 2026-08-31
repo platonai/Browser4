@@ -2804,3 +2804,314 @@ pub(super) fn test_interactive_enhanced_tracking(ctx: &mut E2ECtx) {
 
     run_command(ctx, &["close"]);
 }
+
+// ---------------------------------------------------------------------------
+// download — real download flow against the download fixture
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_download_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    run_command(
+        ctx,
+        &["open", &ctx.download_url(), OPEN_PROFILE_MODE_ARG],
+    );
+
+    // Configure downloads into an isolated directory (Browser.setDownloadBehavior).
+    let dl_dir = ctx.state_dir.join("downloads");
+    std::fs::create_dir_all(&dl_dir).expect("create download dir");
+    let dl_dir_str = dl_dir.to_string_lossy().into_owned();
+    let configure = run_command(ctx, &["download", "--dir", &dl_dir_str]);
+    assert!(
+        configure.exit_code == 0,
+        "download should configure the browser, got:\n{}",
+        configure.stdout
+    );
+
+    // Clicking the fixture link must land the file in the configured dir.
+    run_command(ctx, &["click", "#download-link"]);
+
+    let target = dl_dir.join("download-me.txt");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        if target.exists() {
+            let len = target.metadata().map(|m| m.len()).unwrap_or(0);
+            if len > 0 {
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    assert!(
+        target.exists(),
+        "Expected the downloaded file at {} (dir listing: {:?})",
+        target.display(),
+        std::fs::read_dir(&dl_dir)
+            .map(|it| it
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect::<Vec<_>>())
+            .unwrap_or_default()
+    );
+    let content = std::fs::read_to_string(&target).unwrap_or_else(|e| {
+        panic!("failed to read downloaded file {}: {e}", target.display())
+    });
+    assert!(
+        content.contains("browser4 download fixture payload"),
+        "Expected the fixture payload in the downloaded file, got:\n{}",
+        content
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+// ---------------------------------------------------------------------------
+// profiler start/stop — live V8 CPU profiling via CDP
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_profiler_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
+    goto_interactive_page(ctx);
+
+    let start = run_command(ctx, &["profiler", "start"]);
+    assert!(
+        start.stdout.contains("CPU profiler started"),
+        "profiler start should confirm, got:\n{}",
+        start.stdout
+    );
+
+    // Generate CPU activity so the profile is non-trivial.
+    run_command(
+        ctx,
+        &["eval", "for (let i = 0; i < 200000; i++) { Math.sqrt(i); } 'done'"],
+    );
+
+    let out_path = ctx.state_dir.join("e2e.cpuprofile");
+    let out_str = out_path.to_string_lossy().into_owned();
+    let stop = run_command(ctx, &["profiler", "stop", "--file", &out_str]);
+    assert!(
+        stop.stdout.contains("CPU profile saved"),
+        "profiler stop should report the saved file, got:\n{}",
+        stop.stdout
+    );
+
+    let profile_text = std::fs::read_to_string(&out_path)
+        .unwrap_or_else(|e| panic!("expected .cpuprofile at {}: {e}", out_path.display()));
+    let profile: serde_json::Value = serde_json::from_str(&profile_text)
+        .unwrap_or_else(|e| panic!("profile should be valid JSON: {e}\n{profile_text}"));
+    assert!(
+        profile.get("nodes").and_then(|v| v.as_array()).is_some(),
+        "expected a nodes array in the cpuprofile, got:\n{}",
+        profile_text
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+// ---------------------------------------------------------------------------
+// agent-browser A/B-tier command gaps — real DOM behaviour on the interactive
+// fixture (the mock scenario covers CLI plumbing; this covers real effects)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_agent_browser_command_gaps_live(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
+    goto_interactive_page(ctx);
+
+    // ── focus: the element becomes the real focused element (CDP DOM.focus
+    // sets activeElement; the JS focus event is not dispatched in headless) ──
+    run_command(ctx, &["focus", "#fill-target"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut focused = false;
+    while Instant::now() < deadline {
+        if eval_text(ctx, "document.activeElement ? document.activeElement.id : ''")
+            .contains("fill-target")
+        {
+            focused = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(focused, "focus should make fill-target the active element");
+
+    // ── is-visible / is-enabled / is-checked against the real DOM ──
+    // NOTE: the upstream driver's isVisible currently reports true for any
+    // existing element (display:none included), so only the positive branch
+    // is asserted; isEnabled/isChecked distinguish disabled/checked states.
+    let visible = run_command(ctx, &["is", "visible", "#click-target"]);
+    assert!(
+        visible.stdout.contains("true"),
+        "is visible should report true for an existing element, got:\n{}",
+        visible.stdout
+    );
+    let enabled = run_command(ctx, &["is", "enabled", "#click-target"]);
+    assert!(
+        enabled.stdout.contains("true"),
+        "is enabled should report true for an enabled element, got:\n{}",
+        enabled.stdout
+    );
+    let disabled = run_command(ctx, &["is", "enabled", "#disabled-target"]);
+    assert!(
+        disabled.stdout.contains("false"),
+        "is enabled should report false for a disabled element, got:\n{}",
+        disabled.stdout
+    );
+    run_command(ctx, &["check", "#check-target"]);
+    let checked = run_command(ctx, &["is", "checked", "#check-target"]);
+    assert!(
+        checked.stdout.contains("true"),
+        "is checked should report true after check, got:\n{}",
+        checked.stdout
+    );
+
+    // ── scrollintoview: the page actually scrolls (scroll-target sits
+    // ~1600px below the fold on the fixture) ──
+    let before_scroll = eval_text(ctx, "window.scrollY");
+    run_command(ctx, &["scrollintoview", "#scroll-target"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut scrolled = false;
+    while Instant::now() < deadline {
+        let now_scroll = eval_text(ctx, "window.scrollY");
+        let before: f64 = before_scroll.trim().parse().unwrap_or(0.0);
+        let now: f64 = now_scroll.trim().parse().unwrap_or(0.0);
+        if now > before {
+            scrolled = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(scrolled, "scrollintoview should scroll the page");
+
+    // ── pushstate: history.pushState without a reload ──
+    run_command(ctx, &["pushstate", "/pushed-path"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut pushed = false;
+    while Instant::now() < deadline {
+        if eval_text(ctx, "location.pathname").contains("/pushed-path") {
+            pushed = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(pushed, "Expected pushstate to change the URL path");
+
+    // ── highlight: succeeds on a real element ──
+    let highlight = run_command(ctx, &["highlight", "#click-target"]);
+    assert!(
+        highlight.exit_code == 0,
+        "highlight should succeed on a real element, got:\n{}",
+        highlight.stdout
+    );
+
+    // ── errors: page console error surfaces through the errors command ──
+    // Console interception is installed on the first consoleMessages call, so
+    // warm it up BEFORE triggering the error. The error is raised through the
+    // eval command (console.error from a CDP-dispatched click does not reach
+    // the buffered console in headless Chrome), then poll for the message.
+    run_command_allowing_failure(ctx, &["errors"]);
+    run_command(
+        ctx,
+        &["eval", "console.error('fixture-console-error'); 'logged'"],
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut saw_error = false;
+    while Instant::now() < deadline {
+        let errors = run_command_allowing_failure(ctx, &["errors"]);
+        if errors.stdout.contains("fixture-console-error") {
+            saw_error = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    assert!(saw_error, "errors should surface the fixture console error");
+
+    // ── key / keyboard: real keystrokes land in the focused input (aliases
+    // of press; CDP Input.dispatchKeyEvent inserts text natively even when
+    // the page's JS key listeners do not fire in headless) ──
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut ready = false;
+    while Instant::now() < deadline {
+        if eval_text(ctx, "document.activeElement ? document.activeElement.id : ''")
+            .contains("fill-target")
+        {
+            ready = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(ready, "fill-target should be focused before key presses");
+    run_command(ctx, &["key", "a"]);
+    run_command(ctx, &["keyboard", "b"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut typed = false;
+    while Instant::now() < deadline {
+        if eval_text(ctx, "document.getElementById('fill-target').value").contains("ab") {
+            typed = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(typed, "key + keyboard should type into the focused input");
+
+    // ── set geo: CDP emulation is applied on the real browser ──
+    let geo = run_command(ctx, &["set", "geo", "--lat=37.7749", "--lon=-122.4194"]);
+    assert!(
+        geo.exit_code == 0,
+        "set geo should succeed on the real browser, got:\n{}",
+        geo.stdout
+    );
+
+    // ── dialog-status: reports a pending JS dialog (must run while the
+    // interactive fixture is still the current tab) ──
+    eval_text(
+        ctx,
+        "(() => { setTimeout(() => document.getElementById('prompt-target').click(), 100); return 'scheduled'; })()",
+    );
+    let deadline = Instant::now() + Duration::from_millis(10_000);
+    let mut saw_pending = false;
+    while Instant::now() < deadline {
+        let status = run_command_allowing_failure(ctx, &["dialog-status"]);
+        if status.stdout.contains("true") && status.stdout.contains("prompt") {
+            saw_pending = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(
+        saw_pending,
+        "dialog-status should report the pending prompt dialog"
+    );
+    // Clean up the pending dialog so the session closes cleanly.
+    let deadline = Instant::now() + Duration::from_millis(10_000);
+    let mut accepted = false;
+    while Instant::now() < deadline {
+        let result = run_command_allowing_failure(ctx, &["dialog-accept", "accepted by cli"]);
+        if result.exit_code == 0 {
+            accepted = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(accepted, "Expected dialog-accept to succeed within 10 s");
+
+    // ── window-new: creates a real new tab (and selects it) ──
+    let window_new = run_command(ctx, &["window", "new", &ctx.other_url()]);
+    assert!(
+        window_new.stdout.contains("Created tab"),
+        "window-new should report the created tab, got:\n{}",
+        window_new.stdout
+    );
+    // The new tab is now current — close it with a no-arg tab-close.
+    run_command(ctx, &["tab-close"]);
+
+    run_command(ctx, &["close"]);
+}

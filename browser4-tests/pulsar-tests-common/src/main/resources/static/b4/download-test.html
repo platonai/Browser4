@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Browser4 CLI Download Fixture</title>
+</head>
+<body>
+  <h1>Download fixture</h1>
+  <p>
+    The linked file is served with <code>Content-Disposition: attachment</code>
+    by the fixture server, so clicking it starts a real browser download.
+  </p>
+  <a id="download-link" href="/files/download-me.txt" download="download-me.txt">Download me</a>
+  <pre id="state-log"></pre>
+  <script>
+    document.getElementById('download-link').addEventListener('click', function () {
+      document.getElementById('state-log').textContent = 'clicked';
+    });
+  </script>
+</body>
+</html>

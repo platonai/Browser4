@@ -22,6 +22,15 @@ pub const DRAG_PATH: &str = "/drag-test";
 
 pub const NETWORK_PATH: &str = "/network";
 
+/// Download fixture page (link to a `Content-Disposition: attachment` file).
+pub const DOWNLOAD_PATH: &str = "/download";
+
+/// The downloadable file served by the fixture server (attachment download).
+pub const DOWNLOAD_FILE_PATH: &str = "/files/download-me.txt";
+
+/// Content of the downloadable fixture file.
+pub const DOWNLOAD_FILE_CONTENT: &str = "browser4 download fixture payload\n";
+
 /// 200 JSON endpoint served by the fixture server (fetched by the network fixture).
 pub const NETWORK_OK_ENDPOINT: &str = "/api/network-endpoint-ok.json";
 
@@ -61,6 +70,8 @@ pub const KEYBOARD_FIXTURE_FILE: &str = "mcp-tool-controller-keyboard-fixture.ht
 pub const DRAG_FIXTURE_FILE: &str = "drag-test.html";
 
 pub const NETWORK_FIXTURE_FILE: &str = "network-fixture.html";
+
+pub const DOWNLOAD_FIXTURE_FILE: &str = "download-test.html";
 
 pub const MAX_EMPTY_READ_ATTEMPTS: u32 = 200; // 2 s with 10 ms sleep per attempt
 

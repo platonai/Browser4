@@ -751,7 +751,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Excluded, // uninstall targets real ~/.scent via WinAPI home — not redirectable in e2e
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -1746,7 +1746,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "after", description: "Second snapshot file path (optional — defaults to the most recent snapshot)", optional: true },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded, // filesystem-only, no backend
+            e2e_coverage: E2eCoverage::Tested, // filesystem-only, covered by mock scenario
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -1884,7 +1884,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded, // requires live profiling session
+            e2e_coverage: E2eCoverage::Tested, // live profiler session scenario
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -1898,7 +1898,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "file", description: "Output .cpuprofile file path (default: profiler-<timestamp>.cpuprofile in the current directory)", is_bool: false, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded, // requires live profiling session
+            e2e_coverage: E2eCoverage::Tested, // live profiler session scenario
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -1917,7 +1917,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "dir", description: "Download directory (default: ./downloads)", is_bool: false, short: None },
                 OptionDef { name: "behavior", description: "Download behavior: allow (default) or deny", is_bool: false, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded, // requires real download flow
+            e2e_coverage: E2eCoverage::Tested, // real download flow via download fixture
             tool_name_fn: |_| "execute_cdp_command".to_string(),
             tool_params_fn: |args| {
                 let dir = get_opt_str(args, "dir").unwrap_or("downloads");
@@ -2220,7 +2220,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded, // depends on external CDN + real page metrics
+            e2e_coverage: E2eCoverage::Tested, // dispatch covered by mock scenario (metrics need CDN)
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |_| {
                 json!({
@@ -2237,7 +2237,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded, // same as vitals
+            e2e_coverage: E2eCoverage::Tested, // alias of vitals, covered by mock scenario
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |_| {
                 json!({
@@ -2948,7 +2948,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded, // filesystem-only, no backend
+            e2e_coverage: E2eCoverage::Tested, // filesystem-only, covered by mock scenario
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -3253,7 +3253,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "verbose", short: Some("v"), is_bool: true, description: "Show the full detail layer of every report section (default: summary layer only)" },
                 OptionDef { name: "server", short: None, is_bool: false, description: "Server URL to check (defaults to saved or http://127.0.0.1:8182)" },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // mock /api/system/status scenario
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut params = json!({});
@@ -3447,7 +3447,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "id", description: "Task ID returned by agent run", optional: false },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // mock cancel endpoint scenario
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
@@ -4424,7 +4424,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // config command family mock scenario
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -4436,7 +4436,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // config command family mock scenario
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -4454,7 +4454,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // config command family mock scenario
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
@@ -4480,7 +4480,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // config command family mock scenario
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
@@ -4502,7 +4502,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // config command family mock scenario
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
@@ -4523,7 +4523,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "start-line", description: "Start line (1-based, default: 1)", is_bool: false, short: None },
                 OptionDef { name: "end-line", description: "End line (1-based, default: last line)", is_bool: false, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_read".to_string(),
             tool_params_fn: |args| {
                 let path = get_str(args, "path").unwrap_or_default();
@@ -4552,7 +4552,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "stdin", description: "Read content from stdin", is_bool: true, short: None },
                 OptionDef { name: "base64", description: "Decode the content argument as base64 before writing", is_bool: true, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_write".to_string(),
             tool_params_fn: |args| {
                 let path = get_str(args, "path").unwrap_or_default();
@@ -4578,7 +4578,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "file", description: "Read content from a file", is_bool: false, short: None },
                 OptionDef { name: "stdin", description: "Read content from stdin", is_bool: true, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_append".to_string(),
             tool_params_fn: |args| {
                 let path = get_str(args, "path").unwrap_or_default();
@@ -4604,7 +4604,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "count", description: "Max replacements (-1 = replace all, default: -1)", is_bool: false, short: None },
                 OptionDef { name: "stdin", description: "Read newStr from stdin (useful for multi-line replacements)", is_bool: true, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_replace".to_string(),
             tool_params_fn: |args| {
                 let path = get_str(args, "path").unwrap_or_default();
@@ -4630,7 +4630,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "recursive", description: "Delete directories recursively", is_bool: true, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_delete".to_string(),
             tool_params_fn: |args| {
                 let path = get_str(args, "path").unwrap_or_default();
@@ -4650,7 +4650,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "dest", description: "Destination path", optional: false },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_copy".to_string(),
             tool_params_fn: |args| {
                 let source = get_str(args, "source").unwrap_or_default();
@@ -4669,7 +4669,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "dest", description: "Destination path", optional: false },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_move".to_string(),
             tool_params_fn: |args| {
                 let source = get_str(args, "source").unwrap_or_default();
@@ -4689,7 +4689,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "depth", description: "Max depth (default: 1)", is_bool: false, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_listDir".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -4710,7 +4710,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "path", description: "Path to the file or directory", optional: false },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_stat".to_string(),
             tool_params_fn: |args| {
                 let path = get_str(args, "path").unwrap_or_default();
@@ -4727,7 +4727,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "pattern", description: "Glob pattern", optional: false },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_glob".to_string(),
             tool_params_fn: |args| {
                 let pattern = get_str(args, "pattern").unwrap_or_default();
@@ -4748,7 +4748,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "file-pattern", description: "File name glob filter (default: *)", is_bool: false, short: None },
                 OptionDef { name: "ignore-case", description: "Case-insensitive search", is_bool: true, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_grep".to_string(),
             tool_params_fn: |args| {
                 let pattern = get_str(args, "pattern").unwrap_or_default();
@@ -4769,7 +4769,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "path", description: "Directory path to create", optional: false },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_mkdir".to_string(),
             tool_params_fn: |args| {
                 let path = get_str(args, "path").unwrap_or_default();
@@ -4788,7 +4788,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "algorithm", description: "Diff algorithm: 'myers' (default) or 'patience'", is_bool: false, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_diff".to_string(),
             tool_params_fn: |args| {
                 let path = get_str(args, "path").unwrap_or_default();
@@ -4805,7 +4805,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_changeSummary".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -4823,7 +4823,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "cwd", description: "Working directory for the command", is_bool: false, short: None },
                 OptionDef { name: "stdin", description: "Read command from stdin (for complex multi-line commands)", is_bool: true, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_shell".to_string(),
             tool_params_fn: |args| {
                 let command = get_str(args, "command").unwrap_or_default();
@@ -4859,7 +4859,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "shell", description: "Shell type for scripts: 'ps1' | 'bash'", is_bool: false, short: None },
                 OptionDef { name: "verify", description: "Run validation after scaffolding (with --dir)", is_bool: true, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |args| {
                 if get_opt_str(args, "dir").is_some() {
                     "coding_scaffoldToDir".to_string()
@@ -4896,7 +4896,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "path", description: "Path to plugin dir or file (not needed for repo-consistency)", optional: true },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_validate".to_string(),
             tool_params_fn: |args| {
                 let vtype = get_str(args, "type").unwrap_or_default();
@@ -4919,7 +4919,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "skip-tests", description: "Skip tests (default: true)", is_bool: true, short: None },
                 OptionDef { name: "timeout", description: "Timeout in seconds (default: 300)", is_bool: false, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_mvnBuild".to_string(),
             tool_params_fn: |args| {
                 let module = get_str(args, "module").unwrap_or_default();
@@ -4946,7 +4946,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "timeout", description: "Timeout in seconds (default: 30)", is_bool: false, short: None },
                 OptionDef { name: "stdin", description: "Read code from stdin", is_bool: true, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_runCode".to_string(),
             tool_params_fn: |args| {
                 let language = get_str(args, "language").unwrap_or_default();
@@ -4973,7 +4973,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "run-tests", description: "Run tests after task", is_bool: true, short: None },
                 OptionDef { name: "execute", description: "Execute the generated dev-task plan steps (writes files and runs builds/tests)", is_bool: true, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_devTask".to_string(),
             tool_params_fn: |args| {
                 let task = get_str(args, "task").unwrap_or_default();
@@ -4994,7 +4994,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "path", description: "Path to the file to analyze", optional: false },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_impact".to_string(),
             tool_params_fn: |args| {
                 let path = get_str(args, "path").unwrap_or_default();
@@ -5009,7 +5009,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_workspaceRoot".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -5023,7 +5023,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "class", description: "Fully-qualified class name (e.g. ai.platon.pulsar.common.config.ImmutableConfig)", optional: false },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_classInfo".to_string(),
             tool_params_fn: |args| {
                 let class_name = get_str(args, "class").unwrap_or_default();
