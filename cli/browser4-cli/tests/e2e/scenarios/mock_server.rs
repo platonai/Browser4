@@ -1,6 +1,144 @@
 use crate::*;
 
 // ---------------------------------------------------------------------------
+// profile-import (browser4-profile-import plugin tool surface)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_profile_import_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // --list-sources routes to profile_import_list_sources and prints raw JSON
+    let list = run_command(ctx, &["profile-import", "--list-sources"]);
+    assert_eq!(list.exit_code, 0, "expected list-sources to succeed");
+    assert!(
+        list.stdout.contains("Person 1") && list.stdout.contains("chrome"),
+        "Expected mock source listing in:\n{}",
+        list.stdout
+    );
+
+    // import routes to profile_import_import and pretty-prints key fields
+    let import = run_command(
+        ctx,
+        &["profile-import", "--source", "chrome", "--data", "bookmarks,cookies"],
+    );
+    assert_eq!(import.exit_code, 0, "expected import to succeed");
+    assert!(
+        import.stdout.contains("Import dir: /mock/imports/chrome-Default-20260825"),
+        "Expected import dir line in:\n{}",
+        import.stdout
+    );
+    assert!(
+        import.stdout.contains("Files copied: 42"),
+        "Expected files copied line in:\n{}",
+        import.stdout
+    );
+    assert!(
+        import.stdout.contains("Warning: Passwords were not imported"),
+        "Expected password warning in:\n{}",
+        import.stdout
+    );
+    assert!(
+        import.stdout.contains("Next step: browser4-cli open --profile"),
+        "Expected next-step hint in:\n{}",
+        import.stdout
+    );
+
+    // --json is a CLI-global flag (wraps output); the tool call itself must
+    // not carry it.
+    let raw = run_command(
+        ctx,
+        &["profile-import", "--source", "edge", "--json"],
+    );
+    assert_eq!(raw.exit_code, 0, "expected --json import to succeed");
+
+    // Dynamic plugin path: no CLI change needed — `plugin <domain>` (spaced,
+    // matching every other prefixed command style) rewrites to
+    // `plugin-<domain>`, discovers the tools from the server's /mcp/tools and
+    // calls them generically. The dynamic path routes through the
+    // session-aware tool executor, so an open session is needed first.
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+    let dynamic = run_command(
+        ctx,
+        &["plugin", "profile_import", "import", "--source", "chrome", "--data", "cookies"],
+    );
+    assert_eq!(dynamic.exit_code, 0, "expected dynamic plugin command to succeed:\n{}", dynamic.stdout);
+    assert!(
+        dynamic.stdout.contains("\"importDir\""),
+        "Expected raw JSON result from the dynamic plugin path in:\n{}",
+        dynamic.stdout
+    );
+
+    // Bare `plugin` is intentionally rejected with a subcommand hint (see
+    // preferred_prefixed_group_form); server-driven listing lives behind
+    // `plugin list` and `plugin-<domain>` invocations. The dynamic path above
+    // already proves server-side discovery works end to end.
+
+    // Plugin-declared CLI command: the plugin manifest (ToolSpec.cliName)
+    // declares `profile import`; the CLI discovers it from /mcp/tools/specs
+    // and renders it as a first-class named command — no CLI code change.
+    let declared = run_command(
+        ctx,
+        &["profile", "import", "--source", "chrome", "--data", "cookies"],
+    );
+    assert_eq!(declared.exit_code, 0, "expected declared command to succeed:\n{}", declared.stdout);
+    assert!(
+        declared.stdout.contains("\"importDir\""),
+        "Expected import result from the declared command in:\n{}",
+        declared.stdout
+    );
+
+    // `plugin commands` lists plugin-declared commands with their origin
+    // domain — the source-of-truth way to tell plugin commands apart from
+    // built-in ones.
+    let plugin_commands = run_command(ctx, &["plugin", "commands"]);
+    assert_eq!(plugin_commands.exit_code, 0, "expected plugin commands to succeed:\n{}", plugin_commands.stdout);
+    assert!(
+        plugin_commands.stdout.contains("profile import [--source --data]")
+            && plugin_commands.stdout.contains("profile_import.import"),
+        "Expected declared command listing in:\n{}",
+        plugin_commands.stdout
+    );
+
+    // `help` badges plugin-declared commands with [plugin], so the origin of
+    // every command is visible at a glance.
+    let help_out = run_command(ctx, &["help"]);
+    assert_eq!(help_out.exit_code, 0, "expected help to succeed");
+    assert!(
+        help_out.stdout.contains("[plugin] profile import [--source --data]"),
+        "Expected [plugin] badge in help:\n{}",
+        help_out.stdout
+    );
+
+    // `help profile` shows both the built-in profile-import command and the
+    // plugin-declared `profile import` with its badge.
+    let help_profile = run_command(ctx, &["help", "profile"]);
+    assert_eq!(help_profile.exit_code, 0, "expected help profile to succeed");
+    assert!(
+        help_profile.stdout.contains("[plugin] profile import"),
+        "Expected [plugin] badge in help profile:\n{}",
+        help_profile.stdout
+    );
+
+    // Recorded tool calls carry the right names and camelCase params
+    let tool_calls = mock_server.snapshot().tool_calls;
+    assert!(
+        tool_calls.iter().any(|c| c.tool == "profile_import_list_sources"),
+        "expected list_sources call, got: {:?}",
+        tool_calls.iter().map(|c| c.tool.as_str()).collect::<Vec<_>>()
+    );
+    let import_call = tool_calls.iter().find(|c| c.tool == "profile_import_import").expect("import call");
+    assert_eq!(import_call.arguments.get("source").and_then(|v| v.as_str()), Some("chrome"));
+    assert_eq!(
+        import_call.arguments.get("data").and_then(|v| v.as_str()),
+        Some("bookmarks,cookies")
+    );
+    assert!(import_call.arguments.get("json").is_none(), "CLI-only flag must not be forwarded");
+}
+
+// ---------------------------------------------------------------------------
 // close
 // ---------------------------------------------------------------------------
 

@@ -362,6 +362,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
     [
         "open",
         "attach",
+        "profile-import",
         "goto",
         "act",
         "batch",
@@ -10255,11 +10256,16 @@ fn parse_status_code_from_json(value: &Value) -> String {
         .unwrap_or_default()
 }
 
-/// Extract a human-readable status string from the server's `command_status` JSON response.
+/// Extract a human-readable status string from the server's `command_status`
+/// JSON response.
 ///
-/// Uses the same lifecycle vocabulary as [`friendly_agent_status`] so that status strings
-/// written into the local task-tracking file are consistent with the labels shown in
-/// `agent list`.
+/// Uses the same lifecycle vocabulary as [`friendly_agent_status`] so that
+/// status strings written into the local task-tracking file are consistent
+/// with the labels shown in `agent list`.
+///
+/// Currently referenced only by unit tests (the production call site was
+/// removed); kept under `#[cfg(test)]` so the release binary has no dead code.
+#[cfg(test)]
 fn extract_readable_agent_status(status: &Value) -> String {
     let process_state = status
         .get("processState")
@@ -14775,6 +14781,73 @@ async fn handle_code_command(
     Ok(())
 }
 
+/// `profile-import` — import browser personal data via the
+/// `profile_import_import` / `profile_import_list_sources` MCP tools
+/// (browser4-profile-import plugin). No browser session required; the call
+/// goes straight to the backend, like the coding tools.
+async fn handle_profile_import_command(
+    client: &reqwest::Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &mut Value,
+) -> Result<(), String> {
+    // Strip CLI-only flags before sending to the server. (`--json` is a
+    // global flag consumed by the CLI itself; it never reaches the backend.)
+    if let Value::Object(ref mut m) = tool_params {
+        m.remove("json");
+    }
+
+    let result = http::call_tool(client, base_url, tool_name, tool_params.clone()).await?;
+    if result.trim().is_empty() {
+        cli_println!("(no output)");
+        return Ok(());
+    }
+
+    match serde_json::from_str::<Value>(&result) {
+        Ok(v) => {
+            if let Some(import_dir) = v.get("importDir").and_then(|x| x.as_str()) {
+                cli_println!("Import dir: {}", import_dir);
+            }
+            if let Some(profile_dir) = v.get("profileDir").and_then(|x| x.as_str()) {
+                cli_println!("Profile dir: {}", profile_dir);
+            }
+            if let Some(browser) = v.get("browser").and_then(|x| x.as_str()) {
+                cli_println!("Browser: {}", browser);
+            }
+            if let Some(source_profile) = v.get("sourceProfile").and_then(|x| x.as_str()) {
+                cli_println!("Source profile: {}", source_profile);
+            }
+            if let Some(files) = v.get("filesCopied") {
+                cli_println!("Files copied: {}", files);
+            }
+            if let Some(data) = v.get("data").and_then(|x| x.as_array()) {
+                let list = data.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(",");
+                cli_println!("Data: {}", list);
+            }
+            if let Some(bookmarks) = v.get("bookmarksImported") {
+                cli_println!("Bookmarks imported: {}", bookmarks);
+            }
+            if let Some(cookies) = v.get("cookiesImported") {
+                cli_println!("Cookies imported: {}", cookies);
+            }
+            if let Some(warnings) = v.get("warnings").and_then(|x| x.as_array()) {
+                for w in warnings.iter().filter_map(|x| x.as_str()) {
+                    cli_println!("Warning: {}", w);
+                }
+            }
+            if let Some(next) = v.get("nextStep").and_then(|x| x.as_str()) {
+                cli_println!("Next step: {}", next);
+            }
+            if v.get("importDir").is_none() && v.get("bookmarksImported").is_none() {
+                // Fall back to raw output (e.g. list_sources result).
+                cli_println!("{}", result);
+            }
+        }
+        Err(_) => cli_println!("{}", result),
+    }
+    Ok(())
+}
+
 async fn handle_plugin_list(client: &reqwest::Client, base_url: &str) -> Result<(), String> {
     let response = http::list_plugins(client, base_url).await?;
     // Pretty-print the JSON array of PluginInfo objects
@@ -15064,6 +15137,168 @@ fn resolve_plugin_method(
 
     // Fall back: use the first matching tool alphabetically
     matching[0].to_string()
+}
+
+/// A tool spec declared for CLI use by a plugin (`ToolSpec.cliName`), as
+/// served by the backend's `GET /mcp/tools/specs` endpoint.
+#[derive(Clone, Debug, serde::Deserialize)]
+struct CliToolSpec {
+    #[serde(rename = "cliName")]
+    cli_name: String,
+    domain: String,
+    method: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    arguments: Vec<CliToolArg>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+struct CliToolArg {
+    name: String,
+    #[serde(rename = "type")]
+    arg_type: String,
+    #[serde(rename = "defaultValue", default)]
+    default_value: Option<String>,
+}
+
+/// Find the plugin-declared CLI tool spec matching `spaced` (e.g.
+/// `"profile import"`).
+fn find_declared_cli_spec<'a>(specs: &'a [CliToolSpec], spaced: &str) -> Option<&'a CliToolSpec> {
+    specs.iter().find(|s| s.cli_name == spaced)
+}
+
+/// Fetch all plugin-declared CLI tool specs from `GET /mcp/tools/specs`.
+/// Returns an empty vec when the backend is unreachable or has none.
+async fn fetch_all_declared_cli_specs(base_url: &str) -> Vec<CliToolSpec> {
+    let url = format!("{}/mcp/tools/specs", base_url.trim_end_matches('/'));
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+    else {
+        return Vec::new();
+    };
+    let Ok(response) = client.get(&url).send().await else {
+        return Vec::new();
+    };
+    let Ok(body) = response.json::<Value>().await else {
+        return Vec::new();
+    };
+    body.get("tools")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| serde_json::from_value(t.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Fetch the plugin-declared CLI tool spec matching `spaced` (e.g.
+/// `"profile import"`). Returns None when the backend is unreachable or no
+/// spec declares that command name — the caller then falls through to the
+/// normal command dispatch.
+async fn fetch_declared_cli_spec(base_url: &str, spaced: &str) -> Option<CliToolSpec> {
+    let specs = fetch_all_declared_cli_specs(base_url).await;
+    find_declared_cli_spec(&specs, spaced).cloned()
+}
+
+/// Render a declared command's arguments as `--name [=default]` tokens.
+/// Reads `default_value` so declared defaults surface in help output.
+fn render_spec_args(spec: &CliToolSpec) -> String {
+    spec.arguments
+        .iter()
+        .map(|a| match a.default_value.as_deref() {
+            Some(d) if !d.is_empty() && d != "null" => format!("--{}={}", a.name, d),
+            _ => format!("--{}", a.name),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Render the plugin-declared CLI command listing for `plugin commands`.
+fn render_declared_commands(specs: &[CliToolSpec]) -> String {
+    if specs.is_empty() {
+        return "No plugin-declared CLI commands.".to_string();
+    }
+    let mut lines = vec!["Declared plugin CLI commands (from /mcp/tools/specs):".to_string()];
+    for spec in specs {
+        let args = render_spec_args(spec);
+        let args_suffix = if args.is_empty() {
+            String::new()
+        } else {
+            format!(" [{args}]")
+        };
+        lines.push(format!(
+            "  {:<28} -> {}.{}   (plugin domain)",
+            format!("{}{}", spec.cli_name, args_suffix),
+            spec.domain,
+            spec.method
+        ));
+    }
+    lines.join("\n")
+}
+
+/// `plugin commands` — list CLI commands declared by installed plugins via
+/// `ToolSpec.cliName` (the plugin-declared, first-class command surface).
+async fn handle_plugin_commands_command(
+    base_url: &str,
+    global: &args::GlobalFlags,
+) -> Result<(), CliError> {
+    ensure_server_running(base_url, should_enforce_server_version(global)).await?;
+    let specs = fetch_all_declared_cli_specs(base_url).await;
+    cli_println!("{}", render_declared_commands(&specs));
+    Ok(())
+}
+
+/// Execute a plugin-declared CLI command: parse `--key value` arguments from
+/// the tool spec's declared arguments, then call the tool
+/// (`<domain>_<method>`) through the session-aware executor.
+async fn handle_declared_cli_command(
+    base_url: &str,
+    spec: &CliToolSpec,
+    global: &args::GlobalFlags,
+) -> Result<(), CliError> {
+    ensure_server_running(base_url, should_enforce_server_version(global)).await?;
+    let client = make_client();
+
+    // Boolean args are flags (no value consumed); everything else takes a value.
+    let bool_opts: HashSet<String> = spec
+        .arguments
+        .iter()
+        .filter(|a| a.arg_type == "Boolean")
+        .map(|a| a.name.clone())
+        .collect();
+    let short_to_long = HashMap::new();
+    let mut parsed = parse_raw_args(&global.args[2..], Some(&short_to_long), Some(&bool_opts));
+    // Declared commands take named options only; drop positionals.
+    parsed.remove("_");
+
+    let tool_name = format!("{}_{}", spec.domain, spec.method);
+    let session_name = global.session_name.as_deref();
+    let timeout_override = global.timeout_secs;
+    let result = with_session(&client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.clone();
+        let mut params = Value::Object(parsed.clone().into_iter().collect());
+        params["sessionId"] = json!(session_id);
+        async move {
+            call_tool_with_timeout_override(
+                &client,
+                &base_url,
+                &tool_name,
+                params,
+                timeout_override,
+            )
+            .await
+        }
+    })
+    .await
+    .map_err(|e| CliError(ExitCode::General, e))?;
+
+    cli_println!("{}", result);
+    Ok(())
 }
 
 /// Handle a dynamic plugin command (plugin-<name>) that has no hardcoded
@@ -19360,33 +19595,45 @@ fn main() {
         let mut global = parse_global_flags(&raw_args);
         apply_config_defaults(&mut global);
         let json_mode = global.json;
+
+        // Plugin-declared CLI commands (ToolSpec.cliName, spaced form like
+        // `profile import`): resolved BEFORE normalize so the spaced name
+        // survives rewriting. Only probed when the first token is not a known
+        // built-in command (avoids an extra HTTP round-trip for open/goto/...).
+        let declared_result = {
+            let declared_cmd_map = commands_map();
+            if global.args.len() >= 2
+                && !global.args[1].starts_with('-')
+                && declared_cmd_map.get(global.args[0].as_str()).is_none()
+            {
+                let base_url = resolve_base_url(
+                    global.server_url.as_deref(),
+                    global.session_name.as_deref(),
+                );
+                let spaced = format!("{} {}", global.args[0], global.args[1]);
+                if let Some(spec) = fetch_declared_cli_spec(&base_url, &spaced).await {
+                    Some(handle_declared_cli_command(&base_url, &spec, &global).await)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
         let (command, effective_global, from_spaced_prefix) =
             normalize_command_invocation(&global);
 
-        match run(&command, &effective_global, from_spaced_prefix).await {
-            Ok(()) => 0,
-            Err(err) => {
-                // json_mode covers global --json; json_active() covers subcommand-level
-                // --json (e.g. "tab-list --json") which enables JSON inside run().
-                if json_mode || json_active() {
-                    // Use println! directly -- cli_println! checks json_active()
-                    // which is true here (json_init was called inside run()),
-                    // and we MUST emit the JSON error envelope regardless.
-                    let error = serde_json::json!({
-                        "message": err.message(),
-                        "code": if err.code() == ExitCode::Usage { "USAGE_ERROR" }
-                                else if err.code() == ExitCode::Session { "SESSION_ERROR" }
-                                else { "COMMAND_FAILED" }
-                    });
-                    println!(
-                        "{}",
-                        json_envelope("error", &command, serde_json::json!({}), Some(error))
-                    );
-                } else {
-                    eprintln!("{}", format_cli_error_output(err.message()));
-                }
-                err.code() as i32
-            }
+        let declared_command = command.clone();
+        match declared_result {
+            Some(result) => match result {
+                Ok(()) => 0,
+                Err(err) => render_cli_error(json_mode, &declared_command, err),
+            },
+            None => match run(&command, &effective_global, from_spaced_prefix).await {
+                Ok(()) => 0,
+                Err(err) => render_cli_error(json_mode, &command, err),
+            },
         }
     });
 
@@ -19396,6 +19643,31 @@ fn main() {
     use std::io::Write;
     let _ = std::io::stdout().flush();
     std::process::exit(exit_code);
+}
+
+/// Render a CLI error in the active output mode (JSON envelope or plain text)
+/// and return the process exit code.
+fn render_cli_error(json_mode: bool, command: &str, err: CliError) -> i32 {
+    // json_mode covers global --json; json_active() covers subcommand-level
+    // --json (e.g. "tab-list --json") which enables JSON inside run().
+    if json_mode || json_active() {
+        // Use println! directly -- cli_println! checks json_active()
+        // which is true here (json_init was called inside run()),
+        // and we MUST emit the JSON error envelope regardless.
+        let error = serde_json::json!({
+            "message": err.message(),
+            "code": if err.code() == ExitCode::Usage { "USAGE_ERROR" }
+                    else if err.code() == ExitCode::Session { "SESSION_ERROR" }
+                    else { "COMMAND_FAILED" }
+        });
+        println!(
+            "{}",
+            json_envelope("error", command, serde_json::json!({}), Some(error))
+        );
+    } else {
+        eprintln!("{}", format_cli_error_output(err.message()));
+    }
+    err.code() as i32
 }
 
 fn format_cli_error_output(error: &str) -> String {
@@ -19520,6 +19792,10 @@ async fn run(
     // Initialise pretty-print mode when --pretty is active.
     pretty_init(global.pretty);
 
+    // Resolve the server URL early — the help paths below also need it to
+    // discover plugin-declared commands ([plugin]-badged help entries).
+    let base_url = resolve_base_url(global.server_url.as_deref(), global.session_name.as_deref());
+
     // ── Help dispatch ────────────────────────────────────────────────
     //
     // Progressive disclosure:
@@ -19554,7 +19830,19 @@ async fn run(
     if command == "help" || command == "--help" || command == "-h" {
         let help_args: Vec<String> = global.args.iter().skip(1).cloned().collect();
         let sub = resolve_help_target(&help_args);
-        print_help(sub.as_deref());
+        // Plugin-declared commands are rendered with a [plugin] badge, so
+        // `help` and `help profile` both show the plugin surface.
+        let specs = fetch_all_declared_cli_specs(&base_url).await;
+        let handled = print_help(sub.as_deref());
+        if handled {
+            let declared = render_declared_help_section(sub.as_deref(), &specs);
+            if !declared.is_empty() {
+                cli_println!("{}", declared);
+            }
+        } else if !print_declared_help(sub.as_deref(), &specs) {
+            eprintln!("Unknown command: {}", sub.as_deref().unwrap_or(""));
+            print_help(None);
+        }
         return Ok(());
     }
 
@@ -19571,7 +19859,12 @@ async fn run(
     // When the user passes --help/-h after a command (e.g. `htmlsnapshot --help`),
     // print the help for that command instead of complaining about the form.
     if global.args.iter().any(|a| a == "--help" || a == "-h") {
-        print_help(Some(command));
+        let specs = fetch_all_declared_cli_specs(&base_url).await;
+        let handled = print_help(Some(command));
+        if !handled && !print_declared_help(Some(command), &specs) {
+            eprintln!("Unknown command: {}", command);
+            print_help(None);
+        }
         return Ok(());
     }
 
@@ -19605,8 +19898,6 @@ async fn run(
     }
 
     // Resolve base URL: --server flag > persisted state > default
-    let base_url = resolve_base_url(global.server_url.as_deref(), global.session_name.as_deref());
-
     // Persist server URL override if different from current state
     if let Some(ref server_url) = global.server_url {
         let current_state = read_state(None, global.session_name.as_deref());
@@ -19643,7 +19934,14 @@ async fn run(
                 "plugin-info",
                 "plugin-install",
                 "plugin-remove",
+                "plugin-commands",
             ];
+            if command == "plugin-commands" {
+                // `plugin commands` — list CLI commands declared by plugins
+                // via ToolSpec.cliName (the plugin-declared command surface).
+                ensure_server_running(&base_url, should_enforce_server_version(global)).await?;
+                return handle_plugin_commands_command(&base_url, global).await;
+            }
             let is_dynamic_plugin =
                 command.starts_with("plugin-") && !BUILTIN_PLUGIN_COMMANDS.contains(&command);
             let is_bare_plugin = command == "plugin";
@@ -20845,6 +21143,9 @@ async fn run(
             )
             .await?;
         }
+        "profile-import" => {
+            handle_profile_import_command(&client, &base_url, &tool_name, &mut tool_params).await?;
+        }
         "code-read" | "code-write" | "code-append" | "code-replace"
         | "code-delete" | "code-copy" | "code-move" | "code-list"
         | "code-stat" | "code-glob" | "code-grep" | "code-mkdir"
@@ -20951,13 +21252,17 @@ fn resolve_help_target(args: &[String]) -> Option<String> {
     Some(target.clone())
 }
 
-fn print_help(command_name: Option<&str>) {
+/// Print help for a command name, prefix, category, or the general overview.
+/// Returns `true` when a specific target was handled (or the overview was
+/// printed); `false` when the target matched nothing — the caller then tries
+/// plugin-declared commands before reporting an unknown command.
+fn print_help(command_name: Option<&str>) -> bool {
     if let Some(name) = command_name {
         if name != "--help" {
             let cmd_map = commands_map();
             if let Some(cmd) = cmd_map.get(name) {
                 cli_println!("{}", generate_command_help(cmd));
-                return;
+                return true;
             }
             // Not an exact command — collect every command whose public
             // name starts with this prefix (e.g. "swarm" matches
@@ -20973,7 +21278,7 @@ fn print_help(command_name: Option<&str>) {
                     lines.push(generate_help_entry(cmd));
                 }
                 cli_println!("{}", lines.join("\n"));
-                return;
+                return true;
             }
             // Try category alias — shows all commands in that category
             if let Some(canonical) = resolve_category_alias(name) {
@@ -20990,13 +21295,80 @@ fn print_help(command_name: Option<&str>) {
                         lines.push(generate_help_entry(cmd));
                     }
                     cli_println!("{}", lines.join("\n"));
-                    return;
+                    return true;
                 }
             }
-            eprintln!("Unknown command: {}", name);
+            return false;
         }
     }
     cli_println!("{}", generate_help());
+    true
+}
+
+/// Render the `[plugin]`-badged section of declared plugin commands.
+/// With `target = Some(name)` only commands matching `name` / `name ...`
+/// are shown; `None` shows all. Empty when nothing matches.
+fn render_declared_help_section(target: Option<&str>, specs: &[CliToolSpec]) -> String {
+    let matching: Vec<&CliToolSpec> = match target {
+        None => specs.iter().collect(),
+        Some(name) => specs
+            .iter()
+            .filter(|s| s.cli_name == name || s.cli_name.starts_with(&format!("{name} ")))
+            .collect(),
+    };
+    if matching.is_empty() {
+        return String::new();
+    }
+    let mut lines = vec![
+        "\n── Plugin commands (declared by plugins, [plugin]) ─────────────────".to_string(),
+    ];
+    for spec in matching {
+        let args = render_spec_args(spec);
+        let args_suffix = if args.is_empty() {
+            String::new()
+        } else {
+            format!(" [{args}]")
+        };
+        let desc = spec.description.as_deref().unwrap_or("").split('\n').next().unwrap_or("");
+        lines.push(format!(
+            "  [plugin] {:<34} {}  (-> {}.{})",
+            format!("{}{}", spec.cli_name, args_suffix),
+            desc,
+            spec.domain,
+            spec.method
+        ));
+    }
+    lines.join("\n")
+}
+
+/// Print help for a plugin-declared command target (exact `cliName` or
+/// prefix like `profile` matching `profile import`). Returns true when at
+/// least one declared command matched.
+fn print_declared_help(target: Option<&str>, specs: &[CliToolSpec]) -> bool {
+    let Some(name) = target else {
+        return false;
+    };
+    let matching: Vec<&CliToolSpec> = specs
+        .iter()
+        .filter(|s| s.cli_name == name || s.cli_name.starts_with(&format!("{name} ")))
+        .collect();
+    if matching.is_empty() {
+        return false;
+    }
+    let mut lines = vec![format!("{name} commands (declared by plugins, [plugin]):\n")];
+    for spec in matching {
+        let mut entry = format!("  [plugin] {}", spec.cli_name);
+        let args = render_spec_args(spec);
+        if !args.is_empty() {
+            entry += &format!(" [{args}]");
+        }
+        if let Some(desc) = spec.description.as_deref() {
+            entry += &format!("  — {}", desc.split('\n').next().unwrap_or(""));
+        }
+        lines.push(entry);
+    }
+    cli_println!("{}", lines.join("\n"));
+    true
 }
 
 /// Format the result of wait-related tools into a user-friendly message.
@@ -21297,6 +21669,11 @@ mod tests {
     #[test]
     fn test_no_snapshot_commands_include_attach() {
         assert!(no_snapshot_commands().contains("attach"));
+    }
+
+    #[test]
+    fn test_no_snapshot_commands_include_profile_import() {
+        assert!(no_snapshot_commands().contains("profile-import"));
     }
 
     #[test]
@@ -22365,6 +22742,169 @@ mod tests {
         assert_eq!(rewritten[0], "htmlsnapshot-get-all");
         assert_eq!(rewritten[1], "text");
         assert_eq!(rewritten[2], ".product-title");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_handles_plugin_domain_spaced_form() {
+        // `plugin <domain> [method] ...` must rewrite to the flat
+        // `plugin-<domain>` form so the dynamic plugin dispatch handles it —
+        // this keeps the plugin surface consistent with swarm/agent/profiles.
+        let rewritten = rewrite_prefixed_command(&[
+            "plugin".to_string(),
+            "profile_import".to_string(),
+            "import".to_string(),
+            "--source".to_string(),
+            "chrome".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "plugin-profile_import");
+        assert_eq!(rewritten[1], "import");
+        assert_eq!(rewritten[2], "--source");
+        assert_eq!(rewritten[3], "chrome");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_handles_plugin_builtin_subcommand() {
+        // Builtin plugin subcommands keep the same spaced form.
+        let rewritten = rewrite_prefixed_command(&["plugin".to_string(), "list".to_string()])
+            .unwrap();
+        assert_eq!(rewritten[0], "plugin-list");
+    }
+
+    #[test]
+    fn declared_cli_spec_deserializes_from_backend_json() {
+        let json = r#"{"tools":[
+            {"cliName":"profile import","domain":"profile_import","method":"import",
+             "description":"Import browser data",
+             "arguments":[{"name":"source","type":"String","defaultValue":null},
+                          {"name":"data","type":"String","defaultValue":null}]},
+            {"cliName":"profile sources","domain":"profile_import","method":"list_sources",
+             "arguments":[]}
+        ]}"#;
+        let body: Value = serde_json::from_str(json).unwrap();
+        let specs: Vec<CliToolSpec> = body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| serde_json::from_value(t.clone()).unwrap())
+            .collect();
+
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].cli_name, "profile import");
+        assert_eq!(specs[0].domain, "profile_import");
+        assert_eq!(specs[0].method, "import");
+        assert_eq!(specs[0].arguments.len(), 2);
+        assert_eq!(specs[0].arguments[0].name, "source");
+        assert_eq!(specs[0].arguments[0].arg_type, "String");
+        assert!(specs[0].arguments[0].default_value.is_none());
+    }
+
+    #[test]
+    fn declared_cli_spec_matches_spaced_name() {
+        let json = r#"{"tools":[
+            {"cliName":"profile import","domain":"profile_import","method":"import","arguments":[]}
+        ]}"#;
+        let body: Value = serde_json::from_str(json).unwrap();
+        let specs: Vec<CliToolSpec> = body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| serde_json::from_value(t.clone()).unwrap())
+            .collect();
+
+        assert!(find_declared_cli_spec(&specs, "profile import").is_some());
+        assert!(find_declared_cli_spec(&specs, "profile sources").is_none());
+        assert!(find_declared_cli_spec(&specs, "profile-import").is_none());
+    }
+
+    #[test]
+    fn render_declared_commands_lists_specs_with_origin_domain() {
+        let specs = vec![
+            CliToolSpec {
+                cli_name: "profile import".to_string(),
+                domain: "profile_import".to_string(),
+                method: "import".to_string(),
+                description: None,
+                arguments: vec![CliToolArg {
+                    name: "source".to_string(),
+                    arg_type: "String".to_string(),
+                    default_value: None,
+                }],
+            },
+            CliToolSpec {
+                cli_name: "profile sources".to_string(),
+                domain: "profile_import".to_string(),
+                method: "list_sources".to_string(),
+                description: None,
+                arguments: vec![],
+            },
+        ];
+
+        let rendered = render_declared_commands(&specs);
+
+        assert!(rendered.contains("profile import [--source]"), "rendered: {rendered}");
+        assert!(rendered.contains("profile_import.import"), "rendered: {rendered}");
+        assert!(rendered.contains("profile sources"), "rendered: {rendered}");
+        assert!(rendered.contains("plugin domain"), "rendered: {rendered}");
+    }
+
+    #[test]
+    fn render_declared_commands_empty_is_clear() {
+        let rendered = render_declared_commands(&[]);
+        assert!(rendered.contains("No plugin-declared CLI commands"));
+    }
+
+    #[test]
+    fn declared_help_section_badges_plugin_commands() {
+        let specs = vec![CliToolSpec {
+            cli_name: "profile import".to_string(),
+            domain: "profile_import".to_string(),
+            method: "import".to_string(),
+            description: Some("Import browser data".to_string()),
+            arguments: vec![CliToolArg {
+                name: "source".to_string(),
+                arg_type: "String".to_string(),
+                default_value: None,
+            }],
+        }];
+
+        // No target: everything shows with the [plugin] badge.
+        let all = render_declared_help_section(None, &specs);
+        assert!(all.contains("[plugin] profile import [--source]"), "all: {all}");
+        assert!(all.contains("profile_import.import"), "all: {all}");
+
+        // Matching prefix target shows the entry too.
+        let by_prefix = render_declared_help_section(Some("profile"), &specs);
+        assert!(by_prefix.contains("[plugin]"), "by_prefix: {by_prefix}");
+
+        // Non-matching target yields nothing.
+        let none = render_declared_help_section(Some("swarm"), &specs);
+        assert!(none.is_empty(), "none: {none}");
+    }
+
+    #[test]
+    fn render_spec_args_surfaces_declared_defaults() {
+        let spec = CliToolSpec {
+            cli_name: "profile import".to_string(),
+            domain: "profile_import".to_string(),
+            method: "import".to_string(),
+            description: None,
+            arguments: vec![
+                CliToolArg {
+                    name: "source".to_string(),
+                    arg_type: "String".to_string(),
+                    default_value: None,
+                },
+                CliToolArg {
+                    name: "into".to_string(),
+                    arg_type: "String".to_string(),
+                    default_value: Some("temp".to_string()),
+                },
+            ],
+        };
+
+        let rendered = render_spec_args(&spec);
+        assert_eq!(rendered, "--source --into=temp", "rendered: {rendered}");
     }
 
     #[test]

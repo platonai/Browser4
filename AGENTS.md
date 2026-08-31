@@ -273,6 +273,35 @@ logger.info("Task {} finished in {} ms", taskId, cost)  // placeholders, never c
 
 ## Development Patterns
 
+### CLI command naming: spaced form preferred
+
+New CLI commands must use the **spaced name** style (`verb noun`) — e.g.
+`swarm submit`, `htmlsnapshot get`, `profiles list`, `plugin <domain>` — to
+stay consistent with every other prefixed command. Internally the CLI is
+kebab-case (`swarm-submit`); users type the spaced form, which
+`rewrite_prefixed_command()` (main.rs) rewrites to the internal kebab name.
+
+When adding a prefixed command:
+
+1. `CommandDef.name` stays kebab-case (the internal dispatch name).
+2. Register the prefix in `rewrite_prefixed_command()` so `prefix sub` →
+   `prefix-sub`. If the prefix also works standalone (`crawl`, `webdb`,
+   `doctor`, `webminer`, …), gate it with a `known_subs` allowlist so bare
+   usage and positional args pass through untouched.
+3. Register the kebab form in `preferred_spaced_command_form()` (and the bare
+   prefix in `preferred_prefixed_group_form()` when the bare prefix is
+   invalid) so users get a "Use 'browser4-cli prefix sub' instead" hint.
+4. Single-word commands without subcommands (`goto`, `close`, `eval`, …) stay
+   bare kebab — no prefix, no spaced form.
+5. Plugin tool domains are already invoked spaced as `plugin <domain> <method>`
+   (dynamic discovery via `/mcp/tools`, no registration needed).
+6. Plugins can declare a **named CLI command** without any CLI change: set
+   `ToolSpec.cliName` (spaced form, e.g. `"profile import"`) on the tool spec.
+   The CLI discovers these from `GET /mcp/tools/specs` at startup and renders
+   them as first-class commands with argument parsing (`browser4-cli profile
+   import --source chrome`). No `CommandDef` needed — the spec's `arguments`
+   define the `--key value` options.
+
 ### Adding a `browser4-cli` command
 
 1. **`commands.rs`** — Add `CommandDef`: CLI name kebab-case, MCP tool `browser_`-prefixed snake_case, map args in `tool_params_fn`

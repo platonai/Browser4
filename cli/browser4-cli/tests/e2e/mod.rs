@@ -967,7 +967,13 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             &mut stream,
             "200 OK",
             "application/json",
-            r#"{"tools":["open_session","list_sessions","browser_navigate","agent_extract","agent_summarize","crawl_submit","markdown_read"]}"#,
+            r#"{"tools":["open_session","list_sessions","browser_navigate","agent_extract","agent_summarize","crawl_submit","markdown_read","profile_import_list_sources","profile_import_import"]}"#,
+        ),
+        ("GET", "/mcp/tools/specs") => write_http_response(
+            &mut stream,
+            "200 OK",
+            "application/json",
+            r#"{"tools":[{"cliName":"profile import","domain":"profile_import","method":"import","description":"Import browser data","arguments":[{"name":"source","type":"String","defaultValue":null},{"name":"data","type":"String","defaultValue":null}]}]}"#,
         ),
         ("POST", "/mcp/call-tool") => {
             let payload: serde_json::Value =
@@ -1607,6 +1613,14 @@ fn mock_browser_tool_text(
                 }
                 _ => "mock response for browser_tabs".to_string(),
             }
+        }
+        "profile_import_list_sources" => {
+            r#"{"chrome":[{"directory":"Default","name":"Person 1","userDataDir":"/mock/chrome","profileDir":"/mock/chrome/Default"}],"edge":[],"safari":{}}"#
+                .to_string()
+        }
+        "profile_import_import" => {
+            r#"{"importDir":"/mock/imports/chrome-Default-20260825","profileDir":"/mock/imports/chrome-Default-20260825/profile/Default","browser":"chrome","sourceProfile":"chrome:Default","filesCopied":42,"data":["bookmarks","cookies"],"warnings":["Passwords were not imported (disabled by default)."],"nextStep":"browser4-cli open --profile /mock/imports/chrome-Default-20260825/profile/Default"}"#
+                .to_string()
         }
         other => format!("mock response for {other}"),
     }

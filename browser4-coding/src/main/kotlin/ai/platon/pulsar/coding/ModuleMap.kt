@@ -46,6 +46,7 @@ object ModuleMap {
         "browser4-plugins/browser4-pptx",
         "browser4-plugins/browser4-seo",
         "browser4-plugins/browser4-swarm",
+        "browser4-plugins/browser4-profile-import",
         "browser4-rest",
         "browser4-tests",
         "browser4-tests/browser4-e2e-tests",
@@ -80,6 +81,7 @@ object ModuleMap {
             "browser4-plugins/browser4-markdown", "browser4-plugins/browser4-media",
             "browser4-plugins/browser4-pptx",
             "browser4-plugins/browser4-seo", "browser4-plugins/browser4-swarm",
+            "browser4-plugins/browser4-profile-import",
             "browser4-rest", "browser4-tests/browser4-e2e-tests",
             "examples/browser4-examples",
         ),
@@ -128,6 +130,7 @@ object ModuleMap {
             "browser4-plugins/browser4-markdown", "browser4-plugins/browser4-media",
             "browser4-plugins/browser4-pptx",
             "browser4-plugins/browser4-seo", "browser4-plugins/browser4-swarm",
+            "browser4-plugins/browser4-profile-import",
             "browser4-rest", "examples/browser4-examples",
         ),
         "browser4-pdk" to listOf(
@@ -137,6 +140,7 @@ object ModuleMap {
             "browser4-plugins/browser4-pptx",
             "browser4-plugins/browser4-seo",
             "browser4-plugins/browser4-swarm",
+            "browser4-plugins/browser4-profile-import",
         ),
         "browser4-plugins/browser4-swarm" to listOf(
             "browser4-tests/browser4-rest-tests",

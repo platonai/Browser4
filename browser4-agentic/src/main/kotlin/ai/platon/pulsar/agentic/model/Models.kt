@@ -58,6 +58,15 @@ data class ToolSpec constructor(
     val returnType: String = "Unit",
     val description: String? = null,
     val help: String? = null,
+    /**
+     * Optional CLI command name in spaced form (e.g. `"profile import"`).
+     * When set, the CLI discovers this tool from `GET /mcp/tools/specs` and
+     * renders it as a first-class named command (`browser4-cli profile import
+     * --source chrome`) with argument parsing — no CLI code change needed.
+     * Null (default) keeps the tool CLI-invokable only through the generic
+     * `plugin <domain> <method>` path.
+     */
+    val cliName: String? = null,
 ) {
     data class Arg(
         val name: String,

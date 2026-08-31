@@ -285,14 +285,14 @@ pub fn generate_help() -> String {
         "\n── Plugin tools ─────────────────────────────────────────────────────".to_string(),
     );
     lines.push(
-        "  Installed plugins expose tools via the plugin-<name> <method> pattern:".to_string(),
+        "  Installed plugins expose tools via the `plugin <name> [method]` pattern:".to_string(),
     );
     lines.push(
-        "    plugin-<name>              invoke the default tool for a plugin domain".to_string(),
+        "    plugin <name>              invoke the default tool for a plugin domain".to_string(),
     );
-    lines.push("    plugin-<name> <method>     invoke a specific method (e.g. plugin-media download --url ...)".to_string());
-    lines.push("    plugin                     list all available plugin tool domains".to_string());
-    lines.push("  Use `plugin list` to see installed plugins and their status.".to_string());
+    lines.push("    plugin <name> <method>     invoke a specific method (e.g. plugin media download --url ...)".to_string());
+    lines.push("    plugin commands             list named CLI commands declared by installed plugins (ToolSpec.cliName)".to_string());
+    lines.push("    plugin list                see installed plugins and their status.".to_string());
 
     // Global options
     lines.push(
