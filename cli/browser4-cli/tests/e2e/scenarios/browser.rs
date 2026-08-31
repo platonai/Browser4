@@ -1537,6 +1537,338 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
     run_command(ctx, &["close"]);
 }
 
+/// Poll `network requests` until every [expected] substring appears in the
+/// output or [deadline] passes, panicking with the last output on timeout.
+/// Polling replaces fixed sleeps: loaded CI machines get more time, fast ones
+/// less.
+fn poll_network_requests_until(
+    ctx: &mut E2ECtx,
+    expected: &[&str],
+    deadline: Instant,
+    context: &str,
+) -> String {
+    let mut last = String::new();
+    while Instant::now() < deadline {
+        let check = run_command(ctx, &["network", "requests"]);
+        last = check.stdout.clone();
+        if expected.iter().all(|needle| last.contains(needle)) {
+            return last;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    panic!(
+        "timed out waiting for {expected:?} in network requests ({context}); last output:\n{last}"
+    );
+}
+
+/// Poll the network fixture's `#results` element until it contains every
+/// [expected] substring or [deadline] passes, panicking with the last text.
+fn poll_network_results_until(
+    ctx: &mut E2ECtx,
+    expected: &[&str],
+    deadline: Instant,
+    context: &str,
+) -> String {
+    let mut last = String::new();
+    while Instant::now() < deadline {
+        last = eval_text(ctx, "document.getElementById('results').textContent");
+        if expected.iter().all(|needle| last.contains(needle)) {
+            return last;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    panic!(
+        "timed out waiting for {expected:?} in #results ({context}); last text:\n{last}"
+    );
+}
+
+/// Network request inspection & HAR recording against a real browser.
+///
+/// Uses the `/network` fixture which issues two fetches on load:
+/// one that returns 200 JSON and one that 404s.
+pub(super) fn test_network_requests_and_har(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    // 1. Open the interactive fixture (any page works — traffic from THIS load
+    // is not tracked yet: network tracking is opt-in and enables the CDP
+    // Network domain on first use).
+    let open_result = run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
+    assert!(
+        open_result.stdout.contains("Session opened:"),
+        "Expected session to open. Output:\n{}",
+        open_result.stdout
+    );
+    sleep(Duration::from_secs(2));
+
+    // Close and reopen so the scenario also covers tracking on a freshly
+    // created session (the observer is per tab; a new session must track
+    // independently of the previous one).
+    let close_result = run_command(ctx, &["close"]);
+    assert!(
+        close_result.stdout.contains("Session closed."),
+        "Expected session to close. Output:\n{}",
+        close_result.stdout
+    );
+    let reopen_result = run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
+    assert!(
+        reopen_result.stdout.contains("Session opened:"),
+        "Expected session to reopen. Output:\n{}",
+        reopen_result.stdout
+    );
+    sleep(Duration::from_secs(1));
+
+    // 2. First network command enables tracking; navigate to a DIFFERENT URL
+    // (goto short-circuits when already at the target URL) so the load and its
+    // fetches are observed.
+    let first_list = run_command(ctx, &["network", "requests"]);
+    assert!(
+        first_list.stdout.contains("["),
+        "network requests should print a JSON array, got:\n{}",
+        first_list.stdout
+    );
+
+    let goto_result = run_command(ctx, &["goto", &ctx.network_url()]);
+    assert!(
+        goto_result.stdout.contains("Navigated to")
+            || goto_result.stdout.contains("Page loaded"),
+        "goto should succeed, got:\n{}",
+        goto_result.stdout
+    );
+
+    // 3. Both fetches are now tracked — poll instead of a fixed sleep so the
+    // assertion is robust under load.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let list_output = poll_network_requests_until(
+        ctx,
+        &["network-endpoint-ok", "network-endpoint-missing"],
+        deadline,
+        "after goto to /network",
+    );
+    assert!(
+        list_output.contains("network-endpoint-ok"),
+        "expected the 200 fetch in tracked requests, got:\n{}",
+        list_output
+    );
+    assert!(
+        list_output.contains("network-endpoint-missing"),
+        "expected the 404 fetch in tracked requests, got:\n{}",
+        list_output
+    );
+
+    // 4. Filters.
+    let filtered = run_command(ctx, &["network", "requests", "--filter", "network-endpoint-ok"]);
+    assert!(
+        filtered.stdout.contains("network-endpoint-ok") && !filtered.stdout.contains("network-endpoint-missing"),
+        "filter=network-endpoint-ok should keep only the ok request, got:\n{}",
+        filtered.stdout
+    );
+
+    let failed = run_command(ctx, &["network", "requests", "--status", "4xx"]);
+    assert!(
+        failed.stdout.contains("network-endpoint-missing"),
+        "--status 4xx should include the 404 fetch, got:\n{}",
+        failed.stdout
+    );
+    assert!(
+        !failed.stdout.contains("network-endpoint-ok"),
+        "--status 4xx should exclude the 200 fetch, got:\n{}",
+        failed.stdout
+    );
+
+    // 5. Request detail — parse the list as JSON to find the ok request id.
+    let list_json: serde_json::Value =
+        serde_json::from_str(&strip_snapshot_output(&list_output))
+            .unwrap_or_else(|e| panic!("network requests output should be JSON: {e}\n{}", list_output));
+    let ok_entry = list_json
+        .as_array()
+        .and_then(|arr| {
+            arr.iter().find(|entry| {
+                entry["url"]
+                    .as_str()
+                    .is_some_and(|url| url.contains("network-endpoint-ok"))
+            })
+        })
+        .unwrap_or_else(|| panic!("expected an entry for network-endpoint-ok in:\n{}", list_json));
+    let request_id = ok_entry["requestId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("expected requestId in entry:\n{ok_entry}"));
+    let detail = run_command(ctx, &["network", "request", request_id]);
+    assert!(
+        detail.stdout.contains("responseBody"),
+        "request detail should include the response body, got:\n{}",
+        detail.stdout
+    );
+    // The tool result is JSON with the body as an (escaped) string field;
+    // parse it instead of string-matching, which would trip on escaping.
+    let detail_json: serde_json::Value =
+        serde_json::from_str(&strip_snapshot_output(&detail.stdout))
+            .unwrap_or_else(|e| panic!("network request output should be JSON: {e}\n{}", detail.stdout));
+    assert_eq!(
+        detail_json["responseBody"].as_str(),
+        Some(r#"{"status":"ok","source":"fixture"}"#),
+        "response body should contain the fixture payload, got:\n{}",
+        detail.stdout
+    );
+
+    // 6. HAR recording — traffic generated while recording is captured.
+    // Navigate away and back so new traffic flows while recording.
+    let start = run_command(ctx, &["network", "har", "start", "--content", "text"]);
+    assert!(
+        start.stdout.contains("recording"),
+        "har start should confirm recording, got:\n{}",
+        start.stdout
+    );
+
+    run_command(ctx, &["goto", &ctx.other_url()]);
+    run_command(ctx, &["goto", &ctx.network_url()]);
+    // Poll until the recording observed both fetches again, so the HAR below
+    // provably contains them (no fixed sleep).
+    let deadline = Instant::now() + Duration::from_secs(15);
+    poll_network_requests_until(
+        ctx,
+        &["network-endpoint-ok", "network-endpoint-missing"],
+        deadline,
+        "while HAR recording",
+    );
+
+    let har_path = ctx.state_dir.join("network-test.har");
+    let stop = run_command(
+        ctx,
+        &["network", "har", "stop", har_path.to_str().expect("har path")],
+    );
+    assert!(
+        stop.stdout.contains("HAR saved"),
+        "har stop should report the saved file, got:\n{}",
+        stop.stdout
+    );
+
+    let har_text = std::fs::read_to_string(&har_path)
+        .unwrap_or_else(|e| panic!("expected HAR file at {}: {e}", har_path.display()));
+    let har: serde_json::Value = serde_json::from_str(&har_text)
+        .unwrap_or_else(|e| panic!("HAR file should be valid JSON: {e}\n{}", har_text));
+    assert_eq!(har["log"]["version"], "1.2", "HAR version should be 1.2");
+    let entries = har["log"]["entries"]
+        .as_array()
+        .expect("HAR should have entries");
+    assert!(
+        entries.len() >= 2,
+        "expected at least 2 HAR entries, got {}",
+        entries.len()
+    );
+    let ok_entry = entries
+        .iter()
+        .find(|entry| {
+            entry["request"]["url"]
+                .as_str()
+                .is_some_and(|url| url.contains("network-endpoint-ok"))
+        })
+        .unwrap_or_else(|| panic!("expected a HAR entry for network-endpoint-ok in:\n{har_text}"));
+    assert_eq!(ok_entry["response"]["status"], 200);
+    let ok_body = ok_entry["response"]["content"]["text"].as_str().unwrap_or("");
+    assert!(
+        ok_body.contains("\"status\":\"ok\""),
+        "HAR text mode should embed the JSON body, got: {ok_body}"
+    );
+    let missing_entry = entries
+        .iter()
+        .find(|entry| {
+            entry["request"]["url"]
+                .as_str()
+                .is_some_and(|url| url.contains("network-endpoint-missing"))
+        })
+        .unwrap_or_else(|| panic!("expected a HAR entry for network-endpoint-missing in:\n{har_text}"));
+    assert_eq!(missing_entry["response"]["status"], 404);
+
+    // 7. Routing — mock the ok endpoint's body, abort the missing one, then
+    // unroute and confirm the fixture sees the real responses again.
+    let route = run_command(
+        ctx,
+        &["network", "route", "**/api/network-endpoint-ok.json", "--body", r#"{"routed":true}"#, "--content-type", "application/json"],
+    );
+    assert!(
+        route.stdout.contains("routed"),
+        "network route should confirm the route, got:\n{}",
+        route.stdout
+    );
+
+    run_command(ctx, &["goto", &ctx.other_url()]);
+    run_command(ctx, &["goto", &ctx.network_url()]);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let results = poll_network_results_until(
+        ctx,
+        &["ok: 200", r#"{"routed":true}"#],
+        deadline,
+        "route mock",
+    );
+    assert!(
+        results.contains("ok: 200") && results.contains(r#"{"routed":true}"#),
+        "the ok fetch should receive the mocked body, got:\n{}",
+        results
+    );
+
+    let abort = run_command(
+        ctx,
+        &["network", "route", "**/api/network-endpoint-missing.json", "--abort"],
+    );
+    assert!(
+        abort.stdout.contains("routed"),
+        "network route --abort should confirm the route, got:\n{}",
+        abort.stdout
+    );
+    run_command(ctx, &["goto", &ctx.other_url()]);
+    run_command(ctx, &["goto", &ctx.network_url()]);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let results = poll_network_results_until(
+        ctx,
+        &["missing: error"],
+        deadline,
+        "route abort",
+    );
+    assert!(
+        results.contains("missing: error"),
+        "the aborted fetch should fail in the page, got:\n{}",
+        results
+    );
+
+    let unroute = run_command(ctx, &["network", "unroute"]);
+    assert!(
+        unroute.stdout.contains("unrouted"),
+        "network unroute should confirm removal, got:\n{}",
+        unroute.stdout
+    );
+    run_command(ctx, &["goto", &ctx.other_url()]);
+    run_command(ctx, &["goto", &ctx.network_url()]);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let results = poll_network_results_until(
+        ctx,
+        &["missing: 404"],
+        deadline,
+        "after unroute",
+    );
+    assert!(
+        results.contains("missing: 404"),
+        "after unroute the missing fetch should 404 again, got:\n{}",
+        results
+    );
+
+    // 8. Clear drops the tracked buffer.
+    run_command(ctx, &["network", "requests", "--clear"]);
+    let after_clear = run_command(ctx, &["network", "requests"]);
+    assert!(
+        !after_clear.stdout.contains("network-endpoint-ok"),
+        "after --clear the buffer should be empty, got:\n{}",
+        after_clear.stdout
+    );
+
+    run_command(ctx, &["close"]);
+}
+
 pub(super) fn test_cdp_live_command(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     run_command(

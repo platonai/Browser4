@@ -20,6 +20,14 @@ pub const KEYBOARD_PATH: &str = "/keyboard";
 
 pub const DRAG_PATH: &str = "/drag-test";
 
+pub const NETWORK_PATH: &str = "/network";
+
+/// 200 JSON endpoint served by the fixture server (fetched by the network fixture).
+pub const NETWORK_OK_ENDPOINT: &str = "/api/network-endpoint-ok.json";
+
+/// Not served by the fixture server — resolves to a 404 (fetched by the network fixture).
+pub const NETWORK_MISSING_ENDPOINT: &str = "/api/network-endpoint-missing.json";
+
 pub const INTERACTIVE_TITLE: &str = "Browser4 CLI Interactive Fixture";
 
 pub const OTHER_TITLE: &str = "Browser4 CLI Other Fixture";
@@ -51,6 +59,8 @@ pub const MOUSE_FIXTURE_FILE: &str = "mcp-tool-controller-mouse-fixture.html";
 pub const KEYBOARD_FIXTURE_FILE: &str = "mcp-tool-controller-keyboard-fixture.html";
 
 pub const DRAG_FIXTURE_FILE: &str = "drag-test.html";
+
+pub const NETWORK_FIXTURE_FILE: &str = "network-fixture.html";
 
 pub const MAX_EMPTY_READ_ATTEMPTS: u32 = 200; // 2 s with 10 ms sleep per attempt
 

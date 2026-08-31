@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Browser4 CLI Network Fixture</title>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 2rem; }
+        pre { background: #f4f4f4; padding: 1rem; border-radius: 6px; }
+    </style>
+</head>
+<body>
+<h1 id="title">Browser4 CLI Network Fixture</h1>
+<p>On load this page issues two fetches so network tracking / HAR recording has observable traffic:</p>
+<ul>
+    <li><code>/api/network-endpoint-ok.json</code> — returns 200 with a JSON body.</li>
+    <li><code>/api/network-endpoint-missing.json</code> — returns 404.</li>
+</ul>
+<pre id="results">loading…</pre>
+<script>
+    (async () => {
+        const results = document.getElementById("results");
+        const lines = [];
+        try {
+            const ok = await fetch("/api/network-endpoint-ok.json");
+            const okBody = await ok.text();
+            lines.push(`ok: ${ok.status} ${okBody}`);
+        } catch (e) {
+            lines.push(`ok: error ${e}`);
+        }
+        try {
+            const missing = await fetch("/api/network-endpoint-missing.json");
+            lines.push(`missing: ${missing.status}`);
+        } catch (e) {
+            lines.push(`missing: error ${e}`);
+        }
+        results.textContent = lines.join("\n");
+    })();
+</script>
+</body>
+</html>

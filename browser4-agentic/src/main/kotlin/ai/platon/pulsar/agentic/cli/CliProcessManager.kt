@@ -22,6 +22,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Process-management configuration. Defaults are materialised here (not hidden
@@ -81,8 +82,8 @@ class CliProcessManager(
     fun resolve(request: CliRunRequest, backendBaseUrl: String? = null): CliRunSpec {
         val binary = resolver.resolve()
         val (shell, shellArgv, commandLine) = buildShellInvocation(binary, request.args)
-        val timeoutMs = (request.timeoutSeconds
-            ?: config.defaultTimeoutMs / 1000)
+        val timeoutMs = ((request.timeoutSeconds
+            ?: (config.defaultTimeoutMs / 1000)))
             .coerceIn(1, config.maxTimeoutMs / 1000) * 1000
         return CliRunSpec(
             binaryPath = binary,
@@ -150,7 +151,9 @@ class CliProcessManager(
         pb.redirectErrorStream(false)
 
         val proc = try {
-            pb.start()
+            withContext(Dispatchers.IO) {
+                pb.start()
+            }
         } catch (e: IOException) {
             return CliResult(
                 null, "", "", infraFailure = "spawn failed: ${e.message}",
@@ -164,12 +167,12 @@ class CliProcessManager(
         val errThread = startReader(proc.errorStream, stderr)
 
         val outcome: Outcome = try {
-            withTimeoutOrNull(spec.timeoutMs) {
+            withTimeoutOrNull(spec.timeoutMs.milliseconds) {
                 while (proc.isAlive) {
                     if (cancelToken != null && !cancelToken.isActive) {
                         return@withTimeoutOrNull Outcome.Aborted
                     }
-                    delay(50)
+                    delay(50.milliseconds)
                 }
                 Outcome.Exited(proc.exitValue())
             } ?: Outcome.TimedOut
@@ -177,16 +180,24 @@ class CliProcessManager(
             // External cancellation: kill the tree, then rethrow so structured
             // concurrency sees the cancellation (no result is returned).
             killTree(proc, spec.graceMs)
-            outThread.join(2_000)
-            errThread.join(2_000)
+            withContext(Dispatchers.IO) {
+                outThread.join(2_000)
+            }
+            withContext(Dispatchers.IO) {
+                errThread.join(2_000)
+            }
             throw e
         }
 
         if (outcome !is Outcome.Exited) {
             killTree(proc, spec.graceMs)
         }
-        outThread.join(2_000)
-        errThread.join(2_000)
+        withContext(Dispatchers.IO) {
+            outThread.join(2_000)
+        }
+        withContext(Dispatchers.IO) {
+            errThread.join(2_000)
+        }
         val durationMs = System.currentTimeMillis() - startMs
         val outText = stdout.text()
         val errText = stderr.text()

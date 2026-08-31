@@ -374,6 +374,48 @@ class MCPToolControllerTest {
     }
 
     @Test
+    fun `test frontend network and har tools map to tab methods`() = runBlocking {
+        mockTool("tab", "networkRequests")
+        mockTool("tab", "networkRequestDetail")
+        mockTool("tab", "networkRoute")
+        mockTool("tab", "networkUnroute")
+        mockTool("tab", "harStart")
+        mockTool("tab", "harStop")
+
+        val cases = listOf(
+            Triple("browser_network_requests", mapOf("filter" to "api"), "networkRequests"),
+            Triple("browser_network_request", mapOf("requestId" to "1.2"), "networkRequestDetail"),
+            Triple("browser_network_route", mapOf("urlPattern" to "**/api/users", "body" to "{}"), "networkRoute"),
+            Triple("browser_network_unroute", mapOf("urlPattern" to "**/api/users"), "networkUnroute"),
+            Triple("browser_har_start", mapOf("contentMode" to "all"), "harStart"),
+            Triple("browser_har_stop", emptyMap<String, Any?>(), "harStop"),
+        )
+
+        for ((tool, args, method) in cases) {
+            val request = MCPToolCallRequest(
+                tool = tool,
+                arguments = args + ("sessionId" to sessionId)
+            )
+            val result = controller.callTool(request, response)
+            assertEquals(HttpStatus.OK, result.statusCode, "tool $tool should resolve")
+        }
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager, Mockito.times(6)).execute(capture(captor))
+        val calls = captor.allValues
+        assertEquals(
+            listOf("networkRequests", "networkRequestDetail", "networkRoute", "networkUnroute", "harStart", "harStop"),
+            calls.map { it.method }
+        )
+        assertTrue(calls.all { it.domain == "tab" })
+        assertEquals("api", calls[0].arguments["filter"])
+        assertEquals("1.2", calls[1].arguments["requestId"])
+        assertEquals("**/api/users", calls[2].arguments["urlPattern"])
+        assertEquals("{}", calls[2].arguments["body"])
+        assertEquals("all", calls[4].arguments["contentMode"])
+    }
+
+    @Test
     fun `test frontend type command without ref`() = runBlocking {
         mockTool("tab", "type")
 

@@ -7,7 +7,11 @@ import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.api.model.PageTarget
 import ai.platon.pulsar.api.model.SnapshotOptions
 import ai.platon.pulsar.api.model.WebDriverException
+import ai.platon.pulsar.chrome.network.HarContentMode
+import ai.platon.pulsar.chrome.network.NetworkObserver
 import ai.platon.pulsar.chrome.network.RobustRPC
+import ai.platon.pulsar.chrome.network.RouteManager
+import ai.platon.pulsar.chrome.network.TrackedNetworkRequest
 import ai.platon.pulsar.chrome.protocol.Keyboard
 import ai.platon.pulsar.chrome.protocol.util.withNodeObjectId
 import ai.platon.pulsar.chrome.util.ChromeDriverException
@@ -66,6 +70,17 @@ open class Browser4WebDriver(
     browserProtocol: BrowserProtocol,
     browser: PulsarBrowser
 ) : PulsarWebDriver(uniqueID, chromeTab, browserProtocol, browser) {
+
+    init {
+        // Claim the CDP event-listener slots before the base library's
+        // NetworkManager registers them on first navigation: its event
+        // dispatcher keeps only one listener per event key, so a listener
+        // registered later would silently never fire. Per-protocol sharing
+        // (see NetworkObserver.forProtocol) makes this a single registration
+        // per tab no matter how many drivers wrap it.
+        NetworkObserver.forProtocol(browserProtocol).preRegister()
+        RouteManager.forProtocol(browserProtocol).preRegister()
+    }
 
     /**
      * Viewport center of a drag element, plus the stable CSS path used to
@@ -525,6 +540,133 @@ open class Browser4WebDriver(
      * per-instance, so it is tracked independently from the parent's counters.
      */
     private val rpc = RobustRPC(this)
+
+    /**
+     * Network observer for this tab, shared by every driver wrapping the same
+     * tab protocol (see [NetworkObserver.forProtocol]).
+     *
+     * Network tracking and HAR recording are opt-in: the CDP `Network` domain
+     * is enabled on the first `network*`/`har*` call, so tabs that never use
+     * the feature pay no overhead. The event listeners themselves are
+     * registered eagerly at construction so they claim the dispatcher slot
+     * before the base library's `NetworkManager` does on first navigation.
+     */
+    private val networkObserver: NetworkObserver by lazy {
+        NetworkObserver.forProtocol(browserProtocol)
+    }
+
+    /**
+     * Request router for this tab (CDP `Fetch` interception), shared per tab
+     * protocol like the network observer; the `Fetch.requestPaused` listener
+     * is registered eagerly at construction for the same reason.
+     */
+    private val routeManager: RouteManager by lazy {
+        RouteManager.forProtocol(browserProtocol)
+    }
+
+    /**
+     * List network requests tracked for this tab, optionally filtered.
+     *
+     * The CDP `Network` domain is enabled on first use; requests observed
+     * afterwards are retained in a bounded in-memory store (oldest evicted).
+     *
+     * @param filter Only requests whose URL contains this text (case-insensitive).
+     * @param type Only requests whose CDP resource type is in this comma-separated list (e.g. `xhr,fetch`).
+     * @param method Only requests with this HTTP method (case-insensitive).
+     * @param status Status filter: exact code (`200`), wildcard (`2xx`), or range (`400-499`).
+     * @param clear When true, drop all tracked requests first.
+     * @return The matching requests in observation order.
+     */
+    suspend fun networkRequests(
+        filter: String? = null,
+        type: String? = null,
+        method: String? = null,
+        status: String? = null,
+        clear: Boolean = false,
+    ): List<TrackedNetworkRequest> {
+        networkObserver.ensureEnabled()
+        // Strip captured bodies: list results carry metadata only; bodies are
+        // retrieved through networkRequestDetail.
+        return networkObserver.networkRequests(filter, type, method, status, clear).map { it.withoutBody() }
+    }
+
+    /**
+     * Full detail of one tracked network request, including headers, timing,
+     * and the response body (fetched on demand when available).
+     *
+     * @param requestId The CDP network request id, as shown by [networkRequests].
+     * @throws IllegalArgumentException when the request id is unknown.
+     */
+    suspend fun networkRequestDetail(requestId: String): Map<String, Any?> {
+        networkObserver.ensureEnabled()
+        return networkObserver.networkRequestDetail(requestId)
+    }
+
+    /**
+     * Start a HAR recording session on this tab.
+     *
+     * @param contentMode Which response bodies to embed in the HAR: `none`,
+     * `text` (text-like MIME types only), or `all` (binary base64-encoded).
+     * @return Recording metadata.
+     */
+    suspend fun harStart(contentMode: String = "none"): Map<String, Any?> {
+        val mode = HarContentMode.parse(contentMode)
+        return networkObserver.harStart(mode)
+    }
+
+    /**
+     * Stop the active HAR recording and build the HAR 1.2 document from all
+     * requests observed so far.
+     *
+     * @return `{ recording, contentMode, entries, har }` where `har` is the
+     * HAR document (serialize to JSON to get a `.har` file).
+     */
+    suspend fun harStop(): Map<String, Any?> {
+        return networkObserver.harStop()
+    }
+
+    /**
+     * Route matching requests to a mock response or abort them, via the CDP
+     * `Fetch` domain (agent-browser compatible).
+     *
+     * @param urlPattern URL pattern: `*` matches all; plain text matches URLs
+     * containing it; `*` globs are supported (e.g. `**` + `/api/users`).
+     * @param abort When true, matching requests fail instead of being sent.
+     * @param body Mock response body (plain text; JSON strings work as-is).
+     * @param contentType Content-Type for the mock response (e.g. `application/json`).
+     * @param resourceType Only intercept requests of these CDP resource types
+     * (comma-separated, e.g. `xhr,fetch`); empty matches all.
+     * @return `{ "routed": urlPattern }`.
+     */
+    suspend fun networkRoute(
+        urlPattern: String,
+        abort: Boolean = false,
+        body: String? = null,
+        contentType: String? = null,
+        resourceType: String? = null,
+    ): Map<String, Any?> {
+        require(urlPattern.isNotBlank()) { "networkRoute requires a non-blank urlPattern" }
+        require(abort || body != null) {
+            "networkRoute requires at least one action: --abort or --body"
+        }
+        val response = if (body != null) {
+            RouteManager.RouteResponse(body = body, contentType = contentType)
+        } else {
+            null
+        }
+        val types = resourceType?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
+        return routeManager.route(urlPattern, response, abort, types)
+    }
+
+    /**
+     * Remove routes. Without [urlPattern] every route is removed and Fetch
+     * interception is disabled.
+     *
+     * @return `{ "unrouted": urlPattern | "all" }`.
+     */
+    suspend fun networkUnroute(urlPattern: String? = null): Map<String, Any?> {
+        return routeManager.unroute(urlPattern)
+    }
 
     /**
      * Capture the browser/page state, degrading gracefully when the page is unusable.

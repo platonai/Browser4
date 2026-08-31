@@ -211,6 +211,106 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 Empties the in-browser console message buffer.
             """.trimIndent()
         )
+        toolSpec["networkRequests"] = ToolSpec(
+            domain = domain,
+            method = "networkRequests",
+            arguments = listOf(
+                ToolSpec.Arg("filter", "String?", "null"),
+                ToolSpec.Arg("type", "String?", "null"),
+                ToolSpec.Arg("method", "String?", "null"),
+                ToolSpec.Arg("status", "String?", "null"),
+                ToolSpec.Arg("clear", "Boolean", "false"),
+            ),
+            returnType = "List<TrackedNetworkRequest>",
+            description = "List network requests tracked for the current tab, optionally filtered.",
+            help = """
+                tab.networkRequests()
+                tab.networkRequests(filter: String? = null, type: String? = null, method: String? = null, status: String? = null, clear: Boolean = false)
+
+                Enables Network tracking on first use, then returns the requests observed so far.
+                filter — only requests whose URL contains this text (case-insensitive).
+                type — comma-separated CDP resource types, e.g. "xhr,fetch".
+                method — HTTP method, e.g. "POST".
+                status — "200", "2xx", or a range like "400-499".
+                clear — drop all tracked requests first.
+            """.trimIndent()
+        )
+        toolSpec["networkRequestDetail"] = ToolSpec(
+            domain = domain,
+            method = "networkRequestDetail",
+            arguments = listOf(ToolSpec.Arg("requestId", "String")),
+            returnType = "Map<String, Any?>",
+            description = "Fetch the full detail of one tracked network request, including headers, timing, and response body.",
+            help = """
+                tab.networkRequestDetail(requestId: String)
+
+                Returns request/response metadata plus the response body (fetched on demand) for the
+                request id shown by tab.networkRequests().
+            """.trimIndent()
+        )
+        toolSpec["harStart"] = ToolSpec(
+            domain = domain,
+            method = "harStart",
+            arguments = listOf(ToolSpec.Arg("contentMode", "String?", "none")),
+            returnType = "Map<String, Any?>",
+            description = "Start a HAR recording session on the current tab (bodies captured per content mode: none, text, or all).",
+            help = """
+                tab.harStart(contentMode: String = "none")
+
+                Starts recording network traffic into a HAR 1.2 document.
+                contentMode — which response bodies to embed: "none" (default), "text" (text-like MIME types), or "all" (binary base64).
+                Stop with tab.harStop() and write the returned "har" document to a .har file.
+            """.trimIndent()
+        )
+        toolSpec["harStop"] = ToolSpec(
+            domain = domain,
+            method = "harStop",
+            arguments = emptyList(),
+            returnType = "Map<String, Any?>",
+            description = "Stop the active HAR recording and return the complete HAR 1.2 document.",
+            help = """
+                tab.harStop()
+
+                Stops recording and returns { recording, contentMode, entries, har } where har is the
+                HAR 1.2 document. Serialize it to JSON to get a .har file.
+            """.trimIndent()
+        )
+        toolSpec["networkRoute"] = ToolSpec(
+            domain = domain,
+            method = "networkRoute",
+            arguments = listOf(
+                ToolSpec.Arg("urlPattern", "String"),
+                ToolSpec.Arg("abort", "Boolean", "false"),
+                ToolSpec.Arg("body", "String?", "null"),
+                ToolSpec.Arg("contentType", "String?", "null"),
+                ToolSpec.Arg("resourceType", "String?", "null"),
+            ),
+            returnType = "Map<String, Any?>",
+            description = "Route matching requests to a mock response or abort them (CDP Fetch interception).",
+            help = """
+                tab.networkRoute(urlPattern: String, abort: Boolean = false, body: String? = null, contentType: String? = null, resourceType: String? = null)
+
+                Intercepts requests whose URL matches urlPattern ("*" matches all; plain text matches
+                URLs containing it; "*" globs like "**/api/users" are supported).
+                abort — fail matching requests instead of sending them.
+                body/contentType — answer matching requests with this mock response.
+                resourceType — only intercept these CDP resource types (comma-separated, e.g. "xhr,fetch").
+                Remove routes with tab.networkUnroute().
+            """.trimIndent()
+        )
+        toolSpec["networkUnroute"] = ToolSpec(
+            domain = domain,
+            method = "networkUnroute",
+            arguments = listOf(ToolSpec.Arg("urlPattern", "String?", "null")),
+            returnType = "Map<String, Any?>",
+            description = "Remove request routes; without a pattern every route is removed and Fetch interception is disabled.",
+            help = """
+                tab.networkUnroute(urlPattern: String? = null)
+
+                Removes the route registered with the exact urlPattern, or all routes (and disables
+                Fetch interception) when no pattern is given.
+            """.trimIndent()
+        )
     }
 
     override fun help(method: String): String {
@@ -1782,6 +1882,62 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 @Suppress("UNCHECKED_CAST")
                 val params = args["params"] as? Map<String, Any?>
                 driver.executeCdpCommand(method, params)
+            }
+
+            // Network tracking & HAR recording (Browser4-specific; requires a
+            // Browser4WebDriver session — all production sessions are).
+            "networkRequests" -> {
+                validateArgs(args, allowed("filter", "type", "method", "status", "clear"), emptySet(), functionName)
+                val b4Driver = driver as? Browser4WebDriver
+                    ?: throw IllegalArgumentException("networkRequests requires a Browser4WebDriver session")
+                b4Driver.networkRequests(
+                    filter = paramString(args, "filter", functionName, required = false),
+                    type = paramString(args, "type", functionName, required = false),
+                    method = paramString(args, "method", functionName, required = false),
+                    status = paramString(args, "status", functionName, required = false),
+                    clear = paramBool(args, "clear", functionName, required = false, default = false) ?: false,
+                )
+            }
+
+            "networkRequestDetail" -> {
+                validateArgs(args, allowed("requestId"), setOf("requestId"), functionName)
+                val b4Driver = driver as? Browser4WebDriver
+                    ?: throw IllegalArgumentException("networkRequestDetail requires a Browser4WebDriver session")
+                b4Driver.networkRequestDetail(paramString(args, "requestId", functionName)!!)
+            }
+
+            "harStart" -> {
+                validateArgs(args, allowed("contentMode"), emptySet(), functionName)
+                val b4Driver = driver as? Browser4WebDriver
+                    ?: throw IllegalArgumentException("harStart requires a Browser4WebDriver session")
+                b4Driver.harStart(paramString(args, "contentMode", functionName, required = false) ?: "none")
+            }
+
+            "harStop" -> {
+                validateArgs(args, emptySet(), emptySet(), functionName)
+                val b4Driver = driver as? Browser4WebDriver
+                    ?: throw IllegalArgumentException("harStop requires a Browser4WebDriver session")
+                b4Driver.harStop()
+            }
+
+            "networkRoute" -> {
+                validateArgs(args, allowed("urlPattern", "abort", "body", "contentType", "resourceType"), setOf("urlPattern"), functionName)
+                val b4Driver = driver as? Browser4WebDriver
+                    ?: throw IllegalArgumentException("networkRoute requires a Browser4WebDriver session")
+                b4Driver.networkRoute(
+                    urlPattern = paramString(args, "urlPattern", functionName)!!,
+                    abort = paramBool(args, "abort", functionName, required = false, default = false) ?: false,
+                    body = paramString(args, "body", functionName, required = false),
+                    contentType = paramString(args, "contentType", functionName, required = false),
+                    resourceType = paramString(args, "resourceType", functionName, required = false),
+                )
+            }
+
+            "networkUnroute" -> {
+                validateArgs(args, allowed("urlPattern"), emptySet(), functionName)
+                val b4Driver = driver as? Browser4WebDriver
+                    ?: throw IllegalArgumentException("networkUnroute requires a Browser4WebDriver session")
+                b4Driver.networkUnroute(paramString(args, "urlPattern", functionName, required = false))
             }
 
             "help" -> help()

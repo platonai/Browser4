@@ -119,8 +119,6 @@
                 <module>browser4-tests</module>
                 <module>browser4-tests/browser4-rest-tests</module>
                 <module>browser4-tests/browser4-e2e-tests</module>
-                <module>browser4-tests/pulsar-it-tests</module>
-                <module>browser4-tests/pulsar-e2e-tests</module>
             </modules>
         </profile>
 
@@ -134,8 +132,6 @@
                 <module>browser4-tests</module>
                 <module>browser4-tests/browser4-rest-tests</module>
                 <module>browser4-tests/browser4-e2e-tests</module>
-                <module>browser4-tests/pulsar-it-tests</module>
-                <module>browser4-tests/pulsar-e2e-tests</module>
 
                 <module>browser4-apps</module>
                 <module>browser4-apps/browser4-standalone</module>
@@ -201,9 +197,6 @@
                     <value>true</value>
                 </property>
             </activation>
-            <modules>
-                <module>browser4-tests/pulsar-it-tests</module>
-            </modules>
             <properties>
                 <!-- Integration tests can be Slow/Heavy - this is expected behavior
                      Integration tests CAN require Browser/AI/Docker for service collaboration
@@ -220,10 +213,6 @@
                     <value>true</value>
                 </property>
             </activation>
-            <modules>
-                <module>browser4-tests/pulsar-it-tests</module>
-                <module>browser4-tests/pulsar-e2e-tests</module>
-            </modules>
             <properties>
                 <!-- E2E tests can be Heavy, RequiresBrowser, RequiresAI
                      Only exclude ManualOnly tests -->
@@ -238,8 +227,6 @@
             </activation>
             <modules>
                 <module>browser4-tests/browser4-rest-tests</module>
-                <module>browser4-tests/pulsar-it-tests</module>
-                <module>browser4-tests/pulsar-e2e-tests</module>
             </modules>
             <properties>
                 <surefire.excludedGroups>ManualOnly</surefire.excludedGroups>
