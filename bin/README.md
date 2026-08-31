@@ -178,7 +178,7 @@ Build scripts with extended functionality.
 
 CI/CD helper scripts for triggering and managing CI workflows.
 
-- **`trigger-ci.ps1`**: Create and push a CI pre-release tag (`vX.Y.Z-ci.N`) to trigger the CI workflow. Auto-increments the pre-release number. Branch-aware — creates tags from the current branch context.
+- **`trigger-ci.ps1`**: Create and push a CI pre-release tag (`vX.Y.Z-ci.N`) to trigger the CI workflow. Auto-increments the pre-release number. Branch-aware — creates tags from the current branch context, and hard-fails when the VERSION file's major.minor does not match the branch (the tag base version must always equal the VERSION file).
 - **`ci-tags-rm.ps1`**: Remove CI release tags.
 - **`monitor-ci.ps1`**: Monitor CI workflow runs with a 5-stage diagnostic pipeline. Tracks run status, extracts errors, and reports failures. On failure it prints error diagnostics; by default it does NOT call an AI agent — pass `-Agent auto` (or a backend name) to dispatch a coworker fix task.
 - **`tests/monitor-ci.tests.ps1`**: Unit tests for `monitor-ci.ps1`.

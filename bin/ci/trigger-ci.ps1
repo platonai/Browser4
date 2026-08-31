@@ -16,18 +16,23 @@
 
 .DESCRIPTION
     1. Verifies the local VERSION equals the latest GitHub release patch + 1,
-       aborting with a confirmation prompt if it does not. The check is
-       branch-aware: on version branches (X.Y.x) it compares against the latest
-       release on the same X.Y line only, and a line with no stable release yet
-       (e.g. a fresh minor branch like 4.14.x before any 4.14 release) skips
-       the patch+1 check instead of aborting against an unrelated older line.
+       aborting if it does not. The check is branch-aware: on version branches
+       (X.Y.x) it compares against the latest release on the same X.Y line
+       only, and a line with no stable release yet (e.g. a fresh minor branch
+       like 4.14.x before any 4.14 release) skips the patch+1 check instead of
+       aborting against an unrelated older line. On version branches the VERSION
+       file's major.minor MUST match the branch (hard failure, no confirmation
+       bypass) — a mismatched VERSION would synthesize a tag for a version that
+       does not exist (e.g. branch 4.14.x + stale VERSION 4.13.6-SNAPSHOT
+       produced the bogus v4.14.6-ci.N tags).
     2. Detects the current git branch.
     3. If the branch matches X.Y.x (e.g. 4.12.x), uses X.Y as the version prefix
        and the patch from the current VERSION file, then searches for existing
        tags like vX.Y.<patch>-ci.* — scoped to that branch.
     4. Increments only the pre-release counter (ci.N); the patch tracks the
        current VERSION file: v4.12.5-ci.3 → v4.12.5-ci.4 (same patch), or
-       v4.12.5-ci.3 → v4.12.6-ci.1 after a version bump.
+       v4.12.5-ci.3 → v4.12.6-ci.1 after a version bump. The tag base version
+       always equals the VERSION file's version — never a synthesized blend.
     5. On non-version branches (main, develop, feature/*), falls back to the
        VERSION file for the base version and bumps the pre-release counter as
        before.
@@ -93,13 +98,12 @@ $branchMajorMinor = if ($branch -match '^(\d+)\.(\d+)\.x$') { "$($matches[1]).$(
 if ($branchMajorMinor) {
     $localParts = $localVersion -split '\.'
     if ($localParts.Count -ge 2 -and "$($localParts[0]).$($localParts[1])" -ne $branchMajorMinor) {
-        Write-Warning "Local VERSION '$localVersion' major.minor does not match branch '$branch' ('$branchMajorMinor')."
-        try { $answer = Read-Host "Continue anyway? [y/N]" } catch { $answer = '' }
-        if ($answer -notmatch '^[Yy]$') {
-            Write-Error "Aborted: local VERSION '$localVersion' is out of sync with branch '$branch'."
-            exit 1
-        }
-        Write-Host "Continuing despite major.minor mismatch (user confirmed)."
+        # Hard failure, NOT a confirmable warning: a CI tag built from a
+        # mismatched VERSION claims a version that does not exist. Real-world
+        # case: branch 4.14.x with a stale VERSION 4.13.6-SNAPSHOT produced the
+        # bogus v4.14.6-ci.N tags although v4.14.6 never existed.
+        Write-Error "Aborted: local VERSION '$localVersion' major.minor does not match branch '$branch' ('$branchMajorMinor'). Bump the VERSION file (and module poms) to '$branchMajorMinor.x-SNAPSHOT' on this branch before creating CI tags."
+        exit 1
     } else {
         $latestRelease = Get-LatestStableRelease -MajorMinor $branchMajorMinor
         if (-not $latestRelease) {
@@ -176,6 +180,10 @@ if ($tags.Count -eq 0) {
     $fileMajorMinor = $fileParts[0] + "." + $fileParts[1]
     $initialPatch = if ($fileMajorMinor -eq $majorMinor) { [int]$fileParts[2] } else { 0 }
     $newTag = "v$majorMinor.$initialPatch-$PreReleaseVersion.1"
+    if ("v$majorMinor.$initialPatch" -ne "v$fileVersion") {
+        Write-Error "Aborted: seed tag base 'v$majorMinor.$initialPatch' does not match VERSION file '$fileVersion'. Refusing to create a CI tag for a version that does not exist."
+        exit 1
+    }
     Write-Host "No existing tags for v$majorMinor.*-$PreReleaseVersion.*. Creating new tag: $newTag"
     git tag $newTag
     git push $remote $newTag
@@ -199,6 +207,14 @@ if ($branchBased) {
     $currentVersion = $SNAPSHOT_VERSION -replace "-SNAPSHOT", ""
     $currentParts = $currentVersion -split "\."
     $currentPatch = if ($currentParts.Count -ge 3) { [int]$currentParts[2] } else { 0 }
+
+    # The tag base must be exactly the VERSION file's version — never a blend
+    # of branch major.minor with a patch from a stale/unrelated VERSION file
+    # (that blend is how the non-existent v4.14.6-ci.N tags were created).
+    if ("v$majorMinor.$currentPatch" -ne "v$currentVersion") {
+        Write-Error "Aborted: tag base 'v$majorMinor.$currentPatch' (branch '$branch' major.minor + VERSION patch) does not match VERSION file '$currentVersion'. Refusing to create a CI tag for a version that does not exist."
+        exit 1
+    }
 
     $escapedCurrent = [regex]::Escape("v$majorMinor.$currentPatch")
     $exactPattern = "^${escapedCurrent}-$([regex]::Escape($PreReleaseVersion))\.(\d+)$"
