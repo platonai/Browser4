@@ -68,11 +68,19 @@
     dev branch a single command. Without it the script warns and asks for
     confirmation when HEAD is off main.
 
+.PARAMETER Force
+    Allow overwriting an existing tag. Overwriting is destructive — deleting
+    and re-pushing a tag can re-trigger the release workflow, and the workflow
+    fails if a GitHub release for that tag already exists. -Force is required
+    even under BROWSER4_RELEASE_YES: automation must opt in deliberately
+    instead of auto-confirming the overwrite.
+
 .EXAMPLE
     .\bin\release\trigger-release.ps1                       # dry run (preview only)
     .\bin\release\trigger-release.ps1 -Apply                # actually create + push
     .\bin\release\trigger-release.ps1 -Apply -message "Hotfix for login crash"
     .\bin\release\trigger-release.ps1 -Apply -SyncMain      # auto-fast-forward main first
+    .\bin\release\trigger-release.ps1 -Apply -Force         # overwrite an existing tag
     .\bin\release\trigger-release.ps1 -Agent auto           # dry run, AI notes (auto backend)
     .\bin\release\trigger-release.ps1 -Agent dsh            # dry run, AI notes via dsh
 #>
@@ -83,6 +91,7 @@ param(
     [switch]$Apply,
     [switch]$DryRun,
     [switch]$SyncMain,
+    [switch]$Force,
     [ValidateSet('auto', 'claude', 'kimi', 'codex', 'dsh', 'copilot')]
     [string]$Agent = ""
 )
@@ -174,12 +183,30 @@ if ($status) {
 Write-Host ""
 Write-Host "Verifying HEAD is the latest $remote/main ..."
 git fetch $remote main 2>$null
+$fetchExit = $LASTEXITCODE
+if ($null -eq $fetchExit) { $fetchExit = -1 }
 
 $headSha = git rev-parse HEAD
 $mainSha = git rev-parse "$remote/main" 2>$null
+$mainResolved = ($null -ne $mainSha -and $mainSha)
 
-if ($null -eq $mainSha -or -not $mainSha) {
-    Write-Warning "Could not resolve $remote/main (fetch failed?). Skipping main-branch check."
+if (-not $mainResolved -or $fetchExit -ne 0) {
+    # The main-branch guard is the core release invariant — release.yml
+    # hard-fails any tag that is not on the latest origin/main. It must never
+    # be skipped silently: an Apply run aborts here (the pushed tag would be
+    # rejected by CI anyway); a dry run warns and continues the preview
+    # because nothing is pushed in preview mode.
+    $why = if (-not $mainResolved) {
+        "Could not resolve $remote/main (git fetch exit code $fetchExit)."
+    } else {
+        "git fetch $remote main failed (exit code $fetchExit) — $remote/main may be stale."
+    }
+    if ($isDryRun) {
+        Write-Warning "$why Dry-run preview continues unverified — run -Apply only when $remote is reachable."
+    } else {
+        Write-Error "$why Aborting: a tag pushed without verification would be rejected by release.yml."
+        exit 1
+    }
 } elseif ($headSha -ne $mainSha) {
     # Can HEAD fast-forward main? (origin/main must be an ancestor of HEAD)
     git merge-base --is-ancestor $mainSha $headSha 2>$null
@@ -194,17 +221,37 @@ if ($null -eq $mainSha -or -not $mainSha) {
             $currentBranch = git rev-parse --abbrev-ref HEAD
             git show-ref --verify --quiet refs/heads/main
             $hadLocalMain = ($LASTEXITCODE -eq 0)
-            try {
-                if ($hadLocalMain) { git switch main } else { git switch -c main "$remote/main" }
+
+            # Native git commands do NOT throw under $ErrorActionPreference =
+            # "Stop", so try/catch cannot catch a failed step. Every step
+            # checks $LASTEXITCODE explicitly; on failure we still try to
+            # switch back to the original branch before exiting.
+            $syncFailed = ''
+            if ($hadLocalMain) { git switch main } else { git switch -c main "$remote/main" }
+            if ($LASTEXITCODE -ne 0) { $syncFailed = "git switch to main failed (exit code $LASTEXITCODE)" }
+            if (-not $syncFailed) {
                 git merge --ff-only $currentBranch
+                if ($LASTEXITCODE -ne 0) { $syncFailed = "git merge --ff-only $currentBranch failed (exit code $LASTEXITCODE)" }
+            }
+            if (-not $syncFailed) {
                 git push $remote main
-                git switch $currentBranch
-            } catch {
-                Write-Error "SyncMain failed: $_"
-                try { git switch $currentBranch } catch { }
+                if ($LASTEXITCODE -ne 0) { $syncFailed = "git push $remote main failed (exit code $LASTEXITCODE)" }
+            }
+
+            git switch $currentBranch 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "Could not switch back to $currentBranch — you are still on main. Run: git switch $currentBranch"
+            }
+
+            if ($syncFailed) {
+                Write-Error "SyncMain failed: $syncFailed"
                 exit 1
             }
+
             git fetch $remote main 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "Re-fetch after sync failed — verifying against the local tracking ref (updated by the push)."
+            }
             $mainSha = git rev-parse "$remote/main"
             if ($headSha -ne $mainSha) {
                 Write-Error "SyncMain verification failed: $remote/main is still not at HEAD after sync."
@@ -371,9 +418,41 @@ $newTag = "v$version"
 $existingTag = git tag -l $newTag
 if ($existingTag) {
     if ($isDryRun) {
-        Write-Warning "Tag '$newTag' already exists (would be overwritten with -Apply)."
+        Write-Warning "Tag '$newTag' already exists (would be overwritten with -Apply -Force)."
     } else {
+        # Overwriting a tag is destructive — deleting + re-pushing can
+        # re-trigger the release workflow or collide with an existing GitHub
+        # release. It therefore requires an explicit -Force, which is NOT
+        # auto-granted by BROWSER4_RELEASE_YES: automation must opt in.
+        if (-not $Force) {
+            Write-Error "Tag '$newTag' already exists. Pass -Force to overwrite it — without it the script refuses to touch an existing tag."
+            exit 1
+        }
         Write-Host "Tag '$newTag' already exists"
+
+        # If the remote tag has already been consumed by a GitHub release,
+        # overwriting it will re-trigger release.yml against an existing
+        # release and the workflow fails. Best-effort check via gh.
+        $remoteTag = git ls-remote --tags $remote "refs/tags/$newTag" 2>$null
+        if ($remoteTag) {
+            $releaseExists = $false
+            try {
+                gh release view $newTag 2>$null | Out-Null
+                $releaseExists = ($LASTEXITCODE -eq 0)
+            } catch {
+                Write-Warning "Could not verify GitHub release status for '$newTag' (gh unavailable?) — overwriting may re-trigger the workflow."
+            }
+            if ($releaseExists) {
+                Write-Warning "A GitHub release for '$newTag' already exists."
+                $confirm = Confirm-Step "Overwrite anyway? The re-triggered workflow may fail. (y/n)"
+                if ($confirm -ne 'y') {
+                    Write-Host "Cancelled"
+                    exit 0
+                }
+            } else {
+                Write-Warning "Remote tag '$newTag' exists on $remote — deleting and re-pushing it may re-trigger the release workflow."
+            }
+        }
 
         $confirm = Confirm-Step "Do you want to overwrite it? (y/n)"
         if ($confirm -ne 'y') {
@@ -383,12 +462,13 @@ if ($existingTag) {
         try {
             # Delete local tag
             git tag -d $newTag
+            if ($LASTEXITCODE -ne 0) { throw "git tag -d failed (exit code $LASTEXITCODE)" }
             Write-Host "Deleted local tag: $newTag"
 
             # Delete remote tag if it exists
-            $remoteTag = git ls-remote --tags $remote "refs/tags/$newTag" 2>$null
             if ($remoteTag) {
                 git push $remote --delete $newTag
+                if ($LASTEXITCODE -ne 0) { throw "git push --delete failed (exit code $LASTEXITCODE)" }
                 Write-Host "Deleted remote tag: $newTag"
             }
         } catch {
@@ -417,8 +497,11 @@ function Get-TagSortKey {
     }
 }
 
-# Get previous tag for release notes (supports vX.Y.Z and X.Y.Z-rc.N)
-$tagCandidates = git tag --list | Where-Object { $_ -match '^(v\d+\.\d+\.\d+|\d+\.\d+\.\d+-rc\.\d+)$' }
+# Get previous tag for release notes. The filter must accept the v-prefixed
+# rc form (vX.Y.Z-rc.N): this script itself creates tags as "v$version", so an
+# rc release was previously never picked as the previous tag — release notes
+# spanned back to the last full release instead of the previous rc.
+$tagCandidates = git tag --list | Where-Object { $_ -match '^v?\d+\.\d+\.\d+(-rc\.\d+)?$' }
 $prevTag = $tagCandidates |
         ForEach-Object {
             $key = Get-TagSortKey $_
@@ -459,7 +542,11 @@ if ($prevTag) {
 # function scopes the defined functions to that function only, so
 # Invoke-Agent would not be visible to Invoke-ReleaseNotesAgent below
 # (it failed with: "The term 'Invoke-Agent' is not recognized").
-$script:AgentScriptPath = Join-Path $repoRoot 'coworker\scripts\workers\agent.ps1'
+# Forward slashes on purpose: Join-Path does not translate backslashes on
+# Linux/macOS, and a literal backslash path makes Test-Path -LiteralPath fail —
+# which would silently disable the -Agent feature there (same cross-platform
+# pitfall documented in monitor-release.ps1).
+$script:AgentScriptPath = Join-Path $repoRoot 'coworker/scripts/workers/agent.ps1'
 $script:AgentHelpersLoaded = $false
 if (Test-Path -LiteralPath $script:AgentScriptPath) {
     try {
@@ -684,7 +771,7 @@ if ($isDryRun) {
     Write-Host "  Tag type:      $tagType"
     Write-Host "  Remote:        $remote"
     if ($existingTag) {
-        Write-Host "  Note:          tag '$newTag' already exists (would be overwritten)" -ForegroundColor Yellow
+        Write-Host "  Note:          tag '$newTag' already exists (would be overwritten with -Apply -Force)" -ForegroundColor Yellow
     }
     if ($agentUsed) {
         Write-Host "  Release notes: What's New (AI via $($script:ReleaseAgent.Backend)) + commit sections" -ForegroundColor Green
