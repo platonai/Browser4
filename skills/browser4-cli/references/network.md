@@ -1,5 +1,5 @@
 ---
-title: "Network Inspection & HAR"
+title: "Network Inspection, HAR & Routing"
 description: "Use when you need to see what the page loaded — XHR/fetch calls, status codes, headers, response bodies — or record a HAR file: network requests, network request, network har start/stop."
 tier: procedure
 ---
@@ -171,6 +171,47 @@ browser4-cli network requests --clear
 browser4-cli click "button[data-testid=submit]"
 browser4-cli network requests --type xhr --method POST
 ```
+
+## Flags
+
+Common options across the network commands:
+
+| Flag | Commands | Meaning |
+|------|----------|---------|
+| `--filter <text>` | `network requests` | Only requests whose URL contains this text (case-insensitive) |
+| `--type <csv>` | `network requests` | CDP resource types, e.g. `xhr,fetch` |
+| `--method <m>` | `network requests` | HTTP method, e.g. `POST` |
+| `--status <s>` | `network requests` | `200`, `2xx`, `400-499`, or comma-separated combos `2xx,4xx` |
+| `--clear` | `network requests` | Drop all tracked requests first |
+| `--content <mode>` | `network har start` | `none` (default), `text`, or `all` (binary base64) |
+| `--path <file>` | `network har stop` | Output `.har` file path (alias of the positional path) |
+| `--abort` | `network route` | Fail matching requests instead of sending them |
+| `--body <text>` | `network route` | Answer matching requests with this mock response body |
+| `--content-type <mime>` | `network route` | Content-Type header for the mock response |
+| `--resource-type <csv>` | `network route` | Only intercept these CDP resource types (alias: `--type`) |
+
+`network route` requires exactly one action: `--abort` or `--body`.
+
+## Errors & Recovery
+
+- **No requests tracked** — tracking is lazy: the CDP `Network` domain is
+  enabled on the first `network`/`har` command, so traffic that happened
+  before it is not recorded. Re-run the page interaction and check again.
+- **"Unknown network request id"** — request ids are per tab and per session;
+  a closed tab or a new session invalidates them. Re-list with
+  `network requests` to get current ids.
+- **Missing response bodies** — `Network.getResponseBody` is best-effort:
+  Chrome evicts bodies on navigation, so detail queries and HAR `text`/`all`
+  modes may return metadata-only entries. Navigate while recording
+  (`network har start` → navigate → `network har stop`) to capture bodies.
+- **Route not taking effect** — routes are matched in registration order and
+  respect `--resource-type` filters; a later route wins over an earlier one
+  for the same URL, and requests rejected by type filters continue unchanged.
+  Check the active routes with `network unroute` (removes everything) or
+  re-register the route.
+- **HAR file looks wrong / empty** — the CLI only writes a file when the
+  backend returned a real HAR document; a backend error is printed verbatim
+  instead of being saved as a fake `.har`.
 
 ## Notes & Limitations
 
