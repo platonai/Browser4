@@ -1704,8 +1704,14 @@ pub(super) fn test_network_requests_and_har(ctx: &mut E2ECtx) {
         "request detail should include the response body, got:\n{}",
         detail.stdout
     );
-    assert!(
-        detail.stdout.contains("\"status\":\"ok\""),
+    // The tool result is JSON with the body as an (escaped) string field;
+    // parse it instead of string-matching, which would trip on escaping.
+    let detail_json: serde_json::Value =
+        serde_json::from_str(&strip_snapshot_output(&detail.stdout))
+            .unwrap_or_else(|e| panic!("network request output should be JSON: {e}\n{}", detail.stdout));
+    assert_eq!(
+        detail_json["responseBody"],
+        serde_json::json!({"status": "ok", "source": "fixture"}),
         "response body should contain the fixture payload, got:\n{}",
         detail.stdout
     );
