@@ -397,6 +397,23 @@ class MCPToolController(
         }
     }
 
+    /**
+     * List plugin tool specs that declare a named CLI command
+     * (`ToolSpec.cliName`, spaced form like `"profile import"`).
+     *
+     * The CLI fetches this endpoint at startup to render declared plugin
+     * commands as first-class named commands (argument parsing, help) with no
+     * CLI code change — the plugin manifest/spec is the single source of truth.
+     */
+    @GetMapping("/tools/specs")
+    fun listCliToolSpecs(): ResponseEntity<Any> {
+        val specs = CustomToolRegistry.instance.getAllExecutors()
+            .flatMap { executor -> executor.getToolSpecs().values }
+            .filter { !it.cliName.isNullOrBlank() }
+            .sortedBy { it.cliName }
+        return ResponseEntity.ok(mapOf("tools" to specs))
+    }
+
     // =========================================================================
     // Session management handlers
     // =========================================================================

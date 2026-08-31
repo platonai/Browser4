@@ -114,9 +114,9 @@ Have HTML files and want structured data — without tokens?
 | `webminer all <html-dir>` | Full pipeline: encode → cluster → views (`--max-files`, `--output`, `--resume`) |
 | `webminer views <result-dir>` | Rebuild the interactive views from an existing run |
 
-Requires JDK 17+ (auto-detected from `JAVA_HOME`, common paths, or `PATH`). Any other command is forwarded verbatim to `scent-miner.jar` (e.g. `webminer encode <dir>`).
+Requires JDK 17+ (auto-detected: `JAVA_HOME` → Browser4 runtime bundle JRE → common paths → `PATH`). Any other command is forwarded verbatim to `scent-miner.jar` (e.g. `webminer encode <dir>`).
 
-> **Install:** `browser4-cli webminer install` (or the legacy launcher `.\webminer.ps1 install` from the [web-miner](https://github.com/platonai/web-miner) project). The JAR is also downloadable from [web-miner releases](https://github.com/platonai/web-miner/releases).
+> **Install:** `browser4-cli webminer install`. The JAR is also downloadable from [web-miner releases](https://github.com/platonai/web-miner/releases).
 
 See **[web-miner/SKILL.md](../../browser4-web-miner/SKILL.md)** for the full reference.
 

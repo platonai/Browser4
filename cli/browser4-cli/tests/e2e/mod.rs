@@ -507,6 +507,9 @@ struct FixtureDownloadServer {
     requests: Arc<Mutex<Vec<String>>>,
     /// Release tag served by this fixture (reported in /latest-release.json).
     tag: String,
+    /// Optional release-candidate tag reported in /latest-rc.json (simulating
+    /// a mirror that publishes RC metadata next to the stable metadata).
+    latest_rc: Option<String>,
     /// Artificial latency applied before serving each request (for speed-test
     /// scenarios that need one mirror to appear slower than another).
     latency: Duration,
@@ -517,7 +520,27 @@ impl FixtureDownloadServer {
         Self::start_with_latency(bundle_bytes, tag, Duration::ZERO)
     }
 
+    /// Like [`Self::start`], but also serves a `/latest-rc.json` metadata
+    /// endpoint reporting `rc_tag` (a newer release candidate).
+    fn start_with_rc(bundle_bytes: Vec<u8>, tag: &str, rc_tag: &str) -> Self {
+        Self::start_with_latency_and_rc(
+            bundle_bytes,
+            tag,
+            Duration::ZERO,
+            Some(rc_tag.to_string()),
+        )
+    }
+
     fn start_with_latency(bundle_bytes: Vec<u8>, tag: &str, latency: Duration) -> Self {
+        Self::start_with_latency_and_rc(bundle_bytes, tag, latency, None)
+    }
+
+    fn start_with_latency_and_rc(
+        bundle_bytes: Vec<u8>,
+        tag: &str,
+        latency: Duration,
+        latest_rc: Option<String>,
+    ) -> Self {
         let listener =
             TcpListener::bind("127.0.0.1:0").expect("fixture download server bind failed");
         let port = listener.local_addr().unwrap().port();
@@ -527,6 +550,7 @@ impl FixtureDownloadServer {
         let reqs = requests.clone();
         let bytes = Arc::new(bundle_bytes);
         let tag_owned = tag.to_string();
+        let rc_owned = latest_rc.clone();
 
         let tag_for_thread = tag_owned.clone();
         thread::spawn(move || {
@@ -542,7 +566,10 @@ impl FixtureDownloadServer {
                         let b = bytes.clone();
                         let r = reqs.clone();
                         let t = tag_for_thread.clone();
-                        thread::spawn(move || serve_download_request(stream, b, r, t, latency));
+                        let rc = rc_owned.clone();
+                        thread::spawn(move || {
+                            serve_download_request(stream, b, r, t, rc, latency)
+                        });
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
@@ -560,6 +587,7 @@ impl FixtureDownloadServer {
             shutdown,
             requests,
             tag: tag_owned,
+            latest_rc,
             latency,
         }
     }
@@ -587,6 +615,7 @@ fn serve_download_request(
     bundle_bytes: Arc<Vec<u8>>,
     requests: Arc<Mutex<Vec<String>>>,
     tag: String,
+    latest_rc: Option<String>,
     latency: Duration,
 ) {
     if !latency.is_zero() {
@@ -624,6 +653,26 @@ fn serve_download_request(
         );
         let content_type = "application/json";
         write_http_response(&mut stream, "200 OK", content_type, &body);
+        return;
+    }
+
+    // Serve /latest-rc.json metadata endpoint (simulating a mirror that
+    // publishes RC metadata; 404 when the fixture has no RC tag).
+    if path == "/releases/latest-rc.json" {
+        match latest_rc {
+            Some(rc_tag) => {
+                let body = format!(
+                    r#"{{"tag":"{}","version":"{}","published_at":"2026-01-01T00:00:00Z","release_url":"https://github.com/platonai/Browser4/releases/tag/{}","assets":[]}}"#,
+                    rc_tag,
+                    rc_tag.trim_start_matches('v'),
+                    rc_tag
+                );
+                write_http_response(&mut stream, "200 OK", "application/json", &body);
+            }
+            None => {
+                write_http_response(&mut stream, "404 Not Found", "text/plain", "not found")
+            }
+        }
         return;
     }
 
@@ -932,7 +981,13 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             &mut stream,
             "200 OK",
             "application/json",
-            r#"{"tools":["open_session","list_sessions","browser_navigate","agent_extract","agent_summarize","crawl_submit","markdown_read"]}"#,
+            r#"{"tools":["open_session","list_sessions","browser_navigate","agent_extract","agent_summarize","crawl_submit","markdown_read","profile_import_list_sources","profile_import_import"]}"#,
+        ),
+        ("GET", "/mcp/tools/specs") => write_http_response(
+            &mut stream,
+            "200 OK",
+            "application/json",
+            r#"{"tools":[{"cliName":"profile import","domain":"profile_import","method":"import","description":"Import browser data","arguments":[{"name":"source","type":"String","defaultValue":null},{"name":"data","type":"String","defaultValue":null}]}]}"#,
         ),
         ("POST", "/mcp/call-tool") => {
             let payload: serde_json::Value =
@@ -1572,6 +1627,14 @@ fn mock_browser_tool_text(
                 }
                 _ => "mock response for browser_tabs".to_string(),
             }
+        }
+        "profile_import_list_sources" => {
+            r#"{"chrome":[{"directory":"Default","name":"Person 1","userDataDir":"/mock/chrome","profileDir":"/mock/chrome/Default"}],"edge":[],"safari":{}}"#
+                .to_string()
+        }
+        "profile_import_import" => {
+            r#"{"importDir":"/mock/imports/chrome-Default-20260825","profileDir":"/mock/imports/chrome-Default-20260825/profile/Default","browser":"chrome","sourceProfile":"chrome:Default","filesCopied":42,"data":["bookmarks","cookies"],"warnings":["Passwords were not imported (disabled by default)."],"nextStep":"browser4-cli open --profile /mock/imports/chrome-Default-20260825/profile/Default"}"#
+                .to_string()
         }
         other => format!("mock response for {other}"),
     }

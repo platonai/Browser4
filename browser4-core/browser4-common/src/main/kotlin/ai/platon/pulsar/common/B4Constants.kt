@@ -12,6 +12,15 @@ object B4Constants {
 
     const val SESSION_ID_CAPABILITY = "sessionId"
     const val PROFILE_MODE_CAPABILITY = "profileMode"
+    const val PROFILE_PATH_CAPABILITY = "profilePath"
+
+    /**
+     * The session-level browser profile path, set from the `profilePath`
+     * capability (e.g. `open --profile <path>`). When present, the session's
+     * browser launches with this directory as the Chrome user data dir
+     * instead of a Browser4-managed profile directory.
+     */
+    const val BROWSER_PROFILE_PATH = "browser.profile.path"
 
     /**
      * The REST level session id - DEFAULT

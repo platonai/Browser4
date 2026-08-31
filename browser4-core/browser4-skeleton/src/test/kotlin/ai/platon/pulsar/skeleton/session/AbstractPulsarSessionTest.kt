@@ -1,5 +1,6 @@
 package ai.platon.pulsar.skeleton.session
 
+import ai.platon.pulsar.common.B4Constants.BROWSER_PROFILE_PATH
 import ai.platon.pulsar.common.Runtimes
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_DISPLAY_MODE
@@ -107,5 +108,32 @@ class AbstractPulsarSessionTest {
         val sessionConfig = VolatileConfig(false)
         PulsarSettings.parse(emptyMap()).overrideConfiguration(sessionConfig)
         assertNull(sessionConfig[BROWSER_DISPLAY_MODE])
+    }
+
+    // ------------------------------------------------------------------
+    // Capability chain: open --profile <path> -> sessionConfig
+    // browser.profile.path. createBoundDriver launches with a custom
+    // BrowserId when this value is set.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `profilePath capability sets browser profile path on the session config`() {
+        val sessionConfig = VolatileConfig(false)
+        PulsarSettings.parse(mapOf("profilePath" to "C:/tmp/browser-profile")).overrideConfiguration(sessionConfig)
+        assertEquals("C:/tmp/browser-profile", sessionConfig[BROWSER_PROFILE_PATH])
+    }
+
+    @Test
+    fun `blank profilePath capability is ignored`() {
+        val sessionConfig = VolatileConfig(false)
+        PulsarSettings.parse(mapOf("profilePath" to "   ")).overrideConfiguration(sessionConfig)
+        assertNull(sessionConfig[BROWSER_PROFILE_PATH])
+    }
+
+    @Test
+    fun `absent profilePath capability leaves the profile path unset`() {
+        val sessionConfig = VolatileConfig(false)
+        PulsarSettings.parse(emptyMap()).overrideConfiguration(sessionConfig)
+        assertNull(sessionConfig[BROWSER_PROFILE_PATH])
     }
 }

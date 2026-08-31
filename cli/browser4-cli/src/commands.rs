@@ -406,6 +406,38 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "profile-import",
+            description: "Import browser personal data (bookmarks, history, passwords, cookies, extensions) from system Chrome/Edge/Safari into a Browser4-managed profile snapshot. Requires the browser4-profile-import plugin on the backend. Use --list-sources to discover installed browsers first.",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "list-sources", description: "List installed browsers (chrome, edge, safari) and their profiles", is_bool: true, short: None },
+                OptionDef { name: "source", description: "Source browser: chrome, edge or safari", is_bool: false, short: None },
+                OptionDef { name: "profile", description: "Source Chrome/Edge profile name or directory name (default: first profile); ignored for safari", is_bool: false, short: None },
+                OptionDef { name: "data", description: "Comma-separated subset of bookmarks,history,passwords,cookies,extensions (default: all; passwords excluded unless profileimport.allow.passwords=true)", is_bool: false, short: None },
+                OptionDef { name: "into", description: "Import landing: temp (snapshot dir, default), prototype (seed the prototype profile), default (replace the default profile dir)", is_bool: false, short: None },
+                OptionDef { name: "json", description: "Print the raw JSON result", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |args| {
+                if get_bool(args, "list-sources").unwrap_or(false) {
+                    "profile_import_list_sources".to_string()
+                } else {
+                    "profile_import_import".to_string()
+                }
+            },
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(v) = get_opt_str(args, "source") { params["source"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "profile") { params["profile"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "data") { params["data"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "into") { params["into"] = json!(v); }
+                params
+            },
+        },
+        CommandDef {
             name: "attach",
             description: "Attach to an existing browser via CDP endpoint, channel name, or Browser4 Extension",
             category: Category::Browsers,
@@ -5216,6 +5248,49 @@ mod tests {
         let args = HashMap::new();
         assert!((cmd.tool_name_fn)(&args).is_empty());
         assert_eq!((cmd.tool_params_fn)(&args), json!({}));
+    }
+
+    #[test]
+    fn test_profile_import_tool_name_for_import() {
+        let map = commands_map();
+        let cmd = map.get("profile-import").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "profile_import_import");
+    }
+
+    #[test]
+    fn test_profile_import_tool_name_for_list_sources() {
+        let map = commands_map();
+        let cmd = map.get("profile-import").unwrap();
+        let mut args = HashMap::new();
+        args.insert("list-sources".to_string(), json!(true));
+        assert_eq!((cmd.tool_name_fn)(&args), "profile_import_list_sources");
+    }
+
+    #[test]
+    fn test_profile_import_params_map_to_camel_case() {
+        let map = commands_map();
+        let cmd = map.get("profile-import").unwrap();
+        let mut args = HashMap::new();
+        args.insert("source".to_string(), json!("chrome"));
+        args.insert("profile".to_string(), json!("Work"));
+        args.insert("data".to_string(), json!("bookmarks,cookies"));
+        args.insert("into".to_string(), json!("prototype"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["source"], "chrome");
+        assert_eq!(params["profile"], "Work");
+        assert_eq!(params["data"], "bookmarks,cookies");
+        assert_eq!(params["into"], "prototype");
+        // CLI-only flags are not forwarded as tool params
+        assert!(params.get("json").is_none());
+    }
+
+    #[test]
+    fn test_profile_import_is_not_batch_supported() {
+        let map = commands_map();
+        let cmd = map.get("profile-import").unwrap();
+        assert!(!cmd.batch_supported);
     }
 
     #[test]

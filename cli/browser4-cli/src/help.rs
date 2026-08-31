@@ -292,14 +292,14 @@ pub fn generate_help() -> String {
         "\n── Plugin tools ─────────────────────────────────────────────────────".to_string(),
     );
     lines.push(
-        "  Installed plugins expose tools via the plugin-<name> <method> pattern:".to_string(),
+        "  Installed plugins expose tools via the `plugin <name> [method]` pattern:".to_string(),
     );
     lines.push(
-        "    plugin-<name>              invoke the default tool for a plugin domain".to_string(),
+        "    plugin <name>              invoke the default tool for a plugin domain".to_string(),
     );
-    lines.push("    plugin-<name> <method>     invoke a specific method (e.g. plugin-media download --url ...)".to_string());
-    lines.push("    plugin                     list all available plugin tool domains".to_string());
-    lines.push("  Use `plugin list` to see installed plugins and their status.".to_string());
+    lines.push("    plugin <name> <method>     invoke a specific method (e.g. plugin media download --url ...)".to_string());
+    lines.push("    plugin commands             list named CLI commands declared by installed plugins (ToolSpec.cliName)".to_string());
+    lines.push("    plugin list                see installed plugins and their status.".to_string());
 
     // Global options
     lines.push(
@@ -1413,6 +1413,18 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(
             "    match the upgraded CLI binary."
+                .to_string(),
+        );
+        lines.push(
+            "  - When upgrading to the latest stable release, a newer release candidate"
+                .to_string(),
+        );
+        lines.push(
+            "    (e.g. v4.14.0-rc.1) is advertised so you can opt into the RC track"
+                .to_string(),
+        );
+        lines.push(
+            "    explicitly with --tag."
                 .to_string(),
         );
         lines.push(String::new());
