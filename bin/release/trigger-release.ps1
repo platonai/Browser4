@@ -18,10 +18,12 @@
     and creates + pushes a vX.Y.Z tag that triggers the release workflow.
 
     main is the single release source: the tag must be created from the latest
-    origin/main commit. The script verifies HEAD matches origin/main and warns
-    (asking for confirmation in -Apply mode) when it does not — release.yml
-    hard-fails any release whose tag does not point at the latest main, so the
-    workflow never rewrites main to match a tag.
+    origin/main commit. Maintenance releases may also be tagged from the tip of
+    the matching X.Y.x branch (e.g. v4.13.12 → origin/4.13.x). The script
+    verifies HEAD matches origin/main or the matching maintenance branch and
+    warns (asking for confirmation in -Apply mode) when it does not — release.yml
+    hard-fails any release whose tag is off both, so the workflow never
+    rewrites main to match a tag.
 
     By default the script runs in DRY RUN mode: it performs all read-only
     checks, previews the tag and release notes, and exits without changing
@@ -144,7 +146,7 @@ if ($status) {
 # ═══════════════════════════════════════════════════════════════════
 
 Write-Host ""
-Write-Host "Verifying HEAD is the latest $remote/main ..."
+Write-Host "Verifying HEAD is the latest $remote/main (or the matching X.Y.x maintenance branch) ..."
 git fetch $remote main 2>$null
 
 $headSha = git rev-parse HEAD
@@ -153,14 +155,30 @@ $mainSha = git rev-parse "$remote/main" 2>$null
 if ($null -eq $mainSha -or -not $mainSha) {
     Write-Warning "Could not resolve $remote/main (fetch failed?). Skipping main-branch check."
 } elseif ($headSha -ne $mainSha) {
-    Write-Warning "HEAD ($headSha) does not match $remote/main ($mainSha)."
-    Write-Warning "Releases must be tagged from the latest main commit — release.yml will abort the workflow if the tag is off main."
-    Write-Warning "Run 'git checkout main && git pull' (or push your commits to main) before tagging."
-    if (-not $isDryRun) {
-        $continue = Read-Host "Continue anyway? (y/n)"
-        if ($continue -ne 'y') {
-            Write-Host "Cancelled"
-            exit 0
+    # Maintenance-line allowance: a release may also be tagged from the tip
+    # of the matching X.Y.x maintenance branch (mirrors release.yml).  The
+    # branch is derived from VERSION, e.g. v4.13.12 → origin/4.13.x.
+    $maintAllowed = $false
+    $releaseVersion = ((Get-Content "VERSION" -ErrorAction SilentlyContinue).Trim() -replace '-SNAPSHOT$', '')
+    if ($releaseVersion -match '^(\d+\.\d+)\.\d+$') {
+        $maintBranch = "$remote/$($Matches[1]).x"
+        git fetch $remote $Matches[1].x 2>$null
+        $maintSha = git rev-parse $maintBranch 2>$null
+        if ($maintSha -and $headSha -eq $maintSha) {
+            $maintAllowed = $true
+            Write-Host "[OK] HEAD is the latest $maintBranch ($maintSha)"
+        }
+    }
+    if (-not $maintAllowed) {
+        Write-Warning "HEAD ($headSha) does not match $remote/main ($mainSha)."
+        Write-Warning "Releases must be tagged from the latest main (or the matching X.Y.x maintenance branch) — release.yml will abort the workflow otherwise."
+        Write-Warning "Run 'git checkout main && git pull' (or push your commits to main) before tagging."
+        if (-not $isDryRun) {
+            $continue = Read-Host "Continue anyway? (y/n)"
+            if ($continue -ne 'y') {
+                Write-Host "Cancelled"
+                exit 0
+            }
         }
     }
 } else {

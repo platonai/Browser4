@@ -121,21 +121,41 @@ jobs:
           # created from stale code and the release is aborted — never
           # force-resync main to a tag (that rewrites history and drops
           # commits merged in during the release window).
-          git fetch origin main
+          #
+          # Maintenance-line allowance: a tag vX.Y.Z may also point at the
+          # tip of the matching maintenance branch origin/X.Y.x (e.g.
+          # v4.13.12 → origin/4.13.x) when that branch exists.  This lets
+          # patch releases ship from maintenance branches without waiting
+          # for a merge into the current development line.
+          git fetch origin main '+refs/heads/*:refs/remotes/origin/*'
           TAG_SHA=$(git rev-parse HEAD)
           MAIN_SHA=$(git rev-parse origin/main)
 
-          if [ "$TAG_SHA" != "$MAIN_SHA" ]; then
-            echo "❌ Release tag $TAG does not point at the latest origin/main commit."
-            echo "   tag:  $TAG_SHA"
-            echo "   main: $MAIN_SHA"
-            echo ""
-            echo "   Releases must be tagged from the latest main:"
-            echo "     git checkout main && git pull"
-            echo "     .\\bin\\release\\trigger-release.ps1 -Apply"
-            exit 1
+          if [ "$TAG_SHA" = "$MAIN_SHA" ]; then
+            echo "✅ Tag $TAG points at the latest origin/main ($MAIN_SHA)"
+            exit 0
           fi
-          echo "✅ Tag $TAG points at the latest origin/main ($MAIN_SHA)"
+
+          VERSION="${TAG#v}"
+          MAJOR_MINOR=$(printf '%s' "$VERSION" | sed -E 's/^([0-9]+\.[0-9]+)\..*/\1/')
+          MAINT_BRANCH="origin/${MAJOR_MINOR}.x"
+          if MAINT_SHA=$(git rev-parse "$MAINT_BRANCH" 2>/dev/null) && [ "$TAG_SHA" = "$MAINT_SHA" ]; then
+            echo "✅ Tag $TAG points at the latest $MAINT_BRANCH ($MAINT_SHA)"
+            exit 0
+          fi
+
+          echo "❌ Release tag $TAG does not point at a valid release source."
+          echo "   tag:  $TAG_SHA"
+          echo "   main: $MAIN_SHA"
+          if [ -n "${MAINT_SHA:-}" ]; then
+            echo "   $MAINT_BRANCH: $MAINT_SHA"
+          fi
+          echo ""
+          echo "   Releases must be tagged from the latest main (or the"
+          echo "   matching X.Y.x maintenance branch):"
+          echo "     git checkout main && git pull"
+          echo "     .\\bin\\release\\trigger-release.ps1 -Apply"
+          exit 1
 
       - name: Setup Node.js
         uses: actions/setup-node@v5
