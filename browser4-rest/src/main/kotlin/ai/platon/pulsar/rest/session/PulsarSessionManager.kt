@@ -28,7 +28,6 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
-import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
 import java.util.UUID
@@ -97,15 +96,13 @@ class PulsarSessionManager(
             return ensureSwarmSession(capabilities)
         }
 
-        // Resolve DEFAULT to a stable UUID so all session types use
-        // UUID-based IDs consistently (extension sessions already do).
-        val resolvedId = if (sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true)) {
-            generateDefaultSessionId()
-        } else {
-            sessionId
-        }
-
-        val normalizedCapabilities = normalizeCapabilities(resolvedId, capabilities)
+        // normalizeCapabilities resolves the display name (or DEFAULT) to the
+        // same stable UUID the capabilities-only path uses, registering the
+        // name -> UUID mapping — so addressing a session by explicit id or by
+        // capability always lands on the same session and the same dedicated
+        // context dir.
+        val normalizedCapabilities = normalizeCapabilities(sessionId, capabilities)
+        val resolvedId = normalizedCapabilities.getValue(SESSION_ID_CAPABILITY).toString()
         val session = sessions.computeIfAbsent(resolvedId) {
             createManagedSession(resolvedId, normalizedCapabilities)
         }
@@ -832,37 +829,40 @@ class PulsarSessionManager(
         val sessionId = when {
             explicitSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> generateDefaultSessionId()
             explicitSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> SWARM_SESSION_ID
-            hasExplicitSessionId -> displayNameToSessionId.getOrDefault(
-                explicitSessionId.trim(),
-                explicitSessionId.trim()
-            )
+            hasExplicitSessionId -> resolveSessionId(explicitSessionId.trim())
             requestedSessionId.isNullOrBlank() || requestedSessionId.equals(
                 DEFAULT_SESSION_ID,
                 ignoreCase = true
             ) -> generateDefaultSessionId()
 
             requestedSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> SWARM_SESSION_ID
-            else -> displayNameToSessionId.computeIfAbsent(requestedSessionId) {
-                UUID.randomUUID().toString()
-            }
+            else -> resolveSessionId(requestedSessionId)
         }
 
         val requestedProfileMode = BrowserProfileMode.fromString(
             normalizedCapabilities[PROFILE_MODE_CAPABILITY]?.toString()
         )
 
+        // The stable UUID that DEFAULT resolves to (if it has been resolved
+        // already). Both the literal "DEFAULT" and this UUID address the
+        // default session slot and must never be treated as named.
+        val defaultSessionUuid = displayNameToSessionId[DEFAULT_SESSION_ID]
+
         // A named session is any session explicitly addressed by a display
-        // name or id other than DEFAULT/SWARM. Named sessions bind a
-        // dedicated, stable chrome user data dir keyed by the resolved
-        // session id, so reopening the session never rotates to another
-        // profile (and never silently clobbers another session's state).
+        // name or id other than DEFAULT/SWARM (by literal name or by the
+        // resolved default UUID). Named sessions bind a dedicated, stable
+        // chrome user data dir keyed by the resolved session id, so
+        // reopening the session never rotates to another profile (and never
+        // silently clobbers another session's state).
         val isNamedSession = if (hasExplicitSessionId) {
             !explicitSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) &&
-                !explicitSessionId.equals(SWARM_SESSION_ID, ignoreCase = true)
+                !explicitSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) &&
+                !explicitSessionId.equals(defaultSessionUuid, ignoreCase = true)
         } else {
             !requestedSessionId.isNullOrBlank() &&
                 !requestedSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) &&
-                !requestedSessionId.equals(SWARM_SESSION_ID, ignoreCase = true)
+                !requestedSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) &&
+                !requestedSessionId.equals(defaultSessionUuid, ignoreCase = true)
         }
 
         normalizedCapabilities[SESSION_ID_CAPABILITY] = sessionId
@@ -900,6 +900,30 @@ class PulsarSessionManager(
     }
 
     /**
+     * Resolve a session id to its stable UUID.
+     *
+     * A display name that has not been seen before is registered in
+     * [displayNameToSessionId] and gets a fresh UUID; a name that is already
+     * registered returns its existing UUID; an id that is already a resolved
+     * session UUID (a registered value) is returned as-is — so addressing a
+     * session by display name, by UUID, or through either API entry point
+     * always lands on the same session.
+     */
+    private fun resolveSessionId(sessionId: String): String {
+        val trimmed = sessionId.trim()
+        // Already a resolved session UUID (registered as a display-name
+        // value, or already a live session key)? Keep it as-is instead of
+        // wrapping it in a new UUID — otherwise addressing an existing
+        // session by its UUID would silently create a different session.
+        if (displayNameToSessionId.containsValue(trimmed) || sessions.containsKey(trimmed)) {
+            return trimmed
+        }
+        return displayNameToSessionId.computeIfAbsent(trimmed) {
+            UUID.randomUUID().toString()
+        }
+    }
+
+    /**
      * Compute the dedicated chrome context directory for a named session.
      *
      * The directory is derived deterministically from the resolved session id
@@ -907,13 +931,16 @@ class PulsarSessionManager(
      * same named session always binds the same chrome user data dir — across
      * reopens and across server restarts. Named profiles live in their own
      * group ("named"), separated from the rotating SEQUENTIAL pool.
+     *
+     * The directory itself is NOT created here: it is materialized lazily at
+     * browser launch ([AbstractPulsarSession.createBoundDriver] calls
+     * `Files.createDirectories` before binding the profile), so an unused
+     * named session costs nothing on disk.
      */
     private fun computeNamedSessionContextDir(sessionId: String): Path {
         val safeName = sessionId.replace(Regex("[^A-Za-z0-9._-]"), "_")
-        val contextDir = AppPaths.getContextBaseDir(NAMED_CONTEXT_GROUP, BrowserType.PULSAR_CHROME)
+        return AppPaths.getContextBaseDir(NAMED_CONTEXT_GROUP, BrowserType.PULSAR_CHROME)
             .resolve("cx.$safeName")
-        Files.createDirectories(contextDir)
-        return contextDir
     }
 
     /**
