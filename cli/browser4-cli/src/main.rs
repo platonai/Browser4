@@ -3493,6 +3493,18 @@ async fn handle_kill_all() -> Result<(), String> {
         cli_println!("✅ No Browser4 server was running.");
     }
 
+    if !shutdown_result.remaining_pids.is_empty() {
+        let pids: Vec<String> = shutdown_result
+            .remaining_pids
+            .iter()
+            .map(|p| p.to_string())
+            .collect();
+        return Err(format!(
+            "❌ Server cleanup incomplete. Remaining process(es): {}",
+            pids.join(", ")
+        ));
+    }
+
     if !shutdown_result.fallback_killed_server_pids.is_empty() {
         let pids: Vec<String> = shutdown_result
             .fallback_killed_server_pids
@@ -6176,6 +6188,36 @@ async fn handle_get(
 // Agent extract / summarize handlers
 // ---------------------------------------------------------------------------
 
+/// Run an async task on a dedicated worker thread with a large stack.
+///
+/// The Windows main thread defaults to a 1 MB stack.  In debug builds
+/// (unoptimised frames) `tokio::join!` of the three concurrent `call_tool`
+/// futures in `extract` / `summarize` / `htmlsnapshot summary` can overflow
+/// that stack and abort the process with a silent exit code 0.  Running the
+/// work on a 16 MB-stack thread — with its own current-thread runtime so no
+/// runtime-crossing restrictions apply — makes these commands robust
+/// regardless of the build profile.
+fn run_on_big_stack<F, Fut, T>(f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    std::thread::Builder::new()
+        .name("b4w-big-stack".to_string())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || -> Result<T, String> {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("failed to build worker runtime: {e}"))?;
+            Ok(rt.block_on(f()))
+        })
+        .map_err(|e| format!("failed to spawn worker thread: {e}"))?
+        .join()
+        .map_err(|_| "worker thread panicked".to_string())?
+}
+
 /// Handle the `extract` command: save AI-extracted content to a file by default,
 /// print to stdout with `--raw`.
 async fn handle_extract(
@@ -6219,36 +6261,54 @@ async fn handle_extract(
         }
     }
 
-    let combined = with_session(client, base_url, session_name, false, |session_id| {
+    let combined = {
         let client = client.clone();
         let base_url = base_url.to_string();
+        let session_name = session_name.map(|s| s.to_string());
         let tool_name = tool_name.to_string();
-        let mut args = extract_args.clone();
-        args["sessionId"] = json!(session_id.clone());
+        let extract_args = extract_args.clone();
+        // Copies owned by the inner (move) closure only, so the futures it
+        // builds are 'static and can cross the thread boundary.
+        let inner_client = client.clone();
+        let inner_base_url = base_url.clone();
+        let inner_tool_name = tool_name.clone();
+        let inner_args = extract_args.clone();
+        // Run on a dedicated 16 MB-stack thread: the concurrent extract
+        // futures can overflow the 1 MB Windows main-thread stack in debug
+        // builds (silent exit code 0).  See `run_on_big_stack`.
+        run_on_big_stack(move || async move {
+            with_session(&client, &base_url, session_name.as_deref(), false, move |session_id| {
+                let client = inner_client.clone();
+                let base_url = inner_base_url.clone();
+                let tool_name = inner_tool_name.clone();
+                let mut args = inner_args.clone();
+                args["sessionId"] = json!(session_id.clone());
 
-        async move {
-            let (url_res, title_res, extract_res) = tokio::join!(
-                call_tool(
-                    &client,
-                    &base_url,
-                    "page_url",
-                    json!({ "sessionId": session_id })
-                ),
-                call_tool(
-                    &client,
-                    &base_url,
-                    "page_title",
-                    json!({ "sessionId": session_id })
-                ),
-                call_tool(&client, &base_url, &tool_name, args),
-            );
-            let url = url_res?;
-            let title = title_res?;
-            let content = extract_res?;
-            Ok(format!("{}\n{}\n{}", url, title, content))
-        }
-    })
-    .await
+                async move {
+                    let (url_res, title_res, extract_res) = tokio::join!(
+                        call_tool(
+                            &client,
+                            &base_url,
+                            "page_url",
+                            json!({ "sessionId": session_id })
+                        ),
+                        call_tool(
+                            &client,
+                            &base_url,
+                            "page_title",
+                            json!({ "sessionId": session_id })
+                        ),
+                        call_tool(&client, &base_url, &tool_name, args),
+                    );
+                    let url = url_res?;
+                    let title = title_res?;
+                    let content = extract_res?;
+                    Ok(format!("{}\n{}\n{}", url, title, content))
+                }
+            })
+            .await
+        })?
+    }
     .map_err(|e| {
         if is_missing_llm_configuration_message(&e) {
             format_missing_llm_error(&e, "extract")
@@ -6370,36 +6430,54 @@ async fn handle_summarize(
         a
     };
 
-    let combined = with_session(client, base_url, session_name, false, |session_id| {
+    let combined = {
         let client = client.clone();
         let base_url = base_url.to_string();
+        let session_name = session_name.map(|s| s.to_string());
         let tool_name = tool_name.to_string();
-        let mut args = summarize_args.clone();
-        args["sessionId"] = json!(session_id.clone());
+        let summarize_args = summarize_args.clone();
+        // Copies owned by the inner (move) closure only, so the futures it
+        // builds are 'static and can cross the thread boundary.
+        let inner_client = client.clone();
+        let inner_base_url = base_url.clone();
+        let inner_tool_name = tool_name.clone();
+        let inner_args = summarize_args.clone();
+        // Run on a dedicated 16 MB-stack thread: the concurrent summarize
+        // futures can overflow the 1 MB Windows main-thread stack in debug
+        // builds (silent exit code 0).  See `run_on_big_stack`.
+        run_on_big_stack(move || async move {
+            with_session(&client, &base_url, session_name.as_deref(), false, move |session_id| {
+                let client = inner_client.clone();
+                let base_url = inner_base_url.clone();
+                let tool_name = inner_tool_name.clone();
+                let mut args = inner_args.clone();
+                args["sessionId"] = json!(session_id.clone());
 
-        async move {
-            let (url_res, title_res, summary_res) = tokio::join!(
-                call_tool(
-                    &client,
-                    &base_url,
-                    "page_url",
-                    json!({ "sessionId": session_id })
-                ),
-                call_tool(
-                    &client,
-                    &base_url,
-                    "page_title",
-                    json!({ "sessionId": session_id })
-                ),
-                call_tool(&client, &base_url, &tool_name, args),
-            );
-            let url = url_res?;
-            let title = title_res?;
-            let content = summary_res?;
-            Ok(format!("{}\n{}\n{}", url, title, content))
-        }
-    })
-    .await
+                async move {
+                    let (url_res, title_res, summary_res) = tokio::join!(
+                        call_tool(
+                            &client,
+                            &base_url,
+                            "page_url",
+                            json!({ "sessionId": session_id })
+                        ),
+                        call_tool(
+                            &client,
+                            &base_url,
+                            "page_title",
+                            json!({ "sessionId": session_id })
+                        ),
+                        call_tool(&client, &base_url, &tool_name, args),
+                    );
+                    let url = url_res?;
+                    let title = title_res?;
+                    let content = summary_res?;
+                    Ok(format!("{}\n{}\n{}", url, title, content))
+                }
+            })
+            .await
+        })?
+    }
     .map_err(|e| {
         if is_missing_llm_configuration_message(&e) {
             format_missing_llm_error(&e, "summarize")
@@ -7793,39 +7871,56 @@ async fn handle_html_snapshot_summary(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    let combined = with_session(client, base_url, session_name, false, |session_id| {
+    let combined = {
         let client = client.clone();
         let base_url = base_url.to_string();
+        let session_name = session_name.map(|s| s.to_string());
         let tool_name = tool_name.to_string();
+        // Copies owned by the inner (move) closure only, so the futures it
+        // builds are 'static and can cross the thread boundary.
+        let inner_client = client.clone();
+        let inner_base_url = base_url.clone();
+        let inner_tool_name = tool_name.clone();
+        // Run on a dedicated 16 MB-stack thread: the concurrent summary
+        // futures can overflow the 1 MB Windows main-thread stack in debug
+        // builds (silent exit code 0).  See `run_on_big_stack`.
+        run_on_big_stack(move || async move {
+            with_session(&client, &base_url, session_name.as_deref(), false, move |session_id| {
+                let client = inner_client.clone();
+                let base_url = inner_base_url.clone();
+                let tool_name = inner_tool_name.clone();
 
-        async move {
-            let (url_res, title_res, summary_res) = tokio::join!(
-                call_tool(
-                    &client,
-                    &base_url,
-                    "page_url",
-                    json!({ "sessionId": session_id })
-                ),
-                call_tool(
-                    &client,
-                    &base_url,
-                    "page_title",
-                    json!({ "sessionId": session_id })
-                ),
-                call_tool(
-                    &client,
-                    &base_url,
-                    &tool_name,
-                    json!({ "sessionId": session_id })
-                ),
-            );
-            let url = url_res?;
-            let title = title_res?;
-            let summary = summary_res?;
-            Ok(format!("{}\n{}\n{}", url, title, summary))
-        }
-    })
-    .await?;
+                async move {
+                    let (url_res, title_res, summary_res) = tokio::join!(
+                        call_tool(
+                            &client,
+                            &base_url,
+                            "page_url",
+                            json!({ "sessionId": session_id })
+                        ),
+                        call_tool(
+                            &client,
+                            &base_url,
+                            "page_title",
+                            json!({ "sessionId": session_id })
+                        ),
+                        call_tool(
+                            &client,
+                            &base_url,
+                            &tool_name,
+                            json!({ "sessionId": session_id })
+                        ),
+                    );
+                    let url = url_res?;
+                    let title = title_res?;
+                    let summary = summary_res?;
+                    Ok(format!("{}\n{}\n{}", url, title, summary))
+                }
+            })
+            .await
+        })?
+    }
+    .map_err(|e| e.to_string())?;
 
     // The combined result has url, title, and summary separated by newlines
     let parts: Vec<&str> = combined.splitn(3, '\n').collect();
