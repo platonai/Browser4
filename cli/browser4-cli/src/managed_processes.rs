@@ -764,6 +764,15 @@ fn command_line_matches_browser4_server(command_line: &str) -> bool {
         || normalized.contains("browser4launcherkt")
         || normalized.contains("browser4bundleapplicationkt")
         || normalized.contains("browser4standaloneapplicationkt")
+        // Bundle servers launch via `java @argfile` (long classpath) and the
+        // launcher deletes the argfile once the JVM is up, so the main class
+        // never appears in the command line again.  The bundled JRE path is
+        // then the only reliable marker: dev worktrees use
+        // `...\browser4-apps\browser4-bundle\target\runtime-bundle\_work\...`,
+        // installed runtimes use `...\browser4\runtime\vX.Y.Z\runtime\bin\java.exe`.
+        || normalized.contains("browser4-apps/browser4-bundle")
+        || normalized.contains("runtime-bundle")
+        || normalized.contains("browser4/runtime/")
 }
 
 fn find_browser4_server_processes() -> Vec<u32> {
@@ -846,15 +855,20 @@ fn force_kill_all_browser4_server_processes() -> ServerKillResult {
 }
 
 /// Ports swept by the port-based server cleanup: every port recorded in the
-/// managed-process registry plus the default 8182.
+/// managed-process registry plus the default ports 8182 (generic) and 18182
+/// (runtime bundle default from `application-bundle.properties`).  Bundle
+/// servers listen on 18182 by default, so without it an unregistered server
+/// would survive `kill-all` / `stop`.
 fn managed_server_ports_for_sweep() -> Vec<u16> {
     let mut ports: Vec<u16> = read_managed_server_processes(None)
         .iter()
         .map(|p| p.port)
         .filter(|&p| p > 0)
         .collect();
-    if !ports.contains(&8182) {
-        ports.push(8182);
+    for default_port in [8182u16, 18182] {
+        if !ports.contains(&default_port) {
+            ports.push(default_port);
+        }
     }
     ports
 }
@@ -1601,11 +1615,28 @@ mod tests {
     }
 
     #[test]
+    fn test_command_line_matches_browser4_server_via_bundle_jre_path_when_argfile_deleted() {
+        // After a successful launch the daemon deletes the java `@argfile`,
+        // so the main class is gone from the command line.  Only the bundled
+        // JRE path identifies the process as a Browser4 server.
+        let dev_bundle = r#""D:/workspace/Browser4/Browser4-4.14-feat/browser4-apps/browser4-bundle/target/runtime-bundle/_work/browser4-bundle-runtime-windows-x64/browser4-bundle-runtime-windows-x64/runtime/bin/java.exe" @D:/Users/tester/AppData/Local/Temp/browser4-argfile-123-456/java-args.txt"#;
+        let installed_runtime = r#""C:/Users/tester/AppData/Roaming/browser4/runtime/v4.13.7/runtime/bin/java.exe" @C:/Users/tester/AppData/Local/Temp/browser4-argfile-123-456/java-args.txt"#;
+
+        assert!(command_line_matches_browser4_server(dev_bundle));
+        assert!(command_line_matches_browser4_server(installed_runtime));
+    }
+
+    #[test]
     fn test_command_line_matches_browser4_server_rejects_non_browser4_java() {
         let non_browser4 =
             r#""C:/Java/bin/java.exe" -jar D:/apps/another-service.jar --server.port=8080"#;
+        let maven_daemon =
+            r#""D:/Program Files/Java/graalvm-jdk-25.0.3+9.1/bin/java.exe" -cp D:/Users/tester/.m2/repository/org/jetbrains/kotlin/kotlin-build-tools-impl/2.2.21/kotlin-build-tools-impl-2.2.21.jar org.jetbrains.kotlin.daemon.KotlinCompileDaemon"#;
+        let mock_site = r#""D:/Program Files/Java/graalvm-jdk-25.0.3+9.1/bin/java.exe" -XX:TieredStopAtLevel=1 -Dmock.site.port=18080 -cp @D:/Users/tester/AppData/Local/Temp/spring-boot-123.argfile ai.platon.pulsar.test.server.MockSiteBootKt"#;
 
         assert!(!command_line_matches_browser4_server(non_browser4));
+        assert!(!command_line_matches_browser4_server(maven_daemon));
+        assert!(!command_line_matches_browser4_server(mock_site));
     }
 
     #[test]
@@ -1749,6 +1780,10 @@ mod tests {
     fn test_managed_server_ports_for_sweep_includes_default() {
         let ports = managed_server_ports_for_sweep();
         assert!(ports.contains(&8182), "default port must always be swept: {ports:?}");
+        assert!(
+            ports.contains(&18182),
+            "bundle default port 18182 must always be swept: {ports:?}"
+        );
     }
 
     #[test]
