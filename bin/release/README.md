@@ -118,6 +118,11 @@ checks and previews the tag and release notes; it never creates or pushes anythi
   is available. The tag message (What's New + curated sections) is also
   prepended into the GitHub Release body by `release.yml`.
 - Supports `-remote`, `-message`, `-Apply`, `-DryRun`, and `-Agent`.
+- **Non-interactive hosts (CI/automation)**: set `BROWSER4_RELEASE_ASSUME_YES=1`
+  to auto-confirm every interactive prompt (Read-Host throws in
+  NonInteractive PowerShell). Pairs with `monitor-release.ps1 -NoWatch`.
+  The release-message prompt auto-skips, producing a lightweight tag unless
+  `-message` is given.
 
 ```
 .\bin\release\trigger-release.ps1                             # dry run (preview)

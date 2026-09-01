@@ -42,6 +42,13 @@
 .PARAMETER remote
     The git remote to push the tag to (default: "origin").
 
+.NOTES
+    Non-interactive hosts (CI/automation): set BROWSER4_RELEASE_ASSUME_YES=1
+    to auto-confirm every interactive prompt instead of calling Read-Host
+    (which throws in NonInteractive PowerShell). Pairs with
+    monitor-release.ps1 -NoWatch. The release-message prompt auto-skips,
+    producing a lightweight tag unless -message is given.
+
 .PARAMETER message
     Explicit release message for the annotated tag. Takes precedence over
     AI-generated release notes.
@@ -84,6 +91,18 @@ $ErrorActionPreference = "Stop"
 # Dry run is the default. -Apply opts into real execution; -DryRun is an
 # explicit (redundant) confirmation of the default.
 $isDryRun = $DryRun -or -not $Apply
+
+# Non-interactive confirmation: when BROWSER4_RELEASE_ASSUME_YES=1, every
+# interactive prompt auto-confirms (used by CI/automation — pairs with
+# monitor-release.ps1 -NoWatch). Read-Host throws in NonInteractive hosts.
+function Confirm-ReleasePrompt {
+    param([string]$Prompt)
+    if ($env:BROWSER4_RELEASE_ASSUME_YES -eq '1') {
+        Write-Host "$Prompt [auto-confirmed: BROWSER4_RELEASE_ASSUME_YES=1]"
+        return 'y'
+    }
+    return Read-Host $Prompt
+}
 
 # AI release notes are opt-in via -Agent. Any non-empty value (auto or a
 # pinned backend name) enables them; ValidateSet guards the allowed values.
@@ -130,7 +149,7 @@ $status = git status --porcelain
 if ($status) {
     Write-Warning "Uncommitted changes detected"
     if (-not $isDryRun) {
-        $continue = Read-Host "Continue anyway? (y/n)"
+        $continue = Confirm-ReleasePrompt "Continue anyway? (y/n)"
         if ($continue -ne 'y') {
             Write-Host "Cancelled"
             exit 0
@@ -174,7 +193,7 @@ if ($null -eq $mainSha -or -not $mainSha) {
         Write-Warning "Releases must be tagged from the latest main (or the matching X.Y.x maintenance branch) — release.yml will abort the workflow otherwise."
         Write-Warning "Run 'git checkout main && git pull' (or push your commits to main) before tagging."
         if (-not $isDryRun) {
-            $continue = Read-Host "Continue anyway? (y/n)"
+            $continue = Confirm-ReleasePrompt "Continue anyway? (y/n)"
             if ($continue -ne 'y') {
                 Write-Host "Cancelled"
                 exit 0
@@ -247,7 +266,7 @@ try {
         Write-Host $checkOutput
     }
     if (-not $isDryRun) {
-        $confirm = Read-Host "Continue anyway? (y/n)"
+        $confirm = Confirm-ReleasePrompt "Continue anyway? (y/n)"
         if ($confirm -ne 'y') {
             Write-Host "Cancelled"
             exit 0
@@ -294,7 +313,7 @@ if ($parseOk) {
         }
 
         if (-not $isDryRun) {
-            $confirm = Read-Host "Continue anyway? (y/n)"
+            $confirm = Confirm-ReleasePrompt "Continue anyway? (y/n)"
             if ($confirm -ne 'y') {
                 Write-Host "Cancelled"
                 exit 0
@@ -314,7 +333,7 @@ if ($existingTag) {
     } else {
         Write-Host "Tag '$newTag' already exists"
 
-        $confirm = Read-Host "Do you want to overwrite it? (y/n)"
+        $confirm = Confirm-ReleasePrompt "Do you want to overwrite it? (y/n)"
         if ($confirm -ne 'y') {
             Write-Host "Cancelled"
             exit 0
@@ -643,13 +662,19 @@ if ($isDryRun) {
 # ── APPLY: prompt for message if still missing, then create + push ──────
 if ([string]::IsNullOrWhiteSpace($effectiveMessage)) {
     Write-Host ""
-    $effectiveMessage = Read-Host "Enter release message (optional, press Enter to skip)"
+    if ($env:BROWSER4_RELEASE_ASSUME_YES -eq '1') {
+        # Non-interactive: no message → lightweight tag (same as pressing Enter).
+        $effectiveMessage = ""
+        Write-Host "Enter release message (optional, press Enter to skip) [auto-skip: BROWSER4_RELEASE_ASSUME_YES=1]"
+    } else {
+        $effectiveMessage = Read-Host "Enter release message (optional, press Enter to skip)"
+    }
     $tagType = if ([string]::IsNullOrWhiteSpace($effectiveMessage)) { "lightweight" } else { "annotated" }
 }
 
 # Confirm creation
 Write-Host ""
-$confirm = Read-Host "Create and push $tagType tag '$newTag'? (y/n)"
+$confirm = Confirm-ReleasePrompt "Create and push $tagType tag '$newTag'? (y/n)"
 if ($confirm -ne 'y') {
     Write-Host "Cancelled"
     exit 0
