@@ -4,6 +4,7 @@ import ai.platon.pulsar.api.DomSettlePolicy
 import ai.platon.pulsar.api.InteractSettings
 import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.api.model.DisplayMode
+import ai.platon.pulsar.common.B4Constants.BROWSER_CONTEXT_DIR
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.InteractLevel
@@ -50,6 +51,7 @@ data class PulsarSettings(
     val maxOpenTabs: Int? = null,
     val interactSettings: InteractSettings? = null,
     val profileMode: BrowserProfileMode? = null,
+    val contextDir: String? = null,
     val label: String? = null,
 ) {
     fun overrideSystemProperties() {
@@ -62,6 +64,9 @@ data class PulsarSettings(
 
     private fun overrideConfigurationInternal(conf: MutableConfig? = null) {
         profileMode?.let { withBrowserContextMode(profileMode, conf) }
+        contextDir?.takeIf { it.isNotBlank() }?.let {
+            if (conf != null) conf.set(BROWSER_CONTEXT_DIR, it) else System.setProperty(BROWSER_CONTEXT_DIR, it)
+        }
         when(displayMode) {
             DisplayMode.HEADLESS -> headless(conf)
             DisplayMode.GUI -> headed(conf)
@@ -84,6 +89,7 @@ data class PulsarSettings(
             val interactSettings: InteractSettings? = capabilities?.get("interactSettings")?.toString()?.let { InteractSettings.fromJsonOrNull(it) }
             val interactLevel = parseInteractLevel(capabilities)
             val profileMode = capabilities?.get("profileMode")?.toString()?.let { BrowserProfileMode.fromString(it) }
+            val contextDir = capabilities?.get("contextDir")?.toString()?.takeIf { it.isNotBlank() }
 
             return PulsarSettings(
                 spa = spa,
@@ -91,6 +97,7 @@ data class PulsarSettings(
                 maxBrowsers = maxBrowsers,
                 maxOpenTabs = maxOpenTabs,
                 profileMode = profileMode,
+                contextDir = contextDir,
                 interactSettings = interactSettings ?: InteractSettings.create(interactLevel ?: InteractLevel.DEFAULT),
             )
         }

@@ -155,6 +155,7 @@ docker run -d -p 8182:8182 `
     - All `SEQUENTIAL` and `TEMPORARY` modes inherit from this prototype.
   - `SEQUENTIAL` **[Advanced]**: Selects a user data directory from a managed pool to enable sequential isolation.
   - `TEMPORARY` **[Advanced]**: Generates a new, isolated user data directory for each browser instance.
+  - **Named sessions** (`open --name <n>` / `--sessionId <id>`): the backend binds a **dedicated profile directory** keyed by the stable session id (`~/.browser4/context/groups/named/PULSAR_CHROME/cx.<sessionUuid>`), so reopening the session always restores the same cookies / login state instead of rotating through the `SEQUENTIAL` pool. An explicit `TEMPORARY` request on a named session is honored as-is.
 
 * **`proxy.rotation.url`**
   [**Advanced**] Only for `SEQUENTIAL` and `TEMPORARY` modes.

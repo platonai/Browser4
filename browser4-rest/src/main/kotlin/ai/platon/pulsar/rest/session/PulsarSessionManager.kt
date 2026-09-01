@@ -5,7 +5,9 @@ import ai.platon.pulsar.chrome.PulsarBrowser
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.chrome.protocol.transport.ExtensionChromeService
 import ai.platon.pulsar.chrome.protocol.transport.ExtensionMessageSender
+import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.B4Constants.BROWSER_PROFILE_MODE
+import ai.platon.pulsar.common.B4Constants.CONTEXT_DIR_CAPABILITY
 import ai.platon.pulsar.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.common.B4Constants.PROFILE_MODE_CAPABILITY
 import ai.platon.pulsar.common.B4Constants.SESSION_ID_CAPABILITY
@@ -16,6 +18,7 @@ import ai.platon.pulsar.agentic.context.AgenticContexts
 import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.browser.BrowserProfileMode
+import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_MODE
 import ai.platon.pulsar.core.api.PulsarSettings
 import kotlinx.coroutines.runBlocking
@@ -25,6 +28,8 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.nio.file.Files
+import java.nio.file.Path
 import java.time.Duration
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -371,6 +376,9 @@ class PulsarSessionManager(
      * Accepts `http://host:port`, `ws://host:port/path`, and bare `host:port`.
      */
     companion object {
+        /** The context group that holds dedicated named-session profiles. */
+        private const val NAMED_CONTEXT_GROUP = "named"
+
         fun normalizeCdpEndpoint(endpoint: String, port: Int): String {
             val trimmed = endpoint.trim()
             return when {
@@ -843,8 +851,22 @@ class PulsarSessionManager(
             normalizedCapabilities[PROFILE_MODE_CAPABILITY]?.toString()
         )
 
+        // A named session is any session explicitly addressed by a display
+        // name or id other than DEFAULT/SWARM. Named sessions bind a
+        // dedicated, stable chrome user data dir keyed by the resolved
+        // session id, so reopening the session never rotates to another
+        // profile (and never silently clobbers another session's state).
+        val isNamedSession = if (hasExplicitSessionId) {
+            !explicitSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) &&
+                !explicitSessionId.equals(SWARM_SESSION_ID, ignoreCase = true)
+        } else {
+            !requestedSessionId.isNullOrBlank() &&
+                !requestedSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) &&
+                !requestedSessionId.equals(SWARM_SESSION_ID, ignoreCase = true)
+        }
+
         normalizedCapabilities[SESSION_ID_CAPABILITY] = sessionId
-        normalizedCapabilities[PROFILE_MODE_CAPABILITY] = when {
+        val profileMode = when {
             sessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> when (requestedProfileMode) {
                 BrowserProfileMode.TEMPORARY -> BrowserProfileMode.TEMPORARY
                 BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
@@ -862,11 +884,36 @@ class PulsarSessionManager(
             ) && requestedProfileMode == BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
 
             sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> BrowserProfileMode.DEFAULT
+            // Named sessions below: honor an explicit TEMPORARY request;
+            // otherwise keep SEQUENTIAL as the mode marker while `contextDir`
+            // pins the session's dedicated profile.
+            requestedProfileMode == BrowserProfileMode.TEMPORARY -> BrowserProfileMode.TEMPORARY
             requestedProfileMode == BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
             else -> BrowserProfileMode.SEQUENTIAL
-        }.name
+        }
+        normalizedCapabilities[PROFILE_MODE_CAPABILITY] = profileMode.name
+        if (isNamedSession && profileMode == BrowserProfileMode.SEQUENTIAL) {
+            normalizedCapabilities[CONTEXT_DIR_CAPABILITY] = computeNamedSessionContextDir(sessionId).toString()
+        }
 
         return normalizedCapabilities
+    }
+
+    /**
+     * Compute the dedicated chrome context directory for a named session.
+     *
+     * The directory is derived deterministically from the resolved session id
+     * (the stable UUID persisted in the session registry), so reopening the
+     * same named session always binds the same chrome user data dir — across
+     * reopens and across server restarts. Named profiles live in their own
+     * group ("named"), separated from the rotating SEQUENTIAL pool.
+     */
+    private fun computeNamedSessionContextDir(sessionId: String): Path {
+        val safeName = sessionId.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val contextDir = AppPaths.getContextBaseDir(NAMED_CONTEXT_GROUP, BrowserType.PULSAR_CHROME)
+            .resolve("cx.$safeName")
+        Files.createDirectories(contextDir)
+        return contextDir
     }
 
     /**

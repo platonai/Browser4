@@ -130,7 +130,7 @@ browser4-cli goto https://other-page.com             # stays headless (or headed
 
 ### Sessions
 
-Named sessions isolate browser state (cookies, localStorage, tabs). Use `-s <name>` to target a named session. `goto` auto-opens/reconnects — you rarely need to manage sessions manually.
+Named sessions isolate browser state (cookies, localStorage, tabs) in a **dedicated browser profile directory** keyed by the session id — reopening a named session always restores the same profile instead of rotating through a shared pool. Use `-s <name>` to target a named session. `goto` auto-opens/reconnects — you rarely need to manage sessions manually.
 
 The `list` command displays a "Next open" column showing what happens when `goto` or `open` targets a named session that already exists:
 - **Reuse** — reconnects to the existing browser window (session is active on the backend).
