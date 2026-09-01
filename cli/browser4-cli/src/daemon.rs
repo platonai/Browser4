@@ -3836,7 +3836,7 @@ pub fn find_chrome_executable() -> Option<std::path::PathBuf> {
 
 /// Try to locate an installed Microsoft Edge executable.
 /// Searched after Chrome/Chromium — Edge is a fallback.
-fn find_edge_executable() -> Option<PathBuf> {
+pub fn find_edge_executable() -> Option<PathBuf> {
     let candidates: &[&str] = if cfg!(target_os = "windows") {
         &[
             r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",

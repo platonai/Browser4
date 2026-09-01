@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.mcp.service
 
+import ai.platon.pulsar.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.GenericAgenticSession
@@ -126,10 +127,44 @@ class PulsarSessionManagerTest {
     fun getOrCreateSessionByIdUsesExplicitSessionIdWhenCapabilitiesAreMissing() {
         val session = sessionManager.getOrCreateSession("team-f")
 
-        assertEquals("team-f", session.sessionId)
-        assertEquals("team-f", session.capabilities?.get("sessionId"))
+        // Explicit ids go through the same name -> UUID resolution as the
+        // capabilities path, so both entry points address the same session.
+        assertNotEquals("team-f", session.sessionId, "Explicit id should resolve to a UUID, not the raw name")
+        assertEquals(session.sessionId, session.capabilities?.get("sessionId"))
         assertEquals("SEQUENTIAL", session.capabilities?.get("profileMode"))
         assertNotNull(session.capabilities?.get("contextDir"), "Named session by explicit id must bind a dedicated context dir")
+        assertSame(session, sessionManager.getSession("team-f"), "Display name must resolve back to the same session")
+    }
+
+    @Test
+    fun explicitIdAndCapabilitiesEntryPointsResolveToSameSessionAndContextDir() {
+        val byId = sessionManager.getOrCreateSession("team-cross")
+        val byCapabilities = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-cross"))
+
+        assertEquals(byId.sessionId, byCapabilities.sessionId,
+            "Both entry points must resolve the same display name to the same UUID")
+        assertSame(byId, byCapabilities, "Both entry points must land on the same session")
+        assertEquals(
+            byId.capabilities?.get("contextDir"),
+            byCapabilities.capabilities?.get("contextDir"),
+            "Both entry points must bind the same dedicated context dir"
+        )
+        assertSame(byId, sessionManager.getSession(byId.sessionId),
+            "A session addressed by its resolved UUID must be found")
+    }
+
+    @Test
+    fun defaultSessionByExplicitIdGetsNoNamedContextDir() {
+        val session = sessionManager.getOrCreateSession(DEFAULT_SESSION_ID)
+
+        // DEFAULT addressed through the explicit-id entry point must behave
+        // exactly like the capabilities path: stable default UUID, no named
+        // context dir (regression guard for a DEFAULT misjudged as named).
+        assertNotEquals(DEFAULT_SESSION_ID, session.sessionId, "DEFAULT should be resolved to a UUID")
+        assertEquals(session.sessionId, session.capabilities?.get("sessionId"))
+        assertNull(session.capabilities?.get("contextDir"), "Default sessions must not pin a named context dir")
+        assertSame(session, sessionManager.getOrCreateSession(mapOf("sessionId" to DEFAULT_SESSION_ID)),
+            "DEFAULT by explicit id and by capability must land on the same session")
     }
 
     @Test

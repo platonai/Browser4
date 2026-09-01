@@ -1573,8 +1573,12 @@ fn resolve_cdp_params_file(file_path: &str) -> Result<Option<String>, CliError> 
 }
 
 /// Chrome Extension ID for the Browser4 Chrome Extension.
-/// Derived from the public key in `chrome-extension/manifest.json`.
-const BROWSER4_EXTENSION_ID: &str = "fcagfeimnhdkkkkipkjjolahpakoddeb";
+///
+/// This is the ID of the published extension on the Chrome Web Store
+/// ("Browser4 Extension", derived from the store listing's public key):
+/// https://chromewebstore.google.com/detail/browser4-extension/jdcmdidbgjeebbhkoepjgifeibipfimi
+/// Extensions installed from the Web Store into Edge use the same ID.
+const BROWSER4_EXTENSION_ID: &str = "jdcmdidbgjeebbhkoepjgifeibipfimi";
 
 async fn handle_attach(
     client: &Client,
@@ -1743,7 +1747,7 @@ async fn handle_attach(
         if has_token {
             cli_println!("Using BROWSER4_EXTENSION_TOKEN for automatic approval.");
         }
-        let opened = open_url_in_browser(&connect_url);
+        let opened = open_url_in_browser(&connect_url, channel.as_deref());
         if opened {
             cli_println!("Opened extension connect page in browser.");
         } else {
@@ -1924,19 +1928,38 @@ async fn handle_attach(
     Ok(())
 }
 
-/// Try to open a URL in the system default browser.
+/// True when the attach channel names a Microsoft Edge browser family.
+fn is_edge_channel(channel: Option<&str>) -> bool {
+    channel
+        .map(|c| c.to_ascii_lowercase().contains("edge"))
+        .unwrap_or(false)
+}
+
+/// Try to open a URL in the browser matching the requested attach channel.
 ///
 /// Returns `true` if a browser process was spawned successfully.
-fn open_url_in_browser(url: &str) -> bool {
+fn open_url_in_browser(url: &str, channel: Option<&str>) -> bool {
     #[cfg(target_os = "windows")]
     {
-        // Prefer launching Chrome directly — the chrome-extension:// protocol
-        // handler isn't reliably registered by Windows, but Chrome itself
-        // handles extension URLs when passed on the command line.
-        if let Some(chrome) = crate::daemon::find_chrome_executable() {
-            let result = std::process::Command::new(&chrome).arg(url).spawn();
-            if let Ok(mut child) = result {
-                // Detach — don't wait for Chrome to exit.
+        // Prefer launching the browser matching the requested channel — the
+        // chrome-extension:// protocol handler isn't reliably registered by
+        // Windows, but Chrome/Edge itself handles extension URLs when passed
+        // on the command line.  For `attach --extension msedge` this opens
+        // the connect page in Edge instead of Chrome.
+        let edge_first = is_edge_channel(channel);
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+        let edge = crate::daemon::find_edge_executable();
+        let chrome = crate::daemon::find_chrome_executable();
+        if edge_first {
+            if let Some(e) = edge { candidates.push(e); }
+            if let Some(c) = chrome { candidates.push(c); }
+        } else {
+            if let Some(c) = chrome { candidates.push(c); }
+            if let Some(e) = edge { candidates.push(e); }
+        }
+        for exe in candidates {
+            if let Ok(mut child) = std::process::Command::new(&exe).arg(url).spawn() {
+                // Detach — don't wait for the browser to exit.
                 let _ = child.stdin.take();
                 return true;
             }
@@ -1950,10 +1973,29 @@ fn open_url_in_browser(url: &str) -> bool {
     }
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open").arg(url).spawn().is_ok()
+        if is_edge_channel(channel) {
+            // Prefer Microsoft Edge for msedge channels so the connect page
+            // lands in the browser that actually has the extension.
+            if let Some(edge) = crate::daemon::find_edge_executable() {
+                if std::process::Command::new(&edge).arg(url).spawn().is_ok() {
+                    return true;
+                }
+            }
+        }
+        std::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .is_ok()
     }
     #[cfg(all(target_os = "linux", not(target_os = "macos")))]
     {
+        if is_edge_channel(channel) {
+            if let Some(edge) = crate::daemon::find_edge_executable() {
+                if std::process::Command::new(&edge).arg(url).spawn().is_ok() {
+                    return true;
+                }
+            }
+        }
         std::process::Command::new("xdg-open")
             .arg(url)
             .spawn()
@@ -27222,10 +27264,27 @@ mod tests {
 
     #[test]
     fn test_browser4_extension_id_is_known() {
-        // The extension ID is deterministic (derived from manifest.json key).
-        // It must not be empty.
-        assert!(!BROWSER4_EXTENSION_ID.is_empty());
+        // The extension ID is deterministic (derived from the published
+        // Chrome Web Store listing's manifest key).  It must match the
+        // store listing "Browser4 Extension" — a stale ID here makes the
+        // connect page show ERR_BLOCKED_BY_CLIENT in every browser.
+        assert_eq!(
+            BROWSER4_EXTENSION_ID,
+            "jdcmdidbgjeebbhkoepjgifeibipfimi",
+            "BROWSER4_EXTENSION_ID must match the published Chrome Web Store / Edge Add-ons listing"
+        );
         assert_eq!(BROWSER4_EXTENSION_ID.len(), 32); // Chrome extension IDs are 32 chars
+    }
+
+    #[test]
+    fn test_is_edge_channel_detects_edge_family() {
+        assert!(is_edge_channel(Some("msedge")));
+        assert!(is_edge_channel(Some("msedge-dev")));
+        assert!(is_edge_channel(Some("MsEdge-Beta")));
+        assert!(is_edge_channel(Some("EDGE")));
+        assert!(!is_edge_channel(Some("chrome")));
+        assert!(!is_edge_channel(Some("chrome-canary")));
+        assert!(!is_edge_channel(None));
     }
 
     #[test]

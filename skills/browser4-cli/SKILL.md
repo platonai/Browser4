@@ -107,7 +107,17 @@ browser4-cli goto https://other-page.com             # stays headless (or headed
 
 ### Sessions
 
-Named sessions isolate browser state (cookies, localStorage, tabs) in a **dedicated browser profile directory** keyed by the session id — reopening a named session always restores the same profile instead of rotating through a shared pool. Use `-s <name>` to target a named session; `goto` auto-opens/reconnects — you rarely need to manage sessions manually. `list` shows a "Next open" column: **Reuse** (reconnects to the active window) or **Refresh** (opens fresh — session stale or missing). Session state lives in `~/.browser4` by default; when unwritable (sandboxed shells) the CLI falls back to `./.browser4-cli-state` with a warning — set `BROWSER4_CLI_STATE_DIR` / `BROWSER4_RUNTIME_DIR` to explicit writable paths to silence it.
+Named sessions isolate browser state (cookies, localStorage, tabs) in a **dedicated browser profile directory** keyed by the session id — reopening a named session always restores the same profile instead of rotating through a shared pool. Use `-s <name>` to target a named session. `goto` auto-opens/reconnects — you rarely need to manage sessions manually.
+
+The `list` command displays a "Next open" column showing what happens when `goto` or `open` targets a named session that already exists:
+- **Reuse** — reconnects to the existing browser window (session is active on the backend).
+- **Refresh** — opens a fresh window (session is stale or missing).
+
+Session state is stored in `~/.browser4` by default. When that directory is not
+writable (e.g. sandboxed shells), the CLI automatically falls back to
+`./.browser4-cli-state` (workspace-relative) and prints a warning — set
+`BROWSER4_CLI_STATE_DIR` to an explicit writable path to silence it.
+`BROWSER4_RUNTIME_DIR` likewise overrides the runtime bundle location.
 
 ### Configuration
 
