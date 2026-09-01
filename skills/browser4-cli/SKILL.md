@@ -107,7 +107,7 @@ browser4-cli goto https://other-page.com             # stays headless (or headed
 
 ### Sessions
 
-Named sessions isolate browser state (cookies, localStorage, tabs). Use `-s <name>` to target a named session; `goto` auto-opens/reconnects — you rarely need to manage sessions manually. `list` shows a "Next open" column: **Reuse** (reconnects to the active window) or **Refresh** (opens fresh — session stale or missing). Session state lives in `~/.browser4` by default; when unwritable (sandboxed shells) the CLI falls back to `./.browser4-cli-state` with a warning — set `BROWSER4_CLI_STATE_DIR` / `BROWSER4_RUNTIME_DIR` to explicit writable paths to silence it.
+Named sessions isolate browser state (cookies, localStorage, tabs) in a **dedicated browser profile directory** keyed by the session id — reopening a named session always restores the same profile instead of rotating through a shared pool. Use `-s <name>` to target a named session; `goto` auto-opens/reconnects — you rarely need to manage sessions manually. `list` shows a "Next open" column: **Reuse** (reconnects to the active window) or **Refresh** (opens fresh — session stale or missing). Session state lives in `~/.browser4` by default; when unwritable (sandboxed shells) the CLI falls back to `./.browser4-cli-state` with a warning — set `BROWSER4_CLI_STATE_DIR` / `BROWSER4_RUNTIME_DIR` to explicit writable paths to silence it.
 
 ### Configuration
 

@@ -9,6 +9,7 @@ import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.InteractLevel
 import ai.platon.pulsar.common.config.CapabilityTypes.*
 import ai.platon.pulsar.common.config.MutableConfig
+import ai.platon.pulsar.common.B4Constants.BROWSER_CONTEXT_DIR
 import ai.platon.pulsar.common.B4Constants.BROWSER_PROFILE_PATH
 import ai.platon.pulsar.core.api.PulsarSettings
 
@@ -52,6 +53,7 @@ data class PulsarSettings(
     val interactSettings: InteractSettings? = null,
     val profileMode: BrowserProfileMode? = null,
     val profilePath: String? = null,
+    val contextDir: String? = null,
     val label: String? = null,
 ) {
     fun overrideSystemProperties() {
@@ -66,6 +68,9 @@ data class PulsarSettings(
         profileMode?.let { withBrowserContextMode(profileMode, conf) }
         profilePath?.takeIf { it.isNotBlank() }?.let {
             if (conf != null) conf.set(BROWSER_PROFILE_PATH, it) else System.setProperty(BROWSER_PROFILE_PATH, it)
+        }
+        contextDir?.takeIf { it.isNotBlank() }?.let {
+            if (conf != null) conf.set(BROWSER_CONTEXT_DIR, it) else System.setProperty(BROWSER_CONTEXT_DIR, it)
         }
         when(displayMode) {
             DisplayMode.HEADLESS -> headless(conf)
@@ -90,6 +95,7 @@ data class PulsarSettings(
             val interactLevel = parseInteractLevel(capabilities)
             val profileMode = capabilities?.get("profileMode")?.toString()?.let { BrowserProfileMode.fromString(it) }
             val profilePath = capabilities?.get("profilePath")?.toString()?.takeIf { it.isNotBlank() }
+            val contextDir = capabilities?.get("contextDir")?.toString()?.takeIf { it.isNotBlank() }
 
             return PulsarSettings(
                 spa = spa,
@@ -98,6 +104,7 @@ data class PulsarSettings(
                 maxOpenTabs = maxOpenTabs,
                 profileMode = profileMode,
                 profilePath = profilePath,
+                contextDir = contextDir,
                 interactSettings = interactSettings ?: InteractSettings.create(interactLevel ?: InteractLevel.DEFAULT),
             )
         }

@@ -23,6 +23,22 @@ object B4Constants {
     const val BROWSER_PROFILE_PATH = "browser.profile.path"
 
     /**
+     * The session-level browser context directory capability. Set by the
+     * backend for CLI named sessions so the same session always binds the
+     * same dedicated chrome user data dir instead of rotating through the
+     * SEQUENTIAL pool on every launch.
+     */
+    const val CONTEXT_DIR_CAPABILITY = "contextDir"
+
+    /**
+     * The session-level browser context directory, set from the `contextDir`
+     * capability. When present, the session's browser launches with a
+     * Browser4-managed context directory dedicated to this session
+     * (e.g. .../context/groups/named/PULSAR_CHROME/cx.<sessionUuid>).
+     */
+    const val BROWSER_CONTEXT_DIR = "browser.context.dir"
+
+    /**
      * The REST level session id - DEFAULT
      * */
     const val DEFAULT_SESSION_ID = "DEFAULT"

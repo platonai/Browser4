@@ -8,8 +8,10 @@ import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.AppPaths.WEB_CACHE_DIR
+import ai.platon.pulsar.common.B4Constants.BROWSER_CONTEXT_DIR
 import ai.platon.pulsar.common.B4Constants.BROWSER_PROFILE_PATH
 import ai.platon.pulsar.common.browser.BrowserProfileMode
+import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_MODE
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_DISPLAY_MODE
@@ -33,6 +35,7 @@ import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
 import org.jsoup.nodes.Element
 import org.slf4j.LoggerFactory
 import java.nio.ByteBuffer
+import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
 import java.util.*
@@ -245,9 +248,21 @@ abstract class AbstractPulsarSession(
                 return b4Driver
             }
 
+            val contextDir = sessionConfig[BROWSER_CONTEXT_DIR]?.toString()?.takeIf { it.isNotBlank() }
             val profilePath = sessionConfig[BROWSER_PROFILE_PATH]?.toString()?.takeIf { it.isNotBlank() }
             val mode = BrowserProfileMode.fromString(sessionConfig[BROWSER_CONTEXT_MODE])
             val browser = when {
+                contextDir != null -> {
+                    // Named session (e.g. `open --name <n>`): the backend
+                    // computed a dedicated context dir from the stable session
+                    // id. Bind the same chrome user data dir on every launch
+                    // instead of rotating through the SEQUENTIAL pool, so the
+                    // session's cookies / login state survive across restarts.
+                    val contextDirPath = Path.of(contextDir)
+                    Files.createDirectories(contextDirPath)
+                    val profile = BrowserProfile.create(BrowserType.PULSAR_CHROME, contextDirPath)
+                    context.browserManager.launch(BrowserId(profile), BrowserSettings(sessionConfig))
+                }
                 profilePath != null -> {
                     // `open --profile <path>`: launch Chrome with the given
                     // directory as the user data dir. The path is used as-is,
