@@ -77,22 +77,6 @@
                 <scope>import</scope>
             </dependency>
 
-            <!--
-                Local override: pulsar-browser 4.11.6 carries the upstream fix
-                for browserUseState throwing NPE when invoked on a torn-down
-                driver (invokeOnPage may return null after a failed health check;
-                the old `!!` crashed agent sessions that reuse a driver whose
-                browser was closed; 4.11.6 falls back to BrowserUseState.DUMMY).
-                The base BOM (${browser4-base.version}) still pins 4.11.5, which
-                predates the fix — keep this override until the base BOM is
-                bumped to 4.11.6 or later.
-            -->
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-browser</artifactId>
-                <version>4.11.6</version>
-            </dependency>
-
             <dependency>
                 <groupId>org.jetbrains.kotlinx</groupId>
                 <artifactId>kotlinx-coroutines-bom</artifactId>
@@ -572,7 +556,7 @@
         <!-- Pulsar dependency -->
         <pulsar-h2.version>1.4.197</pulsar-h2.version>
         <pulsar-jsoup.version>1.14.3</pulsar-jsoup.version>
-        <browser4-base.version>4.11.8</browser4-base.version>
+        <browser4-base.version>4.11.10</browser4-base.version>
         <cdt-kotlin-client.version>4.8.0</cdt-kotlin-client.version>
 
         <!-- Agent memory system: SQLite FTS derived index (design: docs-dev/copilot/robust-browser-agent-memory-system-design.md) -->
