@@ -4206,7 +4206,12 @@ fn should_skip_browser4_root_search(path: &Path) -> bool {
 /// Check whether a valid runtime bundle already exists at the given paths.
 ///
 /// A valid bundle must have a populated `lib/` directory (at least one jar) and
-/// a `runtime/bin/java` launcher produced by jlink.
+/// a `runtime/bin/java` launcher produced by jlink.  The runtime image must
+/// also contain `runtime/lib/jvm.cfg` — a partially-deleted runtime (e.g. a
+/// rebuild interrupted while the previous bundle was locked) can leave
+/// `java.exe` behind while removing `jvm.cfg`, making the launcher report
+/// "could not open jvm.cfg".  Such a broken bundle is NOT reused; the caller
+/// falls through to a rebuild.
 fn existing_runtime_bundle(
     lib_dir: &Path,
     java_path: &Path,
@@ -4229,7 +4234,18 @@ fn existing_runtime_bundle(
             })
             .unwrap_or(false);
 
-    if has_jars && java_path.is_file() {
+    // jvm.cfg sits at <runtime>/lib/jvm.cfg next to the bin/ launcher.
+    let jvm_cfg = java_path
+        .parent()
+        .and_then(|bin_dir| bin_dir.parent())
+        .map(|runtime_dir| runtime_dir.join("lib").join("jvm.cfg"));
+
+    let runtime_healthy = match &jvm_cfg {
+        Some(cfg) => cfg.is_file(),
+        None => false,
+    };
+
+    if has_jars && runtime_healthy && java_path.is_file() {
         Some(InstalledBrowser4Runtime {
             tag: "local".to_string(),
             asset_name: String::new(),
@@ -4245,6 +4261,216 @@ fn existing_runtime_bundle(
     }
 }
 
+/// Why an existing local runtime bundle does not match the checked-out sources.
+#[derive(Debug, PartialEq, Eq)]
+enum LocalBundleStaleness {
+    /// The checked-out project version (root pom.xml) differs from the
+    /// version embedded in the bundled jar names.
+    VersionMismatch { checked_out: String, bundled: String },
+    /// Versions match, but some source file under the checked-out modules is
+    /// newer than the newest bundled project jar — sources were edited after
+    /// the bundle was assembled.
+    SourcesNewerThanBundle,
+}
+
+/// Read the checked-out project version from the root `pom.xml` of a Browser4
+/// repository checkout.  Returns the `<version>` that belongs to the root
+/// artifact itself (`<artifactId>browser4</artifactId>`), NOT the parent POM
+/// version declared above it.
+fn checked_out_project_version(root: &Path) -> Option<String> {
+    let pom = std::fs::read_to_string(root.join("pom.xml")).ok()?;
+    let marker = "<artifactId>browser4</artifactId>";
+    let marker_end = pom.find(marker)? + marker.len();
+    let rest = &pom[marker_end..];
+    let head = if rest.len() > 512 { &rest[..512] } else { rest };
+    let version_open = "<version>";
+    let start = head.find(version_open)? + version_open.len();
+    let tail = &head[start..];
+    let end = tail.find("</version>")?;
+    let version = tail[..end].trim();
+    if version.is_empty() { None } else { Some(version.to_string()) }
+}
+
+/// Compare two project version strings such as `4.13.13-SNAPSHOT` numerically,
+/// segment by segment (`4.13.9-SNAPSHOT` < `4.13.10-SNAPSHOT`).  Trailing
+/// qualifiers after `-` are ignored.  Returns true when `a` is a later version.
+fn project_version_newer(a: &str, b: &str) -> bool {
+    fn leading_number(s: &str) -> u64 {
+        s.split('-')
+            .next()
+            .unwrap_or("")
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .unwrap_or(0)
+    }
+    let av: Vec<u64> = a.split('.').map(leading_number).collect();
+    let bv: Vec<u64> = b.split('.').map(leading_number).collect();
+    for i in 0..av.len().max(bv.len()) {
+        let x = av.get(i).copied().unwrap_or(0);
+        let y = bv.get(i).copied().unwrap_or(0);
+        if x != y {
+            return x > y;
+        }
+    }
+    false
+}
+
+/// Extract the project version embedded in the assembled bundle's jar names
+/// (e.g. `browser4-rest-4.13.13-SNAPSHOT.jar`) together with the newest such
+/// jar's modified time.  Returns `None` when the bundle contains no project
+/// jars (not a locally built bundle).
+fn bundled_project_version(lib_dir: &Path) -> Option<(String, std::time::SystemTime)> {
+    let mut newest: Option<(String, std::time::SystemTime)> = None;
+    let entries = std::fs::read_dir(lib_dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        // browser4-rest is the backend module every locally built bundle
+        // contains; its version suffix marks the build's project version.
+        let version = name
+            .strip_prefix("browser4-rest-")
+            .and_then(|rest| rest.strip_suffix(".jar"));
+        let Some(version) = version else { continue };
+        if version.is_empty() || !version.contains('.') {
+            continue;
+        }
+        let Ok(metadata) = path.metadata() else { continue };
+        let Ok(mtime) = metadata.modified() else { continue };
+        // Newest jar wins; when a stale jar was copied at the same clock tick
+        // (filesystem timestamp granularity) and mtimes tie, prefer the later
+        // version so a leftover older build is never mistaken for the bundle's
+        // real version.
+        let replace = match &newest {
+            None => true,
+            Some((v, t)) => {
+                mtime > *t || (mtime == *t && project_version_newer(version, v))
+            }
+        };
+        if replace {
+            newest = Some((version.to_string(), mtime));
+        }
+    }
+    newest
+}
+
+/// Newest modification time of any Kotlin/Java source (or pom.xml) under the
+/// modules whose code ships in the runtime bundle, when newer than `baseline`.
+/// Returns `true` when at least one source file is newer than the bundle jars.
+fn local_sources_newer_than(root: &Path, baseline: std::time::SystemTime) -> bool {
+    let mut source_roots: Vec<PathBuf> = vec![
+        root.join("browser4-rest").join("src"),
+        root.join("browser4-agentic").join("src"),
+        root.join("browser4-common").join("src"),
+        root.join("browser4-apps").join("browser4-bundle").join("pom.xml"),
+    ];
+    // browser4-core ships multiple modules (skeleton, browser, parse, ...).
+    let core_src = root.join("browser4-core");
+    if let Ok(entries) = std::fs::read_dir(&core_src) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() && path.join("src").join("main").is_dir() {
+                source_roots.push(path.join("src"));
+            }
+        }
+    }
+
+    fn walk_newer(dir: &Path, baseline: std::time::SystemTime, found: &mut bool) {
+        if *found {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk_newer(&path, baseline, found);
+            } else {
+                let is_source = matches!(
+                    path.extension().and_then(|e| e.to_str()),
+                    Some("kt" | "java")
+                );
+                if is_source {
+                    if let Ok(metadata) = path.metadata() {
+                        if let Ok(mtime) = metadata.modified() {
+                            if mtime > baseline {
+                                *found = true;
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut found = false;
+    for root_dir in &source_roots {
+        walk_newer(root_dir, baseline, &mut found);
+        if found {
+            break;
+        }
+    }
+    found
+}
+
+/// Detect whether an existing local runtime bundle at `lib_dir` was built from
+/// sources that differ from the current checkout at `root`.
+fn detect_local_bundle_staleness(root: &Path, lib_dir: &Path) -> Option<LocalBundleStaleness> {
+    let checked_out = checked_out_project_version(root)?;
+    let (bundled, newest_jar_mtime) = bundled_project_version(lib_dir)?;
+
+    if bundled != checked_out {
+        return Some(LocalBundleStaleness::VersionMismatch {
+            checked_out,
+            bundled,
+        });
+    }
+    if local_sources_newer_than(root, newest_jar_mtime) {
+        return Some(LocalBundleStaleness::SourcesNewerThanBundle);
+    }
+    None
+}
+
+/// Print a loud, actionable warning when the existing local runtime bundle was
+/// built from older sources than the current checkout.
+fn warn_bundle_staleness(root: &Path, staleness: &LocalBundleStaleness) {
+    let reason = match staleness {
+        LocalBundleStaleness::VersionMismatch {
+            checked_out,
+            bundled,
+        } => format!(
+            "the existing local Browser4 runtime bundle was built from \
+             {bundled} sources, but the checked-out sources are {checked_out}"
+        ),
+        LocalBundleStaleness::SourcesNewerThanBundle => {
+            "the checked-out sources are newer than the existing local \
+             Browser4 runtime bundle"
+                .to_string()
+        }
+    };
+    // Name the rebuild command for the platform we are running on:
+    // powershell.exe on Windows (also runnable from cmd/Git Bash), pwsh elsewhere.
+    let rebuild_command = if cfg!(windows) {
+        format!(
+            "powershell -ExecutionPolicy Bypass -File {}\\browser4-apps\\browser4-bundle\\build-runtime-bundle.ps1",
+            root.display()
+        )
+    } else {
+        format!(
+            "pwsh -File {}/browser4-apps/browser4-bundle/build-runtime-bundle.ps1",
+            root.display()
+        )
+    };
+    eprintln!(
+        "\n\u{26A0}  {reason}.\n\
+         \u{26A0}  Serving the OLD backend build — behaviour may not match the checked-out code.\n\
+         \u{26A0}  To rebuild from source, run:\n\
+         \u{26A0}    {rebuild_command}\n\
+         \u{26A0}  (or set BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1 and re-run this command)"
+    );
+}
+
 /// Check whether the Maven-built fat JAR is present and has valid content.
 fn maven_jar_exists(bundle_module_dir: &Path) -> bool {
     let jar = bundle_module_dir.join("target").join("Browser4Bundle.jar");
@@ -4258,6 +4484,24 @@ fn maven_jar_exists(bundle_module_dir: &Path) -> bool {
 /// Browser4 repository checkout.  Returns `Ok(None)` when auto-build is not
 /// applicable (no bundle module, build script missing, or build failed) so the
 /// caller can fall back to the download path.
+///
+/// # Local runtime bundle lifecycle (dev mode)
+///
+/// - **Where the bundle lives:** `browser4-apps/browser4-bundle/target/runtime-bundle/`.
+///   The assembled runtime sits under `_work/<platform>/<platform>/` — `runtime/` is
+///   the jlink JRE image, `lib/` holds the backend jars — and the distributable
+///   archive (`browser4-bundle-runtime-<platform>.zip` / `.tar.gz`) is written next
+///   to `_work/`.
+/// - **When it is rebuilt:** dev-mode auto-start from a checkout reuses an existing
+///   bundle WITHOUT rebuilding (fast path below) unless the bundle is missing or
+///   broken, or `BROWSER4_CLI_FORCE_REBUILD_BUNDLE` is set.  If the staleness check
+///   finds the on-disk bundle older than the checked-out sources it is still reused
+///   (the rebuild may be a deliberate, slow operation) but a loud warning names the
+///   rebuild command.  A full rebuild (Maven `install` + the platform build script)
+///   only runs when no valid bundle exists.
+/// - **How to force a rebuild:** set `BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1` and re-run
+///   the command, or run `build-runtime-bundle.ps1` manually (optionally after
+///   deleting `browser4-apps/browser4-bundle/target/runtime-bundle/_work`).
 ///
 /// Each build step is independently skippable when its output already exists:
 /// 1. Maven `package` is skipped when `target/Browser4Bundle.jar` is valid.
@@ -4285,9 +4529,16 @@ async fn try_build_local_runtime_bundle(
         .join(browser4_java_executable_name());
 
     // Fast path: runtime bundle already assembled — nothing to do
-    // (unless --force-rebuild-bundle is active).
+    // (unless --force-rebuild-bundle is active).  The bundle is reused
+    // UNCONDITIONALLY on the happy path, so when it looks stale relative to
+    // the checked-out sources we still reuse it (the rebuild may be
+    // deliberate, e.g. a slow machine) but warn loudly and name the rebuild
+    // command — a silently stale backend costs hours of misdiagnosis.
     if !should_force_rebuild_bundle() {
         if let Some(runtime) = existing_runtime_bundle(&lib_dir, &java_path, &work_dir) {
+            if let Some(staleness) = detect_local_bundle_staleness(root, &lib_dir) {
+                warn_bundle_staleness(root, &staleness);
+            }
             eprintln!(
                 "Using existing local Browser4 runtime bundle at {}.",
                 work_dir.display()
@@ -7620,6 +7871,151 @@ mod tests {
         assert_eq!(BrowserChannel::ChromeBeta.to_string(), "chrome-beta");
         assert_eq!(BrowserChannel::MsEdge.to_string(), "msedge");
         assert_eq!(BrowserChannel::MsEdgeCanary.to_string(), "msedge-canary");
+    }
+
+    // -------------------------------------------------------------------
+    // Runtime-bundle staleness detection (Issue: dev-mode auto-start can
+    // silently reuse a stale bundle that does not match checked-out sources)
+    // -------------------------------------------------------------------
+
+    fn write_root_pom_with_version(root: &Path, version: &str) {
+        write(
+            root.join("pom.xml"),
+            format!(
+                "<?xml version=\"1.0\"?>\n<project>\n  <parent>\n    \
+                 <groupId>ai.platon</groupId>\n    <artifactId>pulsar-parent</artifactId>\n    \
+                 <version>4.5.0</version>\n  </parent>\n  <groupId>ai.platon.pulsar</groupId>\n  \
+                 <artifactId>browser4</artifactId>\n  <version>{version}</version>\n</project>\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    fn write_bundle_lib_jar(lib_dir: &Path, name: &str) {
+        create_dir_all(lib_dir).unwrap();
+        write(lib_dir.join(name), "jar-content").unwrap();
+    }
+
+
+    #[test]
+    fn checked_out_project_version_reads_root_artifact_not_parent() {
+        let tmp = test_temp_dir();
+        write_root_pom_with_version(tmp.path(), "4.13.13-SNAPSHOT");
+        assert_eq!(
+            checked_out_project_version(tmp.path()).as_deref(),
+            Some("4.13.13-SNAPSHOT")
+        );
+    }
+
+    #[test]
+    fn checked_out_project_version_returns_none_for_unrelated_pom() {
+        let tmp = test_temp_dir();
+        write(
+            tmp.path().join("pom.xml"),
+            "<project><artifactId>other</artifactId></project>",
+        )
+        .unwrap();
+        assert_eq!(checked_out_project_version(tmp.path()), None);
+    }
+
+    #[test]
+    fn bundled_project_version_extracts_version_from_jar_names() {
+        let tmp = test_temp_dir();
+        let lib_dir = tmp.path().join("lib");
+        write_bundle_lib_jar(&lib_dir, "browser4-rest-4.13.11-SNAPSHOT.jar");
+        write_bundle_lib_jar(&lib_dir, "browser4-rest-4.13.13-SNAPSHOT.jar");
+        write_bundle_lib_jar(&lib_dir, "caffeine-3.2.3.jar");
+        let (version, _) = bundled_project_version(&lib_dir).expect("version expected");
+        // The newest jar (written last) wins.
+        assert_eq!(version, "4.13.13-SNAPSHOT");
+    }
+
+    #[test]
+    fn bundled_project_version_returns_none_without_project_jars() {
+        let tmp = test_temp_dir();
+        let lib_dir = tmp.path().join("lib");
+        write_bundle_lib_jar(&lib_dir, "caffeine-3.2.3.jar");
+        assert_eq!(bundled_project_version(&lib_dir), None);
+    }
+
+    #[test]
+    fn project_version_newer_compares_segments_numerically() {
+        assert!(project_version_newer("4.13.13-SNAPSHOT", "4.13.11-SNAPSHOT"));
+        assert!(project_version_newer("4.13.10-SNAPSHOT", "4.13.9-SNAPSHOT"));
+        assert!(!project_version_newer("4.13.9-SNAPSHOT", "4.13.10-SNAPSHOT"));
+        assert!(project_version_newer("5.0.0-SNAPSHOT", "4.99.99-SNAPSHOT"));
+        // Trailing qualifier after `-` is ignored; equal prefixes are not newer.
+        assert_eq!(
+            project_version_newer("4.13.13-SNAPSHOT", "4.13.13-SNAPSHOT"),
+            false
+        );
+        assert_eq!(project_version_newer("4.13.13", "4.13.13-SNAPSHOT"), false);
+        assert_eq!(project_version_newer("4.13.13-SNAPSHOT", "4.13.13"), false);
+    }
+
+    #[test]
+    fn detect_staleness_flags_version_mismatch() {
+        let tmp = test_temp_dir();
+        write_root_pom_with_version(tmp.path(), "4.13.13-SNAPSHOT");
+        let lib_dir = tmp.path().join("lib");
+        write_bundle_lib_jar(&lib_dir, "browser4-rest-4.13.11-SNAPSHOT.jar");
+
+        let staleness = detect_local_bundle_staleness(tmp.path(), &lib_dir);
+        assert_eq!(
+            staleness,
+            Some(LocalBundleStaleness::VersionMismatch {
+                checked_out: "4.13.13-SNAPSHOT".to_string(),
+                bundled: "4.13.11-SNAPSHOT".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn detect_staleness_flags_newer_sources() {
+        let tmp = test_temp_dir();
+        write_root_pom_with_version(tmp.path(), "4.13.13-SNAPSHOT");
+        let lib_dir = tmp.path().join("lib");
+        write_bundle_lib_jar(&lib_dir, "browser4-rest-4.13.13-SNAPSHOT.jar");
+
+        // No newer sources yet — bundle is fresh.
+        assert_eq!(detect_local_bundle_staleness(tmp.path(), &lib_dir), None);
+
+        // Touch a Kotlin source under a bundled module after the jar time.
+        let src = tmp.path().join("browser4-rest").join("src").join("main");
+        create_dir_all(&src).unwrap();
+        let source_file = src.join("Fresh.kt");
+        write(&source_file, "package fresh\n").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert_eq!(
+            detect_local_bundle_staleness(tmp.path(), &lib_dir),
+            Some(LocalBundleStaleness::SourcesNewerThanBundle)
+        );
+    }
+
+    #[test]
+    fn existing_runtime_bundle_rejects_broken_jvm_cfg_runtime() {
+        let tmp = test_temp_dir();
+        let work_dir = tmp.path().join("bundle");
+        let lib_dir = work_dir.join("lib");
+        let bin_dir = work_dir.join("runtime").join("bin");
+        create_dir_all(&lib_dir).unwrap();
+        create_dir_all(&bin_dir).unwrap();
+        write_bundle_lib_jar(&lib_dir, "browser4-rest-4.13.13-SNAPSHOT.jar");
+        let java_path = bin_dir.join(browser4_java_executable_name());
+        write(&java_path, "java").unwrap();
+
+        // Missing lib/jvm.cfg → broken (partially deleted) runtime → None,
+        // so the caller rebuilds instead of serving a bundle whose java.exe
+        // reports "could not open jvm.cfg".
+        assert_eq!(
+            existing_runtime_bundle(&lib_dir, &java_path, &work_dir),
+            None
+        );
+
+        // Adding jvm.cfg makes the bundle valid again.
+        create_dir_all(work_dir.join("runtime").join("lib")).unwrap();
+        write(work_dir.join("runtime").join("lib").join("jvm.cfg"), "-server").unwrap();
+        assert!(existing_runtime_bundle(&lib_dir, &java_path, &work_dir).is_some());
     }
 
 }

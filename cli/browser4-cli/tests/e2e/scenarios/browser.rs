@@ -350,8 +350,16 @@ pub(super) fn test_storage_state_commands(ctx: &mut E2ECtx) {
     );
 
     let cookie_get_result = run_command(ctx, &["cookie-get", "session_id"]);
-    let cookie_get: serde_json::Value = serde_json::from_str(cookie_get_result.stdout.trim())
-        .expect("cookie-get should return JSON");
+    assert_eq!(
+        cookie_get_result.stdout.trim(),
+        "abc123",
+        "cookie-get should print the bare cookie value by default:\n{}",
+        cookie_get_result.stdout
+    );
+
+    let cookie_get_full_result = run_command(ctx, &["cookie-get", "session_id", "--full"]);
+    let cookie_get: serde_json::Value = serde_json::from_str(cookie_get_full_result.stdout.trim())
+        .expect("cookie-get --full should return JSON");
     assert_eq!(cookie_get["name"].as_str(), Some("session_id"));
     assert_eq!(cookie_get["value"].as_str(), Some("abc123"));
 
@@ -1117,6 +1125,18 @@ pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     assert!(
         !webdb_result.stderr.contains("Unknown tool: webdb_export"),
         "webdb-export command should be recognised by the backend:\n{}",
+        webdb_result.stderr
+    );
+    // webdb export is read-only w.r.t. the current viewport: it must not
+    // trigger the post-command auto-snapshot ('### Page' / '### Snapshot'
+    // block + snapshot YAML on disk). Regression for the webdb export stray
+    // snapshot issue — see no_snapshot_commands().
+    assert!(
+        !webdb_result.stdout.contains("### Page")
+            && !webdb_result.stderr.contains("### Page")
+            && !webdb_result.stdout.contains("### Snapshot"),
+        "webdb-export must not emit the post-command snapshot block, got:\nstdout: {}\nstderr: {}",
+        webdb_result.stdout,
         webdb_result.stderr
     );
 
@@ -2350,6 +2370,92 @@ pub(super) fn test_interactive_enhanced_tracking(ctx: &mut E2ECtx) {
             "Expected key events to have 'key' or 'code' field, got: {:?}", evt
         );
     }
+
+    run_command(ctx, &["close"]);
+}
+
+pub(super) fn test_htmlsnapshot_capture_after_tab_new(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    // Open the interactive fixture (the full navigate registers the runtime on
+    // the original session driver — the pre-tab-new baseline).
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    sleep(Duration::from_secs(2));
+    let title = eval_text(ctx, "document.title");
+    assert_eq!(title.trim(), INTERACTIVE_TITLE);
+
+    // ── 1. Baseline capture on the original tab ─────────────────────
+    // Interactive elements are computed from __pulsar_utils__ document
+    // features (vi attributes), so their presence proves the runtime was
+    // available for this capture.
+    let first = run_command(ctx, &["htmlsnapshot", "capture"]);
+    assert_eq!(
+        first.exit_code, 0,
+        "Baseline htmlsnapshot capture failed:\nstdout: {}\nstderr: {}",
+        first.stdout, first.stderr
+    );
+    assert!(
+        first.stdout.contains(&format!("Snapshot: \"{INTERACTIVE_TITLE}\"")),
+        "Baseline capture should report the interactive fixture:\n{}",
+        first.stdout
+    );
+    assert!(
+        first.stdout.contains("interactive elements"),
+        "Baseline capture should report interactive elements (requires the __pulsar_utils__ runtime):\n{}",
+        first.stdout
+    );
+
+    // ── 2. tab-new to the form fixture ──────────────────────────────
+    // The CLI auto-switches to the new tab.  The tab's document committed
+    // before the dual-world runtime could be registered on it, and the
+    // session driver bound afterwards never receives the frame-navigated
+    // re-injection.
+    let form_url = ctx.form_url();
+    let new_tab = run_command(ctx, &["tab-new", &form_url]);
+    assert_eq!(
+        new_tab.exit_code, 0,
+        "tab-new failed:\nstdout: {}\nstderr: {}",
+        new_tab.stdout, new_tab.stderr
+    );
+    let tab_list = strip_snapshot_output(&run_command(ctx, &["tab-list", "--json"]).stdout);
+    assert!(
+        tab_list.contains(&form_url),
+        "Expected the form fixture tab after tab-new:\n{tab_list}"
+    );
+
+    // ── 3. Capture on the tab-new target — the regression ───────────
+    // Before the fix this capture threw 'ReferenceError: __pulsar_utils__ is
+    // not defined' on the server, and every later capture on the session
+    // failed until the session was closed.
+    let second = run_command(ctx, &["htmlsnapshot", "capture"]);
+    assert_eq!(
+        second.exit_code, 0,
+        "htmlsnapshot capture after tab-new failed:\nstdout: {}\nstderr: {}",
+        second.stdout, second.stderr
+    );
+    assert!(
+        second.stdout.contains(&format!("Snapshot: \"{FORM_TITLE}\"")),
+        "Capture after tab-new should target the new tab (form fixture):\n{}",
+        second.stdout
+    );
+    assert!(
+        second.stdout.contains("interactive elements"),
+        "Capture after tab-new should report interactive elements (requires the re-injected __pulsar_utils__ runtime on the tab-new target):\n{}",
+        second.stdout
+    );
+    let combined = format!("{}\n{}", second.stdout, second.stderr);
+    assert!(
+        !combined.contains("ReferenceError"),
+        "Capture after tab-new must not surface a __pulsar_utils__ ReferenceError:\n{combined}"
+    );
+
+    // ── 4. Captures keep working — the failure was session-wide ─────
+    let third = run_command(ctx, &["htmlsnapshot", "capture"]);
+    assert_eq!(
+        third.exit_code, 0,
+        "Follow-up capture after tab-new failed:\nstdout: {}\nstderr: {}",
+        third.stdout, third.stderr
+    );
 
     run_command(ctx, &["close"]);
 }

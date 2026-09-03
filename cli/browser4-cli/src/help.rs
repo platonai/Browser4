@@ -82,6 +82,8 @@ pub const CATEGORY_TITLES: &[(&str, &str)] = &[
     ("browsers", "Browser sessions"),
     ("config", "Config"),
     ("install", "Install"),
+    ("webminer", "WebMiner"),
+    ("skill", "Skill management"),
     ("skills", "Skills"),
     ("plugins", "Plugins"),
 ];
@@ -189,6 +191,8 @@ pub fn generate_help() -> String {
         }
         if first_category {
             lines.push("\n── Commands ─────────────────────────────────────────────────────────".to_string());
+            // Legend for the ★ marker used on high-frequency command rows below.
+            lines.push("  ★ = high-frequency command — good starting points for new users".to_string());
         }
         first_category = false;
         lines.push(format!("\n  [{}]", cat_title));
@@ -470,7 +474,10 @@ fn command_to_json(cmd: &CommandDef) -> serde_json::Value {
         .map(|o| {
             let typ = if o.is_bool { "bool" } else { "string" };
             let mut opt = serde_json::json!({
-                "name": o.name,
+                // Machine key only: OptionDef.name may carry a display
+                // placeholder ("max-files <n>"), which must not leak into
+                // the machine-readable catalog.
+                "name": o.key(),
                 "description": o.description,
                 "type": typ,
             });
@@ -888,21 +895,50 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli get attr \"a.link\" href".to_string());
         lines.push(String::new());
         lines.push(
-            "  ⚠️  `get` operates on the live accessibility tree (AXTree), NOT raw CSS selectors."
+            "  ⚠️  `<selector>` resolves against the LIVE page: snapshot refs (e5) always"
                 .to_string(),
         );
         lines.push(
-            "  For CSS selector extraction on stored HTML, use `htmlsnapshot get` instead:"
+            "  resolve; CSS selectors are supported, but resolution can vary by mode and"
                 .to_string(),
         );
         lines.push(
-            "    browser4-cli htmlsnapshot             # capture the current DOM"
+            "  element type (attr/property reads are the least reliable). A missing"
                 .to_string(),
         );
         lines.push(
-            "    browser4-cli htmlsnapshot get text h1  # query with CSS selectors"
+            "  attribute/property reads as null — re-run `snapshot` for fresh refs, or use"
                 .to_string(),
         );
+        lines.push(
+            "  `htmlsnapshot` + `htmlsnapshot get` for extraction on a stored DOM copy."
+                .to_string(),
+        );
+    }
+
+    if cmd.name == "select" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - <val> accepts the option's VALUE or its visible label, case-insensitively"
+                .to_string(),
+        );
+        lines.push(
+            "    (e.g. 'sg' or 'Singapore' for the same option)."
+                .to_string(),
+        );
+        lines.push(
+            "  - --verify re-checks the selection with the same value-or-label,"
+                .to_string(),
+        );
+        lines.push(
+            "    case-insensitive semantics. A genuine mismatch exits non-zero, so scripts"
+                .to_string(),
+        );
+        lines.push("    can rely on --verify.".to_string());
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli select e1918 \"Singapore\" --verify   # by visible label".to_string());
+        lines.push("  browser4-cli select e1918 sg --verify             # by option value".to_string());
     }
 
     if cmd.name == "extract" {
@@ -1700,7 +1736,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             4,
         ));
         lines.push(wrap_text(
-            "Search the HTML snapshot HTML with regex patterns using `htmlsnapshot grep <pattern>`. Supports standard grep flags: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number. Use --selector to scope to the first matching CSS element (querySelector), or --selector-all to search across ALL matching elements (querySelectorAll) with element-index annotations. Uses Rust regex syntax where | is alternation (not \\|). Line numbers are shown by default (unlike GNU grep's -n opt-in).",
+            "Search the HTML snapshot HTML with regex patterns using `htmlsnapshot grep <pattern>`. Supports standard grep flags: -e (repeatable), -i, -n (GNU grep compatibility - line numbers are printed by default, so -n is a no-op), -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number. Use --selector to scope to the first matching CSS element (querySelector), or --selector-all to search across ALL matching elements (querySelectorAll) with element-index annotations. Regex dialect is Rust regex: | is alternation (not \\|), ^/$ anchor the start/end of a line, and a literal $ must be written [$] because \\$ is an invalid escape - add -F to match plain text.",
             "  - ",
             4,
         ));
@@ -1873,7 +1909,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(wrap_text(
-            "snapshot grep supports the same grep options as htmlsnapshot grep: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, --selector, --selector-all, --page N, --page-size N, and --all.",
+            "snapshot grep supports the same grep options as htmlsnapshot grep: -e (repeatable), -i, -n, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, --selector, --selector-all, --page N, --page-size N, and --all.",
             "  - ",
             4,
         ));
@@ -2493,18 +2529,40 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - --expires takes a Unix timestamp (seconds since epoch), not a duration."
+            "  - --expires accepts a Unix timestamp (seconds since epoch), a relative duration"
+                .to_string(),
+        );
+        lines.push(
+            "    with a unit suffix (e.g. 7d, 1w, 30m, 2h — s/m/h/d/w for seconds/minutes/hours/"
+                .to_string(),
+        );
+        lines.push(
+            "    days/weeks), or an RFC 3339 datetime (e.g. 2026-08-21T00:00:00Z). Durations and"
+                .to_string(),
+        );
+        lines.push(
+            "    datetimes are resolved to an absolute timestamp before the cookie is set."
                 .to_string(),
         );
         lines.push(
             "  - --sameSite values: Strict, Lax, or None (case-sensitive)."
                 .to_string(),
         );
+        lines.push(
+            "  - The confirmation line echoes the attributes that were actually forwarded"
+                .to_string(),
+        );
+        lines.push(
+            "    (domain/path/httpOnly/secure/expires/sameSite) so a flag the backend ignored"
+                .to_string(),
+        );
+        lines.push("    becomes visible without a cookie-list round trip.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli cookie-set session abc123".to_string());
         lines.push("  browser4-cli cookie-set session abc123 --domain localhost --path / --httpOnly --secure".to_string());
-        lines.push("  browser4-cli cookie-set theme dark --sameSite Lax --expires 1786474749".to_string());
+        lines.push("  browser4-cli cookie-set theme dark --sameSite Lax --expires 7d".to_string());
+        lines.push("  browser4-cli cookie-set theme dark --sameSite Lax --expires 2026-08-21T00:00:00Z".to_string());
     }
 
     if cmd.name == "cookie-list" {
@@ -2515,7 +2573,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Output is always JSON (an array of cookie objects)."
+            "  - Output is always JSON (an array of cookie objects), sorted by domain, path,"
+                .to_string(),
+        );
+        lines.push(
+            "    then name; whole-number expires values are printed as integers."
                 .to_string(),
         );
         lines.push(String::new());
@@ -2527,9 +2589,33 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
 
     if cmd.name == "cookie-get" {
         lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Prints the bare cookie VALUE by default (matching localstorage-get and"
+                .to_string(),
+        );
+        lines.push(
+            "    sessionstorage-get). Use --full to print the whole cookie object with all"
+                .to_string(),
+        );
+        lines.push(
+            "    attributes (domain, path, expires, httpOnly, secure, sameSite)."
+                .to_string(),
+        );
+        lines.push(
+            "  - When several cookies share the name across domains, the most specific match"
+                .to_string(),
+        );
+        lines.push(
+            "    is used and the output states which domain matched. Pass --domain <domain> to"
+                .to_string(),
+        );
+        lines.push("    prefer an exact domain match.".to_string());
+        lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli cookie-get session_id".to_string());
-        lines.push("  browser4-cli cookie-get theme".to_string());
+        lines.push("  browser4-cli cookie-get theme --full".to_string());
+        lines.push("  browser4-cli cookie-get theme --domain localhost".to_string());
     }
 
     if cmd.name == "cookie-delete" {
@@ -3098,6 +3184,50 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_command_help_options_show_value_placeholders() {
+        // Value-taking options render with a placeholder (--max-files <n>,
+        // --sql <query>) so they are visually distinct from boolean flags,
+        // which stay bare (--resume, --refresh). Regression test for the
+        // OptionDef name-text placeholder convention.
+        let cmds = all_commands();
+        let help_for = |name: &str| {
+            let cmd = cmds.iter().find(|c| c.name == name).unwrap();
+            generate_command_help(cmd)
+        };
+
+        let wm = help_for("webminer-all");
+        assert!(wm.contains("  --max-files <n>"), "webminer-all help:\n{wm}");
+        assert!(wm.contains("  --output <dir>"), "webminer-all help:\n{wm}");
+        assert!(wm.contains("  --resume"), "boolean --resume must stay bare:\n{wm}");
+
+        let crawl = help_for("crawl");
+        assert!(crawl.contains("  -d, --depth <n>"), "crawl help:\n{crawl}");
+        assert!(crawl.contains("  --seed-file <file>"), "crawl help:\n{crawl}");
+        assert!(crawl.contains("  -o, --output <file>"), "crawl help:\n{crawl}");
+        assert!(crawl.contains("  --refresh"), "boolean --refresh must stay bare:\n{crawl}");
+
+        let swarm = help_for("swarm-query");
+        assert!(swarm.contains("  --sql <query>"), "swarm-query help:\n{swarm}");
+        assert!(swarm.contains("  --seed-file <file>"), "swarm-query help:\n{swarm}");
+
+        let hg = help_for("htmlsnapshot-grep");
+        assert!(hg.contains("  -e, --regexp <regex>"), "htmlsnapshot-grep help:\n{hg}");
+        assert!(hg.contains("  --selector <css>"), "htmlsnapshot-grep help:\n{hg}");
+        assert!(hg.contains("  -i, --ignore-case"), "boolean -i must stay bare:\n{hg}");
+
+        // Short-option aliases resolve to the bare machine key, not the
+        // display text with placeholder.
+        let (short_map, _) = crate::args::build_short_option_map(&crawl_cmd(&cmds, "crawl").options);
+        assert_eq!(short_map.get("o").map(String::as_str), Some("output"));
+        assert_eq!(short_map.get("d").map(String::as_str), Some("depth"));
+    }
+
+    // helper kept local because `cmds` is borrowed in the test above
+    fn crawl_cmd<'a>(cmds: &'a [crate::commands::CommandDef], name: &str) -> &'a crate::commands::CommandDef {
+        cmds.iter().find(|c| c.name == name).unwrap()
+    }
+
+    #[test]
     fn test_generate_command_help_swarm_status_and_result() {
         let cmds = all_commands();
 
@@ -3415,6 +3545,85 @@ mod tests {
         // These categories should NOT appear since no commands use them
         assert!(!help.contains("\nNetwork:"));
         assert!(!help.contains("\nConfiguration:"));
+    }
+
+    #[test]
+    fn test_every_visible_command_belongs_to_exactly_one_help_section() {
+        // Each visible command's category must resolve to exactly one
+        // canonical entry in CATEGORY_TITLES, so no visible command can
+        // silently disappear from (or appear twice in) the category
+        // listing. Shared sections (different families in one category,
+        // e.g. crawl-*/swarm-* → Swarm) are fine; a category without a
+        // title entry is not.
+        let cmds = crate::commands::all_commands();
+        let mut missing: Vec<String> = Vec::new();
+        for cmd in cmds.iter().filter(|c| !c.hidden) {
+            let cat = cmd.category.as_str();
+            let title_count = CATEGORY_TITLES
+                .iter()
+                .filter(|(name, _)| *name == cat)
+                .count();
+            if title_count != 1 {
+                missing.push(format!("{} ({}) — {title_count} section title(s)", cmd.name, cat));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "Visible commands must map to exactly one help section:\n  {}",
+            missing.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn test_webminer_and_experience_have_dedicated_help_sections() {
+        let help = generate_help();
+        // webminer-* gets its own [WebMiner] section ...
+        assert!(help.contains("  [WebMiner]"), "help should contain a [WebMiner] section:\n{help}");
+        // ... and is no longer listed under [Skills], which only holds the
+        // bundled-skill 'skills' command.
+        let skills_start = help.find("  [Skills]").unwrap_or_else(|| panic!("no [Skills] section:\n{help}"));
+        let skills_end = help[skills_start..]
+            .find("  [Plugins]")
+            .map(|i| skills_start + i)
+            .unwrap_or(help.len());
+        let skills_body = &help[skills_start..skills_end];
+        assert!(
+            !skills_body.contains("webminer") && !skills_body.contains("experience"),
+            "[Skills] section must not list webminer/experience commands:\n{skills_body}"
+        );
+        // experience-* (progressive experience memory) belongs to [Agent].
+        let agent_start = help.find("  [Agent]").unwrap_or_else(|| panic!("no [Agent] section:\n{help}"));
+        let agent_end = help[agent_start..]
+            .find("  [Swarm]")
+            .map(|i| agent_start + i)
+            .unwrap_or(help.len());
+        let agent_body = &help[agent_start..agent_end];
+        assert!(
+            agent_body.contains("experience save") && agent_body.contains("experience deep-learn"),
+            "[Agent] section should list the experience-* commands:\n{agent_body}"
+        );
+        // The [WebMiner] section lists the full family in spaced form.
+        let wm_start = help.find("  [WebMiner]").unwrap();
+        let wm_end = help[wm_start..]
+            .find("  [Skills]")
+            .map(|i| wm_start + i)
+            .unwrap_or(help.len());
+        let wm_body = &help[wm_start..wm_end];
+        for entry in [
+            "webminer",
+            "webminer install",
+            "webminer update",
+            "webminer version",
+            "webminer uninstall",
+            "webminer run-example",
+            "webminer all",
+            "webminer views",
+        ] {
+            assert!(
+                wm_body.contains(entry),
+                "[WebMiner] section should list '{entry}':\n{wm_body}"
+            );
+        }
     }
 
     // ── Quick reference tests ──────────────────────────────────────

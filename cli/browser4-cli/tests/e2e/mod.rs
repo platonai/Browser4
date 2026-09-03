@@ -664,9 +664,21 @@ struct MockBrowser4State {
     /// Custom command_result responses keyed by task ID. When set, these override
     /// the default response for `command_result`.
     custom_command_results: HashMap<String, String>,
+    /// Custom GET /api/crawl/{id}/result bodies keyed by task ID. When set,
+    /// these override the canned OK response so tests can exercise listing /
+    /// diagnostic rendering paths (e.g. linksDiscovered=0 warnings).
+    custom_crawl_results: HashMap<String, String>,
     /// Custom browser_snapshot response. When set, overrides the default mock
     /// response for `browser_snapshot` tool calls (used by snapshot-grep, etc.).
     custom_browser_snapshot_response: Option<String>,
+    /// Custom html_snapshot_query response. When set, overrides the default OK
+    /// envelope so tests can exercise X-SQL error envelopes end-to-end
+    /// (e.g. statusCode 417 must produce a nonzero exit code).
+    custom_html_snapshot_query_response: Option<String>,
+    /// Custom agent_extract tool response. When set, overrides the default
+    /// clean JSON so tests can exercise the double-encoded ExtractResult
+    /// envelope unwrap path end-to-end.
+    custom_agent_extract_response: Option<String>,
     /// Track async chat submissions (prompt → task_id).
     chat_async_submissions: Vec<(String, String)>,
     next_chat_task_id: usize,
@@ -777,6 +789,15 @@ impl MockBrowser4Server {
             .clone()
     }
 
+    /// Configure a custom response body for `GET /api/crawl/{task_id}/result`.
+    fn set_crawl_result(&self, task_id: &str, body: &str) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .custom_crawl_results
+            .insert(task_id.to_string(), body.to_string());
+    }
+
     fn set_listed_sessions(&self, listed_sessions: Vec<MockListedSession>) {
         self.state
             .lock()
@@ -865,6 +886,28 @@ impl MockBrowser4Server {
             .lock()
             .expect("mock Browser4 state mutex poisoned")
             .custom_browser_snapshot_response = None;
+    }
+
+    /// Set a custom response for the `html_snapshot_query` tool.  When set,
+    /// every `html_snapshot_query` call returns this text instead of the
+    /// default OK envelope, letting tests exercise X-SQL error envelopes
+    /// (e.g. statusCode 417) end-to-end.
+    fn set_html_snapshot_query_response(&self, response: &str) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .custom_html_snapshot_query_response = Some(response.to_string());
+    }
+
+    /// Set a custom response for the `agent_extract` tool.  When set, every
+    /// `agent_extract` call returns this text instead of the default clean
+    /// JSON, letting tests exercise the double-encoded ExtractResult
+    /// envelope unwrap path end-to-end.
+    fn set_agent_extract_response(&self, response: &str) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .custom_agent_extract_response = Some(response.to_string());
     }
 
     /// Shut down the mock server's listener thread without dropping the recorded
@@ -1132,7 +1175,10 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 "close_session" => "Session closed.".to_string(),
                 "close_all_sessions" => "All sessions closed.".to_string(),
                 "agent_extract" => {
-                    r#"{"items":[{"title":"Mock Product","price":"$19.99"}]}"#.to_string()
+                    let guard = state.lock().expect("mock Browser4 state mutex poisoned");
+                    guard.custom_agent_extract_response.clone().unwrap_or_else(|| {
+                        r#"{"items":[{"title":"Mock Product","price":"$19.99"}]}"#.to_string()
+                    })
                 }
                 "agent_summarize" => "Mock summary for #page-marker".to_string(),
                 "crawl_submit" => {
@@ -1148,6 +1194,12 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 }
                 "html_snapshot_inspect" => {
                     r#"{"selector":".product","matchCount":5,"analyzed":5,"autoDiscovered":false,"suggestedSelectors":[{"selector":".product h2","count":5,"score":100,"type":"text"}]}"#.to_string()
+                }
+                "html_snapshot_query" => {
+                    let guard = state.lock().expect("mock Browser4 state mutex poisoned");
+                    guard.custom_html_snapshot_query_response.clone().unwrap_or_else(|| {
+                        r#"{"statusCode":200,"status":"OK","resultSet":[{"url":"https://mock.browser4.local","title":"Mock Page"}]}"#.to_string()
+                    })
                 }
                 "execute_cdp_command" => {
                     let method = arguments
@@ -1417,23 +1469,32 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 .expect("mock Browser4 state mutex poisoned")
                 .result_queries
                 .push(task_id.clone());
-            let response = serde_json::json!({
-                "id": task_id,
-                "statusCode": 200,
-                "pageStatusCode": 200,
-                "isDone": true,
-                "status": "OK",
-                "pagesFound": 1,
-                "pages": [
-                    {
-                        "url": "https://mock.browser4.local/result/page",
-                        "title": "Mock Crawled Page",
-                        "depth": 0,
-                    }
-                ],
-                "error": null,
-            })
-            .to_string();
+            // A test-registered custom body wins when present; otherwise the
+            // canned OK response below applies.
+            let custom = {
+                let guard = state.lock().expect("mock Browser4 state mutex poisoned");
+                guard.custom_crawl_results.get(&task_id).cloned()
+            };
+            let response = match custom {
+                Some(custom) => custom,
+                None => serde_json::json!({
+                    "id": task_id,
+                    "statusCode": 200,
+                    "pageStatusCode": 200,
+                    "isDone": true,
+                    "status": "OK",
+                    "pagesFound": 1,
+                    "pages": [
+                        {
+                            "url": "https://mock.browser4.local/result/page",
+                            "title": "Mock Crawled Page",
+                            "depth": 0,
+                        }
+                    ],
+                    "error": null,
+                })
+                .to_string(),
+            };
             write_http_response(&mut stream, "200 OK", "application/json", &response);
         }
         // ---- chat REST endpoints ----
@@ -1525,6 +1586,8 @@ fn mock_browser_tool_text(
                 ("element => element.textContent", Some(target)) => {
                     format!("Mock element text for {target}")
                 }
+                // eval --json regression: a numeric JS result arrives as the text "6"
+                ("document.querySelectorAll('a').length", None) => "6".to_string(),
                 _ => "mock evaluation result".to_string(),
             }
         }

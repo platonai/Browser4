@@ -959,6 +959,19 @@ if (Test-Path $Exe) {
     }
 }
 
+# Capture the CLI's exit status BEFORE restoring the working directory.
+# All four invocation branches above (direct exe / cargo run fallback, with
+# or without args) run a native command whose status lands in $LASTEXITCODE.
+$CliExitCode = $LASTEXITCODE
+
 # Restore the original working directory so the caller's shell session
 # (e.g., Git Bash) sees a consistent CWD after b4w.ps1 exits.
 Set-Location $OriginalCwd
+
+# Propagate the CLI's exit code so scripts, CI, and &&-chains can detect
+# failure.  Without this, pwsh -File / Git Bash / b4w.bat invocations of
+# this script always report success even when the CLI printed an error
+# (usage errors exit 2, tool failures exit 1, ...).  cmdlets like
+# Set-Location above do not modify $LASTEXITCODE, so it still holds the
+# CLI's status here.
+exit $CliExitCode

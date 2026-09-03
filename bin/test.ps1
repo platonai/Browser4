@@ -1,4 +1,5 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
+#requires -Version 7
 
 # ===================================================================
 # CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
@@ -141,6 +142,107 @@ function Invoke-CommandAndReport {
     return $exitCode
 }
 
+# kotlin-maven-plugin (2.x) daemon failure markers.  The plugin connects to
+# a KotlinCompileDaemon; stale daemons left by crashed builds or a second
+# Maven build running concurrently surface as opaque daemon connection
+# errors ('Failed connecting to the daemon in 4 retries').
+$script:KotlinDaemonErrorPattern = '(?i)(connecting to the daemon|kotlin.{0,24}daemon)'
+
+function Write-DaemonRecoveryGuide {
+    <#
+    .SYNOPSIS
+        Print a diagnosable recovery guide for Kotlin compiler daemon
+        connection failures.
+
+    .DESCRIPTION
+        Deliberately does NOT auto-kill daemons: taskkill on java.exe could
+        kill the daemons of a concurrent legitimate build.  The guide lists
+        the manual cleanup commands instead.
+    #>
+    Write-Host ''
+    Write-Host 'Kotlin compiler daemon connection failure — recovery steps:' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host '  1. Concurrency: run only ONE Maven-driven build at a time.  If another build'
+    Write-Host '     is running (e.g. b4w.ps1, test.ps1 fast/it/e2e, a second mock-site boot),'
+    Write-Host '     wait for it to finish, then re-run this command.'
+    Write-Host '  2. Stale daemons: a crashed build can leave orphaned KotlinCompileDaemon'
+    Write-Host '     java processes that block new connections.  List them:'
+    Write-Host ''
+    Write-Host "       Get-CimInstance Win32_Process -Filter \"Name = 'java.exe'\" | Where-Object { `$_.CommandLine -match 'KotlinCompileDaemon' } | Select-Object ProcessId, CommandLine"
+    Write-Host ''
+    Write-Host '     Kill only the stale daemon PIDs — never taskkill //IM java.exe (that also'
+    Write-Host '     kills any legitimately running browser4/IDE processes):'
+    Write-Host ''
+    Write-Host '       taskkill //PID <daemon-pid> //F'
+    Write-Host ''
+    Write-Host '  3. Re-run:  test.ps1 mock-site --force'
+    Write-Host ''
+}
+
+function Invoke-KotlinCompileWithRetry {
+    <#
+    .SYNOPSIS
+        Run a Kotlin-compiling Maven invocation with ONE automatic retry on
+        Kotlin daemon connection failures.
+
+    .DESCRIPTION
+        kotlin-maven-plugin daemon errors ('Failed connecting to the daemon
+        in 4 retries') are intermittent: a single retry after a short pause
+        recovers most cases.  Non-daemon failures (real compile errors) exit
+        immediately without retry.  On a persistent daemon failure a
+        diagnosable recovery guide (Write-DaemonRecoveryGuide) is printed.
+        Output is streamed live to the host and captured for marker
+        detection.
+
+    .PARAMETER Label
+        Human-readable label for banner messages (passed through).
+    .PARAMETER PreExecPath
+        Optional directory to Push-Location into before execution.
+    .PARAMETER MvnArgs
+        Arguments for the Maven wrapper invocation.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Label,
+        [string]$PreExecPath = '',
+        [Parameter(Mandatory)][string[]]$MvnArgs
+    )
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        $exitCode = 1
+        try {
+            if ($PreExecPath) { Push-Location $PreExecPath }
+            $global:LASTEXITCODE = 0
+            $output = & $mvnwScript @MvnArgs 2>&1 | Tee-Object -Variable bootOutput | Out-Host
+            $exitCode = $LASTEXITCODE
+            $output = $bootOutput
+        }
+        catch {
+            Write-Error "Failed to execute $Label`: $_"
+            exit 1
+        }
+        finally {
+            if ($PreExecPath) { Pop-Location }
+        }
+
+        if ($exitCode -eq 0) {
+            Write-CommandBanner -Label "$Label completed successfully" -Icon '[PASS]'
+            return 0
+        }
+
+        $isDaemonFailure = (($output | Out-String) -match $script:KotlinDaemonErrorPattern)
+        if ($attempt -eq 1 -and $isDaemonFailure) {
+            Write-CommandBanner -Label "$Label hit a Kotlin compiler daemon error (exit code $exitCode) — retrying once after 5s..." -Icon '[RETRY]'
+            Start-Sleep -Seconds 5
+            continue
+        }
+
+        Write-CommandBanner -Label "$Label failed with exit code $exitCode" -Icon '[FAIL]'
+        if ($isDaemonFailure) {
+            Write-DaemonRecoveryGuide
+        }
+        exit $exitCode
+    }
+}
+
 function Invoke-BackendBuild {
     <#
     .SYNOPSIS
@@ -247,6 +349,10 @@ function Print-Usage {
     Write-Host "  test.ps1 cli -- -s=tool_* -L=ALL    # Run scenarios matching a glob pattern (ALL levels)"
     Write-Host "  test.ps1 mock-site -Dmock.site.port=18080"
     Write-Host "  test.ps1 mock-site --force              # Auto-kill process on port 18080"
+    Write-Host "  NOTE: run only ONE Maven-driven build at a time. Concurrent builds (mock-site,"
+    Write-Host "        b4w.ps1, test.ps1 fast/it/e2e) contend for the Kotlin compiler daemon and"
+    Write-Host "        fail with 'Failed connecting to the daemon in 4 retries'. The launcher"
+    Write-Host "        retries once automatically; if it still fails, see the printed recovery guide."
     Write-Host "  test.ps1 skills                     # Run skills-focused agentic tests"
     Write-Host "  test.ps1 mcp                        # Run MCP-focused agentic tests"
     Write-Host "  test.ps1 ps                         # Run all PowerShell *.tests.ps1 files"
@@ -386,6 +492,10 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
         exit 1
     }
 
+    # Preflight: the b4w wrappers must propagate the CLI exit code.  Fast,
+    # offline (no backend, no build) — fails before the expensive e2e run.
+    Invoke-WrapperSmokeTests
+
     if ($script:Show) {
         $cargoArgs = @('test', '--test', 'e2e', '--color', 'always', '--', '--nocapture') + $additionalArgs
         Write-CommandBanner -Label '[SHOW] Would execute in browser4-cli:' -Subtitle "  cargo $($cargoArgs -join ' ')"
@@ -451,6 +561,103 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
     }
 
     if ($exitCode -ne 0) { exit $exitCode }
+}
+
+function Invoke-WrapperSmokeTests {
+    <#
+    .SYNOPSIS
+        Smoke-check that the b4w wrappers propagate the CLI exit code.
+
+    .DESCRIPTION
+        Regression guard for "b4w.ps1 swallows the CLI exit code": a failing
+        CLI invocation (unknown command -> the CLI exits 2) must come back as
+        a non-zero exit code through the wrapper's real subprocess shapes —
+        `pwsh -File b4w.ps1` (used by the Git Bash shebang and by scripts)
+        and b4w.bat on Windows.  A successful invocation (--version) must
+        still exit 0.  Fast and offline: no backend and no cargo build are
+        involved (passes -NoBuild and skips when the debug binary is absent).
+
+        Runs as a preflight of the `cli` test scope (Invoke-Browser4CliTests)
+        before the cargo e2e run.
+    #>
+    Write-CommandBanner -Label 'Running b4w wrapper exit-code smoke checks...'
+
+    $b4wPs1 = Join-Path $repoRoot 'b4w.ps1'
+    if (-not (Test-Path $b4wPs1)) {
+        Write-Error "b4w.ps1 not found at $b4wPs1"
+        exit 1
+    }
+    $b4wPs1 = (Resolve-Path $b4wPs1).Path
+
+    $exeName = if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'browser4-cli.exe' } else { 'browser4-cli' }
+    $cliExe = Join-Path $repoRoot 'cli' 'browser4-cli' 'target' 'debug' $exeName
+    if (-not (Test-Path $cliExe)) {
+        Write-Host "  [WARN] SKIP: CLI binary not found at $cliExe" -ForegroundColor Yellow
+        Write-Host '         Build it first (e.g. test.ps1 cli or cargo build) and re-run this smoke check.' -ForegroundColor Yellow
+        return
+    }
+
+    if ($script:Show -or $script:DryRun) {
+        $label = if ($script:Show) { '[SHOW] Would execute' } else { '[DRY RUN] Would execute' }
+        Write-CommandBanner -Label $label
+        Write-Host "  pwsh -NoProfile -File $b4wPs1 -NoBuild <unknown-command>   (expect non-zero exit)"
+        if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+            $b4wBatShow = Join-Path $repoRoot 'b4w.bat'
+            Write-Host "  $b4wBatShow <unknown-command>  (expect non-zero exit)"
+        }
+        Write-Host "  pwsh -NoProfile -File $b4wPs1 -NoBuild --version    (expect exit 0)"
+        return
+    }
+
+    $failed = 0
+    $unknownCmd = 'nosuchcommand_b4w_wrapper_smoke'
+
+    # 1) Failing invocation through b4w.ps1 as a subprocess (pwsh -File) —
+    #    the shape used by the Git Bash shebang, scripts, and CI.
+    $global:LASTEXITCODE = 0
+    & pwsh -NoProfile -File $b4wPs1 -NoBuild $unknownCmd *> $null
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -eq 0) {
+        Write-Host "    ❌ b4w.ps1 swallowed the CLI exit code for '$unknownCmd' (got 0)" -ForegroundColor Red
+        $failed++
+    } else {
+        Write-Host "    ✅ b4w.ps1 propagates failure exit code $exitCode for '$unknownCmd'" -ForegroundColor Green
+    }
+
+    # 2) Failing invocation through b4w.bat (Windows cmd.exe entry point).
+    if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+        $b4wBat = Join-Path $repoRoot 'b4w.bat'
+        if (Test-Path $b4wBat) {
+            $global:LASTEXITCODE = 0
+            & $b4wBat -NoBuild $unknownCmd *> $null
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -eq 0) {
+                Write-Host '    ❌ b4w.bat swallowed the CLI exit code for the same command (got 0)' -ForegroundColor Red
+                $failed++
+            } else {
+                Write-Host "    ✅ b4w.bat propagates failure exit code $exitCode" -ForegroundColor Green
+            }
+        }
+    }
+
+    # 3) Successful invocation must still exit 0 (exit-code propagation must
+    #    not turn every run into a failure).
+    $global:LASTEXITCODE = 0
+    & pwsh -NoProfile -File $b4wPs1 -NoBuild --version *> $null
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        Write-Host "    ❌ b4w.ps1 --version exited $exitCode (expected 0)" -ForegroundColor Red
+        $failed++
+    } else {
+        Write-Host '    ✅ b4w.ps1 --version exits 0' -ForegroundColor Green
+    }
+
+    Write-Host ''
+    if ($failed -gt 0) {
+        Write-CommandBanner -Label "$failed wrapper smoke check(s) failed" -Icon '[FAIL]'
+        exit 1
+    }
+    Write-CommandBanner -Label 'Wrapper exit-code smoke checks completed successfully' -Icon '[PASS]'
 }
 
 function Invoke-MockSiteBoot([string[]]$additionalArgs) {
@@ -608,6 +815,8 @@ To use a different port:
 
         # Phase 2: browser4-rest + transitive deps (slow on first build —
         #          browser4-rest compiles ~25 modules; 10-15 min cold).
+        #          Compiles Kotlin → uses the Kotlin compile daemon, so the
+        #          invocation carries one automatic daemon-failure retry.
         $preflightRestArgs = @(
             'install',
             '-pl', 'browser4-rest',
@@ -615,11 +824,13 @@ To use a different port:
             '-DskipTests',
             '-q'
         )
-        Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @preflightRestArgs } `
-            -Label 'InstallBrowser4Rest' -PreExecPath $repoRoot
+        Invoke-KotlinCompileWithRetry -Label 'InstallBrowser4Rest' -PreExecPath $repoRoot -MvnArgs $preflightRestArgs
     }
 
-    Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @mvnArgs } -Label 'MockSiteBoot' -PreExecPath $mockSiteModuleDir
+    # 'package spring-boot:run' compiles Kotlin (browser4-rest-tests and its
+    # -am reactor modules) → one automatic Kotlin-daemon retry, with a
+    # diagnosable recovery guide if it persists.
+    Invoke-KotlinCompileWithRetry -Label 'MockSiteBoot' -PreExecPath $mockSiteModuleDir -MvnArgs $mvnArgs
 }
 
 function Show-RwsDirectoryTree {
