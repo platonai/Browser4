@@ -1,0 +1,286 @@
+{
+  "meta": {
+    "scenario": "crawl-advanced-extraction",
+    "source": "20260902-193524-crawl-advanced-extraction.full.md",
+    "mode": "dev",
+    "date": "20260902-193524"
+  },
+  "background": {
+    "task": "All nine mandated steps were executed successfully and produced the expected outcome, with two data-integrity anomalies discovered along the way (both documented below).\n\n1. **Seed file** created (`.test-sessions/seed-urls.txt`) with the three Electronics product URLs.\n2. **X-SQL query file** created (`.test-sessions/extract.sql`) using the selectors documented in `crawl.md` (`#productTitle`, `#product-price`) — verified against live MockSite HTML first.\n3. **Foreground crawl** (task `091e8602`): `--seed-file … --depth 0 --sql @extract.sql --refresh --parse --expires 1h --priority 1 --page-load-timeout 30s` → **3/3 pages, correct rows**: 4K OLED TV 55 / $899.99, Wireless Noise-Cancelling Headphones / $199.99, Portable Bluetooth Speaker / $49.99.\n4. **Background crawl** (task `90258b87`): returned immediately with task ID; `crawl status` → PROCESSING, later `crawl result` → status OK, 3 pages, same correct extraction.\n5. **`crawl list` while running** showed the background task as `processing` alongside completed tasks (16 tracked at that point).\n6. **`--ignore-url-query` crawl** ran; side-by-side with an identical no-flag baseline, outputs were byte-identical (→ Issue 4).\n7. **`--no-norm` crawl** ran; also byte-identical to its baseline (→ Issues 3/4).\n8. **`--readonly` crawl** ran; first attempt returned **wrong content for B0E000002** (Wireless Mouse / $24.99 instead of Wireless Noise-Cancelling Headphones / $199.99), reproducible 3×; corrected after a non-readonly refresh of that URL (→ Issue 2).\n9. **Final `crawl list`**: 39/39 tasks completed, none running or queued; background task result retrieved and verified.\n\nThe mock-site crawl workload itself is a clean, well-documented workflow: `crawl.md` contains a verbatim MockSite recipe (seed file + `extract.sql` + command) that worked on the first attempt, and the CLI `--help` output matches the reference documentation for every flag used.",
+    "executionContext": "- **Preparation**: verified `pwd` = repo root; `mkdir -p .test-sessions`; confirmed MockSite healthy (HTTP 200 on `localhost:18080`); read `./b4w.ps1 help` (full output), `SKILL.md` (771 lines), `references/crawl.md` (447 lines), and `crawl --help`; verified the three product URLs and their DOM selectors via direct HTTP requests.\n- **Commands** (~25 crawl invocations): the step-3 foreground crawl; the `--background` crawl; `crawl list` (mid-run and final); `crawl status`/`crawl result` on the background task; variant crawls for `--ignore-url-query`, `--no-norm`, `--readonly` — each run both with the flag and as a baseline; duplicate-seed (exact, mixed-case, query-variant) crawls to probe the documented dedup rules; link-discovery crawls from the Electronics category page (`/ec/b?node=1292115012`) with different `-olp` patterns to find an observable difference for the URL flags; `goto` + `eval` to inspect the JS-rendered anchor set; `curl` to cross-check live MockSite content while diagnosing the readonly corruption.\n- **Key decisions**: compare each flag against a no-flag baseline so \"no observable effect\" was an evidence-based conclusion, not an assumption; probe the readonly anomaly with single-URL reproductions and a mapping crawl before hypothesizing; re-ran the canonical step-3 crawl at the end to confirm end-state data integrity.\n- **Workarounds required**: (a) `-olp` regexes beginning with `/` were silently mangled by Git Bash MSYS path conversion when invoking `./b4w.ps1` — switched to slash-free patterns (`dp/`) or `./b4w.sh` (→ Issue 5); (b) no workaround existed for the readonly wrong-content anomaly other than a non-readonly refresh, which repaired the stored copy."
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "Link-discovery crawl page listings report identical, wrong titles for every page (no --sql)",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.sh crawl \"http://localhost:18080/ec/b?node=1292115012\" -ol \"a[href]\" -olp \"/ec/dp\" --depth 1 --page-load-timeout 20s  (repeat with --refresh). Expected: each of the 6 discovered /ec/dp/* pages listed with its own title. Actual: run 1 listed all 6 pages with title \"Product: Wireless Noise-Cancelling Headphones\" (B0E000002); run 2 listed all 6 with \"Product: USB-C Hub 7-in-1\" (B0E000005). URLs in the listing were correct; only the per-page titles were uniformly wrong and silently."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Each crawled page listed with its own title (Product: 4K OLED TV 55 / Product: Wireless Mouse / etc.), as the X-SQL extraction in the same run configuration produced per-page-correct rows."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "All 6 pages in the page listing showed the same single page's title (the wrong page varied between runs). No error or warning was emitted. A same-configuration crawl with --sql extracted correct per-page data, so the corruption is specific to the metadata/title capture path of rapid multi-page link crawls."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Race in the backend crawl page-metadata capture: when several URLs are fetched in quick succession (link-discovery mode fetches 6 pages back-to-back, ~3-4s apart), the title recorded for each page is read from a shared tab/document state that has already advanced to another page (a later fetch), so every entry ends up stamped with whichever document won the race. Likely in the crawl portal/loader that captures {url, title} after navigation completes. Needs investigation in browser4-rest crawl executor + PulsarWebDriver portal-load path; correlate with Issue 2 (same symptom family: page content/meta bound to the wrong URL under rapid sequential fetches)."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Capture title/URL metadata atomically with the navigation that produced the document (e.g., per-fetch unique tab or per-navigation snapshot token) instead of reading shared current-page state\n- Add an integration test: link-discovery crawl over N mock pages asserting each page's stored title matches its URL\n- Consider validating stored page content against the requested URL (host/path sanity check) and logging a warning on mismatch"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "--readonly crawl silently returned another product's content (B0E000002 served B0E000006's HTML)",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1) Run a 6-page link-discovery crawl (e.g. crawl --seed-file of the Electronics category with -olp \"dp/\" --depth 1 --sql @extract.sql). 2) Then run: ./b4w.ps1 crawl --seed-file seed-one.txt --depth 0 --sql @extract.sql --refresh --readonly (seed = http://localhost:18080/ec/dp/B0E000002). Actual: 3 consecutive runs returned \"Wireless Mouse | $24.99\" (B0E000006's product) for B0E000002, while curl and non-readonly crawls of the same URL returned \"Wireless Noise-Cancelling Headphones | $199.99\". After a non-readonly --refresh crawl of B0E000002, the readonly crawl returned correct data (4/4 runs afterward). Repro is not deterministic — one-off corruption observed in a ~100s window."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "--readonly crawl returns the current content of the requested URL (same as non-readonly), or at minimum warns when it serves stored content instead of a live fetch."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The readonly path served a stale, corrupted stored copy: B0E000002's store entry contained B0E000006's document. Silent — no error, no cache-age indication, output looked like a successful crawl."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The crawl page store (WebDB) entry for B0E000002 was overwritten with B0E000006's HTML during the rapid multi-page fetch window (write race: store keyed by one URL while the shared tab/document belonged to another fetch — same family as Issue 1), and the --readonly fetch path reads from that store rather than fetching live, so it faithfully served the corrupted entry. Evidence: readonly results were wrong only between the 6-page crawl and a non-readonly refresh of B0E000002; live server always correct. Needs investigation: store write path (which document gets persisted under which key) and the readonly read path (why no live fetch / no staleness signal)."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Serialize or tokenize store writes: persist only the document produced by the navigation for that URL key (see Issue 1 fix)\n- Make the readonly path report that it serves cached/stored content (age, fetch time) or verify freshness with a conditional request\n- Add a data-integrity self-check comparing a stored page's canonical URL/title against its key when serving"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "crawl.md URL-deduplication rules contradicted by seed-file behavior: duplicates are all fetched",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "printf 'http://localhost:18080/ec/dp/B0E000001\\nhttp://localhost:18080/ec/dp/B0E000001\\n' > dup.txt; ./b4w.ps1 crawl --seed-file dup.txt --depth 0 --sql @extract.sql --refresh. Also case-variant seeds (…/ec/dp/B0E000001 + …/EC/dp/b0e000001) and query-variant seeds (…?src=1 + …?src=2). crawl.md states: 'Visited URLs are normalized: lowercase, trailing slash removed, query string always stripped for dedup purposes. The same URL is never visited twice within a crawl session.'"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Per crawl.md: exact duplicate seeds collapse to 1 page; mixed-case seeds collapse (lowercase); query-variant seeds collapse (query stripped)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "All three probes fetched every seed: exact duplicates → 2 pages crawled / 2 identical rows; mixed-case → 2 pages, uppercase URL preserved verbatim in output, second page returned empty rows; query variants → 2 pages with query strings preserved. Dedup/normalization was never applied to seed URLs in depth-0 mode."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Dedup normalization (if implemented at all) appears to apply only to URLs discovered during link following, not to seed-file URLs, which are queued as-is. crawl.md does not state this scope, and its 'URL deduplication' section is written as a universal rule. Needs verification in the crawl queue builder (backend) whether seed dedup was intended but not implemented, or docs need scoping."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Scope the documentation: state that seeds are always queued verbatim and dedup applies to discovered links only (or implement seed dedup if intended)\n- If normalization is intended for seeds, apply lowercase/query-strip before queueing and document the precedence of --no-norm/--ignore-url-query over it"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "--ignore-url-query and --no-norm have no observable effect in seed-file depth-0 crawls, and docs don't scope them",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Side-by-side runs of crawl --seed-file seeds.txt --depth 0 --sql @extract.sql --refresh with (a) no flag, (b) --ignore-url-query, (c) --no-norm, using query-variant, mixed-case and exact-duplicate seeds. All outputs byte-identical in every pairing."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Each flag should have a describable, observable effect for the mode it is used in, and the docs should say which mode that is."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Zero observable difference in the bulk-fetch mode a first-time user is most likely to try them in (the docs' own 'Bulk fetch' example). crawl.md describes --ignore-url-query only as affecting 'extracted link hrefs' (link-discovery mode) and --no-norm as 'LoadOptions-level normalization' — neither statement tells the user that in seed mode these flags do nothing, so runs look like silent no-ops."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The flags operate on LoadOptions/link-href processing paths that seed-file fetches never exercise; the LoadOptions-flags table and dedup section give no mode scoping. Demonstrated demonstration gap: MockSite pages cannot exercise the link-href path because JS-rendered links carry no query strings."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "skills/browser4-cli/references/crawl.md (LoadOptions flags table + 'URL deduplication' section)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add an 'Affects' column or note to each LoadOptions flag: 'seed URLs / discovered link hrefs / fetch request' with examples of observable behavior\n- Explicitly state that seed URLs are always fetched verbatim in depth-0 mode regardless of --ignore-url-query/--no-norm\n- Surface a hint when a flag cannot take effect for the current invocation mode"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 5,
+      "title": "Git Bash path mangling silently corrupts -olp regexes starting with '/' when invoking ./b4w.ps1",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "In Git Bash: ./b4w.ps1 crawl \"http://localhost:18080/ec/b?node=1292115012\" -ol \"a[href]\" -olp \"/ec/b\" --depth 1. Actual: crawl completes with '1 pages found' and no diagnostic. With --verbose, the diagnostic shows: 'the out-link pattern 'C:/Program Files/Git/ec/b' filtered them all'. The same command via ./b4w.sh works (6 pages found)."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The pattern /ec/b should be passed to the CLI verbatim and match the extracted links, or the CLI should detect the mangled Windows-path pattern and warn."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "MSYS2 converted the leading-slash argument to a Windows path (C:/Program Files/Git/ec/b) before pwsh received it, silently filtering every link. Without --verbose the failure is indistinguishable from 'no links on the page'. crawl.md's Quick start and examples all use leading-slash patterns (-olp \"/product/\", \"a.product-link\" examples), and the shell-quoting reference covers PowerShell quoting but not Git Bash path mangling."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "MSYS2 path conversion applies to leading-'/' arguments when bash spawns the native pwsh.exe (env shebang path of ./b4w.ps1); b4w.sh's exec path does not trigger it. Neither the docs nor the wrappers neutralize it."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "skills/browser4-cli/references/crawl.md (link discovery examples) and skills/browser4-cli/references/shell-quoting.md"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Document the Git Bash rule in shell-quoting.md: quote patterns so they don't start with '/' (e.g. \"dp/\"), or prefix invocations with MSYS_NO_PATHCONV=1, or prefer ./b4w.sh\n- Have the CLI warn when an -olp value looks like an absolute Windows path (contains ':/') — almost certainly user error\n- Consider surfacing the 'filtered them all' diagnostic without requiring --verbose"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 6,
+      "title": "Helpful 'selector matched but pattern filtered all' diagnostic only appears with --verbose",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run the crawl from Issue 5 without --verbose (identical flags, depth 1): output ends at 'Crawl completed. 1 pages found.' with no explanation. Re-run adding --verbose: a detailed Diagnostic + Tips block appears explaining the pattern filtered all 9 matched anchors."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The diagnostic explaining why 0 links were followed should appear by default — it is the single most useful error-recovery hint for link-discovery crawls that return nothing."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Users who omit --verbose (the documented examples never use it) get a silent near-empty result and no pointer to the cause."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The crawl completion path appears to emit the pattern-filter diagnostic only under the --verbose flag."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ (crawl result rendering — diagnostic emission gated on verbose)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Emit the 'matched N element(s) but pattern filtered them all' diagnostic whenever all matches are filtered, regardless of --verbose\n- If kept behind --verbose, print a one-line hint ('0 pages found — re-run with --verbose for a diagnostic') in the default path"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 7,
+      "title": "Crawl page listing shows confusing depth labels and a '#'-suffixed seed URL when pages contain fragment-only links",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 crawl \"http://localhost:18080/ec/b?node=1292115012\" -ol \"a[href]\" --depth 1 (no -olp, or with a non-matching pattern). The JS-rendered page contains three <a href=\"#\"> anchors. Output: 'Crawl completed. 1 pages found.  depth=1 | http://localhost:18080/ec/b?node=1292115012# | Category: Electronics'."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The seed page (depth 0, unmodified URL) either listed with its true depth and URL, or not listed at all when 0 new pages were discovered."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The seed itself is listed as 'depth=1' with a trailing '#' fragment appended to its URL, implying a discovery event occurred when none did; '1 pages found' reads as if the crawl found one page beyond the seed."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Fragment-only hrefs resolve against the seed URL and are queued/deduped as URL+'#', and the listing appears to include the seed when fragment links reference it, mislabeled as depth 1. Minor, but misleading output for a first-time user evaluating link discovery."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Strip empty fragments during link resolution/normalization so '#' hrefs resolve to the base URL and dedup against the seed\n- Label listing rows with the depth at which they were actually discovered and exclude seeds from the 'pages found' count, or state explicitly that the count includes seeds"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 8,
+      "title": "Progress output repeats identical lines and truncates identifiers during long crawls",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Watch any crawl of >= 3 URLs: the same 'Crawling... N pages found so far' line prints repeatedly at ~10s intervals even when nothing changed, and per-seed progress lines truncate the URL/title (e.g. 'http://localhost:18080/ec/d... / Wireless Noise-Cancelling H...')."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Progress lines that only print on actual state change, with full or at least distinguishable identifiers."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Idle polling spam and truncated identifiers make long foreground crawls harder to read; with several concurrent crawls the interleaved repeats are genuinely confusing."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Foreground crawl progress poller reprints the same aggregate status each poll and abbreviates long values in the per-seed lines."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ (crawl foreground progress reporting)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Print a line only when the reported counters (pages found / rows / seeds done) change, or use a single-line update\n- Truncate URLs from the right with an ellipsis but keep the differing path suffix, or show full URLs for <= 3 concurrent items"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}
