@@ -162,3 +162,4 @@ bin/maintenance/state/*.lock
 /b4w
 /b4w.bat
 /b4w-*.bat
+/.buildtmp/

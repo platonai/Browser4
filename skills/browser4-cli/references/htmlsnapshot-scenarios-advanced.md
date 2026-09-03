@@ -6,13 +6,28 @@ tier: procedure
 
 # HTML Snapshot Scenarios — Advanced Discovery & Automation
 
-Practical recipes for discovering page structure, finding CSS selectors on unfamiliar pages, and using HTML snapshots in agent-assisted form-filling workflows.
+## Quick Start
 
-> **Note:** CSS selectors are tied to live websites and may break over time. See [SKILL.md §5](../SKILL.md#5-critical-warnings). These examples demonstrate discovery workflows — the selectors shown are outputs of `inspect` and `summary`, not inputs you hard-code.
+Every scenario follows the same discovery-first loop:
 
-> **Parent document:** [htmlsnapshot-scenarios.md](htmlsnapshot-scenarios.md) — full scenario index, patterns & tips, and command reference.
+```bash
+browser4-cli open --headless "<target-url>"
+browser4-cli htmlsnapshot summary                  # page structure overview (WPSI)
+browser4-cli htmlsnapshot inspect --selector ":root"   # discover selectors
+browser4-cli htmlsnapshot get text "<css>"         # extract with the discovered selector
+```
 
-## Scenarios
+The numbered scenarios below apply this loop to specific domains.
+
+## When to Use
+
+Use these recipes when the page is **unfamiliar** — you need to discover its structure and selectors before extracting, or you are orchestrating agent-assisted form workflows. The parent [scenario index](htmlsnapshot-scenarios.md) compares all scenario families.
+
+## How It Works
+
+The discovery-first loop compresses the problem: `summary` builds a Web Page Summary Index of the page's structure, `inspect` samples elements matching a candidate selector, and only then do `get`/`query` extract with selectors you can trust — instead of guessing selectors against the raw HTML.
+
+## Patterns
 
 | # | Scenario | Primary Commands | Domain |
 |---|----------|------------------|--------|
@@ -21,6 +36,24 @@ Practical recipes for discovering page structure, finding CSS selectors on unfam
 | 13 | Selector Discovery for Unknown Pages | `inspect` | Research / Scraping |
 
 ---
+
+## Flags
+
+The scenarios use `htmlsnapshot` flags (`--selector`, `--sql`, `-limit`/`-offset`, load options) — see [htmlsnapshot.md](htmlsnapshot.md) for the full flag reference.
+
+## Errors & Recovery
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `inspect` returns few/no matches | Selector too specific or page changed | Start from `:root` or `summary` and narrow down |
+| Discovered selector extracts nothing | Snapshot is stale | Re-run `htmlsnapshot` (re-capture) before extracting |
+| Form discovery misses fields | Fields rendered by JS after load | Use load options to wait for rendering (see [load-options-guide.md](load-options-guide.md)) |
+
+Practical recipes for discovering page structure, finding CSS selectors on unfamiliar pages, and using HTML snapshots in agent-assisted form-filling workflows.
+
+> **Note:** CSS selectors are tied to live websites and may break over time. See [SKILL.md §5](../SKILL.md#5-critical-warnings). These examples demonstrate discovery workflows — the selectors shown are outputs of `inspect` and `summary`, not inputs you hard-code.
+
+> **Parent document:** [htmlsnapshot-scenarios.md](htmlsnapshot-scenarios.md) — full scenario index, patterns & tips, and command reference.
 
 ## 10. Agent-Assisted Form Discovery
 

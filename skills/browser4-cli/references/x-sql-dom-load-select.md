@@ -6,11 +6,19 @@ tier: catalog
 
 # X-SQL: DOM_LOAD_AND_SELECT — Page Loading with CSS Selection
 
+## Overview
+
 > **Parent:** [x-sql.md](x-sql.md) — full function index and quick-reference patterns
 >
 > **Related:** [DomFunctions](x-sql-dom-functions.md) | [DomSelectFunctions](x-sql-dom-select-functions.md) | [StringFunctions](x-sql-string-functions.md) | [ArrayFunctions](x-sql-array-functions.md)
 
 **Source:** `DomFunctionTables.kt` | **Namespace:** `DOM`
+
+## Quick Index
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| [DOM_LOAD_AND_SELECT](#dom_load_and_select) | ResultSet | Load a page and select elements by CSS query — the required table source for all X-SQL page-data queries |
 
 ---
 

@@ -6,6 +6,19 @@ tier: procedure
 
 # Shell Quoting on Windows — Workaround Guide
 
+## Quick Start
+
+Avoid the quoting trap entirely — never inline complex expressions on Windows:
+
+```bash
+browser4-cli htmlsnapshot query --sql @query.sql    # SQL from file (recommended)
+browser4-cli htmlsnapshot query --sql-stdin         # SQL from stdin
+browser4-cli eval --file script.js                  # JS from file
+browser4-cli eval --base64 "…"                      # JS as base64
+```
+
+[When to Use](#when-to-use) below explains when you are at risk; [Patterns](#patterns) has the full workaround recipes.
+
 When running `browser4-cli` under Git Bash (or any POSIX shell on Windows), inline expressions pass through **four layers of quote interpretation**: Bash → `cargo run` → CLI argument parser → browser's JS engine. Each layer strips or reinterprets quotes, making correct escaping nearly impossible for complex JavaScript or X-SQL.
 
 > **This is the trap warned about in [SKILL.md §5 Critical Warnings](../SKILL.md).** That section states the problem in one line; this file is the detailed workaround workflow. The warning text is not repeated here.
@@ -68,7 +81,7 @@ browser4-cli htmlsnapshot query "https://example.com/products" --sql @query.sql
 echo 'a[href]' | browser4-cli htmlsnapshot inspect --stdin
 ```
 
-## Options Cheat Sheet
+## Flags / Options Cheat Sheet
 
 | Instead of | Use | Example |
 |---|---|---|
@@ -81,6 +94,14 @@ echo 'a[href]' | browser4-cli htmlsnapshot inspect --stdin
 | `htmlsnapshot inspect --selector "..."` | `@file` | `htmlsnapshot inspect @selectors.txt` |
 | | `--stdin` | `echo 'a[href]' \| htmlsnapshot inspect --stdin` |
 | | `--selector-base64` | `--selector-base64 <base64>` |
+
+## Errors & Recovery
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `--sql "…"` output is mangled or empty | Shell reinterprets nested quotes (Windows/Git Bash) | Use `--sql @file.sql` or `--sql-stdin` |
+| `eval "…"` returns `null` or syntax errors | Quotes stripped across the 4 shell layers | Use `--file` / `--stdin` / `--base64` |
+| `htmlsnapshot inspect --selector "…"` breaks on special chars | `$`, backticks, or quotes in the selector | Use `@file`, `--stdin`, or `--selector-base64` |
 
 ## PowerShell-Specific: `@` Splatting
 
@@ -111,6 +132,30 @@ browser4-cli htmlsnapshot get all text '[class*="product-title"]'
 ```
 
 **In PowerShell, use single quotes around CSS selectors that contain double quotes.**
+
+## Git Bash / MSYS2: leading-slash values become Windows paths
+
+MSYS2 (Git Bash) rewrites arguments that begin with `/` into Windows paths when it spawns a native executable (`pwsh`, `browser4-cli.exe`). A pattern value like `/product/` silently arrives as `C:/Program Files/Git/product/`:
+
+```bash
+# Git Bash → the value below is converted before it reaches the CLI:
+# the pattern matches nothing → the crawl filters out every link.
+browser4-cli crawl "https://example.com/index.html" -d 2 -ol "a.product" -olp "/product/"
+```
+
+The result is a silently wrong crawl: only the seed page is reported (`Crawl completed. 1 pages found.`), exit code 0, no hint of the mangled pattern.
+
+**`./b4w.sh` neutralizes this** — it exports `MSYS2_ARG_CONV_EXCL='*'` around its `pwsh` invocation, so all arguments pass through unconverted. Use `./b4w.sh` from Git Bash whenever a command needs a `/`-leading value.
+
+**`./b4w.ps1` called from Git Bash is affected too** — Git Bash runs the script by spawning the native `pwsh.exe`, and conversion applies to every argument of that spawn, regardless of quoting. Only a real PowerShell console (or cmd) is conversion-free.
+
+**Workarounds:**
+- Prefer `./b4w.sh` (conversion disabled for all arguments).
+- Use a value that does not start with `/`: `-olp "product/"`, `-olp "ec/dp"`.
+- Or export the exclusion yourself before invoking anything:
+  `export MSYS2_ARG_CONV_EXCL='*'` (older equivalent: `MSYS_NO_PATHCONV=1`).
+
+Applies to any value that legitimately starts with `/` and is not an existing file path — `-olp`/`--out-link-pattern` (e.g. `/product/`), `snapshot grep` patterns like `/ec/dp/`, and similar. The CLI prints a warning when a pattern value looks like a mangled Windows path (contains `:/`).
 
 ## Why This Works
 

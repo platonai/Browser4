@@ -80,6 +80,34 @@ browser4-cli loop -- snapshot -i 600
 browser4-cli loop -- screenshot --full-page -i 1800
 ```
 
+## Patterns
+
+### Named loops
+
+Run multiple independent loops concurrently with `--name` — each has its own state file under `~/.browser4/loops/<name>.json`:
+
+```bash
+browser4-cli loop --name health --shell "curl -s https://api.example.com/health" -i 300
+browser4-cli loop --list
+```
+
+### Start paused
+
+Create a loop that is persisted but does not start until resumed:
+
+```bash
+browser4-cli loop --pause --shell "echo hi" -i 60 --name demo
+browser4-cli loop --resume --name demo
+```
+
+### Resume after interruption
+
+Pick up a loop after a crash or Ctrl+C with `--resume` (optionally `--name` to target a named loop) — see [Persistence and resume](#persistence-and-resume) for the full state-file workflow.
+
+### Stop and clean up
+
+`--stop` stops a running/paused loop and clears its persisted state; `--stop-all` clears every loop at once.
+
 ## Flags
 
 | Flag | Short | Type | Default | Description |
@@ -271,6 +299,20 @@ hello
 ========================================
 Loop finished. 2 iteration(s) completed.
 ```
+
+> **Redirecting output to a file on Windows:** loop's human-readable output
+> uses non-ASCII glyphs (`—`, `✓`, `⏸`, `▶`). Console display is fine, but
+> Windows PowerShell 5.1's redirection (`*>`, `>`) decodes the CLI's UTF-8
+> byte stream with the ANSI codepage and mangles those characters into
+> mojibake. Before redirecting, set the console encoding:
+>
+> ```powershell
+> [Console]::OutputEncoding = [Text.Encoding]::UTF8
+> browser4-cli loop --name my-check --count 2 -i 10 -- eval "..." *> loop-run.log
+> ```
+>
+> Or run the redirect under PowerShell 7+ (`pwsh`), which decodes UTF-8 by
+> default.
 
 ### JSON output (`--json`)
 

@@ -55,22 +55,10 @@ The snapshot file path is printed to stderr after capture. Snapshot files can be
 ```bash
 browser4-cli snapshot [--viewport N|-v N] [--stdout] [--json] [--quiet]   # capture accessibility tree
 browser4-cli snapshot --auto-diff [--viewport N|-v N]                      # diff vs previous snapshot
-browser4-cli snapshot --interactive|-i [--viewport N|-v N]                 # interactive mode (strips generic <div> containers)
+browser4-cli snapshot --interactive|-i [--viewport N|-v N]                 # interactive-oriented rendering (text merged into names — not a strict filter)
 browser4-cli snapshot --stdout --page N                                    # paginate stdout output
 browser4-cli snapshot grep [OPTIONS] <pattern>                             # search snapshot content with regex
 ```
-
-### Options
-
-| Option | Description |
-|---|---|
-| `--viewport N`, `-v N` | Capture viewport N (0 = current visible screen; negative = above). Paginates long pages into fixed-height chunks. |
-| `--stdout` | Print snapshot to stdout instead of saving to file. |
-| `--auto-diff` | Diff against the previous snapshot — shows added/removed/changed elements. |
-| `--interactive`, `-i` | Interactive mode — strips generic `<div>` containers for cleaner output. |
-| `--json` | Single-line JSON envelope on stdout only. All tips, hints, and warnings are suppressed. |
-| `--quiet`, `-q` | Suppress all normal output; only errors appear on stderr. |
-| `--page N` | When used with `--stdout`, show only page N of the output. |
 
 ## Viewport Pagination
 
@@ -123,8 +111,11 @@ Grep operates on the most recent snapshot. If no snapshot exists yet, run `snaps
 | `-A N` | Show N lines after each match |
 | `-B N` | Show N lines before each match |
 | `-C N` | Show N lines before and after each match |
+| `-n` | GNU grep `-n` compatibility — line numbers are printed by default, so `-n` is a no-op here |
 | `--page N` | Show page N of paginated results |
 | `--all` | Disable pagination (show all results) |
+
+Patterns are **Rust regex** (same dialect as `htmlsnapshot grep`): `|` is alternation, `^`/`$` anchor the start/end of a line, and a literal `$` must be written `[$]` (e.g. `'[$][0-9.]+'` for prices) — `\$` is an invalid escape, not a way to write a literal dollar. Use `-F` to match plain text. See the [htmlsnapshot grep dialect notes](htmlsnapshot.md#regex-dialect) for details.
 
 ## Ref Lifecycle
 
@@ -145,14 +136,23 @@ Refs are **ephemeral** — they become invalid after commands that change the DO
 
 ## Interactive Mode
 
-`--interactive` (`-i`) strips generic `<div>` containers from the accessibility tree for cleaner output:
+`--interactive` (`-i`) switches the snapshot into **interactive-oriented rendering**: the AX capture aggregates inner text into the enclosing element's name, so each ref line reads as a self-contained target (e.g. a `<header>`/`banner` line carries the text of everything inside it).
+
+> **`-i` is not a strict filter.** Despite the name, the tree is **not** reduced to buttons, links, inputs and other interactive controls: any addressable element (headings, paragraphs, list items, generic `<div>` containers — they all carry refs) stays in the output. Do not use `-i` expecting a smaller tree.
 
 ```bash
-browser4-cli snapshot -i        # cleaner tree, generic containers removed
-browser4-cli snapshot -i -v 0   # interactive mode with viewport
+browser4-cli snapshot -i        # interactive-oriented rendering (text merged into names)
+browser4-cli snapshot -i -v 0   # same, but only the current screenful — the reliable way to bound output size
 ```
 
-> **Warning:** Many e-commerce product cards use generic `<div>` elements, not semantic elements. Interactive mode may strip important structural containers on shopping/search pages. Prefer `--viewport 0` or `htmlsnapshot` for those cases.
+To keep the output genuinely small and focused, use:
+
+- `-v 0` / `-v N` — capture one screenful at a time (the recommended way to bound size)
+- `-s, --selector <CSS>` — scope the capture to a subtree
+- `-d, --depth <N>` — limit tree depth
+- `htmlsnapshot` — CSS-selector extraction when you do not need refs
+
+> **Warning:** Do not rely on `-i` to shrink large snapshots or to strip product-card containers — addressable non-interactive elements remain. For shopping/search pages prefer `-v 0` viewport pagination or `htmlsnapshot` for selector-based extraction.
 
 ## Output Modes
 
@@ -162,6 +162,26 @@ browser4-cli snapshot -i -v 0   # interactive mode with viewport
 | JSON | `--json` | Single-line JSON envelope on stdout only; tips/hints/warnings suppressed |
 | Quiet | `--quiet`, `-q` | Suppress all normal output; only errors on stderr |
 | Stdout | `--stdout` | Print snapshot content to stdout instead of saving to file |
+
+## Where Snapshots Are Stored
+
+Snapshot files are written to **`.browser4-cli/snapshot/` under the current working directory** (`<cwd>/.browser4-cli/snapshot/snapshot-<timestamp>.yml`) — **not** to the session-state directory (`~/.browser4`) and **not** affected by `BROWSER4_CLI_STATE_DIR`. The file path is printed to stderr after each capture.
+
+**They accumulate.** Every navigation and interaction that triggers a capture (`goto`, `open`, `click`, `fill`, `select`, …) writes a new timestamped file, plus any `snapshot` command run without `--stdout`. Over a session this can grow to hundreds of files; the directory is gitignored in the Browser4 repo (`.gitignore`: `.browser4-cli/`), but other projects may not ignore it.
+
+Manage the directory with the `snapshot list` / `snapshot clean` commands (canonical kebab-case names `snapshot-list` / `snapshot-clean`; both spellings work):
+
+```bash
+browser4-cli snapshot list              # show saved files (name, size, modified; default: 20 most recent)
+browser4-cli snapshot list -n 50        # more files
+browser4-cli snapshot list --all        # include archived snapshots
+browser4-cli snapshot clean --dry-run   # preview what would be deleted
+browser4-cli snapshot clean             # delete all but the 100 most recent
+browser4-cli snapshot clean --keep 20   # keep only the 20 most recent
+browser4-cli snapshot clean --all       # delete everything (including the archive)
+```
+
+`extract` / `summarize` / screenshot artifacts also land in this directory (timestamped), so `snapshot list`/`clean` manage those too.
 
 ## Patterns
 
@@ -202,13 +222,34 @@ browser4-cli snapshot -v 2     # further down
 browser4-cli snapshot -v 0 --json   # clean JSON for scripts/agents
 ```
 
+## Flags / Options
+
+| Option | Description |
+|---|---|
+| `--viewport N`, `-v N` | Capture viewport N (0 = current visible screen; negative = above). Paginates long pages into fixed-height chunks. |
+| `--stdout` | Print snapshot to stdout instead of saving to file. |
+| `--auto-diff` | Diff against the previous snapshot — shows added/removed/changed elements. |
+| `--interactive`, `-i` | Interactive-oriented rendering: inner text is aggregated into the enclosing element's name so ref lines read as self-contained targets. This is **not** a strict interactive-only filter — addressable headings, paragraphs and generic containers remain in the tree. |
+| `--json` | Single-line JSON envelope on stdout only. All tips, hints, and warnings are suppressed. |
+| `--quiet`, `-q` | Suppress all normal output; only errors appear on stderr. |
+| `--page N` | When used with `--stdout`, show only page N of the output. |
+
+## Errors & Recovery
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `snapshot --stdout` dumps a huge tree | Full page captured; stdout output is not paginated by default | Use `-v 0` or `--stdout --page N`; or `snapshot grep` for targeted reads |
+| `snapshot grep` finds nothing | Pattern doesn't match the accessibility tree (refs/labels, not raw HTML) | Match against element names and labels; use `htmlsnapshot grep` for raw HTML |
+| Missing elements in `-i` mode | Interactive mode strips generic `<div>` containers | Use `--viewport 0` or `htmlsnapshot` for shopping/search pages |
+| Stale refs after interaction | Refs are single-use handles | Re-snapshot after any interaction — see [SKILL.md §5](../SKILL.md#5-critical-warnings) |
+
 ## Critical Warnings
 
-> **Warning:** Don't cat snapshot files — they can exceed 256KB. Use viewport pagination (`snapshot -v 0`), `snapshot grep <pattern>`, or `snapshot --stdout --page 1` instead.
+> **Note:** Warning: don't cat snapshot files (they can exceed 256KB) — see [SKILL.md §5](../SKILL.md#5-critical-warnings)
 
-> **Warning:** Refs are single-use for navigation and DOM-mutating commands. Re-snapshot after `click` (on links/buttons), `goto`, `reload`, and tab switches. Never store refs across navigations.
+> **Note:** Warning: refs are single-use — re-snapshot after any interaction — see [SKILL.md §5](../SKILL.md#5-critical-warnings)
 
-> **Warning:** Interactive mode (`snapshot -i`) strips generic `<div>` containers. Many e-commerce product cards use generic divs, not semantic elements. Prefer `--viewport 0` or `htmlsnapshot` for shopping/search pages.
+> **Warning:** Interactive mode (`snapshot -i`) does **not** strip generic `<div>` containers or other non-interactive elements — any addressable element remains in the tree. Prefer `-v 0` viewport pagination or `htmlsnapshot` for shopping/search pages where you need small, focused output.
 
 ## See Also
 

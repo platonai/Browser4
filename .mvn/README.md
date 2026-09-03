@@ -5,13 +5,15 @@ This directory contains the Maven Wrapper configuration for the Browser4 project
 ## Files
 
 ### `jvm.config`
-JVM options passed to the Maven launcher. Currently enables native access for all unnamed modules:
+JVM options passed to the Maven launcher (applied to the JVM running Maven itself, not to forked test JVMs):
 
 ```
 --enable-native-access=ALL-UNNAMED
+-Djdk.net.URLClassPath.disableClassPathURLCheck=true
 ```
 
-This flag is required for Java native interoperability features used by the project.
+- `--enable-native-access=ALL-UNNAMED` — enables native access for all unnamed modules. Required for the Java native interoperability features used by the project.
+- `-Djdk.net.URLClassPath.disableClassPathURLCheck=true` — Java 25 surefire workaround: the surefire-booter JAR manifest contains absolute paths that Java 25's `URLClassPath` rejects. It must be set on the Maven JVM itself (a pom `argLine` only applies to the forked test JVM and does not reach the booter), which is why it lives in `jvm.config`.
 
 ### `maven.config`
 Default Maven CLI options applied to every `mvnw` invocation. Currently contains commented-out settings for parallel builds (`-T 1C`) and Kotlin incremental compilation. These are disabled because kapt (Spring/JPA annotation processing) forces non-incremental mode and some plugins (kapt, remote-resources) are not marked thread-safe.
@@ -27,6 +29,8 @@ Maven Wrapper version and distribution settings:
 | Distribution type | `only-script` (scripts only, no bundled JAR) |
 | Maven version | 3.9.16 |
 | Distribution URL | Apache Maven Central |
+
+These values pin the Maven toolchain only and are independent of the Browser4 project version. Because the distribution type is `only-script`, `wrapper/` contains just the properties file — the `mvnw` / `mvnw.cmd` launcher scripts themselves live at the project root.
 
 ## Usage
 

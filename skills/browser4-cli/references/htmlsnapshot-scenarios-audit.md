@@ -6,13 +6,26 @@ tier: procedure
 
 # HTML Snapshot Scenarios — Audit, Compliance & Monitoring
 
-Practical recipes for auditing web pages, tracking competitive pricing, verifying compliance requirements, running CI regression checks, and debugging incidents — using `htmlsnapshot grep`, `query`, `export`, and load options.
+## Quick Start
 
-> **Note:** CSS selectors are tied to live websites and may break over time. See [SKILL.md §5](../SKILL.md#5-critical-warnings). Treat these examples as patterns, not copy-paste recipes.
+```bash
+browser4-cli open --headless "<target-url>"
+browser4-cli htmlsnapshot get html "head"          # capture the raw head (meta tags, links)
+browser4-cli htmlsnapshot grep -i "og:"            # quick Open Graph / meta checks
+browser4-cli htmlsnapshot query --sql @audit.sql   # structured audit queries (X-SQL)
+```
 
-> **Parent document:** [htmlsnapshot-scenarios.md](htmlsnapshot-scenarios.md) — full scenario index, patterns & tips, and command reference.
+The numbered scenarios below apply these commands to SEO, pricing, compliance, CI, and incident-response use cases.
 
-## Scenarios
+## When to Use
+
+Use these recipes when you need **verification and monitoring** rather than bulk extraction: SEO health, price tracking, compliance checks, CI regression snapshots, and incident debugging. The parent [scenario index](htmlsnapshot-scenarios.md) compares all scenario families.
+
+## How It Works
+
+Audit scenarios combine four capabilities: `grep` searches snapshot HTML with regex (fast checks), `query` runs X-SQL for structured verification, `export` archives pages for audit trails and baselines, and load options control freshness/quality of what gets captured.
+
+## Patterns
 
 | # | Scenario | Primary Commands | Domain |
 |---|----------|------------------|--------|
@@ -23,6 +36,24 @@ Practical recipes for auditing web pages, tracking competitive pricing, verifyin
 | 12 | Incident Response & Debugging | `grep` | Engineering / SRE |
 
 ---
+
+## Flags
+
+The scenarios use `htmlsnapshot` flags and load options — see [htmlsnapshot.md](htmlsnapshot.md) for the full flag reference.
+
+## Errors & Recovery
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `grep` finds nothing | Pattern doesn't match the snapshot HTML | Check regex flags (`-i`, `-F`) and re-capture before grepping |
+| Baseline diff shows everything changed | Page loaded inconsistently | Use load options (`-expires`, quality requirements) to stabilize captures |
+| Compliance check passes wrongly | Stale snapshot | Always re-capture with `htmlsnapshot` before verification runs |
+
+Practical recipes for auditing web pages, tracking competitive pricing, verifying compliance requirements, running CI regression checks, and debugging incidents — using `htmlsnapshot grep`, `query`, `export`, and load options.
+
+> **Note:** CSS selectors are tied to live websites and may break over time. See [SKILL.md §5](../SKILL.md#5-critical-warnings). Treat these examples as patterns, not copy-paste recipes.
+
+> **Parent document:** [htmlsnapshot-scenarios.md](htmlsnapshot-scenarios.md) — full scenario index, patterns & tips, and command reference.
 
 ## 3. SEO Health Audit
 

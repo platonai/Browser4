@@ -10,7 +10,9 @@ From the repository root, start MockSite with its default port (18080):
 
 **Windows (PowerShell):**
 ```powershell
-./bin/test.ps1 mock-site -Dmock.site.port=18080
+# bin/*.ps1 scripts require PowerShell 7+ (pwsh). Windows PowerShell 5.1
+# refuses with a clear "#requires" error — run it via pwsh instead:
+pwsh -File ./bin/test.ps1 mock-site -Dmock.site.port=18080
 ```
 
 **Linux / macOS (bash):**

@@ -6,6 +6,8 @@ tier: catalog
 
 # X-SQL Reference: DOM & String Functions
 
+## Overview
+
 This directory contains the X-SQL function reference, split by function group. Use the links below to read only the section you need.
 
 **SQL constraint:** All queries extracting page data MUST use this pattern:
@@ -21,6 +23,8 @@ FROM DOM_LOAD_AND_SELECT(url, cssQuery [, offset, limit])
 No other SQL syntax is supported — no CTEs (`WITH`), no subqueries in `FROM`, no `EXPLODE`, no joins. The only valid table source is `DOM_LOAD_AND_SELECT`.
 
 **URL parameter:** When used through `htmlsnapshot query` or `swarm query`, use the **unquoted** `@url` placeholder to reference the target page URL. Do NOT use `'.'` as a literal URL — it is not valid and will cause a 500 error. The `@url` placeholder is replaced with the actual page URL by `SQLTemplate.createSQL()`.
+
+**CLI output:** `htmlsnapshot query` / `swarm query` default to the **raw JSON response envelope** (machine-readable). For human-readable results add `--format table` (or `--format csv`); `--result-only` prints just the resultSet. Exit code is `0` on success — an **empty** resultSet still exits `0` ("no rows matched" is not an error) — and nonzero when the server returns an error envelope (`417`/`5xx`). See [htmlsnapshot.md](htmlsnapshot.md#output-format-and-exit-codes).
 
 X-SQL uses the **H2 database** SQL dialect.
 
@@ -298,11 +302,11 @@ Scalar functions (input: DOM + selector string, output: scalar)
 | `DOM_FIRST_MINIMAL_HTML` | `(DOM, sel)` | `String` | CSS select |
 | `DOM_NTH_MINIMAL_HTML` | `(DOM, sel, n)` | `String` | CSS select |
 | `DOM_ALL_INTEGERS` | `(DOM, sel)` | `ValueArray` | CSS select |
-| `DOM_FIRST_INTEGER` | `(DOM, sel)` | `Int` | CSS select |
-| `DOM_NTH_INTEGER` | `(DOM, sel, n)` | `Int` | CSS select |
-| `DOM_ALL_FLOATS` | `(DOM, sel)` | `ValueArray` | CSS select |
-| `DOM_FIRST_FLOAT` | `(DOM, sel)` | `ValueFloat` | CSS select |
-| `DOM_NTH_FLOAT` | `(DOM, sel, n)` | `ValueFloat` | CSS select |
+| `DOM_FIRST_INTEGER` | `(DOM, sel, default)` | `Int` | CSS select |
+| `DOM_NTH_INTEGER` | `(DOM, sel, n, default)` | `Int` | CSS select |
+| `DOM_ALL_FLOATS` | `(DOM, sel, default)` | `ValueArray` | CSS select |
+| `DOM_FIRST_FLOAT` | `(DOM, sel, default)` | `ValueFloat` | CSS select |
+| `DOM_NTH_FLOAT` | `(DOM, sel, n, default)` | `ValueFloat` | CSS select |
 | `DOM_ALL_ATTRS` | `(DOM, sel, attr)` | `ValueArray` | CSS select |
 | `DOM_FIRST_ATTR` | `(DOM, sel, attr)` | `String` | CSS select |
 | `DOM_NTH_ATTR` | `(DOM, sel, attr, n)` | `String` | CSS select |
@@ -326,6 +330,23 @@ Scalar functions (input: DOM + selector string, output: scalar)
 > ⚠ **Warning:** Functions marked with ⚠ return a **scalar** (`String`), not a `ValueDom`. They select an element AND extract a property in one step. Their results **cannot** be passed to `ValueDom` functions like `DOM_ABS_SRC`, `DOM_ABS_HREF`, `DOM_TEXT`, etc. Use the `DOM_SELECT_*` + property-function pattern instead for composable DOM access (see [§Composability](#function-inputoutput-types--composability) above).
 
 > **Note on `DOM_FIRST_HREF`:** For href extraction, `DOM_FIRST_HREF(DOM, sel)` can return an empty string for a class-only selector (e.g. `.product-link`) while the tag-qualified form (`a.product-link`) works. Prefer `DOM_FIRST_ATTR(DOM, sel, 'href')` — it accepts any selector and returns the href consistently (relative; use `DOM_ABS_HREF` or `abs:href` for the absolute URL).
+
+> **Number-extraction functions take a default argument:** the registered form of `DOM_FIRST_FLOAT` is `(DOM, sel, default)` — likewise `DOM_NTH_FLOAT(DOM, sel, n, default)`, `DOM_FIRST_INTEGER(DOM, sel, default)`, `DOM_NTH_INTEGER(DOM, sel, n, default)` and `DOM_ALL_FLOATS(DOM, sel, default)`. The 2-argument forms are **not registered** — calls without the default fail with `Method "DOMFIRSTFLOAT … parameter count: 2" not found` (HTTP 417). Pass the default explicitly in every call (`DOM_FIRST_FLOAT(DOM, '.price', 0.0)`); it is also the value returned when the selector matches nothing.
+
+> **Numeric predicates need a CAST:** `DOM_FIRST_FLOAT` (and `DOM_FIRST_INTEGER`) return a custom H2 value type. Selecting/ordering by them works, but comparing one to a numeric literal in `WHERE`/`ORDER BY` makes H2 hex-decode the value's string form and fail with an opaque `Hexadecimal string contains non-hex character: "899.99"` error (H2 90004-197, HTTP 417). Wrap the function in a numeric cast, or parse through the STR namespace:
+>
+> ```sql
+> -- Wrong — H2 90004-197 in WHERE:
+> --   ... WHERE DOM_FIRST_FLOAT(DOM, '.price', 0.0) >= 25.0
+> SELECT ... FROM DOM_LOAD_AND_SELECT(@url, '.product-card')
+>   WHERE CAST(DOM_FIRST_FLOAT(DOM, '.price', 0.0) AS DOUBLE) >= 25.0
+> -- or, using the STR workaround (returns a primitive):
+> --   ... WHERE STR_FIRST_FLOAT(DOM_FIRST_TEXT(DOM, '.price'), 0.0) >= 25.0
+> ```
+>
+> The same comparison **works** in `SELECT` and `ORDER BY` (e.g. `ORDER BY DOM_FIRST_FLOAT(DOM, '.price', 0.0) DESC`), so only predicates need the cast — `STR_FIRST_FLOAT(DOM_FIRST_TEXT(DOM, sel), default)` is the drop-in workaround for `WHERE`/`ORDER BY`.
+
+> **Where `:expr(...)` is evaluated:** PowerCSS `:expr()` visual filters ARE evaluated in the `DOM_LOAD_AND_SELECT` selector (the `FROM` clause) and in `htmlsnapshot get` / `get all` / `inspect` selectors over the stored snapshot. Inside **`DOM_FIRST_*`/`DOM_ALL_*` UDF selector arguments** `:expr` is **not reliably evaluated and can silently match nothing** (no error) — in particular the image helpers `DOM_FIRST_IMG`/`DOM_NTH_IMG`/`DOM_ALL_IMGS` ignore `:expr(...)` entirely. Keep UDF selector arguments to plain CSS (e.g. `'img'`) and move visual filters to the `FROM` clause (`DOM_LOAD_AND_SELECT(@url, 'img:expr(width > 250)')`) or to `htmlsnapshot get`/`inspect`; to read image URLs, use `DOM_FIRST_ATTR(DOM, 'img', 'src')`. See [power-dom.md](power-dom.md).
 
 ### STR Namespace
 

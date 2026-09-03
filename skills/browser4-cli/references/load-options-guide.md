@@ -6,6 +6,8 @@ tier: catalog
 
 # LoadOptions Guide
 
+## Overview
+
 `LoadOptions` controls web page fetching, processing, and storage in Browser4. Options are passed as command-line-style strings (e.g., `-expires 1d -parse -storeContent`).
 
 ## Quick Reference
@@ -316,38 +318,11 @@ Set an explicit deadline:
 
 ---
 
-## Decision Tree
 
-```
-Need to fetch a page?
-├─ Use cache if valid → -expires 1d
-├─ Force refresh → -refresh
-└─ Ignore past failures → -ignoreFailure
+## Choosing Load Options
 
-Extracting links?
-├─ Set selector → -outLink CSS_SELECTOR
-├─ Limit count → -topLinks 20
-└─ Filter pattern → -outLinkPattern REGEX
+Need to pick which LoadOptions to use? See [LoadOptions — Choosing Options](load-options-decision.md) — the decision tree lives there.
 
-Quality concerns?
-├─ Size check → -requireSize BYTES
-├─ Image check → -requireImages COUNT
-└─ Link check → -requireAnchors COUNT
-
-Dynamic content?
-├─ More scrolling → -scrollCount 10 -scrollInterval 2s
-└─ Higher interaction preset → -interactLevel BEST_DATA
-
-Two-tier crawl (portal + items)?
-├─ Portal options → -expires 1d -outLink CSS
-└─ Item options → -itemExpires 7d -itemRequireImages 5
-
-Storage concerns?
-├─ Parse only → -parse -dropContent
-└─ Parse & store → -parse -storeContent
-```
-
----
 
 ## Portal vs Item Pattern
 

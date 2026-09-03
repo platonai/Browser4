@@ -98,6 +98,7 @@ Interaction commands capture an automatic snapshot after execution. Pass `--no-s
 - **Default** — human-readable output on stdout.
 - **`--show-tip` / `-tip`** — show a relevant, rotating tip on stderr after each successful command. Tips are suppressed by default; use this flag to enable them.
 - **`--json`** — single-line JSON envelope on stdout for commands that support structured output. This is the clean machine-readable mode for commands such as `tab-list`, `htmlsnapshot get`, `htmlsnapshot query`, and `eval`. **Exception:** `snapshot` remains YAML-focused and warns on stderr instead of returning JSON snapshot data.
+- **File output (default for AI commands)** — `extract` and `summarize` save their result to a timestamped file in `.browser4-cli/snapshot/` and print only a link; add `--stdout` (or `--raw`) to print the payload directly. When `extract --schema` is used, the requested schema fields are emitted as plain **top-level JSON** (in the file and on stdout) — no envelope to parse.
 - **`--quiet` / `-q`** — suppress all normal output; only errors appear on stderr.
 
 ### Display Mode (Headless vs Headed)
@@ -417,7 +418,18 @@ browser4-cli htmlsnapshot inspect --selector-base64 <base64-of-selector>
 
 # 3. Run it
 browser4-cli htmlsnapshot query "https://example.com/products" --sql @query.sql
+#    Default output is the raw JSON response envelope (machine-readable).
+#    For human-readable output add --format table (csv also available;
+#    --result-only prints just the resultSet):
+browser4-cli htmlsnapshot query "https://example.com/products" --sql @query.sql --format table
 ```
+
+**Exit codes:** `htmlsnapshot query` exits `0` when the response envelope
+reports success — a `200` with an *empty* resultSet counts as success
+("no rows matched", not an error). It exits nonzero when the server returns
+an error envelope (`417 Expectation Failed` — the scrape session closed
+before the query ran — or a `5xx` with an empty resultSet), so scripts can
+detect failure without parsing the JSON.
 
 **Critical syntax rules** (H2 SQL engine — violating these produces opaque errors):
 
@@ -430,10 +442,12 @@ browser4-cli htmlsnapshot query "https://example.com/products" --sql @query.sql
 
 **Discover selectors** before writing the query:
 ```bash
-browser4-cli htmlsnapshot inspect                    # interactive: lists all elements with CSS classes/ids
-browser4-cli htmlsnapshot summary                    # statistical summary of selectors on the page
+browser4-cli htmlsnapshot inspect                    # recurring-pattern discovery (list/grid pages)
+browser4-cli htmlsnapshot summary                    # visual clustering (detail/single-block pages)
 browser4-cli htmlsnapshot get text ".price" --all    # quick test: does this selector match elements?
 ```
+
+`htmlsnapshot inspect` finds **recurring** patterns — it is built for list/grid pages (search results, product cards, tables). A single product/article/detail page has no repeating block, so inspect may surface nothing or an unrelated side rail; when that happens it prints "No recurring pattern found". For detail pages use `htmlsnapshot summary` (visual clustering) or `htmlsnapshot get` with explicit selectors (`htmlsnapshot get text "h1"`, `get attr "#product-image" src`).
 
 **Common mistakes and solutions:**
 
@@ -441,7 +455,9 @@ browser4-cli htmlsnapshot get text ".price" --all    # quick test: does this sel
 |---------|-------------|-----|
 | `Column "h2" not found` | Double quotes around CSS selector → treated as SQL column name | Use single quotes: `'h2'` |
 | `Table "..." not found` | Wrong FROM source or quoted `@url` | Use `DOM_LOAD_AND_SELECT(@url, 'selector')` |
+| `Hexadecimal string contains non-hex character` (417) | `DOM_FIRST_FLOAT`/`DOM_FIRST_INTEGER` compared to a numeric literal in WHERE — the function returns a custom H2 value type that predicates cannot compare (works in SELECT/ORDER BY) | Wrap in a numeric cast: `WHERE CAST(DOM_FIRST_FLOAT(DOM, '.price', 0.0) AS DOUBLE) >= 25.0` (or `STR_FIRST_FLOAT(DOM_FIRST_TEXT(DOM, '.price'), 0.0)`) — always pass the default argument explicitly (the registered form is `DOM_FIRST_FLOAT(DOM, sel, default)`; the 2-argument shorthand is not portable across engine builds), see [x-sql.md](references/x-sql.md) |
 | Empty result set | Selector doesn't match any elements | Run `htmlsnapshot inspect` to find valid selectors |
+| Empty result set (no error) | Filtering images with a PowerCSS `:expr(...)` selector passed to a `DOM_*_IMG` function — the img-scanning path ignores `:expr` and matches nothing | Use an attribute path that honors `:expr`: `DOM_FIRST_ATTR(DOM, 'img:expr(src^=https://cdn)', 'src')` or `DOM_SELECT_FIRST(DOM, sel)` + `DOM_ABS_SRC` — see [x-sql-dom-select-functions.md](references/x-sql-dom-select-functions.md) |
 | `Syntax error in SQL statement` | `--sql` value contains shell-escaped characters | Use `--sql @query.sql` instead of inline SQL |
 
 ## 5. Critical Warnings
@@ -466,23 +482,20 @@ browser4-cli htmlsnapshot get text ".price" --all    # quick test: does this sel
 > |------|--------------|----------|
 > | `snapshot` (default) | Full AX tree with all element refs | General exploration, first look at a page |
 > | `snapshot -v 0` | Current visible screen (a single screen-height viewport chunk) | Long pages — read one chunk at a time to keep output small. Use `-v all` for the entire page |
-> | `snapshot -i` | **Interactive elements only:** buttons, links, inputs, selects, textareas. Strips generic `<div>`, `<span>`, and other non-interactive containers | Simple forms, login pages, sparse pages with clear interactive controls. Reduces noise when you only need clickable/fillable elements |
+> | `snapshot -i` | **Interactive-oriented layout** — inner text is aggregated into the enclosing element's name so each ref line reads as a self-contained target. **Not** a strict interactive-only filter: addressable headings, paragraphs and generic containers remain | Quick orientation before acting via refs; form-heavy pages where most lines are controls anyway. To bound size use `-v 0` viewport pagination, `--selector`, or `htmlsnapshot` |
 > | `htmlsnapshot` | Static HTML (CSS selectors) | Content extraction (text, attributes), when you need CSS selectors instead of AX refs |
 >
-> **`-i` trade-off:** Interactive mode discards structural context. On e-commerce/search pages where product cards use generic `<div>` wrappers, `-i` may strip the containers you need. For these pages, prefer `--viewport 0` or use `htmlsnapshot` for CSS-based extraction.
+> **`-i` does not shrink the tree:** the interactive pass aggregates text into element names; it does **not** strip non-interactive containers (addressable headings, `<div>` wrappers etc. remain). Pair `-i` with `-v 0` (`snapshot -i -v 0`) for one focused screenful, and use `htmlsnapshot` when you need CSS-selector extraction instead of refs.
 >
-> **Example — simple form page:**
+> **Example — reading one screenful:**
 > ```bash
-> # Without -i: shows full page tree including header, footer, nav, etc.
-> browser4-cli snapshot --stdout
-> # ... 200+ lines ...
+> # Default rendering: text sits under its own element lines in the tree.
+> browser4-cli snapshot -v 0 --stdout
 >
-> # With -i: shows only form fields and buttons
-> browser4-cli snapshot -i --stdout
-> # e5  textbox  "Email"       /url: /login
-> # e6  textbox  "Password"    /url: /login
-> # e7  button   "Sign In"     /url: /login
-> # 12 lines — just the interactive controls
+> # Interactive-oriented rendering: each ref line carries its inner text in
+> # the name. Controls, headings and containers that have refs all remain —
+> # `-i` changes the layout, it does not reduce the tree to buttons/links.
+> browser4-cli snapshot -i -v 0 --stdout
 > ```
 
 > **Warning:** `htmlsnapshot` captures the **current live DOM** at capture time. Re-capture (run `htmlsnapshot`) after any interaction or navigation to reflect JS updates — a previously captured snapshot is stale only if you do not re-capture. The auto-captured snapshot after `goto` is an earlier capture and does not include later interactions. For one-off live reads without a capture step, use `eval`. The `htmlsnapshot inspect` command reads the stored snapshot — re-capture first to inspect the updated DOM.
@@ -535,6 +548,8 @@ browser4-cli snapshot grep "See also"             # search for text in the full 
 browser4-cli snapshot grep -i "price|rating"      # case-insensitive regex alternation
 browser4-cli snapshot grep -A 3 -B 1 "Checkout"   # show surrounding context lines
 ```
+
+**Regex dialect (same for `htmlsnapshot grep`):** patterns are Rust regex. `|` is alternation (not `\|`); `^`/`$` anchor the start/end of a line, so a literal dollar must be written `[$]` — e.g. `'[$][0-9]+'` matches "$12", but `\$[0-9]+` is an invalid-escape **error**. `-n` is accepted (GNU-grep habit) but line numbers already print by default — use `--no-line-number` to hide them, or `-F` to match literal text.
 
 ### Mouse Interactions
 
@@ -618,7 +633,9 @@ SELECT
 FROM DOM_LOAD_AND_SELECT(@url, '.product-card')
 SQLEOF
 
-browser4-cli htmlsnapshot query "https://example.com/products" --sql @query.sql
+# Add --format table for human-readable output (default is the raw JSON
+# response envelope; --result-only prints just the resultSet):
+browser4-cli htmlsnapshot query "https://example.com/products" --sql @query.sql --format table
 ```
 
 ### PowerCSS
@@ -645,7 +662,7 @@ Browser4 computes these features for every DOM node:
 | `seq` | Node sequence in document order |
 | `txt_dns` | Text node density |
 
-These are usable in any CSS selector via `:expr(...)`, in X-SQL `DOM_*` functions, and in `htmlsnapshot get` / `htmlsnapshot query` commands.
+These are usable in any CSS selector via `:expr(...)`, in X-SQL `DOM_*` attribute/text/select functions, and in `htmlsnapshot get` / `htmlsnapshot query` commands. **Exception:** the X-SQL `DOM_*_IMG` image helpers (`DOM_FIRST_IMG`/`DOM_NTH_IMG`/`DOM_ALL_IMGS`) ignore `:expr(...)` and silently match nothing — filter images with `DOM_FIRST_ATTR(DOM, 'img:expr(...)', 'src')` or `DOM_SELECT_FIRST` instead (see [x-sql-dom-select-functions.md](references/x-sql-dom-select-functions.md)).
 
 ---
 

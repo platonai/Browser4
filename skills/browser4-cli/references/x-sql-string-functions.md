@@ -6,6 +6,8 @@ tier: catalog
 
 # X-SQL: StringFunctions — String Manipulation
 
+## Overview
+
 > **Parent:** [x-sql.md](x-sql.md) — full function index and quick-reference patterns
 >
 > **Related:** [DomFunctions](x-sql-dom-functions.md) | [DomSelectFunctions](x-sql-dom-select-functions.md) | [ArrayFunctions](x-sql-array-functions.md)

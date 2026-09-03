@@ -6,7 +6,47 @@ tier: procedure
 
 # CSS Selector Bridge — From Snapshot Refs to HTML Snapshot Queries
 
+## Quick Start
+
+The fastest path from a snapshot ref to a usable CSS selector:
+
+```bash
+browser4-cli snapshot -i                  # discover the element (refs like e5, e12)
+browser4-cli htmlsnapshot inspect --selector ":root"   # discover stable CSS selectors on the page
+browser4-cli htmlsnapshot get text "<css>"             # extract with the discovered selector
+```
+
+The three tiers below explain how to construct a selector directly from snapshot output, and the end-to-end workflow ties it all together.
+
 `browser4-cli` has two separate element-addressing systems. This document explains how to bridge between them — so you can discover element structure with the compact interactive `snapshot`, then extract structured data with `htmlsnapshot` — **without ever reading the full HTML snapshot text**.
+
+## When to Use
+
+Use this whenever you interact with a page via `snapshot` refs (click/fill/type) and then need CSS selectors to extract data with `htmlsnapshot` — without reading the full HTML snapshot. The [Two Systems](#the-two-systems) comparison below shows when each addressing scheme applies.
+
+## How It Works
+
+Snapshot refs (`e5`, `backend:15`) are backend node ids; CSS selectors address DOM nodes by structure. The bridge converts one to the other: from the snapshot's ref line you know the element's tag, text, and attributes, and from those you build (or auto-generate) a CSS selector that `htmlsnapshot` accepts.
+
+## Patterns
+
+Pick a tier by how much information the snapshot gives you:
+
+- [Tier 1: Construct selector from snapshot info](#tier-1-construct-selector-from-snapshot-info) — enough text/attributes on the ref line
+- [Tier 2: Extract identifying attributes from the ref](#tier-2-extract-identifying-attributes-from-the-ref) — need extra attributes from the element
+- [Tier 3: Generate unique selector via generate-locator](#tier-3-generate-unique-selector-via-generate-locator) — fastest reliable path when available
+
+## Flags
+
+The bridge itself defines no flags — it composes `snapshot`, `htmlsnapshot inspect`, and `htmlsnapshot get`; see those references for their flags.
+
+## Errors & Recovery
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `htmlsnapshot get` rejects `@e5` | It accepts CSS selectors only, not refs | Use one of the three tiers to build a CSS selector |
+| Selector matches nothing | Stale or over-specific selector | Re-discover with `snapshot -i` + `htmlsnapshot inspect` |
+| Selector matches too much | Selector too generic | Add structural context (parent/child) from the snapshot |
 
 ## The Two Systems
 

@@ -6,9 +6,58 @@ tier: decision
 
 # HTML Snapshot — Real-World Scenarios
 
+## Quick Comparison
+
+| Need | Primary commands | Start here |
+|------|------------------|------------|
+| Extract structured data from listing/detail pages | `get`, `query`, `export` | [Data Extraction](#data-extraction) |
+| Amazon end-to-end workflow (discover → search → detail) | `summary`, `inspect`, `get all`, `query` | [Amazon Discovery & Extraction](#amazon-discovery--extraction) |
+| Audit, compliance & monitoring | `grep`, `query`, `export` | [Audit, Compliance & Monitoring](#audit-compliance--monitoring) |
+| Agent-assisted discovery & automation | `get` + Agent CLI, `summary`, `inspect` | [Advanced Discovery & Automation](#advanced-discovery--automation) |
+
+## Decision Tree
+
+```
+What do you need?
+├─ Structured data from a listing/detail page
+│   ├─ Unfamiliar page → summary + inspect first, then get/query (Data Extraction)
+│   └─ Known selectors, one-off → htmlsnapshot get / query directly
+├─ Amazon-specific workflow → Amazon Discovery & Extraction scenarios
+├─ Audit, compliance, or monitoring → Audit, Compliance & Monitoring scenarios
+├─ Agent-assisted or unfamiliar-page automation → Advanced Discovery & Automation
+└─ Bulk/scale (many URLs) → crawl.md or swarm.md instead of scenarios
+```
+
+## When to Use Each
+
+- **Data Extraction** — use for structured data from listing/detail pages: products, headlines, jobs, listings. Commands: `get`, `query`, `export`.
+- **Amazon Discovery & Extraction** — use for Amazon-specific workflows where the page structure must be re-discovered (`summary`/`inspect`) before extraction.
+- **Audit, Compliance & Monitoring** — use for verification and watching: SEO health, pricing, compliance, CI regression, incident debugging. Commands: `grep`, `query`, `export`.
+- **Advanced Discovery & Automation** — use for unfamiliar pages and agent-assisted workflows: form discovery, page-structure analysis, selector discovery.
+
 Practical, end-to-end recipes using the `htmlsnapshot` family of commands. Each scenario is self-contained: you can adapt the CSS selectors and X-SQL queries to your own target pages.
 
 > **Note:** CSS selectors are tied to live websites and may break over time. See [SKILL.md §5](../SKILL.md#5-critical-warnings). Always discover current selectors with `htmlsnapshot inspect` or `htmlsnapshot summary` before extraction.
+
+## Quick Patterns
+
+### Single-field extraction
+
+```bash
+browser4-cli htmlsnapshot get text "h1"
+```
+
+### Bulk correlated extraction (X-SQL)
+
+```bash
+browser4-cli htmlsnapshot query --sql @extract.sql
+```
+
+### Quick presence check
+
+```bash
+browser4-cli htmlsnapshot grep -i "pattern"
+```
 
 ## Scenario Index
 
@@ -83,6 +132,14 @@ All scenarios using `get`, `export`, `grep`, and `summary` commands have been te
 **X-SQL `query` note:** The X-SQL query path (`htmlsnapshot query`) previously had a Jackson serialization issue with `java.time.Instant` fields in `ScrapeResponse`. This was fixed by using `pulsarObjectMapper()` (which includes `JavaTimeModule`) instead of `jacksonObjectMapper()` in `MCPToolController.kt`. Verified 2026-07-11 — no further action needed.
 
 ---
+
+## Reference Map
+
+- [htmlsnapshot.md](htmlsnapshot.md) — command reference for `get` / `query` / `grep` / `summary` / `inspect` / `export`
+- [crawl.md](crawl.md) — bulk multi-page extraction with link discovery
+- [swarm.md](swarm.md) — parallel scraping across multiple browser contexts
+- [loop.md](loop.md) — repeated monitoring at intervals
+- [x-sql.md](x-sql.md) — X-SQL function reference
 
 ## See Also
 

@@ -127,6 +127,10 @@ failed=$(echo "$result" | jq '.failed')
 echo "Exported $succeeded pages ($failed failed)"
 ```
 
+## Flags
+
+The `webdb` commands take positional arguments only (see [Commands](#commands)); no flags are currently defined.
+
 ## Error handling
 
 | Symptom | Cause | Fix |
