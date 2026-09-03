@@ -378,13 +378,34 @@ function Read-IssuesFile {
 
     # ── Parse issues ─────────────────────────────────────────────────────────
     $issues = @()
+
+    # Canonical files put the issue blocks under a "## Issues Found (N issue…)"
+    # heading, terminated by "## How to Reproduce".  Some hand-written or
+    # converted files use a bare "## Issues" heading (or none at all) — fall
+    # back to the first "### Issue N:" block so every .issues.md file found in
+    # draft/ and review/ can be reviewed (same semantics as the GUI's
+    # issue-model.js and scan-deferred-issues.ps1).
+    $issuesSection = ''
     if ($issuesHeaderIdx -ge 0) {
         $issuesSectionStart = $normalized.IndexOf("`n", $issuesHeaderIdx) + 1
         # Find "## How to Reproduce" as the end boundary
         $howToIdx = $normalized.IndexOf("`n## How to Reproduce", $issuesSectionStart)
         if ($howToIdx -lt 0) { $howToIdx = $normalized.Length }
         $issuesSection = $normalized.Substring($issuesSectionStart, [Math]::Max(0, $howToIdx - $issuesSectionStart))
+    }
+    else {
+        $firstIssueMatch = [regex]::Match($normalized, '(?m)^###\s+Issue\s+\d+:')
+        if ($firstIssueMatch.Success) {
+            $issuesSectionStart = $firstIssueMatch.Index
+            # End at the next level-2 heading ("## Summary", "## How to
+            # Reproduce", …) or at the end of the file
+            $nextH2Idx = $normalized.IndexOf("`n## ", $issuesSectionStart + 1)
+            if ($nextH2Idx -lt 0) { $nextH2Idx = $normalized.Length }
+            $issuesSection = $normalized.Substring($issuesSectionStart, [Math]::Max(0, $nextH2Idx - $issuesSectionStart))
+        }
+    }
 
+    if ($issuesSection) {
         # Split on "### Issue N:" headers
         $issueBlocks = @($issuesSection -split '(?=###\s+Issue\s+\d+:)') |
             Where-Object { $_ -match '###\s+Issue\s+(\d+):\s*(.+)' }

@@ -1561,7 +1561,9 @@ async function init() {
 }
 
 async function loadFiles() {
-  var data = await apiGet('/api/tasks?stage=issues%2Freview');
+  // Read from both issues/draft and issues/review directories (consistent with CLI's coworker review)
+  // Excludes archive/, done/, and discard/ directories
+  var data = await apiGet('/api/issues');
   // Only .issues.md files
   state.files = data.tasks.filter(function(t) {
     return /\.issues\.md$/i.test(t.name);

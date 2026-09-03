@@ -79,6 +79,11 @@ var ISSUE_MODEL = (function() {
   function parseIssueFile(content) {
     if (!content) return emptyResult();
 
+    // Strip a UTF-8 BOM if present (PowerShell's Read-IssuesFile does the same).
+    if (content.charCodeAt(0) === 0xFEFF) {
+      content = content.substring(1);
+    }
+
     var result = emptyResult();
 
     // Parse meta line: > **Source:** `file.full.md` | **Date:** ts | **Mode:** mode
@@ -95,17 +100,38 @@ var ISSUE_MODEL = (function() {
       result.meta.scenario = titleMatch[1].trim();
     }
 
-    // Find "## Issues Found" header
+    // Find "## Issues Found" header (canonical layout).  Some hand-written or
+    // converted files use a bare "## Issues" heading (or none at all) — fall
+    // back to the first "### Issue N:" block so every listed file parses the
+    // same way as the PowerShell review CLI (review.ps1 Read-IssuesFile).
     var issuesIdx = content.search(/^## Issues Found/m);
-    var beforeIssues = issuesIdx >= 0 ? content.substring(0, issuesIdx) : content;
-    var afterIssues = issuesIdx >= 0 ? content.substring(issuesIdx) : '';
+    var afterIssues = '';
+    var beforeIssues = '';
+    if (issuesIdx >= 0) {
+      beforeIssues = content.substring(0, issuesIdx);
+      afterIssues = content.substring(issuesIdx);
+    } else {
+      var firstIssueIdx = content.search(/^### Issue \d+:/m);
+      if (firstIssueIdx >= 0) {
+        beforeIssues = content.substring(0, firstIssueIdx);
+        var tail = content.substring(firstIssueIdx);
+        // The issues section ends at the next level-2 heading ("## Summary",
+        // "## How to Reproduce", …) — mirror review.ps1's section boundary.
+        var nextH2 = tail.search(/\n## /);
+        if (nextH2 >= 0) tail = tail.substring(0, nextH2);
+        afterIssues = tail;
+      } else {
+        beforeIssues = content;
+      }
+    }
 
-    // Parse background sections
+    // Parse background sections.  Execution Context may be terminated by the
+    // next level-2 heading when the canonical "---" separator is absent.
     var bgTaskMatch = beforeIssues.match(/### Task\n([\s\S]*?)(?=\n###\s|\n---|$)/);
     if (bgTaskMatch) {
       result.background.task = bgTaskMatch[1].trim();
     }
-    var bgExecMatch = beforeIssues.match(/### Execution Context\n([\s\S]*?)(?=\n---|$)/);
+    var bgExecMatch = beforeIssues.match(/### Execution Context\n([\s\S]*?)(?=\n---|\n##\s|$)/);
     if (bgExecMatch) {
       result.background.executionContext = bgExecMatch[1].trim();
     }
@@ -401,8 +427,13 @@ var ISSUE_MODEL = (function() {
   /** Quick parse: count issues and reviewed from raw content without full parse. */
   function quickParseStats(content) {
     if (!content) return { total: 0, reviewed: 0 };
+    if (content.charCodeAt(0) === 0xFEFF) content = content.substring(1);
     var total = (content.match(/^### Issue \d+:/gm) || []).length;
-    var reviewed = (content.match(/^- \[x\] \*\*(ACCEPT|DEFER|WONTFIX|REJECT|DUPLICATE)/gm) || []).length;
+    // Any checked decision box counts as reviewed — including
+    // "ACCEPT with improvements" (which a per-decision alternation misses).
+    // Same semantics as the PowerShell review CLI, which counts
+    // "- [x] **" occurrences.
+    var reviewed = (content.match(/^- \[x\] \*\*/gm) || []).length;
     return { total: total, reviewed: reviewed };
   }
 
