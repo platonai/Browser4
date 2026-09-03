@@ -83,6 +83,54 @@ for ($i = 0; $i -lt $args.Count; $i++) {
 # use long-form equivalents (--output, --interactive, --viewport) or
 # b4w.bat (cmd.exe) for full compatibility.
 
+# ── Git-Bash (MSYS) mangled-argument guard ──────────────────────────────
+# Git Bash rewrites '/'-leading arguments into Windows paths rooted at the
+# Git installation directory when spawning pwsh ('/ec/dp/' arrives here as
+# 'C:/Program Files/Git/ec/dp/').  The original token is lost before this
+# script runs — a mangled argument would be forwarded to the CLI and
+# silently produce wrong results (e.g. a snapshot grep pattern reporting
+# '0 matches found').  Detect the rewritten form and fail fast with
+# guidance; the conversion-free route from Git Bash is ./b4w.sh, which
+# exports MSYS2_ARG_CONV_EXCL='*'.  Legit '/d/...'-style conversions to
+# other drives are never under the Git root, so they pass through.
+if ($env:MSYSTEM) {
+    $MsysRoot = $null
+    $MsysGit = Get-Command git.exe -ErrorAction SilentlyContinue
+    if ($MsysGit -and $MsysGit.Source) {
+        # <root>\cmd\git.exe | <root>\bin\git.exe | <root>\usr\bin\git.exe | <root>\mingw64\bin\git.exe
+        $MsysGitDir = Split-Path $MsysGit.Source -Parent
+        $MsysGitLeaf = Split-Path $MsysGitDir -Leaf
+        if ($MsysGitLeaf -eq 'cmd') {
+            $MsysRoot = Split-Path $MsysGitDir -Parent
+        } elseif ($MsysGitLeaf -eq 'bin') {
+            $MsysGitParent = Split-Path $MsysGitDir -Parent
+            if ((Split-Path $MsysGitParent -Leaf) -in @('usr', 'mingw64', 'msys64')) {
+                $MsysRoot = Split-Path $MsysGitParent -Parent
+            } else {
+                $MsysRoot = $MsysGitParent
+            }
+        }
+    }
+
+    if ($MsysRoot) {
+        $RootFwd = ($MsysRoot -replace '\\', '/').TrimEnd('/') + '/'
+        foreach ($MangledArg in $RemainingArgs) {
+            $ArgFwd = $MangledArg -replace '\\', '/'
+            if ($ArgFwd.Length -gt $RootFwd.Length -and $ArgFwd.StartsWith($RootFwd, [StringComparison]::OrdinalIgnoreCase)) {
+                $ProbableOriginal = '/' + $ArgFwd.Substring($RootFwd.Length).TrimStart('/')
+                Write-Host "Error: argument '$MangledArg' (probably typed as '$ProbableOriginal') was rewritten by" -ForegroundColor Red
+                Write-Host "Git Bash's MSYS path conversion before PowerShell started.  The original value" -ForegroundColor Red
+                Write-Host 'is unrecoverable, and using the rewritten path would silently produce wrong' -ForegroundColor Red
+                Write-Host "results (e.g. a snapshot grep pattern reporting '0 matches found')." -ForegroundColor Red
+                Write-Host ''
+                Write-Host "Run this command via ./b4w.sh instead (it disables the conversion)." -ForegroundColor Cyan
+                Write-Host "Or export MSYS2_ARG_CONV_EXCL='*' and re-run:  MSYS2_ARG_CONV_EXCL='*' ./b4w.ps1 ..." -ForegroundColor Cyan
+                exit 1
+            }
+        }
+    }
+}
+
 # Save the original working directory so we can restore it on exit.
 # Some operations (cargo build, cargo run) may change the process CWD,
 # and restoring it prevents shell session CWD drift when b4w.ps1 is
@@ -182,17 +230,46 @@ if ($RemainingArgs -and ($RemainingArgs[0] -eq '--' -or $RemainingArgs[0] -eq '-
 # ── Subcommand: coworker ──────────────────────────────────────────────────
 # Delegates to coworker/coworker.ps1, forwarding all remaining arguments.
 # Special cases:
-#   coworker start   — run coworker/start.ps1 sched in the background
-#   coworker stop    — stop the background scheduler
-#   coworker restart — stop and restart the background scheduler
+#   coworker start   — run coworker/start.ps1 (both by default) in the background
+#   coworker stop    — stop the background scheduler/GUI
+#   coworker restart — stop and restart the background scheduler/GUI
 if ($CliArgs -and $CliArgs[0] -eq 'coworker') {
     $CoworkerArgs = if ($CliArgs.Count -gt 1) { ,$CliArgs[1..($CliArgs.Count - 1)] } else { @() }
     $CoworkerPidFile = Join-Path $ScriptDir '.coworker\scheduler.pid'
 
     # ── coworker start ───────────────────────────────────────────────────
+    # Thin wrapper around coworker/start.ps1 so both entry points share the
+    # same behavior.  Arguments are forwarded verbatim; b4w only supplies a
+    # default when none are given:
+    #   b4w coworker start                    → start.ps1 both -Background
+    #   b4w coworker start sched|gui|both …   → start.ps1 sched|gui|both …
+    # Legacy b4w-only aliases still map onto start.ps1 subcommands (with
+    # -Background and PID tracking so stop/restart can manage them):
+    #   --sched-only → sched   --gui-only → gui
     if ($CoworkerArgs -and $CoworkerArgs[0] -eq 'start') {
         $StartScript = Join-Path $ScriptDir 'coworker\start.ps1'
-        & $StartScript sched -Background -PidFile $CoworkerPidFile
+        $StartArgs = @()
+        if ($CoworkerArgs.Count -gt 1) { $StartArgs = @($CoworkerArgs[1..($CoworkerArgs.Count - 1)]) }
+
+        $legacySchedOnly = $StartArgs -contains '--sched-only'
+        $legacyGuiOnly = $StartArgs -contains '--gui-only'
+
+        if ($legacySchedOnly -or $legacyGuiOnly) {
+            $LegacySub = if ($legacySchedOnly) { 'sched' } else { 'gui' }
+            $LegacyArgs = @($StartArgs | Where-Object { $_ -ne '--sched-only' -and $_ -ne '--gui-only' })
+            $ForwardArgs = @($LegacySub) + $LegacyArgs
+            if ($ForwardArgs -notcontains '-Background') { $ForwardArgs += '-Background' }
+            if ($ForwardArgs -notcontains '-PidFile') { $ForwardArgs += '-PidFile'; $ForwardArgs += $CoworkerPidFile }
+            & $StartScript @ForwardArgs
+        } elseif ($StartArgs.Count -eq 0) {
+            # Default: scheduler + GUI, both detached, PID(s) recorded so
+            # `b4w coworker stop` / `restart` can manage them.
+            & $StartScript both -Background -PidFile $CoworkerPidFile
+        } else {
+            # Explicit start.ps1 subcommand and options — behave exactly like
+            # running coworker/start.ps1 directly.
+            & $StartScript @StartArgs
+        }
         exit $LASTEXITCODE
     }
 
@@ -202,14 +279,42 @@ if ($CliArgs -and $CliArgs[0] -eq 'coworker') {
             Write-Host 'No running Coworker scheduler found.' -ForegroundColor Yellow
             exit 0
         }
-        $savedPid = Get-Content $CoworkerPidFile -Raw
-        $proc = Get-Process -Id $savedPid -ErrorAction SilentlyContinue
-        if ($proc) {
-            Write-Host "Stopping Coworker scheduler (PID $savedPid)..." -ForegroundColor Cyan
-            $proc.Kill()
-            Write-Host 'Coworker scheduler stopped.' -ForegroundColor Green
-        } else {
-            Write-Host "Coworker scheduler (PID $savedPid) is no longer running." -ForegroundColor Yellow
+        $pidRaw = Get-Content $CoworkerPidFile -Raw
+        $pidsToStop = @()
+        $pidJson = $null
+        try {
+            # Newer format: JSON { "scheduler": <pid>, "gui": <pid> } when both
+            # scheduler and GUI were started together.
+            $pidJson = $pidRaw | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            $pidJson = $null
+        }
+        if ($pidJson -is [System.Management.Automation.PSCustomObject]) {
+            if ($pidJson.scheduler) { $pidsToStop += [int]$pidJson.scheduler }
+            if ($pidJson.gui) { $pidsToStop += [int]$pidJson.gui }
+        } elseif ($pidRaw.Trim() -match '^\d+$') {
+            # Legacy format: a single plain PID (note: a bare number is also
+            # valid JSON, so only treat PSCustomObject payloads as JSON records)
+            $pidsToStop += [int]$pidRaw.Trim()
+        }
+        if ($pidsToStop.Count -eq 0) {
+            Write-Host "No running Coworker process found in PID file: $CoworkerPidFile" -ForegroundColor Yellow
+            Remove-Item $CoworkerPidFile -Force -ErrorAction SilentlyContinue
+            exit 0
+        }
+        $stoppedAny = $false
+        foreach ($savedPid in $pidsToStop) {
+            $proc = Get-Process -Id $savedPid -ErrorAction SilentlyContinue
+            if ($proc) {
+                Write-Host "Stopping Coworker process (PID $savedPid)..." -ForegroundColor Cyan
+                $proc.Kill()
+                $stoppedAny = $true
+            } else {
+                Write-Host "Coworker process (PID $savedPid) is no longer running." -ForegroundColor Yellow
+            }
+        }
+        if ($stoppedAny) {
+            Write-Host 'Coworker stopped.' -ForegroundColor Green
         }
         Remove-Item $CoworkerPidFile -Force -ErrorAction SilentlyContinue
         exit 0
@@ -217,19 +322,34 @@ if ($CliArgs -and $CliArgs[0] -eq 'coworker') {
 
     # ── coworker restart ─────────────────────────────────────────────────
     if ($CoworkerArgs -and $CoworkerArgs[0] -eq 'restart') {
-        # Stop if running
+        # Stop any recorded background processes first
         if (Test-Path $CoworkerPidFile) {
-            $pid = Get-Content $CoworkerPidFile -Raw
-            $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
-            if ($proc) {
-                Write-Host "Stopping Coworker scheduler (PID $pid)..." -ForegroundColor Cyan
-                $proc.Kill()
+            $pidRaw = Get-Content $CoworkerPidFile -Raw
+            $pidsToStop = @()
+            $pidJson = $null
+            try {
+                $pidJson = $pidRaw | ConvertFrom-Json -ErrorAction Stop
+            } catch {
+                $pidJson = $null
+            }
+            if ($pidJson -is [System.Management.Automation.PSCustomObject]) {
+                if ($pidJson.scheduler) { $pidsToStop += [int]$pidJson.scheduler }
+                if ($pidJson.gui) { $pidsToStop += [int]$pidJson.gui }
+            } elseif ($pidRaw.Trim() -match '^\d+$') {
+                $pidsToStop += [int]$pidRaw.Trim()
+            }
+            foreach ($savedPid in $pidsToStop) {
+                $proc = Get-Process -Id $savedPid -ErrorAction SilentlyContinue
+                if ($proc) {
+                    Write-Host "Stopping Coworker process (PID $savedPid)..." -ForegroundColor Cyan
+                    $proc.Kill()
+                }
             }
             Remove-Item $CoworkerPidFile -Force -ErrorAction SilentlyContinue
         }
-        # Start fresh
+        # Start fresh (same default as `b4w coworker start`)
         $StartScript = Join-Path $ScriptDir 'coworker\start.ps1'
-        & $StartScript sched -Background -PidFile $CoworkerPidFile
+        & $StartScript both -Background -PidFile $CoworkerPidFile
         exit $LASTEXITCODE
     }
 
@@ -337,9 +457,14 @@ Examples:
 
   # subcommands
   b4w coworker list                     list Coworker tasks
-  b4w coworker start                    start the Coworker scheduler (background)
-  b4w coworker stop                     stop the background scheduler
-  b4w coworker restart                  restart the background scheduler
+  b4w coworker start                    start the Coworker scheduler + GUI (background)
+  b4w coworker start --sched-only       start only the scheduler (background)
+  b4w coworker start --gui-only         start only the GUI server (background)
+  b4w coworker start sched              run only the scheduler (foreground — Ctrl+C to stop)
+  b4w coworker start gui -OpenBrowser   run only the GUI server (foreground — Ctrl+C to stop)
+  b4w coworker start both -Port 8091    scheduler + GUI, custom GUI port (background)
+  b4w coworker stop                     stop the background scheduler/GUI
+  b4w coworker restart                  restart the background scheduler/GUI
   b4w test --e2e                        run E2E tests
   b4w sc                                interactive scenario picker
   b4w sc add my-test https://example.com  create a new scenario

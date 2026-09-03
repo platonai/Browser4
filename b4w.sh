@@ -39,6 +39,22 @@
 #
 # Workaround for direct ./b4w.ps1 users in Git Bash:
 #   ./b4w.ps1 "swarm" "query" "--sql" "@query.sql" "--seed-file" "./urls.txt"
+#
+# MSYS2 path conversion: when Git Bash spawns a native executable (pwsh),
+# arguments that begin with '/' are silently rewritten into Windows paths
+# (e.g. "/product/" becomes "C:/Program Files/Git/product/").  Single-quoting
+# does NOT stop this conversion, so pattern-like values such as
+#   crawl <url> -olp "/product/"
+# would reach the backend mangled and silently filter out every link.
+# MSYS2_ARG_CONV_EXCL='*' disables conversion for every argument of the
+# child process (MSYS_NO_PATHCONV=1 is the equivalent older spelling).
+
+if [ -n "$MSYS2_ARG_CONV_EXCL" ]; then
+    # Respect a user/global override if one is already set.
+    :
+else
+    export MSYS2_ARG_CONV_EXCL='*'
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # On Git Bash (MSYS2/Cygwin), pwd produces Unix-style paths like
