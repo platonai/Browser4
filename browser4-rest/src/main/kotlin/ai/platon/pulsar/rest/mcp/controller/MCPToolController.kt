@@ -879,10 +879,18 @@ class MCPToolController(
 
         val evaluate = result.evaluate
         evaluate.exception?.let { exception ->
+            val rawMessage = exception.message ?: ""
+            val mapped = isMissingPageHelperError(rawMessage)
+            // Same mapping as [buildErrorMessage]: a raw JS ReferenceError on the
+            // missing page helper is replaced with an actionable message.
+            val message = if (mapped) missingPageHelperErrorMessage() else rawMessage
             val errorMsg = buildString {
-                append("$toolName failed: ${exception.message}")
+                append("$toolName failed: $message")
                 val causeMsg = exception.cause?.message
-                if (causeMsg != null && causeMsg != exception.message) {
+                // The cause chain is only informative when it says something the
+                // headline does not; never re-leak the raw helper ReferenceError
+                // that [mapped] just replaced.
+                if (!mapped && causeMsg != null && causeMsg != rawMessage) {
                     append(" ($causeMsg)")
                 }
             }
@@ -1197,7 +1205,13 @@ class MCPToolController(
      * contextual tips when the error matches known patterns (e.g. "not focusable").
      */
     private fun buildErrorMessage(toolName: String, exception: TcException): String {
-        val message = exception.message ?: "unknown error"
+        val rawMessage = exception.message ?: "unknown error"
+
+        // Map the raw JS ReferenceError on the missing page helper
+        // (__pulsar_utils__ — a session whose tab predates the backend process,
+        // or a tab that never received the injected runtime) to an actionable
+        // message instead of leaking the internal JS stack.
+        val message = if (isMissingPageHelperError(rawMessage)) missingPageHelperErrorMessage() else rawMessage
         val sb = StringBuilder("$toolName failed: $message")
 
         // Contextual tips for known error patterns
@@ -1205,8 +1219,11 @@ class MCPToolController(
             sb.append(" Tip: Use 'click <ref>' first to focus the element")
         }
 
-        // Explicit help from the tool executor
-        if (!exception.help.isNullOrBlank()) {
+        // Explicit help from the tool executor.  The static tool description /
+        // signature attached by AbstractToolExecutor is only useful for usage
+        // errors (missing/unknown parameters); on runtime errors it reads like
+        // a debug dump, so reserve it for usage errors.
+        if (isUsageError(exception.cause, rawMessage) && !exception.help.isNullOrBlank()) {
             sb.append(" help: ${exception.help}")
         }
 
@@ -1233,6 +1250,47 @@ class MCPToolController(
     private fun addRequestId(response: HttpServletResponse) {
         response.addHeader("X-Request-Id", UUID.randomUUID().toString())
     }
+}
+
+// =========================================================================
+// Tool error formatting helpers
+// =========================================================================
+
+/**
+ * True when [message] is the raw JS ReferenceError raised by code that
+ * dereferences the Browser4 page helper (__pulsar_utils__).
+ *
+ * The helper is injected into a tab when the backend navigates it; sessions
+ * whose tab predates the backend process (dev restarts, daemon restarts) or
+ * tabs that never received the runtime (tab-new targets) dereference it and
+ * surface this raw internal error unless it is mapped.
+ */
+internal fun isMissingPageHelperError(message: String): Boolean =
+    message.contains("__pulsar_utils__") &&
+        (message.contains("ReferenceError") || message.contains("is not defined"))
+
+/** Actionable replacement message for a missing page-helper failure. */
+internal fun missingPageHelperErrorMessage(): String =
+    "the page in this session is missing the injected page helper (__pulsar_utils__ is not " +
+        "defined — the tab predates the backend process or never received the helper); " +
+        "run `open --fresh` or re-open the session, then retry"
+
+/**
+ * Whether an exception should carry the tool's static description/signature as
+ * 'help:' text.  Static help is reserved for usage errors (bad parameters,
+ * unknown fields/methods); runtime errors get their own actionable mapping and
+ * must not read as a debug dump.
+ */
+internal fun isUsageError(cause: Throwable?, message: String): Boolean {
+    if (cause is IllegalArgumentException) return true
+    return listOf(
+        "missing parameter",
+        "missing required parameter",
+        "extraneous parameter",
+        "unknown field",
+        "unknown html_snapshot method",
+        "element references (",
+    ).any { message.contains(it, ignoreCase = true) }
 }
 
 // =========================================================================
@@ -1682,9 +1740,16 @@ internal fun inspectDocument(
             // 1. Class-based selector (primary)
             if (descClass.isNotBlank()) {
                 val classes = descClass.split("\\s+".toRegex()).take(2).joinToString(".") { it }
-                val sel = if (descId.isNotBlank()) "${descTag}.$classes#${descId}"
-                else "${descTag}.$classes"
-                candidates.add(sel to "class")
+                candidates.add("${descTag}.$classes" to "class")
+                // When the element also carries an id, record the compound selector too.
+                // Template-generated ids that are unique per match (e.g.
+                // id="product-price-B0E000001") would otherwise give every candidate a
+                // count of 1, and the recurring class would never reach the recurrence
+                // threshold. The compound form only survives when the id itself recurs;
+                // unique ids fall out in the threshold filter below.
+                if (descId.isNotBlank()) {
+                    candidates.add("${descTag}.$classes#${descId}" to "class")
+                }
             } else if (descId.isNotBlank()) {
                 candidates.add("${descTag}#${descId}" to "id")
             }

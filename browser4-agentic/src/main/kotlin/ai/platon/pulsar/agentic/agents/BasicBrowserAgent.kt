@@ -252,7 +252,9 @@ open class BasicBrowserAgent(
 
     /**
      * Structured extraction: builds a rich prompt with DOM snapshot & optional JSON schema; performs
-     * two-stage LLM calls (extract + metadata) and merges results with token/time metrics.
+     * two-stage LLM calls (extract + evaluation metadata).  The returned [ExtractResult] carries the
+     * CLEAN schema payload (fields exactly as extracted — no token/timing/metadata bookkeeping) plus
+     * a truthful completion flag.
      */
     override suspend fun extract(options: ExtractOptions): ExtractResult {
         onWillExtract(options)
@@ -262,14 +264,20 @@ open class BasicBrowserAgent(
 
         val result = try {
             val params = context.createExtractParams(options.schema)
-            val resultNode = inference.extract(params)
+            val inferenceResult = inference.extract(params)
 
-            ExtractResult(success = true, message = "OK", data = resultNode)
+            ExtractResult(
+                success = true, message = "OK",
+                data = inferenceResult.result,
+                completed = inferenceResult.completed
+            )
         } catch (e: Exception) {
             logger.error("❌ extract.error requestId={} msg={}", context.sid, e.message, e)
 
             ExtractResult(
-                success = false, message = e.message ?: "extract failed", data = JsonNodeFactory.instance.objectNode()
+                success = false, message = e.message ?: "extract failed",
+                data = JsonNodeFactory.instance.objectNode(),
+                completed = false
             )
         }
 

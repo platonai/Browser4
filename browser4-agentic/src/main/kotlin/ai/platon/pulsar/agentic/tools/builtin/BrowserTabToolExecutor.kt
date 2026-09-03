@@ -60,6 +60,31 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         private const val NAVIGATION_DOM_READY_TIMEOUT_MS = 10_000L
         private const val NAVIGATION_DOM_SETTLE_DELAY_MS = 1_000L
 
+        /**
+         * Read the concatenated descendant text of an element, skipping
+         * SCRIPT/STYLE/NOSCRIPT/TEMPLATE subtrees.  Mirrors the driver's
+         * `selectFirstTextOrNull` semantics exactly, but runs through the same
+         * CDP `callFunctionOn` locator path used by the attribute/property
+         * reads below, so every `get` mode resolves refs (`eN` backend node
+         * ids) and CSS selectors identically against the live DOM.
+         */
+        private val SELECT_FIRST_TEXT_READ_JS: String =
+            """
+            function(element) {
+                try {
+                    var excluded = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
+                    var text = '';
+                    var walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, { acceptNode: function(node) {
+                        var p = node.parentNode;
+                        return p && !excluded.has(p.nodeName) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+                    }});
+                    var n;
+                    while ((n = walker.nextNode())) { text += n.nodeValue; }
+                    return text;
+                } catch (e) { return null; }
+            }
+            """.trimIndent()
+
         private fun resolveReadPageStateActions(): Set<String> {
             val configuredValue = System.getProperty(READ_ACTIONS_WHITELIST_PROPERTY)?.trim()
                 ?.takeIf { it.isNotEmpty() }
@@ -240,6 +265,96 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "eval" -> "eval requires 'expression' or ('expression','selector')"
             else -> "evaluateValue requires 'expression' or ('selector','functionDeclaration')"
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Element-scoped reads — uniform locator resolution for `get` modes
+    // ---------------------------------------------------------------------------
+    //
+    // text / attr / property reads are dispatched to the driver methods
+    // selectFirstTextOrNull / selectFirstAttributeOrNull /
+    // selectFirstPropertyValueOrNull, whose resolution paths historically
+    // diverged (CDP DOM resolution for text/attr vs a page-JS
+    // __pulsar_utils__ helper for property that needs an injected runtime and
+    // degrades `eN` refs).  Instead, all three modes resolve through the
+    // driver's element-scoped evaluateValueDetail (CDP DOM.querySelector for
+    // CSS selectors and DOM.resolveNode for `eN` backend-node-id refs) and
+    // differ only in the value expression — one live-DOM path with identical
+    // semantics for every locator format and every mode.
+    //
+    // Result contract (backward compatible with the CLI):
+    // - element matched  -> the value, or `""` when the element matched but the
+    //   requested attribute/property is null/absent (never conflated with a miss)
+    // - CSS/XPath selector matched nothing -> null (a miss is a legitimate,
+    //   non-fatal outcome when probing static selectors)
+    // - an `eN`/`backend:` snapshot ref cannot be resolved -> an explicit
+    //   "Element not found for ref ..." error (refs expire after page changes
+    //   and must not degrade silently to a bare null)
+
+    /**
+     * True when [selector] is a snapshot element-ref (`e1265`, `backend:15`)
+     * rather than a CSS/XPath selector.  Refs are ephemeral backend node ids:
+     * they expire whenever the page's DOM changes, so a failed lookup most
+     * likely means the ref is stale.  Mirrors the CLI's `looks_like_element_ref`.
+     */
+    private fun isElementRef(selector: String): Boolean {
+        val s = selector.trim()
+        val rest = when {
+            s.startsWith("e") -> s.drop(1)
+            s.startsWith("backend:") -> s.removePrefix("backend:")
+            else -> return false
+        }
+        return rest.isNotEmpty() && rest.all { it.isDigit() }
+    }
+
+    /**
+     * The error message used when [selector] cannot be resolved to a live DOM
+     * element.  Ref-shaped targets get the staleness guidance (the hint phrase
+     * matches the CLI verbatim so it is not appended twice); CSS/XPath
+     * selectors get a plain no-match message.
+     */
+    private fun elementNotFoundMessage(selector: String): String {
+        val target = selector.trim()
+        return if (isElementRef(target)) {
+            "Element not found for ref $target. Refs expire after page changes — re-run `snapshot` to get fresh refs."
+        } else {
+            "No element matches selector \"$target\"."
+        }
+    }
+
+    /**
+     * Resolve [selector] to the first matching live-DOM element and read its
+     * text/attribute/property via [functionDeclaration].  See the contract in
+     * the section comment above.
+     */
+    private suspend fun selectFirstValue(
+        driver: WebDriver,
+        selector: String,
+        functionDeclaration: String,
+        valueLabel: String
+    ): String? {
+        val evaluation = driver.evaluateValueDetail(selector, functionDeclaration)
+        if (evaluation == null) {
+            // The locator could not be resolved.  Refs are ephemeral backend
+            // node ids — expire them loudly instead of returning a bare null.
+            if (isElementRef(selector)) {
+                throw IllegalArgumentException(elementNotFoundMessage(selector))
+            }
+            return null
+        }
+
+        // The element exists.  A null/undefined value or a page-side read
+        // exception (e.g. attribute access on a non-element node) both mean
+        // "matched, but the value is empty or missing" — encoded as "" so the
+        // caller can tell it apart from "no element matched" (null).
+        val exception = evaluation.exception
+        if (exception != null) {
+            logger.fine(
+                "Reading $valueLabel from $selector raised a page-side exception: ${exception.text}"
+            )
+            return ""
+        }
+        return evaluation.value?.toString() ?: ""
     }
 
     /**
@@ -1358,9 +1473,9 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             }
 
             "selectFirstTextOrNull" -> {
-                validateArgs(args, allowed("selector"), setOf("selector"), functionName); driver.selectFirstTextOrNull(
-                    paramString(args, "selector", functionName)!!
-                )
+                validateArgs(args, allowed("selector"), setOf("selector"), functionName)
+                val selector = paramString(args, "selector", functionName)!!
+                selectFirstValue(driver, selector, SELECT_FIRST_TEXT_READ_JS, "text")
             }
 
             "selectTextAll" -> {
@@ -1375,10 +1490,11 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     allowed("selector", "attrName"),
                     setOf("selector", "attrName"),
                     functionName
-                ); driver.selectFirstAttributeOrNull(
-                    paramString(args, "selector", functionName)!!,
-                    paramString(args, "attrName", functionName)!!
                 )
+                val selector = paramString(args, "selector", functionName)!!
+                val attrName = paramString(args, "attrName", functionName)!!
+                val readJs = "function(element) { return element.getAttribute('${Browser4WebDriver.escapeJsString(attrName)}'); }"
+                selectFirstValue(driver, selector, readJs, "attribute '$attrName'")
             }
 
             "selectAttributes" -> {
@@ -1455,10 +1571,11 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     allowed("selector", "propName"),
                     setOf("selector", "propName"),
                     functionName
-                ); driver.selectFirstPropertyValueOrNull(
-                    paramString(args, "selector", functionName)!!,
-                    paramString(args, "propName", functionName)!!
                 )
+                val selector = paramString(args, "selector", functionName)!!
+                val propName = paramString(args, "propName", functionName)!!
+                val readJs = "function(element) { return element['${Browser4WebDriver.escapeJsString(propName)}']; }"
+                selectFirstValue(driver, selector, readJs, "property '$propName'")
             }
 
             "selectPropertyValueAll" -> {
@@ -1558,10 +1675,16 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                             setOf("selector", "functionDeclaration"),
                             functionName
                         )
+                        val selector = paramString(normalizedArgs, "selector", functionName)!!
+                        // An element-scoped evaluation needs a real element: when the
+                        // locator cannot be resolved (stale `eN` snapshot ref, selector
+                        // miss, removed element) the driver returns a null JsEvaluation
+                        // that is indistinguishable from a legitimate JS null.  Fail
+                        // loudly instead so the caller sees an explicit not-found error.
                         driver.evaluateValueDetail(
-                            paramString(normalizedArgs, "selector", functionName)!!,
+                            selector,
                             paramString(normalizedArgs, "functionDeclaration", functionName)!!
-                        )
+                        ) ?: throw IllegalArgumentException(elementNotFoundMessage(selector))
                     }
 
                     normalizedArgs.containsKey("expression") -> {
@@ -1586,10 +1709,14 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                             setOf("selector", "functionDeclaration"),
                             functionName
                         )
+                        val selector = paramString(args, "selector", functionName)!!
+                        // See the "eval"/"evaluateValue" branch above — an element
+                        // scoped evaluation whose locator resolves to nothing must
+                        // surface as an explicit not-found error, never a null result.
                         driver.evaluateValueDetail(
-                            paramString(args, "selector", functionName)!!,
+                            selector,
                             paramString(args, "functionDeclaration", functionName)!!
-                        )
+                        ) ?: throw IllegalArgumentException(elementNotFoundMessage(selector))
                     }
 
                     args.containsKey("expression") -> {

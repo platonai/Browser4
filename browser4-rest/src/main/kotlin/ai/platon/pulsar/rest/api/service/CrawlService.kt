@@ -25,6 +25,7 @@ import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import java.nio.file.Path
+import java.time.Instant
 import java.sql.ResultSet
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
@@ -49,6 +50,13 @@ data class CrawlResponse(
     val taskId: String = "",
     val status: String = "CREATED",
     val pagesFound: Int = 0,
+    /**
+     * Number of out-links discovered and submitted beyond the seed URLs
+     * (depth>=1 crawls).  Kept separate from [pagesFound] so a crawl that only
+     * records the seed page (linksDiscovered == 0) is distinguishable from one
+     * that actually found pages.
+     */
+    val linksDiscovered: Int = 0,
     val pages: List<CrawlPageResult>? = null,
     val error: String? = null,
     val diagnostic: String? = null,
@@ -60,6 +68,12 @@ data class CrawlResponse(
     var finishTime: java.time.Instant? = null,
     /** Per-seed-URL processing status (populated when verbose). */
     val seedStatuses: List<CrawlSeedStatus>? = null,
+    /**
+     * Readonly-mode surfacing: what --readonly actually did for this crawl —
+     * served pages from the store (with the age of the stored content) or
+     * verified that every page was fetched fresh from the live site.
+     */
+    val readonlyNote: String? = null,
 )
 
 data class CrawlPageResult(
@@ -70,6 +84,10 @@ data class CrawlPageResult(
     val extracted: List<Map<String, Any?>>? = null,
     /** Non-null when X-SQL extraction was attempted but failed on this page. */
     val extractionError: String? = null,
+    /** True when the content was served from the page store (--readonly), not fetched from the live site. */
+    val servedFromStore: Boolean = false,
+    /** Age in seconds of the stored content when [servedFromStore]. */
+    val storeAgeSeconds: Long? = null,
 )
 
 @Service
@@ -197,6 +215,11 @@ class CrawlService(
                 )
                 taskStore.put(taskId, processing)
                 onStatusChanged(processing)
+                // Out-links discovered beyond the seed URLs (depth>=1 crawls),
+                // aggregated across seeds.  Kept separate from results.size so a
+                // crawl that only records seed page(s) (0 discovered links) is
+                // distinguishable from one that followed links.
+                val linksDiscovered = AtomicInteger()
                 val result = withTimeout(CRAWL_TASK_TIMEOUT_MS) {
                     withContext(Dispatchers.IO) {
                     val results = mutableListOf<CrawlPageResult>()
@@ -226,8 +249,8 @@ class CrawlService(
                             val pages = try {
                                 val fetched = when {
                                     seedRequest.depth == 0 -> crawlDepth0(taskId, seedRequest, sharedDepth0Session)
-                                    seedRequest.depth <= 1 -> crawlDepth1(taskId, seedRequest)
-                                    else -> crawlDepthN(taskId, seedRequest)
+                                    seedRequest.depth <= 1 -> crawlDepth1(taskId, seedRequest, linksDiscovered)
+                                    else -> crawlDepthN(taskId, seedRequest, linksDiscovered)
                                 }
                                 logger.info(
                                     "Crawl {}: seed URL {}/{} completed: {} → {} page(s)",
@@ -272,6 +295,7 @@ class CrawlService(
                                 taskId = taskId,
                                 status = "PROCESSING",
                                 pagesFound = results.size,
+                                linksDiscovered = linksDiscovered.get(),
                                 pages = results.toList(),
                                 diagnostic = currentResult?.diagnostic,
                                 startedTime = currentResult?.startedTime ?: java.time.Instant.now(),
@@ -297,15 +321,24 @@ class CrawlService(
                 val existingDiagnostic = taskStore.getIfPresent(taskId)?.diagnostic
                 val now = java.time.Instant.now()
                 val previous = taskStore.getIfPresent(taskId)
+                // --readonly must not be silent: either pages came from the page
+                // store (say so, with the age of the stored content) or every
+                // page was verified fetched fresh from the live site.
+                val readonlyRequested = request.args.split(Regex("\\s+")).any {
+                    it == "-readonly" || it.startsWith("-readonly=")
+                }
+                val readonlyNote = if (readonlyRequested) buildReadonlyNote(allPages) else null
                 val completed = CrawlResponse(
                     taskId = taskId,
                     status = ResourceStatus.getStatusText(ResourceStatus.SC_OK),
                     pagesFound = allPages.size,
+                    linksDiscovered = linksDiscovered.get(),
                     pages = allPages,
                     diagnostic = existingDiagnostic,
                     startedTime = previous?.startedTime ?: now,
                     finishTime = now,
-                    seedStatuses = seedStatuses
+                    seedStatuses = seedStatuses,
+                    readonlyNote = readonlyNote
                 )
                 taskStore.put(taskId, completed)
                 onStatusChanged(completed)
@@ -518,13 +551,16 @@ class CrawlService(
                 val title = document.title.takeIf { !it.isNullOrBlank() }
                     ?: extractTitleFromHtml(document.html)
 
+                val (servedFromStore, storeAgeSeconds) = storeServeMarkers(page)
                 val result = CrawlPageResult(
                     url = request.url,
                     title = title,
                     contentLength = page.contentLength,
                     depth = 0,
                     extracted = extractionResult.first,
-                    extractionError = extractionResult.second
+                    extractionError = extractionResult.second,
+                    servedFromStore = servedFromStore,
+                    storeAgeSeconds = storeAgeSeconds
                 )
                 logger.info("Crawl {}: fetched seed URL {} ({} bytes)", taskId, request.url, page.contentLength)
                 return listOf(result)
@@ -566,7 +602,7 @@ class CrawlService(
     // Depth=1: extract out-links from the portal page and load each one
     // ------------------------------------------------------------------
 
-    private suspend fun crawlDepth1(taskId: String, request: CrawlRequest): List<CrawlPageResult> {
+    private suspend fun crawlDepth1(taskId: String, request: CrawlRequest, linksDiscovered: AtomicInteger): List<CrawlPageResult> {
         val session = sessionManager.agenticContext.createSession()
         val results = Collections.synchronizedList(mutableListOf<CrawlPageResult>())
         try {
@@ -602,37 +638,7 @@ class CrawlService(
                 val diagnostic = try {
                     val normOptions = session.normalize(options)
                     val document = session.loadDocument(request.url, normOptions)
-                    val allAnchors = document.select("a").size
-                    val htmlLength = document.html.length
-                    val totalElements = document.select("*").size
-                    when {
-                        htmlLength < 200 && allAnchors == 0 ->
-                            "Portal page returned near-empty content (${htmlLength} bytes, " +
-                            "$totalElements total elements, 0 anchors). " +
-                            "The page may not have loaded correctly. Try --refresh, " +
-                            "verify the URL is reachable, or check network connectivity."
-                        allAnchors > 0 -> {
-                            val selectorMatches = runCatching {
-                                document.select(options.outLinkSelector).size
-                            }.getOrDefault(-1)
-                            if (selectorMatches > 0) {
-                                "The page has $allAnchors anchors and ${htmlLength}B of HTML, " +
-                                "and the selector '${options.outLinkSelector}' matched " +
-                                "$selectorMatches element(s), but the out-link pattern " +
-                                "'${options.outLinkPattern}' filtered them all. " +
-                                "Try a broader pattern (or drop -olp / --out-link-pattern)."
-                            } else {
-                                "The page has $allAnchors anchors and ${htmlLength}B of HTML, " +
-                                "but the CSS selector '${options.outLinkSelector}' matched zero " +
-                                "elements. Try a broader selector (e.g., 'a') or use " +
-                                "'htmlsnapshot inspect' to discover valid selectors."
-                            }
-                        }
-                        else ->
-                            "No out-links found. The page has 0 anchors and ${htmlLength}B " +
-                            "of HTML (${totalElements} elements). The page may have loaded " +
-                            "but contains no links — verify the URL."
-                    }
+                    emptyOutLinksDiagnostic(document, options.outLinkSelector, options.outLinkPattern)
                 } catch (e: Exception) {
                     "Failed to load portal page: ${e.message}. " +
                     "Verify the URL is accessible and retry."
@@ -648,6 +654,7 @@ class CrawlService(
             }
 
             logger.info("Crawl {}: found {} out-links, submitting...", taskId, outLinks.size)
+            linksDiscovered.addAndGet(outLinks.size)
 
             // Per-crawl completion tracking: use a CompletableDeferred signaled by
             // an AtomicInteger counter instead of AgenticContexts.await(), which
@@ -655,29 +662,53 @@ class CrawlService(
             // crawls run concurrently or stale contexts persist in PulsarContexts.
             val pendingCount = AtomicInteger(outLinks.size)
             val allCompleted = CompletableDeferred<Unit>()
+            // onHTMLDocumentParsed can fire more than once for a single page
+            // (re-parse after refresh, shared-session reloads).  Only the first
+            // event may add the result or tick the completion counter — otherwise
+            // one page can appear twice in the listing and the crawl can complete
+            // before every page has been collected.
+            val recorded = ConcurrentHashMap.newKeySet<String>()
 
             // Submit each out-link as a ParsableHyperlink so we can collect results.
             // Include -refresh so each out-link is fetched fresh — without it, internal
             // HTTP caches or stale protocol state can cause 0-byte responses.
             outLinks.forEach { linkUrl ->
-                val hyperlink = ParsableHyperlink("$linkUrl -parse -refresh") { _page: WebPage, _document: FeaturedDocument ->
-                    val extractionResult = if (request.sql != null) {
-                        executeSqlQuery(session, linkUrl, request.sql)
-                    } else Pair(null, null)
-                    results.add(
-                        CrawlPageResult(
-                            url = linkUrl,
-                            title = _document.title.takeIf { !it.isNullOrBlank() }
-                                ?: extractTitleFromHtml(_document.html),
-                            contentLength = _page.contentLength,
-                            depth = 1,
-                            extracted = extractionResult.first,
-                            extractionError = extractionResult.second
-                        )
-                    )
-                    // Signal completion when the last out-link finishes processing
-                    if (pendingCount.decrementAndGet() == 0) {
-                        allCompleted.complete(Unit)
+                // -readonly is forwarded so depth-1 page loads honor it too (no
+                // store writes) instead of silently ignoring the flag.
+                val readonlySuffix = if (options.readonly) " -readonly" else ""
+                val hyperlink = ParsableHyperlink("$linkUrl -parse -refresh$readonlySuffix") { _page: WebPage, _document: FeaturedDocument ->
+                    // Only the first parse event for a URL records the result and
+                    // ticks the completion counter; duplicates are dropped.
+                    if (recorded.add(normalizeForVisit(linkUrl))) {
+                        val extractionResult = if (request.sql != null) {
+                            executeSqlQuery(session, linkUrl, request.sql)
+                        } else Pair(null, null)
+                        val (servedFromStore, storeAgeSeconds) = storeServeMarkers(_page)
+                        synchronized(results) {
+                            results.add(
+                                CrawlPageResult(
+                                    url = linkUrl,
+                                    title = _document.title.takeIf { !it.isNullOrBlank() }
+                                        ?: extractTitleFromHtml(_document.html),
+                                    contentLength = _page.contentLength,
+                                    depth = 1,
+                                    extracted = extractionResult.first,
+                                    extractionError = extractionResult.second,
+                                    servedFromStore = servedFromStore,
+                                    storeAgeSeconds = storeAgeSeconds
+                                )
+                            )
+                            // Publish in-memory progress so the CLI poll loop sees
+                            // pages as they arrive instead of 'waiting for first
+                            // page' for the whole seed round.
+                            publishIncremental(taskId, results.toList(), linksDiscovered.get())
+                        }
+                        // Signal completion when the last out-link finishes processing
+                        if (pendingCount.decrementAndGet() == 0) {
+                            allCompleted.complete(Unit)
+                        }
+                    } else {
+                        logger.debug("Crawl {}: duplicate parse event for {}; already recorded", taskId, linkUrl)
                     }
                 }
                 session.submit(hyperlink)
@@ -688,7 +719,9 @@ class CrawlService(
                 allCompleted.await()
             }
 
-            return results.toList()
+            // Deterministic ordering: identical runs over an unchanged site
+            // produce identical listings.
+            return results.toList().sortedBy { it.url }
         } catch (e: TimeoutCancellationException) {
             logger.warn("Crawl {}: depth=1 timed out after collecting {} pages; saving partial results", taskId, results.size)
             // Save partial results BEFORE re-throwing — the outer launch catch
@@ -698,7 +731,8 @@ class CrawlService(
                 taskId = taskId,
                 status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
                 pagesFound = results.size,
-                pages = results.toList(),
+                linksDiscovered = linksDiscovered.get(),
+                pages = results.toList().sortedBy { it.url },
                 error = "Crawl timed out after collecting ${results.size} pages (partial results saved)",
                 startedTime = previous?.startedTime ?: java.time.Instant.now(),
                 finishTime = java.time.Instant.now()
@@ -715,7 +749,7 @@ class CrawlService(
     // Depth>1: BFS continuous crawl using ParsableHyperlink parse handlers
     // ------------------------------------------------------------------
 
-    private suspend fun crawlDepthN(taskId: String, request: CrawlRequest): List<CrawlPageResult> {
+    private suspend fun crawlDepthN(taskId: String, request: CrawlRequest, linksDiscovered: AtomicInteger): List<CrawlPageResult> {
         // Use sequential browsers for continuous crawling (same as _5_ContinuousCrawler.kt)
         try { PulsarSettings.withSequentialBrowsers().maxOpenTabs(8) } catch (e: Exception) { /* optional config */ }
 
@@ -727,9 +761,27 @@ class CrawlService(
             val maxDepth = request.depth
             val visited = ConcurrentHashMap.newKeySet<String>()
 
+            // Per-URL crawl bookkeeping:
+            //  - recorded: URLs whose parse event already produced a result entry.
+            //    onHTMLDocumentParsed can fire more than once per page (re-parse
+            //    after refresh, shared-session reloads); only the first event may
+            //    add a result or tick the completion counter — otherwise a single
+            //    page appears twice in the listing and the crawl can complete
+            //    early (nondeterministic totals across runs).
+            //  - depths: discovery depth captured at submission time.  Re-deriving
+            //    it from page.configuredUrl is unreliable (the -depth args are not
+            //    always preserved), which made every page — including the seed —
+            //    fall back to depth=1.
+            val recorded = ConcurrentHashMap.newKeySet<String>()
+            val depths = ConcurrentHashMap<String, Int>()
+            // Serializes the visited-check + visited-mark + submit sequence so two
+            // pages that discover the same child cannot both pass the check and
+            // submit it twice.
+            val discoveryLock = Any()
+
             // Per-crawl completion tracking: submitted count increments when new
-            // links are submitted, completed count increments when parseHandler
-            // finishes processing a page.  When they match the pool is drained.
+            // links are submitted, completed count increments when a page's first
+            // parse event finishes processing.  When they match the pool is drained.
             val submittedCount = AtomicInteger(1) // seed URL counts as submitted
             val completedCount = AtomicInteger(0)
             val allCompleted = CompletableDeferred<Unit>()
@@ -737,28 +789,73 @@ class CrawlService(
             // Use lateinit to allow recursive reference within the parse handler
             lateinit var parseHandler: (WebPage, FeaturedDocument) -> Any?
 
-            parseHandler = { page: WebPage, document: FeaturedDocument ->
+            parseHandler = crawlParse@{ page: WebPage, document: FeaturedDocument ->
                 val pageUrl = document.baseURI ?: page.url
-                val currentDepth = extractDepth(page) ?: 1
-
-                // Record this page
-                val extractionResult = if (request.sql != null) {
-                    executeSqlQuery(session, pageUrl, request.sql)
-                } else Pair(null, null)
-                results.add(
-                    CrawlPageResult(
-                        url = pageUrl,
-                        title = document.title.takeIf { !it.isNullOrBlank() }
-                            ?: extractTitleFromHtml(document.html),
-                        contentLength = page.contentLength,
-                        depth = currentDepth,
-                        extracted = extractionResult.first,
-                        extractionError = extractionResult.second
+                val key = normalizeForVisit(pageUrl)
+                // Depth resolution is queue-time bookkeeping, never a guess:
+                // every URL this crawl submits is registered in `depths` before
+                // submission (seed = 0, each link = discovering page's depth + 1),
+                // so the map is the source of truth.  extractDepth() re-derives
+                // the same queue-time value from the '-depth N' marker embedded in
+                // page.configuredUrl and covers parse events whose final URL
+                // differs from the submitted URL (redirects).  A page with neither
+                // record was not queued by this crawl — fail loudly instead of
+                // silently labeling it depth=1 (the old `?: 1` fallback), and tick
+                // the completion counter exactly once so the pool drain cannot
+                // hang on the unqueued event.
+                val currentDepth = depths[key] ?: extractDepth(page)
+                if (currentDepth == null) {
+                    logger.error(
+                        "Crawl {}: parsed page '{}' has no queue-time depth record " +
+                        "(configuredUrl='{}'); it was not submitted by this crawl — " +
+                        "dropping it from the result listing instead of silently reporting depth=1",
+                        taskId, pageUrl, page.configuredUrl
                     )
-                )
-                visited.add(normalizeForVisit(pageUrl))
+                    if (recorded.add(key) && completedCount.incrementAndGet() == submittedCount.get()) {
+                        allCompleted.complete(Unit)
+                    }
+                    return@crawlParse null
+                }
 
-                logger.debug("Crawl {}: depth={} page={}", taskId, currentDepth, pageUrl)
+                // First parse event for this URL owns the result entry and the
+                // completion tick.  Later events (re-parses of the same page) only
+                // re-run discovery, which finds every link already visited and
+                // therefore does nothing.
+                val firstEvent = recorded.add(key)
+
+                if (firstEvent) {
+                    // Record this page
+                    val extractionResult = if (request.sql != null) {
+                        executeSqlQuery(session, pageUrl, request.sql)
+                    } else Pair(null, null)
+                    val (servedFromStore, storeAgeSeconds) = storeServeMarkers(page)
+                    synchronized(results) {
+                        results.add(
+                            CrawlPageResult(
+                                url = pageUrl,
+                                title = document.title.takeIf { !it.isNullOrBlank() }
+                                    ?: extractTitleFromHtml(document.html),
+                                contentLength = page.contentLength,
+                                depth = currentDepth,
+                                extracted = extractionResult.first,
+                                extractionError = extractionResult.second,
+                                servedFromStore = servedFromStore,
+                                storeAgeSeconds = storeAgeSeconds
+                            )
+                        )
+                        // Publish in-memory progress so the CLI poll loop sees real
+                        // page counts while the crawl is still running, instead of
+                        // repeating 'waiting for first page' until the whole crawl
+                        // finishes.
+                        publishIncremental(taskId, results.toList(), linksDiscovered.get())
+                    }
+                    logger.debug("Crawl {}: depth={} page={}", taskId, currentDepth, pageUrl)
+                } else {
+                    logger.debug(
+                        "Crawl {}: duplicate parse event for {} (depth={}); already recorded",
+                        taskId, pageUrl, currentDepth
+                    )
+                }
 
                 // If we haven't reached max depth, extract and submit more links
                 if (currentDepth < maxDepth) {
@@ -767,25 +864,31 @@ class CrawlService(
                         val allLinks = document.selectHyperlinks(selector)
                             .map { it.url }
                             .toList()
-                        val (dupes, fresh) = allLinks.partition { link ->
-                            normalizeForVisit(link) in visited
+                        // Check-and-mark must be atomic with submission, so two
+                        // pages discovering the same link cannot both submit it.
+                        val (newLinks, dupes) = synchronized(discoveryLock) {
+                            val fresh = allLinks.filter { link ->
+                                normalizeForVisit(link) !in visited
+                            }
+                            val chosen = fresh
+                                .filter { link -> matchesPattern(link, options.outLinkPattern) }
+                                .take(options.topLinks)
+                            chosen.forEach { link -> visited.add(normalizeForVisit(link)) }
+                            chosen to (allLinks.size - fresh.size)
                         }
-                        if (dupes.isNotEmpty()) {
+                        if (dupes > 0) {
                             logger.debug(
                                 "Crawl {}: {} link(s) skipped — already visited (depth={})",
-                                taskId, dupes.size, currentDepth
+                                taskId, dupes, currentDepth
                             )
                         }
-                        val newLinks = fresh
-                            .filter { link -> matchesPattern(link, options.outLinkPattern) }
-                            .take(options.topLinks)
-                            .toList()
 
                         if (newLinks.isNotEmpty()) {
                             submittedCount.addAndGet(newLinks.size)
+                            linksDiscovered.addAndGet(newLinks.size)
                             val args = buildArgsForDepth(options, currentDepth + 1)
                             newLinks.forEach { link ->
-                                visited.add(normalizeForVisit(link))
+                                depths[normalizeForVisit(link)] = currentDepth + 1
                                 val hyperlink = ParsableHyperlink("$link $args", parseHandler)
                                 session.submit(hyperlink)
                             }
@@ -795,17 +898,42 @@ class CrawlService(
                                 newLinks.size,
                                 currentDepth + 1
                             )
+                        } else if (currentDepth == 0 && submittedCount.get() == 1) {
+                            // The seed page's round produced no followable
+                            // out-links (nothing but the seed has been submitted),
+                            // so this crawl will only report the seed page.
+                            // Explain why instead of letting it pass as a silent
+                            // '1 pages found' success (mirrors crawlDepth1).
+                            val diagnostic = runCatching {
+                                emptyOutLinksDiagnostic(
+                                    document, options.outLinkSelector, options.outLinkPattern
+                                )
+                            }.getOrNull()
+                            if (diagnostic != null) {
+                                logger.info("Crawl {}: {}", taskId, diagnostic)
+                                publishIncremental(
+                                    taskId,
+                                    synchronized(results) { results.toList() },
+                                    linksDiscovered.get(),
+                                    diagnostic
+                                )
+                            }
                         }
                     }
                 }
 
-                // Signal completion when all submitted pages have been processed
-                if (completedCount.incrementAndGet() == submittedCount.get()) {
+                // Signal completion when all submitted pages have been processed.
+                // Duplicate parse events are not counted, so each submitted page
+                // contributes exactly one tick.
+                if (firstEvent && completedCount.incrementAndGet() == submittedCount.get()) {
                     allCompleted.complete(Unit)
                 }
             } // parseHandler defined
 
             // Submit the seed URL (depth 0 — it is the starting page).
+            val seedKey = normalizeForVisit(request.url)
+            visited.add(seedKey)
+            depths[seedKey] = 0
             val seedArgs = buildArgsForDepth(options, 0)
             val seedHyperlink = ParsableHyperlink("${request.url} $seedArgs", parseHandler)
             session.submit(seedHyperlink)
@@ -816,7 +944,9 @@ class CrawlService(
                 allCompleted.await()
             }
 
-            return results.toList()
+            // Deterministic ordering: identical runs over an unchanged site
+            // produce identical listings.
+            return results.toList().sortedWith(compareBy({ it.depth }, { it.url }))
         } catch (e: TimeoutCancellationException) {
             logger.warn("Crawl {}: depth>1 timed out after collecting {} pages; saving partial results", taskId, results.size)
             val previous = taskStore.getIfPresent(taskId)
@@ -824,7 +954,8 @@ class CrawlService(
                 taskId = taskId,
                 status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
                 pagesFound = results.size,
-                pages = results.toList(),
+                linksDiscovered = linksDiscovered.get(),
+                pages = results.toList().sortedWith(compareBy({ it.depth }, { it.url })),
                 error = "Crawl timed out after collecting ${results.size} pages (partial results saved)",
                 startedTime = previous?.startedTime ?: java.time.Instant.now(),
                 finishTime = java.time.Instant.now()
@@ -852,6 +983,74 @@ class CrawlService(
             rawArgs.isBlank() -> "-refresh"
             rawArgs.contains("-refresh") -> rawArgs
             else -> "$rawArgs -refresh"
+        }
+    }
+
+    /**
+     * Publish an in-memory progress snapshot to the task store so the CLI poll
+     * loop sees real page counts while the crawl is still running.  In-memory
+     * only — persistence is deferred until the crawl reaches a terminal state.
+     */
+    private fun publishIncremental(
+        taskId: String,
+        pages: List<CrawlPageResult>,
+        linksDiscovered: Int,
+        diagnostic: String? = null
+    ) {
+        val previous = taskStore.getIfPresent(taskId)
+        taskStore.put(taskId, CrawlResponse(
+            taskId = taskId,
+            status = "PROCESSING",
+            pagesFound = pages.size,
+            linksDiscovered = linksDiscovered,
+            pages = pages,
+            diagnostic = diagnostic ?: previous?.diagnostic,
+            startedTime = previous?.startedTime ?: java.time.Instant.now(),
+            seedStatuses = previous?.seedStatuses
+        ))
+    }
+
+    /**
+     * Build a user-facing diagnostic explaining why link discovery found no
+     * followable out-links on an already-parsed document.  Distinguishes
+     * "page was empty" from "page had anchors but the selector / pattern
+     * matched nothing".
+     */
+    private fun emptyOutLinksDiagnostic(
+        document: FeaturedDocument,
+        selector: String?,
+        pattern: String?
+    ): String {
+        val allAnchors = document.select("a").size
+        val htmlLength = document.html.length
+        val totalElements = document.select("*").size
+        return when {
+            htmlLength < 200 && allAnchors == 0 ->
+                "Portal page returned near-empty content ($htmlLength bytes, " +
+                "$totalElements total elements, 0 anchors). " +
+                "The page may not have loaded correctly. Try --refresh, " +
+                "verify the URL is reachable, or check network connectivity."
+            allAnchors > 0 -> {
+                val selectorMatches = if (selector.isNullOrBlank()) 0 else runCatching {
+                    document.select(selector).size
+                }.getOrDefault(-1)
+                if (selectorMatches > 0) {
+                    "The page has $allAnchors anchors and ${htmlLength}B of HTML, " +
+                    "and the selector '$selector' matched " +
+                    "$selectorMatches element(s), but the out-link pattern " +
+                    "'$pattern' filtered them all. " +
+                    "Try a broader pattern (or drop -olp / --out-link-pattern)."
+                } else {
+                    "The page has $allAnchors anchors and ${htmlLength}B of HTML, " +
+                    "but the CSS selector '$selector' matched zero " +
+                    "elements. Try a broader selector (e.g., 'a') or use " +
+                    "'htmlsnapshot inspect' to discover valid selectors."
+                }
+            }
+            else ->
+                "No out-links found. The page has 0 anchors and ${htmlLength}B " +
+                "of HTML ($totalElements elements). The page may have loaded " +
+                "but contains no links — verify the URL."
         }
     }
 
@@ -1052,6 +1251,9 @@ class CrawlService(
     }
 
     companion object {
+        /** Earliest plausible fetch time; earlier values are unset sentinels. */
+        private val MIN_FETCH_TIME: Instant = Instant.parse("2000-01-01T00:00:00Z")
+
         /** Maximum fetch retries when content is 0 bytes or protocol error occurs. */
         private const val MAX_FETCH_RETRIES = 3
 
@@ -1089,6 +1291,59 @@ class CrawlService(
         }.getOrDefault(true)
     }
 
+    /**
+     * Compute the readonly store-serving markers for a recorded page.
+     *
+     * When a load serves the stored page core (options.readonly without a
+     * forced -refresh), [WebPage.isCached] is true and [WebPage.fetchTime]
+     * preserves the time the content was originally fetched, so the age of the
+     * served content is computable.  Fresh fetches keep served=false.
+     */
+    private fun storeServeMarkers(page: WebPage): Pair<Boolean, Long?> {
+        if (!page.isCached) return false to null
+        val fetchTime = page.fetchTime
+        val now = java.time.Instant.now()
+        // Guard against sentinel/unset fetch times (e.g. epoch) that would
+        // produce absurd ages for stored content.
+        val ageSeconds = if (fetchTime.isAfter(MIN_FETCH_TIME) && fetchTime.isBefore(now)) {
+            java.time.Duration.between(fetchTime, now).seconds.coerceAtLeast(0)
+        } else null
+        return true to ageSeconds
+    }
+
+    /**
+     * Build the terminal note that tells the user what --readonly did: either
+     * pages were served from the page store (with the age of the oldest stored
+     * content) or every page was verified fetched fresh from the live site.
+     * See the readonly acceptance criteria: "must surface that it served
+     * stored content (with age) or verify freshness".
+     */
+    private fun buildReadonlyNote(pages: List<CrawlPageResult>): String {
+        val served = pages.filter { it.servedFromStore }
+        val freshCount = pages.size - served.size
+        return if (served.isEmpty()) {
+            "readonly: verified fresh — all ${pages.size} page(s) fetched from the live site " +
+            "(none served from the page store); nothing was written to the page store"
+        } else {
+            val oldest = served.maxOfOrNull { it.storeAgeSeconds ?: 0L } ?: 0L
+            "readonly: ${served.size}/${pages.size} page(s) served from the page store " +
+            "(stored content up to ${formatAge(oldest)} old)" +
+            (if (freshCount > 0) "; $freshCount fetched fresh" else "") +
+            "; nothing was written to the page store"
+        }
+    }
+
+    private fun formatAge(totalSeconds: Long): String {
+        val h = totalSeconds / 3600
+        val m = (totalSeconds % 3600) / 60
+        val s = totalSeconds % 60
+        return when {
+            h > 0 -> "${h}h ${m}m"
+            m > 0 -> "${m}m ${s}s"
+            else -> "${s}s"
+        }
+    }
+
     private fun normalizeForVisit(url: String): String {
         return url.trim().lowercase()
             .removeSuffix("/")
@@ -1112,7 +1367,11 @@ class CrawlService(
         if (options.outLinkPattern.isNotBlank() && options.outLinkPattern != ".+") {
             parts.add("-outLinkPattern \"${options.outLinkPattern}\"")
         }
+        // -readonly must reach every page load, not just the seed: without this
+        // the flag silently stops applying at depth>=2 and the crawl writes
+        // pages to the store while claiming nothing was written.
         if (options.refresh) parts.add("-refresh")
+        if (options.readonly) parts.add("-readonly")
         return parts.joinToString(" ")
     }
 }

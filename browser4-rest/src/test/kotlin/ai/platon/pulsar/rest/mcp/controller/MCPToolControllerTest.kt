@@ -1033,6 +1033,114 @@ class MCPToolControllerTest {
         Unit
     }
 
+    @Test
+    fun `missing page helper ReferenceError is mapped to an actionable message`() = runBlocking {
+        mockTool("tab", "evaluateValue")
+
+        `when`(agentToolManager.execute(any())).thenReturn(
+            toolCallResult(
+                evaluate = TcEvaluate(
+                    expression = "html_snapshot.capture(sessionId=\"...\")",
+                    exception = TcException(
+                        expression = "html_snapshot.capture(sessionId=\"...\")",
+                        cause = RuntimeException(
+                            "ReferenceError: __pulsar_utils__ is not defined at <anonymous>:1:1"
+                        ),
+                        help = "Capture the current page as an HTML snapshot with metadata, interactive elements, and link groups."
+                    )
+                )
+            )
+        )
+
+        val request = MCPToolCallRequest(
+            tool = "browser_evaluate",
+            arguments = mapOf("sessionId" to sessionId, "expression" to "1")
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.isError)
+        val errorText = result.body!!.content[0].text
+        // The internal JS stack must not leak to the user ...
+        assertFalse(errorText.contains("ReferenceError"), "Raw ReferenceError should be mapped away: $errorText")
+        assertFalse(errorText.contains("at <anonymous>"), "JS stack must not leak: $errorText")
+        // ... and the user must get an actionable remediation instead
+        assertTrue(errorText.contains("open --fresh"), "Expected actionable 'open --fresh' hint in: $errorText")
+        Unit
+    }
+
+    @Test
+    fun `runtime errors do not append the static tool description as help text`() = runBlocking {
+        mockTool("tab", "evaluateValue")
+
+        `when`(agentToolManager.execute(any())).thenReturn(
+            toolCallResult(
+                evaluate = TcEvaluate(
+                    expression = "tab.evaluateValue(expression=\"boom\")",
+                    exception = TcException(
+                        expression = "tab.evaluateValue(expression=\"boom\")",
+                        cause = RuntimeException("The browser tab crashed mid-evaluation"),
+                        help = "Evaluate a JavaScript expression and return its value."
+                    )
+                )
+            )
+        )
+
+        val request = MCPToolCallRequest(
+            tool = "browser_evaluate",
+            arguments = mapOf("sessionId" to sessionId, "expression" to "boom")
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.isError)
+        val errorText = result.body!!.content[0].text
+        assertTrue(errorText.contains("browser_evaluate failed:"), "Expected tool prefix, got: $errorText")
+        assertTrue(errorText.contains("crashed"), "Expected runtime message in: $errorText")
+        assertFalse(
+            errorText.contains("help:"),
+            "Runtime errors must not carry the static tool description as 'help:', got: $errorText"
+        )
+        Unit
+    }
+
+    @Test
+    fun `usage errors keep the static help text`() = runBlocking {
+        mockTool("tab", "evaluateValue")
+
+        `when`(agentToolManager.execute(any())).thenReturn(
+            toolCallResult(
+                evaluate = TcEvaluate(
+                    expression = "tab.evaluateValue(expression=null)",
+                    exception = TcException(
+                        expression = "tab.evaluateValue(expression=null)",
+                        cause = IllegalArgumentException("Missing required parameter 'expression' for evaluateValue"),
+                        help = "Evaluate a JavaScript expression and return its value."
+                    )
+                )
+            )
+        )
+
+        val request = MCPToolCallRequest(
+            tool = "browser_evaluate",
+            arguments = mapOf("sessionId" to sessionId)
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.isError)
+        val errorText = result.body!!.content[0].text
+        assertTrue(errorText.contains("Missing required parameter"), "Expected usage message in: $errorText")
+        assertTrue(
+            errorText.contains("help: Evaluate a JavaScript expression"),
+            "Usage errors should keep the static help text, got: $errorText"
+        )
+        Unit
+    }
+
     private fun toolCallResult(value: Any? = null, evaluate: TcEvaluate? = null): ToolCallResult {
         val resolvedEvaluate = evaluate ?: TcEvaluate(value = value)
         return ToolCallResult(

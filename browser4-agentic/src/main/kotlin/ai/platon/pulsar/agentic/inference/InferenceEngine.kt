@@ -79,11 +79,22 @@ class InferenceEngine(
     }
 
     /**
-     * Returns an ObjectNode with extracted fields expanded at top-level, plus:
-     *   - metadata: { progress, completed }
-     *   - inputTokenCount, outputTokenCount, totalTokenCount, inferenceTimeMillis
+     * Run the two-stage structured extraction pipeline and return an
+     * [ExtractInferenceResult] whose [ExtractInferenceResult.result] is the
+     * CLEAN schema payload — the extraction fields exactly as the model
+     * returned them, with no task bookkeeping merged in.
+     *
+     * Token counts, timing and the evaluation metadata (progress/completed)
+     * are carried separately by [ExtractInferenceResult] and surfaced through
+     * inference events/logs; they never leak into the payload the caller
+     * asked the model to produce.
+     *
+     * The [ExtractInferenceResult.completed] flag is truthful: it is `true`
+     * whenever usable content is present in the payload, even if the advisory
+     * evaluation call reported `completed: false` (a successful extraction
+     * must never look incomplete).
      */
-    suspend fun extract(params: ExtractParams): ObjectNode {
+    suspend fun extract(params: ExtractParams): ExtractInferenceResult {
         InferenceEventEmitter.onWillExtract(params)
 
         val messages = InferencePromptBuilder.buildExtractionPrompt(params)
@@ -140,7 +151,15 @@ class InferenceEngine(
                 ?: JsonNodeFactory.instance.objectNode()
         }.getOrElse { JsonNodeFactory.instance.objectNode() }
         val progress = metaNode.path("progress").asText("")
-        val completed = metaNode.path("completed").asBoolean(false)
+        val metaCompleted = metaNode.path("completed").asBoolean(false)
+
+        // The completion flag must reflect reality: once usable content is
+        // present the extraction counts as complete, even if the advisory
+        // metadata call reported "completed": false (it may signal that more
+        // viewports remain).  Only when no content was produced do we fall
+        // back to the evaluator model's judgment.
+        val contentPresent = extractedNode.size() > 0
+        val completed = metaCompleted || contentPresent
 
         inferenceLogger.logSummary(
             filename = "extract.jsonl",
@@ -162,16 +181,11 @@ class InferenceEngine(
 
         val totalInferenceTimeMillis = DateTimes.elapsedTime(extractStartTime).toMillis()
 
-        val result: ObjectNode = (extractedNode.deepCopy()).apply {
-            set<ObjectNode>("metadata", JsonNodeFactory.instance.objectNode().apply {
-                put("progress", progress)
-                put("completed", completed)
-            })
-            put("inputToken", inputTokenCount)
-            put("outputToken", outputTokenCount)
-            put("totalToken", totalTokenCount)
-            put("inferenceTimeMillis", totalInferenceTimeMillis)
-        }
+        // The user payload is the clean extraction result ONLY.  Bookkeeping
+        // (metadata{progress,completed} and the token/time metrics) must not
+        // be merged into it — it pollutes schema-constrained output and makes
+        // the completion flag indistinguishable from a user field.
+        val result: ObjectNode = extractedNode.deepCopy()
 
         val inferenceResult = ExtractInferenceResult(
             result = result,
@@ -186,7 +200,7 @@ class InferenceEngine(
         )
         InferenceEventEmitter.onDidExtract(params, inferenceResult)
 
-        return result
+        return inferenceResult
     }
 
     suspend fun summarize(instruction: String?, textContent: String): String {
