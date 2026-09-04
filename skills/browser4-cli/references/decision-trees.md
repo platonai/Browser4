@@ -30,9 +30,9 @@ tier: decision
 | `htmlsnapshot summary` | **Yes** — requires stored snapshot | Statistical summary of selectors on the stored page |
 | `htmlsnapshot grep` | **Yes** — requires stored snapshot | Regex search over the stored HTML |
 | `htmlsnapshot export` | **Yes** — requires stored snapshot | Exports the stored HTML to a file |
-| `htmlsnapshot query` | **No** — fetches independently | Uses `DOM_LOAD_AND_SELECT(@url, ...)` which re-fetches the page, bypassing the stored snapshot entirely |
+| `htmlsnapshot query` | **No** — no capture needed | Current page → queries the session's **live DOM** (seeded before the SQL runs; login/SPA state visible). Other URLs → independent webdb load, no session state |
 
-> **If you get "No HTML snapshot found" or a timeout:** either run `htmlsnapshot` first to capture, or use `htmlsnapshot query` with `@url` for independent fetching.
+> **If you get "No HTML snapshot found" or a timeout:** either run `htmlsnapshot` first to capture, or use `htmlsnapshot query` — it needs no prior capture (current page reads the live DOM; an explicit URL is fetched independently).
 
 > **⚠️ Important:** `htmlsnapshot` captures the **current live DOM** at capture time. Content added or modified by JavaScript before the capture (form submission results, dynamic updates, SPA route changes) **is reflected** — but only if you run `htmlsnapshot` (capture) *after* the interaction. The stored snapshot becomes stale only if you do not re-capture after a navigation or interaction. For one-off live reads without a capture step, use `eval`.
 

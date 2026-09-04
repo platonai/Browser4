@@ -658,15 +658,23 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "htmlsnapshot-query" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - DOM_LOAD_AND_SELECT(@url, ...) re-fetches the page fresh via the scrape API."
+            "  - Without a URL (or when the URL is the current page) the query is seeded from the"
                 .to_string(),
         );
         lines.push(
-            "    It does NOT use the stored snapshot from htmlsnapshot capture."
+            "    session's LIVE DOM first, so it sees login state, SPA updates and eval mutations."
                 .to_string(),
         );
         lines.push(
-            "    htmlsnapshot capture is only needed for inspect/get/summary, not for query with @url."
+            "    An explicit different URL runs an independent scrape/webdb load instead."
+                .to_string(),
+        );
+        lines.push(
+            "    The stored snapshot from htmlsnapshot capture is never used; capture is only"
+                .to_string(),
+        );
+        lines.push(
+            "    needed for inspect/get/summary, not for query."
                 .to_string(),
         );
         lines.push(
@@ -3348,8 +3356,10 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-query").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli htmlsnapshot query [url]"));
-        assert!(help.contains("DOM_LOAD_AND_SELECT(@url, ...) re-fetches the page fresh via the scrape API"));
-        assert!(help.contains("htmlsnapshot capture is only needed for inspect/get/summary"));
+        assert!(help.contains("seeded from the"));
+        assert!(help.contains("An explicit different URL runs an independent scrape/webdb load"));
+        assert!(help.contains("capture is only"));
+        assert!(help.contains("needed for inspect/get/summary"));
         assert!(help.contains("--sql"));
         assert!(help.contains("--sql-stdin"));
         assert!(help.contains("--sql-base64"));

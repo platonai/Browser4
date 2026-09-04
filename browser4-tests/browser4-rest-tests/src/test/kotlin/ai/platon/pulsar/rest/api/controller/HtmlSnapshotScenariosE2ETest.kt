@@ -285,6 +285,42 @@ private val createdSessions = mutableListOf<String>()
         assertTrue(html.contains("product-price"), "Exported HTML should contain price element")
     }
 
+    @Test
+    @DisplayName("1d — Query with @url reflects live DOM mutations on the current page")
+    fun test1d_queryReflectsLiveDomMutations() {
+        val sessionId = openAndNavigate(TestUrls.MOCK_PRODUCT_DETAIL_URL)
+        awaitPageTitle(sessionId, "4K OLED TV")
+
+        // Mutate the LIVE DOM only — no navigation, no server-side change, so
+        // an independent re-fetch of the URL can never see this value.
+        val mutation = callTool(
+            "browser_evaluate",
+            mapOf(
+                "sessionId" to sessionId,
+                "expression" to "document.querySelector('#productTitle').textContent = 'LIVE-MUTATED-TITLE'"
+            )
+        )
+        assertNotError(mutation)
+
+        // Querying the current page (no url arg) must be seeded from the live
+        // tab and therefore observe the mutation.  Without live-page seeding
+        // the scrape engine re-fetches the fixture URL and returns the
+        // original server-side title.
+        val sql = """
+            SELECT dom_first_text(dom, '#productTitle') AS title
+            FROM load_and_select(@url, 'body')
+        """.trimIndent()
+        val result = queryHtmlSnapshot(sessionId, sql)
+        val resultSet = requireResultSet(result)
+        assertTrue(resultSet.size() == 1, "Expected 1 body row, got ${resultSet.size()}")
+
+        val row = resultSet[0]
+        assertTrue(
+            row["title"]?.asText()?.contains("LIVE-MUTATED-TITLE") == true,
+            "Query on the current page should reflect the live DOM mutation, got: ${row["title"]}"
+        )
+    }
+
     // =========================================================================
     // Scenario 2 — News Headline Aggregator
     // =========================================================================

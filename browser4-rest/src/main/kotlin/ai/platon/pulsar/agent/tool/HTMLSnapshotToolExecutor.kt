@@ -14,6 +14,7 @@ import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryIndexService
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.node.ArrayNode
 import ai.platon.pulsar.rest.session.ManagedSession
+import kotlinx.coroutines.withTimeout
 import org.slf4j.LoggerFactory
 import java.time.Instant
 import kotlin.reflect.KClass
@@ -369,12 +370,33 @@ class HTMLSnapshotToolExecutor(
             )
         }
 
-        val url = paramString(args, "url", "query", required = false)?.takeIf { it.isNotBlank() }
-            ?: run {
-                val managed = resolveSession(args, receiver)
-                val pulsarSession = managed.agenticSession
-                pulsarSession.normalize(managed.driver.currentUrl()).urlString
-            }
+        val explicitUrl = paramString(args, "url", "query", required = false)?.takeIf { it.isNotBlank() }
+
+        // A session is mandatory only when no URL is given — the target then IS
+        // the session's live page.  With an explicit URL the query is a pure
+        // page-store/webdb query and may run session-less (offline corpus).
+        val managed = if (explicitUrl == null) {
+            resolveSession(args, receiver)
+        } else {
+            runCatching { resolveSession(args, receiver) }.getOrNull()
+        }
+
+        val url = explicitUrl ?: run {
+            val pulsarSession = managed!!.agenticSession
+            pulsarSession.normalize(managed.driver.currentUrl()).urlString
+        }
+
+        // Live-page coherence: when the query target is the page the session is
+        // CURRENTLY showing, seed the page store with a fresh capture of the
+        // live tab (capture reads the driver document; it never navigates).
+        // The X-SQL engine's load_and_select then serves the LIVE document —
+        // login state, SPA updates and eval mutations included — instead of an
+        // independent re-fetch that sees none of the session state.  Targets
+        // that differ from the live page (or session-less offline queries)
+        // keep the independent webdb load path untouched.
+        if (managed != null && queriesCurrentLivePage(managed, url)) {
+            seedLivePageForQuery(managed, url)
+        }
 
         val processedSql = SQLTemplate(sql).createSQL(url)
         val response = scrapeService.executeQuery(ScrapeRequest(processedSql))
@@ -428,6 +450,69 @@ class HTMLSnapshotToolExecutor(
         return pulsarObjectMapper().copy()
             .setSerializationInclusion(JsonInclude.Include.ALWAYS)
             .writeValueAsString(response)
+    }
+
+    /**
+     * Whether an X-SQL query targeting [targetUrl] should be seeded from the
+     * live page of [managed] — i.e. the normalized target URL equals the
+     * normalized URL of the page the session is currently showing.
+     */
+    private suspend fun queriesCurrentLivePage(managed: ManagedSession, targetUrl: String): Boolean {
+        val pulsarSession = managed.agenticSession
+        val currentUrl = runCatching {
+            pulsarSession.normalize(managed.driver.currentUrl()).urlString
+        }.getOrNull() ?: return false
+        val normalizedTarget = runCatching {
+            pulsarSession.normalize(targetUrl).urlString
+        }.getOrNull() ?: return false
+        return currentUrl == normalizedTarget
+    }
+
+    /**
+     * Best-effort seeding of the page store with the live document of
+     * [managed]'s active tab, keyed by [targetUrl].
+     *
+     * Mirrors the crawl pipeline's "pre-load the page into the WebDB cache so
+     * load_and_select UDFs find the page" pattern, except the record comes
+     * from a driver capture of the LIVE tab instead of a network fetch — the
+     * capture reads the current document and never navigates.  A subsequent
+     * load_and_select without `-refresh` then serves this record, so the
+     * query reflects the state the user actually sees.
+     *
+     * The URL is seeded with `-refresh` so the capture bypasses any existing
+     * in-memory cache record for the URL: a cache-hit shell would otherwise
+     * keep serving the previous record (verified empirically — a second query
+     * on the same URL returned the first query's page content).  With
+     * `-refresh` the pipeline builds a fresh shell, fetches the LIVE document
+     * through the bound driver, and overwrites the cache entry deterministically.
+     *
+     * Failure is non-fatal: the caller falls back to the independent load
+     * path (the previous behavior) and logs why.
+     */
+    private suspend fun seedLivePageForQuery(managed: ManagedSession, targetUrl: String) {
+        val seeded = try {
+            managed.withLock {
+                val pulsarSession = managed.agenticSession
+                withTimeout(30_000) {
+                    pulsarSession.capture(managed.driver, url = "$targetUrl -refresh")
+                }
+                pulsarSession.getOrNull(pulsarSession.normalize(targetUrl).urlString) != null
+            }
+        } catch (e: Exception) {
+            logger.warn(
+                "htmlsnapshot query: failed to seed '{}' from the live page ({}); " +
+                    "the query falls back to the independent load path",
+                targetUrl, e.message
+            )
+            false
+        }
+        if (!seeded) {
+            logger.warn(
+                "htmlsnapshot query: live-page seed for '{}' did not land in the page store; " +
+                    "the query uses the independent load path",
+                targetUrl
+            )
+        }
     }
 
     private suspend fun export(args: Map<String, Any?>, receiver: Any = Any()): String {

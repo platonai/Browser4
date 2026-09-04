@@ -60,7 +60,7 @@ browser4-cli htmlsnapshot get all text "<css-selector>"   # all matches
 | Use for | **Interaction** — get refs to click/fill | **Extraction** — read text / data / attributes |
 | Decider | "I need to click a button / find an input" | "I need to read an article / extract a price" |
 
-`htmlsnapshot` (capture) must run once **before** `get` / `get all` / `inspect` / `grep` / `export` become available; `query` is the exception — it re-fetches independently and needs no prior capture. For JS-updated content, capture before extracting; `eval --json` reads the live DOM. **Re-capture after every navigation/interaction** or the snapshot goes stale.
+`htmlsnapshot` (capture) must run once **before** `get` / `get all` / `inspect` / `grep` / `export` become available; `query` is the exception — it needs no prior capture (current page → live DOM; other URLs → independent fetch). For JS-updated content, capture before extracting; `eval --json` reads the live DOM. **Re-capture after every navigation/interaction** or the snapshot goes stale.
 
 ## Refs: Single-Use Handles
 

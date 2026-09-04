@@ -26,7 +26,7 @@ The `htmlsnapshot` family operates on a **static HTML snapshot** — the raw HTM
 ```bash
 browser4-cli htmlsnapshot                                # capture fresh static HTML snapshot + metadata
 browser4-cli htmlsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]  # extract text/html/attr via CSS; html paginated at 2K lines, text not paginated
-browser4-cli htmlsnapshot query [url] --sql <query> [--format json|csv|table]  # X-SQL; re-fetches the URL fresh on every run (no snapshot cache — see Query below)
+browser4-cli htmlsnapshot query [url] --sql <query> [--format json|csv|table]  # X-SQL; current page = live DOM, other URLs = independent fetch (see Query below)
 browser4-cli htmlsnapshot summary                        # compressed page summary (WPSI)
 browser4-cli htmlsnapshot export [--file <path>] [--clean]  # save snapshot HTML to file
 browser4-cli htmlsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]  # extract ALL matches; html paginated at 2K lines, text not paginated
@@ -34,7 +34,7 @@ browser4-cli htmlsnapshot grep [OPTIONS] <pattern> [--page N] [--page-size N] [-
 browser4-cli htmlsnapshot inspect [selector] [--max N] [--depth D]  # analyze DOM structure, suggest CSS selectors
 ```
 
-`htmlsnapshot` (capture) always fetches a fresh snapshot, caches it, and returns enriched metadata including image/link counts and a list of interactive elements (with tag, class, id, aria attributes, and bounding box). Subsequent `get`/`get all`/`export`/`inspect`/`summary`/`grep` reuse the cache until the next capture or page navigation. **`htmlsnapshot query` is the exception — it never uses this cache** (see [Query](#query--x-sql-with-a-fresh-fetch-no-cache)).
+`htmlsnapshot` (capture) always fetches a fresh snapshot, caches it, and returns enriched metadata including image/link counts and a list of interactive elements (with tag, class, id, aria attributes, and bounding box). Subsequent `get`/`get all`/`export`/`inspect`/`summary`/`grep` reuse the cache until the next capture or page navigation. **`htmlsnapshot query` does not use this cache** — it queries the current page's live DOM, or independently loads an explicit URL (see [Query](#query--x-sql-live-current-page-or-independent-fetch)).
 
 > **Note:** `htmlsnapshot get` looks up the page using the browser's current URL (after any redirects/navigations), so it works correctly on search-results pages and post-form-submission pages.
 
@@ -87,22 +87,30 @@ If `htmlsnapshot get` returns an empty string when the page clearly has matching
 3. **Use `htmlsnapshot query` or `htmlsnapshot get all`** for multiple results or complex queries
 4. **Check page load:** ensure the page finished loading (AJAX content may take time)
 
-## Query — X-SQL with a fresh fetch (no cache)
+## Query — X-SQL (live current page or independent fetch)
 
 The `--sql` flag is **required**. Use `@url` as a placeholder for the target URL.
 
 X-SQL uses the **H2 database** SQL dialect with DOM UDFs. Only simple `SELECT ... FROM DOM_LOAD_AND_SELECT(url, cssQuery)` queries are supported — no CTEs, subqueries, `EXPLODE`, or joins.
 
-> **`query` always fetches fresh — it does NOT read the stored snapshot.**
-> Every invocation re-fetches the target URL through the scrape API, runs the
-> SQL over that freshly-loaded DOM, and discards it (the response envelope
-> carries a new capture id / timestamps on every run). This is by design:
-> `query` needs no prior `htmlsnapshot` capture, and repeated runs always see
-> the page as it is *now* — useful for polling or verifying a scrape is
-> deterministic. If the page is slow or you want many queries against one
-> stable fetch, capture once and use `htmlsnapshot get` / `get all` instead,
-> which do read the cache. A `query` run without an explicit URL argument
-> still fetches (against the current page URL), not from the stored snapshot.
+> **`query` never reads the stored `htmlsnapshot` cache** — its data source depends on the target:
+> - **No URL argument, or a URL matching the session's current page:** the page
+>   store is seeded from the session's **live DOM** first (a capture of the
+>   current tab — no navigation, no network re-fetch), then the SQL runs over
+>   that live document. Login state, SPA updates and `eval` mutations are all
+>   visible, exactly like `htmlsnapshot capture`. Use this when the data you
+>   want only exists in the browser session you are driving.
+> - **An explicit URL that differs from the current page (or a session-less
+>   invocation):** the URL is fetched independently through the scrape API and
+>   the SQL runs over that fresh fetch (no session state, no stored snapshot).
+>   This is the offline/corpus path — querying pages that are not open in any
+>   session still works without a browser.
+>
+> Repeated runs against the current page therefore always see the page as it
+> is *right now* in the session. If the page is slow or you want many queries
+> against one stable fetch, capture once and use `htmlsnapshot get` / `get all`
+> instead, which do read the cache. A `query` run without an explicit URL
+> argument always targets the current page URL.
 
 > **Important:** `@url` must appear **unquoted** in SQL. `SQLTemplate.createSQL(url)` handles escaping internally.
 > - ✅ `FROM DOM_LOAD_AND_SELECT(@url, ':root')`
@@ -375,7 +383,7 @@ When `selector` matches only **1 element** (e.g. default `:root`, or `body`), **
 
 - `htmlsnapshot get` only accepts CSS selectors. For interactive element interaction, use the standard `snapshot` + ref-based commands.
 - X-SQL queries through `htmlsnapshot query` follow the same constraints as `swarm query`. See [X-SQL reference](x-sql.md) for full function documentation.
-- The captured snapshot is cached in the backend and invalidated by the next `htmlsnapshot` capture or a page navigation (`goto`, `reload`, etc.). `htmlsnapshot query` bypasses this cache — it re-fetches the URL on every invocation (see the [Query](#query--x-sql-with-a-fresh-fetch-no-cache) section).
+- The captured snapshot is cached in the backend and invalidated by the next `htmlsnapshot` capture or a page navigation (`goto`, `reload`, etc.). `htmlsnapshot query` does not use this cache: it queries the session's live DOM when targeting the current page, and independently loads an explicit URL otherwise (see the [Query](#query--x-sql-live-current-page-or-independent-fetch) section).
 - `htmlsnapshot grep` performs matching **entirely client-side** in the CLI — the full HTML is fetched from the backend once, then all regex matching happens locally. No backend round-trips for the search itself.
 - For CI pass/fail checks with grep, use `-l` (prints "htmlsnapshot" if matches found) or `-c` (prints match count). A `browser4-cli` non-zero exit code means the backend call itself failed, not that matches were absent.
 - `htmlsnapshot` capture now returns enriched metadata: `imageCount`, `linkCount`, and `interactiveElements` (tag, class, id, aria attributes, bounding-box). The bounding box is extracted from the `vi` attribute injected by the browser's layout engine.
