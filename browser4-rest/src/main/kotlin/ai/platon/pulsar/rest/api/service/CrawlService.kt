@@ -30,6 +30,7 @@ import java.sql.ResultSet
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.time.Duration.Companion.milliseconds
 
 data class CrawlRequest @JsonCreator constructor(
     @param:JsonProperty("url") val url: String = "",
@@ -220,7 +221,7 @@ class CrawlService(
                 // crawl that only records seed page(s) (0 discovered links) is
                 // distinguishable from one that followed links.
                 val linksDiscovered = AtomicInteger()
-                val result = withTimeout(CRAWL_TASK_TIMEOUT_MS) {
+                val result = withTimeout(CRAWL_TASK_TIMEOUT_MS.milliseconds) {
                     withContext(Dispatchers.IO) {
                     val results = mutableListOf<CrawlPageResult>()
                     val seedStatuses = mutableListOf<CrawlSeedStatus>()
@@ -308,7 +309,7 @@ class CrawlService(
                             // session this is less critical (no protocol handler
                             // re-registration), but still prevents resource contention.
                             if (index < totalSeeds - 1) {
-                                delay(SEED_INTERVAL_MS)
+                                delay(SEED_INTERVAL_MS.milliseconds)
                             }
                         }
                     } finally {
