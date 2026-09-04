@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.client.expectBody
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -222,6 +223,45 @@ private val createdSessions = mutableListOf<String>()
         )
     }
 
+    /**
+     * Select the tab whose URL contains [urlMarker], polling the tab list until
+     * the tab appears (a freshly created tab may lag the creation response).
+     */
+    private fun selectTabByUrl(sessionId: String, urlMarker: String, timeoutMs: Long = 15000) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val list = callTool("browser_tabs", mapOf("sessionId" to sessionId, "action" to "list"))
+            if (!list.isError) {
+                val tree = runCatching { objectMapper.readTree(textContent(list)) }.getOrNull()
+                val tabs = when {
+                    tree == null -> null
+                    tree.isArray -> tree
+                    tree.has("tabs") && tree["tabs"].isArray -> tree["tabs"]
+                    else -> null
+                }
+                if (tabs != null) {
+                    for (tab in tabs) {
+                        if (tab.path("url").asText("").contains(urlMarker)) {
+                            val index = tab.path("index").asInt(-1)
+                            if (index >= 0) {
+                                val select = callTool(
+                                    "browser_tabs",
+                                    mapOf("sessionId" to sessionId, "action" to "select", "index" to index)
+                                )
+                                if (!select.isError) return
+                            }
+                        }
+                    }
+                }
+            }
+            Thread.sleep(500)
+        }
+        val lastList = callTool("browser_tabs", mapOf("sessionId" to sessionId, "action" to "list"))
+        throw AssertionError(
+            "Timed out selecting tab with URL marker '$urlMarker'; last tab list: ${textContent(lastList)}"
+        )
+    }
+
     // =========================================================================
     // Scenario 1 — E-Commerce Product Monitoring
     // =========================================================================
@@ -283,6 +323,75 @@ private val createdSessions = mutableListOf<String>()
         val html = exportHtmlSnapshot(sessionId)
         assertTrue(html.contains("4K OLED TV"), "Exported HTML should contain product title")
         assertTrue(html.contains("product-price"), "Exported HTML should contain price element")
+    }
+
+    @Test
+    @DisplayName("1e — Capture survives tab-new and tab-select back (runtime self-heal)")
+    fun test1e_captureSurvivesTabNewAndTabSelectBack() {
+        val sessionId = openAndNavigate(TestUrls.MOCK_PRODUCT_DETAIL_URL)
+        awaitPageTitle(sessionId, "4K OLED TV")
+
+        // Baseline: capture on the originally navigated tab (the runtime was
+        // registered by the navigation hook on this driver).
+        assertNotError(callTool("html_snapshot_capture", mapOf("sessionId" to sessionId)))
+
+        // tab-new to a second fixture — the new tab's document commits before
+        // the dual-world runtime can be registered on it, and a driver bound
+        // afterwards never receives the frame-navigated re-injection.  This is
+        // the driver-swap scenario that used to break every later capture on
+        // the session with 'ReferenceError: __pulsar_utils__ is not defined'.
+        // (The MCP tool only CREATES the tab — the CLI wrapper then selects it,
+        // which is what binds the driver to the already-committed document.)
+        val newTab = callTool(
+            "browser_tabs",
+            mapOf("sessionId" to sessionId, "action" to "new", "url" to TestUrls.MOCK_NEWS_URL)
+        )
+        assertNotError(newTab)
+        // Locate the news tab by URL (creation may lag the tool response) and
+        // select it — the driver then binds to the already-committed document.
+        selectTabByUrl(sessionId, "/htmlsnapshot-test/news")
+        awaitPageTitle(sessionId, "Hacker News")
+
+        // Capture on the tab-new target must succeed and see the NEW tab.
+        val captureNewTab = callTool("html_snapshot_capture", mapOf("sessionId" to sessionId))
+        assertNotError(captureNewTab)
+        val newTabText = textContent(captureNewTab)
+        assertTrue(
+            newTabText.contains("Hacker News"),
+            "Capture after tab-new should target the new tab (news fixture): $newTabText"
+        )
+
+        // tab-select back to the original product tab and capture again: the
+        // driver re-binds to a document whose runtime was registered by an
+        // earlier binding.
+        selectTabByUrl(sessionId, "/ec/dp/B0E000001")
+        awaitPageTitle(sessionId, "4K OLED TV")
+
+        val captureBack = callTool("html_snapshot_capture", mapOf("sessionId" to sessionId))
+        assertNotError(captureBack)
+        val backText = textContent(captureBack)
+        assertTrue(
+            backText.contains("4K OLED TV"),
+            "Capture after tab-select back should target the original tab: $backText"
+        )
+        assertTrue(
+            !backText.contains("ReferenceError"),
+            "Capture after tab-select back must not surface a __pulsar_utils__ ReferenceError: $backText"
+        )
+
+        // The capture's best-effort runtime recovery must have re-established
+        // the isolated world on the re-selected tab: subsequent evaluations
+        // resolve through the isolated world where __pulsar_utils__ lives.
+        val runtimeProbe = callTool(
+            "browser_evaluate",
+            mapOf("sessionId" to sessionId, "expression" to "typeof window.__pulsar_utils__")
+        )
+        assertNotError(runtimeProbe)
+        assertEquals(
+            "function",
+            textContent(runtimeProbe).trim(),
+            "After capture on the re-selected tab the __pulsar_utils__ runtime must be available again"
+        )
     }
 
     @Test
