@@ -55,6 +55,14 @@ browser4-cli wait --load networkidle
 browser4-cli snapshot -v 0 --auto-diff
 ```
 
+Dropdowns (`select`) accept the option's **visible label or its value**, matched case-insensitively:
+
+```bash
+browser4-cli select <country-ref> "Singapore"          # by visible label (option value may be 'sg')
+browser4-cli select <country-ref> "sg"                 # by option value — both forms work
+browser4-cli select <country-ref> "Singapore" --verify # confirms the selected option; exits non-zero on a genuine mismatch
+```
+
 ### 3. Find Elements by Text (snapshot grep)
 
 ```bash
@@ -141,12 +149,21 @@ SELECT
     DOM_FIRST_TEXT(DOM, '.title') AS title,
     DOM_FIRST_TEXT(DOM, '.price') AS price,
     DOM_FIRST_ATTR(DOM, 'a[href]', 'href') AS url,
-    DOM_FIRST_ATTR(DOM, 'img:expr(width > 250 && height > 250)', 'src') AS img
+    DOM_FIRST_ATTR(DOM, 'img', 'src') AS img   -- plain CSS inside UDF selector args
 FROM DOM_LOAD_AND_SELECT(@url, '.product-card')
 SQLEOF
 
-browser4-cli htmlsnapshot query "https://example.com/products" --sql @query.sql
+# Default output is the raw JSON envelope; add --format table for human-readable
+# output (--result-only prints just the resultSet):
+browser4-cli htmlsnapshot query "https://example.com/products" --sql @query.sql --format table
 ```
+
+> **PowerCSS `:expr(...)` and UDF selector args:** visual filters like
+> `img:expr(width > 250 && height > 250)` are **not reliably evaluated inside
+> `DOM_FIRST_*`/`DOM_ALL_*` selector arguments** — they silently match nothing.
+> Keep UDF selector args to plain CSS (as above) and put `:expr(...)` filters
+> where they are supported: the `DOM_LOAD_AND_SELECT` selector in the `FROM`
+> clause, or `htmlsnapshot get` / `inspect` selectors.
 
 ### 9. PowerCSS (visual-feature selectors)
 
@@ -204,7 +221,7 @@ See **[agent.md](agent.md)** for full details including LLM key configuration, e
 | `-s <name>` | session commands | Target a named session |
 | `--stdout` | `snapshot` | Print to stdout instead of a file |
 | `--auto-diff` | `snapshot` | Diff vs the previous snapshot — shows only what changed |
-| `-i`, `--interactive` | `snapshot` | Interactive mode: interactive elements only |
+| `-i`, `--interactive` | `snapshot` | Interactive-oriented rendering: inner text merged into element names so ref lines are self-contained targets (not a strict interactive-only filter — pair with `-v 0` to bound size) |
 | `--all` | `htmlsnapshot get` | Return all matches (JSON array) |
 | `--sql @file` | `htmlsnapshot query` | Read the X-SQL query from a file (avoids shell quoting) |
 | `--wait`, `--wait-timeout <s>` | `agent run` | Block for the result (default 600 s) |

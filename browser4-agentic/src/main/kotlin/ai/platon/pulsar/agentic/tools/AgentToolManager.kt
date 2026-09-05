@@ -500,13 +500,29 @@ class AgentToolManager constructor(
      * (same chromeTab, BrowserProtocol, and browser), so the swapped driver
      * replaces the existing bean and the session follows the switch.
      */
-    private fun bindSwappedDriver(driver: WebDriver) {
+    private suspend fun bindSwappedDriver(driver: WebDriver) {
         val bound = when {
             driver is Browser4WebDriver -> driver
             driver is PulsarWebDriver -> Browser4WebDriver.from(driver)
             else -> driver
         }
         session.bindDriver(bound)
+
+        // A swapped driver starts without an isolated-world context cache: it
+        // was created *after* the tab's document committed, so neither its own
+        // navigation nor the frame-navigated event registered the Browser4
+        // runtime (__pulsar_utils__) on this tab.  Evaluations would fall back
+        // to the main world, where the runtime never exists, and capture
+        // helpers would throw a ReferenceError until the next navigation.
+        // Initialize the runtime right away so the first capture on a
+        // tab-new target works; best-effort — the capture-side guard in
+        // InteractiveBrowserEmulator.ensurePulsarUtils retries lazily when
+        // this attempt races an in-flight navigation.
+        if (bound is Browser4WebDriver) {
+            runCatching { bound.ensurePulsarUtilsInjected() }.onFailure {
+                logger.debug("Failed to initialize the dual-world runtime after binding driver {}", it.message)
+            }
+        }
     }
 
     /**

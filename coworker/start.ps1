@@ -14,8 +14,10 @@
     ./start.ps1               # both (default)
     ./start.ps1 both
     ./start.ps1 sched -Once
-    ./start.ps1 sched -Background
+    ./start.ps1 sched -Background -PidFile .coworker/scheduler.pid
     ./start.ps1 gui -Port 8091 -OpenBrowser
+    ./start.ps1 gui -Background -PidFile .coworker/scheduler.pid
+    ./start.ps1 both -Background -PidFile .coworker/scheduler.pid
 
 .PARAMETER Command
     Subcommand: sched | gui | both.
@@ -33,10 +35,18 @@
     Path to the scheduler configuration file.
 
 .PARAMETER Background
-    Run the scheduler as a background process and exit immediately.
+    Run the started process(es) as background processes and exit immediately
+    (sched / gui / both).  Foreground modes keep the process in this terminal
+    so Ctrl+C stops it cleanly.
 
 .PARAMETER Once
     Run the scheduler once and exit.
+
+.PARAMETER PidFile
+    File that receives the PID(s) of the background process(es).  When both
+    the scheduler and the GUI are running (both -Background), the file holds
+    a small JSON object {"scheduler": <pid>, "gui": <pid>}; otherwise it
+    holds a single PID.  Consumed by `b4w coworker stop` / `restart`.
 #>
 
 [CmdletBinding()]
@@ -113,6 +123,69 @@ function Test-NodeAvailable {
     return $true
 }
 
+function Write-CoworkerPidFile {
+    <#
+    .SYNOPSIS
+        Record the PID(s) of background processes started by this script.
+    .DESCRIPTION
+        Writes the scheduler and/or GUI PID to the given file.  When both
+        processes are running the file contains JSON so `b4w coworker stop`
+        can stop both; a single process keeps the legacy plain-PID format.
+    #>
+    param(
+        [string]$PidFile,
+        [System.Diagnostics.Process]$SchedulerProcess,
+        [System.Diagnostics.Process]$GuiProcess
+    )
+
+    if (-not $PidFile) { return }
+
+    $pidDir = Split-Path -Parent $PidFile
+    if ($pidDir -and -not (Test-Path -LiteralPath $pidDir)) {
+        New-Item -ItemType Directory -Path $pidDir -Force | Out-Null
+    }
+
+    $schedulerId = if ($SchedulerProcess) { $SchedulerProcess.Id } else { $null }
+    $guiId = if ($GuiProcess) { $GuiProcess.Id } else { $null }
+
+    if ($schedulerId -and $guiId) {
+        $payload = @{ scheduler = $schedulerId; gui = $guiId } | ConvertTo-Json -Compress
+        [System.IO.File]::WriteAllText($PidFile, $payload, [System.Text.UTF8Encoding]::new($false))
+    } elseif ($schedulerId) {
+        [System.IO.File]::WriteAllText($PidFile, "$schedulerId", [System.Text.Encoding]::ASCII)
+    } elseif ($guiId) {
+        [System.IO.File]::WriteAllText($PidFile, "$guiId", [System.Text.Encoding]::ASCII)
+    } else {
+        return
+    }
+
+    Write-Host "[coworker] PID file written: $PidFile"
+}
+
+function Get-BackgroundLogPath {
+    <#
+    .SYNOPSIS
+        Return a log file path for a detached background process.
+    .DESCRIPTION
+        Background processes must NOT inherit the caller's stdout/stderr
+        handles — otherwise a caller that captures output (a pipe, a test
+        harness, an agent) blocks until every background process exits.
+        Their output is redirected to per-process log files instead.
+    #>
+    param([string]$Name)
+
+    $logDir = Join-Path $HOME '.browser4-coworker\tasks\300logs'
+    try {
+        if (-not (Test-Path -LiteralPath $logDir)) {
+            New-Item -ItemType Directory -Path $logDir -Force -ErrorAction Stop | Out-Null
+        }
+    } catch {
+        $logDir = [System.IO.Path]::GetTempPath()
+    }
+    $ts = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    return Join-Path $logDir "$ts-$Name"
+}
+
 # ═══════════════════════════════════════════════════════════════════════════
 # GUI server
 # ═══════════════════════════════════════════════════════════════════════════
@@ -164,19 +237,32 @@ function Start-GuiServer {
 
     Write-Host "[coworker] GUI server → node $($guiArgs -join ' ')"
 
-    $proc = Start-Process -FilePath 'node' `
-        -ArgumentList $guiArgs `
-        -NoNewWindow `
-        -PassThru
+    if ($Background) {
+        # Detached run: redirect the server's output to a log file so the
+        # caller's stdout/stderr pipes are released when start.ps1 exits.
+        $guiLog = Get-BackgroundLogPath -Name 'gui-server'
+        $proc = Start-Process -FilePath 'node' `
+            -ArgumentList $guiArgs `
+            -NoNewWindow `
+            -RedirectStandardOutput "$guiLog.stdout.log" `
+            -RedirectStandardError "$guiLog.stderr.log" `
+            -PassThru
+        Write-Host "[coworker] GUI server log → $guiLog.stdout.log"
+    } else {
+        $proc = Start-Process -FilePath 'node' `
+            -ArgumentList $guiArgs `
+            -NoNewWindow `
+            -PassThru
 
-    # Ensure cleanup even if the terminal window is closed directly
-    $guiPid = $proc.Id
-    Register-EngineEvent -SourceIdentifier PowerShell.Exiting -SupportEvent -Action {
-        $p = Get-Process -Id $guiPid -ErrorAction SilentlyContinue
-        if ($p -and -not $p.HasExited) { $p.Kill() }
-    } | Out-Null
+        # Ensure cleanup even if the terminal window is closed directly
+        $guiPid = $proc.Id
+        Register-EngineEvent -SourceIdentifier PowerShell.Exiting -SupportEvent -Action {
+            $p = Get-Process -Id $guiPid -ErrorAction SilentlyContinue
+            if ($p -and -not $p.HasExited) { $p.Kill() }
+        } | Out-Null
+    }
 
-    Write-Host "[coworker] GUI server started (PID $guiPid) → http://${HostAddress}:${Port}"
+    Write-Host "[coworker] GUI server started (PID $($proc.Id)) → http://${HostAddress}:${Port}"
 
     return $proc
 }
@@ -226,11 +312,18 @@ function Invoke-Scheduler {
         if ($ConfigPath) { $pwshArgs += '-ConfigPath'; $pwshArgs += $ConfigPath }
         if ($Once)       { $pwshArgs += '-Once' }
 
+        # Redirect output to a log file so a caller that captures stdout
+        # (pipe / test harness / agent) does not block until the scheduler
+        # exits.
+        $schedLog = Get-BackgroundLogPath -Name 'coworker-scheduler'
         $proc = Start-Process -FilePath 'pwsh' `
             -ArgumentList $pwshArgs `
             -NoNewWindow `
+            -RedirectStandardOutput "$schedLog.stdout.log" `
+            -RedirectStandardError "$schedLog.stderr.log" `
             -PassThru
         Write-Host "[coworker] Scheduler started (PID $($proc.Id))."
+        Write-Host "[coworker] Scheduler log → $schedLog.stdout.log"
         return $proc
     }
 
@@ -251,6 +344,20 @@ if ($Command -eq 'gui') {
         Write-Warning '[coworker] GUI server failed to start.'
         exit 1
     }
+
+    if ($Background) {
+        # Detached GUI server: record the PID (when requested) and return so
+        # the caller's terminal is free.  Use `b4w coworker stop` (or the PID
+        # file) to stop it later.
+        Write-CoworkerPidFile -PidFile $PidFile -GuiProcess $guiProc
+        Write-Host '[coworker] GUI server running in the background. This terminal can be closed.'
+        Write-Host "[coworker] Open → http://${HostAddress}:${Port}"
+        if (-not $PidFile) {
+            Write-Host "[coworker] To stop: Stop-Process $($guiProc.Id)"
+        }
+        return
+    }
+
     Write-Host '[coworker] GUI server running. Press Ctrl+C to stop.'
     Write-Host "[coworker] Open → http://${HostAddress}:${Port}"
     try {
@@ -266,14 +373,7 @@ if ($Command -eq 'gui') {
 if ($Command -eq 'sched') {
     if ($Background) {
         $proc = Invoke-Scheduler -ReturnProcess
-        if ($PidFile -and $proc) {
-            $pidDir = Split-Path -Parent $PidFile
-            if ($pidDir -and -not (Test-Path $pidDir)) {
-                New-Item -ItemType Directory -Path $pidDir -Force | Out-Null
-            }
-            $proc.Id | Out-File -FilePath $PidFile -NoNewline
-            Write-Host "[coworker] PID file written: $PidFile"
-        }
+        Write-CoworkerPidFile -PidFile $PidFile -SchedulerProcess $proc
         Write-Host '[coworker] This terminal can be closed.'
         if (-not $PidFile) {
             Write-Host "[coworker] To stop: look for the pwsh process running coworker-scheduler.ps1"
@@ -290,11 +390,12 @@ if ($Command -eq 'sched') {
 $guiProc = Start-GuiServer -ReturnProcess
 
 if ($Background) {
-    $null = Invoke-Scheduler -ReturnProcess
+    $schedProc = Invoke-Scheduler -ReturnProcess
+    Write-CoworkerPidFile -PidFile $PidFile -SchedulerProcess $schedProc -GuiProcess $guiProc
     Write-Host '[coworker] This terminal can be closed.'
     Write-Host '[coworker] GUI server →' "http://${HostAddress}:${Port}"
-    if ($null -ne $guiProc) {
-        Write-Host "[coworker] To stop GUI: Stop-Process $($guiProc.Id)"
+    if (-not $PidFile) {
+        Write-Host '[coworker] To stop: run b4w coworker stop (or Stop-Process the PIDs above)'
     }
     return
 }

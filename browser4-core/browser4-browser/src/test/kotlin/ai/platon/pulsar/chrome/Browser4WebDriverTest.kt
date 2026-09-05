@@ -286,6 +286,71 @@ class Browser4WebDriverTest {
     }
 
     @Test
+    @DisplayName("normalizeStorageStateCookie keeps explicit non-root paths (domain- and url-scoped)")
+    fun normalizeStorageStateCookieKeepsNonRootPaths() {
+        val domainScoped = Browser4WebDriver.normalizeStorageStateCookie(
+            mapOf("name" to "session_id", "value" to "abc123", "domain" to "localhost", "path" to "/app")
+        )
+        assertEquals("/app", domainScoped["path"], "domain-scoped cookie must keep its explicit path")
+        assertEquals("localhost", domainScoped["domain"])
+
+        val urlScoped = Browser4WebDriver.normalizeStorageStateCookie(
+            mapOf("name" to "session_id", "value" to "abc123", "url" to "http://localhost:18080/x", "path" to "/app")
+        )
+        assertEquals("/app", urlScoped["path"], "url-scoped cookie must keep its explicit path")
+        assertEquals("http://localhost:18080/x", urlScoped["url"])
+    }
+
+    @Test
+    @DisplayName("normalizeStorageStateCookie rejects paths that do not start with /")
+    fun normalizeStorageStateCookieRejectsRelativePath() {
+        val error = runCatching {
+            Browser4WebDriver.normalizeStorageStateCookie(
+                mapOf("name" to "bad_path", "value" to "v", "domain" to "localhost", "path" to "app")
+            )
+        }.exceptionOrNull()
+        assertTrue(error is IllegalArgumentException, "expected an IllegalArgumentException, got $error")
+        assertTrue(
+            error?.message?.contains("bad_path") == true,
+            "expected the error to name the cookie, got ${error?.message}"
+        )
+        assertTrue(
+            error?.message?.contains("start with '/'") == true,
+            "expected the path rule in the message, got ${error?.message}"
+        )
+    }
+
+    @Test
+    @DisplayName("normalizeStorageStateCookie rejects cookie names the browser will not store")
+    fun normalizeStorageStateCookieRejectsUnstorableNames() {
+        for (badName in listOf("a b", "a;b", "a=b", "a\tb")) {
+            val error = runCatching {
+                Browser4WebDriver.normalizeStorageStateCookie(
+                    mapOf("name" to badName, "value" to "v", "url" to "http://example.com")
+                )
+            }.exceptionOrNull()
+            assertTrue(error is IllegalArgumentException, "expected rejection for name '$badName', got $error")
+            assertTrue(
+                error?.message?.contains(badName) == true,
+                "expected the error to name the cookie, got ${error?.message}"
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("normalizeStorageStateCookie accepts names Chrome accepts (unicode, punctuation)")
+    fun normalizeStorageStateCookieAcceptsBrowserNames() {
+        // Chrome's CDP layer accepts these; the in-repo pre-validation must not
+        // over-reject names a round-tripped state can legitimately contain.
+        for (goodName in listOf("utf_\u540d", "quote\"name", "brace{name}", "dollar\$name", "dot.name", "a-b_c")) {
+            val normalized = Browser4WebDriver.normalizeStorageStateCookie(
+                mapOf("name" to goodName, "value" to "v", "domain" to "localhost")
+            )
+            assertEquals(goodName, normalized["name"], "name '$goodName' must be preserved")
+        }
+    }
+
+    @Test
     @DisplayName("restoreLocalStorageScript clears and rewrites the entries array")
     fun restoreLocalStorageScriptClearsAndRewrites() {
         val script = Browser4WebDriver.restoreLocalStorageScript(

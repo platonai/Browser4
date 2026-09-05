@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.pulsar.agentic.ExtractResult
 import ai.platon.pulsar.agentic.model.DirectValue
 import ai.platon.pulsar.agentic.model.TcEvaluate
 import ai.platon.pulsar.agentic.model.ToolCall
@@ -78,10 +79,25 @@ abstract class AbstractToolExecutor : ToolExecutor {
                         // Wrap non-serializable domain objects in a description map
                         // to prevent Jackson from walking into internal object graphs
                         // (e.g. PulsarWebDriver → browser → settings → Spring Environment → ...)
-                        mapOf(
-                            "type" to qualifiedName,
-                            "description" to r.toString()
-                        ) to qualifiedName
+                        if (r is ExtractResult) {
+                            // agent.extract: a stable, documented envelope whose
+                            // `description` holds the CLEAN schema payload (extraction
+                            // fields only — task bookkeeping like token counts lives in
+                            // inference events/logs, never inside the payload).  The
+                            // truthful completion flag is envelope-level:
+                            // completed=true whenever usable content is present, so a
+                            // successful extraction never reports "completed": false.
+                            mapOf(
+                                "type" to qualifiedName,
+                                "description" to r.toString(),
+                                "completed" to r.completed
+                            ) to qualifiedName
+                        } else {
+                            mapOf(
+                                "type" to qualifiedName,
+                                "description" to r.toString()
+                            ) to qualifiedName
+                        }
                     }
                 }
             }

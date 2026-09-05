@@ -348,6 +348,75 @@ describe('parseIssueFile', () => {
     assert.equal(model.issues.length, 0);
   });
 
+  it('should parse files with a bare "## Issues" heading (no "Issues Found")', () => {
+    // Some hand-written/converted files omit the canonical "## Issues Found"
+    // heading.  They must still be readable (fallback to the first
+    // "### Issue N:" block), matching the PowerShell review CLI
+    // (review.ps1 Read-IssuesFile / review.tests.ps1 fixture).
+    const bareHeader = `# Issues: bare-header-scenario
+
+> **Source:** \`20260725-120000-bare.full.md\` | **Date:** 20260725-120000 | **Mode:** dev
+
+## Scenario Background
+
+### Task
+
+The agent filled out a form.
+
+### Execution Context
+
+Trace text.
+
+## Issues
+
+### Issue 1: Snapshot preview too short
+
+**Severity:** Medium
+**Category:** UX
+
+#### Reproduction
+
+Run \`snapshot -i\`.
+
+#### Human Review
+
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- **Notes:**
+
+Nice one.
+
+### Issue 2: Second issue title
+
+**Severity:** Low
+**Category:** Docs
+
+#### Reproduction
+
+Steps.
+
+## Summary
+
+Trailing level-2 sections must not leak into the issue blocks.
+`;
+    const model = parseIssueFile(bareHeader);
+
+    assert.equal(model.meta.scenario, 'bare-header-scenario');
+    assert.equal(model.issues.length, 2);
+    assert.equal(model.issues[0].title, 'Snapshot preview too short');
+    assert.equal(model.issues[0].severity, 'Medium');
+    assert.equal(model.issues[0].review.decision, 'ACCEPT');
+    assert.equal(model.issues[0].review.notes, 'Nice one.');
+    assert.equal(model.issues[1].title, 'Second issue title');
+    // Background is terminated by the "## Issues" heading, not the file end
+    assert.equal(model.background.executionContext, 'Trace text.');
+
+    // Quick stats agree with the full parse
+    const stats = quickParseStats(bareHeader);
+    assert.equal(stats.total, 2);
+    assert.equal(stats.reviewed, 1);
+  });
+
   it('should handle null/empty content', () => {
     const model = parseIssueFile('');
     assert.equal(model.issues.length, 0);

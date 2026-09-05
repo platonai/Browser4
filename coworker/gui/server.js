@@ -178,6 +178,32 @@ function listTasksRecursive(dir, root) {
   return results;
 }
 
+// List issues files recursively, excluding archive/, done/, and discard/ directories
+// This matches the behavior of CLI's Find-IssuesFiles function
+function listIssuesFilesRecursive(dir, root, excludeDirs = []) {
+  const results = [];
+  if (!fs.existsSync(dir)) return results;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name.startsWith('.')) continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      // Skip excluded directories (archive, done, discard)
+      if (excludeDirs.includes(entry.name.toLowerCase())) continue;
+      results.push(...listIssuesFilesRecursive(full, root, excludeDirs));
+    } else if (/\.issues\.md$/i.test(entry.name)) {
+      const stat = fs.statSync(full);
+      results.push({
+        name: entry.name,
+        path: path.relative(root, full).replace(/\\/g, '/'),
+        size: stat.size,
+        modified: stat.mtime.toISOString().replace(/\.\d{3}Z$/, 'Z'),
+      });
+    }
+  }
+  results.sort((a, b) => a.path.localeCompare(b.path));
+  return results;
+}
+
 function listTasksFlat(dir, root) {
   const results = [];
   if (!fs.existsSync(dir)) return results;
@@ -257,15 +283,43 @@ app.get('/api/stats', (_req, res) => {
   res.json({ stages, total });
 });
 
-// GET /api/tasks?stage=<id>
+// GET /api/tasks?stage=<id> or ?stage=<id1>,<id2> (comma-separated)
 app.get('/api/tasks', (req, res) => {
-  const stage = stageById[req.query.stage];
-  if (!stage) return res.status(400).json({ error: `Unknown stage: ${req.query.stage}` });
-  const dir = path.join(TASKS_ROOT, stage.path_suffix);
-  const tasks = stage.date_stamped
-    ? listTasksRecursive(dir, TASKS_ROOT)
-    : listTasksFlat(dir, TASKS_ROOT);
-  res.json({ stage: req.query.stage, tasks });
+  const stageIds = req.query.stage.split(',').map(s => s.trim()).filter(Boolean);
+  const allTasks = [];
+  for (const stageId of stageIds) {
+    const stage = stageById[stageId];
+    if (!stage) return res.status(400).json({ error: `Unknown stage: ${stageId}` });
+    const dir = path.join(TASKS_ROOT, stage.path_suffix);
+    const tasks = stage.date_stamped
+      ? listTasksRecursive(dir, TASKS_ROOT)
+      : listTasksFlat(dir, TASKS_ROOT);
+    allTasks.push(...tasks);
+  }
+  res.json({ stage: req.query.stage, tasks: allTasks });
+});
+
+// GET /api/issues - List all .issues.md files from draft and review directories
+// Excludes archive/, done/, and discard/ directories (consistent with CLI's Find-IssuesFiles)
+app.get('/api/issues', (_req, res) => {
+  const issuesRoot = path.join(TASKS_ROOT, 'issues');
+  const draftDir = path.join(issuesRoot, 'draft');
+  const reviewDir = path.join(issuesRoot, 'review');
+  
+  const excludeDirs = ['archive', 'done', 'discard'];
+  const allTasks = [];
+  
+  if (fs.existsSync(draftDir)) {
+    allTasks.push(...listIssuesFilesRecursive(draftDir, TASKS_ROOT, excludeDirs));
+  }
+  if (fs.existsSync(reviewDir)) {
+    allTasks.push(...listIssuesFilesRecursive(reviewDir, TASKS_ROOT, excludeDirs));
+  }
+  
+  // Sort by name (newest first)
+  allTasks.sort((a, b) => b.name.localeCompare(a.name));
+  
+  res.json({ tasks: allTasks });
 });
 
 // GET /api/task?path=<rel>

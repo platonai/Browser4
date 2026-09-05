@@ -1,0 +1,194 @@
+{
+  "meta": {
+    "scenario": "form-filling",
+    "mode": "dev",
+    "source": "20260902-201601-form-filling.full.md",
+    "date": "20260902-201601"
+  },
+  "background": {
+    "executionContext": "| Step | Command | Result |\n|---|---|---|\n| Prep | `./b4w.ps1 help`; read `skills/browser4-cli/SKILL.md` | Help + skill docs learned; backend auto-started (existing daemon/session reused) |\n| 1 | `./b4w.ps1 goto \"http://localhost:18080/generated/form-filling.html\"` | Navigated; auto-snapshot saved |\n| 2 | `./b4w.ps1 snapshot -i --stdout` | Full interactive tree; all form refs identified |\n| 3 | `fill e1915 \"Jane\"`, then `fill e1916/1917/1922 … --no-snapshot` | All text inputs filled (used `--no-snapshot` after the first fill since the page is static and refs stayed valid — validated at the end via the live state log) |\n| 4 | `select e1918 \"Singapore\" --verify`, `select e1921 \"Advanced\" --verify` | Both selects succeeded → **`--verify` printed false-failure messages** (see Issue 1) |\n| 5 | `check e1927`, `check e1928`, `check e1930` (all `--no-snapshot`) | Checked Testing, AI agents, agree-terms |\n| 6 | `get text \"#state-log\"` | Confirmed all values, `formValid: true` before submitting |\n| 7 | `snapshot -i --stdout \\| grep 'Submit form'` (fresh refs) | Submit button still `e2081` |\n| 8 | `click e2081`, then `wait --load networkidle` | Submit + wait complete |\n| 9 | `get text \"#result-data\"`, `get text \"#state-log\"`, `get text \"#result-panel\"` | Payload + `submitCount: 1` + confirmation message verified |\n| 10 | `snapshot -v 0 --stdout > .test-sessions/form-result-snapshot-v0.yml` | Final documentation snapshot |\n| 11 | Root-cause investigation of `select --verify` (exit codes, value-vs-label argument) and of `config list` auto-snapshot; code read at `main.rs:1041`, `main.rs:8828`, `main.rs:362`, `help.rs:2663` | Issue evidence gathered |\n\n**Decisions/workarounds:** (a) Used `--no-snapshot` after the first fill — each interaction otherwise saves a full AX snapshot to disk and adds a round trip; the docs recommend re-snapshotting between interactions, but this static fixture page made refs stable, and final state was verified via the live state log. (b) Chose option labels (\"Singapore\"/\"Advanced\") for `select` — worked, but exposed a `--verify` defect. (c) After submit, the page does not navigate (SPA-style), so verification used live-DOM `get text` on the result panel rather than `htmlsnapshot` of a new URL.\n\n\n\n**Overall Assessment (D):** Task completion **Successful** at ~100%. 5 issues found (1 Medium, 4 Low), no major blockers. For a first-time user the core loop (goto → snapshot -i → fill/select/check → click → wait → get text) is smooth, well-documented, and produced no failures — the strengths being the excellent interactive-snapshot mode and the live state-log verification path. The main frictions were the misleading `select --verify` output (Medium — worth fixing before automation relies on it), silent auto-snapshots on read-only commands like `config list`, and a few small documentation/discoverability gaps (select arg semantics, ★ legend, scroll-relative `-v 0`). **Usability rating: 7/10.**",
+    "task": "The full form-filling workflow was completed on `http://localhost:18080/generated/form-filling.html` (a JS-driven registration playground; submission updates an in-page result panel rather than navigating):\n\n1. **Navigate:** `./b4w.ps1 goto \"http://localhost:18080/generated/form-filling.html\"` ✓\n2. **Discover:** `./b4w.ps1 snapshot -i --stdout` revealed the AX tree with refs for every control (textboxes `e1915`–`e1917`, `e1922`; comboboxes `e1918`/`e1921`; checkboxes `e1926`–`e1930`; buttons `e2081`/`e2082`) ✓\n3. **Fill text inputs:** First Name `Jane`, Last Name `Smith`, Email `jane.smith@example.com`, Comments (textarea) ✓\n4. **Dropdowns:** Country → `Singapore`, Experience level → `Advanced` ✓\n5. **Checkboxes:** Checked Testing, AI agents, and I-agree-to-terms (≥2 required; terms was required for a valid submit) ✓\n6. **Submit:** `click e2081` (Submit form) ✓\n7. **Wait:** `wait --load networkidle` ✓\n8. **Verify:** `get text \"#result-data\"` returned the full submitted payload JSON; `get text \"#state-log\"` showed `submitCount: 1`, `formValid: true`, `lastSubmission` populated; `get text \"#result-panel\"` returned *\"Your form data was captured successfully.\"* ✓\n9. **Document:** `snapshot -v 0 --stdout` saved to `.test-sessions/form-result-snapshot-v0.yml` — shows the payload in the result panel, `submit-success:email` event, and \"All validation checks passed.\" ✓\n\nNo blockers; every step succeeded on the first attempt."
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "select --verify reports successful label-based selections as failures (and never affects the exit code)",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "On a page with <select> options whose value differs from the visible label (e.g. the form-filling fixture: value 'sg', label 'Singapore'):\n1. browser4-cli select e1918 \"Singapore\" --verify\n   → prints \"✓ Selected 'Singapore' in e1918\" then \"Verification: expected 'Singapore' to be selected, but current value is 'sg'.\" (exit code 0).\n2. browser4-cli select e1918 \"sg\" --verify\n   → prints \"Verification: option 'sg' is selected.\" (same selection, both exit 0).",
+          "label": "Reproduction"
+        },
+        {
+          "body": "When the option was successfully selected by its visible label, --verify should confirm success (resolve label → option value, case-insensitively) instead of printing a failure message. A genuine verification failure should produce a non-zero exit code so scripts can rely on it.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "select accepts both the option label and the option value as <val> and selects correctly in both cases, but --verify compares the raw argument string (exact, case-sensitive) against element.value, so any label-based or case-differing selection prints a misleading 'expected … but current value is …' failure line. All verification branches return Ok, so exit code is 0 whether verification passed or failed.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "verify_select_result in cli/browser4-cli/src/main.rs:8828 reads element.value via browser_evaluate and compares it with expected_value using exact equality (main.rs:8852). The select tool itself matches option text OR value server-side, so the verify step's value-only, case-sensitive comparison disagrees with the select semantics. Verification outcome is printed via Ok(...) in every branch (main.rs:8852-8864), never Err, so exit code cannot signal failure.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:verify_select_result (line 8828)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Make --verify resolve the expected label to its option value before comparing (e.g. evaluate the option list and match label case-insensitively, or compare against both option.text and option.value).\n- Normalize case on comparison so 'Advanced' vs 'advanced' does not fail.\n- Return Err (non-zero exit) when verification genuinely fails; treat label/value/case matches as success.\n- Keep the success/failure wording consistent with the select argument actually accepted ('option \"Singapore\" (value sg) is selected').",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "select help text does not document that <val> accepts label or value, nor what --verify compares",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "browser4-cli help select → shows only '<val>  Value to select in the dropdown' and a bare '--verify  Verify the correct option was selected by reading the element value'. No mention that the visible option text (e.g. 'Singapore') or the option value ('sg') are both accepted, that matching is case-insensitive on labels, or that --verify compares against element.value only.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Help should state: <val> may be the option's visible label or its value; --verify compares the argument against the select's value attribute, so passing a label with differing value triggers a mismatch message (see the verify issue).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "A first-time user has no way to know the accepted input forms; the only in-session signal is the confusing --verify message discovered by accident.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Command help definitions in commands.rs describe select minimally; SKILL.md lists select under interaction commands with no worked example (unlike fill/click which have several). No reference doc exists for select at all.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/commands.rs (select command help definition, near the 'no-snapshot' OptionDef at line 1005); skills/browser4-cli/SKILL.md §6 Quick Patterns",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Extend the select help text: '<val> Option value or visible label to select'.\n- Document --verify comparison semantics and note it is advisory (exit code unaffected) until the verify bug is fixed.\n- Add a one-line select example to SKILL.md Quick Patterns next to the form-fill example.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "Non-browser commands missing from the no-snapshot allowlist trigger a full page snapshot (config list prints '### Page' and writes a YAML snapshot file)",
+      "severity": "Low",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "With an active browser session: browser4-cli config list → prints the four config values, then also '### Page / Page URL / Page Title / ### Snapshot / [Snapshot](...\\.browser4-cli\\snapshot\\snapshot-....yml)' and a tip line, and writes a new snapshot file to disk. Verified twice (two snapshot files created purely by config list invocations).",
+          "label": "Reproduction"
+        },
+        {
+          "body": "config list is a local read-only CLI command; it should print configuration only and should not capture a browser accessibility snapshot, add ~1-3s latency, or write files.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Any command not in the no_snapshot_commands() allowlist triggers post_command_snapshot() whenever a session is active (main.rs:18438). 'config' is absent from the allowlist, so config list behaves like an interaction command. Output clutter plus snapshot-disk accumulation on every invocation (100+ YAML files now present in .browser4-cli/snapshot, mostly from interactions in previous sessions).",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "main.rs:18433-18443 implements an opt-out allowlist (no_snapshot_commands(), main.rs:362) that enumerates commands that skip the auto-snapshot. Non-browser/management commands such as 'config' were never added to the list; the allowlist design means any new command silently inherits browser-snapshot behavior. The comment at main.rs:18431 ('commands that modify browser state') does not match the implementation.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:no_snapshot_commands() (line 362) and post-command snapshot call site (line 18438); post_command_snapshot at line 1041",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add 'config' (and audit 'plugin', 'skills', 'experience', 'webminer', 'swarm', 'crawl' subcommand families) to no_snapshot_commands().\n- Invert the design: only run the post-command snapshot for a small explicit set of interaction commands (fill/click/type/press/select/check/…) rather than for everything except an allowlist.\n- Add a regression unit test asserting config-style commands do not trigger post-command snapshots.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "★ marker on help rows has no legend in the help output",
+      "severity": "Low",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "browser4-cli help → many rows are prefixed '★' (goto, snapshot, eval, fill, click, …) with no legend explaining the marker anywhere in the output (grepped the full help text: no '★ =' legend).",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Either a legend ('★ = commonly used / high-frequency command') at the top of the Commands section, or removal of the unexplained marker.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "First-time users cannot tell whether ★ denotes importance, a prerequisite, or a category; the meaning exists only in code comments (help.rs:2663 'Mark high-frequency commands with a ★ so first-time users can …') and in an unrelated selector-quality legend elsewhere in the codebase.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "help.rs:2663 marks high-frequency commands in category listings but the rendered help table never defines the symbol. Minor, but the marker is aimed precisely at first-time users, the group least able to guess its meaning.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/help.rs:2663 (category-listing renderer that emits the marker)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Print a legend line after the Commands heading: '★ = high-frequency command — good starting points for new users'.\n- Alternatively drop the marker from category listings and rely on the Quick Start box already present.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 5,
+      "title": "snapshot -v 0 captures a mid-page chunk after interactions that auto-scroll; no actionable hint that the page top is above the current viewport",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "After filling the form and clicking the submit button (which sits at y≈1573, below the 1080px viewport, so the driver scrolls it into view), run: browser4-cli snapshot -v 0 --stdout. The output header shows '# hiddenTopHeight: 1057px' but the tree starts mid-page: the top-of-page confirmation text ('Submission Result / Your form data was captured successfully.', at y≈434-747) is excluded from the capture because it lies above the visible band.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The captured 'result page' chunk should be recognizable as not starting at the page top, and the help/docs should tell the user how to reach the top chunk (-v -1, or scroll up first) when they intend to document the page from the top.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The doc table says '-v 0 = current visible screen' and the header comment lists hiddenTopHeight, so the behavior technically matches the docs — but a first-time user reading '-v 0' as 'top of the result page' silently produces an artifact missing the confirmation heading. SKILL.md only clarifies the scroll-relative semantics for fresh navigations ('After a fresh navigation -v 0 is the top of the page'); this page did not navigate on submit.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Click interactions that target below-the-fold elements scroll the page; viewport indices are scroll-relative, so -v 0 no longer equals the page top after such a click. The snapshot footer comment (viewports/scroll hints) does not warn when hiddenTopHeight is large.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs (snapshot output footer generation / viewport hint); skills/browser4-cli/SKILL.md §5 snapshot-modes table",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- When hiddenTopHeight > 0, print an actionable hint with the snapshot (e.g. '# Note: page is scrolled 1057px down; use snapshot -v -1 or scroll up to capture the page top').\n- Extend the SKILL.md snapshot-modes row: '-v 0 = current visible screen; after clicks that auto-scroll elements into view this may be mid-page — use -v -1/-v 0 after scrolling to top for the page start'.\n- Consider a 'snapshot --top' convenience flag that scrolls to top (or maps to viewport 0 of a fresh scroll) before capturing.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}

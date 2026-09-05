@@ -133,6 +133,30 @@ browser4-cli htmlsnapshot get all text '[class*="product-title"]'
 
 **In PowerShell, use single quotes around CSS selectors that contain double quotes.**
 
+## Git Bash / MSYS2: leading-slash values become Windows paths
+
+MSYS2 (Git Bash) rewrites arguments that begin with `/` into Windows paths when it spawns a native executable (`pwsh`, `browser4-cli.exe`). A pattern value like `/product/` silently arrives as `C:/Program Files/Git/product/`:
+
+```bash
+# Git Bash → the value below is converted before it reaches the CLI:
+# the pattern matches nothing → the crawl filters out every link.
+browser4-cli crawl "https://example.com/index.html" -d 2 -ol "a.product" -olp "/product/"
+```
+
+The result is a silently wrong crawl: only the seed page is reported (`Crawl completed. 1 pages found.`), exit code 0, no hint of the mangled pattern.
+
+**`./b4w.sh` neutralizes this** — it exports `MSYS2_ARG_CONV_EXCL='*'` around its `pwsh` invocation, so all arguments pass through unconverted. Use `./b4w.sh` from Git Bash whenever a command needs a `/`-leading value.
+
+**`./b4w.ps1` called from Git Bash is affected too** — Git Bash runs the script by spawning the native `pwsh.exe`, and conversion applies to every argument of that spawn, regardless of quoting. Only a real PowerShell console (or cmd) is conversion-free.
+
+**Workarounds:**
+- Prefer `./b4w.sh` (conversion disabled for all arguments).
+- Use a value that does not start with `/`: `-olp "product/"`, `-olp "ec/dp"`.
+- Or export the exclusion yourself before invoking anything:
+  `export MSYS2_ARG_CONV_EXCL='*'` (older equivalent: `MSYS_NO_PATHCONV=1`).
+
+Applies to any value that legitimately starts with `/` and is not an existing file path — `-olp`/`--out-link-pattern` (e.g. `/product/`), `snapshot grep` patterns like `/ec/dp/`, and similar. The CLI prints a warning when a pattern value looks like a mangled Windows path (contains `:/`).
+
 ## Why This Works
 
 - **`--file`** — File content is read directly; the shell never interprets it.

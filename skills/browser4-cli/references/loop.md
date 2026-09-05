@@ -300,6 +300,20 @@ hello
 Loop finished. 2 iteration(s) completed.
 ```
 
+> **Redirecting output to a file on Windows:** loop's human-readable output
+> uses non-ASCII glyphs (`—`, `✓`, `⏸`, `▶`). Console display is fine, but
+> Windows PowerShell 5.1's redirection (`*>`, `>`) decodes the CLI's UTF-8
+> byte stream with the ANSI codepage and mangles those characters into
+> mojibake. Before redirecting, set the console encoding:
+>
+> ```powershell
+> [Console]::OutputEncoding = [Text.Encoding]::UTF8
+> browser4-cli loop --name my-check --count 2 -i 10 -- eval "..." *> loop-run.log
+> ```
+>
+> Or run the redirect under PowerShell 7+ (`pwsh`), which decodes UTF-8 by
+> default.
+
 ### JSON output (`--json`)
 
 When the global `--json` flag is used before the command:

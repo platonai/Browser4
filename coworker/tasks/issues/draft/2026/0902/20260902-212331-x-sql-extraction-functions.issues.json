@@ -1,0 +1,158 @@
+{
+  "meta": {
+    "scenario": "x-sql-extraction-functions",
+    "mode": "dev",
+    "source": "20260902-212331-x-sql-extraction-functions.full.md",
+    "date": "20260902-212331"
+  },
+  "background": {
+    "executionContext": "**Commands used (all via `./b4w.ps1`):**\n1. `./b4w.ps1 help` — full command map read; confirmed dev wrapper works.\n2. Read `skills/browser4-cli/SKILL.md` + `references/{x-sql,x-sql-array-functions,x-sql-string-functions,htmlsnapshot}.md` completely before first browser action.\n3. `./bin/test.ps1 mock-site` — **failed under Windows PowerShell 5.1** (ParserError on UTF-8 script); succeeded via `pwsh -File ./bin/test.ps1 mock-site`. MockSite reachable at :18080 after ~1 min Maven/Spring boot.\n4. `./b4w.ps1 status` — daemon/backend already healthy (4.13.13-SNAPSHOT at :18182).\n5. `./b4w.ps1 goto \"http://localhost:18080/ec/b?node=1292115012\"` — navigated, page title \"Category: Electronics\".\n6. `./b4w.ps1 htmlsnapshot` — captured live DOM (metadata: 6 product cards, 9 links, 8 inputs, sizes/bounding boxes).\n7. `./b4w.ps1 htmlsnapshot inspect --max 3 --depth 3` — discovered selectors + coverage (`div.product-title` 3/3, `a.product-link` 3/3, `img.product-img` 3/3, `[data-category-id=\"1292115012\"]` 3/3, `.product-badges` 2/3, `span.badge` 2/3 → the badge variation that motivated fallback chains).\n8. Cross-checked against `curl` raw HTML and `htmlsnapshot export` (saved to `.test-sessions/`) — identified the browser-vs-plain-HTML DOM divergence and per-card structure (cards 5–6 lack `.product-badges`).\n9. Query files written under `.test-sessions/` (sanity.sql → probes a–j → final.sql/final-2.sql/final-3.sql), executed with `./b4w.ps1 htmlsnapshot query \"<url>\" --sql \"@.test-sessions/<file>.sql\"` (file form avoids the documented shell-quoting pitfalls — this worked first try).\n10. Debugging iterations: probe a (`WHERE DOM_FIRST_FLOAT(...) >= 25.0` → 417 hex error) → probe b/c (3-arg overload still fails; `CAST AS DOUBLE` works) → probe d/e (raw ORDER BY works; int literal also fails) → probe f–i (`:expr` fails inside `DOM_FIRST_IMG` for `> 0` and `>= 0`, works in `DOM_FIRST_ATTR`, `DOM_SELECT_FIRST`, FROM selector, and `htmlsnapshot get attr` on the stored snapshot) → probe j (`STR_FIRST_FLOAT(...)` in WHERE/ORDER BY works).\n11. Final runs: `final-2.sql` (`--format table` → 3 clean rows, \"3 rows returned.\"), `final-3.sql` (6 rows, ASC, badge fallback verified).\n\n**Key decisions:** Followed the docs' own guidance to write SQL to files and use `--sql @file`; used `inspect` results rather than assumptions; adopted `CAST`/`STR_FIRST_FLOAT` wrappers after the WHERE failure; chose `DOM_FIRST_ATTR`+`:expr` composition for PowerCSS image filtering once `DOM_FIRST_IMG`+`:expr` proved broken; kept all scratch files under `.test-sessions/`.\n\n\n\n**D. Overall assessment summary (JSON above, mirrored here):** task completed successfully with an estimated 95% success rate; 4 issues found (2 High product defects with silent/opaque failure modes, 1 Medium discoverability gap, 1 Low environment/documentation issue). No major blockers — both High issues have undocumented workarounds I verified. The documentation is unusually thorough (decision trees, quick-start SQL template, shell-quoting warnings that proved accurate), but the two X-SQL engine asymmetries undermine the documented semantics exactly where a first-time user would write a filter (`WHERE price >= X`) or a PowerCSS image selector — and each fails in a way that gives no clue about the cause (cryptic H2 hex error; silent empty match). Overall usability rating: **6/10**.",
+    "task": "**Successful.** The complete X-SQL extraction pipeline was executed against the MockSite Electronics category (`http://localhost:18080/ec/b?node=1292115012`, 6 products). All 9 scenario steps were completed:\n\n- **Navigation & capture:** `goto` opened the page (\"Category: Electronics\"), `htmlsnapshot` captured the live DOM. Notable: the browser-served DOM (`div.product-card`, `div.product-title`, `div.product-price`) differs from the raw HTML curl receives (`article.product-card`, `h2.product-title`, `span.product-price`) — the MockSite serves client-type-specific markup.\n- **Selector discovery:** `htmlsnapshot inspect --max 3 --depth 3` cleanly discovered recurring patterns with coverage percentages (`div.product-title`, `a.product-link`, `img.product-img`, `.product-price`, `.product-rating`, `[data-category-id=…]`, `.product-badges`).\n- **Final query:** extracts per-product `title` (STR_TRIM'd via a 3-selector `ARRAY_FIRST_NOT_BLANK(MAKE_ARRAY(…))` fallback chain), `price` (`DOM_FIRST_FLOAT`, parsed to numbers), absolute `detail_link` (`DOM_FIRST_HREF`), `image_url` (`DOM_FIRST_IMG`), `image_visible` (`DOM_FIRST_ATTR` + PowerCSS `img:expr(width > 100 && height > 100)`), `rating` (`DOM_FIRST_ATTR` → `data-rating`), `badge` (uppercased via `STR_UPPER_CASE`, fallback chain + `STR_DEFAULT_IF_BLANK` → \"NO BADGE\" for badge-less products), `rating_from_text` (`STR_FIRST_FLOAT` on \"4.4 (312)\"), `title_short` (`STR_ABBREVIATE`), with PowerCSS in the FROM selector, `WHERE CAST(DOM_FIRST_FLOAT(...) AS DOUBLE) >= 25.0 AND DOM_WIDTH(DOM) > 100`, `ORDER BY … DESC`, `LIMIT 3`.\n- **Verified result (3 rows):** `4K OLED TV 55 | 899.99 | http://localhost:18080/ec/dp/B0E000001 | …/seed/1250857624/200/140 | 4.6 | BESTSELLER`; `Smartphone 128GB | 599.0 | …/dp/B0E000004 | … | 4.5 | HOT`; `Wireless Noise-Cancelling Headphones | 199.99 | …/dp/B0E000002 | … | 4.4 | BESTSELLER`. A second run (no price filter, `ORDER BY … ASC`) returned all 6 products and demonstrated the fallback chain correctly producing `NO BADGE` for the three cards without badges.\n\n**Workarounds required:** (1) `DOM_FIRST_FLOAT` cannot be compared to a numeric literal in `WHERE` — it crashes with an opaque H2 hex-conversion error; wrapping in `CAST(... AS DOUBLE)` (or `STR_FIRST_FLOAT(DOM_FIRST_TEXT(...), 0.0)`) fixes it. (2) `DOM_FIRST_IMG` silently ignores `:expr()` PowerCSS selectors (returns no match); using `DOM_FIRST_ATTR(DOM, 'img:expr(...)', 'src')` or `DOM_ABS_SRC(DOM_SELECT_FIRST(DOM, 'img:expr(...)'))` works. Both are reported as issues below."
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "DOM_FIRST_FLOAT cannot be compared to a numeric literal in WHERE — opaque 417 'Hexadecimal string' error",
+      "severity": "High",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Write a query file: SELECT DOM_FIRST_TEXT(DOM, '.product-title') AS title FROM DOM_LOAD_AND_SELECT(@url, '.product-card') WHERE DOM_FIRST_FLOAT(DOM, '.product-price') >= 25.0  then run: ./b4w.ps1 htmlsnapshot query \"http://localhost:18080/ec/b?node=1292115012\" --sql \"@.test-sessions/probe-a.sql\". Also fails with integer literal (>= 25) and with the 3-arg overload DOM_FIRST_FLOAT(DOM, '.product-price', 0.0)."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The natural SQL pattern WHERE DOM_FIRST_FLOAT(DOM, '.price') >= 25.0 should filter rows numerically (the same expression works in SELECT and in ORDER BY)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Request returns statusCode 417 'Expectation Failed' with the H2 error 'Hexadecimal string contains non-hex character: \"899.99\"' (SQL 90004-197), echoing the full SQL. Zero rows returned. Workarounds that DO work: WHERE CAST(DOM_FIRST_FLOAT(DOM, '.product-price') AS DOUBLE) >= 25.0, or WHERE STR_FIRST_FLOAT(DOM_FIRST_TEXT(DOM, '.product-price'), 0.0) >= 25.0. ORDER BY DOM_FIRST_FLOAT(...) without CAST sorts correctly."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The DOM_FIRST_FLOAT scalar UDF returns a custom ValueFloat type that is not registered as a numeric H2 type, so a WHERE comparison against a DOUBLE literal triggers a fallback type-conversion path that tries to hex-decode the value's string form ('899.99'). SELECT and ORDER BY use raw-value paths that avoid the conversion, which is why only WHERE comparisons crash. Likely in the external ai.platon.pulsar X-SQL UDF engine (function alias registration for DOM_FIRST_FLOAT / DomSelectFunctions); needs confirmation by inspecting the engine's H2 function type mapping. The error message gives no hint which expression failed or how to fix it."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "X-SQL UDF engine lives in the external ai.platon.pulsar dependency (function source per docs: DomSelectFunctions.kt, DOM_FIRST_FLOAT alias; H2 function type registration). In-repo touchpoints: skills/browser4-cli/references/x-sql.md (docs to update), cli/browser4-cli/src/commands.rs (htmlsnapshot-query arg def ~line 3236, error surfacing)."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Register DOM_FIRST_FLOAT/DOM_FIRST_INTEGER result type as a numeric H2 type (or return a plain DOUBLE) so WHERE comparisons work without CAST\n- Add a 'Common mistakes' entry in SKILL.md and x-sql.md documenting the CAST/STR_FIRST_FLOAT workaround and a WHERE numeric-filter example\n- Detect this failure mode server-side and return a hint (e.g. 'DOM_FIRST_FLOAT comparisons require CAST(... AS DOUBLE)') instead of the raw H2 hex error"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "DOM_FIRST_IMG silently ignores PowerCSS :expr() selectors while DOM_FIRST_ATTR/DOM_SELECT_FIRST honor them",
+      "severity": "High",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "SELECT STR_DEFAULT_IF_BLANK(DOM_FIRST_IMG(DOM, 'img.product-img:expr(width > 100 && height > 100)'), 'NO_IMAGE') AS img, DOM_FIRST_TEXT(DOM, '.product-title') AS title FROM DOM_LOAD_AND_SELECT(@url, '.product-card') LIMIT 2 — run via ./b4w.ps1 htmlsnapshot query \"http://localhost:18080/ec/b?node=1292115012\" --sql @file.sql. Try variants :expr(width > 0) and :expr(width >= 0); compare with DOM_FIRST_ATTR(DOM, 'img.product-img:expr(width > 100)', 'src') and DOM_ABS_SRC(DOM_SELECT_FIRST(DOM, 'img.product-img:expr(width > 100 && height > 100)'))."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Per SKILL.md §PowerCSS ('usable in any CSS selector via :expr(...), in X-SQL DOM_* functions'), DOM_FIRST_IMG(DOM, 'img.x:expr(width > 100)') should return the src of a matching visible image — the images here measure 169x140 (vi attribute present), and the identical selector returns URLs through DOM_FIRST_ATTR, DOM_SELECT_FIRST, the FROM selector, and htmlsnapshot get attr."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "DOM_FIRST_IMG with any :expr filter returns no match (empty string → the STR_DEFAULT_IF_BLANK fallback 'NO_IMAGE' appears), even for a tautological :expr(width >= 0). Plain DOM_FIRST_IMG(DOM, 'img.product-img') works. The failure is silent — no error, no warning — so an unwrapped query yields NULL/empty image columns without explanation. Only 2-3 of the 6 products' rows showed this in testing, but a single product with a filterable image would lose data unnoticed."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "DOM_FIRST_IMG appears to evaluate its selector through a different code path than DOM_FIRST_ATTR/DOM_SELECT_FIRST (e.g., an img-scanning implementation whose selector matcher does not parse/evaluate the :expr() pseudo-selector, or evaluates features on an unmeasured DOM copy where all visual features are NaN, making every expression false). Needs confirmation by locating the DOM_FIRST_IMG alias implementation in the pulsar X-SQL engine and comparing its selector pipeline with DOM_FIRST_ATTR's."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "X-SQL UDF engine (external ai.platon.pulsar dependency): DOM_FIRST_IMG alias implementation vs DOM_FIRST_ATTR/DOM_SELECT_FIRST selector handling. Docs claiming uniform :expr support: skills/browser4-cli/references/power-dom.md and SKILL.md §PowerCSS. In-repo backend surface: browser4-rest X-SQL execution path."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Make DOM_FIRST_IMG route its selector through the same PowerCSS-capable selector engine as DOM_FIRST_ATTR/DOM_SELECT_FIRST (or document and enforce that :expr is only honored in DOM_SELECT_*/DOM_FIRST_ATTR/FROM selectors)\n- Add a unit test asserting :expr behavior parity across DOM_FIRST_IMG, DOM_FIRST_ATTR, DOM_SELECT_FIRST, and DOM_LOAD_AND_SELECT table selectors\n- Since a selector that matches nothing is indistinguishable from an unsupported selector, log a warning when :expr appears in a selector evaluated by a non-PowerCSS path"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "htmlsnapshot query defaults to a raw JSON envelope with no hint of --format table / --result-only; skill docs never mention them",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run ./b4w.ps1 htmlsnapshot query \"http://localhost:18080/ec/b?node=1292115012\" --sql @file.sql and observe stdout. Then search skills/browser4-cli/SKILL.md, references/htmlsnapshot.md and references/x-sql.md for 'format table' or 'result-only'."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Human-oriented default output (or a documented, discoverable table flag): SKILL.md §4e and htmlsnapshot.md's Query section show only raw envelope output and never mention --format table, so a first-time user should at least be pointed to it in output or examples."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Default stdout is the complete machine envelope (id, pageContentBytes, timestamps, status fields) as a single JSON line — no column headers, no row-count summary. --format table exists (defined in --help htmlsnapshot-query and produces a clean aligned table plus '3 rows returned.') but is absent from the SKILL.md copy-paste template, htmlsnapshot.md, and x-sql.md, so it is effectively undiscoverable. Error responses echo the entire SQL statement inside the envelope's message field, pushing real causes far off-screen."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Docs lag behind CLI capabilities: the query help text documents --format json|csv|table (default json, 'the raw scrape response envelope') and --result-only, but the skill reference pages were not updated to mention the human-readable modes; the CLI makes no effort to suggest --format table when stdout looks like a terminal."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/commands.rs (htmlsnapshot-query ArgDef, ~line 3236-3290: --format and --result-only definitions); skills/browser4-cli/SKILL.md §4e and skills/browser4-cli/references/htmlsnapshot.md 'Query — X-SQL against HTML snapshot'."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Update SKILL.md §4e/§6 and htmlsnapshot.md query examples to default to --format table (or show both: table for humans, --json/--result-only for scripts)\n- When the CLI detects the query succeeded and stdout is not piped, print 'N rows returned. Use --format csv|table for other views.' like the existing tip pattern\n- Add a 'Query output formats' table to htmlsnapshot.md (json default, table, csv, --result-only)"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "bin/test.ps1 mock-site fails under Windows PowerShell 5.1 with parser errors; docs assume pwsh without saying so",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "powershell -File ./bin/test.ps1 mock-site on Windows with the default Windows PowerShell 5.1 (zh-CN console). Observe ParserError 'unexpected token <' / 'string missing terminator' at test.ps1 lines ~2181, 2302-2304. Then run pwsh -File ./bin/test.ps1 mock-site — succeeds."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The documented invocation ./bin/test.ps1 mock-site should start MockSite regardless of which PowerShell is first on PATH, or the docs/script should state 'requires PowerShell 7 (pwsh)'."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Windows PowerShell 5.1 fails to parse test.ps1 (ParserError, exit code 0 reported by the launcher but nothing starts). The script is UTF-8 without BOM with CJK text; PS 5.1 decodes it with the ANSI codepage (GBK), corrupting string literals and producing spurious parse errors at unrelated lines. The CLI wrapper b4w.sh routes through pwsh so CLI usage is unaffected; only direct test.ps1 invocations (e.g., the mock-site prerequisite in this scenario) hit the issue."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "test.ps1 (and likely other bin/*.ps1 scripts) contains non-ASCII characters and is stored as UTF-8 without BOM; Windows PowerShell 5.1 reads script files using the ANSI code page, corrupting multi-byte sequences inside string literals and breaking parsing. pwsh (PowerShell 7+) defaults to UTF-8 and parses fine."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "bin/test.ps1 (file encoding; lines ~2181/2302 contain CJK help text) — consider adding a #requires -Version 7 header or saving with BOM so PS 5.1 fails fast with a clear message instead of a parser error."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add '#requires -Version 7' to test.ps1 (and other bin scripts with non-ASCII content) so PS 5.1 users get an actionable message\n- Or re-save the scripts as UTF-8 with BOM, which PS 5.1 handles correctly\n- Note the pwsh requirement in the scenario/test-runner docs that reference ./bin/test.ps1"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}

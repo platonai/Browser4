@@ -345,7 +345,7 @@ Utility scripts for development and system maintenance.
   ```
 
 **Code Metrics:**
-- **`cloc.ps1`**: Count lines of code for a given git ref (defaults to HEAD).
+- **`cloc.ps1`**: Count Kotlin, Java, PowerShell, Bash, JavaScript (Node.js), and Rust lines of code for a given git ref (defaults to HEAD).
 
 **Maven Configuration:**
 - **`maven/cn/settings.xml`**: Pre-configured Maven settings with Huawei Cloud mirror for faster builds in China.

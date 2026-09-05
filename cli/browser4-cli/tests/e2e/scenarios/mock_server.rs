@@ -2066,7 +2066,27 @@ pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
         "element => element.textContent"
     );
     assert_eq!(eval_calls[1].arguments["ref"], "backend:5");
+
+    // Regression (eval --json type preservation): the backend transports
+    // the evaluated value as text, so a numeric result arrives as "6" and
+    // must be emitted as the native JSON number 6, not the quoted string
+    // "6" (which would force consumers to coerce).
+    let json_eval = run_command(ctx, &["eval", "--json", "document.querySelectorAll('a').length"]);
+    let json_out: serde_json::Value = serde_json::from_str(&json_eval.stdout)
+        .unwrap_or_else(|e| panic!("eval --json output should be valid JSON: {e}
+{}", json_eval.stdout));
+    let num_result = json_out
+        .pointer("/output/result")
+        .unwrap_or_else(|| panic!("envelope should carry output.result:
+{}", json_eval.stdout));
+    assert!(
+        num_result.is_number() && num_result.as_i64() == Some(6),
+        "numeric eval result must stay a native JSON number, got: {num_result}
+{}",
+        json_eval.stdout
+    );
 }
+
 
 pub(super) fn test_cdp_command(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
@@ -2775,6 +2795,100 @@ pub(super) fn test_swarm_session_and_agent_tools(ctx: &mut E2ECtx) {
         "summarize the page marker"
     );
     assert_eq!(summarize_call.arguments["selector"], "#page-marker");
+}
+
+/// Regression for the double-encoded extract envelope: the backend can wrap
+/// schema-constrained extraction in a serialization envelope whose
+/// `description` field holds the schema payload as an escaped JSON string.
+/// The CLI must surface the payload as clean top-level JSON — as the only
+/// stdout document under `--stdout`, and as a native value inside the
+/// `--json` envelope (a single JSON document, no stray raw line).
+pub(super) fn test_extract_schema_payload_clean_json(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_open_command(ctx);
+
+    mock_server.set_agent_extract_response(
+        r#"{"type":"ai.platon.pulsar.agentic.ExtractResult","description":"{\"title\":\"4K OLED TV 55\",\"price\":\"$899.99\",\"features\":[\"55 inch\",\"HDR10+\"]}"}"#,
+    );
+
+    // --stdout: the payload is the ONLY stdout document — clean schema-level
+    // JSON with no wrapper envelope, no task bookkeeping, no second line.
+    let stdout_result = run_command(
+        ctx,
+        &[
+            "extract",
+            "Extract the product title, price, and feature list",
+            "--schema={\"type\":\"object\"}",
+            "--stdout",
+        ],
+    );
+    assert_eq!(
+        stdout_result.exit_code, 0,
+        "extract --stdout should succeed:
+{}",
+        stdout_result.stderr
+    );
+    let payload: serde_json::Value = serde_json::from_str(
+        strip_snapshot_output(&stdout_result.stdout).trim(),
+    )
+    .unwrap_or_else(|e| {
+        panic!(
+            "extract --stdout output must parse as one clean JSON document: {e}
+{}",
+            stdout_result.stdout
+        )
+    });
+    assert_eq!(
+        payload,
+        serde_json::json!({
+            "title": "4K OLED TV 55",
+            "price": "$899.99",
+            "features": ["55 inch", "HDR10+"]
+        })
+    );
+    assert!(
+        !stdout_result.stdout.contains("ExtractResult"),
+        "the wrapper envelope must not leak into extract --stdout output:
+{}",
+        stdout_result.stdout
+    );
+
+    // --json --stdout: still exactly ONE stdout document (the JSON envelope),
+    // and the payload is embedded natively under output.extracted_content —
+    // not as an escaped string that needs a second JSON.parse.
+    let json_result = run_command(
+        ctx,
+        &[
+            "--json",
+            "extract",
+            "Extract the product title, price, and feature list",
+            "--schema={\"type\":\"object\"}",
+            "--stdout",
+        ],
+    );
+    let envelope: serde_json::Value = serde_json::from_str(&json_result.stdout)
+        .unwrap_or_else(|e| {
+            panic!(
+                "extract --json --stdout must emit a single JSON document: {e}
+{}",
+                json_result.stdout
+            )
+        });
+    assert_eq!(
+        envelope.pointer("/output/extracted_content"),
+        Some(&serde_json::json!({
+            "title": "4K OLED TV 55",
+            "price": "$899.99",
+            "features": ["55 inch", "HDR10+"]
+        })),
+        "the --json envelope must carry the schema payload natively, got:
+{}",
+        json_result.stdout
+    );
 }
 
 pub(super) fn test_agent_task_commands(ctx: &mut E2ECtx) {
@@ -4193,6 +4307,204 @@ pub(super) fn test_crawl_foreground(ctx: &mut E2ECtx) {
     );
 }
 
+pub(super) fn test_crawl_foreground_no_links_discovered(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = start_mock_crawl_session(ctx);
+
+    // A depth>=1 crawl whose backend response reports linksDiscovered=0:
+    // the seed page is recorded, but no out-links were found.  The CLI must
+    // surface the warning + backend diagnostic + the effective pattern
+    // instead of a hollow "Crawl completed. N pages found."  The diagnostic
+    // below is the pattern-filtered-all variant (the selector matched
+    // elements but the pattern filtered every one) — it must render by
+    // default, with no --verbose required.
+    let body = serde_json::json!({
+        "taskId": "crawl-job-42",
+        "statusCode": 200,
+        "isDone": true,
+        "status": "OK",
+        "pagesFound": 1,
+        "linksDiscovered": 0,
+        "diagnostic": "The page has 12 anchors and 4000B of HTML, and the selector 'a.product' matched 9 element(s), but the out-link pattern 'abc' filtered them all. Try a broader pattern (or drop -olp / --out-link-pattern).",
+        "pages": [
+            {
+                "url": "https://example.com/seed",
+                "title": "Seed Page",
+                "depth": 0,
+            }
+        ],
+        "error": null,
+    })
+    .to_string();
+    mock_server.set_crawl_result("crawl-job-42", &body);
+
+    let result = run_command(
+        ctx,
+        &[
+            "crawl",
+            "https://example.com/seed",
+            "--depth=2",
+            "--out-link-selector",
+            "a.product",
+            "--out-link-pattern",
+            "abc",
+        ],
+    );
+
+    let stdout = &result.stdout;
+    assert_eq!(result.exit_code, 0, "Expected exit 0, got:\n{}", result.stdout);
+    assert!(
+        stdout.contains("Crawl completed. 1 pages found."),
+        "Expected seed-only completion message in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("⚠ Link discovery found no out-links — only 1 page(s) recorded."),
+        "Expected no-out-links warning in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Diagnostic: The page has 12 anchors"),
+        "Expected backend diagnostic echo in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("matched 9 element(s), but the out-link pattern 'abc' filtered them all"),
+        "Expected the pattern-filtered-all diagnostic text without --verbose in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("The effective --out-link-pattern was: abc"),
+        "Expected effective-pattern echo in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("depth=0 | https://example.com/seed | Seed Page"),
+        "Expected seed page listing in:\n{}",
+        stdout
+    );
+}
+
+pub(super) fn test_crawl_foreground_with_discovered_links(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = start_mock_crawl_session(ctx);
+
+    // The same depth>=1 shape, but link discovery succeeded (linksDiscovered>0
+    // and multiple depth-labeled pages).  Must NOT show the no-out-links
+    // warning, and must render each page with its depth label.
+    let body = serde_json::json!({
+        "taskId": "crawl-job-42",
+        "statusCode": 200,
+        "isDone": true,
+        "status": "OK",
+        "pagesFound": 3,
+        "linksDiscovered": 2,
+        "pages": [
+            {
+                "url": "https://example.com/seed",
+                "title": "Seed Page",
+                "depth": 0,
+            },
+            {
+                "url": "https://example.com/cat/a",
+                "title": "Category A",
+                "depth": 1,
+            },
+            {
+                "url": "https://example.com/cat/b",
+                "title": "Category B",
+                "depth": 1,
+            }
+        ],
+        "error": null,
+    })
+    .to_string();
+    mock_server.set_crawl_result("crawl-job-42", &body);
+
+    let result = run_command(
+        ctx,
+        &[
+            "crawl",
+            "https://example.com/seed",
+            "--depth=2",
+            "--out-link-selector",
+            "a",
+        ],
+    );
+
+    let stdout = &result.stdout;
+    assert_eq!(result.exit_code, 0, "Expected exit 0, got:\n{}", result.stdout);
+    assert!(
+        stdout.contains("Crawl completed. 3 pages found."),
+        "Expected completion message in:\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("no out-links"),
+        "Discovery succeeded — must not warn about missing links:\n{}",
+        stdout
+    );
+    for expected in [
+        "  depth=0 | https://example.com/seed | Seed Page",
+        "  depth=1 | https://example.com/cat/a | Category A",
+        "  depth=1 | https://example.com/cat/b | Category B",
+    ] {
+        assert!(stdout.contains(expected), "Expected '{expected}' in:\n{stdout}");
+    }
+    // Depth-major, URL-ascending order as published by the backend.
+    let pos_seed = stdout.find("depth=0 |").expect("depth=0 line present");
+    let pos_a = stdout.find("depth=1 | https://example.com/cat/a").expect("cat/a line present");
+    let pos_b = stdout.find("depth=1 | https://example.com/cat/b").expect("cat/b line present");
+    assert!(
+        pos_seed < pos_a && pos_a < pos_b,
+        "Expected depth-major sorted listing in:\n{}",
+        stdout
+    );
+}
+
+pub(super) fn test_crawl_foreground_progress_suppresses_unchanged_counts(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = start_mock_crawl_session(ctx);
+
+    // A crawl that never makes progress: the mock returns a non-terminal
+    // "Processing" body with pagesFound stuck at 1.  The foreground poller
+    // reports at a 5s-then-10s cadence; lines whose counts did not change
+    // since the previous interval report must be suppressed (regression:
+    // crawls used to repeat identical same-count lines and interleave two
+    // progress formats, which read as stalling).  Bound the run with a short
+    // timeout so the scenario doesn't wait for the 10-minute default.
+    let body = serde_json::json!({
+        "taskId": "crawl-job-42",
+        "statusCode": 102,
+        "isDone": false,
+        "status": "Processing",
+        "pagesFound": 1,
+        "linksDiscovered": 0,
+        "pages": [],
+        "error": null,
+    })
+    .to_string();
+    mock_server.set_crawl_result("crawl-job-42", &body);
+    ctx.set_env("BROWSER4_CLI_CRAWL_TIMEOUT_SECS", "22");
+
+    let result = run_command_expecting_failure(
+        ctx,
+        &["crawl", "https://example.com/seed", "--depth=0"],
+        "Crawl timed out",
+    );
+
+    // In a ~22s run the interval printer would fire ~twice (5s then 10s
+    // cadence); the count never changed, so exactly one progress line may
+    // appear.  A reintroduced per-poll printer or a non-suppressing
+    // interval printer would emit it again.
+    let occurrences = result.stdout.matches("Crawling... 1 pages found").count();
+    assert_eq!(
+        occurrences, 1,
+        "Expected a single 'Crawling... 1 pages found' line for an unchanged count, got {}:\n{}",
+        occurrences, result.stdout
+    );
+}
+
 pub(super) fn test_crawl_foreground_with_sql(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     let _mock_server = start_mock_crawl_session(ctx);
@@ -5308,7 +5620,7 @@ pub(super) fn test_snapshot_viewport_range(ctx: &mut E2ECtx) {
 }
 
 // ---------------------------------------------------------------------------
-// snapshot-grep -- flag coverage (-i, -v, -F, -w)
+// snapshot-grep -- flag coverage (-i, -n, -v, -F, -w)
 // ---------------------------------------------------------------------------
 
 pub(super) fn test_snapshot_grep_flags(ctx: &mut E2ECtx) {
@@ -5396,6 +5708,20 @@ pub(super) fn test_snapshot_grep_flags(ctx: &mut E2ECtx) {
         "Expected -w moc NOT to match 'mock' (partial word):\n{}",
         result.stdout
     );
+
+    // --line-number (-n): GNU grep -n compatibility. Line numbers print by
+    // default, so -n is a no-op — but it must be ACCEPTED (previously it
+    // errored as "unexpected positional arguments (this command accepts 1)").
+    let result = run_command(ctx, &["snapshot", "grep", "-n", "mock"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep -n to succeed:\n{}", result.stderr);
+    assert!(result.stdout.contains("mock snapshot"),
+        "Expected -n mock to match:\n{}", result.stdout);
+    let numbered: Vec<&str> = result.stdout.lines()
+        .filter(|l| l.contains("mock snapshot"))
+        .collect();
+    assert!(numbered.iter().any(|l| l.starts_with(|c: char| c.is_ascii_digit())),
+        "Expected -n output lines to carry line-number prefixes:\n{}", result.stdout);
 
     // Combined flags: -i -v (invert case-insensitive match)
     let result = run_command(ctx, &["snapshot", "grep", "-i", "-v", "MOCK"]);
@@ -5836,6 +6162,154 @@ pub(super) fn test_htmlsnapshot_query(ctx: &mut E2ECtx) {
         Some("SELECT h1 FROM page"),
         "expected sql='SELECT h1 FROM page', got: {:?}",
         query_call.arguments
+    );
+}
+
+/// `htmlsnapshot query --format table` renders rows from the response
+/// resultSet; the default (no --format) stays the raw JSON envelope.
+pub(super) fn test_htmlsnapshot_query_table_format(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    mock_server.set_html_snapshot_query_response(
+        r#"{"statusCode":200,"status":"OK","resultSet":[{"title":"Alpha","price":"$19.99"},{"title":"Beta","price":"$9.99"}]}"#,
+    );
+
+    let result = run_command(
+        ctx,
+        &["htmlsnapshot", "query", "--sql", "SELECT * FROM page", "--format", "table"],
+    );
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot query --format table to succeed:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stdout.contains("Alpha") && result.stdout.contains("Beta"),
+        "expected the table to list both result rows, got:\n{}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("2 rows returned."),
+        "expected row-count summary in table output, got:\n{}",
+        result.stdout
+    );
+
+    // Default output (no --format) remains the raw JSON envelope, exit 0.
+    let result = run_command(
+        ctx,
+        &["htmlsnapshot", "query", "--sql", "SELECT * FROM page"],
+    );
+    assert_eq!(
+        result.exit_code, 0,
+        "default-format query should succeed:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stdout.contains(r#""statusCode":200"#),
+        "expected the raw JSON envelope on stdout by default, got:\n{}",
+        result.stdout
+    );
+}
+
+/// A backend error envelope (417 Expectation Failed, or a 5xx with an empty
+/// resultSet) must produce a nonzero exit code in every output mode so scripts
+/// can detect failure; a 200 with an empty resultSet stays exit 0 ("no data"
+/// is not an error).
+pub(super) fn test_htmlsnapshot_query_error_envelope_exit_code(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    // 417 Expectation Failed — scrape session closed before the query ran.
+    mock_server.set_html_snapshot_query_response(
+        r#"{"statusCode":417,"status":"Expectation Failed","resultSet":null,"isDone":false}"#,
+    );
+
+    let result = run_command_expecting_failure(
+        ctx,
+        &["htmlsnapshot", "query", "--sql", "SELECT * FROM page"],
+        "X-SQL query failed (417 Expectation Failed)",
+    );
+    assert!(
+        result.stdout.contains(r#""statusCode":417"#),
+        "expected the raw JSON envelope to stay on stdout, got:\n{}",
+        result.stdout
+    );
+
+    // The --format table path prints actionable guidance AND exits nonzero.
+    let result = run_command_expecting_failure(
+        ctx,
+        &["htmlsnapshot", "query", "--sql", "SELECT * FROM page", "--format", "table"],
+        "### X-SQL Query Failed (417 Expectation Failed)",
+    );
+    assert!(
+        result.stdout.contains(r#""statusCode":417"#),
+        "expected the raw envelope to still be printed in table mode, got:\n{}",
+        result.stdout
+    );
+
+    // A 417 whose message carries a genuine H2 engine error (DOM_FIRST_FLOAT
+    // compared to a numeric literal in WHERE) surfaces the real cause + CAST
+    // fix instead of the canned session-race text.
+    mock_server.set_html_snapshot_query_response(
+        r#"{"statusCode":417,"status":"Expectation Failed","resultSet":null,"isDone":true,"message":"Hexadecimal string contains non-hex character: \"899.99\" (SQL 90004-197)\nSQL statement:\nSELECT DOM_FIRST_TEXT(DOM, '.product-title') FROM DOM_LOAD_AND_SELECT('http://mock/ec/b', '.product-card') WHERE DOM_FIRST_FLOAT(DOM, '.product-price') >= 25.0"}"#,
+    );
+    let result = run_command_expecting_failure(
+        ctx,
+        &["htmlsnapshot", "query", "--sql", "SELECT * FROM page"],
+        "Hexadecimal string contains non-hex character",
+    );
+    assert!(
+        !result.stderr.contains("scrape session closed"),
+        "a genuine H2 error must not be reported as a session race:\n{}",
+        result.stderr
+    );
+    let result = run_command_expecting_failure(
+        ctx,
+        &["htmlsnapshot", "query", "--sql", "SELECT * FROM page", "--format", "table"],
+        "CAST(DOM_FIRST_FLOAT(DOM, '.price', 0.0) AS DOUBLE) >= 25.0",
+    );
+    assert!(
+        !result.stdout.contains("scrape session closed"),
+        "a genuine H2 error must not be reported as a session race:\n{}",
+        result.stdout
+    );
+
+    // 5xx with an empty resultSet is a backend engine error → nonzero exit.
+    mock_server.set_html_snapshot_query_response(
+        r#"{"statusCode":500,"status":"Internal Server Error","resultSet":null,"isDone":true}"#,
+    );
+    let result = run_command_expecting_failure(
+        ctx,
+        &["htmlsnapshot", "query", "--sql", "SELECT * FROM page"],
+        "backend scrape engine",
+    );
+    assert!(
+        result.stdout.contains(r#""statusCode":500"#),
+        "expected the raw JSON envelope to stay on stdout, got:\n{}",
+        result.stdout
+    );
+
+    // A 200 envelope with an empty resultSet is "no data", not an error.
+    mock_server.set_html_snapshot_query_response(
+        r#"{"statusCode":200,"status":"OK","resultSet":[]}"#,
+    );
+    let result = run_command(
+        ctx,
+        &["htmlsnapshot", "query", "--sql", "SELECT * FROM page"],
+    );
+    assert_eq!(
+        result.exit_code, 0,
+        "expected empty 200 resultSet to stay exit 0:\n{}",
+        result.stderr
     );
 }
 

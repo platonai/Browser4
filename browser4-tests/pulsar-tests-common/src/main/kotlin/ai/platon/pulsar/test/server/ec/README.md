@@ -2,7 +2,7 @@
 
 ## Prerequisite
 
-Read `README-AI.md` in the project root to guide your actions.
+Read `AGENTS.md` in the project root to guide your actions.
 
 ## Purpose
 Implement a fully dynamic mock ecommerce website served under the `/ec` path using `MockSiteApplication.kt`.
@@ -23,12 +23,13 @@ All pages (home, category/list, product) must be rendered server-side from a **s
 | GET `/ec/b?node={categoryId}` | Category list page | `node` required; 400 if missing, 404 if unknown |
 | GET `/ec/dp/{productId}` | Product detail page | 404 if product missing or inconsistent category |
 | GET `/ec/static/*` | Optional static assets (images/css) | Can serve from classpath |
+| GET `/ec/sitemap.xml` | XML sitemap of all discoverable pages | Absolute URLs for `/ec/`, every `/ec/dp/{productId}`, and every `/ec/b?node={categoryId}` (sorted by id) so crawl/swarm scenarios can find pages without guessing IDs |
 | (any other `/ec/*`) | Not found | 404 |
 
 ## Data Source
 Single JSON file (example path):
 ```
-/pulsar-tests-common/src/main/resources/static/generated/mock-amazon/data/products.json
+browser4-tests/pulsar-tests-common/src/main/resources/static/generated/mock-amazon/data/products.json
 ```
 Load once at application start; keep immutable in memory.
 
@@ -82,10 +83,18 @@ Two rendering paths coexist:
 
 ### Primary: `EcommerceController` + `HtmlRenderer`
 
-Templates under `/pulsar-tests-common/src/main/resources/static/generated/mock-amazon/`:
+Templates under `browser4-tests/pulsar-tests-common/src/main/resources/static/generated/mock-amazon/`:
 - Home: `ec-home.html`
 - Category: `ec-category.html`
 - Product: `ec-product.html`
+
+Sibling content in the same directory:
+- `data/products.json` — the single catalog dataset (see Data Source).
+- `list/` (`index.html`, `main.js`, `style.css`, `category.js`) — stock Amazon-mock category
+  layout; feeds the alternative `EcCategoryController` + `ListPageRenderer` path and is also
+  served as a static test fixture.
+- `product/` (`index.html`, `main.js`, `style.css`, `counter.js`) — stock Amazon-mock product
+  detail layout; static test fixture only, not wired to any `/ec` controller.
 
 Placeholders use `{{VARIABLE}}` syntax for scalar values and `<!--BLOCK_NAME-->` HTML comments
 for repeated/multi-line content injection.
@@ -192,6 +201,7 @@ Automated or manual tests should assert:
 7. All prices show two decimals (regex: `\$\d+\.\d{2}`).
 8. No duplicate IDs in any page (spot check by parsing DOM or regex + set logic).
 9. Total product count = 100; exactly 5 products per category.
+10. GET `/ec/sitemap.xml` returns 200 XML containing `/ec/` plus every product (`/ec/dp/{id}`) and category (`/ec/b?node={id}`) URL exactly once.
 
 ## Optional Enhancements (Do NOT block MVP)
 - Query pagination: `/ec/b?node=1292115012&page=2` (deterministic sort by product ID).

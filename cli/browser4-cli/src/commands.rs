@@ -21,6 +21,7 @@ pub enum Category {
     Install,
     Agent,
     Swarm,
+    WebMiner,
     Snapshot,
     Skill,
     Act,
@@ -46,6 +47,7 @@ impl Category {
             Category::Install => "install",
             Category::Agent => "agent",
             Category::Swarm => "swarm",
+            Category::WebMiner => "webminer",
             Category::Snapshot => "snapshot",
             Category::Skill => "skill",
             Category::Act => "act",
@@ -77,11 +79,27 @@ pub struct ArgDef {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct OptionDef {
+    /// Option text as shown in help. Value-taking options embed their
+    /// placeholder directly in the display name, mirroring the global
+    /// options convention (`--timeout <seconds>`, `--server <url>`):
+    /// `"max-files <n>"`, `"output <dir>"`, `"sql <query>"`. Boolean
+    /// flags keep a bare name. Use [`OptionDef::key`] whenever the
+    /// machine-readable key (the text before the placeholder) is needed,
+    /// e.g. for short-option resolution and `--help-json`.
     pub name: &'static str,
     pub description: &'static str,
     pub is_bool: bool,
     /// Optional short-form alias (e.g. `"y"` for `-y`).
     pub short: Option<&'static str>,
+}
+
+impl OptionDef {
+    /// Machine key of the option: [`OptionDef::name`] without an embedded
+    /// value placeholder (`"max-files <n>"` → `"max-files"`). Bare names
+    /// (boolean flags and unhinted value options) are returned unchanged.
+    pub fn key(&self) -> &'static str {
+        self.name.split(' ').next().unwrap_or(self.name)
+    }
 }
 
 /// A single CLI command definition.
@@ -676,7 +694,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "webminer",
             description: "Run webminer (WebMiner): cluster downloaded HTML pages into interactive views. Subcommands: install, update, version, uninstall, run-example, all, views. Other commands are forwarded to scent-miner.jar (runs locally, no Browser4 server needed).",
-            category: Category::Skills,
+            category: Category::WebMiner,
             hidden: false,
             batch_supported: false,
             args: &[ArgDef {
@@ -692,7 +710,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "webminer-install",
             description: "Download and install the webminer release (scent-miner.jar) to ~/.scent/webminer, verifying the SHA-256 checksum (GitHub Releases with an OSS mirror fallback)",
-            category: Category::Skills,
+            category: Category::WebMiner,
             hidden: false,
             batch_supported: false,
             args: &[ArgDef {
@@ -722,7 +740,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "webminer-update",
             description: "Update webminer to the latest release",
-            category: Category::Skills,
+            category: Category::WebMiner,
             hidden: false,
             batch_supported: false,
             args: &[],
@@ -734,7 +752,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "webminer-version",
             description: "Show the installed and latest available webminer versions",
-            category: Category::Skills,
+            category: Category::WebMiner,
             hidden: false,
             batch_supported: false,
             args: &[],
@@ -746,7 +764,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "webminer-uninstall",
             description: "Remove the installed webminer release from ~/.scent/webminer",
-            category: Category::Skills,
+            category: Category::WebMiner,
             hidden: false,
             batch_supported: false,
             args: &[],
@@ -758,7 +776,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "webminer-run-example",
             description: "Download the sample dataset and run the full webminer pipeline on it (requires 7-Zip)",
-            category: Category::Skills,
+            category: Category::WebMiner,
             hidden: false,
             batch_supported: false,
             args: &[],
@@ -770,7 +788,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "webminer-all",
             description: "Run the full webminer pipeline (encode → cluster → views) on a directory of HTML files",
-            category: Category::Skills,
+            category: Category::WebMiner,
             hidden: false,
             batch_supported: false,
             args: &[ArgDef {
@@ -780,13 +798,13 @@ pub fn all_commands() -> Vec<CommandDef> {
             }],
             options: &[
                 OptionDef {
-                    name: "max-files",
+                    name: "max-files <n>",
                     description: "Maximum number of HTML files to process (default: 40)",
                     is_bool: false,
                     short: None,
                 },
                 OptionDef {
-                    name: "output",
+                    name: "output <dir>",
                     description: "Where to write the clustered results (default: <html-dir>-ml-output)",
                     is_bool: false,
                     short: None,
@@ -820,7 +838,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "webminer-views",
             description: "Rebuild the interactive views (index.html, xlsx, json) from an existing clustering result directory",
-            category: Category::Skills,
+            category: Category::WebMiner,
             hidden: false,
             batch_supported: false,
             args: &[ArgDef {
@@ -1433,10 +1451,10 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[
                 ArgDef { name: "ref", description: "Target element: snapshot ref (e5, backend:15) or CSS selector (#id, .class, tag[attr])", optional: false },
-                ArgDef { name: "val", description: "Value to select in the dropdown", optional: false },
+                ArgDef { name: "val", description: "Option value or visible label to select (case-insensitive)", optional: false },
             ],
             options: &[
-                OptionDef { name: "verify", description: "Verify the correct option was selected by reading the element value", is_bool: true, short: None },
+                OptionDef { name: "verify", description: "Verify the selection after the fact: accepts the option value or its visible label (case-insensitive); a genuine mismatch exits non-zero", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
@@ -1566,7 +1584,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[
                 ArgDef { name: "mode", description: "What to extract: text, html, box, styles, property, or attr", optional: false },
-                ArgDef { name: "selector", description: "CSS selector or element reference (e.g. e5, .price, #main)", optional: false },
+                ArgDef { name: "selector", description: "Snapshot ref (e5) or CSS selector (e.g. .price, #main). Refs resolve most reliably; CSS selector support varies by mode (see Notes)", optional: false },
                 ArgDef { name: "name", description: "Property or attribute name (required for property and attr modes)", optional: true },
             ],
             options: &[],
@@ -1609,7 +1627,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "filename", description: "Save snapshot to file instead of returning it in the response", is_bool: false, short: None },
                 OptionDef { name: "boxes", description: "Include each element's bounding box as [box=x,y,width,height] (enabled by default)", is_bool: true, short: None },
                 OptionDef { name: "no-boxes", description: "Disable bounding boxes in snapshot output", is_bool: true, short: None },
-                OptionDef { name: "interactive", description: "Only show interactive elements (buttons, links, inputs). Combine with --stdout to see refs inline.", is_bool: true, short: Some("i") },
+                OptionDef { name: "interactive", description: "Interactive-oriented rendering: merge inner text into element names so ref lines read as self-contained targets (not a strict interactive-only filter). Combine with --stdout to see refs inline.", is_bool: true, short: Some("i") },
                 OptionDef { name: "urls", description: "Include href URLs for link elements", is_bool: true, short: Some("u") },
                 OptionDef { name: "compact", description: "Remove empty structural elements (enabled by default)", is_bool: true, short: Some("c") },
                 OptionDef { name: "no-compact", description: "Disable compact mode; include all structural nodes", is_bool: true, short: None },
@@ -1660,12 +1678,13 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[
-                ArgDef { name: "pattern", description: "Regex or literal pattern to search for. Use | for alternation (e.g. 'price|rating|stars'), not \\|", optional: true },
+                ArgDef { name: "pattern", description: "Regex or literal pattern to search for. Use | for alternation (e.g. 'price|rating|stars'), not \\|. Rust regex dialect: ^ and $ anchor the start/end of a line, and a literal $ must be written [$] — \\$ is an invalid escape (use -F to match plain text)", optional: true },
             ],
             options: &[
                 OptionDef { name: "ignore-case", short: Some("i"), is_bool: true, description: "Case-insensitive matching" },
                 OptionDef { name: "regexp", short: Some("e"), is_bool: false, description: "Additional regex pattern (repeatable). Use -e PATTERN for alternation, e.g. -e price -e rating -e stars" },
                 OptionDef { name: "no-line-number", short: None, is_bool: true, description: "Suppress line numbers in output" },
+                OptionDef { name: "line-number", short: Some("n"), is_bool: true, description: "GNU grep -n compatibility — line numbers are printed by default, so -n is a no-op here; use --no-line-number to suppress them" },
                 OptionDef { name: "after-context", short: Some("A"), is_bool: false, description: "Show N lines after each match" },
                 OptionDef { name: "before-context", short: Some("B"), is_bool: false, description: "Show N lines before each match" },
                 OptionDef { name: "context", short: Some("C"), is_bool: false, description: "Show N lines before and after each match" },
@@ -1772,7 +1791,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "stdin", description: "Read JavaScript expression from stdin (useful for piping multi-line scripts without shell quoting)", is_bool: true, short: None },
                 OptionDef { name: "js", description: "Shorthand for --stdin: read JavaScript expression from stdin", is_bool: true, short: None },
                 OptionDef { name: "base64", description: "Decode the expression argument as base64 before execution (avoids shell quoting issues on Windows)", is_bool: true, short: None },
-                OptionDef { name: "json", description: "Serialize the result as JSON (quotes strings, wraps scalars)", is_bool: true, short: None },
+                OptionDef { name: "json", description: "Serialize the result as JSON with native types: strings stay quoted strings; numbers/booleans/null/objects/arrays keep their JSON types", is_bool: true, short: None },
                 OptionDef { name: "await", description: "Wait for the evaluated expression's Promise to resolve before returning the result", is_bool: true, short: None },
                 OptionDef { name: "wait-selector", description: "Wait for a CSS selector to appear in the DOM before evaluating (use for async-rendered content like React/SPA pages)", is_bool: false, short: None },
                 OptionDef { name: "wait-timeout", description: "Max time in ms to wait for --wait-selector (default: 30000)", is_bool: false, short: None },
@@ -2427,7 +2446,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "cookie-get",
-            description: "Get a cookie by name",
+            description: "Get a cookie's value by name",
             category: Category::Storage,
             hidden: false,
             batch_supported: false,
@@ -2436,13 +2455,26 @@ pub fn all_commands() -> Vec<CommandDef> {
                 description: "Cookie name",
                 optional: false,
             }],
-            options: &[],
+            options: &[
+                OptionDef { name: "domain", description: "Restrict the lookup to cookies with the exact domain (preferred when several cookies share the name)", is_bool: false, short: None },
+                OptionDef { name: "full", description: "Print the whole cookie object (all attributes) instead of the bare value", is_bool: true, short: None },
+            ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_save_storage_state".to_string(),
             tool_params_fn: |args| {
-                json!({
+                let mut p = json!({
                     "name": get_string_value(args, "name").unwrap_or_default()
-                })
+                });
+                if let Some(domain) = get_opt_str(args, "domain") {
+                    match normalize_cookie_domain(domain) {
+                        Some(normalized) => { p["domain"] = json!(normalized); }
+                        None => { p["_invalid_domain"] = json!(domain); }
+                    }
+                }
+                if get_bool(args, "full").unwrap_or(false) {
+                    p["full"] = json!(true);
+                }
+                p
             },
         },
         CommandDef {
@@ -2458,10 +2490,10 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "domain", description: "Cookie domain (defaults to current page domain if omitted)", is_bool: false, short: None },
                 OptionDef { name: "path", description: "Cookie path", is_bool: false, short: None },
-                OptionDef { name: "expires", description: "Cookie expiration Unix timestamp", is_bool: false, short: None },
+                OptionDef { name: "expires", description: "Cookie expiry: Unix timestamp, relative duration (e.g. 7d, 1w, 30m — s/m/h/d/w), or RFC 3339 datetime", is_bool: false, short: None },
                 OptionDef { name: "httpOnly", description: "Mark the cookie as HttpOnly", is_bool: true, short: None },
                 OptionDef { name: "secure", description: "Mark the cookie as Secure", is_bool: true, short: None },
-                OptionDef { name: "sameSite", description: "Cookie SameSite policy (Strict, Lax, None)", is_bool: false, short: None },
+                OptionDef { name: "sameSite", description: "Cookie SameSite policy (Strict, Lax, None — case-sensitive)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_load_storage_state".to_string(),
@@ -3501,10 +3533,10 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[
-                OptionDef { name: "profile-mode", description: "Browser profile mode (default: SEQUENTIAL; supported: SEQUENTIAL or TEMPORARY)", is_bool: false, short: None },
-                OptionDef { name: "max-open-tabs", description: "Maximum open tabs per browser context (default: 8)", is_bool: false, short: None },
-                OptionDef { name: "max-browser-contexts", description: "Number of isolated browser environments (default: 2)", is_bool: false, short: None },
-                OptionDef { name: "display-mode", description: "Display mode: GUI, HEADLESS, SUPERVISED", is_bool: false, short: None },
+                OptionDef { name: "profile-mode <mode>", description: "Browser profile mode (default: SEQUENTIAL; supported: SEQUENTIAL or TEMPORARY)", is_bool: false, short: None },
+                OptionDef { name: "max-open-tabs <n>", description: "Maximum open tabs per browser context (default: 8)", is_bool: false, short: None },
+                OptionDef { name: "max-browser-contexts <n>", description: "Number of isolated browser environments (default: 2)", is_bool: false, short: None },
+                OptionDef { name: "display-mode <mode>", description: "Display mode: GUI, HEADLESS, SUPERVISED", is_bool: false, short: None },
                 OptionDef { name: "clear-stale", description: "Clear stale swarm tasks from prior sessions before creating the new session", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
@@ -3531,10 +3563,10 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "url", description: "URL or X-SQL payload to submit", optional: true }],
             options: &[
-                OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line", is_bool: false, short: None },
-                OptionDef { name: "sql", description: "X-SQL query to execute against the page. Use @url as placeholder for the target URL. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
-                OptionDef { name: "deadline", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false, short: None },
-                OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false, short: None },
+                OptionDef { name: "seed-file <file>", description: "File containing URLs to submit, one per line", is_bool: false, short: None },
+                OptionDef { name: "sql <query>", description: "X-SQL query to execute against the page. Use @url as placeholder for the target URL. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
+                OptionDef { name: "deadline <iso>", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false, short: None },
+                OptionDef { name: "expires <dur>", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false, short: None },
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
                 OptionDef { name: "parse", description: "Parse page immediately after fetching", is_bool: true, short: None },
                 OptionDef { name: "wait", description: "Block until all submitted jobs complete", is_bool: true, short: None },
@@ -3562,12 +3594,12 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "url", description: "Target page URL to load and run the query against (optional when --seed-file is used)", optional: true }],
             options: &[
-                OptionDef { name: "sql", description: "X-SQL query to execute. Use @url as placeholder for the target URL. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
+                OptionDef { name: "sql <query>", description: "X-SQL query to execute. Use @url as placeholder for the target URL. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
                 OptionDef { name: "sql-stdin", description: "Read X-SQL query from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
-                OptionDef { name: "sql-base64", description: "Base64-encoded X-SQL query (avoid shell quoting issues on Windows)", is_bool: false, short: None },
-                OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line (direct path, no @ prefix). When provided, the URL positional arg can be omitted", is_bool: false, short: None },
-                OptionDef { name: "deadline", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false, short: None },
-                OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false, short: None },
+                OptionDef { name: "sql-base64 <base64>", description: "Base64-encoded X-SQL query (avoid shell quoting issues on Windows)", is_bool: false, short: None },
+                OptionDef { name: "seed-file <file>", description: "File containing URLs to submit, one per line (direct path, no @ prefix). When provided, the URL positional arg can be omitted", is_bool: false, short: None },
+                OptionDef { name: "deadline <iso>", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false, short: None },
+                OptionDef { name: "expires <dur>", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false, short: None },
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
                 OptionDef { name: "wait", description: "Block until all submitted jobs complete", is_bool: true, short: None },
             ],
@@ -3626,8 +3658,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[],
             options: &[
                 OptionDef { name: "clear", description: "Remove all tracked swarm tasks from the list", is_bool: true, short: None },
-                OptionDef { name: "limit", description: "Show at most N tasks (default: all)", is_bool: false, short: None },
-                OptionDef { name: "offset", description: "Skip the first N tasks (useful for pagination)", is_bool: false, short: None },
+                OptionDef { name: "limit <n>", description: "Show at most N tasks (default: all)", is_bool: false, short: None },
+                OptionDef { name: "offset <n>", description: "Skip the first N tasks (useful for pagination)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
@@ -3663,23 +3695,23 @@ pub fn all_commands() -> Vec<CommandDef> {
                 optional: true,
             }],
             options: &[
-                OptionDef { name: "depth", description: "Maximum crawl depth (default: 1). Use 0 to fetch pages without link discovery.", is_bool: false, short: Some("d") },
-                OptionDef { name: "seed-file", description: "File containing URLs to crawl, one per line (lines starting with # are ignored)", is_bool: false, short: None },
-                OptionDef { name: "sql", description: "X-SQL query to extract structured data from each crawled page. Use @url as the page URL placeholder. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
+                OptionDef { name: "depth <n>", description: "Maximum crawl depth (default: 1). Use 0 to fetch pages without link discovery.", is_bool: false, short: Some("d") },
+                OptionDef { name: "seed-file <file>", description: "File containing URLs to crawl, one per line (lines starting with # are ignored)", is_bool: false, short: None },
+                OptionDef { name: "sql <query>", description: "X-SQL query to extract structured data from each crawled page. Use @url as the page URL placeholder. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
                 OptionDef { name: "sql-stdin", description: "Read X-SQL query from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
-                OptionDef { name: "sql-base64", description: "Base64-encoded X-SQL query (avoid shell quoting issues on Windows)", is_bool: false, short: None },
-                OptionDef { name: "format", description: "Output format for X-SQL extracted data (requires --sql): json, csv, or table (default: table). Has no effect without --sql.", is_bool: false, short: None },
-                OptionDef { name: "output", description: "Write results to a file instead of stdout", is_bool: false, short: Some("o") },
-                OptionDef { name: "out-link-selector", description: "CSS selector to extract links from each page", is_bool: false, short: Some("ol") },
-                OptionDef { name: "out-link-pattern", description: "Regex pattern to filter extracted links (default: .+)", is_bool: false, short: Some("olp") },
-                OptionDef { name: "top-links", description: "Maximum links to extract per page (default: 20)", is_bool: false, short: Some("tl") },
-                OptionDef { name: "args", description: "Additional LoadOptions passthrough. Prefix with @ to read from file (e.g. -a @loadopts.txt). Use --args-stdin to pipe from stdin.", is_bool: false, short: Some("a") },
+                OptionDef { name: "sql-base64 <base64>", description: "Base64-encoded X-SQL query (avoid shell quoting issues on Windows)", is_bool: false, short: None },
+                OptionDef { name: "format <fmt>", description: "Output format for X-SQL extracted data (requires --sql): json, csv, or table (default: table). Has no effect without --sql.", is_bool: false, short: None },
+                OptionDef { name: "output <file>", description: "Write results to a file instead of stdout", is_bool: false, short: Some("o") },
+                OptionDef { name: "out-link-selector <css>", description: "CSS selector to extract links from each page", is_bool: false, short: Some("ol") },
+                OptionDef { name: "out-link-pattern <regex>", description: "Regex pattern to filter extracted links (default: .+)", is_bool: false, short: Some("olp") },
+                OptionDef { name: "top-links <n>", description: "Maximum links to extract per page (default: 20)", is_bool: false, short: Some("tl") },
+                OptionDef { name: "args <json>", description: "Additional LoadOptions passthrough. Prefix with @ to read from file (e.g. -a @loadopts.txt). Use --args-stdin to pipe from stdin.", is_bool: false, short: Some("a") },
                 OptionDef { name: "args-stdin", description: "Read LoadOptions args from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
                 OptionDef { name: "parse", description: "Parse each page immediately after fetching", is_bool: true, short: None },
-                OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h, 30m)", is_bool: false, short: None },
-                OptionDef { name: "priority", description: "Queue priority (lower = higher priority)", is_bool: false, short: Some("p") },
-                OptionDef { name: "page-load-timeout", description: "Maximum time to wait for page load", is_bool: false, short: None },
+                OptionDef { name: "expires <dur>", description: "Cache expiration duration (e.g. 1d, 1h, 30m)", is_bool: false, short: None },
+                OptionDef { name: "priority <n>", description: "Queue priority (lower = higher priority)", is_bool: false, short: Some("p") },
+                OptionDef { name: "page-load-timeout <seconds>", description: "Maximum time to wait for page load", is_bool: false, short: None },
                 OptionDef { name: "ignore-url-query", description: "Remove query parameters from URLs during normalization", is_bool: true, short: None },
                 OptionDef { name: "no-norm", description: "Disable URL normalization", is_bool: true, short: None },
                 OptionDef { name: "readonly", description: "Non-destructive mode (no page modifications)", is_bool: true, short: None },
@@ -3724,6 +3756,11 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if let Some(v) = get_opt_str(args, "out-link-pattern") {
                     load_opts.push(format!("-outLinkPattern \"{}\"", v));
+                    // Store in tool_params so main.rs can echo the effective
+                    // pattern in crawl completion output — a mangled pattern
+                    // (e.g. MSYS path conversion) otherwise filters every link
+                    // with no visible trace.
+                    p["out-link-pattern"] = json!(v);
                 }
                 if let Some(v) = get_opt_str(args, "top-links") {
                     load_opts.push(format!("-topLinks {}", v));
@@ -3851,10 +3888,10 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[],
             options: &[
                 OptionDef { name: "clear", description: "Remove all tracked crawl tasks from the list", is_bool: true, short: None },
-                OptionDef { name: "limit", description: "Show at most N tasks (default: 20)", is_bool: false, short: None },
-                OptionDef { name: "offset", description: "Skip the first N tasks (useful for pagination)", is_bool: false, short: None },
-                OptionDef { name: "status", description: "Filter by status: completed, running, failed, queued, or 'not found'", is_bool: false, short: None },
-                OptionDef { name: "since", description: "Show only tasks submitted since a relative time (e.g. 1h, 30m, 1d)", is_bool: false, short: None },
+                OptionDef { name: "limit <n>", description: "Show at most N tasks (default: 20)", is_bool: false, short: None },
+                OptionDef { name: "offset <n>", description: "Skip the first N tasks (useful for pagination)", is_bool: false, short: None },
+                OptionDef { name: "status <status>", description: "Filter by status: completed, running, failed, queued, or 'not found'", is_bool: false, short: None },
+                OptionDef { name: "since <time>", description: "Show only tasks submitted since a relative time (e.g. 1h, 30m, 1d)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
@@ -3905,8 +3942,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "name", description: "Attribute name (required for attr field)", optional: true },
             ],
             options: &[
-                OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
+                OptionDef { name: "page <n>", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
+                OptionDef { name: "page-size <n>", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             e2e_coverage: E2eCoverage::Tested,
@@ -3931,10 +3968,10 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "name", description: "Attribute name (required for attr field)", optional: true },
             ],
             options: &[
-                OptionDef { name: "offset", description: "Skip the first n results (0-based)", is_bool: false, short: None },
-                OptionDef { name: "limit", description: "Return at most n results", is_bool: false, short: None },
-                OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated output (default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
+                OptionDef { name: "offset <n>", description: "Skip the first n results (0-based)", is_bool: false, short: None },
+                OptionDef { name: "limit <n>", description: "Return at most n results", is_bool: false, short: None },
+                OptionDef { name: "page <n>", short: None, is_bool: false, description: "Page number for paginated output (default: 1)" },
+                OptionDef { name: "page-size <n>", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             e2e_coverage: E2eCoverage::Tested,
@@ -3955,7 +3992,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-query",
-            description: "Run X-SQL. DOM_LOAD_AND_SELECT(@url, ...) re-fetches the page fresh via the scrape API (independent of the stored snapshot). htmlsnapshot capture is only needed for inspect/get/summary, not for query with @url. IMPORTANT: CSS selectors in X-SQL must use single quotes (SQL syntax); double quotes mean SQL identifiers.",
+            description: "Run X-SQL. Without a URL (or when the URL is the session's current page) the query is seeded from the LIVE page first, so it sees login state, SPA updates and eval mutations; an explicit different URL runs an independent scrape/webdb load. htmlsnapshot capture is only needed for inspect/get/summary, not for query. IMPORTANT: CSS selectors in X-SQL must use single quotes (SQL syntax); double quotes mean SQL identifiers.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -3964,7 +4001,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef {
-                    name: "sql",
+                    name: "sql <query>",
                     description: "X-SQL query. Use @url as placeholder (unquoted — SQLTemplate handles escaping). Prefix with @ to read from file",
                     is_bool: false,
                     short: None,
@@ -3976,7 +4013,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
                 OptionDef {
-                    name: "sql-base64",
+                    name: "sql-base64 <base64>",
                     description: "Base64-encoded X-SQL query (avoid shell quoting issues on Windows)",
                     is_bool: false,
                     short: None,
@@ -3988,13 +4025,13 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
                 OptionDef {
-                    name: "output-file",
+                    name: "output-file <file>",
                     description: "Write output to a file instead of stdout",
                     is_bool: false,
                     short: None,
                 },
                 OptionDef {
-                    name: "format",
+                    name: "format <fmt>",
                     description: "Output format: json, csv, or table (default: json — the raw scrape response envelope; use --format table for readable output, or --result-only for the bare resultSet)",
                     is_bool: false,
                     short: None,
@@ -4027,13 +4064,13 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef {
-                    name: "file",
+                    name: "file <file>",
                     description: "Path to save the HTML file",
                     is_bool: false,
                     short: None,
                 },
                 OptionDef {
-                    name: "filename",
+                    name: "filename <file>",
                     description: "Alias for --file (accepted for compatibility)",
                     is_bool: false,
                     short: None,
@@ -4084,25 +4121,26 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[
-                ArgDef { name: "pattern", description: "Regex or literal pattern to search for. Use | for alternation (e.g. 'price|rating|stars'), not \\|", optional: true },
+                ArgDef { name: "pattern", description: "Regex or literal pattern to search for. Use | for alternation (e.g. 'price|rating|stars'), not \\|. Rust regex dialect: ^ and $ anchor the start/end of a line, and a literal $ must be written [$] — \\$ is an invalid escape (use -F to match plain text)", optional: true },
             ],
             options: &[
                 OptionDef { name: "ignore-case", short: Some("i"), is_bool: true, description: "Case-insensitive matching" },
-                OptionDef { name: "regexp", short: Some("e"), is_bool: false, description: "Additional regex pattern (repeatable). Use -e PATTERN for alternation, e.g. -e price -e rating -e stars" },
+                OptionDef { name: "regexp <regex>", short: Some("e"), is_bool: false, description: "Additional regex pattern (repeatable). Use -e PATTERN for alternation, e.g. -e price -e rating -e stars" },
                 OptionDef { name: "no-line-number", short: None, is_bool: true, description: "Suppress line numbers in output" },
-                OptionDef { name: "after-context", short: Some("A"), is_bool: false, description: "Show N lines after each match" },
-                OptionDef { name: "before-context", short: Some("B"), is_bool: false, description: "Show N lines before each match" },
-                OptionDef { name: "context", short: Some("C"), is_bool: false, description: "Show N lines before and after each match" },
+                OptionDef { name: "line-number", short: Some("n"), is_bool: true, description: "GNU grep -n compatibility — line numbers are printed by default, so -n is a no-op here; use --no-line-number to suppress them" },
+                OptionDef { name: "after-context <n>", short: Some("A"), is_bool: false, description: "Show N lines after each match" },
+                OptionDef { name: "before-context <n>", short: Some("B"), is_bool: false, description: "Show N lines before each match" },
+                OptionDef { name: "context <n>", short: Some("C"), is_bool: false, description: "Show N lines before and after each match" },
                 OptionDef { name: "invert-match", short: Some("v"), is_bool: true, description: "Select non-matching lines" },
                 OptionDef { name: "count", short: Some("c"), is_bool: true, description: "Print only the count of matching lines" },
                 OptionDef { name: "files-with-matches", short: Some("l"), is_bool: true, description: "Print only whether matches exist" },
                 OptionDef { name: "fixed-strings", short: Some("F"), is_bool: true, description: "Treat pattern as a literal string, not regex" },
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
                 OptionDef { name: "extended-regexp", short: Some("E"), is_bool: true, description: "Extended regex (ERE) — already the default. Accepted for compatibility with grep -E." },
-                OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to (querySelector semantics: first match only). Use --selector-all to search across all matching elements." },
-                OptionDef { name: "selector-all", short: None, is_bool: false, description: "CSS selector to scope the search to all matching elements (querySelectorAll semantics). Each element's inner HTML is searched independently, and results are annotated with the element index." },
-                OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
+                OptionDef { name: "selector <css>", short: None, is_bool: false, description: "CSS selector to scope the search to (querySelector semantics: first match only). Use --selector-all to search across all matching elements." },
+                OptionDef { name: "selector-all <css>", short: None, is_bool: false, description: "CSS selector to scope the search to all matching elements (querySelectorAll semantics). Each element's inner HTML is searched independently, and results are annotated with the element index." },
+                OptionDef { name: "page <n>", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
+                OptionDef { name: "page-size <n>", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
                 OptionDef { name: "raw-html", short: None, is_bool: true, description: "Search the raw HTML including <script> and <style> content. By default, script/style tags are stripped to avoid false positives from JavaScript code." },
             ],
@@ -4281,10 +4319,10 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "selector", description: "CSS selector to scope inspection (default: :root; use e.g. .product-card for recurring pattern detection). Prefix with @ to read from file (e.g. @selector.txt). Use --stdin to pipe or --selector-base64 for encoded selectors.", optional: true },
             ],
             options: &[
-                OptionDef { name: "max", description: "Max matching elements to analyze (default: 20)", is_bool: false, short: None },
-                OptionDef { name: "depth", description: "Max descendant depth for selector suggestions (default: 5). If the DOM under the selector is shallower than --depth, the actual DOM depth is used and output is identical for higher depth values.", is_bool: false, short: None },
+                OptionDef { name: "max <n>", description: "Max matching elements to analyze (default: 20)", is_bool: false, short: None },
+                OptionDef { name: "depth <n>", description: "Max descendant depth for selector suggestions (default: 5). If the DOM under the selector is shallower than --depth, the actual DOM depth is used and output is identical for higher depth values.", is_bool: false, short: None },
                 OptionDef { name: "stdin", description: "Read the CSS selector from stdin instead of an inline argument (avoids shell quoting issues on Windows)", is_bool: true, short: None },
-                OptionDef { name: "selector-base64", description: "Base64-encoded CSS selector (avoids shell quoting issues on Windows)", is_bool: false, short: None },
+                OptionDef { name: "selector-base64 <base64>", description: "Base64-encoded CSS selector (avoids shell quoting issues on Windows)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_inspect".to_string(),
@@ -4364,7 +4402,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "experience-save",
             description: "Save a task execution trace to the progressive experience memory. Records the steps taken, selectors used, and outcome so future tasks on the same domain can replay them.",
-            category: Category::Skills,
+            category: Category::Agent,
             hidden: false,
             batch_supported: false,
             args: &[
@@ -4390,7 +4428,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "experience-query",
             description: "Query the progressive experience memory for stored knowledge about a domain. Returns selectors, blockers, interaction hints, and confidence tier. Called automatically before every agent task.",
-            category: Category::Skills,
+            category: Category::Agent,
             hidden: false,
             batch_supported: false,
             args: &[
@@ -4410,7 +4448,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "experience-list",
             description: "List stored knowledge entries from the progressive experience memory. Filter by domain or intent to inspect what the system has learned.",
-            category: Category::Skills,
+            category: Category::Agent,
             hidden: false,
             batch_supported: false,
             args: &[],
@@ -4434,7 +4472,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "experience-deep-learn",
             description: "Run deep learning analysis on stored experience traces. Builds or updates verified knowledge facts (selectors, blockers, page structure). Promotes knowledge from hypothesis to verified when confidence thresholds are met.",
-            category: Category::Skills,
+            category: Category::Agent,
             hidden: false,
             batch_supported: false,
             args: &[
@@ -5823,6 +5861,27 @@ mod tests {
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["name"], "session");
         assert_eq!(params["domain"], "example.com");
+    }
+
+    #[test]
+    fn test_cookie_get_params_carry_domain_and_full() {
+        let map = commands_map();
+        let cmd = map.get("cookie-get").unwrap();
+        let mut args = HashMap::new();
+        args.insert("name".to_string(), json!("theme"));
+        args.insert("domain".to_string(), json!("localhost"));
+        args.insert("full".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["name"], "theme");
+        assert_eq!(params["domain"], "localhost");
+        assert_eq!(params["full"], true);
+
+        // No options → name only (defaults to the bare-value output).
+        let bare_args = HashMap::new();
+        assert_eq!(
+            (cmd.tool_params_fn)(&bare_args),
+            json!({ "name": "" })
+        );
     }
 
     #[test]
@@ -9084,12 +9143,7 @@ mod tests {
             "experience-deep-learn",
         ] {
             let cmd = map.get(*name).unwrap();
-            assert_eq!(
-                cmd.category.as_str(),
-                "skills",
-                "{} should be in Skills category",
-                name
-            );
+            assert_eq!(cmd.category.as_str(), "agent", "{} should be in Agent category", name);
         }
     }
 
@@ -9139,8 +9193,9 @@ mod tests {
             // Local tool — no MCP tool name, not batchable.
             assert_eq!((cmd.tool_name_fn)(&HashMap::new()), "");
             assert!(!cmd.batch_supported);
-            // A bundled skill → Skills category (like skills-*/experience-*).
-            assert_eq!(cmd.category.as_str(), "skills", "{name} should be in Skills category");
+            // A self-contained pipeline tool → its own WebMiner section
+            // (not the bundled-skill Skills section).
+            assert_eq!(cmd.category.as_str(), "webminer", "{name} should be in WebMiner category");
         }
     }
 

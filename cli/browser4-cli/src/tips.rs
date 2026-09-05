@@ -33,7 +33,7 @@ const TIPS_SNAPSHOT: &[Tip] = &[
         text: "Use `snapshot grep <pattern>` to search a saved snapshot without re-reading the entire file",
     },
     Tip {
-        text: "Use `snapshot -i -d 5` to capture only interactive elements at depth 5",
+        text: "Use `snapshot -i` to merge inner text into element names so ref lines read as self-contained targets (not a strict filter — pair with `-v 0` to bound the output size)",
     },
     Tip {
         text: "Use `snapshot --stdout --page 1` to read snapshots directly in stdout without file access",

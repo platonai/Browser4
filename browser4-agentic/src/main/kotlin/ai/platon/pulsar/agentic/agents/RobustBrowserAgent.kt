@@ -460,7 +460,8 @@ open class RobustBrowserAgent(
             ExtractResult(
                 success = false,
                 message = "USER interrupted: ${e.message}",
-                data = JsonNodeFactory.instance.objectNode()
+                data = JsonNodeFactory.instance.objectNode(),
+                completed = false
             )
         }
     }

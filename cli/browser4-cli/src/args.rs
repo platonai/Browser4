@@ -157,6 +157,9 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
 /// The boolean set is used by `parse_raw_args` to avoid consuming the next
 /// argument as a value for boolean flags (e.g. `-i` should not consume
 /// `"search"` in `snapshot grep -i "search"`).
+/// Both collections hold machine keys: [`OptionDef::key`] strips an
+/// embedded help placeholder (`"max-files <n>"` → `"max-files"`) so the
+/// parsed argument map always uses the bare flag name.
 pub fn build_short_option_map(
     options: &[crate::commands::OptionDef],
 ) -> (HashMap<String, String>, HashSet<String>) {
@@ -164,10 +167,10 @@ pub fn build_short_option_map(
     let mut bool_opts = HashSet::new();
     for opt in options {
         if opt.is_bool {
-            bool_opts.insert(opt.name.to_string());
+            bool_opts.insert(opt.key().to_string());
         }
         if let Some(short) = opt.short {
-            map.insert(short.to_string(), opt.name.to_string());
+            map.insert(short.to_string(), opt.key().to_string());
         }
     }
     (map, bool_opts)

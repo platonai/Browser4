@@ -784,7 +784,7 @@ The `coding` domain exposes **47 tools** in four groups:
 
 Browser4 includes a lightweight **MockSite** server that serves static HTML pages for testing and demos. Start it from the repository root:
 
-**Windows:** `./bin/test.ps1 mock-site -Dmock.site.port=18080`
+**Windows (pwsh — PowerShell 7+):** `./bin/test.ps1 mock-site -Dmock.site.port=18080`
 **Linux/macOS:** `./bin/test.sh mock-site -Dmock.site.port=18080`
 
 Key demo pages are served at `http://localhost:18080/generated/`. For the full page listing, environment variables, Python fallback, and Maven-based launch, see [MockSite](docs/mocksite.md). For the test taxonomy and tagging system, see [Test Taxonomy](docs/TESTING.md).

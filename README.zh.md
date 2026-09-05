@@ -792,7 +792,7 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 
 Browser4 自带一个轻量级 **MockSite** 服务器，用于提供静态 HTML 测试页和演示页。可在仓库根目录启动：
 
-**Windows：** `./bin/test.ps1 mock-site -Dmock.site.port=18080`
+**Windows（pwsh —— PowerShell 7+）：** `./bin/test.ps1 mock-site -Dmock.site.port=18080`
 **Linux/macOS：** `./bin/test.sh mock-site -Dmock.site.port=18080`
 
 关键演示页面位于 `http://localhost:18080/generated/`。完整页面列表、环境变量、Python 回退方案和基于 Maven 的启动方式请见 [MockSite](docs/mocksite.md)。测试分类体系与标签系统请见 [Test Taxonomy](docs/TESTING.md)。

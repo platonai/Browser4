@@ -107,6 +107,9 @@ open class Browser4WebDriver(
         /** Settle delay after the post-navigation body wait (see [waitForNavigationSettled]). */
         private const val NAVIGATION_DOM_SETTLE_DELAY_MS = 1_000L
 
+        /** The dual-world runtime global probed by [ensurePulsarUtilsInjected]. */
+        private const val PULSAR_UTILS_FUNCTION = "__pulsar_utils__"
+
         private val storageStateMapper: ObjectMapper = jacksonObjectMapper()
             .setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
 
@@ -304,12 +307,30 @@ open class Browser4WebDriver(
          * normalization so states saved by `tab.saveStorageState()` round-trip
          * unchanged.
          *
+         * Beyond the upstream pass-through this validates the two fields whose
+         * violations make the downstream CDP layer reject the whole batch with
+         * the opaque `Invalid cookie fields` error (no field attribution):
+         * cookie paths that do not start with `/`, and cookie names containing
+         * characters the browser will not store (`;`, `=`, whitespace/control
+         * characters).  Failing here names the offending cookie so callers can
+         * act on it instead of receiving the browser's generic rejection.
+         *
          * @param cookie Raw cookie entry from the storage-state payload.
          * @return A map with the canonical `Network.setCookies` field set.
          */
         fun normalizeStorageStateCookie(cookie: Map<String, Any?>): Map<String, Any?> {
             val name = cookie["name"]?.toString()?.trim().orEmpty()
             require(name.isNotEmpty()) { "Storage state cookie name must not be blank" }
+            // Chrome's Network.setCookies rejects cookie names containing ';',
+            // '=', or whitespace/control characters ("Invalid cookie fields").
+            // Validate in-repo so the error names the cookie instead of leaking
+            // the browser's opaque rejection.
+            require(
+                name.none { it == ';' || it == '=' || it.code < 0x21 || it.code == 0x7F }
+            ) {
+                "Storage state cookie name '$name' contains characters the browser rejects " +
+                    "(whitespace/control characters, ';', '=')"
+            }
 
             val normalized = linkedMapOf<String, Any?>(
                 "name" to name,
@@ -318,7 +339,15 @@ open class Browser4WebDriver(
 
             cookie["url"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["url"] = it }
             cookie["domain"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["domain"] = it }
-            cookie["path"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["path"] = it }
+            cookie["path"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { path ->
+                // Chrome rejects cookie paths that do not start with '/'
+                // ("Invalid cookie fields"); validate in-repo so the error names
+                // the cookie instead of leaking the browser's opaque rejection.
+                require(path.startsWith('/')) {
+                    "Storage state cookie '$name' has an invalid path '$path': cookie paths must start with '/'"
+                }
+                normalized["path"] = path
+            }
             cookie["expires"]?.toString()?.toDoubleOrNull()?.takeIf { it > 0 }?.let { normalized["expires"] = it }
             cookie["httpOnly"]?.toString()?.toBooleanStrictOrNull()?.let { normalized["httpOnly"] = it }
             cookie["secure"]?.toString()?.toBooleanStrictOrNull()?.let { normalized["secure"] = it }
@@ -1108,6 +1137,80 @@ open class Browser4WebDriver(
     @Throws(WebDriverException::class)
     suspend fun consoleClear(): JsEvaluation? =
         evaluateValueDetail(consoleClearJs())
+
+    // ---------------------------------------------------------------------------
+    // Dual-world runtime recovery — PulsarWebDriver registers the Browser4
+    // runtime (__pulsar_utils__) into a tab's isolated world when it navigates
+    // or when the tab's main frame navigates (onFrameNavigated0).  A driver
+    // bound to a tab *after* its document committed — a tab opened by tab-new
+    // and then switched to, or any driver swap — has neither hook fired, so
+    // its isolated-world context cache is empty (or points at a world that no
+    // longer exists) and evaluations fall back to the main world, where
+    // __pulsar_utils__ never exists.  Every helper that dereferences it
+    // (capture meta links, document features, original-content-length, ...)
+    // then throws a ReferenceError that breaks capture until the session is
+    // closed.  This method (re-)establishes the runtime on demand.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Ensure the Browser4 dual-world runtime (__pulsar_utils__) is available
+     * to evaluations on this tab, re-registering it when the tab never
+     * received it.
+     *
+     * The recovery mirrors [PulsarWebDriver.onFrameNavigated0]: stale cached
+     * execution contexts are dropped, then the isolated world of the current
+     * main frame is located or created.  `Page.createIsolatedWorld` is
+     * idempotent per frame + world name — when the world already exists (a
+     * previous driver instance registered it for this document), its context
+     * id is returned and reused, and the runtime is injected only when the
+     * world is fresh and empty, so an already-initialized world is never
+     * re-run.
+     *
+     * @return true when `__pulsar_utils__` is available afterwards.
+     */
+    suspend fun ensurePulsarUtilsInjected(): Boolean {
+        // typeof() does not dereference the variable, so a missing runtime
+        // reports "undefined" instead of throwing a ReferenceError.  When the
+        // cached isolated-world context is valid this probe resolves through
+        // the isolated world; a driver with no cached context (e.g. freshly
+        // bound to an already-loaded tab) falls back to the main world and
+        // reports missing — the recovery below then locates or creates the
+        // real isolated world and caches its context id.
+        if (runCatching { evaluate("typeof($PULSAR_UTILS_FUNCTION)") }.getOrDefault(null) == "function") {
+            return true
+        }
+
+        return runCatching {
+            val runtimeJs = settings.dualWorldScriptLoader.getIsolatedWorldJs(false)
+            if (runtimeJs.isBlank()) {
+                return false
+            }
+            check(browserProtocol.isOpen) { "Underlying browser (BrowserProtocol) is closed" }
+
+            val worldManager = page.isolatedWorldManager
+            val mainFrameId = browserProtocol.getFrameTree().frame.id
+            val contextId = worldManager.createIsolatedWorld(mainFrameId)
+            val hasRuntime = browserProtocol.evaluate(
+                "typeof($PULSAR_UTILS_FUNCTION)",
+                contextId = contextId,
+            )?.result?.value == "function"
+            if (!hasRuntime) {
+                worldManager.injectRuntime(runtimeJs, contextId)
+            }
+
+            val verified = browserProtocol.evaluate(
+                "typeof($PULSAR_UTILS_FUNCTION)",
+                contextId = contextId,
+            )?.result?.value == "function"
+            if (!verified) {
+                logger.warn(
+                    "Failed to inject the Browser4 runtime into the isolated world of tab {}",
+                    guid
+                )
+            }
+            verified
+        }.getOrDefault(false)
+    }
 
     // ---------------------------------------------------------------------------
     // Viewport screenshot — capture a screenshot of the [n]-th viewport, scrolling

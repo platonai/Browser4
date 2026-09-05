@@ -546,6 +546,26 @@ function Ensure-CleanDirectory([string]$path) {
     New-Item -ItemType Directory -Force -Path $path | Out-Null
 }
 
+function Reset-CleanDirectory([string]$path, [string]$label = $path) {
+    # Rename-then-delete reset.  On Windows, renaming a directory that holds
+    # open/locked files (e.g. a backend daemon auto-started from this bundle)
+    # fails atomically — nothing is deleted, so a failed reset never corrupts
+    # a previously working bundle.  A plain Remove-Item -Recurse can delete
+    # half the tree before hitting a locked file (e.g. deleting jvm.cfg while
+    # java.exe stays locked), which is exactly how a re-run used to leave a
+    # broken runtime behind ("java.exe: could not open jvm.cfg").
+    if (Test-Path $path) {
+        $trash = Join-Path (Split-Path -Parent $path) ("." + (Split-Path -Leaf $path) + ".old-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        try {
+            Rename-Item -LiteralPath $path -NewName (Split-Path -Leaf $trash) -ErrorAction Stop
+        } catch {
+            throw "Cannot reset $label ('$path'): the directory is locked / in use. If a backend daemon is running from this runtime bundle, stop it first, then re-run the build."
+        }
+        Remove-Item -LiteralPath $trash -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Force -Path $path | Out-Null
+}
+
 function Get-PathSeparator {
     if (Get-IsWindows) { return ';' }
     return ':'
@@ -854,11 +874,16 @@ if ((Test-Path $assetPath) -and (-not $Force)) {
 }
 
 New-Item -ItemType Directory -Force -Path $resolvedOutputDirectory | Out-Null
-Ensure-CleanDirectory $workDirectory
-Ensure-CleanDirectory $bundleDirectory
-Ensure-CleanDirectory $libDirectory
-Ensure-CleanDirectory $pluginsDirectory
-Ensure-CleanDirectory $jdepsLogDirectory
+# Reset (not just ensure) the working directories so a re-run over an existing
+# build always starts from a clean slate — jlink refuses to write into a
+# non-empty output directory.  Reset-CleanDirectory renames before deleting so
+# a bundle that is locked by a running daemon fails fast instead of being
+# half-deleted (see Reset-CleanDirectory).
+Reset-CleanDirectory $workDirectory 'working directory'
+Reset-CleanDirectory $bundleDirectory 'bundle directory'
+Reset-CleanDirectory $libDirectory 'lib directory'
+Reset-CleanDirectory $pluginsDirectory 'plugins directory'
+Reset-CleanDirectory $jdepsLogDirectory 'jdeps log directory'
 
 # Auto-detect best JDK before resolving jdeps/jlink.
 $null = Resolve-JavaHome
@@ -1084,7 +1109,7 @@ Write-Host "Running jdeps to compute Browser4 runtime modules..." -ForegroundCol
 
 # Create a temp directory for extracted app classes (jdeps works best with classes)
 $appClassesDir = Join-Path $workDirectory 'app-classes'
-Ensure-CleanDirectory $appClassesDir
+Reset-CleanDirectory $appClassesDir 'app-classes directory'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [System.IO.Compression.ZipFile]::ExtractToDirectory($resolvedJarPath, $appClassesDir)
 
@@ -1437,6 +1462,13 @@ if ($modules.Count -eq 0) {
 # --------------------------------------------------------------------------
 $phaseIndex = 4
 Write-BuildProgress -Status $buildPhases[$phaseIndex - 1].Label
+
+# jlink refuses to write into an existing (non-empty) output directory, so
+# reset the runtime directory immediately before invoking it.  This makes the
+# script idempotent over an existing build: a plain re-run after a source
+# change must not fail with 'directory already exists' or leave a broken
+# runtime behind.
+Reset-CleanDirectory $runtimeDirectory 'runtime (jlink output) directory'
 
 Write-Host "Running jlink with modules: $($modules -join ',')" -ForegroundColor Cyan
 Write-Host "Using jlink compression mode: $jlinkCompressValue" -ForegroundColor Cyan

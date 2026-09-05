@@ -177,6 +177,15 @@ browser4-cli crawl --seed-file urls.txt --depth 0 --sql "
 | `--out-link-pattern` | `-olp` | regex | `.+` | Regex to filter extracted links |
 | `--top-links` | `-tl` | int | `20` | Max links extracted per page |
 
+> **Git Bash / MSYS2 caveat — leading-`/` pattern values:** when you run the CLI
+> from Git Bash, argument values that start with `/` (e.g.
+> `-olp "/product/"`) are converted into Windows paths
+> (`C:/Program Files/Git/product/`) before the CLI sees them — the pattern then
+> filters out every link and the crawl silently reports only the seed page.
+> Use `./b4w.sh` from Git Bash (it exports `MSYS2_ARG_CONV_EXCL='*'`, disabling
+> the conversion), run from PowerShell, or use a value that does not start with
+> `/` (e.g. `-olp "product/"`). See [shell-quoting.md](shell-quoting.md).
+
 ### LoadOptions flags
 
 | Flag | Short | Type | Description |
@@ -242,13 +251,20 @@ When no X-SQL is provided, the default output lists crawled pages:
 ```
 Crawl task submitted: 550e8400-e29b-41d4-a716-446655440000
   URLs: 3
-Crawling... 1 pages found so far
+Crawling... 2 pages found (12s elapsed)
+Crawling... 3 pages found (18s elapsed)
 
 Crawl completed. 3 pages found.
   depth=0 | https://example.com/page1 | Page 1 Title
   depth=0 | https://example.com/page2 | Page 2 Title
   depth=0 | https://example.com/page3 | Page 3 Title
 ```
+
+> **Timing — slow progress is normal:** each page takes **several seconds**
+> (roughly 5–7 s) through the backend parse/load pipeline, even for local
+> pages, and progress lines update only when a page completes. A small local
+> crawl of 3–10 pages can legitimately take 20–60 seconds — repeated
+> `Crawling...` lines with a growing elapsed time are progress, not a hang.
 
 ## Testing locally with MockSite
 
@@ -355,7 +371,7 @@ prepended to the seed file list.
 | Empty seed file | Exits with "No URLs provided." after parsing |
 | Timeout | Exits with message + task ID; increase `BROWSER4_CLI_CRAWL_TIMEOUT_SECS` |
 | Server error | Exits with "Crawl failed: ..." and server error details |
-| No links found (depth >= 1) | Completes with 0 pages; verify `--out-link-selector` |
+| No links found (depth >= 1) | Exit 0 with a `⚠ Link discovery found no out-links` warning plus the backend diagnostic (it distinguishes "selector matched nothing" from "pattern filtered them all") and the effective `--out-link-pattern`. The seed page is always counted in depth ≥ 2 crawls, so an all-filtered crawl reports `Crawl completed. 1 pages found.` (depth-1 crawls list only discovered pages and report `0 pages found`). Inspect the warning text and verify `--out-link-selector` / `--out-link-pattern` — a shell-mangled pattern (Git Bash `/`-prefix conversion) is the usual cause |
 | Invalid --format | Exits with "Invalid --format '...'. Expected: json, csv, or table" |
 | X-SQL failure on one page | Page logged with error; other pages continue normally |
 

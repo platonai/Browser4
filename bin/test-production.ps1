@@ -1,4 +1,5 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
+#requires -Version 7
 
 # ═══════════════════════════════════════════════════════════════════
 # CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.

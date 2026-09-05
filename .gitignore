@@ -170,3 +170,4 @@ bin/maintenance/state/*.lock
 
 # CloakBrowser POC outputs (bin/setup-cloakbrowser.ps1)
 /cloakbrowser-poc/
+/.buildtmp/
