@@ -388,7 +388,10 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "doctor-status",
         "help",
         "eval",
+        "cdp",
         "generate-locator",
+        "frame",
+        "frames",
         "extract",
         "summarize",
         "snapshot",
@@ -21999,6 +22002,19 @@ mod tests {
     #[test]
     fn no_snapshot_commands_include_eval() {
         assert!(no_snapshot_commands().contains("eval"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_cdp() {
+        // A raw CDP command can mutate the page, and the post-command
+        // snapshot would invalidate DOM node ids chained CDP calls depend on.
+        assert!(no_snapshot_commands().contains("cdp"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_frame_commands() {
+        assert!(no_snapshot_commands().contains("frame"));
+        assert!(no_snapshot_commands().contains("frames"));
     }
 
     #[test]

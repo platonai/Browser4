@@ -311,6 +311,51 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 Fetch interception) when no pattern is given.
             """.trimIndent()
         )
+        // Frame-scope specs are normally generated from the WebDriver interface
+        // source; the explicit entries keep them resolvable when the generator
+        // falls back to the bundled JSON (e.g. running from a JAR).
+        toolSpec["frameList"] = ToolSpec(
+            domain = domain,
+            method = "frameList",
+            arguments = emptyList(),
+            returnType = "List<FrameInfo>",
+            description = "List the frames of the current page (frame tree, depth-first, main frame first).",
+            help = """
+                tab.frameList()
+
+                Returns the page's frames with their id, name, url, parent frame id, and depth.
+                The frame that element operations are currently scoped to is marked active.
+            """.trimIndent()
+        )
+        toolSpec["frameSwitch"] = ToolSpec(
+            domain = domain,
+            method = "frameSwitch",
+            arguments = listOf(ToolSpec.Arg("frame", "String")),
+            returnType = "Map<String, Any?>",
+            description = "Switch the frame that subsequent CSS-selector element operations resolve against.",
+            help = """
+                tab.frameSwitch(frame: String)
+
+                Resolves the target in this order: a CSS selector matching an <iframe> in the
+                currently scoped document (nested switching works), an exact frame id as printed
+                by tab.frameList(), an exact frame name, or a case-insensitive url substring.
+                After switching, click/fill/type/hover/focus/waitForSelector/isVisible and the
+                element-scoped reads resolve their CSS selectors inside the selected frame.
+                Return to the main frame with tab.frameMain(); the scope also resets on navigation.
+            """.trimIndent()
+        )
+        toolSpec["frameMain"] = ToolSpec(
+            domain = domain,
+            method = "frameMain",
+            arguments = emptyList(),
+            returnType = "Unit",
+            description = "Switch back to the main frame, undoing the scope set by frameSwitch.",
+            help = """
+                tab.frameMain()
+
+                All subsequent element operations resolve against the main document again.
+            """.trimIndent()
+        )
     }
 
     override fun help(method: String): String {
@@ -1882,6 +1927,33 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 @Suppress("UNCHECKED_CAST")
                 val params = args["params"] as? Map<String, Any?>
                 driver.executeCdpCommand(method, params)
+            }
+
+            // ---- Frame scope (iframe switching) ----
+            "frameList" -> {
+                validateArgs(args, emptySet(), emptySet(), functionName)
+                driver.frameList()
+            }
+
+            "frameSwitch" -> {
+                validateArgs(args, allowed("frame"), setOf("frame"), functionName)
+                val info = driver.frameSwitch(paramString(args, "frame", functionName)!!)
+                // Serialize explicitly: FrameInfo is a data class, and the generic
+                // response serializer only JSON-encodes maps/lists/collections.
+                linkedMapOf(
+                    "id" to info.id,
+                    "name" to info.name,
+                    "url" to info.url,
+                    "parentId" to info.parentId,
+                    "depth" to info.depth,
+                    "active" to info.active,
+                    "label" to info.label,
+                )
+            }
+
+            "frameMain" -> {
+                validateArgs(args, emptySet(), emptySet(), functionName)
+                driver.frameMain()
             }
 
             // Network tracking & HAR recording (Browser4-specific; requires a
