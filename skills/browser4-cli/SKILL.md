@@ -133,6 +133,24 @@ browser4-cli config set agent.llm.maxRequestTokens 800000   # server-side runtim
 
 Tab commands (`tab-list`, `tab-new`, `tab-select`, `tab-close`, `window new`) scope to a session. **Re-snapshot after `tab-select`** — tab switches change the active page context. See **[tab-management.md](references/tab-management.md)** for the tab lifecycle, GUID-based targeting, cross-session operations, and extension-session quirks.
 
+### Frame Switching (iframes)
+
+Element commands (`click`, `fill`, `type`, `hover`, `focus`, `is visible`, `wait`, …) resolve CSS selectors against the **main document** by default. On pages that embed forms/content in `<iframe>`s, switch into the frame first:
+
+```bash
+browser4-cli frames                    # list the frame tree: names, urls, depth, active frame
+browser4-cli frame "#pay-frame"        # switch into the iframe (CSS selector)
+browser4-cli fill "#card-number" "4111 1111 1111 1111"   # resolves INSIDE the iframe
+browser4-cli click "#pay-submit"       # resolves INSIDE the iframe
+browser4-cli frame main                # back to the main document
+```
+
+- `frame <target>` accepts: a snapshot element ref of the iframe (`e12`, `backend:123`), an iframe CSS selector (`#pay-frame`, `iframe[src*="checkout"]`), the frame `name`, the frame `id` from `frames` output, or a URL fragment. Nested iframes: switch repeatedly (`frame "#outer"` then `frame "#inner"`).
+- The scope resets automatically on navigation (`goto`/`open`/`reload`/back/forward) — re-run `frame` after navigating.
+- **Same-origin iframes are fully supported.** Cross-origin iframes (out-of-process frames) are not supported in this version: `frames` cannot see them and `frame` on one fails with an actionable error (no per-frame CDP sessions are attached). Use `cdp` with `Target.attachToTarget` for those, or drive the frame's origin in its own session.
+- `eval` always runs in the **main document** (matching agent-browser); reach same-origin iframe content from eval via `contentDocument` if needed.
+- See **[frames.md](references/frames.md)** for details.
+
 ## 3. Command Map
 
 | Command family | Purpose | When to use | Full reference |
@@ -164,6 +182,7 @@ Tab commands (`tab-list`, `tab-new`, `tab-select`, `tab-close`, `window new`) sc
 | `skill-list`, `skill-info`, `skill-install`, `skill-uninstall`, `skill-reload` | Backend skill management | Install/manage server-side skills | [skills.md](references/skills.md) |
 | `screenshot`, `scroll`, `wait`, `resize` | Visual capture & viewport control | Screenshots, viewport sizing, scroll control; `wait --download` polls a download directory | — |
 | `tab-list`, `tab-new`, `tab-select`, `tab-close`, `window new` | Tab & window management | Multi-tab workflows, session-scoped tab operations | [tab-management.md](references/tab-management.md) |
+| `frames`, `frame <target>`, `frame main` | Iframe frame switching | Interact with content inside `<iframe>`s: `frame "#pay-frame"` then `fill`/`click`/`is visible` resolve inside that frame; `frames` lists the frame tree | [frames.md](references/frames.md) |
 | `diff snapshot` | Unified diff between two saved accessibility snapshots | Verify what changed between interactions (`snapshot --auto-diff` equivalent on saved files) | — |
 | `download`, `wait --download` | Download management | `download --dir <path>` configures the browser download folder; `wait --download` blocks until a download completes | — |
 | `network requests`, `network request <id>`, `network har start`, `network har stop`, `network route`, `network unroute` | Network request inspection, HAR recording & request routing | Inspect what the page loaded (XHR/fetch/status/headers), debug API calls, record a `.har` file (Chrome DevTools importable), or mock/abort matching requests (Fetch interception). `network requests --filter api --status 2xx`; `network har start --content text` then `network har stop ./capture.har`; `network route "**/api/users" --body '{"users":[]}'` | [network.md](references/network.md) |

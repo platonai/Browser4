@@ -110,6 +110,8 @@ dsh plugin --profile web add github:platonai/dsh-browser4  # GitHub
 └─ 需要高效重复很多 UI 步骤？→ batch "goto ..." "click ..." "fill ..."
 ```
 
+页面内容嵌在 `<iframe>` 中（支付表单、编辑器、小组件）时，使用内置的 frame 切换：`frames` 列出 frame 树，`frame "<iframe 选择器>"` 把后续元素命令的作用域切到该 iframe（同源 iframe 完整支持），`frame main` 回到主文档——无需手写 `contentDocument` eval。
+
 典型交互流程：
 
 ```bash
@@ -119,6 +121,10 @@ browser4-cli fill e3 "user@example.com"
 browser4-cli fill e4 "secret" --submit
 browser4-cli wait --load networkidle
 browser4-cli snapshot -i
+# iframe 较多的页面：
+browser4-cli frame "#pay-frame"
+browser4-cli fill "#card-number" "4111 1111 1111 1111"
+browser4-cli frame main
 ```
 
 ### 如何提取数据
