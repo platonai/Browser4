@@ -221,7 +221,7 @@ See **[agent.md](agent.md)** for full details including LLM key configuration, e
 | `-s <name>` | session commands | Target a named session |
 | `--stdout` | `snapshot` | Print to stdout instead of a file |
 | `--auto-diff` | `snapshot` | Diff vs the previous snapshot — shows only what changed |
-| `-i`, `--interactive` | `snapshot` | Interactive mode: interactive elements only |
+| `-i`, `--interactive` | `snapshot` | Interactive-oriented rendering: inner text merged into element names so ref lines are self-contained targets (not a strict interactive-only filter — pair with `-v 0` to bound size) |
 | `--all` | `htmlsnapshot get` | Return all matches (JSON array) |
 | `--sql @file` | `htmlsnapshot query` | Read the X-SQL query from a file (avoids shell quoting) |
 | `--wait`, `--wait-timeout <s>` | `agent run` | Block for the result (default 600 s) |
