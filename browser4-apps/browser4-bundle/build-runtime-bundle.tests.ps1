@@ -1041,6 +1041,46 @@ Assert-Equal -Label 'ECD: directory is empty after cleaning' `
 Write-Host ''
 
 # ═══════════════════════════════════════════════════════════════════
+# TESTS: Reset-CleanDirectory / Remove-CleanDirectory
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ Reset-CleanDirectory / Remove-CleanDirectory ━━━" -ForegroundColor Cyan
+
+$rcdTestDir = New-TempDir 'reset-clean'
+
+# Reset-CleanDirectory removes existing content and recreates the directory
+$rcdDir = Join-Path $rcdTestDir 'reset-dir'
+New-Item -ItemType Directory -Path $rcdDir -Force | Out-Null
+New-TempFile (Join-Path $rcdDir 'old-file.txt') 'old content'
+New-Item -ItemType Directory -Path (Join-Path $rcdDir 'subdir') -Force | Out-Null
+Reset-CleanDirectory $rcdDir 'test reset dir'
+Assert-True -Label 'RCD: reset dir exists after reset' `
+    -Condition (Test-Path $rcdDir -PathType Container)
+Assert-Equal -Label 'RCD: reset dir is empty after reset' `
+    -Actual (Get-ChildItem $rcdDir -ErrorAction SilentlyContinue).Count -Expected 0
+
+# Remove-CleanDirectory removes existing content and does NOT recreate the
+# directory — the semantics the jlink phase depends on (jlink refuses an
+# --output directory that already exists, even an empty one).
+$rmDir = Join-Path $rcdTestDir 'remove-dir'
+New-Item -ItemType Directory -Path $rmDir -Force | Out-Null
+New-TempFile (Join-Path $rmDir 'old-file.txt') 'old content'
+New-Item -ItemType Directory -Path (Join-Path $rmDir 'subdir') -Force | Out-Null
+Remove-CleanDirectory $rmDir 'test remove dir'
+Assert-True -Label 'RCD: remove dir is gone after removal' `
+    -Condition (-not (Test-Path $rmDir))
+
+# Remove-CleanDirectory on a path that does not exist is a no-op
+Remove-CleanDirectory (Join-Path $rcdTestDir 'never-existed') 'test remove dir'
+Assert-True -Label 'RCD: removing a missing dir does not throw' -Condition $true
+
+# The rename-then-delete trash sibling is cleaned up when deletion succeeds
+$stray = Get-ChildItem -Path $rcdTestDir -Directory -Filter '.remove-dir.old-*' -ErrorAction SilentlyContinue
+Assert-Equal -Label 'RCD: no .old-* trash dirs left behind' `
+    -Actual $stray.Count -Expected 0
+
+Write-Host ''
+
+# ═══════════════════════════════════════════════════════════════════
 # TESTS: Remove-SafeRuntimePayload
 # ═══════════════════════════════════════════════════════════════════
 Write-Host "━━━ Remove-SafeRuntimePayload ━━━" -ForegroundColor Cyan

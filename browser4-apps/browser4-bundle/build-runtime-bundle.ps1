@@ -545,12 +545,13 @@ function Ensure-CleanDirectory([string]$path) {
     New-Item -ItemType Directory -Force -Path $path | Out-Null
 }
 
-function Reset-CleanDirectory([string]$path, [string]$label = $path) {
-    # Rename-then-delete reset.  On Windows, renaming a directory that holds
-    # open/locked files (e.g. a backend daemon auto-started from this bundle)
-    # fails atomically — nothing is deleted, so a failed reset never corrupts
-    # a previously working bundle.  A plain Remove-Item -Recurse can delete
-    # half the tree before hitting a locked file (e.g. deleting jvm.cfg while
+function Remove-CleanDirectory([string]$path, [string]$label = $path) {
+    # Rename-then-delete removal of a directory (without recreating it).
+    # On Windows, renaming a directory that holds open/locked files (e.g. a
+    # backend daemon auto-started from this bundle) fails atomically —
+    # nothing is deleted, so a failed reset never corrupts a previously
+    # working bundle.  A plain Remove-Item -Recurse can delete half the
+    # tree before hitting a locked file (e.g. deleting jvm.cfg while
     # java.exe stays locked), which is exactly how a re-run used to leave a
     # broken runtime behind ("java.exe: could not open jvm.cfg").
     if (Test-Path $path) {
@@ -562,6 +563,14 @@ function Reset-CleanDirectory([string]$path, [string]$label = $path) {
         }
         Remove-Item -LiteralPath $trash -Recurse -Force -ErrorAction SilentlyContinue
     }
+}
+
+function Reset-CleanDirectory([string]$path, [string]$label = $path) {
+    # Rename-then-delete reset followed by a fresh empty directory.  Only
+    # use this for directories that must exist *before* a later tool writes
+    # into them (Maven output, extracted classes, logs).  Never use it to
+    # prepare a directory a tool creates itself — see the jlink phase.
+    Remove-CleanDirectory -path $path -label $label
     New-Item -ItemType Directory -Force -Path $path | Out-Null
 }
 
@@ -826,10 +835,11 @@ if ((Test-Path $assetPath) -and (-not $Force)) {
 
 New-Item -ItemType Directory -Force -Path $resolvedOutputDirectory | Out-Null
 # Reset (not just ensure) the working directories so a re-run over an existing
-# build always starts from a clean slate — jlink refuses to write into a
-# non-empty output directory.  Reset-CleanDirectory renames before deleting so
-# a bundle that is locked by a running daemon fails fast instead of being
-# half-deleted (see Reset-CleanDirectory).
+# build always starts from a clean slate — stale leftovers (jars, jdeps logs,
+# an old runtime image) would otherwise leak into the new build and, in
+# jlink's case, make it refuse to run at all.  Reset-CleanDirectory renames
+# before deleting so a bundle that is locked by a running daemon fails fast
+# instead of being half-deleted (see Remove-CleanDirectory).
 Reset-CleanDirectory $workDirectory 'working directory'
 Reset-CleanDirectory $bundleDirectory 'bundle directory'
 Reset-CleanDirectory $libDirectory 'lib directory'
@@ -1392,12 +1402,15 @@ if ($modules.Count -eq 0) {
 $phaseIndex = 4
 Write-BuildProgress -Status $buildPhases[$phaseIndex - 1].Label
 
-# jlink refuses to write into an existing (non-empty) output directory, so
-# reset the runtime directory immediately before invoking it.  This makes the
-# script idempotent over an existing build: a plain re-run after a source
-# change must not fail with 'directory already exists' or leave a broken
-# runtime behind.
-Reset-CleanDirectory $runtimeDirectory 'runtime (jlink output) directory'
+# jlink refuses to write into an output directory that already exists —
+# even an empty one ("Error: directory already exists: <path>") — and
+# creates the directory itself when it is absent.  So remove any leftover
+# runtime image from a previous build but do NOT recreate the directory;
+# recreating it here is what made every jlink invocation fail after the
+# rename-then-delete reset was introduced.  Remove-CleanDirectory renames
+# before deleting, so a runtime locked by a running daemon fails fast
+# instead of being half-deleted.
+Remove-CleanDirectory $runtimeDirectory 'runtime (jlink output) directory'
 
 Write-Host "Running jlink with modules: $($modules -join ',')" -ForegroundColor Cyan
 Write-Host "Using jlink compression mode: $jlinkCompressValue" -ForegroundColor Cyan
