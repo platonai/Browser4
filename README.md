@@ -90,6 +90,8 @@ Choosing the right tool for your task:
 
 Use `snapshot -i --boxes` to see clickable/typeable elements with refs like `e15`, then `click <ref>`, `fill <ref> "<text>"`, `type`/`press`, `select`, `hover`/`drag`/`scroll`, and `wait` to drive the page. All interaction commands accept CSS selectors too. Chain multiple steps efficiently with `batch`.
 
+Content embedded in `<iframe>`s (payment forms, editors, widgets) is reached with the built-in frame switching: `frames` lists the frame tree, `frame "<iframe selector>"` scopes subsequent element commands into that frame (same-origin iframes fully supported), and `frame main` returns to the main document — no manual `contentDocument` eval needed.
+
 Typical interactive flow:
 
 ```bash
@@ -100,6 +102,10 @@ browser4-cli fill e3 "user@example.com"
 browser4-cli fill e4 "secret" --submit
 browser4-cli wait --load networkidle
 browser4-cli snapshot -i
+# iframe-heavy page:
+browser4-cli frame "#pay-frame"
+browser4-cli fill "#card-number" "4111 1111 1111 1111"
+browser4-cli frame main
 ```
 
 ### How to Extract Data

@@ -2911,6 +2911,46 @@ pub fn all_commands() -> Vec<CommandDef> {
                 p
             },
         },
+        // ---- Frames ----
+        CommandDef {
+            name: "frames",
+            description: "List the frames of the current page (frame tree with names and URLs; the active frame is marked)",
+            category: Category::Tabs,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "frame_list".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "frame",
+            description: "Switch the frame that subsequent element commands (click/fill/type/isVisible/...) resolve against. Use 'frame main' to return to the main frame. Target forms: an element ref from a snapshot (e.g. e12 or backend:123), a CSS selector of an <iframe> (e.g. #pay-frame), frame name, frame id, or URL fragment (from 'frames' output). The scope resets automatically on navigation.",
+            category: Category::Tabs,
+            hidden: false,
+            batch_supported: true,
+            args: &[
+                ArgDef { name: "target", description: "'main', or the frame target: element ref (e12/backend:123), CSS selector (#pay-frame), frame name, frame id, or URL fragment", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |args| {
+                if get_str(args, "target").unwrap_or_default().trim() == "main" {
+                    "frame_main".to_string()
+                } else {
+                    "frame_switch".to_string()
+                }
+            },
+            tool_params_fn: |args| {
+                let target = get_str(args, "target").unwrap_or_default();
+                if target.trim() == "main" {
+                    json!({})
+                } else {
+                    json!({ "frame": target })
+                }
+            },
+        },
         // ---- Page Info ----
         CommandDef {
             name: "page-info",
@@ -6538,6 +6578,56 @@ mod tests {
         assert_eq!(params["action"], json!("close"));
         assert_eq!(params["tabId"], json!("1B46D74FB…"));
         assert!(params.get("guid").is_none());
+    }
+
+    #[test]
+    fn test_frames_lists_frames_with_frame_list_tool() {
+        let map = commands_map();
+        let cmd = map.get("frames").unwrap();
+        let args: HashMap<String, Value> = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "frame_list");
+        assert!((cmd.tool_params_fn)(&args).as_object().unwrap().is_empty());
+        assert!(!cmd.hidden, "frames should not be hidden from help");
+        assert_eq!(cmd.category, Category::Tabs);
+    }
+
+    #[test]
+    fn test_frame_switch_uses_frame_switch_tool() {
+        let map = commands_map();
+        let cmd = map.get("frame").unwrap();
+        let mut args = HashMap::new();
+        args.insert("target".to_string(), json!("#pay-frame"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!((cmd.tool_name_fn)(&args), "frame_switch");
+        assert_eq!(params["frame"], json!("#pay-frame"));
+    }
+
+    #[test]
+    fn test_frame_main_uses_frame_main_tool() {
+        let map = commands_map();
+        let cmd = map.get("frame").unwrap();
+        let mut args = HashMap::new();
+        args.insert("target".to_string(), json!("main"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!((cmd.tool_name_fn)(&args), "frame_main");
+        assert!(params.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_frame_switch_supports_name_url_and_id_targets() {
+        let map = commands_map();
+        let cmd = map.get("frame").unwrap();
+        for target in ["payframe", "frame-pay.html", "ABCD1234"] {
+            let mut args = HashMap::new();
+            args.insert("target".to_string(), json!(target));
+            assert_eq!(
+                (cmd.tool_name_fn)(&args),
+                "frame_switch",
+                "'{target}' must map to frame_switch, not frame_main"
+            );
+            let params = (cmd.tool_params_fn)(&args);
+            assert_eq!(params["frame"], json!(target));
+        }
     }
 
     #[test]

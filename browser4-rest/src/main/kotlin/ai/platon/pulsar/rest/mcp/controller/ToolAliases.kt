@@ -38,5 +38,8 @@ val FRONTEND_TOOL_NAME_ALIASES: Map<String, String> = mapOf(
     "browser_is_enabled" to "is_enabled",
     "browser_is_checked" to "is_checked",
     "browser_dialog_status" to "dialog_status",
+    "browser_frame_list" to "frame_list",
+    "browser_frame_switch" to "frame_switch",
+    "browser_frame_main" to "frame_main",
 )
 

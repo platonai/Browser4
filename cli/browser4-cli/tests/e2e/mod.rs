@@ -210,6 +210,11 @@ struct FixturePages {
     drag_html: String,
     network_html: String,
     download_html: String,
+    frame_switch_html: String,
+    frame_pay_html: String,
+    frame_other_html: String,
+    frame_nested_html: String,
+    frame_inner_html: String,
 }
 
 impl FixtureServer {
@@ -234,6 +239,11 @@ impl FixtureServer {
             drag_html: load_html_fixture(DRAG_FIXTURE_FILE),
             network_html: load_html_fixture(NETWORK_FIXTURE_FILE),
             download_html: load_html_fixture(DOWNLOAD_FIXTURE_FILE),
+            frame_switch_html: load_html_fixture(FRAME_FIXTURE_FILE),
+            frame_pay_html: load_html_fixture(FRAME_PAY_FIXTURE_FILE),
+            frame_other_html: load_html_fixture(FRAME_OTHER_FIXTURE_FILE),
+            frame_nested_html: load_html_fixture(FRAME_NESTED_FIXTURE_FILE),
+            frame_inner_html: load_html_fixture(FRAME_INNER_FIXTURE_FILE),
         });
 
         thread::spawn(move || {
@@ -354,6 +364,61 @@ fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePage
             "200 OK",
             "text/html; charset=utf-8",
             pages.download_html.clone(),
+        )
+    } else if path == FRAME_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.frame_switch_html.clone(),
+        )
+    } else if path == FRAME_PAY_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.frame_pay_html.clone(),
+        )
+    } else if path == FRAME_OTHER_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.frame_other_html.clone(),
+        )
+    } else if path == FRAME_NESTED_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.frame_nested_html.clone(),
+        )
+    } else if path == FRAME_INNER_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.frame_inner_html.clone(),
+        )
+    } else if path == FRAME_CROSS_PATH {
+        // Cross-origin frame fixture: the page is opened on 127.0.0.1 but its
+        // iframe points at 127.0.0.2 — a different origin (and a different
+        // renderer process), so the driver can list and select the frame but
+        // cannot operate inside it. The scenario starts a dedicated listener
+        // on 127.0.0.2:<this port> (see CrossOriginFixtureServer).
+        let port = stream.local_addr().map(|a| a.port()).unwrap_or(0);
+        let body = format!(
+            r#"<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Browser4 CLI Cross-Origin Frame Fixture</title></head>
+<body>
+  <h2>Cross-origin frame fixture (127.0.0.1 vs 127.0.0.2)</h2>
+  <button id="cross-main-button" type="button"
+    onclick="document.getElementById('cross-state').textContent = 'cross-main-clicked'">Main Button</button>
+  <div id="cross-state">cross-initial</div>
+  <iframe id="cross-frame" name="crossframe" src="http://127.0.0.2:{port}/frame-other.html"></iframe>
+</body>
+</html>"#
+        );
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            body,
         )
     } else if path == DOWNLOAD_FILE_PATH {
         // Attachment download: Chrome saves this to the download directory
@@ -709,6 +774,69 @@ fn serve_download_request(
         let _ = stream.write_all(&bundle_bytes);
     } else {
         write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cross-origin fixture server: serves one page on 127.0.0.2:<port> — a
+// different origin from the main fixture (127.0.0.1), so an iframe pointing
+// at it renders as a cross-origin / out-of-process frame in Chrome.
+// ---------------------------------------------------------------------------
+
+struct CrossOriginFixtureServer {
+    port: u16,
+    shutdown: Arc<AtomicBool>,
+}
+
+impl CrossOriginFixtureServer {
+    /// Serves [html] for every request on `127.0.0.2:{port}` (the port of the
+    /// main fixture server, so the cross-origin iframe src needs no lookup).
+    fn start(port: u16, html: String) -> Self {
+        let listener = TcpListener::bind(format!("127.0.0.2:{port}"))
+            .expect("cross-origin fixture server bind on 127.0.0.2 failed");
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let flag = shutdown.clone();
+        thread::spawn(move || {
+            listener
+                .set_nonblocking(true)
+                .expect("cross-origin fixture server set_nonblocking failed");
+            loop {
+                if flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let body = html.clone();
+                        thread::spawn(move || {
+                            let response = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                body.len(),
+                                body
+                            );
+                            let _ = stream.write_all(response.as_bytes());
+                        });
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(e) => {
+                        eprintln!("[cross-origin fixture server] accept error (continuing): {e}");
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                }
+            }
+        });
+        Self { port, shutdown }
+    }
+
+    fn base_url(&self) -> String {
+        format!("http://127.0.0.2:{}", self.port)
+    }
+}
+
+impl Drop for CrossOriginFixtureServer {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
     }
 }
 
@@ -2230,6 +2358,14 @@ impl E2ECtx {
 
     fn download_url(&self) -> String {
         format!("{}{}", self.fixture_base_url, DOWNLOAD_PATH)
+    }
+
+    fn frame_switch_url(&self) -> String {
+        format!("{}{}", self.fixture_base_url, FRAME_PATH)
+    }
+
+    fn frame_cross_url(&self) -> String {
+        format!("{}{}", self.fixture_base_url, FRAME_CROSS_PATH)
     }
 
     /// A slow fixture URL (served after a fixed delay) used to hold browser

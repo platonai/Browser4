@@ -2944,14 +2944,20 @@ pub(super) fn test_agent_browser_command_gaps_live(ctx: &mut E2ECtx) {
     assert!(focused, "focus should make fill-target the active element");
 
     // ── is-visible / is-enabled / is-checked against the real DOM ──
-    // NOTE: the upstream driver's isVisible currently reports true for any
-    // existing element (display:none included), so only the positive branch
-    // is asserted; isEnabled/isChecked distinguish disabled/checked states.
+    // isVisible reports real visibility: display:none and unresolvable
+    // selectors are false. (Upstream predicateOnPage used to map any non-null
+    // Boolean result — `false` included — to true; fixed in the base library.)
     let visible = run_command(ctx, &["is", "visible", "#click-target"]);
     assert!(
         visible.stdout.contains("true"),
         "is visible should report true for an existing element, got:\n{}",
         visible.stdout
+    );
+    let hidden = run_command(ctx, &["is", "visible", "#hidden-target"]);
+    assert!(
+        hidden.stdout.contains("false"),
+        "is visible should report false for a display:none element, got:\n{}",
+        hidden.stdout
     );
     let enabled = run_command(ctx, &["is", "enabled", "#click-target"]);
     assert!(
@@ -3114,4 +3120,337 @@ pub(super) fn test_agent_browser_command_gaps_live(ctx: &mut E2ECtx) {
     run_command(ctx, &["tab-close"]);
 
     run_command(ctx, &["close"]);
+}
+
+// ---------------------------------------------------------------------------
+// Frame switching — same-origin iframes (frame / frames commands)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_frame_switch_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    run_command(
+        ctx,
+        &["open", &ctx.frame_switch_url(), OPEN_PROFILE_MODE_ARG],
+    );
+
+    // Wait until the iframes committed their documents (same-origin, so the
+    // main frame can see inside via contentDocument).
+    let ready_deadline = Instant::now() + Duration::from_secs(15);
+    let mut frames_ready = false;
+    while Instant::now() < ready_deadline {
+        let probe = eval_text(
+            ctx,
+            "document.getElementById('pay-frame') && document.getElementById('pay-frame').contentDocument \
+             && document.getElementById('pay-frame').contentDocument.getElementById('pay-submit') ? 'ready' : 'pending'",
+        );
+        if probe.contains("ready") {
+            frames_ready = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(frames_ready, "pay-frame iframe should load its document");
+
+    // ── frames: the frame tree lists every iframe and marks the main frame active
+    let frames_out = run_command(ctx, &["frames"]);
+    for expected in ["payframe", "otherframe", "nestedframe", "frame-pay.html", "\"active\":true"] {
+        assert!(
+            frames_out.stdout.contains(expected),
+            "frames output should contain '{expected}', got:\n{}",
+            frames_out.stdout
+        );
+    }
+
+    // ── frame <element ref>: a snapshot-style ref (backend node id) of the
+    // iframe element resolves through DOM.describeNode (agent-browser parity:
+    // ref → owned frame id via contentDocument). Resolve the iframe's backend
+    // node id via DOM.getFrameOwner (keyed by the CDP frame id, so it cannot
+    // go stale between calls), then switch by that ref.
+    let pay_frame_id = named_frame_id(&frames_out.stdout, "payframe")
+        .unwrap_or_else(|| panic!("expected the payframe id in:\n{}", frames_out.stdout));
+    let owner_out = run_command(
+        ctx,
+        &[
+            "cdp",
+            "DOM.getFrameOwner",
+            "--json",
+            &format!(r##"{{"frameId":"{pay_frame_id}"}}"##),
+        ],
+    );
+    let iframe_backend = json_field_value(&owner_out.stdout, "backendNodeId")
+        .unwrap_or_else(|| panic!("expected a backendNodeId in:\n{}", owner_out.stdout));
+    let by_ref = run_command(ctx, &["frame", &format!("backend:{iframe_backend}")]);
+    assert!(
+        by_ref.stdout.contains("payframe"),
+        "frame backend:{iframe_backend} (element ref) should report the payframe, got:\n{}",
+        by_ref.stdout
+    );
+    run_command(ctx, &["frame", "main"]);
+
+    // ── frame <css selector>: switch into the payment iframe
+    let switched = run_command(ctx, &["frame", "#pay-frame"]);
+    assert!(
+        switched.stdout.contains("payframe"),
+        "frame #pay-frame should report the payframe, got:\n{}",
+        switched.stdout
+    );
+
+    // Scoped fill: #card-number lives inside the pay-frame document only.
+    run_command(ctx, &["fill", "#card-number", "4111-1111-1111-1111"]);
+    let card_value = eval_text(
+        ctx,
+        "document.getElementById('pay-frame').contentDocument.getElementById('card-number').value",
+    );
+    assert!(
+        card_value.contains("4111-1111-1111-1111"),
+        "fill inside the selected frame should reach the iframe input, got:\n{card_value}"
+    );
+
+    // Scoped click: #pay-submit exists only inside the pay-frame document.
+    run_command(ctx, &["click", "#pay-submit"]);
+    let pay_state_deadline = Instant::now() + Duration::from_secs(10);
+    let mut paid = false;
+    while Instant::now() < pay_state_deadline {
+        let state = eval_text(
+            ctx,
+            "document.getElementById('pay-frame').contentDocument.getElementById('pay-state').textContent",
+        );
+        if state.contains("submitted:4111-1111-1111-1111") {
+            paid = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(paid, "click inside the selected frame should update the iframe state");
+
+    // Scoped reads: is-visible resolves inside the selected frame.
+    let in_frame_visible = run_command(ctx, &["is", "visible", "#card-name"]);
+    assert!(
+        in_frame_visible.stdout.contains("true"),
+        "is visible should resolve #card-name inside the selected frame, got:\n{}",
+        in_frame_visible.stdout
+    );
+    // Main-document elements are NOT visible from inside the frame scope.
+    let main_el_scoped = run_command_allowing_failure(ctx, &["is", "visible", "#main-button"]);
+    assert!(
+        main_el_scoped.stdout.contains("false"),
+        "is visible should NOT resolve #main-button inside the frame scope, got:\n{}",
+        main_el_scoped.stdout
+    );
+
+    // Scoped wait: `wait <selector>` resolves inside the selected frame
+    // (#card-number exists only in the pay-frame document; an unscoped wait
+    // would time out).
+    let scoped_wait = run_command(ctx, &["wait", "#card-number", "--timeout", "5000"]);
+    assert!(
+        scoped_wait.exit_code == 0,
+        "wait should resolve #card-number inside the selected frame, got:\n{}",
+        scoped_wait.stdout
+    );
+
+    // XPath inside a selected frame must fail loudly with guidance instead of
+    // resolving against the wrong document or degrading to not-found.
+    run_command_expecting_failure(
+        ctx,
+        &["click", "//*[@id='pay-submit']"],
+        "XPath selectors are not supported inside a selected frame",
+    );
+
+    // ── frame main: scope returns to the main document
+    let main_switch = run_command(ctx, &["frame", "main"]);
+    assert!(
+        main_switch.stdout.contains("main") || main_switch.exit_code == 0,
+        "frame main should succeed, got:\n{}",
+        main_switch.stdout
+    );
+    let main_visible = run_command(ctx, &["is", "visible", "#main-button"]);
+    assert!(
+        main_visible.stdout.contains("true"),
+        "is visible should resolve #main-button again after frame main, got:\n{}",
+        main_visible.stdout
+    );
+    run_command(ctx, &["fill", "#main-input", "hello-main"]);
+    let main_value = eval_text(ctx, "document.getElementById('main-input').value");
+    assert!(
+        main_value.contains("hello-main"),
+        "fill should reach the main-document input after frame main, got:\n{main_value}"
+    );
+
+    // ── frame <name>: switch by frame name
+    let by_name = run_command(ctx, &["frame", "payframe"]);
+    assert!(
+        by_name.stdout.contains("payframe"),
+        "frame payframe (by name) should succeed, got:\n{}",
+        by_name.stdout
+    );
+    run_command(ctx, &["frame", "main"]);
+
+    // ── frame <url substring>: switch by a fragment of the frame's URL
+    let by_url = run_command(ctx, &["frame", "frame-pay.html"]);
+    assert!(
+        by_url.stdout.contains("payframe"),
+        "frame frame-pay.html (by url substring) should succeed, got:\n{}",
+        by_url.stdout
+    );
+    run_command(ctx, &["frame", "main"]);
+
+    // ── nested frames: #nested-frame then #inner-frame from inside
+    run_command(ctx, &["frame", "#nested-frame"]);
+    run_command(ctx, &["click", "#nested-button"]);
+    let nested_deadline = Instant::now() + Duration::from_secs(10);
+    let mut nested_clicked = false;
+    while Instant::now() < nested_deadline {
+        let state = eval_text(
+            ctx,
+            "document.getElementById('nested-frame').contentDocument.getElementById('nested-state').textContent",
+        );
+        if state.contains("nested-clicked") {
+            nested_clicked = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(nested_clicked, "click inside the nested frame host should update its state");
+
+    // Switch deeper: #inner-frame resolves inside the nested frame's document.
+    let inner_switch = run_command(ctx, &["frame", "#inner-frame"]);
+    assert!(
+        inner_switch.exit_code == 0,
+        "nested frame switch should succeed, got:\n{}",
+        inner_switch.stdout
+    );
+    run_command(ctx, &["click", "#inner-button"]);
+    let inner_deadline = Instant::now() + Duration::from_secs(10);
+    let mut inner_clicked = false;
+    while Instant::now() < inner_deadline {
+        let state = eval_text(
+            ctx,
+            "document.getElementById('nested-frame').contentDocument.getElementById('inner-frame') \
+             && document.getElementById('nested-frame').contentDocument.getElementById('inner-frame').contentDocument \
+             ? document.getElementById('nested-frame').contentDocument.getElementById('inner-frame').contentDocument.getElementById('inner-state').textContent : ''",
+        );
+        if state.contains("inner-clicked") {
+            inner_clicked = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(inner_clicked, "click inside the innermost frame should update its state");
+    run_command(ctx, &["frame", "main"]);
+
+    // ── cross-origin iframe (v1 limitation, documented): a cross-origin
+    // iframe runs in its own renderer process (OOPIF). This stack does not
+    // use Target.setAutoAttach, so such frames are NOT part of the page
+    // session's frame tree: they cannot be listed or switched into. Attempts
+    // to target one must fail with an actionable error, never silently.
+    // (The assertion accepts both failure flavors: "Frame not found" when
+    // the frame is invisible to the tree, or "not reachable" on Chrome
+    // builds without site isolation where it is listed but not pierceable.)
+    let fixture_port = ctx
+        .fixture_base_url
+        .rsplit(':')
+        .next()
+        .and_then(|s| s.parse::<u16>().ok())
+        .expect("fixture base url should carry a port");
+    let _cross_server = CrossOriginFixtureServer::start(
+        fixture_port,
+        load_html_fixture(FRAME_OTHER_FIXTURE_FILE),
+    );
+    run_command(ctx, &["goto", &ctx.frame_cross_url()]);
+    // Give the cross-origin iframe time to start (its element exists in the
+    // main document regardless of isolation).
+    let cross_probe_deadline = Instant::now() + Duration::from_secs(10);
+    let mut cross_frame_present = false;
+    while Instant::now() < cross_probe_deadline {
+        if eval_text(ctx, "document.getElementById('cross-frame') ? 'yes' : 'no'").contains("yes") {
+            cross_frame_present = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(cross_frame_present, "the cross-origin iframe element should exist");
+
+    let cross_switch = run_command_allowing_failure(ctx, &["frame", "crossframe"]);
+    let cross_switch_output = format!("{}\n{}", cross_switch.stdout, cross_switch.stderr);
+    assert!(
+        cross_switch.exit_code != 0
+            && (cross_switch_output.contains("Frame not found")
+                || cross_switch_output.contains("not reachable")),
+        "targeting a cross-origin frame should fail with an actionable error, got (exit {}):\n{cross_switch_output}",
+        cross_switch.exit_code
+    );
+    // The main document stays fully operable afterwards.
+    run_command(ctx, &["frame", "main"]);
+    run_command(ctx, &["click", "#cross-main-button"]);
+    let cross_clicked = eval_text(ctx, "document.getElementById('cross-state').textContent");
+    assert!(
+        cross_clicked.contains("cross-main-clicked"),
+        "main-document click should work on the cross-origin page, got:\n{cross_clicked}"
+    );
+
+    // ── navigation resets the frame scope automatically
+    goto_interactive_page(ctx);
+    let frames_after_nav = run_command(ctx, &["frames"]);
+    assert!(
+        frames_after_nav.stdout.contains("\"active\":true"),
+        "frames after navigation should still list the main frame as active, got:\n{}",
+        frames_after_nav.stdout
+    );
+    assert!(
+        !frames_after_nav.stdout.contains("payframe"),
+        "frames after navigation should not list the old page's iframes, got:\n{}",
+        frames_after_nav.stdout
+    );
+    // Element operations work against the main document right away.
+    run_command(ctx, &["click", "#click-target"]);
+    let click_deadline = Instant::now() + Duration::from_secs(10);
+    let mut clicked = false;
+    while Instant::now() < click_deadline {
+        let count = eval_text(ctx, "window.__browser4State.clickCount");
+        if count.trim() == "1" {
+            clicked = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(clicked, "click should work on the main document after navigation");
+
+    // ── error path: unknown frame target
+    run_command_expecting_failure(ctx, &["frame", "#no-such-frame"], "Frame not found");
+
+    run_command(ctx, &["close"]);
+}
+
+/// Find the first `"field": <integer>` anywhere in a CLI stdout payload
+/// (the JSON may be pretty-printed or wrapped by banners).
+fn json_field_value(stdout: &str, field: &str) -> Option<i64> {
+    let needle = format!("\"{field}\":");
+    let mut search_from = 0;
+    while let Some(relative) = stdout[search_from..].find(&needle) {
+        let value_start = search_from + relative + needle.len();
+        let digits: String = stdout[value_start..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '-')
+            .collect();
+        if let Ok(value) = digits.parse::<i64>() {
+            return Some(value);
+        }
+        search_from = value_start;
+    }
+    None
+}
+
+/// Extract the CDP frame id of the frame whose `name` equals [name] from a
+/// `frames` command payload (a JSON array of frame objects).
+fn named_frame_id(stdout: &str, name: &str) -> Option<String> {
+    let start = stdout.find('[')?;
+    let end = stdout.rfind(']')?;
+    let value: serde_json::Value = serde_json::from_str(&stdout[start..=end]).ok()?;
+    let frames = value.as_array()?;
+    frames
+        .iter()
+        .find(|frame| frame.get("name").and_then(|v| v.as_str()) == Some(name))
+        .and_then(|frame| frame.get("id").and_then(|v| v.as_str()))
+        .map(str::to_string)
 }

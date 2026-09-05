@@ -1692,4 +1692,115 @@ class MCPToolControllerTest {
             assertEquals(method, camelMethod, "snakeToCamelCase round-trip failed: $rawMethod → $camelMethod, expected $method")
         }
     }
+
+    // =====================================================================
+    // Frame switching tools (frame_list / frame_switch / frame_main)
+    // =====================================================================
+
+    @Test
+    fun `test frame_list tool maps to tab frameList`() = runBlocking {
+        mockTool("tab", "frameList")
+
+        val request = MCPToolCallRequest(
+            tool = "frame_list",
+            arguments = mapOf("sessionId" to sessionId)
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("frameList", toolCall.method)
+    }
+
+    @Test
+    fun `test frame_switch tool maps to tab frameSwitch with the frame argument`() = runBlocking {
+        mockTool("tab", "frameSwitch")
+
+        val request = MCPToolCallRequest(
+            tool = "frame_switch",
+            arguments = mapOf("sessionId" to sessionId, "frame" to "#pay-frame")
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("frameSwitch", toolCall.method)
+        assertEquals("#pay-frame", toolCall.arguments["frame"])
+    }
+
+    @Test
+    fun `test frontend browser_frame_switch alias maps to tab frameSwitch`() = runBlocking {
+        mockTool("tab", "frameSwitch")
+
+        val request = MCPToolCallRequest(
+            tool = "browser_frame_switch",
+            arguments = mapOf("sessionId" to sessionId, "frame" to "payframe")
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("frameSwitch", toolCall.method)
+        assertEquals("payframe", toolCall.arguments["frame"])
+    }
+
+    @Test
+    fun `test frame_main tool maps to tab frameMain`() = runBlocking {
+        mockTool("tab", "frameMain")
+
+        val request = MCPToolCallRequest(
+            tool = "frame_main",
+            arguments = mapOf("sessionId" to sessionId)
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("frameMain", toolCall.method)
+    }
+
+    @Test
+    fun `test frontend browser_frame_main alias maps to tab frameMain`() = runBlocking {
+        mockTool("tab", "frameMain")
+
+        val request = MCPToolCallRequest(
+            tool = "browser_frame_main",
+            arguments = mapOf("sessionId" to sessionId)
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("frameMain", toolCall.method)
+    }
 }

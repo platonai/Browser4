@@ -349,6 +349,21 @@ const TIPS_TABS: &[Tip] = &[
     },
 ];
 
+const TIPS_FRAME: &[Tip] = &[
+    Tip {
+        text: "Use `frame <iframe-selector>` to switch into an iframe — click/fill/type/isVisible then resolve inside it (e.g. `frame \"#pay-frame\"` then `fill \"#card-number\" ...`)",
+    },
+    Tip {
+        text: "Use `frames` to list the page frame tree (names + URLs) and find the frame you need to switch into",
+    },
+    Tip {
+        text: "After `frame`, use `frame main` to return to the main document — navigation (goto/open) resets the frame scope automatically",
+    },
+    Tip {
+        text: "`frame` also accepts a frame name, frame id, or URL fragment from `frames` output — not just CSS selectors",
+    },
+];
+
 const TIPS_STORAGE: &[Tip] = &[
     Tip {
         text: "Use `localstorage-get` and `sessionstorage-get` to extract client-side stored data",
@@ -453,6 +468,7 @@ fn tips_for_command(command: &str) -> &'static [Tip] {
         }
         "select" => TIPS_SELECT,
         "tab-list" | "tab-new" | "tab-close" | "tab-select" => TIPS_TABS,
+        "frame" | "frames" => TIPS_FRAME,
         "localstorage-list"
         | "localstorage-get"
         | "localstorage-set"
@@ -571,6 +587,9 @@ mod tests {
         assert!(!tips_for_command("htmlsnapshot-readability").is_empty());
         // Eval
         assert!(!tips_for_command("eval").is_empty());
+        // Frame switching
+        assert!(!tips_for_command("frame").is_empty());
+        assert!(!tips_for_command("frames").is_empty());
         // AI
         assert!(!tips_for_command("extract").is_empty());
         assert!(!tips_for_command("summarize").is_empty());

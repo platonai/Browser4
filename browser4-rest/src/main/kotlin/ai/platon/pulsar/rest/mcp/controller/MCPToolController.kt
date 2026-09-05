@@ -146,6 +146,9 @@ class MCPToolController(
             "browser_network_unroute" to "network_unroute",
             "browser_har_start" to "har_start",
             "browser_har_stop" to "har_stop",
+            "browser_frame_list" to "frame_list",
+            "browser_frame_switch" to "frame_switch",
+            "browser_frame_main" to "frame_main",
         )
 
         private const val CLEAR_SESSION_STORAGE_SCRIPT = """
@@ -1171,6 +1174,9 @@ class MCPToolController(
             "network_unroute" -> return ToolCall("tab", "networkUnroute", args1)
             "har_start" -> return ToolCall("tab", "harStart", args1)
             "har_stop" -> return ToolCall("tab", "harStop", args1)
+            "frame_list" -> return ToolCall("tab", "frameList", args1)
+            "frame_switch" -> return ToolCall("tab", "frameSwitch", args1)
+            "frame_main" -> return ToolCall("tab", "frameMain", args1)
         }
 
         // 2. Generic mapping

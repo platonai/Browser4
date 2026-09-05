@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.pulsar.api.model.FrameInfo
 import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.chrome.Browser4WebDriver
@@ -677,5 +678,77 @@ class BrowserTabToolExecutorTest {
             Mockito.verify(driver, Mockito.never())
                 .waitForNavigation("http://example.com")
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Frame scope tools
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `frameSwitch delegates to the driver with the frame argument`() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        `when`(driver.frameSwitch("#pay-frame")).thenReturn(
+            FrameInfo(id = "f1", name = "payframe", url = "http://x/pay", parentId = "main", active = true)
+        )
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "frameSwitch", mutableMapOf("frame" to "#pay-frame")),
+            driver
+        )
+
+        assertTrue(result.success)
+        val value = result.value as Map<*, *>
+        assertEquals("f1", value["id"])
+        assertEquals("payframe", value["name"])
+        assertEquals(true, value["active"])
+        Mockito.verify(driver).frameSwitch("#pay-frame")
+    }
+
+    @Test
+    fun `frameMain delegates to the driver`() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "frameMain", mutableMapOf<String, Any?>()),
+            driver
+        )
+
+        assertTrue(result.success)
+        Mockito.verify(driver).frameMain()
+    }
+
+    @Test
+    fun `frameList delegates to the driver`() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        `when`(driver.frameList()).thenReturn(
+            listOf(
+                FrameInfo(id = "main", url = "http://x/", active = true),
+                FrameInfo(id = "f1", name = "payframe", url = "http://x/pay", parentId = "main"),
+            )
+        )
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "frameList", mutableMapOf<String, Any?>()),
+            driver
+        )
+
+        assertTrue(result.success)
+        val frames = result.value as List<*>
+        assertEquals(2, frames.size)
+        Mockito.verify(driver).frameList()
+    }
+
+    @Test
+    fun `frameSwitch requires the frame argument`() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "frameSwitch", mutableMapOf<String, Any?>()),
+            driver
+        )
+
+        assertTrue(!result.success)
+        assertTrue(result.exception?.cause?.message?.contains("frameSwitch requires 'frame'") == true)
+        Mockito.verify(driver, Mockito.never()).frameSwitch(Mockito.anyString())
     }
 }

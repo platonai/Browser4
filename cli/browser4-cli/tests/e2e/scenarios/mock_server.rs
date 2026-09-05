@@ -6888,3 +6888,77 @@ pub(super) fn test_doctor_status_command(ctx: &mut E2ECtx) {
         json_out.stdout
     );
 }
+
+// ---------------------------------------------------------------------------
+// Frame commands (frames / frame) — CLI↔backend contract
+// ---------------------------------------------------------------------------
+
+/// `frames` / `frame` / `frame main` must map to the frame_list /
+/// frame_switch / frame_main backend tools with the right arguments, render
+/// the backend response, and surface backend "Frame not found" errors.
+pub(super) fn test_e2e_frame_commands_contract(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result
+            .stdout
+            .contains("Session opened: swarm-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    // ── frames → frame_list (no extra arguments) and prints the response ──
+    let frames_result = run_command(ctx, &["frames"]);
+    assert_eq!(frames_result.exit_code, 0, "expected frames to succeed");
+    assert!(
+        frames_result
+            .stdout
+            .contains("mock response for frame_list"),
+        "Expected the frame_list mock response in:\n{}",
+        frames_result.stdout
+    );
+
+    // ── frame <selector> → frame_switch with the frame argument ──
+    let switch_result = run_command(ctx, &["frame", "#pay-frame"]);
+    assert_eq!(switch_result.exit_code, 0, "expected frame switch to succeed");
+
+    // ── frame main → frame_main (no extra arguments) ──
+    let main_result = run_command(ctx, &["frame", "main"]);
+    assert_eq!(main_result.exit_code, 0, "expected frame main to succeed");
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let list_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "frame_list")
+        .collect();
+    assert_eq!(list_calls.len(), 1, "expected one frame_list call");
+    assert_eq!(list_calls[0].arguments["sessionId"], "swarm-session-1");
+
+    let switch_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "frame_switch")
+        .collect();
+    assert_eq!(switch_calls.len(), 1, "expected one frame_switch call");
+    assert_eq!(switch_calls[0].arguments["sessionId"], "swarm-session-1");
+    assert_eq!(switch_calls[0].arguments["frame"], "#pay-frame");
+
+    let main_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "frame_main")
+        .collect();
+    assert_eq!(main_calls.len(), 1, "expected one frame_main call");
+    assert_eq!(main_calls[0].arguments["sessionId"], "swarm-session-1");
+
+    // ── backend error surfaces to the CLI with a non-zero exit ──
+    mock_server.queue_tool_failure(
+        "frame_switch",
+        Some("swarm-session-1"),
+        None,
+        "Frame not found: #no-such-frame",
+    );
+    run_command_expecting_failure(ctx, &["frame", "#no-such-frame"], "Frame not found");
+}

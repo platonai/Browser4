@@ -8,6 +8,7 @@ import ai.platon.pulsar.api.model.WebDriverException
 import ai.platon.pulsar.api.model.NetworkResourceResponse
 import ai.platon.pulsar.api.model.NodeRef
 import ai.platon.pulsar.api.model.BrowserUseState
+import ai.platon.pulsar.api.model.FrameInfo
 import ai.platon.pulsar.api.model.NanoDOMTree
 import ai.platon.pulsar.api.model.PageTarget
 import ai.platon.pulsar.api.model.SnapshotOptions
@@ -1941,6 +1942,59 @@ interface WebDriver : Closeable {
     @Throws(WebDriverException::class)
     @MCP
     suspend fun executeCdpCommand(method: String, params: Map<String, Any?>? = null): Any?
+
+    /**
+     * List the frames of the current page (frame tree, depth-first, main frame first). @mcp
+     *
+     * Each entry describes one frame: its CDP id, `name` attribute, current document
+     * url, parent frame id, and depth (0 = the main frame). Use the returned name, id,
+     * or url as the target of `frameSwitch` to scope subsequent element operations to
+     * that frame.
+     *
+     * @return The page's frames in depth-first order.
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun frameList(): List<FrameInfo>
+
+    /**
+     * Switch the frame that subsequent CSS-selector element operations resolve against. @mcp
+     *
+     * After a successful switch, operations such as click, fill, type, hover, focus,
+     * waitForSelector, exists, isVisible and the element-scoped reads resolve their
+     * CSS selectors inside the selected frame's document instead of the main frame's,
+     * so iframe-heavy flows (e.g. a payment form embedded in an iframe) need no manual
+     * `contentDocument` evaluation.
+     *
+     * The target is resolved in this order: a CSS selector matching an `<iframe>` element
+     * inside the currently scoped document (nested switching works); an exact frame id as
+     * printed by `frameList`; an exact frame `name`; a case-insensitive url substring.
+     * Switch back to the main frame with `frameMain`. The scope resets automatically when
+     * the main frame navigates.
+     *
+     * Cross-origin (out-of-process) iframes: some Chrome builds report them in the frame
+     * tree — they can then be selected, but element operations inside them are not
+     * supported in this version and fail with an actionable error. Other builds keep them
+     * invisible to the page session's frame tree, in which case switching to them fails
+     * with a "Frame not found" error. Either way they never silently resolve against the
+     * wrong document.
+     *
+     * @param frame The target frame: CSS selector, frame id, frame name, or url substring.
+     * @return The resolved frame.
+     * @throws WebDriverException When no frame matches [frame].
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun frameSwitch(frame: String): FrameInfo
+
+    /**
+     * Switch back to the main frame, undoing the scope set by `frameSwitch`. @mcp
+     *
+     * All subsequent element operations resolve against the main document again.
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun frameMain()
 
     /**
      * Generates a unique CSS selector path for the element located by [selector]. @mcp

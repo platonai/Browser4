@@ -105,6 +105,19 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 | `tab-close [index]` | Close a browser tab. Use `--guid <guid>` for GUID-based close |
 | `tab-select <index>` | Select a browser tab. Use `--guid <guid>` for GUID-based select |
 
+### Frames (iframes)
+
+| Command | Description |
+|---|---|
+| `frames` | List the page's frame tree: names, urls, depth, and the active frame |
+| `frame <target>` | Scope subsequent element commands (`click`, `fill`, `type`, `is visible`, …) into an iframe. Target forms: snapshot element ref of the iframe (`e12`, `backend:123`), iframe CSS selector (`#pay-frame`), frame name, frame id, or URL fragment from `frames` |
+| `frame main` | Return to the main document (also automatic after navigation) |
+
+Same-origin iframes are fully supported; cross-origin iframes (out-of-process
+frames) are not supported in this version — `frames` cannot see them and
+`frame` on one fails with an actionable error. See
+[`skills/browser4-cli/references/frames.md`](../../skills/browser4-cli/references/frames.md).
+
 ### DevTools
 
 | Command | Description |

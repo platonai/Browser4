@@ -94,7 +94,10 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         "tab-select" to "browser_tabs",
         "agent-run" to "command_run",
         "agent-status" to "command_status",
-        "agent-result" to "command_result"
+        "agent-result" to "command_result",
+        "frames" to "browser_frame_list",
+        "frame" to "browser_frame_switch",
+        "frame-main" to "browser_frame_main",
     )
 
     private val createdSessions = mutableListOf<String>()
@@ -913,6 +916,104 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         assertTrue(textContent(invalidSession).contains("Session not found"))
     }
 
+    @Test
+    @DisplayName("frameList frameSwitch and frameMain scope element tools into same-origin iframes")
+    fun testFrameSwitchTools() {
+        val sessionId = openTemporarySession()
+        navigate(sessionId, fixtureServer.frameUrl())
+
+        // Wait until the same-origin iframes committed their documents.
+        waitForEvalText(
+            sessionId,
+            "document.getElementById('pay-frame') && document.getElementById('pay-frame').contentDocument " +
+                "&& document.getElementById('pay-frame').contentDocument.getElementById('pay-submit') ? 'ready' : 'pending'",
+            "ready",
+            "Expected the pay iframe to load its document"
+        )
+
+        // frameList lists every iframe (names + urls).
+        val frameListResponse = callTool("frame_list", mapOf("sessionId" to sessionId))
+        assertNotError(frameListResponse)
+        val frameListText = textContent(frameListResponse)
+        assertTrue(frameListText.contains("payframe"), "Expected payframe in frameList: $frameListText")
+        assertTrue(frameListText.contains("nestedframe"), "Expected nestedframe in frameList: $frameListText")
+        assertTrue(frameListText.contains("frame-pay.html"), "Expected the pay url in frameList: $frameListText")
+
+        // frameSwitch by CSS selector enters the payment iframe.
+        val switchResponse = callTool(
+            "frame_switch",
+            mapOf("sessionId" to sessionId, "frame" to "#pay-frame")
+        )
+        assertNotError(switchResponse)
+        assertTrue(textContent(switchResponse).contains("payframe"))
+
+        // Element tools resolve inside the selected frame afterwards.
+        assertNotError(
+            callTool(
+                "fill",
+                mapOf("sessionId" to sessionId, "selector" to "#card-number", "text" to "4111-1111-1111-1111")
+            )
+        )
+        waitForEvalText(
+            sessionId,
+            "document.getElementById('pay-frame').contentDocument.getElementById('card-number').value",
+            "4111-1111-1111-1111",
+            "Expected fill to reach the input inside the selected frame"
+        )
+
+        assertNotError(
+            callTool("click", mapOf("sessionId" to sessionId, "selector" to "#pay-submit"))
+        )
+        waitForEvalText(
+            sessionId,
+            "document.getElementById('pay-frame').contentDocument.getElementById('pay-state').textContent",
+            "submitted:4111-1111-1111-1111:",
+            "Expected click inside the selected frame to update the iframe state"
+        )
+
+        // Visibility is frame-scoped: the frame's element is visible, the
+        // main document's element is not resolvable from inside the frame.
+        val inFrameVisible = callTool(
+            "is_visible",
+            mapOf("sessionId" to sessionId, "selector" to "#card-name")
+        )
+        assertNotError(inFrameVisible)
+        assertTrue(textContent(inFrameVisible).contains("true"), "Expected #card-name visible in-frame")
+
+        val mainScopedVisible = callTool(
+            "is_visible",
+            mapOf("sessionId" to sessionId, "selector" to "#main-button")
+        )
+        assertNotError(mainScopedVisible)
+        assertTrue(textContent(mainScopedVisible).contains("false"), "Expected #main-button invisible from the frame scope")
+
+        // frameMain returns to the main document.
+        assertNotError(callTool("frame_main", mapOf("sessionId" to sessionId)))
+        assertNotError(
+            callTool(
+                "fill",
+                mapOf("sessionId" to sessionId, "selector" to "#main-input", "text" to "hello-main")
+            )
+        )
+        waitForEvalText(
+            sessionId,
+            "document.getElementById('main-input').value",
+            "hello-main",
+            "Expected fill to reach the main-document input after frameMain"
+        )
+
+        // Unknown frame targets surface an actionable error.
+        val missingResponse = callTool(
+            "frame_switch",
+            mapOf("sessionId" to sessionId, "frame" to "#no-such-frame")
+        )
+        assertIsError(missingResponse)
+        assertTrue(
+            textContent(missingResponse).contains("Frame not found"),
+            "Expected 'Frame not found' error but got: ${textContent(missingResponse)}"
+        )
+    }
+
     private fun callTool(tool: String, arguments: Map<String, Any?> = emptyMap()): MCPToolCallResponse {
         val request = mapOf("tool" to tool, "arguments" to arguments)
         val body = client.post().uri("/mcp/call-tool")
@@ -1314,6 +1415,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         fun interactiveUrl(): String = "$baseUrl/interactive"
         fun otherUrl(): String = "$baseUrl/other"
         fun formUrl(): String = "$baseUrl/form"
+        fun frameUrl(): String = "$baseUrl/frame-switch"
 
         override fun close() {
             server.stop(0)
@@ -1326,6 +1428,11 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
             private const val INTERACTIVE_FIXTURE_RESOURCE = "static/b4/mcp-tool-controller-interactive-fixture.html"
             private const val OTHER_FIXTURE_RESOURCE = "static/b4/mcp-tool-controller-other-fixture.html"
             private const val FORM_FIXTURE_RESOURCE = "static/b4/mcp-tool-controller-form-fixture.html"
+            private const val FRAME_SWITCH_FIXTURE_RESOURCE = "static/b4/frame-switch.html"
+            private const val FRAME_PAY_FIXTURE_RESOURCE = "static/b4/frame-pay.html"
+            private const val FRAME_OTHER_FIXTURE_RESOURCE = "static/b4/frame-other.html"
+            private const val FRAME_NESTED_FIXTURE_RESOURCE = "static/b4/frame-nested.html"
+            private const val FRAME_INNER_FIXTURE_RESOURCE = "static/b4/frame-inner.html"
 
             fun start(): FixtureServer {
                 val executor = Executors.newCachedThreadPool()
@@ -1333,6 +1440,11 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
                 val interactiveHtml = loadFixture(INTERACTIVE_FIXTURE_RESOURCE)
                 val otherHtml = loadFixture(OTHER_FIXTURE_RESOURCE)
                 val formHtml = loadFixture(FORM_FIXTURE_RESOURCE)
+                val frameSwitchHtml = loadFixture(FRAME_SWITCH_FIXTURE_RESOURCE)
+                val framePayHtml = loadFixture(FRAME_PAY_FIXTURE_RESOURCE)
+                val frameOtherHtml = loadFixture(FRAME_OTHER_FIXTURE_RESOURCE)
+                val frameNestedHtml = loadFixture(FRAME_NESTED_FIXTURE_RESOURCE)
+                val frameInnerHtml = loadFixture(FRAME_INNER_FIXTURE_RESOURCE)
                 server.executor = executor
                 server.createContext("/") { exchange ->
                     val path = exchange.requestURI.path
@@ -1340,6 +1452,11 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
                         "/", "/interactive" -> Triple(200, "text/html; charset=utf-8", interactiveHtml)
                         "/other" -> Triple(200, "text/html; charset=utf-8", otherHtml)
                         "/form" -> Triple(200, "text/html; charset=utf-8", formHtml)
+                        "/frame-switch" -> Triple(200, "text/html; charset=utf-8", frameSwitchHtml)
+                        "/frame-pay.html" -> Triple(200, "text/html; charset=utf-8", framePayHtml)
+                        "/frame-other.html" -> Triple(200, "text/html; charset=utf-8", frameOtherHtml)
+                        "/frame-nested.html" -> Triple(200, "text/html; charset=utf-8", frameNestedHtml)
+                        "/frame-inner.html" -> Triple(200, "text/html; charset=utf-8", frameInnerHtml)
                         else -> Triple(404, "text/plain; charset=utf-8", "not found")
                     }
                     val bytes = body.toByteArray(StandardCharsets.UTF_8)
