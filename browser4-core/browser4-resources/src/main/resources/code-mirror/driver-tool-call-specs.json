@@ -1589,6 +1589,36 @@
   "cli" : "browser4-cli tab executeCdpCommand --method=<String>, default= --params=<Map<String, Any?>?>, default=null"
 }, {
   "domain" : "tab",
+  "method" : "frameList",
+  "returnType" : "List<FrameInfo>",
+  "description" : "List the frames of the current page (frame tree, depth-first, main frame first).",
+  "help" : "List the frames of the current page (frame tree, depth-first, main frame first).\n\nEach entry describes one frame: its CDP id, `name` attribute, current document url, parent frame id, and depth (0 = the main frame). Use the returned name, id, or url as the target of `frameSwitch` to scope subsequent element operations to that frame.",
+  "expression" : "tab.frameList()",
+  "cli" : "browser4-cli tab frameList "
+}, {
+  "domain" : "tab",
+  "method" : "frameSwitch",
+  "arguments" : [ {
+    "name" : "frame",
+    "type" : "String",
+    "expression" : "frame: String = ",
+    "cliOptions" : "--frame=<String>, default="
+  } ],
+  "returnType" : "FrameInfo",
+  "description" : "Switch the frame that subsequent CSS-selector element operations resolve against.",
+  "help" : "Switch the frame that subsequent CSS-selector element operations resolve against.\n\nAfter a successful switch, operations such as click, fill, type, hover, focus, waitForSelector, exists, isVisible and the element-scoped reads resolve their CSS selectors inside the selected frame's document instead of the main frame's, so iframe-heavy flows (e.g. a payment form embedded in an iframe) need no manual `contentDocument` evaluation.\n\nThe target is resolved in this order: a CSS selector matching an `<iframe>` element inside the currently scoped document (nested switching works); an exact frame id as printed by `frameList`; an exact frame `name`; a case-insensitive url substring. Switch back to the main frame with `frameMain`. The scope resets automatically when the main frame navigates.\n\nCross-origin (out-of-process) iframes: some Chrome builds report them in the frame tree — they can then be selected, but element operations inside them are not supported in this version and fail with an actionable error. Other builds keep them invisible to the page session's frame tree, in which case switching to them fails with a \"Frame not found\" error. Either way they never silently resolve against the wrong document.",
+  "expression" : "tab.frameSwitch(Arg(name=frame, type=String, defaultValue=))",
+  "cli" : "browser4-cli tab frameSwitch --frame=<String>, default="
+}, {
+  "domain" : "tab",
+  "method" : "frameMain",
+  "returnType" : "Unit",
+  "description" : "Switch back to the main frame, undoing the scope set by `frameSwitch`.",
+  "help" : "Switch back to the main frame, undoing the scope set by `frameSwitch`.\n\nAll subsequent element operations resolve against the main document again.",
+  "expression" : "tab.frameMain()",
+  "cli" : "browser4-cli tab frameMain "
+}, {
+  "domain" : "tab",
   "method" : "generateLocator",
   "arguments" : [ {
     "name" : "selector",
