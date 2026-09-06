@@ -272,6 +272,49 @@ macro_rules! cli_println {
     };
 }
 
+/// Print a crawl STATUS/PROGRESS line.  When a crawl's structured payload
+/// (X-SQL csv/json output) is written to stdout, status chatter must NOT share
+/// the stream — a redirected `--format csv > out.csv` would otherwise start
+/// with task/progress lines and corrupt the CSV.  In that mode status lines go
+/// to stderr (still visible on a terminal); otherwise they behave exactly like
+/// [cli_println!].
+macro_rules! crawl_status_println {
+    () => {
+        if !$crate::quiet_active() && !$crate::json_active() {
+            if $crate::crawl_structured_stdout_active() {
+                eprintln!();
+            } else {
+                $crate::print_stdout_line("");
+            }
+        }
+    };
+    ($($arg:tt)*) => {
+        if !$crate::quiet_active() && !$crate::json_active() {
+            if $crate::crawl_structured_stdout_active() {
+                eprintln!($($arg)*);
+            } else {
+                $crate::print_stdout_line(&format!($($arg)*));
+            }
+        }
+    };
+}
+
+thread_local! {
+    /// When true, `crawl_status_println!` lines are routed to stderr so the
+    /// structured payload (CSV/table/JSON extracted data) is the only thing on
+    /// stdout.  Set per-crawl in `handle_crawl` when the payload goes directly
+    /// to stdout (no --output file).
+    static CRAWL_STRUCTURED_STDOUT: RefCell<bool> = const { RefCell::new(false) };
+}
+
+fn crawl_structured_stdout_active() -> bool {
+    CRAWL_STRUCTURED_STDOUT.with(|cell| *cell.borrow())
+}
+
+fn crawl_set_structured_stdout(active: bool) {
+    CRAWL_STRUCTURED_STDOUT.with(|cell| *cell.borrow_mut() = active);
+}
+
 // ---------------------------------------------------------------------------
 // Exit codes
 // ---------------------------------------------------------------------------
@@ -919,14 +962,18 @@ fn build_swarm_create_capabilities(tool_params: &Value) -> Result<Value, String>
     {
         capabilities.insert("maxBrowserContexts".to_string(), json!(v));
     }
-    if let Some(v) = tool_params
+    // Headless-first convention: open/goto default to HEADLESS for agent use,
+    // and swarm sessions are the CLI's highest-throughput agent surface — a
+    // bare `swarm create` must not pop visible GUI windows.  Only an explicit
+    // --display-mode GUI opts into a visible browser.
+    let display_mode = tool_params
         .get("displayMode")
         .and_then(|value| value.as_str())
         .map(str::trim)
         .filter(|value| !value.is_empty())
-    {
-        capabilities.insert("displayMode".to_string(), json!(v));
-    }
+        .unwrap_or("HEADLESS")
+        .to_ascii_uppercase();
+    capabilities.insert("displayMode".to_string(), json!(display_mode));
 
     Ok(Value::Object(capabilities))
 }
@@ -1106,7 +1153,7 @@ async fn post_command_snapshot(client: &Client, base_url: &str, session_id: &str
                       # Use `browser4-cli snapshot grep <pattern>` to search the tree.\n";
         let snap_with_header = format!("{}\n{}", header, snap_result);
         if let Err(e) = save_snapshot(&out_path, &snap_with_header) {
-            eprintln!("Warning: failed to save snapshot: {e}");
+            eprintln!("Warning: failed to save snapshot: {}", describe_io_error(&e));
             return;
         }
 
@@ -4092,17 +4139,48 @@ fn normalize_path_display(path: &Path) -> PathBuf {
     }
 }
 
+/// Render a file I/O error with locale-independent English text for the
+/// common error kinds.  Windows renders raw OS errors in the system language
+/// (FormatMessageW — e.g. Chinese on a zh-CN machine), which leaks into
+/// otherwise-English CLI output and varies between machines.  Kinds that map
+/// to well-known errno codes keep the raw code suffix for scriptability;
+/// unclassified kinds fall back to the raw (possibly localized) error text.
+fn describe_io_error(error: &std::io::Error) -> String {
+    let kind_text = match error.kind() {
+        std::io::ErrorKind::NotFound => Some("no such file or directory"),
+        std::io::ErrorKind::PermissionDenied => Some("permission denied"),
+        std::io::ErrorKind::AlreadyExists => Some("file or directory already exists"),
+        _ => None,
+    };
+    match (kind_text, error.raw_os_error()) {
+        (Some(kind), Some(code)) => format!("{kind} (os error {code})"),
+        (Some(kind), None) => kind.to_string(),
+        (None, _) => error.to_string(),
+    }
+}
+
 fn resolve_storage_state_path(filename: Option<&str>) -> Result<PathBuf, String> {
     let trimmed = filename.map(str::trim).filter(|value| !value.is_empty());
-    let file_name = trimmed
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(timestamped_filename("storage-state", "json")));
-    if file_name.is_absolute() {
-        return Ok(normalize_path_display(&file_name));
+    match trimmed {
+        None => {
+            // Bare `state-save` (no filename): default into the CLI snapshot
+            // directory like every other capture output (extract/screenshot/
+            // snapshot go to .browser4-cli/snapshot/).  Writing a timestamped
+            // JSON dump into the caller's CWD polluted the working tree.
+            let name = timestamped_filename("storage-state", "json");
+            let dir = crate::snapshot::snapshot_dir();
+            let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+            Ok(normalize_path_display(&cwd.join(dir).join(name)))
+        }
+        Some(name) => {
+            let file_name = PathBuf::from(name);
+            if file_name.is_absolute() {
+                return Ok(normalize_path_display(&file_name));
+            }
+            let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+            Ok(normalize_path_display(&cwd.join(file_name)))
+        }
     }
-
-    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-    Ok(normalize_path_display(&cwd.join(file_name)))
 }
 
 async fn handle_state_save(
@@ -4134,7 +4212,7 @@ async fn handle_state_save(
         .map_err(|e| format!("Browser4 returned invalid storage state JSON: {e}"))?;
     let formatted = serde_json::to_string_pretty(&state_json)
         .map_err(|e| format!("Failed to format storage state JSON: {e}"))?;
-    save_snapshot(&output_path, &formatted).map_err(|e| e.to_string())?;
+    save_snapshot(&output_path, &formatted).map_err(|e| describe_io_error(&e))?;
     cli_println!("Storage state saved: {}", output_path.display());
     Ok(())
 }
@@ -4155,7 +4233,7 @@ async fn handle_state_load(
         format!(
             "Failed to read storage state file {}: {}",
             input_path.display(),
-            e
+            describe_io_error(&e)
         )
     })?;
     serde_json::from_str::<Value>(&state_json).map_err(|e| {
@@ -4590,6 +4668,57 @@ async fn handle_cookie_set(
     Ok(())
 }
 
+/// Extract the host (no scheme, port, or path) from a page URL for cookie
+/// scope comparison, e.g. `http://localhost:18080/a/b` → `localhost`.
+/// Cookie `domain` values never carry a port, so the port must be dropped;
+/// IPv6 `[::1]` hosts are handled for completeness.
+fn page_host(url: &str) -> Option<&str> {
+    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
+    let host_and_port = after_scheme
+        .split(|c| c == '/' || c == '?' || c == '#')
+        .next()?;
+    let host = if let Some(rest) = host_and_port.strip_prefix('[') {
+        rest.split_once(']').map(|(host, _)| host).unwrap_or(rest)
+    } else {
+        host_and_port
+            .split_once(':')
+            .map(|(host, _)| host)
+            .unwrap_or(host_and_port)
+    };
+    if host.is_empty() {
+        None
+    } else {
+        Some(host)
+    }
+}
+
+/// Whether a `cookie-delete` call would target at least one cookie in the
+/// jar, given the scoping the CLI forwards to the backend: a name, a scope
+/// domain (an explicit --domain, or the host of the current page URL when
+/// the delete is URL-scoped), and an optional exact --path.  CDP reports
+/// host-only cookies without a leading dot and domain cookies with one, so
+/// leading dots and case are ignored on both sides.
+fn cookie_in_delete_scope(
+    cookies: &[Value],
+    target_name: &str,
+    scope_domain: &str,
+    scope_path: Option<&str>,
+) -> bool {
+    cookies.iter().any(|cookie| {
+        if cookie.get("name").and_then(|v| v.as_str()) != Some(target_name) {
+            return false;
+        }
+        let domain = cookie.get("domain").and_then(|v| v.as_str()).unwrap_or("");
+        if !domain
+            .trim_start_matches('.')
+            .eq_ignore_ascii_case(scope_domain.trim_start_matches('.'))
+        {
+            return false;
+        }
+        scope_path.is_none_or(|path| cookie.get("path").and_then(|v| v.as_str()) == Some(path))
+    })
+}
+
 async fn handle_cookie_delete(
     client: &Client,
     base_url: &str,
@@ -4601,9 +4730,16 @@ async fn handle_cookie_delete(
         .get("name")
         .and_then(|value| value.as_str())
         .ok_or_else(|| "cookie-delete requires a cookie name".to_string())?;
+    let scope_path = tool_params.get("path").and_then(|value| value.as_str());
     let mut payload = json!({ "name": name });
-    if let Some(domain) = tool_params.get("domain").and_then(|value| value.as_str()) {
+    // Resolve the deletion scope domain exactly as the payload does: an
+    // explicit --domain, or the current page host when the delete is
+    // URL-scoped.
+    let scope_domain = if let Some(domain) =
+        tool_params.get("domain").and_then(|value| value.as_str())
+    {
         payload["domain"] = json!(domain);
+        domain.to_string()
     } else {
         let current_url = current_session_url(client, base_url, session_name).await?;
         if !(current_url.starts_with("http://") || current_url.starts_with("https://")) {
@@ -4613,9 +4749,33 @@ async fn handle_cookie_delete(
             );
         }
         payload["url"] = json!(current_url);
-    }
-    if let Some(path) = tool_params.get("path").and_then(|value| value.as_str()) {
+        page_host(&current_url)
+            .ok_or_else(|| {
+                format!(
+                    "Failed to determine the host of the current page URL: {current_url}"
+                )
+            })?
+            .to_string()
+    };
+    if let Some(path) = scope_path {
         payload["path"] = json!(path);
+    }
+
+    // CDP Network.deleteCookies does not error when the cookie is absent, so
+    // the tool result cannot distinguish 'deleted' from 'did not exist'.
+    // Check the current jar (the same data source cookie-get/cookie-list
+    // use) before deleting, and report honestly when the scope matches
+    // nothing — claiming 'Cookie deleted' for a cookie that was never there
+    // is a silent failure for scripts that clean up auth cookies.
+    let state = current_session_storage_state(client, base_url, session_name).await?;
+    if !cookie_in_delete_scope(
+        state["cookies"].as_array().map(Vec::as_slice).unwrap_or(&[]),
+        name,
+        &scope_domain,
+        scope_path,
+    ) {
+        cli_println!("Cookie not found: {} (nothing to delete)", name);
+        return Ok(());
     }
     let _ = call_session_tool(client, base_url, session_name, tool_name, payload).await?;
     cli_println!("Cookie deleted: {}", name);
@@ -4882,9 +5042,9 @@ async fn handle_snapshot(
     let out_path = resolve_output_path(filename.as_deref(), "snapshot", "yml");
 
     // Prepend a YAML comment header documenting the snapshot scope so users
-    // understand that the file may not contain the full accessibility tree
-    // (e.g. when viewport filtering is active).  Use `snapshot grep <pattern>`
-    // to search the complete in-memory tree regardless of viewport.
+    // understand what the file contains (e.g. when viewport filtering is
+    // active).  Use `snapshot grep <pattern>` to search the complete
+    // in-memory tree regardless of viewport.
     let viewports = tool_params
         .get("viewports")
         .and_then(|v| v.as_str())
@@ -4898,13 +5058,18 @@ async fn handle_snapshot(
             vp
         )
     } else {
+        // No -v filter: the snapshot contains the FULL accessibility tree —
+        // not just the current viewport.  The backend snapshot body may still
+        // carry a '# Viewport State ... processingViewport: 0' header of its
+        // own; this CLI header states the actual output scope so users do not
+        // mistake a full-page dump for a single-screen capture.
         format!(
-            "# Snapshot — current viewport (use -v N for other viewports, -v all for full page).\n\
+            "# Snapshot — full page tree (no viewport filter; use -v N for a single viewport, -v all for all viewports).\n\
              # Use `browser4-cli snapshot grep <pattern>` to search the tree.\n"
         )
     };
     let snap_with_header = format!("{}\n{}", header, snap);
-    save_snapshot(&out_path, &snap_with_header).map_err(|e| e.to_string())?;
+    save_snapshot(&out_path, &snap_with_header).map_err(|e| describe_io_error(&e))?;
 
     // snapshot does not produce JSON output — warn if --json is active
     if json_active() {
@@ -5484,7 +5649,7 @@ async fn handle_screenshot(
         .map_err(|e| format!("Failed to decode screenshot: {e}"))?;
 
     let out_path = resolve_output_path(filename.as_deref(), "screenshot", "png");
-    save_binary(&out_path, &bytes).map_err(|e| e.to_string())?;
+    save_binary(&out_path, &bytes).map_err(|e| describe_io_error(&e))?;
     cli_println!("[Screenshot]({})", out_path.display());
     Ok(())
 }
@@ -5523,7 +5688,7 @@ async fn handle_pdf(
         .map_err(|e| format!("Failed to decode PDF: {e}"))?;
 
     let out_path = resolve_output_path(filename.as_deref(), "pdf", "pdf");
-    save_binary(&out_path, &bytes).map_err(|e| e.to_string())?;
+    save_binary(&out_path, &bytes).map_err(|e| describe_io_error(&e))?;
     cli_println!("[PDF]({})", out_path.display());
     Ok(())
 }
@@ -6101,7 +6266,7 @@ async fn handle_extract(
     let content = unwrap_extract_envelope(raw_content);
 
     let out_path = resolve_output_path(filename.as_deref(), "extract", "txt");
-    save_snapshot(&out_path, &content).map_err(|e| e.to_string())?;
+    save_snapshot(&out_path, &content).map_err(|e| describe_io_error(&e))?;
 
     // Detect silent extraction failures: the server may return a metadata-only
     // response with "completed": false and zero extracted data.  Warn the user
@@ -6303,7 +6468,7 @@ async fn handle_summarize(
     };
 
     let out_path = resolve_output_path(filename.as_deref(), "summarize", "txt");
-    save_snapshot(&out_path, content).map_err(|e| e.to_string())?;
+    save_snapshot(&out_path, content).map_err(|e| describe_io_error(&e))?;
 
     let summary_empty = detect_empty_extraction(content);
 
@@ -6604,26 +6769,32 @@ async fn handle_html_snapshot_capture(
         }
     }
 
-    // Remind users that the live page context is preserved — htmlsnapshot
-    // takes a static copy; eval, snapshot, and other commands still work
-    // against the live DOM.
-    cli_println!("  ℹ️  The live page is still accessible — use `eval`, `snapshot`, or `click` to continue interacting.");
-    // Next-step hints
-    cli_println!("  💡 Try these next:");
-    cli_println!("    Use `get all text` to extract visible text, or `get all attr <name>` for attribute values.");
-    cli_println!("    The SQL variant lets you query with full expressive power (joins, filters, aggregates).");
-    if !title.is_empty() {
-        cli_println!("     htmlsnapshot get text \"h1\" --limit 5   # page heading");
-    }
-    cli_println!("     htmlsnapshot get all text \"a\" --limit 20  # link texts");
-    cli_println!("     htmlsnapshot get attr \"img[src]\" src --limit 20  # image URLs");
-    cli_println!("     htmlsnapshot get attr \"a[href]\" href --limit 20  # link URLs");
-    if image_count > 0 {
-        cli_println!("     htmlsnapshot get attr \"img[src]:expr(width > 200 && height > 200)\" src --limit 20  # large images only");
-    }
-    cli_println!("     htmlsnapshot inspect  # discover recurring patterns");
-    if !url.is_empty() {
-        cli_println!("     htmlsnapshot query --sql \"SELECT DOM_TEXT(DOM) AS text FROM DOM_LOAD_AND_SELECT(@url, 'a')\"");
+    // Onboarding hints must honor the documented tip policy: suppressed by
+    // default, opt-in via --show-tip/-tip, and always on stderr so stdout
+    // stays clean for machine/AI consumption.  This block used to bypass the
+    // flag and land on stdout after every capture.
+    if show_tip_active() && !json_active() && !quiet_active() {
+        // Remind users that the live page context is preserved — htmlsnapshot
+        // takes a static copy; eval, snapshot, and other commands still work
+        // against the live DOM.
+        eprintln!("  ℹ️  The live page is still accessible — use `eval`, `snapshot`, or `click` to continue interacting.");
+        // Next-step hints
+        eprintln!("  💡 Try these next:");
+        eprintln!("    Use `get all text` to extract visible text, or `get all attr <name>` for attribute values.");
+        eprintln!("    The SQL variant lets you query with full expressive power (joins, filters, aggregates).");
+        if !title.is_empty() {
+            eprintln!("     htmlsnapshot get text \"h1\"   # page heading");
+        }
+        eprintln!("     htmlsnapshot get all text \"a\" --limit 20  # link texts");
+        eprintln!("     htmlsnapshot get attr \"img[src]\" src --limit 20  # image URLs");
+        eprintln!("     htmlsnapshot get attr \"a[href]\" href --limit 20  # link URLs");
+        if image_count > 0 {
+            eprintln!("     htmlsnapshot get attr \"img[src]:expr(width > 200 && height > 200)\" src --limit 20  # large images only");
+        }
+        eprintln!("     htmlsnapshot inspect  # discover recurring patterns");
+        if !url.is_empty() {
+            eprintln!("     htmlsnapshot query --sql \"SELECT DOM_TEXT(DOM) AS text FROM DOM_LOAD_AND_SELECT(@url, 'a')\"");
+        }
     }
 
     Ok(())
@@ -6811,7 +6982,7 @@ fn resolve_sql_file(file_path: &str) -> Result<String, String> {
     // Absolute path — just try to read it
     if path.is_absolute() {
         return std::fs::read_to_string(path).map_err(|e| {
-            format!("Failed to read SQL file '{}' ({})", file_path, e)
+            format!("Failed to read SQL file '{}' ({})", file_path, describe_io_error(&e))
         });
     }
 
@@ -6861,6 +7032,11 @@ fn resolve_sql_file(file_path: &str) -> Result<String, String> {
 /// Returns the resolved `PathBuf` on success; errors with a message listing all
 /// locations tried when the file cannot be found.
 fn resolve_file_path_with_root_fallback(file_path: &str) -> Result<std::path::PathBuf, String> {
+    // Accept the @file convention used across the CLI (--sql @query.sql,
+    // extract --schema @file): a leading @ is stripped so eval --file
+    // "@script.js" behaves like --sql's file loader instead of treating the
+    // @ as part of a literal filename.
+    let file_path = file_path.strip_prefix('@').unwrap_or(file_path);
     let path = std::path::Path::new(file_path);
 
     // Absolute path — just check it exists
@@ -6966,18 +7142,61 @@ fn x_sql_server_reason(message: &str) -> Option<String> {
     Some(format!("{bounded}{suffix}"))
 }
 
-/// True when the X-SQL statement selects an image via a DOM_*_IMG function
-/// (e.g. `DOM_FIRST_IMG`) combined with a PowerCSS `:expr(...)` filter.
+/// True when an X-SQL statement passes a PowerCSS `:expr(...)` filter as a
+/// selector ARGUMENT to a DOM_*_IMG function (e.g. `DOM_FIRST_IMG(DOM,
+/// 'img:expr(width > 250)')`).
 ///
 /// The X-SQL engine evaluates such selectors through an img-scanning path
 /// that does not parse `:expr(...)`, so the filter silently matches nothing.
 /// Used to print a corrective tip after the query succeeds.
+///
+/// Only the IMG call's own argument span is considered: `:expr` in the FROM
+/// clause (`DOM_LOAD_AND_SELECT(@url, 'img:expr(...)')`) IS evaluated and must
+/// not trigger the warning, and neither should an unrelated `:expr` elsewhere
+/// in the statement.
 fn sql_uses_dom_first_img_expr(sql: &str) -> bool {
     let upper = sql.to_ascii_uppercase();
-    upper.contains(":EXPR(")
-        && (upper.contains("DOM_FIRST_IMG(")
-            || upper.contains("DOM_NTH_IMG(")
-            || upper.contains("DOM_ALL_IMGS("))
+    let func_names = ["DOM_FIRST_IMG", "DOM_NTH_IMG", "DOM_ALL_IMGS"];
+    let mut search_from = 0;
+    while let Some(func_start) = func_names.iter().find_map(|name| {
+        upper[search_from..].find(name).map(|idx| (search_from + idx, name.len()))
+    }) {
+        let (start, name_len) = func_start;
+        let after_name = start + name_len;
+        // The selector argument is the second argument of DOM_FIRST_IMG/
+        // DOM_NTH_IMG and the second of DOM_ALL_IMGS — scan the whole
+        // argument list for ':expr(' so any argument placement is caught.
+        let Some(open_paren) = upper[after_name..].find('(') else {
+            break;
+        };
+        let args_start = after_name + open_paren + 1;
+        // Find the matching close paren, tracking nesting (PowerCSS expr
+        // blocks contain nested parens of their own).
+        let mut depth = 1usize;
+        let mut cursor = args_start;
+        let mut close_paren = None;
+        while cursor < upper.len() {
+            match upper.as_bytes()[cursor] {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close_paren = Some(cursor);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            cursor += 1;
+        }
+        let Some(close) = close_paren else { break };
+        let args_span = &upper[args_start..close];
+        if args_span.contains(":EXPR(") {
+            return true;
+        }
+        search_from = close + 1;
+    }
+    false
 }
 
 /// Whether to nudge the user toward `--format table`/`csv`/`--result-only`
@@ -7228,7 +7447,7 @@ async fn handle_html_snapshot_query(
 
     if let Some(out_file) = output_file {
         std::fs::write(&out_file, &output)
-            .map_err(|e| format!("Failed to write output to '{}': {}", out_file, e))?;
+            .map_err(|e| format!("Failed to write output to '{}': {}", out_file, describe_io_error(&e)))?;
         cli_println!("Output written to: {}", out_file);
     } else if !output.is_empty() {
         cli_println!("{}", output);
@@ -7367,7 +7586,7 @@ async fn handle_html_snapshot_export(
     })
     .await?;
 
-    snapshot::save_binary(&file_path, result.as_bytes()).map_err(|e| e.to_string())?;
+    snapshot::save_binary(&file_path, result.as_bytes()).map_err(|e| describe_io_error(&e))?;
     cli_println!("Snapshot saved to: {}", file_path.display());
     json_field("path", json!(file_path.display().to_string()));
 
@@ -7798,7 +8017,7 @@ async fn handle_html_snapshot_summary(
     };
 
     let out_path = resolve_output_path(None, "htmlsnapshot-summary", "yml");
-    save_snapshot(&out_path, summary).map_err(|e| e.to_string())?;
+    save_snapshot(&out_path, summary).map_err(|e| describe_io_error(&e))?;
 
     json_field("page_url", json!(url));
     json_field("page_title", json!(title));
@@ -10194,6 +10413,9 @@ async fn handle_swarm_create(
     session_name: Option<&str>,
 ) -> Result<(), String> {
     let capabilities = build_swarm_create_capabilities(tool_params)?;
+    // Keep a copy for echoing the effective configuration after creation —
+    // build_open_session_request consumes the value.
+    let echo_capabilities = capabilities.clone();
     let open_args = build_open_session_request(Some(capabilities), Some(SWARM_SESSION_ID));
 
     let result = call_tool(client, base_url, "open_session", open_args).await?;
@@ -10355,7 +10577,32 @@ async fn handle_swarm_create(
         }
     }
 
-    cli_println!("Swarm session created: {}", session_id);
+    // Echo the effective session configuration so users can confirm their
+    // tuning flags were honored (and spot an accidental GUI session before
+    // windows pop up).
+    let cap_str = |key: &str, default: &str| -> String {
+        echo_capabilities
+            .get(key)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(default)
+            .to_string()
+    };
+    cli_println!(
+        "Swarm session created: {} (display={}, contexts={}, max-tabs={})",
+        session_id,
+        cap_str("displayMode", "HEADLESS"),
+        cap_str("maxBrowserContexts", "default"),
+        cap_str("maxOpenTabs", "default")
+    );
+    // Cold-start cue: browser contexts boot lazily after create returns, so
+    // first submissions sit "queued" for up to ~60s on a fresh session.  Say
+    // so up front — the documented >30s stall heuristic must not lead users
+    // to tear down a healthy session during warm-up.
+    cli_println!(
+        "  Note: browser contexts are starting in the background (~30-60s on a fresh session) — \
+         jobs submitted now stay queued until the first context is ready."
+    );
     Ok(())
 }
 
@@ -10554,7 +10801,7 @@ async fn handle_swarm_submit(
     }
     if let Some(file_path) = seed_file {
         let content = std::fs::read_to_string(file_path)
-            .map_err(|e| format!("Failed to read seed file '{}': {}", file_path, e))?;
+            .map_err(|e| format!("Failed to read seed file '{}': {}", file_path, describe_io_error(&e)))?;
         for line in content.lines() {
             let line = line.trim();
             if !line.is_empty() && !line.starts_with('#') {
@@ -10734,7 +10981,7 @@ async fn handle_swarm_query(
     }
     if let Some(file_path) = seed_file {
         let content = std::fs::read_to_string(file_path)
-            .map_err(|e| format!("Failed to read seed file '{}': {}", file_path, e))?;
+            .map_err(|e| format!("Failed to read seed file '{}': {}", file_path, describe_io_error(&e)))?;
         for line in content.lines() {
             let line = line.trim();
             if !line.is_empty() && !line.starts_with('#') {
@@ -11603,6 +11850,17 @@ async fn handle_crawl_status(
     }
 
     let result = get_crawl_status(client, base_url, id).await?;
+    // Human-readable one-line summary in front of the raw record, so a poll
+    // reads as status without forcing the user to parse the JSON envelope.
+    // Goes to stderr: stdout must stay a pure JSON record for scripts and
+    // tests that parse it directly.
+    if !quiet_active() && !json_active() {
+        if let Ok(parsed) = serde_json::from_str::<Value>(&result) {
+            if let Some(summary) = crawl_task_summary_line(&parsed) {
+                eprintln!("{}", summary);
+            }
+        }
+    }
     cli_println!("{}", result);
     json_field("task_id", json!(id));
     json_field(
@@ -11627,6 +11885,25 @@ async fn handle_crawl_result(
     }
 
     let result = get_crawl_result(client, base_url, id).await?;
+    if !quiet_active() && !json_active() {
+        if let Ok(parsed) = serde_json::from_str::<Value>(&result) {
+            if let Some(summary) = crawl_task_summary_line(&parsed) {
+                eprintln!("{}", summary);
+            }
+            // The backend returns the current task record — including a
+            // PROCESSING status — for non-terminal tasks.  Say so instead of
+            // letting the raw record imply completion.
+            let status = parsed["status"].as_str().unwrap_or("");
+            if !matches!(status, "OK" | "SC_OK" | "TIMEOUT" | "ERROR" | "CANCELLED") {
+                eprintln!(
+                    "Note: task is still {} — poll again with 'crawl status {}' or 'crawl result {}'.",
+                    status,
+                    id,
+                    id
+                );
+            }
+        }
+    }
     cli_println!("{}", result);
     json_field("task_id", json!(id));
     json_field(
@@ -11634,6 +11911,44 @@ async fn handle_crawl_result(
         json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))),
     );
     Ok(())
+}
+
+/// Build a compact one-line status summary from a crawl task record, e.g.
+/// `Crawl <id>: OK — 3 page(s) found, 4 link(s) discovered (12s)`.  Returns
+/// None when the record cannot be summarized (unrecognized shape).
+fn crawl_task_summary_line(parsed: &Value) -> Option<String> {
+    let id = parsed["taskId"].as_str().unwrap_or("").to_string();
+    if id.is_empty() {
+        return None;
+    }
+    let status = parsed["status"].as_str().unwrap_or("").to_string();
+    let pages_found = parsed["pagesFound"].as_i64().unwrap_or(0);
+    let links_discovered = parsed["linksDiscovered"].as_i64().unwrap_or(0);
+    let seed_error_count = parsed["seedStatuses"]
+        .as_array()
+        .map(|statuses| {
+            statuses
+                .iter()
+                .filter(|ss| ss["status"].as_str().unwrap_or("") == "error")
+                .count()
+        })
+        .unwrap_or(0);
+    let mut parts = vec![format!("Crawl {}: {}", id, status)];
+    if pages_found > 0 {
+        parts.push(format!("{} page(s) found", pages_found));
+    }
+    if links_discovered > 0 {
+        parts.push(format!("{} link(s) discovered", links_discovered));
+    }
+    if seed_error_count > 0 {
+        parts.push(format!("{} seed error(s)", seed_error_count));
+    }
+    if let Some(diag) = parsed["diagnostic"].as_str() {
+        if !diag.is_empty() {
+            parts.push(format!("diagnostic: {}", diag));
+        }
+    }
+    Some(parts.join(" — "))
 }
 
 async fn handle_crawl_cancel(
@@ -11653,6 +11968,23 @@ async fn handle_crawl_cancel(
     let result = cancel_crawl(client, base_url, id).await?;
     cli_println!("{}", result);
     json_field("task_id", json!(id));
+
+    // A failed cancel is otherwise a silent no-op: the task record shows no
+    // state change and the user has no way to tell whether the cancel was
+    // ignored (worker already gone) or never reached the task.  Explain what
+    // happened on stderr (stdout carries the JSON record).
+    if !quiet_active() && !json_active() {
+        if let Ok(parsed) = serde_json::from_str::<Value>(&result) {
+            if parsed["cancelled"].as_bool() == Some(false) {
+                eprintln!(
+                    "Note: task was not cancellable — no running worker was found for it. \
+                     Check its state with 'crawl status {}'; tasks stuck in PROCESSING \
+                     without a worker expire automatically after the server-side TTL.",
+                    id
+                );
+            }
+        }
+    }
 
     // Update local tracking
     let _ = update_async_task_status(id, "cancelled", None);
@@ -11766,6 +12098,96 @@ fn validate_crawl_format(format: &str) -> Result<(), String> {
     }
 }
 
+/// Whether a value is a load-options duration: a plain integer (interpreted
+/// as seconds by the backend) or an integer with an ms/s/m/h/d suffix,
+/// e.g. `30`, `30s`, `1m`, `1h`, `1d`.
+fn is_duration_value(value: &str) -> bool {
+    let value = value.trim();
+    let suffixes = ["ms", "s", "m", "h", "d"];
+    let number_part = suffixes
+        .iter()
+        .find_map(|suffix| value.strip_suffix(suffix))
+        .unwrap_or(value);
+    !number_part.is_empty() && number_part.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Validate typed load-option values embedded in the crawl args string
+/// (`-expires`, `-pageLoadTimeout`, `-priority`). The backend silently
+/// defaults malformed values, so the CLI must reject them loudly —
+/// mirroring the existing `--format` reject-with-nonzero-exit pattern.
+/// Returns Ok(()) when every recognized option carries a valid value.
+fn validate_crawl_option_tokens(args: &str) -> Result<(), String> {
+    let tokens: Vec<&str> = args.split_whitespace().collect();
+    let mut i = 0;
+    while i < tokens.len() {
+        let token = tokens[i];
+        let (key, inline_value) = match token.split_once('=') {
+            Some((key, value)) => (key, Some(value)),
+            None => (token, None),
+        };
+        // Accept both single-dash (backend LoadOptions form) and
+        // double-dash (user-facing flag form) spellings.
+        let key = key.trim_start_matches('-');
+        match key {
+            "expires" | "pageLoadTimeout" | "page-load-timeout" => {
+                // The value token: inline after '=' when present, otherwise the
+                // next whitespace-separated token.
+                let value = match inline_value {
+                    Some(v) => v.to_string(),
+                    None => tokens
+                        .get(i + 1)
+                        .map(|v| v.to_string())
+                        .ok_or_else(|| {
+                            format!("Missing value for '--{}' in crawl load options", key)
+                        })?,
+                };
+                if !is_duration_value(&value) {
+                    return Err(format!(
+                        "Invalid --{} value '{}'. Expected a duration such as 30s, 1m, 1h, 1d (or a plain number of seconds)",
+                        key,
+                        value
+                    ));
+                }
+                if inline_value.is_none() {
+                    i += 1;
+                }
+            }
+            "priority" => {
+                let value = match inline_value {
+                    Some(v) => v.to_string(),
+                    None => tokens
+                        .get(i + 1)
+                        .map(|v| v.to_string())
+                        .ok_or_else(|| {
+                            format!("Missing value for '--{}' in crawl load options", key)
+                        })?,
+                };
+                match value.parse::<i64>() {
+                    Ok(priority) if priority >= 0 => {}
+                    Ok(_) => {
+                        return Err(format!(
+                            "Invalid --priority value '{}'. Priority must be a non-negative integer (lower = higher priority)",
+                            value
+                        ));
+                    }
+                    Err(_) => {
+                        return Err(format!(
+                            "Invalid --priority value '{}'. Expected an integer (lower = higher priority)",
+                            value
+                        ));
+                    }
+                }
+                if inline_value.is_none() {
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
 /// Resolve the URL list for a crawl: combines the direct URL argument with
 /// URLs from the seed file (if any). Returns an error when no URLs are
 /// provided. Lines starting with `#` and blank lines are ignored in seed
@@ -11830,7 +12252,7 @@ enum CrawlOutput {
 fn write_crawl_output(content: &str, output_file: Option<&str>, summary: &str) -> Result<CrawlOutput, String> {
     if let Some(file_path) = output_file {
         std::fs::write(file_path, content)
-            .map_err(|e| format!("Failed to write output file '{}': {}", file_path, e))?;
+            .map_err(|e| format!("Failed to write output file '{}': {}", file_path, describe_io_error(&e)))?;
         Ok(CrawlOutput::FileWritten {
             path: file_path.to_string(),
             summary: summary.to_string(),
@@ -11859,7 +12281,7 @@ async fn handle_crawl(
     let seed_content: Option<String> = match seed_file {
         Some(file_path) => {
             let content = std::fs::read_to_string(file_path)
-                .map_err(|e| format!("Failed to read seed file '{}': {}", file_path, e))?;
+                .map_err(|e| format!("Failed to read seed file '{}': {}", file_path, describe_io_error(&e)))?;
             Some(content)
         }
         None => None,
@@ -11929,6 +12351,14 @@ async fn handle_crawl(
     let resolved_args =
         resolve_crawl_args_fallible(&raw_args, args_stdin_content.as_deref())?;
 
+    // Validate typed load-option values (--expires/--page-load-timeout/
+    // --priority) before submitting. The backend silently defaults
+    // malformed values, so an invalid value must fail loudly here —
+    // the user must be able to detect that '--expires 1x' was not applied.
+    if let Some(args_str) = resolved_args.as_deref() {
+        validate_crawl_option_tokens(args_str)?;
+    }
+
     // ---- Resolve output options ----
     let format = tool_params
         .get("format")
@@ -11938,11 +12368,26 @@ async fn handle_crawl(
 
     validate_crawl_format(&format)?;
 
+    // When the X-SQL payload goes directly to stdout (no --output file), the
+    // status/progress chatter must move to stderr so a redirected
+    // `--format csv > out.csv` contains ONLY the CSV.  Background crawls
+    // return before any payload, and interactive terminal use reads both
+    // streams together, so those keep the historical behavior.
+    let bg_requested = tool_params
+        .get("background")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let payload_to_stdout = has_sql
+        && tool_params.get("output").and_then(|v| v.as_str()).is_none()
+        && !bg_requested
+        && !std::io::stdout().is_terminal();
+    crawl_set_structured_stdout(payload_to_stdout);
+
     // Warn when --format csv|json is used without --sql — the format flag only
     // controls how X-SQL result sets are rendered; without --sql there is no
     // structured result set to format.
     if !has_sql && (format == "csv" || format == "json") {
-        cli_println!(
+        crawl_status_println!(
             "Warning: --format {} has no effect without --sql. \
              Use --sql to produce structured output, or omit --format for plain-text output.",
             format.to_uppercase()
@@ -11961,7 +12406,7 @@ async fn handle_crawl(
             .map(|s| !s.is_empty())
             .unwrap_or(false);
         if depth_raw >= 1 && !has_out_link_selector {
-            cli_println!(
+            crawl_status_println!(
                 "Note: Link discovery disabled (no --out-link-selector). Processing seed URLs only."
             );
         }
@@ -12011,10 +12456,10 @@ async fn handle_crawl(
 
     let task_id = submit_crawl(client, base_url, &server_params).await?;
     let task_id = task_id.trim().trim_matches('"').to_string();
-    cli_println!("Crawl task submitted: {}", task_id);
-    cli_println!("  URLs: {}", urls.len());
+    crawl_status_println!("Crawl task submitted: {}", task_id);
+    crawl_status_println!("  URLs: {}", urls.len());
     if has_sql {
-        cli_println!("  X-SQL extraction: enabled");
+        crawl_status_println!("  X-SQL extraction: enabled");
     }
     json_field("task_id", json!(task_id));
 
@@ -12090,7 +12535,7 @@ async fn handle_crawl(
     let mut last_report_rows: i64 = -1;
     let url_count = urls.len();
 
-    cli_println!(
+    crawl_status_println!(
         "Waiting for crawl to complete (task {}, {} URLs). Use --background for long-running crawls.",
         task_id, url_count
     );
@@ -12102,10 +12547,19 @@ async fn handle_crawl(
                 &format!("timeout after {}s", timeout.as_secs()),
                 None,
             );
+            // The CLI wait timing out does NOT stop the crawl: the task keeps
+            // running server-side until it completes or its own internal
+            // timeout fires.  Point the user at the polling commands instead
+            // of implying the crawl died with the wait.
             return Err(format!(
-                "Crawl timed out after {} seconds. Task ID: {}. \
-                 Increase the timeout with the BROWSER4_CLI_CRAWL_TIMEOUT_SECS environment variable.",
+                "Crawl timed out after {} seconds (CLI wait). Task ID: {}.\n\
+                 The task keeps running server-side — poll it with:\n\
+                   browser4-cli crawl status {}\n\
+                   browser4-cli crawl result {}\n\
+                 Increase the CLI wait with the BROWSER4_CLI_CRAWL_TIMEOUT_SECS environment variable.",
                 timeout.as_secs(),
+                task_id,
+                task_id,
                 task_id
             ));
         }
@@ -12195,7 +12649,7 @@ async fn handle_crawl(
                             })
                             .unwrap_or_default();
 
-                        cli_println!(
+                        crawl_status_println!(
                             "Crawling... {}/{} seeds done, {} pages found, {} rows extracted{} ({}s elapsed)",
                             extracted_count,
                             url_count,
@@ -12214,14 +12668,14 @@ async fn handle_crawl(
                     // is active.  Skip lines whose counts are unchanged.
                     if pages_found != last_report_pages || links_discovered != last_report_links {
                         if links_discovered > 0 {
-                            cli_println!(
+                            crawl_status_println!(
                                 "Crawling... {} pages found, {} link(s) discovered ({}s elapsed)",
                                 pages_found,
                                 links_discovered,
                                 elapsed.as_secs()
                             );
                         } else {
-                            cli_println!(
+                            crawl_status_println!(
                                 "Crawling... {} pages found ({}s elapsed)",
                                 pages_found,
                                 elapsed.as_secs()
@@ -12237,13 +12691,13 @@ async fn handle_crawl(
                 // waiting line while pages are actively being processed.
                 let links_discovered = parsed["linksDiscovered"].as_i64().unwrap_or(0);
                 if links_discovered > 0 {
-                    cli_println!(
+                    crawl_status_println!(
                         "Crawling... {} link(s) discovered, fetching pages ({}s elapsed)",
                         links_discovered,
                         elapsed.as_secs()
                     );
                 } else {
-                    cli_println!(
+                    crawl_status_println!(
                         "Crawling... waiting for first page ({}s elapsed, {} URLs queued)",
                         elapsed.as_secs(),
                         url_count
@@ -12312,9 +12766,9 @@ async fn handle_crawl(
                                 page_count
                             )
                         };
-                        cli_println!("{}", diag);
+                        crawl_status_println!("{}", diag);
                     } else if all_rows_empty {
-                        cli_println!(
+                        crawl_status_println!(
                             "⚠ X-SQL returned {} rows but all fields are empty ({} pages crawled). \
                              The query executed but selectors did not match any elements. \
                              Verify selectors with 'htmlsnapshot inspect' or 'htmlsnapshot grep'. \
@@ -12322,7 +12776,7 @@ async fn handle_crawl(
                             all_extracted.len(), page_count
                         );
                     } else {
-                        cli_println!(
+                        crawl_status_println!(
                             "{} pages crawled, {} rows extracted.",
                             page_count, all_extracted.len()
                         );
@@ -12331,7 +12785,7 @@ async fn handle_crawl(
                     // Readonly-mode note: what --readonly did (served from the
                     // store with age, or verified every page fetched fresh).
                     if let Some(note) = parsed["readonlyNote"].as_str() {
-                        cli_println!("{}", note);
+                        crawl_status_println!("{}", note);
                         json_field("readonly_note", json!(note));
                     }
 
@@ -12339,7 +12793,7 @@ async fn handle_crawl(
                     let output = write_crawl_output(&extracted_output, output_file, &summary)?;
                     match output {
                         CrawlOutput::FileWritten { path, summary } => {
-                            cli_println!("{} to {}", summary, path);
+                            crawl_status_println!("{} to {}", summary, path);
                         }
                         CrawlOutput::Stdout(content) => {
                             cli_println!("\n{}", content);
@@ -12407,7 +12861,7 @@ async fn handle_crawl(
                         }
                     }
 
-                    // Link-discovery crawls always count the seed page, so
+                    // Link-discovery crawls always count the seed page(s), so
                     // page_count == 0 can not signal "discovery found nothing"
                     // — links_discovered == 0 is that signal.  Surface the
                     // backend diagnostic whenever a discovery crawl found no
@@ -12420,6 +12874,14 @@ async fn handle_crawl(
                             .and_then(|v| v.as_str())
                             .map(|s| !s.is_empty())
                             .unwrap_or(false);
+                    // "Discovered but nothing new fetched" is also a hollow
+                    // success: fragment-only hrefs ('#'), self-references, and
+                    // duplicates of the seed URLs all resolve back to already
+                    // visited pages, so a crawl can report links_discovered > 0
+                    // while fetching zero new pages (one result row per seed).
+                    let fetched_no_new_pages = discovery_requested
+                        && links_discovered > 0
+                        && page_count <= urls.len();
                     if discovery_requested && links_discovered == 0 {
                         page_lines.push(format!(
                             "\n⚠ Link discovery found no out-links — only {} page(s) recorded.",
@@ -12441,6 +12903,16 @@ async fn handle_crawl(
                             ));
                         }
                         page_lines.push("    - Use 'snapshot' or 'htmlsnapshot' to inspect the page structure first".to_string());
+                    } else if fetched_no_new_pages {
+                        page_lines.push(format!(
+                            "\n⚠ Link discovery found {} link(s), but no NEW pages were fetched — \
+                             every discovered link resolved back to an already-visited URL \
+                             (fragment-only hrefs like '#', self-references, or seed duplicates).",
+                            links_discovered
+                        ));
+                        page_lines.push("  Tips:".to_string());
+                        page_lines.push("    - Fragment-only anchors (href=\"#\") can never navigate — check the page's real links with 'snapshot' or 'htmlsnapshot'".to_string());
+                        page_lines.push("    - Verify --out-link-pattern does not match the seed URL itself".to_string());
                     } else if page_count == 0 {
                         // Display diagnostic info when 0 pages found (e.g. selector matched no elements)
                         if let Some(diag) = parsed["diagnostic"].as_str() {
@@ -12525,7 +12997,7 @@ async fn handle_crawl(
                     let output = write_crawl_output(&page_output, output_file, &page_summary)?;
                     match output {
                         CrawlOutput::FileWritten { path, summary } => {
-                            cli_println!("\n{}. Results written to {}", summary, path);
+                            crawl_status_println!("\n{}. Results written to {}", summary, path);
                         }
                         CrawlOutput::Stdout(content) => {
                             cli_println!("\n{}", content);
@@ -14020,6 +14492,15 @@ async fn handle_loop(
     // --- summary ---
     let total = iteration.saturating_sub(1);
 
+    // Count failed iterations.  Every executed attempt is recorded in
+    // `results` with "ok": true/false, and a failed attempt consumes --count
+    // exactly like a successful one (the count limit is checked at the top of
+    // each iteration regardless of the previous outcome).
+    let failed = results
+        .iter()
+        .filter(|r| r.get("ok").and_then(|v| v.as_bool()) == Some(false))
+        .count();
+
     // Determine the exit reason for the history log.
     let exit_reason = {
         let count_reached = parsed.count.map_or(false, |max| total >= max);
@@ -14033,8 +14514,9 @@ async fn handle_loop(
         }
     };
 
+    let (summary, all_failed) = format_loop_summary(total, failed as u64);
     cli_println!("\n========================================");
-    cli_println!("✓  Loop finished — {} iteration(s) completed.", total);
+    cli_println!("{}", summary);
 
     // Write a history entry so users can review past loop completions.
     let history_entry = state::LoopHistoryEntry {
@@ -14064,10 +14546,45 @@ async fn handle_loop(
     }
 
     json_field("iterations", json!(results));
+    json_field("failed_iterations", json!(failed));
     json_field("total_iterations", json!(total));
     json_field("exit_reason", json!(exit_reason));
 
-    Ok(())
+    if all_failed {
+        // Every iteration failed — surface the failure instead of implying
+        // success with exit 0, so monitoring scripts can trust the exit code.
+        // Partial failures keep exit 0: they are reported in the summary line
+        // and in the failed_iterations JSON field, and for long-running loops
+        // an occasional failed iteration is expected noise.
+        Err(format!(
+            "all {} iteration(s) failed — no iteration completed successfully",
+            total
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+/// Compose the final summary for a completed loop run.
+///
+/// Returns the summary text (the caller prints the separator line) and
+/// whether the run is considered failed — i.e. every executed iteration
+/// failed.  Partial failures are reported in the summary but do not make the
+/// run "failed": a long monitoring loop is allowed to have the odd bad
+/// iteration, whereas a run where nothing ever succeeded is a broken check.
+fn format_loop_summary(total: u64, failed: u64) -> (String, bool) {
+    let all_failed = total > 0 && failed == total;
+    let summary = if all_failed {
+        format!("✗  Loop finished — all {} iteration(s) failed.", total)
+    } else if failed > 0 {
+        format!(
+            "✓  Loop finished — {} iteration(s) completed, {} failed.",
+            total, failed
+        )
+    } else {
+        format!("✓  Loop finished — {} iteration(s) completed.", total)
+    };
+    (summary, all_failed)
 }
 
 /// Format the output lines for `handle_install`.  Extracted as a pure function
@@ -17597,7 +18114,7 @@ fn compile_batch_request(
                                 if push_batch_local_failure(
                                     &mut entries,
                                     spec,
-                                    format!("Failed to read eval file '{}' (resolved to '{}'): {}", file_path, resolved.display(), e),
+                                    format!("Failed to read eval file '{}' (resolved to '{}'): {}", file_path, resolved.display(), describe_io_error(&e)),
                                     bail,
                                 ) {
                                     break;
@@ -17877,7 +18394,7 @@ fn render_batch_result(
             let snapshot = result.snapshot.as_deref().ok_or_else(|| {
                 "Batch snapshot response was missing snapshot content.".to_string()
             })?;
-            save_snapshot(path, snapshot).map_err(|e| e.to_string())?;
+            save_snapshot(path, snapshot).map_err(|e| describe_io_error(&e))?;
             cli_println!("### Page");
             cli_println!(
                 "- Page URL: {}",
@@ -17898,7 +18415,7 @@ fn render_batch_result(
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(encoded.trim())
                 .map_err(|e| format!("Failed to decode screenshot: {e}"))?;
-            save_binary(path, &bytes).map_err(|e| e.to_string())?;
+            save_binary(path, &bytes).map_err(|e| describe_io_error(&e))?;
             cli_println!("[Screenshot]({})", path.display());
         }
         PlannedBatchOutput::Pdf { path } => {
@@ -17909,7 +18426,7 @@ fn render_batch_result(
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(encoded.trim())
                 .map_err(|e| format!("Failed to decode PDF: {e}"))?;
-            save_binary(path, &bytes).map_err(|e| e.to_string())?;
+            save_binary(path, &bytes).map_err(|e| describe_io_error(&e))?;
             cli_println!("[PDF]({})", path.display());
         }
     }
@@ -18162,17 +18679,31 @@ fn msys_git_root_from_path() -> Option<PathBuf> {
 /// rewritten '/'-leading token — returns the probable original as typed.
 /// E.g. `C:/Program Files/Git/ec/dp/` under root `C:/Program Files/Git`
 /// yields `Some("/ec/dp/")`.
+///
+/// A bare '/' argument is rewritten to the Git root ITSELF
+/// (`C:/Program Files/Git` with or without a trailing slash), so the
+/// rewritten value can be exactly as long as the root — equality with the
+/// (trailing-slash-free) root must therefore be treated as mangled too,
+/// yielding `Some("/")`.
 fn msys_mangled_original(arg: &str, root: &str) -> Option<String> {
+    let root_fwd_owned = root.replace('\\', "/");
+    let root_fwd = root_fwd_owned.trim_end_matches('/');
     let arg_fwd = arg.replace('\\', "/");
-    let root_fwd = format!("{}/", root.replace('\\', "/").trim_end_matches('/'));
-    if arg_fwd.len() <= root_fwd.len() {
+    // Exactly-root rewrite ('/' typed → '<GitRoot>[/]').
+    if arg_fwd.trim_end_matches('/').eq_ignore_ascii_case(&root_fwd) {
+        return Some("/".to_string());
+    }
+    // Sub-paths must clear the '/' boundary so sibling directories
+    // (e.g. 'C:/Program Files/GitHub/...') never match the root prefix.
+    let boundary = format!("{root_fwd}/");
+    if arg_fwd.len() <= boundary.len() {
         return None;
     }
-    let head = arg_fwd.get(..root_fwd.len())?;
-    if !head.eq_ignore_ascii_case(&root_fwd) {
+    let head = arg_fwd.get(..boundary.len())?;
+    if !head.eq_ignore_ascii_case(&boundary) {
         return None;
     }
-    let rest = arg_fwd.get(root_fwd.len()..).unwrap_or("");
+    let rest = arg_fwd.get(boundary.len()..).unwrap_or("");
     Some(format!("/{}", rest.trim_start_matches('/')))
 }
 
@@ -18286,9 +18817,14 @@ fn main() {
                                 else if err.code() == ExitCode::Session { "SESSION_ERROR" }
                                 else { "COMMAND_FAILED" }
                     });
+                    // Attach any JSON fields the failed handler already
+                    // accumulated (e.g. per-iteration results from `loop`
+                    // whose iterations all failed).  Commands that fail before
+                    // writing fields produce the same empty output as before.
+                    let fields = json_finish().unwrap_or_default();
                     println!(
                         "{}",
-                        json_envelope("error", &command, serde_json::json!({}), Some(error))
+                        json_envelope("error", &command, serde_json::Value::Object(fields), Some(error))
                     );
                 } else {
                     eprintln!("{}", format_cli_error_output(err.message()));
@@ -19136,7 +19672,7 @@ async fn run(
                     if !use_stdin && !use_base64 {
                         let resolved = resolve_file_path_with_root_fallback(file_path)?;
                         let expression = std::fs::read_to_string(&resolved)
-                            .map_err(|e| format!("Failed to read eval file '{}' (resolved to '{}'): {}", file_path, resolved.display(), e))?;
+                            .map_err(|e| format!("Failed to read eval file '{}' (resolved to '{}'): {}", file_path, resolved.display(), describe_io_error(&e)))?;
                         let expression = expression.trim().to_string();
                         if expression.is_empty() {
                             return Err(CliError(
@@ -19183,6 +19719,25 @@ async fn run(
                 .get("json")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+
+            // Scripts written in the natural "compute and log" style (or with
+            // --file IIFEs that console.log their results) print only the
+            // expression's return value — console output is not captured by
+            // the tool boundary.  Warn before running so a bare 'null' result
+            // is not mistaken for a broken script.
+            if !eval_json && !quiet_active() {
+                let expression = tool_params
+                    .get("expression")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if expression.contains("console.log(") || expression.contains("console.log (") {
+                    eprintln!(
+                        "ℹ️  console.log() output is not captured — only the expression's return \
+                         value is shown. Use `return` / end with the value to see it."
+                    );
+                }
+            }
+
             handle_tool_command_with_options(
                 &client,
                 &base_url,
@@ -20486,6 +21041,61 @@ mod tests {
         assert!(pick_cookie_for_get(cookies, "nope", None).is_none());
     }
 
+    #[test]
+    fn cookie_delete_scope_matches_name_domain_and_path() {
+        let cookies = serde_json::json!([
+            { "name": "session_id", "domain": "localhost", "path": "/" },
+            { "name": "session_id", "domain": ".example.com", "path": "/api" },
+            { "name": "other", "domain": "localhost", "path": "/" },
+        ]);
+        let cookies = cookies.as_array().unwrap();
+        // Name + domain scope (delete by --domain, any path).
+        assert!(cookie_in_delete_scope(cookies, "session_id", "localhost", None));
+        // A leading dot on a domain cookie is ignored...
+        assert!(cookie_in_delete_scope(
+            cookies,
+            "session_id",
+            "example.com",
+            Some("/api")
+        ));
+        // ...and comparison is case-insensitive.
+        assert!(cookie_in_delete_scope(
+            cookies,
+            "session_id",
+            "EXAMPLE.com",
+            Some("/api")
+        ));
+        // An exact --path filter only counts cookies at that path.
+        assert!(!cookie_in_delete_scope(
+            cookies,
+            "session_id",
+            "example.com",
+            Some("/")
+        ));
+        // Wrong name or wrong domain → nothing in the delete scope (the
+        // silent-'Cookie deleted'-for-a-missing-cookie failure class).
+        assert!(!cookie_in_delete_scope(cookies, "no_such_cookie", "localhost", None));
+        assert!(!cookie_in_delete_scope(
+            cookies,
+            "session_id",
+            "other-domain.test",
+            None
+        ));
+    }
+
+    #[test]
+    fn page_host_extracts_host_without_port_or_path() {
+        assert_eq!(
+            page_host("http://localhost:18080/generated/interactive-1.html"),
+            Some("localhost")
+        );
+        assert_eq!(page_host("https://example.com"), Some("example.com"));
+        assert_eq!(page_host("http://localhost:18080/"), Some("localhost"));
+        assert_eq!(page_host("http://localhost:18080"), Some("localhost"));
+        assert_eq!(page_host("https://[::1]:8443/a/b"), Some("::1"));
+        assert_eq!(page_host(""), None);
+    }
+
     // ── select --verify ───────────────────────────────────────────────────
 
     fn sg_options() -> Vec<(String, String)> {
@@ -20672,23 +21282,75 @@ mod tests {
     }
 
     #[test]
-    fn resolve_storage_state_path_defaults_to_timestamped_json_in_current_directory() {
+    fn resolve_storage_state_path_defaults_to_timestamped_json_in_snapshot_dir() {
         let _cwd_guard = CWD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = test_temp_dir();
-        let previous_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
         let resolved = resolve_storage_state_path(None).unwrap();
-        std::env::set_current_dir(previous_dir).unwrap();
 
-        let canonical_tmp = tmp.path().canonicalize().unwrap();
+        let expected_dir = crate::snapshot::snapshot_dir().canonicalize().unwrap_or_else(|_| {
+            // snapshot_dir may not exist yet; the resolver does not create it
+            // (save_snapshot does).  Compare against the raw relative form in
+            // that case.
+            crate::snapshot::snapshot_dir()
+        });
         assert_eq!(
             resolved.parent().map(|p| display_without_verbatim_prefix(p)),
-            Some(display_without_verbatim_prefix(&canonical_tmp))
+            Some(display_without_verbatim_prefix(&expected_dir))
         );
         assert!(resolved
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.starts_with("storage-state-") && name.ends_with(".json")));
+    }
+
+    #[test]
+    fn io_error_text_maps_common_kinds_to_stable_english() {
+        // Raw OS error 2 is NotFound on every platform.  The rendering must
+        // be fixed English — raw Display is localized on Windows (e.g.
+        // Chinese on zh-CN) — yet keep the scriptable code suffix.
+        let not_found = std::io::Error::from_raw_os_error(2);
+        assert_eq!(not_found.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(
+            describe_io_error(&not_found),
+            "no such file or directory (os error 2)"
+        );
+        // Kinds raised without an OS code still render fixed English.
+        assert_eq!(
+            describe_io_error(&std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "custom source"
+            )),
+            "no such file or directory"
+        );
+        assert_eq!(
+            describe_io_error(&std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "custom source"
+            )),
+            "permission denied"
+        );
+        assert_eq!(
+            describe_io_error(&std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "custom source"
+            )),
+            "file or directory already exists"
+        );
+    }
+
+    #[test]
+    fn io_error_text_keeps_raw_os_code_suffix_and_falls_back_unclassified() {
+        // Windows: ERROR_ACCESS_DENIED = 5; Unix: EACCES = 13 — both decode
+        // to PermissionDenied, so the text follows the kind mapping.
+        let code = if cfg!(windows) { 5 } else { 13 };
+        let permission = std::io::Error::from_raw_os_error(code);
+        assert_eq!(permission.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            describe_io_error(&permission),
+            format!("permission denied (os error {code})")
+        );
+        // Unclassified kinds keep the raw error text as a fallback.
+        let other = std::io::Error::new(std::io::ErrorKind::Other, "custom failure");
+        assert_eq!(describe_io_error(&other), "custom failure");
     }
 
     /// Display a path with any Windows verbatim `\\?\` prefix stripped, so
@@ -20887,6 +21549,20 @@ mod tests {
         .unwrap();
 
         assert_eq!(caps["profileMode"], json!("SEQUENTIAL"));
+    }
+
+    #[test]
+    fn build_swarm_create_capabilities_defaults_display_mode_to_headless() {
+        // Headless-first convention: a bare `swarm create` must not pop GUI
+        // windows — only an explicit --display-mode GUI opts into them.
+        let caps = build_swarm_create_capabilities(&json!({})).unwrap();
+        assert_eq!(caps["displayMode"], json!("HEADLESS"));
+
+        let caps = build_swarm_create_capabilities(&json!({
+            "displayMode": "gui",
+        }))
+        .unwrap();
+        assert_eq!(caps["displayMode"], json!("GUI"));
     }
 
     #[test]
@@ -22349,6 +23025,44 @@ mod tests {
             .collect();
         let parsed = parse_loop_args(&args[1..]).unwrap();
         assert_eq!(parsed.count, Some(0));
+    }
+
+    #[test]
+    fn test_format_loop_summary_no_failures() {
+        let (summary, all_failed) = format_loop_summary(2, 0);
+        assert_eq!(summary, "✓  Loop finished — 2 iteration(s) completed.");
+        assert!(!all_failed);
+    }
+
+    #[test]
+    fn test_format_loop_summary_zero_iterations_not_failed() {
+        let (summary, all_failed) = format_loop_summary(0, 0);
+        assert_eq!(summary, "✓  Loop finished — 0 iteration(s) completed.");
+        assert!(!all_failed);
+    }
+
+    #[test]
+    fn test_format_loop_summary_partial_failures_report_but_keep_exit_zero() {
+        let (summary, all_failed) = format_loop_summary(3, 1);
+        assert_eq!(
+            summary,
+            "✓  Loop finished — 3 iteration(s) completed, 1 failed."
+        );
+        assert!(!all_failed);
+    }
+
+    #[test]
+    fn test_format_loop_summary_all_failed() {
+        let (summary, all_failed) = format_loop_summary(2, 2);
+        assert_eq!(summary, "✗  Loop finished — all 2 iteration(s) failed.");
+        assert!(all_failed);
+    }
+
+    #[test]
+    fn test_format_loop_summary_single_iteration_failed() {
+        let (summary, all_failed) = format_loop_summary(1, 1);
+        assert_eq!(summary, "✗  Loop finished — all 1 iteration(s) failed.");
+        assert!(all_failed);
     }
 
     #[test]
@@ -24283,6 +24997,65 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
+    // validate_crawl_option_tokens / is_duration_value tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn is_duration_value_accepts_plain_and_suffixed_numbers() {
+        for valid in ["30", "30s", "90ms", "1m", "1h", "1d", " 30s "] {
+            assert!(is_duration_value(valid), "'{valid}' should be a valid duration");
+        }
+    }
+
+    #[test]
+    fn is_duration_value_rejects_garbage() {
+        for invalid in ["1x", "banana", "s", "ms", "", "-5s", "1.5s"] {
+            assert!(!is_duration_value(invalid), "'{invalid}' should be invalid");
+        }
+    }
+
+    #[test]
+    fn validate_crawl_option_tokens_accepts_valid_options() {
+        let args = "-expires 1h -pageLoadTimeout 30s -priority 3 -refresh -depth 1";
+        assert!(validate_crawl_option_tokens(args).is_ok());
+        let args_eq = "-expires=1h -pageLoadTimeout=30 -priority=0";
+        assert!(validate_crawl_option_tokens(args_eq).is_ok());
+        let args_dashed = "--expires 1d --page-load-timeout 30 --priority 2";
+        assert!(validate_crawl_option_tokens(args_dashed).is_ok());
+        // No typed options at all is fine (bare load options passthrough).
+        assert!(validate_crawl_option_tokens("").is_ok());
+        assert!(validate_crawl_option_tokens("-refresh -parse").is_ok());
+    }
+
+    #[test]
+    fn validate_crawl_option_tokens_rejects_invalid_expires() {
+        let err = validate_crawl_option_tokens("-expires 1x").unwrap_err();
+        assert!(err.contains("1x"), "error should name the invalid value, got: {err}");
+        assert!(err.contains("expires"), "error should name the option, got: {err}");
+    }
+
+    #[test]
+    fn validate_crawl_option_tokens_rejects_invalid_page_load_timeout() {
+        let err = validate_crawl_option_tokens("-pageLoadTimeout banana").unwrap_err();
+        assert!(err.contains("banana"), "error should name the invalid value, got: {err}");
+        assert!(err.contains("pageLoadTimeout"), "error should name the option, got: {err}");
+    }
+
+    #[test]
+    fn validate_crawl_option_tokens_rejects_invalid_priority() {
+        let err = validate_crawl_option_tokens("-priority -5").unwrap_err();
+        assert!(err.contains("-5"), "error should name the invalid value, got: {err}");
+        let err = validate_crawl_option_tokens("-priority high").unwrap_err();
+        assert!(err.contains("high"), "error should name the invalid value, got: {err}");
+    }
+
+    #[test]
+    fn validate_crawl_option_tokens_reports_missing_value() {
+        let err = validate_crawl_option_tokens("-expires").unwrap_err();
+        assert!(err.contains("Missing value"), "got: {err}");
+    }
+
+    // -------------------------------------------------------------------
     // build_crawl_server_params tests
     // -------------------------------------------------------------------
 
@@ -25917,6 +26690,28 @@ mod tests {
         assert!(!sql_uses_dom_first_img_expr(
             "SELECT DOM_FIRST_TEXT(DOM, '.t') FROM DOM_LOAD_AND_SELECT(@url, 'img:expr(width > 100)')"
         ));
+        // Mixed case: DOM_FIRST_IMG with a PLAIN selector while :expr lives in
+        // the FROM clause — the warning must not fire (the FROM :expr IS
+        // evaluated and image_url is correctly populated).
+        assert!(!sql_uses_dom_first_img_expr(
+            "SELECT DOM_FIRST_IMG(DOM, 'img.product-img') AS image_url \
+             FROM DOM_LOAD_AND_SELECT(@url, '.product-card:expr(width >= 150 && height >= 200)')"
+        ));
+        // Nested :expr inside the IMG argument itself still fires, including
+        // when another (non-IMG) function appears before it in the statement.
+        assert!(sql_uses_dom_first_img_expr(
+            "SELECT DOM_FIRST_TEXT(DOM, 'h1') AS t, DOM_FIRST_IMG(DOM, 'img:expr(width > 200)') AS img \
+             FROM DOM_LOAD_AND_SELECT(@url, ':root')"
+        ));
+        // Multiple IMG calls: only the one carrying :expr triggers.
+        assert!(sql_uses_dom_first_img_expr(
+            "SELECT DOM_FIRST_IMG(DOM, 'img.a') AS a, DOM_FIRST_IMG(DOM, 'img.b:expr(width > 9)') AS b \
+             FROM DOM_LOAD_AND_SELECT(@url, ':root')"
+        ));
+        assert!(!sql_uses_dom_first_img_expr(
+            "SELECT DOM_FIRST_IMG(DOM, 'img.a') AS a, DOM_FIRST_IMG(DOM, 'img.b') AS b \
+             FROM DOM_LOAD_AND_SELECT(@url, 'div:expr(width > 9)')"
+        ));
     }
 
     #[test]
@@ -26044,10 +26839,28 @@ mod tests {
     }
 
     #[test]
-    fn msys_guard_does_not_flag_root_itself() {
-        // The conversion always appends at least one segment after the root.
-        assert_eq!(msys_mangled_original("C:/Program Files/Git", "C:/Program Files/Git"), None);
-        assert_eq!(msys_mangled_original("C:/Program Files/Git/", "C:/Program Files/Git"), None);
+    fn msys_guard_flags_exact_root_rewrite_as_typed_slash() {
+        // A bare '/' argument is rewritten to the Git root itself — with or
+        // without the trailing slash ('C:/Program Files/Git/' is what MSYS
+        // produces; some versions omit the slash).  Both must reconstruct
+        // the typed '/', never slip through to a confusing validation error.
+        let root = "C:/Program Files/Git";
+        assert_eq!(
+            msys_mangled_original("C:/Program Files/Git/", root).as_deref(),
+            Some("/")
+        );
+        assert_eq!(
+            msys_mangled_original("C:/Program Files/Git", root).as_deref(),
+            Some("/")
+        );
+        assert_eq!(
+            msys_mangled_original(r"C:\Program Files\Git\", root).as_deref(),
+            Some("/")
+        );
+        // Sibling directories under the parent are NOT the root — only a
+        // clear '/' boundary after the root matches.
+        assert_eq!(msys_mangled_original("C:/Program Files/GitHub/x", root), None);
+        assert_eq!(msys_mangled_original("C:/Program Files/Git-ext/x", root), None);
     }
 
     #[cfg(windows)]
@@ -26110,3 +26923,4 @@ mod tests {
         assert!(find_msys_mangled_arg(&args).is_none());
     }
 }
+

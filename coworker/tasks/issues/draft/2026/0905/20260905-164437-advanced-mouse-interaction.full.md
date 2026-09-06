@@ -1,0 +1,154 @@
+Ignoring 13 permissions.allow entries from .claude/settings.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["D:/workspace/Browser4/Browser4-4.13"].hasTrustDialogAccepted: true in C:\Users\pereg\.claude.json.
+"deepseek-v4-flash" isn't described by this version's model catalog; update Claude Code, or map it with behavesAs on a modelPicker row (or modelOverrides, if it is a provider id of a model this version knows). Until then auto-compact keeps this session within 200k tokens (the context window it assumes); if the model accepts more, append [1m] to the model name for 1M, or set CLAUDE_CODE_MAX_CONTEXT_TOKENS to its real window; CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1 restores the previous wait-for-the-API behavior.
+[claude-code:unrecognized_model] {"model":"deepseek-v4-flash","query_source":"generate_session_title"}
+All scenario steps are complete and verified. Here is the full evaluation report.
+
+---
+
+## A. Task Result
+
+**All 13 scenario steps completed successfully** against `http://localhost:18080/generated/interactive-5.html` ("Advanced Interaction Playground"), verified with a mix of CLI snapshot/eval output, DOM state checks, and the fixture's own interaction log. The backend (auto-started by `./b4w.ps1`) and MockSite (started via `./bin/test.ps1 mock-site`) ran from the local source tree.
+
+| Step | Result | Verification |
+|---|---|---|
+| 1. Goto fixture | ✅ | Title "Advanced Interaction Playground", auto-snapshot saved |
+| 2. Interactive snapshot | ✅ | `snapshot -i -v 0/1` revealed tooltip terms (e22/e25 area), 2 hover cards, sortable list (4 items), dblclick zone + reset zone, 4 dialog buttons, log |
+| 3. Hover tooltips | ✅ (with caveat) | CSS eval: a11y tooltip `visibility:visible` after hover; DOM Snapshot tooltip after second hover. Snapshot-based verification proved unreliable (see Issue 2) |
+| 4. Hover product card | ✅ | `.card-detail` max-height 0→100px, clientHeight 53; AX box `[box=…,748,0]` → `[box=…,748,53]` |
+| 5. Drag reorder | ✅ (misreported as failure) | Order became [Medium, Low, Backlog, **High**]; log shows full DRAG START/END — but the command printed `ERROR: browser_drag failed` (Issue 1) |
+| 6. Dblclick activate | ✅ | Status → "Status: ACTIVATED ✅", dbl counter 0→1, log entry |
+| 7. Dblclick reset | ✅ | Counters → 0/0, Status → idle, log entry |
+| 8. generate-locator | ✅ | `generate-locator e306` → `#alertBtn` |
+| 9. get text w/ selector | ✅ | `get text "#alertBtn"` → "🔔 Show Alert" (untrimmed, Issue 6) |
+| 10. Alert + dialog-accept | ✅ | Result area: "[alert] User dismissed the alert dialog."; click stalled 120s (Issue 3) |
+| 11. Confirm + dialog-dismiss | ✅ | Result: "[confirm] User clicked Cancel / declined." (backgrounded click completed instantly) |
+| 12. Prompt + accept w/ input | ✅ | Result: `[prompt] User entered: "Browser4 usability test"` |
+| 13. Final screenshot | ✅ | Full-page PNG saved (1920×2112) showing final state incl. interaction log |
+
+Final state dump (eval): list order `[🟡 Medium, 🟢 Low, ⚪ Backlog, 🔴 High]`, counters 0/0, status idle, dialog result shows the prompt outcome, and the log records drag/dblclick/reset/alert/confirm/prompt entries. Full evidence (snapshots, scripts, outputs, screenshot) is in `.test-sessions/`.
+
+## B. Execution Trace
+
+**Setup:** Verified pwd = repo root; created `.test-sessions/`. MockSite was not running (curl 000), so I launched `pwsh ./bin/test.ps1 mock-site` (moved to background after 120s — it runs a Maven preflight install + `spring-boot:run`; port 18080 came up ~6 min later). Read `skills/browser4-cli/SKILL.md` fully and `./b4w.ps1 help` (294 lines saved to `.test-sessions/help-output.txt`), plus `help snapshot`/`help screenshot`. Then `./b4w.ps1 goto` auto-started the daemon + backend (20.6s, JVM→Spring Boot→MCP tools), which printed a **version-mismatch warning**: the local runtime bundle is built from 4.13.13-SNAPSHOT while checked-out sources are 4.13.14-SNAPSHOT — the older backend was served.
+
+**Steps 2–4:** `snapshot -i -v 0/1 --stdout` (page = 2 viewports) gave all refs. Hovered e22 → evaluated CSS: tooltip visible, other tooltip correctly hidden; then hovered e25 → states swapped. I discovered `snapshot grep` lists the *hidden* tooltip text even before any hover and that viewport snapshots never list the visible tooltip — verified with a reload experiment (grep matched pre-hover) and computed-style checks. Hovered the product card (e276); verified via `eval` computed style + AX box geometry change.
+
+**Step 5:** Read the driver source first (`Browser4WebDriver.kt:drag` / `buildDragSequenceScript`) to understand semantics: single JS-synthesized dragstart→dragenter→dragover→drop→dragend at the target's center ±2px jitter. Dragged e288 (High) onto e291 (Backlog): the command **errored** ("Target element is occluded or moved"), yet the list reordered to [Medium, Low, Backlog, High] and the log recorded the full drag lifecycle. Checked the backend log (`pulsar.log`) — one successful lifecycle + a later "Error executing expression: tab.drag(...)" line, consistent with retry-after-success (the reordered source then covered the old target point). Verified the new order by eval and AX snapshot; treated the step as achieved.
+
+**Steps 6–7:** Fresh `-i -v 0` refs; `dblclick e295` → ACTIVATED + dbl=1; `dblclick e301` → counters reset to 0, idle; both logged.
+
+**Steps 8–9:** `generate-locator e306` → `#alertBtn`; `get text "#alertBtn"` returned the label with leading/trailing HTML-formatting whitespace.
+
+**Steps 10–12:** `click e306` hung (blocking alert) until the CLI's 120s HTTP timeout — `dialog-accept` issued from a second invocation just before the deadline; the result area updated server-side, but the click invocation reported a timeout. For confirm and prompt I backgrounded the click (bash) and issued `dialog-dismiss` / `dialog-accept "Browser4 usability test"` ~5s later — the clicks then completed successfully within seconds, confirming the block is caused by the dialog remaining open during the click RPC.
+
+**Step 13:** `screenshot --full-page -o .test-sessions/final-fullpage.png` (1920×2112) + final state eval dump. The final dump also exposed a leftover CSS `:hover` state on the product card after many clicks elsewhere (clicks don't dispatch `mouseMoved`, so hover never cleared).
+
+**Cleanup/decisions:** All scratch files kept in `.test-sessions/`; git status clean (`.browser4-cli` + `.test-sessions` ignored). MockSite left running for subsequent scenarios; CLI daemon left as-is by design. Workarounds used: CSS `eval` for tooltip verification (snapshot unreliable); backgrounded clicks for dialogs (else 120s stall per dialog); verify-and-retry for drag placement (jitter makes exact placement probabilistic).
+
+---
+
+```json
+{
+  "issues": [
+    {
+      "title": "drag command reports a hard failure after the drag actually succeeded (state changed, full lifecycle logged)",
+      "severity": "High",
+      "category": "Reliability",
+      "reproduction": "On the fixture page: ./b4w.ps1 goto http://localhost:18080/generated/interactive-5.html, then snapshot -i, then ./b4w.ps1 drag e288 e291 (drag 'High Priority' list item onto the 'Backlog' item). Command prints: ERROR: browser_drag failed: Failed to drag 'backend:288' to 'backend:291': Target element is occluded or moved: the resolved point is covered by another element. Yet the list has reordered to [Medium, Low, Backlog, High] and the page interaction log contains a complete 'DRAG START ... DRAG END: High Priority → new position' pair.",
+      "expected": "A successful drag should exit 0 and report success; a genuinely failed drag should leave the page unchanged. The user should never be told a drag failed when it visibly succeeded (a retry would double-drag).",
+      "actual": "The tool call reported failure with a nonzero/error result while the DOM and the fixture log prove the full drag lifecycle (dragstart→dragenter→dragover→drop→dragend) completed and the item moved to the list bottom. Backend log (pulsar.log) shows one 'Calling tool: browser_drag' with the completed lifecycle, then ~0.6s later 'Error executing expression: tab.drag(...) - Failed to drag ... occluded or moved'.",
+      "rootCause": "The driver's occlusion pre-check runs inside the injected script before any event dispatch, so a failing run cannot reorder the page — therefore a first attempt must have completed the drag (full lifecycle logged) and a retry (driver repeat(3) catches ChromeDriverException, or an executor-level retry) re-ran the sequence afterwards. By then the source element occupied the old target point (it had been appended to the bottom of the list), so the second run's elementFromPoint hit-test correctly found 'another element' (the source itself) and surfaced the error while the first attempt's side effects stayed. The retry-after-success path is not idempotent in practice despite the code comment claiming it is ('all failures are reported before any event is dispatched, so a retry re-runs the sequence idempotently'). Which layer triggered the retry and why attempt 1 raised a transient CDP error after dispatching needs a log-level trace.",
+      "codePointer": "browser4-core/browser4-browser/src/main/kotlin/ai/platon/pulsar/chrome/Browser4WebDriver.kt:drag (and buildDragSequenceScript occlusion pre-check); retry wrapper: browser4-agentic AbstractToolExecutor (see 'Error executing expression' WARN in pulsar.log)",
+      "suggestion": "- Treat an occlusion failure on a re-run within the same drag() invocation as success when the previous attempt already completed the event lifecycle (or verify by measuring whether the source node moved before throwing).\n- Make retries safe: if attempt N-1 dispatched the lifecycle, skip re-dispatch and report success (optionally with a warning on stderr).\n- Post-drag verification: compare source/target geometry before and after; report the drag outcome based on actual DOM change rather than only the script's ok flag.\n- When an occlusion error is genuine, print the offending element (tag/id) that covers the target point instead of a generic message."
+    },
+    {
+      "title": "Tooltip (CSS :hover) visibility cannot be reliably verified via snapshots: hidden tooltip text appears in snapshot grep output, while the visible tooltip never appears as a node in viewport snapshots",
+      "severity": "Medium",
+      "category": "Reliability",
+      "reproduction": "After a fresh ./b4w.ps1 reload, with the mouse nowhere near the terms and both tooltip spans CSS-hidden (visibility:hidden), run ./b4w.ps1 snapshot grep 'hierarchical representation|static capture' — it matches and prints both tooltip texts merged into the paragraph/term names (e.g. generic 'Accessibility Tree A hierarchical representation of the page ...'). Then hover a tooltip term and run snapshot -i -v 0 --stdout: the now-visible tooltip content appears nowhere (no node, no ref, no text). getComputedStyle via eval confirms the tooltip really is visible at that moment.",
+      "expected": "CSS-hidden content should not appear in any snapshot output; a hovered-visible tooltip should be discoverable in a viewport snapshot (own node/ref, or at least a box/geometry change) so 'verify the tooltip appeared' works with snapshot commands as SKILL.md's mouse-interaction pattern suggests.",
+      "actual": "Full-page/aggregated renderings (snapshot grep and the auto-saved snapshot YAML files) include visibility:hidden descendant text regardless of hover state, so the grep matches both pre-hover (false positive) and post-hover. Viewport renderings (snapshot -v 0, -i -v 0) omit the tooltip node entirely even when it is visible (the only observable difference between the two snapshot modes was the card-detail box geometry, which is a different CSS mechanism). A user/agent following the documented 'hover <ref> then snapshot grep <text>' pattern gets a match that proves nothing about visibility.",
+      "rootCause": "The full-page aggregation path builds element names from descendant text that ignores CSS visibility (DOM-text based), while the viewport path serializes per-node AX names and prunes hidden/ignored nodes — the two paths disagree about hidden content, and neither exposes the rendered visibility state of :hover-revealed nodes. Exact location of the divergence (browser4-rest snapshot executor vs driver/upstream AX serializer) requires code investigation: compare the snapshot capture path used for viewport-filtered vs full-page requests.",
+      "codePointer": "",
+      "suggestion": "- Make the text aggregation visibility-aware (innerText-like semantics) so visibility:hidden content never leaks into names/grep matches.\n- Include hover/visibility state or geometry in serialized nodes so a tooltip that becomes visible is detectable in viewport snapshots.\n- Update SKILL.md's hover-verification pattern: verify with eval (getComputedStyle visibility/opacity) or geometry deltas instead of snapshot grep."
+    },
+    {
+      "title": "Documented two-step dialog flow (click → dialog-accept in a separate invocation) stalls the CLI for the full 120s HTTP timeout per dialog",
+      "severity": "Medium",
+      "category": "UX",
+      "reproduction": "./b4w.ps1 click e306 (Show Alert button) per SKILL.md §Dialog Handling, then in a second invocation ./b4w.ps1 dialog-accept. The click command blocks for ~120s and finally prints 'HTTP request timed out [tool=browser_click, endpoint=.../mcp/call-tool, timeout=120s ...]'. When dialog-accept was issued ~1s before the deadline, the click still reported a timeout although the server-side action completed (result area updated to '[alert] User dismissed the alert dialog.').",
+      "expected": "The two-step flow should be practical: the triggering click should either return promptly with a 'dialog is open — run dialog-accept' state, or the docs should warn that the click blocks until the dialog is handled and point to a non-blocking alternative.",
+      "actual": "A synchronous user or agent following the documented pattern cannot run dialog-accept until the click invocation ends, so each alert/confirm/prompt costs a full 120s stall (or Ctrl+C). The click command even races the timeout: it reported failure although the dialog had just been dismissed and the page updated. The alternative --auto-dismiss-dialogs exists but only auto-accepts — it cannot be used to test the dismiss path of confirm/prompt. (Workaround used here: run the click as a background shell job, then dialog-dismiss/accept ~5s later; the click then completes successfully within seconds.)",
+      "rootCause": "The backend click RPC blocks until the JS dialog is dismissed (Chrome blocks the page main thread), and the CLI's default HTTP timeout (120s) is the only bound; nothing detects Page.javascriptDialogOpening to return early. SKILL.md documents the two-step flow but never states that the first step blocks until the second step is performed.",
+      "codePointer": "cli/browser4-cli (dialog command implementation and SKILL.md dialog section); backend dialog state handling in browser4-rest MCPToolController / driver dialog listener",
+      "suggestion": "- Detect the dialog-open event and make the click return promptly with an explicit 'dialog pending, run dialog-accept/dialog-dismiss' message instead of blocking to the HTTP timeout.\n- In SKILL.md, present --auto-dismiss-dialogs as the primary one-step option and add a warning: 'click blocks until the dialog is handled; run the click and dialog-accept in separate terminals/background, or the click will time out after N seconds'.\n- Add a --dialog-timeout option (default well below 120s) so failed dialog-trigger clicks fail fast.\n- If the click times out but the page later updates, print the existing 'may have succeeded' note (it does) and suggest running dialog-accept before retrying."
+    },
+    {
+      "title": "drag offers no drop-position control: placement on live-reorder lists is probabilistic (±2px jitter around the target element's center decides before/after insertion)",
+      "severity": "Medium",
+      "category": "Product",
+      "reproduction": "On the fixture's sortable list: ./b4w.ps1 drag e288 e291 (drag 'High Priority' onto 'Backlog'). The task intent 'put High at the bottom' only succeeds when the single synthesized dragover lands below Backlog's vertical center; the driver jitters the target point by ±2px, so repeated attempts flip between 'High last' (appendChild) and 'High before Backlog' (3rd of 4). Dragging 'Backlog' onto 'High' similarly flips between 'Backlog first' and 'Backlog second'. Order must be re-checked and the drag retried until it lands as intended.",
+      "expected": "Either deterministic insertion semantics (documented: 'dropping on element X inserts at X's position') or a way to target an explicit drop position (top/bottom of a container, or a point offset) so 'move item to the bottom of the list' is expressible and repeatable.",
+      "actual": "The driver dispatches exactly one dragover event at (targetCenterX±2, targetCenterY±2) (Browser4WebDriver.buildDragSequenceScript + randomOffset(2.0)); the page's reorder logic (getDragAfterElement) converts that pointer Y into an insert-before/append decision, so an exact-center hit is a coin flip. There is no drag-to-container-edge, drop-point, or position argument in the CLI. The step-5 goal was achieved only because the misreported retry append landed 'High' last by chance, then was verified.",
+      "rootCause": "Single-dragover-at-center drag simulation with randomized ±2px jitter is a poor match for live-reorder list handlers that decide placement from pointer Y relative to item centers; and the drag API models only 'element onto element', not 'element to list position'. SortableJS/react-dnd-style libraries are additionally unsupported (isTrusted=false), noted in the driver comments but not in user-facing docs.",
+      "codePointer": "browser4-core/browser4-browser/src/main/kotlin/ai/platon/pulsar/chrome/Browser4WebDriver.kt:buildDragSequenceScript / randomOffset; CLI drag command in cli/browser4-cli",
+      "suggestion": "- Dispatch a short chain of dragover events sweeping from the source position to the target (like a real mouse drag) so live-reorder handlers converge deterministically instead of deciding on one center-point event.\n- Support position-aware drag targets (e.g. drag <src> <container> --at bottom|top or a client-point offset), and document exactly where the drop lands.\n- After any drag, evaluate the source's DOM position and include the resulting order/position in the command output."
+    },
+    {
+      "title": "Dev mode serves a stale cached backend bundle when the checkout version no longer matches, requiring a manual rebuild",
+      "severity": "Low",
+      "category": "Product",
+      "reproduction": "With checked-out sources at 4.13.14-SNAPSHOT and a previously built local runtime bundle from 4.13.13-SNAPSHOT, run ./b4w.ps1 goto <url>. Output: '⚠ the existing local Browser4 runtime bundle was built from 4.13.13-SNAPSHOT sources, but the checked-out sources are 4.13.14-SNAPSHOT. ⚠ Serving the OLD backend build — behaviour may not match the checked-out code. To rebuild from source, run: powershell ... build-runtime-bundle.ps1' — then it starts the old bundle anyway.",
+      "expected": "In dev mode (source tree), the backend under test should match the checked-out sources, or the launcher should rebuild/refresh automatically (or offer to) when the bundle version is older than the checkout.",
+      "actual": "The evaluation backend silently (after a warning) runs 4.13.13-SNAPSHOT code while the tree is 4.13.14-SNAPSHOT; users must notice the warning and manually invoke a PowerShell build script (or set BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1) to test the code they actually have checked out — easy to miss for a new user who expects 'auto-starts the locally-built backend' to mean current sources.",
+      "rootCause": "The dev launcher intentionally reuses the cached runtime bundle for speed and only warns on version skew; nothing in the auto-start path rebuilds when the checkout is newer.",
+      "codePointer": "b4w.ps1 / cli daemon bundle-start logic (warning text printed by the CLI on first launch)",
+      "suggestion": "- On version skew, auto-rebuild the bundle once (or prompt the user) instead of proceeding with the stale backend in dev mode.\n- Surface the skew in `browser4-cli status` output for every command, not only the first launch banner.\n- Document in SKILL.md/CLAUDE.md that after a version bump in the source tree the runtime bundle must be rebuilt before dev-mode testing reflects current code."
+    },
+    {
+      "title": "get text returns raw textContent with HTML-formatting whitespace, so element labels come back indented/padded",
+      "severity": "Low",
+      "category": "Product",
+      "reproduction": "./b4w.ps1 generate-locator e306 → '#alertBtn'; ./b4w.ps1 get text '#alertBtn' → output '            🔔 Show Alert' (12 leading spaces + trailing newline), because the button's textContent includes the pretty-printed HTML whitespace/newlines around the label.",
+      "expected": "The button's readable label '🔔 Show Alert' — matching what snapshot shows in the AX name — trimmed of formatting whitespace.",
+      "actual": "The command returns textContent verbatim ('\\n            🔔 Show Alert\\n        '), forcing the user/agent to trim when comparing against snapshot labels or expected strings.",
+      "rootCause": "get text (live-DOM text extraction) returns the raw textContent property; unlike the AX name computation (which normalizes whitespace), no trimming/normalization is applied.",
+      "codePointer": "CLI/backend get-text executor for live DOM reads (cli/browser4-cli get command → browser4-rest/browser driver text extraction)",
+      "suggestion": "- Trim/normalize whitespace in text extraction output, or offer --raw for the verbatim textContent.\n- Document that get text returns raw textContent while snapshot names are whitespace-normalized, so users aren't surprised by label mismatches."
+    },
+    {
+      "title": "Main help text for snapshot says 'See flags below for filtering, scoping, and output options' but no flags are shown anywhere in the main help output",
+      "severity": "Low",
+      "category": "Discoverability",
+      "reproduction": "./b4w.ps1 help (or capture to file) and inspect the snapshot entry: '★ snapshot  Capture page snapshot to obtain element refs. See flags below for filtering, scoping, and output options.' — grep the whole help output for --viewport/--interactive/--auto-diff: zero matches. The flags only appear in ./b4w.ps1 help snapshot.",
+      "expected": "Either include the key snapshot flags (-v, -i, --auto-diff, --stdout) inline in the main help entry, or reword the pointer to 'See: help snapshot'.",
+      "actual": "A first-time user reading the main help is pointed 'below' for flags that are not there; they must know to run the subcommand help to find -i/-v/--auto-diff (the exact flags the docs' quick patterns rely on).",
+      "rootCause": "The main help generator appends the generic 'See flags below' sentence to the snapshot description without a following flags block (flags are only in the per-command help view).",
+      "codePointer": "cli/browser4-cli help rendering (main help text for snapshot)",
+      "suggestion": "- Add the flags inline to the main-help snapshot entry (or a compact flag summary line), since snapshot is a starred high-frequency command.\n- Otherwise change the wording to 'Run help snapshot for filtering, scoping, and output options'."
+    },
+    {
+      "title": "CSS :hover state set by hover persists across later interactions — clicks elsewhere do not clear it, so hover-only content stays 'open' indefinitely",
+      "severity": "Medium",
+      "category": "Reliability",
+      "reproduction": "On the fixture: hover the product card (hover e276) — card detail expands. Then perform several unrelated clicks/dblclicks/dialog actions at other coordinates (e.g. click e306/e307/e308 in the dialog section ~1100px below). A final eval of getComputedStyle/#productCard .card-detail.clientHeight still returns > 0 and the full-page screenshot shows the detail text expanded, i.e. the card is still :hovered although the pointer logically moved away long ago.",
+      "expected": "After the mouse is used elsewhere (click/dblclick coordinates outside the card), CSS :hover on the card should clear and hover-revealed content should collapse, matching real mouse behavior.",
+      "actual": "The hover effect persists for the rest of the session: click/dblclick/drag actions dispatch press/release at new coordinates without a preceding mouseMoved, so Chrome's hover state never updates; there is no documented 'clear hover / move mouse to neutral point' primitive (mousemove <x> <y> exists but is not mentioned in the mouse-interaction docs). Visual assertions/screenshots taken later can show stale hover content.",
+      "rootCause": "hover dispatches a mouse move to the element, but later interactions don't move the mouse first; the browser retains the last hover target. Driver-side hover-state management is missing (no implicit mouse reset between interactions).",
+      "codePointer": "browser4-core/browser4-browser/src/main/kotlin/ai/platon/pulsar/chrome/Browser4WebDriver.kt (hover/click/dblclick mouse event dispatch)",
+      "suggestion": "- Dispatch a mouseMoved to the target coordinates before click/dblclick press events so :hover reflects the actual interaction point.\n- Add an explicit documented command/pattern to clear hover (e.g. mousemove to a neutral area like 0,0) and mention it in SKILL.md's mouse-interaction section.\n- Optionally reset hover state after each interaction command that doesn't end in a hover."
+    }
+  ],
+  "assessment": {
+    "completionStatus": "Successful — all 13 scenario steps were completed and verified on the interactive-5.html fixture (tooltips triggered, hover card expanded, priority list reordered with High Priority at the bottom, dblclick activate/reset verified, generate-locator produced '#alertBtn', alert/confirm/prompt handled with verified result-area updates, final full-page screenshot captured). Several steps required extra verification tooling or workarounds due to the issues above.",
+    "successRate": "90% — all task steps succeeded, but 3 steps required non-obvious workarounds (CSS eval for tooltip verification, backgrounded clicks to avoid 120s dialog stalls, verify-and-retry for drag placement) and one step (drag) succeeded while the tool falsely reported failure, which a first-time user would likely treat as a blocker.",
+    "issuesFound": 8,
+    "majorBlockers": "None that prevented completion. Closest to a blocker: the drag command falsely reporting failure while mutating the page (Issue 1), and the 120s per-dialog stall when following the documented two-step dialog pattern (Issue 3).",
+    "mostConfusingAspects": "For a first-time user: (1) being told a drag failed when the page clearly changed — and being unsure whether to retry; (2) snapshot grep matching tooltip text that is actually hidden, making 'is the tooltip showing?' unanswerable from snapshots; (3) the click command hanging for 2 minutes on dialog-trigger buttons while the docs present click + dialog-accept as a routine flow; (4) 'See flags below' in main help pointing at flags that aren't there.",
+    "mostValuableImprovements": "Fix drag's false-failure reporting and make retries idempotent (Issue 1); make snapshot rendering visibility-aware so hidden CSS content can't masquerade as visible (Issue 2); detect open dialogs and return early instead of blocking the click for 120s (Issue 3); document and support deterministic drag placement (Issue 4).",
+    "usabilityRating": 6
+  }
+}
+```
+
+**D. Overall Assessment summary:** Task completion **Successful**, estimated success rate **90%**, **8 issues** found (2 High/Medium reliability traps on core interaction commands, 2 UX/product gaps in dialog and drag flows, plus smaller doc/discoverability items). No hard blockers. Most confusing for a new user: false-failure drag reporting, snapshot output that cannot distinguish hidden vs. visible content, and the 120s dialog stall. Most valuable fixes: idempotent drag retries with truthful status, visibility-aware snapshot rendering, early dialog detection, and deterministic drag positioning. Overall usability: **6/10** — the CLI is well-documented and powerful, but trust-breaking behaviors in its most interactive workflows (drag, dialog, hover verification) will cost a first-time user significant debugging time.

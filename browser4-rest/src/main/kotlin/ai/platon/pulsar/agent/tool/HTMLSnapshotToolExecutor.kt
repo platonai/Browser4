@@ -529,10 +529,19 @@ class HTMLSnapshotToolExecutor(
                 }
 
             if (clean) {
-                cleanDocument(document)
+                // --clean must change the serialized OUTPUT, not just the parsed
+                // tree.  FeaturedDocument.outerHtml can serve a cached annotated
+                // serialization that ignores in-place mutations, which made the
+                // clean export byte-identical to the raw one.  Re-parse the
+                // serialized HTML into a fresh jsoup tree, clean that, and
+                // serialize it — the mutations provably reach the output.
+                val rawHtml = document.outerHtml
+                val fresh = org.jsoup.Jsoup.parse(rawHtml)
+                cleanDocument(fresh)
+                fresh.outerHtml()
+            } else {
+                document.outerHtml
             }
-
-            document.outerHtml
         }
     }
 
@@ -546,7 +555,7 @@ class HTMLSnapshotToolExecutor(
      * - Non-standard attributes on all elements (keeps `vi`, standard HTML5 attrs,
      *   `aria-*`, `role`, `data-*`, and microdata `item*` attrs)
      */
-    private fun cleanDocument(document: ai.platon.pulsar.dom.FeaturedDocument) {
+    private fun cleanDocument(document: org.jsoup.nodes.Document) {
         document.select("script, style, noscript").remove()
 
         for (el in document.select("*")) {

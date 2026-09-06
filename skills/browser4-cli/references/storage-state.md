@@ -27,10 +27,12 @@ Save and restore browser storage state (cookies and localStorage). Note: session
 ### Save Storage State
 
 ```bash
-# Save to auto-generated filename (storage-state-{timestamp}.json)
+# Save to auto-generated filename in the CLI snapshot directory
+# (.browser4-cli/snapshot/storage-state-{timestamp}.json) — same output
+# location as extract/screenshot/snapshot captures.
 browser4-cli state-save
 
-# Save to specific filename
+# Save to a specific file path (relative paths resolve from the working dir)
 browser4-cli state-save my-auth-state.json
 ```
 
@@ -116,6 +118,11 @@ browser4-cli cookie-set session abc123 --domain example.com --path / --httpOnly 
 # Cookie with expiration (Unix timestamp)
 browser4-cli cookie-set remember_me token123 --expires 1735689600
 ```
+
+> **Git Bash note:** a bare `--path /` (like any `/`-leading argument) is rewritten by
+> Git Bash's MSYS path conversion before the command starts — `--path /` can arrive as
+> `C:/Program Files/Git/`, which the CLI rejects. Invoke commands via `./b4w.sh`
+> instead of `./b4w.ps1`, or prefix `MSYS2_ARG_CONV_EXCL='*'`.
 
 ### Delete a Cookie
 

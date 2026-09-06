@@ -141,7 +141,7 @@ browser4-cli snapshot -i
 ├─ 已知 URL 列表（在文件中）？→ crawl --seed-file urls.txt --depth 0 --sql @query.sql
 ├─ 从起始 URL 开始递归抓取？→ crawl <url> --out-link-selector "..." --depth N
 ├─ 需要并行执行（高吞吐）？→ swarm create → swarm query --seed-file ...
-├─ 需要周期性监控（如每小时检查一次）？→ loop -- eval "..." -i 3600
+├─ 需要周期性监控（如每小时检查一次）？→ loop -i 3600 -- eval "..."
 └─ 只是脚本里处理少量 URL？
    → for url in ...; do browser4-cli goto "$url"; ... done
 ```

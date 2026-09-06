@@ -10,7 +10,7 @@ This scenario covers every branch in **SKILL.md §4b — Choosing Bulk/Scale App
 2. **AC2 — Multiple known URLs:** Use `crawl --seed-file ... --depth 0 --sql @query.sql` against several specific product URLs.
 3. **AC3 — Crawl from a start URL:** Use `crawl <url> --out-link-selector ... --depth N` on the generated crawl fixture.
 4. **AC4 — Parallel execution:** Use `swarm create` and `swarm query --seed-file ...` for the same style of structured extraction at higher throughput.
-5. **AC5 — Repeated monitoring:** Use `loop -- eval ... -i ...` against a named session that is already on a MockSite page.
+5. **AC5 — Repeated monitoring:** Use `loop` in subcommand mode (`-i`/`-n` flags **before** `--`) against a named session that is already on a MockSite page.
 6. **AC6 — Just a few URLs in a shell script:** Run the few-URL pattern with a simple shell loop (PowerShell loop on Windows is acceptable) and add a short wait between iterations.
 
 ## Steps

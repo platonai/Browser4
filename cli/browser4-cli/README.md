@@ -238,7 +238,7 @@ Need to process multiple pages?
 ├─ Single list page? → htmlsnapshot query with DOM_LOAD_AND_SELECT
 ├─ List of known URLs? → crawl --seed-file urls.txt --depth 0 --sql @query.sql
 ├─ Need parallel execution? → swarm create → swarm query --seed-file ...
-└─ Repeated monitoring? → loop -- eval "..." -i 3600
+└─ Repeated monitoring? → loop -i 3600 -- eval "..."
 ```
 
 ### How to Turn HTML into Spreadsheets — Zero Tokens

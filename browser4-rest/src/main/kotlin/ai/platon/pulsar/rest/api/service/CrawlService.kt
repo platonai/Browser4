@@ -112,6 +112,14 @@ class CrawlService(
     /** Active coroutine jobs: taskId -> Job (for cancellation) */
     private val jobStore = ConcurrentHashMap<String, Job>()
 
+    /** Terminal task states: OK, TIMEOUT, ERROR.  Tasks in these states are
+     *  purgeable, clearable, and never re-finalized by a late cancellation. */
+    private val terminalStatuses = setOf(
+        ResourceStatus.getStatusText(ResourceStatus.SC_OK),
+        ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
+        ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
+    )
+
     internal val persistence = JsonlPersistence(
         file = crawlPersistencePath(),
         clazz = CrawlResponse::class,
@@ -122,11 +130,6 @@ class CrawlService(
     fun restoreFromDisk() {
         val now = System.currentTimeMillis()
         val ttlMillis = taskTtlMinutes * 60_000L
-        val terminalStatuses = setOf(
-            ResourceStatus.getStatusText(ResourceStatus.SC_OK),
-            ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
-            ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
-        )
         persistence.restore { entry ->
             if (entry.taskId.isBlank()) return@restore
             // Skip terminal entries that have already expired — they were
@@ -192,10 +195,16 @@ class CrawlService(
         }
 
         if (seedUrls.isEmpty()) {
+            // Terminal records always carry started/finish timestamps so
+            // consumers can distinguish an instantly-failed task from one that
+            // never ran (and the CLI summary can show elapsed time).
+            val now = java.time.Instant.now()
             val errorResponse = CrawlResponse(
                 taskId = taskId,
                 status = ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
-                error = "No URLs provided"
+                error = "No URLs provided",
+                startedTime = now,
+                finishTime = now
             )
             taskStore.put(taskId, errorResponse)
             onStatusChanged(errorResponse)
@@ -347,18 +356,39 @@ class CrawlService(
             } catch (e: CancellationException) {
                 val existing = taskStore.getIfPresent(taskId)
                 val now = java.time.Instant.now()
-                if (existing == null || existing.status == ResourceStatus.getStatusText(ResourceStatus.SC_CREATED)) {
-                    val timeout = CrawlResponse(
+                // A cancellation always transitions the task to a terminal
+                // state.  Historically this branch only wrote TIMEOUT when the
+                // task was still CREATED, so a task whose worker died inside
+                // withTimeout(CRAWL_TASK_TIMEOUT_MS) stayed PROCESSING forever
+                // (uncancellable, invisible to 'crawl clear', purged only by
+                // TTL).  Distinguish the two sources: cancel() removes the job
+                // from jobStore and already wrote a terminal record, so a
+                // record in a terminal state is left alone; anything still
+                // PROCESSING/CREATED is a seed-processing timeout and must be
+                // finalized with whatever partial progress exists.
+                val alreadyTerminal = existing != null && existing.status in terminalStatuses
+                if (!alreadyTerminal) {
+                    val timedOut = CrawlResponse(
                         taskId = taskId,
                         status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
-                        error = "Crawl cancelled or timed out",
+                        error = if (existing?.status == "PROCESSING") {
+                            "Crawl timed out while processing seeds (server-side limit of " +
+                                "${CRAWL_TASK_TIMEOUT_MS / 1000}s exceeded). Partial results below."
+                        } else {
+                            "Crawl cancelled or timed out"
+                        },
+                        pagesFound = existing?.pages?.size ?: 0,
+                        linksDiscovered = existing?.linksDiscovered ?: 0,
+                        pages = existing?.pages,
+                        seedStatuses = existing?.seedStatuses,
+                        diagnostic = existing?.diagnostic,
                         startedTime = existing?.startedTime ?: now,
                         finishTime = now
                     )
-                    taskStore.put(taskId, timeout)
-                    onStatusChanged(timeout)
+                    taskStore.put(taskId, timedOut)
+                    onStatusChanged(timedOut)
                 }
-                logger.warn("Crawl task {} cancelled", taskId)
+                logger.warn("Crawl task {} cancelled or timed out: {}", taskId, e.message)
             } catch (e: Exception) {
                 val existing = taskStore.getIfPresent(taskId)
                 val now = java.time.Instant.now()
@@ -410,11 +440,6 @@ class CrawlService(
      * @return the number of tasks removed.
      */
     fun clearTerminal(): Int {
-        val terminalStatuses = setOf(
-            ResourceStatus.getStatusText(ResourceStatus.SC_OK),
-            ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
-            ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
-        )
         val toRemove = taskStore.asMap().entries.filter { it.value.status in terminalStatuses }
         toRemove.forEach { taskStore.invalidate(it.key) }
         logger.info("Cleared {} terminal crawl tasks", toRemove.size)
@@ -454,11 +479,6 @@ class CrawlService(
     private fun purgeExpiredTasks() {
         val now = System.currentTimeMillis()
         val ttlMillis = taskTtlMinutes * 60_000L
-        val terminalStatuses = setOf(
-            ResourceStatus.getStatusText(ResourceStatus.SC_OK),
-            ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
-            ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
-        )
 
         val expired = taskStore.asMap().entries.filter {
             it.value.status in terminalStatuses &&
@@ -1234,6 +1254,14 @@ class CrawlService(
             val href = element.attr("href").takeIf { it.isNotBlank() }
                 ?: element.attr("src").takeIf { it.isNotBlank() }
                 ?: return@mapNotNull null
+            // Fragment-only anchors (href='#', '#section') can never navigate to
+            // a new document — resolving them yields the portal page itself with
+            // a fragment, which then masquerades as a discovered out-link (it can
+            // even match --out-link-pattern after resolution and produce a hollow
+            // 'discovered but nothing new' crawl).  Skip them before resolution.
+            if (href.trimStart().startsWith("#")) {
+                return@mapNotNull null
+            }
             // Normalize: resolve relative URLs, optional query stripping
             val resolved = runCatching {
                 java.net.URI(portalUrl).resolve(href).toString()
@@ -1346,8 +1374,13 @@ class CrawlService(
     }
 
     private fun normalizeForVisit(url: String): String {
+        // Strip empty or fragment-only suffixes ('#', '#section') too: resolving
+        // a fragment-only href against the portal URL appends '#' to it, and the
+        // canonicalized form must dedupe against the fragment-less URL instead of
+        // surfacing a spurious trailing-'#' page (or counting it as a new link).
         return url.trim().lowercase()
             .removeSuffix("/")
+            .substringBefore('#')
             .substringBefore('?')  // strip query for dedup
     }
 

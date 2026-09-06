@@ -23,7 +23,7 @@ The module is a Browser4 plugin. Place `browser4-pptx-<version>.jar` on the appl
 ```json
 {
   "name": "browser4-pptx",
-  "version": "4.12.1-SNAPSHOT",
+  "version": "4.13.14-SNAPSHOT",
   "description": "Convert web pages to PowerPoint (PPTX) files",
   "dependsOn": ["browser4-protocol", "browser4-agentic"],
   "autoConfigurationClasses": ["ai.platon.pulsar.pptx.config.PptxAutoConfiguration"]

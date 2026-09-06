@@ -152,6 +152,8 @@ pub fn generate_help() -> String {
     lines.push("║".to_string());
     lines.push("║    goto <url>         Navigate to a page (auto-starts server & session)".to_string());
     lines.push("║    snapshot [-v <N>]  Capture accessibility tree with element refs".to_string());
+    lines.push("║    snapshot -i        Interactive-oriented tree (merges text into ref names —".to_string());
+    lines.push("║                        an interactive-oriented layout, not an interactive-only filter)".to_string());
     lines.push("║    click <ref>        Click an element by its ref (e5) or CSS selector".to_string());
     lines.push("║    fill <ref> \"<txt>\"  Fill a form field (--submit to press Enter)".to_string());
     lines.push("║    htmlsnapshot       Capture static HTML for content extraction".to_string());
@@ -171,7 +173,7 @@ pub fn generate_help() -> String {
     lines.push("    fill <ref> \"<text>\" --submit              # fill + press Enter".to_string());
     lines.push("  Handle dialogs (two-step):".to_string());
     lines.push("    click <ref> --auto-dismiss-dialogs        # auto-accept dialog in one step".to_string());
-    lines.push("    OR click <ref>  →  dialog-accept          # separate click + accept".to_string());
+    lines.push("    OR click <ref>  →  dialog-accept          # click returns 'dialog pending'; then accept".to_string());
     lines.push("  Run JavaScript:".to_string());
     lines.push("    eval --file script.js                     # read JS from file (no quoting issues)".to_string());
     lines.push("  Bulk crawl:".to_string());
@@ -295,6 +297,7 @@ pub fn generate_quick_reference() -> String {
     lines.push("── Navigate & Inspect ─────────────────────────────────────────────".to_string());
     lines.push(fmt_cmd("goto <url>", "Navigate to a URL (auto-opens session)"));
     lines.push(fmt_cmd("snapshot [-v <N>]", "Capture page accessibility tree"));
+    lines.push(fmt_cmd("snapshot -i", "Interactive-oriented tree: merges text into ref names (not an interactive-only filter); pair with -v 0 / --selector to bound output"));
     lines.push(fmt_cmd("click <ref>", "Click an element"));
     lines.push(fmt_cmd("fill <ref> \"<text>\"", "Fill a form field (--submit to press Enter)"));
     lines.push(fmt_cmd("scroll <dx> <dy>", "Scroll the page by pixels"));
@@ -1391,11 +1394,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Submit with an inline X-SQL query:".to_string());
         lines.push(
-            r##"  browser4-cli swarm submit "https://www.amazon.com/dp/B08PP5MSVB" --sql ""##
-                .to_string()
-                + r#""SELECT DOM_BASE_URI(DOM) AS url, DOM_FIRST_TEXT(DOM, '#productTitle') AS title ""#
-                + r#""FROM DOM_LOAD_AND_SELECT(@url, 'body')""#
-                + r#"""#
+            r#"  browser4-cli swarm submit "https://www.amazon.com/dp/B08PP5MSVB" --sql "SELECT DOM_BASE_URI(DOM) AS url, DOM_FIRST_TEXT(DOM, '#productTitle') AS title FROM DOM_LOAD_AND_SELECT(@url, 'body')""#
+                .to_string(),
         );
         lines.push(String::new());
         lines.push("  # Submit with a query file:".to_string());
@@ -1443,11 +1443,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Examples:".to_string());
         lines.push("  # Inline X-SQL:".to_string());
         lines.push(
-            r##"  browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql ""##
-                .to_string()
-                + r#""SELECT DOM_BASE_URI(DOM) AS url, DOM_FIRST_TEXT(DOM, '#productTitle') AS title ""#
-                + r#""FROM DOM_LOAD_AND_SELECT(@url, 'body')""#
-                + r#"""#
+            r#"  browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql "SELECT DOM_BASE_URI(DOM) AS url, DOM_FIRST_TEXT(DOM, '#productTitle') AS title FROM DOM_LOAD_AND_SELECT(@url, 'body')""#
+                .to_string(),
         );
         lines.push(String::new());
         lines.push("  # From a query file:".to_string());
@@ -1626,10 +1623,21 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli crawl https://example.com".to_string());
         lines.push("  browser4-cli crawl https://example.com -d 2 -ol \"a.product\" -olp \"/product/\"".to_string());
-        lines.push("  browser4-cli crawl https://example.com --depth 3 --refresh".to_string());
+        lines.push("  browser4-cli crawl https://example.com --depth 3 --refresh -ol \"a[href]\"".to_string());
         lines.push("  browser4-cli crawl --seed-file urls.txt --depth 0 --refresh".to_string());
-        lines.push("  browser4-cli crawl --seed-file urls.txt --sql @extract.sql --format csv -o results.csv".to_string());
+        // @file paths must be quoted on PowerShell, where an unquoted @ token
+        // is parsed as the splatting operator (see SKILL.md quoting warning).
+        lines.push("  browser4-cli crawl --seed-file urls.txt --sql \"@extract.sql\" --format csv -o results.csv".to_string());
         lines.push("  browser4-cli crawl --seed-file urls.txt --sql-stdin --format table < query.sql".to_string());
+        lines.push(String::new());
+        lines.push(
+            "  Note: --depth N (N >= 1) only performs link discovery when --out-link-selector (-ol) is given;"
+                .to_string(),
+        );
+        lines.push(
+            "  without it only the seed URLs are processed, whatever the depth. See the Notes above."
+                .to_string(),
+        );
     }
 
     if cmd.name == "htmlsnapshot" {
@@ -1646,7 +1654,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         ));
         lines.push(format_with_gap(
             "  htmlsnapshot query [url]",
-            "Run X-SQL against the HTML snapshot stored in Browser4's page storage via the scrape API. Use --format table for human-readable output.",
+            "Run X-SQL. Without a URL (or for the current page URL) the query is seeded from the session's LIVE page; an explicit different URL is fetched independently. Does not read the stored capture cache. Use --format table for human-readable output.",
             50,
         ));
         lines.push(format_with_gap(
@@ -2565,6 +2573,18 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push("    becomes visible without a cookie-list round trip.".to_string());
+        lines.push(
+            "  - Git Bash rewrites a bare --path / before the command starts (MSYS path"
+                .to_string(),
+        );
+        lines.push(
+            "    conversion turns it into '<Git>/', which the CLI rejects). Run via ./b4w.sh"
+                .to_string(),
+        );
+        lines.push(
+            "    or prefix MSYS2_ARG_CONV_EXCL='*' when invoking ./b4w.ps1 from Git Bash."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli cookie-set session abc123".to_string());
@@ -2627,6 +2647,28 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     }
 
     if cmd.name == "cookie-delete" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Deleting a cookie that is not present reports 'Cookie not found: <name>'"
+                .to_string(),
+        );
+        lines.push(
+            "    and exits 0, so delete stays idempotent in scripts."
+                .to_string(),
+        );
+        lines.push(
+            "  - Git Bash rewrites a bare --path / (MSYS path conversion) before the command"
+                .to_string(),
+        );
+        lines.push(
+            "    starts. Run via ./b4w.sh or prefix MSYS2_ARG_CONV_EXCL='*' when invoking"
+                .to_string(),
+        );
+        lines.push(
+            "    ./b4w.ps1 from Git Bash."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli cookie-delete session_id".to_string());
@@ -3274,8 +3316,8 @@ mod tests {
         assert!(help.contains("ALL matching elements from the HTML snapshot"));
         assert!(help.contains("querySelectorAll"));
         assert!(help.contains("htmlsnapshot query [url]"));
-        assert!(help.contains("Run X-SQL against the HTML snapshot"));
-        assert!(help.contains("via the scrape API"));
+        assert!(help.contains("Run X-SQL"));
+        assert!(help.contains("seeded from the session's LIVE page"));
         assert!(help.contains("htmlsnapshot export"));
         assert!(help.contains("Export snapshot HTML from Browser4's page storage to a local file"));
         assert!(help.contains("htmlsnapshot summary"));
@@ -3467,9 +3509,9 @@ mod tests {
         assert!(help.contains("--priority"));
         // Examples
         assert!(help.contains("browser4-cli crawl https://example.com"));
-        assert!(help.contains("--depth 3 --refresh"));
+        assert!(help.contains("--depth 3 --refresh -ol \"a[href]\""));
         assert!(help.contains("--seed-file urls.txt --depth 0"));
-        assert!(help.contains("--sql @extract.sql --format csv -o results.csv"));
+        assert!(help.contains("--sql \"@extract.sql\" --format csv -o results.csv"));
         assert!(help.contains("--sql-stdin --format table"));
     }
 

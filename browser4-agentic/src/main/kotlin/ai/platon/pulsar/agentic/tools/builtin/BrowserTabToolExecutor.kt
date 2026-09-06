@@ -62,11 +62,38 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
         /**
          * Read the concatenated descendant text of an element, skipping
-         * SCRIPT/STYLE/NOSCRIPT/TEMPLATE subtrees.  Mirrors the driver's
-         * `selectFirstTextOrNull` semantics exactly, but runs through the same
-         * CDP `callFunctionOn` locator path used by the attribute/property
-         * reads below, so every `get` mode resolves refs (`eN` backend node
-         * ids) and CSS selectors identically against the live DOM.
+         * SCRIPT/STYLE/NOSCRIPT/TEMPLATE subtrees, then normalize runs of
+         * whitespace (including newlines) to single spaces and trim the ends.
+         * This is the default for `get text`: `textContent`-style reads
+         * otherwise surface the page's layout whitespace (indentation,
+         * line breaks) that the rendered text does not show.
+         *
+         * Both variants run through the same CDP `callFunctionOn` locator path
+         * used by the attribute/property reads, so every `get` mode resolves
+         * refs (`eN` backend node ids) and CSS selectors identically against
+         * the live DOM.
+         */
+        private val SELECT_FIRST_TEXT_NORMALIZED_JS: String =
+            """
+            function(element) {
+                try {
+                    var excluded = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
+                    var text = '';
+                    var walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, { acceptNode: function(node) {
+                        var p = node.parentNode;
+                        return p && !excluded.has(p.nodeName) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+                    }});
+                    var n;
+                    while ((n = walker.nextNode())) { text += n.nodeValue; }
+                    return text.replace(/\s+/g, ' ').trim();
+                } catch (e) { return null; }
+            }
+            """.trimIndent()
+
+        /**
+         * Raw variant of [SELECT_FIRST_TEXT_NORMALIZED_JS]: the concatenated
+         * descendant text exactly as stored in the DOM, no whitespace
+         * normalization.  Selected with `get text --raw`.
          */
         private val SELECT_FIRST_TEXT_READ_JS: String =
             """
@@ -1194,14 +1221,26 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "drag" -> {
                 validateArgs(
                     args,
-                    allowed("sourceSelector", "targetSelector"),
+                    allowed("sourceSelector", "targetSelector", "at"),
                     setOf("sourceSelector", "targetSelector"),
                     functionName
                 )
-                driver.drag(
-                    sourceSelector = paramString(args, "sourceSelector", functionName)!!,
-                    targetSelector = paramString(args, "targetSelector", functionName)!!
-                )
+                val sourceSelector = paramString(args, "sourceSelector", functionName)!!
+                val targetSelector = paramString(args, "targetSelector", functionName)!!
+                val b4Driver = driver as? Browser4WebDriver
+                if (b4Driver == null) {
+                    driver.drag(sourceSelector = sourceSelector, targetSelector = targetSelector)
+                    null
+                } else {
+                    // `at` pins the drop point to the target's center (default)
+                    // or its top/bottom edge region, so reorder-list
+                    // insert-before/insert-after is deterministic instead of a
+                    // ±2px jitter coin flip.  Browser4WebDriver.drag reports
+                    // the resulting DOM placement; illegal positions throw
+                    // IllegalArgumentException there.
+                    val at = paramString(args, "at", functionName, required = false, default = "center")!!
+                    b4Driver.drag(sourceSelector, targetSelector, at)
+                }
             }
 
             "clickTextMatches" -> {
@@ -1473,9 +1512,11 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             }
 
             "selectFirstTextOrNull" -> {
-                validateArgs(args, allowed("selector"), setOf("selector"), functionName)
+                validateArgs(args, allowed("selector", "raw"), setOf("selector"), functionName)
                 val selector = paramString(args, "selector", functionName)!!
-                selectFirstValue(driver, selector, SELECT_FIRST_TEXT_READ_JS, "text")
+                val raw = paramBool(args, "raw", functionName, required = false) ?: false
+                val readJs = if (raw) SELECT_FIRST_TEXT_READ_JS else SELECT_FIRST_TEXT_NORMALIZED_JS
+                selectFirstValue(driver, selector, readJs, "text")
             }
 
             "selectTextAll" -> {

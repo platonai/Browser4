@@ -319,6 +319,19 @@ pub(super) fn test_storage_state_commands(ctx: &mut E2ECtx) {
         load_without_session.stdout
     );
 
+    // state-load of a missing file must fail with a stable, locale-independent
+    // error prefix (the raw OS error text is localized on non-English
+    // Windows, e.g. Chinese on zh-CN).
+    let missing_state_path = ctx.workspace_dir.join("does-not-exist.json");
+    let _ = fs::remove_file(&missing_state_path); // guard against leftovers from aborted runs
+    let missing_state_path_text = missing_state_path.to_string_lossy().into_owned();
+    let missing_load = run_command_expecting_failure(
+        ctx,
+        &["state-load", &missing_state_path_text],
+        "Failed to read storage state file",
+    );
+    let _ = missing_load;
+
     run_command(ctx, &["goto", &interactive_url]);
     wait_for_eval_text(
         ctx,
@@ -429,6 +442,18 @@ pub(super) fn test_storage_state_commands(ctx: &mut E2ECtx) {
         "false",
         2_000,
         "Expected cookie-delete to remove the session_id cookie",
+    );
+
+    // Deleting a cookie that is not present must not claim success — it
+    // reports the not-found state and stays idempotent (exit 0), matching
+    // localstorage-delete / sessionstorage-delete.
+    let missing_delete_result = run_command(ctx, &["cookie-delete", "no_such_cookie"]);
+    assert!(
+        missing_delete_result
+            .stdout
+            .contains("Cookie not found: no_such_cookie (nothing to delete)"),
+        "Expected cookie-delete of a missing cookie to report not found:\n{}",
+        missing_delete_result.stdout
     );
 
     run_command(ctx, &["cookie-set", "clear_one", "1", "--path=/"]);

@@ -375,7 +375,7 @@ When `selector` matches only **1 element** (e.g. default `:root`, or `body`), **
 ## Error Handling
 
 - `htmlsnapshot` capture fails if backend is unreachable or page cannot be loaded.
-- `htmlsnapshot get` exits non-zero when the CSS selector matches nothing or an element ref (`e5`) is passed.
+- `htmlsnapshot get` / `get all` print a diagnostic ("No elements matched …") and exit `0` when the CSS selector matches nothing — consistent with `query`'s "no rows matched is not an error". A non-zero exit means the backend call failed (e.g. an invalid selector or an element ref like `e5`, which `get` does not accept).
 - `htmlsnapshot query` exits nonzero on invalid X-SQL syntax, a missing `--sql`, or a server error envelope (`417 Expectation Failed` or a `5xx` with an empty resultSet). A `200` envelope with an empty resultSet ("no rows matched") is exit 0.
 - `htmlsnapshot export` / `summary` / `inspect` fail if no snapshot has been captured yet.
 

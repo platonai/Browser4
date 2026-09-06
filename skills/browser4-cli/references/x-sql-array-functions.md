@@ -16,6 +16,11 @@ tier: catalog
 
 > **SQL constraint:** All queries must use `SELECT ... FROM DOM_LOAD_AND_SELECT(url, cssQuery)`. No CTEs, subqueries, `EXPLODE`, or other table sources are supported.
 
+> **`MAKE_ARRAY` is not an `ARRAY_*` function:** it is the constructor that every
+> fallback-chain example below depends on (`ARRAY_FIRST_NOT_BLANK(MAKE_ARRAY(...))`).
+> It is documented in [x-sql.md → Array Constructors](#array-constructors-make_array);
+> without it there is no way to build the candidate list those functions consume.
+
 ## Quick Index
 
 | Function | Returns | Description |
@@ -23,6 +28,36 @@ tier: catalog
 | [ARRAY_JOIN_TO_STRING](#array_join_to_string) | string | Join all array elements with a separator |
 | [ARRAY_FIRST_NOT_BLANK](#array_first_not_blank) | element | First element that is not blank (non-whitespace) |
 | [ARRAY_FIRST_NOT_EMPTY](#array_first_not_empty) | element | First element that is not empty |
+| [MAKE_ARRAY](#make_array) | array | Constructor for fallback chains — see [x-sql.md](x-sql.md) |
+
+---
+
+## MAKE_ARRAY
+
+```
+MAKE_ARRAY(value1, value2, ...)
+```
+
+Builds a `ValueArray` from its arguments. Every `ARRAY_FIRST_NOT_BLANK` /
+`ARRAY_FIRST_NOT_EMPTY` fallback chain starts with `MAKE_ARRAY(...)`; it is the
+documented way to construct the candidate list those functions scan. `null`
+arguments are kept in the array and simply skipped by the `ARRAY_FIRST_*`
+functions (a `DOM_FIRST_TEXT` that matches nothing evaluates to blank, so the
+chain falls through to the next candidate).
+
+```sql
+-- Build an ordered fallback chain: subtitle → alt-title → h1
+SELECT ARRAY_FIRST_NOT_BLANK(
+    MAKE_ARRAY(
+        DOM_FIRST_TEXT(DOM, '.subtitle'),
+        DOM_FIRST_TEXT(DOM, '.alt-title'),
+        DOM_FIRST_TEXT(DOM, 'h1')
+    )
+) AS best_title
+FROM DOM_LOAD_AND_SELECT('https://example.com', 'body');
+```
+
+Full signature and notes: [x-sql.md → Array Constructors (MAKE_ARRAY)](x-sql.md#array-constructors-make_array).
 
 ---
 

@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertSame
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -461,7 +462,7 @@ class Browser4WebDriverTest {
     }
 
     @Test
-    @DisplayName("buildDragSequenceScript embeds randomized delays and jittered points")
+    @DisplayName("buildDragSequenceScript embeds randomized delays and the resolved target point")
     fun buildDragSequenceScriptEmbedsRandomizedDelays() {
         val delays = listOf(111L, 222L, 333L, 444L)
         val script = Browser4WebDriver.buildDragSequenceScript(
@@ -475,7 +476,144 @@ class Browser4WebDriverTest {
         delays.forEach { delay ->
             assertTrue(script.contains("sleep($delay)"), "expected embedded delay $delay: $script")
         }
-        assertTrue(script.contains("elementFromPoint(30.75, 40.0)"), "expected jittered target point: $script")
+        // The resolved (jittered) target point is the default drop point for
+        // the center mode and feeds the elementFromPoint occlusion pre-check.
+        assertTrue(script.contains("var dropX = 30.75"), "expected embedded target x: $script")
+        assertTrue(script.contains("var dropY = 40.0"), "expected embedded target y: $script")
+        assertTrue(script.contains("elementFromPoint(dropX, dropY)"), "expected pre-check on the drop point: $script")
+        // Center drops carry the rect branch too, but its guard is statically
+        // false, so the drop point is never re-derived from the rect.
+        assertTrue(
+            script.contains("if (\"center\" === 'top' || \"center\" === 'bottom')"),
+            "center drops must not re-derive the point from the rect: $script"
+        )
+    }
+
+    @Test
+    @DisplayName("buildDragSequenceScript pins top/bottom drops to the live rect edge region")
+    fun buildDragSequenceScriptPinsEdgeDrops() {
+        val base = listOf("top", "bottom")
+        base.forEach { position ->
+            val script = Browser4WebDriver.buildDragSequenceScript(
+                targetCssPath = "div#target",
+                sourceX = 1.0,
+                sourceY = 1.0,
+                targetX = 30.0,
+                targetY = 40.0,
+                delays = List(6) { it.toLong() + 1 },
+                dropPosition = position,
+            )
+            assertTrue(
+                script.contains("if (\"$position\" === 'top' || \"$position\" === 'bottom')"),
+                "expected the edge-region branch to be selected for '$position': $script"
+            )
+            assertTrue(
+                script.contains("dropY = \"$position\" === 'bottom' ? targetRect.bottom - 2 : targetRect.top + 2"),
+                "expected an edge-region drop point for '$position': $script"
+            )
+            assertTrue(script.contains("if (targetRect.height > 4)"), "expected a degenerate-size guard: $script")
+        }
+    }
+
+    @Test
+    @DisplayName("buildDragSequenceScript sweeps dragover events only for positioned drops")
+    fun buildDragSequenceScriptSweepsOnlyWhenPositioned() {
+        val center = Browser4WebDriver.buildDragSequenceScript(
+            targetCssPath = "div#target",
+            sourceX = 1.0,
+            sourceY = 1.0,
+            targetX = 1.0,
+            targetY = 1.0,
+            delays = listOf(1L, 2L, 3L, 4L),
+            dropPosition = "center",
+        )
+        val bottom = Browser4WebDriver.buildDragSequenceScript(
+            targetCssPath = "div#target",
+            sourceX = 1.0,
+            sourceY = 1.0,
+            targetX = 1.0,
+            targetY = 1.0,
+            delays = listOf(1L, 2L, 3L, 4L, 5L, 6L),
+            dropPosition = "bottom",
+        )
+        fun dragoverCount(script: String): Int =
+            Regex("'dragover'").findAll(script).count()
+        assertEquals(1, dragoverCount(center), "center drops keep the legacy single dragover: $center")
+        // The sweep step table is emitted once and loops at runtime, so the
+        // positioned script textually carries 2 dragover dispatches which run
+        // as 2 sweep events + the final dragover = 3 runtime events.
+        assertEquals(2, dragoverCount(bottom), "positioned drops sweep two dragover events before the final one: $bottom")
+        assertTrue(bottom.contains("sweep"), "expected the sweep step table: $bottom")
+        assertTrue(bottom.contains("delay: 3") && bottom.contains("delay: 4"), "expected per-sweep-step delays: $bottom")
+        assertTrue(bottom.contains("sleep(5)") && bottom.contains("sleep(6)"), "expected final dragover/drop delays: $bottom")
+    }
+
+    @Test
+    @DisplayName("buildDragSequenceScript requires 6 delays for positioned drops")
+    fun buildDragSequenceScriptRequiresSixDelaysWhenPositioned() {
+        assertThrows(IllegalArgumentException::class.java) {
+            Browser4WebDriver.buildDragSequenceScript(
+                targetCssPath = "div#target",
+                sourceX = 1.0,
+                sourceY = 1.0,
+                targetX = 1.0,
+                targetY = 1.0,
+                delays = listOf(1L, 2L, 3L, 4L),
+                dropPosition = "top",
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            Browser4WebDriver.buildDragSequenceScript(
+                targetCssPath = "div#target",
+                sourceX = 1.0,
+                sourceY = 1.0,
+                targetX = 1.0,
+                targetY = 1.0,
+                delays = List(6) { 1L },
+                dropPosition = "center",
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("parseDragPositionReport renders the resulting DOM placement")
+    fun parseDragPositionReportRendersPlacement() {
+        assertEquals(
+            "Dropped li#priorityHigh as child 4 of 4 in ul#priorityList",
+            Browser4WebDriver.parseDragPositionReport(
+                """{"ok":true,"tag":"li","id":"priorityHigh","parentTag":"ul","parentId":"priorityList","index":3,"total":4}"""
+            )
+        )
+        assertEquals(
+            "Dropped li as child 1 of 2 in ul",
+            Browser4WebDriver.parseDragPositionReport(
+                """{"ok":true,"tag":"li","id":"","parentTag":"ul","parentId":"","index":0,"total":2}"""
+            )
+        )
+        assertNull(Browser4WebDriver.parseDragPositionReport("""{"ok":false}"""))
+        assertNull(Browser4WebDriver.parseDragPositionReport("""{"ok":true,"tag":"li","id":"","parentTag":"ul","parentId":"","index":4,"total":4}"""))
+        assertNull(Browser4WebDriver.parseDragPositionReport(null))
+        assertNull(Browser4WebDriver.parseDragPositionReport("not-json"))
+    }
+
+    @Test
+    @DisplayName("dragPositionReportJs resolves tag, id and sibling placement")
+    fun dragPositionReportJsContainsPlacementLogic() {
+        val js = Browser4WebDriver.dragPositionReportJs()
+        assertTrue(js.contains("this.tagName.toLowerCase()"), "expected tag resolution: $js")
+        assertTrue(js.contains("kids.indexOf(this)"), "expected child index resolution: $js")
+    }
+
+    @Test
+    @DisplayName("DragDropPosition.from normalizes case and rejects unknown values")
+    fun dragPositionFromValidatesValues() {
+        assertEquals("center", Browser4WebDriver.DragDropPosition.from("center").key)
+        assertEquals("top", Browser4WebDriver.DragDropPosition.from("TOP").key)
+        assertEquals("bottom", Browser4WebDriver.DragDropPosition.from(" bottom ").key)
+        val thrown = assertThrows(IllegalArgumentException::class.java) {
+            Browser4WebDriver.DragDropPosition.from("middle")
+        }
+        assertTrue(thrown.message.orEmpty().contains("middle"), "expected the offending value in the message")
     }
 
     @Test

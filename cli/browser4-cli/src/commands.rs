@@ -1266,6 +1266,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "endRef", description: "Target element: snapshot ref (e5, backend:15) or CSS selector (#id, .class, tag[attr])", optional: false },
             ],
             options: &[
+                OptionDef { name: "at", description: "Where on the target to drop: center (default), top, or bottom. top/bottom pin the drop point to the target edge so list reorder drops land before/after the target deterministically", is_bool: false, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
@@ -1274,6 +1275,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 json!({
                     "startRef": get_str(args, "startRef").unwrap_or_default(),
                     "endRef": get_str(args, "endRef").unwrap_or_default(),
+                    "at": get_str(args, "at").unwrap_or_else(|| "center"),
                 })
             },
         },
@@ -1460,7 +1462,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "selector", description: "Snapshot ref (e5) or CSS selector (e.g. .price, #main). Refs resolve most reliably; CSS selector support varies by mode (see Notes)", optional: false },
                 ArgDef { name: "name", description: "Property or attribute name (required for property and attr modes)", optional: true },
             ],
-            options: &[],
+            options: &[
+                OptionDef { name: "raw", description: "Text mode only: return the text exactly as stored in the DOM, without whitespace normalization", is_bool: true, short: None },
+            ],
             e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |args| {
                 let mode = get_str(args, "mode").unwrap_or_default().to_ascii_lowercase();
@@ -1485,13 +1489,17 @@ pub fn all_commands() -> Vec<CommandDef> {
                     "box" => json!({ "selector": selector }),
                     "property" => json!({ "selector": selector, "propName": name }),
                     "attr" => json!({ "selector": selector, "attrName": name }),
-                    _ => json!({ "selector": selector }),
+                    _ => {
+                        let mut p = json!({ "selector": selector });
+                        if args.contains_key("raw") { p["raw"] = json!(true); }
+                        p
+                    }
                 }
             },
         },
         CommandDef {
             name: "snapshot",
-            description: "Capture page snapshot to obtain element refs. See flags below for filtering, scoping, and output options.",
+            description: "Capture page snapshot to obtain element refs. Run 'help snapshot' for the filtering, scoping, and output options.",
             category: Category::Core,
             hidden: false,
             batch_supported: true,
@@ -1790,7 +1798,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef {
                 name: "filename",
-                description: "Optional file path. Defaults to storage-state-<timestamp>.json in the current directory",
+                description: "Optional file path. Defaults to storage-state-<timestamp>.json in the CLI snapshot directory (.browser4-cli/snapshot/)",
                 optional: true,
             }],
             options: &[],
@@ -2149,7 +2157,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Export ----
         CommandDef {
             name: "webdb-export",
-            description: "Export pages from the web database to a local directory",
+            description: "Export pages from the web database to a local directory. URLs must be comma-separated — a space-separated list is rejected with an error (it would silently export only the first page)",
             category: Category::Storage,
             hidden: false,
             batch_supported: false,
@@ -2836,7 +2844,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "swarm-submit",
-            description: "Submit URL(s) or X-SQL payloads as scrape jobs. Without --sql, each URL is fetched but no data is extracted — the resultSet will be empty. Use swarm query for structured extraction.",
+            description: "Submit URL(s) or X-SQL payloads as scrape jobs. Without --sql, each URL is fetched but no data columns are extracted — the resultSet contains a single url row per page. Use swarm query for structured extraction.",
             category: Category::Swarm,
             hidden: false,
             batch_supported: false,
@@ -2989,10 +2997,10 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
                 OptionDef { name: "parse", description: "Parse each page immediately after fetching", is_bool: true, short: None },
                 OptionDef { name: "expires <dur>", description: "Cache expiration duration (e.g. 1d, 1h, 30m)", is_bool: false, short: None },
-                OptionDef { name: "priority <n>", description: "Queue priority (lower = higher priority)", is_bool: false, short: Some("p") },
-                OptionDef { name: "page-load-timeout <seconds>", description: "Maximum time to wait for page load", is_bool: false, short: None },
-                OptionDef { name: "ignore-url-query", description: "Remove query parameters from URLs during normalization", is_bool: true, short: None },
-                OptionDef { name: "no-norm", description: "Disable URL normalization", is_bool: true, short: None },
+                OptionDef { name: "priority <n>", description: "Queue priority (non-negative integer, lower = higher priority)", is_bool: false, short: Some("p") },
+                OptionDef { name: "page-load-timeout <dur>", description: "Maximum time to wait per page load: seconds number or duration such as 30s, 1m", is_bool: false, short: None },
+                OptionDef { name: "ignore-url-query", description: "Remove query parameters from discovered out-link hrefs before loading (no effect on seed URLs in depth-0 bulk fetch)", is_bool: true, short: None },
+                OptionDef { name: "no-norm", description: "Disable URL normalization of discovered out-link hrefs (no effect on seed URLs in depth-0 bulk fetch)", is_bool: true, short: None },
                 OptionDef { name: "readonly", description: "Non-destructive mode (no page modifications)", is_bool: true, short: None },
                 OptionDef { name: "background", description: "Submit crawl and return immediately; use 'crawl list' to track progress", is_bool: true, short: Some("bg") },
                 OptionDef { name: "verbose", description: "Show per-URL processing status in crawl results", is_bool: true, short: None },
@@ -5396,10 +5404,12 @@ mod tests {
     }
 
     #[test]
-    fn test_get_command_has_no_options() {
+    fn test_get_command_has_only_text_mode_raw_option() {
         let map = commands_map();
         let cmd = map.get("get").expect("get command must exist");
-        assert_eq!(cmd.options.len(), 0);
+        assert_eq!(cmd.options.len(), 1);
+        assert_eq!(cmd.options[0].name, "raw");
+        assert!(cmd.options[0].is_bool);
     }
 
     #[test]

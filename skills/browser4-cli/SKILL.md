@@ -133,6 +133,8 @@ browser4-cli goto https://other-page.com             # stays headless (or headed
 
 Named sessions isolate browser state (cookies, localStorage, tabs) in a **dedicated browser profile directory** keyed by the session id — reopening a named session always restores the same profile instead of rotating through a shared pool. Use `-s <name>` to target a named session. `goto` auto-opens/reconnects — you rarely need to manage sessions manually.
 
+> **Concurrent runs — always pass `-s <name>`:** the unnamed DEFAULT session is a singleton shared by every invocation that omits `-s`, and `goto` silently reconnects to it (last writer wins). Two parallel agent processes that both omit `-s` will navigate each other's pages out from under one another. Parallel/automated runs should each use their own `-s <name>` (e.g. `-s job-42`) for isolated state.
+
 The `list` command displays a "Next open" column showing what happens when `goto` or `open` targets a named session that already exists:
 - **Reuse** — reconnects to the existing browser window (session is active on the backend).
 - **Refresh** — opens a fresh window (session is stale or missing).
@@ -237,8 +239,9 @@ browser4-cli -s ext-session tab-select 0
 | `click`, `dblclick`, `drag`, `hover`, `fill`, `type`, `press`, `select`, `check`, `generate-locator` | Page interaction | Form filling, button clicks, mouse actions, navigation | — |
 | `dialog-accept`, `dialog-dismiss` | Native JS dialog handling | After clicking buttons that trigger alert/confirm/prompt | — |
 | `htmlsnapshot get`, `get all` | Extract text/html/attr via CSS selectors from stored HTML | **Page content & text extraction** — get article text, headings, attributes. Use `htmlsnapshot` when you need to read or extract page content. | [htmlsnapshot.md](references/htmlsnapshot.md) |
+| `get <mode> <selector> [name]` | **Live-DOM single-element read** (`text`, `html`, `box`, `styles`, `property`, `attr`) — capture-free, works on the current live page with refs or CSS selectors | **Post-interaction verification & quick reads** — "did the submit work?" without a capture round-trip. `get text <sel>` after a click/fill; `get attr <sel> href` for link URLs. Caveat: attribute/property reads via CSS are the least reliable mode, and a missing attribute reads as `null` (ambiguous with a failed resolution) | — |
 | `htmlsnapshot query` | X-SQL queries for structured extraction | Multi-field, filtered, sorted data | [x-sql.md](references/x-sql.md) |
-| `eval` | Execute JavaScript in the page | Live DOM access, complex transforms | — |
+| `eval` | Execute JavaScript in the page | Live DOM access, complex transforms | [eval.md](references/eval.md) |
 | `eval --ref` | Execute JS scoped to a specific element | Element property extraction (text, attrs, styles) | **⚠️ Expression MUST be an arrow function: `element => element.textContent`** |
 | `extract`, `summarize`, `agent run` | AI-powered extraction | Natural language extraction (needs LLM key) | [agent.md](references/agent.md) |
 | `crawl` | Recursive crawling + bulk extraction | Multi-page traversal, seed-file processing | [crawl.md](references/crawl.md) |
@@ -303,6 +306,8 @@ Set `BROWSER4_SKILLS_DIR` to override the skills directory location. Skill files
 Need to extract data from a page?
 ├─ Need to interact first (click, fill, scroll)?
 │  → snapshot + refs, then re-capture htmlsnapshot after interacting, then extract
+├─ Live-DOM single-field read WITHOUT a capture (post-interaction verify, quick read)?
+│  → get text "<selector>" / get attr "<selector>" href  (capture-free live read)
 ├─ Page has JS-updated content (after interaction, form submit, SPA)?
 │  → eval --json for live DOM (use --stdin or --file on Windows)
 ├─ Static page, one field? → htmlsnapshot get text "<selector>"
@@ -324,7 +329,7 @@ Need to process multiple pages?
 ├─ Multiple known URLs (list in a file)? → crawl --seed-file urls.txt --depth 0 --sql @query.sql
 ├─ Crawl from a start URL (follow links)? → crawl <url> --out-link-selector "..." --depth N
 ├─ Need parallel execution (high throughput)? → swarm create → swarm query --seed-file ...
-├─ Repeated monitoring (check every hour)? → loop -- eval "..." -i 3600
+├─ Repeated monitoring (check every hour)? → loop -i 3600 -- eval "..."
 └─ Just a few URLs in a shell script?
    → browser4-cli open --headless (once) then use goto for each URL; add wait between iterations
 ```
@@ -356,12 +361,27 @@ Have HTML files and want structured data — without tokens?
 │  → Scales to 100K+ pages/day
 └─ Need to acquire pages first?
    ├─ Single pages: browser4-cli open --headless → htmlsnapshot → htmlsnapshot export
-   ├─ Bulk download: browser4-cli crawl --seed-file urls.txt --depth 0
+   ├─ Bulk download: browser4-cli crawl --seed-file urls.txt --depth 0 --refresh
    └─ High throughput: browser4-cli swarm create → swarm query --seed-file ...
        Then feed the HTML directory to WebMiner
 ```
 
+> **Swarm acquisition → on-disk corpus:** `swarm query` returns structured rows,
+> not files.  Every page the swarm fetched is cached in the backend page store
+> (webdb), so stage the corpus with
+> `browser4-cli webdb export "url1,url2,…" <output-dir>` (URLs **comma-separated**;
+> see [webdb.md](references/webdb.md)) and point `webminer all` at that
+> directory.  For on-disk HTML as the primary goal, prefer `crawl --depth 0` —
+> swarm shines when extraction throughput matters more than the files.
+
 **Pipeline:** `encode` (HTML → feature vectors → CSV) → `cluster` (KMeans, auto-detected K) → `views` (interactive HTML report + Excel spreadsheets)
+
+> **Clustering granularity:** the ML engine clusters DOM **node** rows, not whole
+> pages — `kmeans-result/*/predictionAndOriginalFeatures/result.csv` rows are
+> nodes, with each row's page attribution in the far-right `url` column, and
+> the auto-detected K scales with node count (dozens of clusters for a small
+> corpus).  Use the generated views (`index.html` / `*.xlsx`) for page-level
+> analysis; treat `result.csv` as the node-level detail table.
 
 **Free tier (SMILE):** Single-machine ML via the [SMILE](https://haifengl.github.io/) library. Handles small-to-medium datasets (< 1,000 pages). Ideal for ad-hoc analysis, prototyping, and one-off extraction tasks.
 
@@ -458,6 +478,7 @@ browser4-cli htmlsnapshot get text ".price" --all    # quick test: does this sel
 | `Hexadecimal string contains non-hex character` (417) | `DOM_FIRST_FLOAT`/`DOM_FIRST_INTEGER` compared to a numeric literal in WHERE — the function returns a custom H2 value type that predicates cannot compare (works in SELECT/ORDER BY) | Wrap in a numeric cast: `WHERE CAST(DOM_FIRST_FLOAT(DOM, '.price', 0.0) AS DOUBLE) >= 25.0` (or `STR_FIRST_FLOAT(DOM_FIRST_TEXT(DOM, '.price'), 0.0)`) — always pass the default argument explicitly (the registered form is `DOM_FIRST_FLOAT(DOM, sel, default)`; the 2-argument shorthand is not portable across engine builds), see [x-sql.md](references/x-sql.md) |
 | Empty result set | Selector doesn't match any elements | Run `htmlsnapshot inspect` to find valid selectors |
 | Empty result set (no error) | Filtering images with a PowerCSS `:expr(...)` selector passed to a `DOM_*_IMG` function — the img-scanning path ignores `:expr` and matches nothing | Use an attribute path that honors `:expr`: `DOM_FIRST_ATTR(DOM, 'img:expr(src^=https://cdn)', 'src')` or `DOM_SELECT_FIRST(DOM, sel)` + `DOM_ABS_SRC` — see [x-sql-dom-select-functions.md](references/x-sql-dom-select-functions.md) |
+| `DOM_FIRST_HREF(DOM, '.link')` returns `''` silently | The href-scanning helper needs a tag context; class-only selectors can resolve to an empty string with exit 0 (indistinguishable from "no link") | Use the tag-qualified form `DOM_FIRST_HREF(DOM, 'a.link')`, or `DOM_FIRST_ATTR(DOM, sel, 'href')` which accepts any selector — see [x-sql.md](references/x-sql.md) |
 | `Syntax error in SQL statement` | `--sql` value contains shell-escaped characters | Use `--sql @query.sql` instead of inline SQL |
 
 ## 5. Critical Warnings
@@ -539,6 +560,8 @@ browser4-cli wait --load networkidle
 browser4-cli snapshot -v 0 --auto-diff
 ```
 
+> **Auto-scroll side effect:** `click`/`fill`/`select`/`check` scroll the target element into view first. After interacting with a below-the-fold element, the page is scrolled and `snapshot -v 0` captures the *current screen* (mid-page), not the top — its header reports a nonzero `hiddenTopHeight`. To document the top of the page afterwards, scroll back first (`eval "window.scrollTo(0,0)"`) or capture `snapshot -v all`. The same applies to a submit button near the bottom of a long form: the post-submit verification snapshot starts mid-page unless you scroll to top.
+
 ### Find Elements by Text (snapshot grep)
 
 ```bash
@@ -556,23 +579,36 @@ browser4-cli snapshot grep -A 3 -B 1 "Checkout"   # show surrounding context lin
 ```bash
 # Hover — reveal tooltips, expand menus, trigger hover effects
 browser4-cli hover <ref>                          # hover over an element
-browser4-cli snapshot grep "tooltip"              # verify tooltip appeared
+browser4-cli mousemove 5 5                        # move the pointer to blank space (clears any CSS :hover)
 
 # Double-click — trigger dblclick handlers
 browser4-cli dblclick <ref>                       # double-click an element
 
 # Drag-and-drop — move elements between containers
-browser4-cli drag <source-ref> <target-ref>       # drag source onto target
-browser4-cli snapshot grep "new position"         # verify element was moved
+browser4-cli drag <source-ref> <target-ref>            # drag source onto target (drop at target center)
+browser4-cli drag <source-ref> <target-ref> --at top   # insert the source BEFORE the target (drop near its top edge)
+browser4-cli drag <source-ref> <target-ref> --at bottom # insert the source AFTER the target (drop near its bottom edge)
+```
+
+Clicks, double-clicks, and hovers move the pointer onto the element first, so CSS `:hover` styles (highlights, tooltip reveal) match the element under the pointer after the command — they no longer linger on whatever element was hovered previously. A click that opens a `:hover`-revealed tooltip leaves the pointer on the clicked element; move the pointer away (e.g. `mousemove 5 5`) to a blank area to clear it.
+
+`drag --at bottom`/`--at top` pin the drop point to the target's live bottom/top edge, so live-reorder lists (drag-and-drop handlers that decide insert-before/after from the pointer Y) land deterministically; `--at bottom` on the last list item appends. After any drag the command prints where the source landed (e.g. `Dropped li#item3 as child 4 of 4 in ul#list`), so the resulting order does not need a separate verification grep.
+
+**Verifying hover-revealed content:** snapshot text is not a visibility proof — a full-page snapshot can include `visibility:hidden` text and a viewport snapshot may omit a hover-visible tooltip. Verify that a hover effect actually appeared with an eval of the computed style or geometry instead, e.g.:
+
+```bash
+browser4-cli hover <ref>
+browser4-cli eval "getComputedStyle(document.querySelector('.tooltip')).visibility"  # "visible"
+browser4-cli eval "document.querySelector('.card-detail').clientHeight"              # grew past 0
 ```
 
 ### Dialog Handling
 
-Native browser dialogs (`alert()`, `confirm()`, `prompt()`) block the page's main thread. When a dialog appears (e.g., after clicking a button), `click` will time out. Handle the dialog with a separate command:
+Native browser dialogs (`alert()`, `confirm()`, `prompt()`) block the page's main thread while they are open. A click that triggers a dialog returns quickly with a "dialog is pending" error instead of hanging — the click stays parked server-side and completes on its own once the dialog is handled. Do not re-run the triggering click (it would open a second dialog); run the dialog command in a separate invocation, then verify the page updated:
 
 ```bash
-browser4-cli click "#alertBtn"                    # triggers alert — click will time out
-browser4-cli dialog-accept                        # dismiss the alert ("OK")
+browser4-cli click "#alertBtn"                    # prints: native dialog pending — run dialog-accept
+browser4-cli dialog-accept                        # dismiss the alert ("OK") — the parked click then completes
 
 browser4-cli click "#confirmBtn"                  # triggers confirm
 browser4-cli dialog-accept                        # click "OK" (returns true to page)
@@ -583,7 +619,7 @@ browser4-cli dialog-accept "Hello from Browser4"  # fill prompt and accept
 browser4-cli dialog-dismiss                       # cancel/dismiss any dialog
 ```
 
-**Note:** `dialog-accept` and `dialog-dismiss` must be run in a separate invocation — they cannot be part of the same command as the triggering `click`. Alternatively, use `click --auto-dismiss-dialogs <ref>` to auto-accept any dialog triggered by the click in a single invocation.
+**Note:** `dialog-accept` and `dialog-dismiss` must be run in a separate invocation — they cannot be part of the same command as the triggering `click`. The triggering `click` fails fast with a "dialog pending" message instead of hanging, and the underlying click stays parked and finishes when `dialog-accept`/`dialog-dismiss` releases the dialog — run the two commands as separate invocations (for example in a script: `browser4-cli click "#alertBtn" || true; browser4-cli dialog-accept`). Alternatively, use `click --auto-dismiss-dialogs <ref>` to auto-accept any dialog triggered by the click in a single invocation (auto-accept only — it cannot exercise the dismiss path of `confirm`/`prompt`).
 
 ### Verifying Results (verify-after-interaction)
 
@@ -594,16 +630,16 @@ Every interaction should be followed by verification. These patterns show how to
 browser4-cli click <submit-ref>
 browser4-cli snapshot -v 0 --auto-diff --stdout   # shows only what changed
 
-# After hover — search for expected content
+# After hover — check the computed style of the revealed content
 browser4-cli hover <ref>
-browser4-cli snapshot grep "expected-tooltip-text"
+browser4-cli eval "getComputedStyle(document.querySelector('#tooltip')).visibility"  # expect "visible"
 
-# After drag — confirm reordering
-browser4-cli drag <source> <target>
-browser4-cli snapshot grep "new order|reordered|moved"
+# After drag — the command itself reports where the source landed
+browser4-cli drag <source> <target> --at bottom     # e.g. "Dropped li#x as child 4 of 4 in ul#list"
 
-# After dialog — verify the interaction log
-browser4-cli click "#alertBtn" && browser4-cli dialog-accept
+# After dialog — handle the dialog, then verify the interaction log
+browser4-cli click "#alertBtn" || true          # "dialog pending" error is expected
+browser4-cli dialog-accept
 browser4-cli snapshot grep "\[alert\]|\[confirm\]|\[prompt\]"
 
 # Generate resilient CSS selectors from snapshot refs
@@ -731,6 +767,7 @@ Organized by task — follow the link that matches what you're trying to do:
 
 **Extract data from pages:**
 [htmlsnapshot.md](references/htmlsnapshot.md) — `get`, `get all`, `query`, `grep`, `summary`, `inspect`, `export`
+[eval.md](references/eval.md) — `eval`, `eval --ref`: live-DOM JavaScript evaluation (inline/`--file`/`--stdin`/`--base64`, `--json`, arrow-function rule, console.log caveat)
 [x-sql.md](references/x-sql.md) — X-SQL function reference (DOM, STR, ARRAY namespaces)
 [x-sql-dom-functions.md](references/x-sql-dom-functions.md), [x-sql-dom-load-select.md](references/x-sql-dom-load-select.md), [x-sql-dom-select-functions.md](references/x-sql-dom-select-functions.md), [x-sql-string-functions.md](references/x-sql-string-functions.md), [x-sql-array-functions.md](references/x-sql-array-functions.md) — X-SQL namespace sub-references
 [htmlsnapshot-scenarios.md](references/htmlsnapshot-scenarios.md) — end-to-end recipes; focused variants: [advanced](references/htmlsnapshot-scenarios-advanced.md), [amazon](references/htmlsnapshot-scenarios-amazon.md), [audit](references/htmlsnapshot-scenarios-audit.md), [extraction](references/htmlsnapshot-scenarios-extraction.md)

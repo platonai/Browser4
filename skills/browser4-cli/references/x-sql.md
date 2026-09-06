@@ -38,7 +38,7 @@ X-SQL uses the **H2 database** SQL dialect.
 | [x-sql-dom-functions.md](x-sql-dom-functions.md) | `DomFunctions` — Core DOM operations (~65 functions) | ~500 |
 | [x-sql-dom-select-functions.md](x-sql-dom-select-functions.md) | `DomSelectFunctions` — CSS selector-based extraction (~50 functions) | ~200 |
 | [x-sql-string-functions.md](x-sql-string-functions.md) | `StringFunctions` — String manipulation (~90 functions) | ~430 |
-| [x-sql-array-functions.md](x-sql-array-functions.md) | `ArrayFunctions` — Array operations (3 functions) | ~100 |
+| [x-sql-array-functions.md](x-sql-array-functions.md) | `ArrayFunctions` — Array operations (3 functions + the `MAKE_ARRAY` constructor) | ~100 |
 
 ---
 
@@ -442,6 +442,7 @@ Scalar functions (input: DOM + selector string, output: scalar)
 
 | SQL Alias | Returns | Description |
 |-----------|---------|-------------|
+| `MAKE_ARRAY` | `ValueArray` | **Constructor** — builds the candidate list every fallback chain uses (`ARRAY_FIRST_NOT_BLANK(MAKE_ARRAY(...))`). Takes values as arguments; `null`/blank entries are skipped by the `ARRAY_FIRST_*` functions, so `DOM_FIRST_*` calls that match nothing simply fall through to the next candidate. See [x-sql-array-functions.md](x-sql-array-functions.md#make_array) |
 | `ARRAY_JOIN_TO_STRING` | `String` | Join array elements with separator |
 | `ARRAY_FIRST_NOT_BLANK` | `Value?` | First non-blank value |
 | `ARRAY_FIRST_NOT_EMPTY` | `Value?` | First non-empty value |

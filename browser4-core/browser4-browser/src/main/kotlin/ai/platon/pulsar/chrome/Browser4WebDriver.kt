@@ -16,7 +16,12 @@ import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.random.Random
 
 /**
@@ -444,7 +449,26 @@ open class Browser4WebDriver(
          * All failures are reported before any event is dispatched, so a retry
          * of the outer RPC block re-runs the sequence idempotently.
          *
-         * [delays] must contain exactly 4 randomized inter-event delays (ms).
+         * [dropPosition] selects the drop point on the target:
+         *  - `"center"` (legacy): the resolved viewport point ([targetX]/[targetY],
+         *    already jittered by the caller) is used verbatim.
+         *  - `"top"` / `"bottom"`: the drop point is pinned to the live
+         *    top/bottom edge region of the target (`rect.top + 2` /
+         *    `rect.bottom - 2`, read at dispatch time).  Child-index-based
+         *    reorder handlers decide insert-before/insert-after from the drop
+         *    point's y relative to child centers, so the ±2px jitter around a
+         *    center point makes placement a coin flip; an edge-region point
+         *    resolves deterministically (`--at bottom` of an item = insert
+         *    after it, `--at top` = insert before it).  For targets shorter
+         *    than ~5px the edge region is degenerate and the center point is
+         *    kept.  When positioned, two intermediate `dragover` events sweep
+         *    from the source point toward the drop point so handlers that
+         *    track dragenter/dragover transitions observe the approach, and a
+         *    final `dragover` lands exactly on the drop point.
+         *
+         * [delays] must contain exactly 4 randomized inter-event delays (ms)
+         * for `"center"`, or exactly 6 for `"top"`/`"bottom"` (the two extra
+         * delays pace the sweep events).
          */
         internal fun buildDragSequenceScript(
             targetCssPath: String,
@@ -453,9 +477,30 @@ open class Browser4WebDriver(
             targetX: Double,
             targetY: Double,
             delays: List<Long>,
+            dropPosition: String = "center",
         ): String {
-            require(delays.size == 4) { "drag sequence requires exactly 4 delays" }
+            val positioned = dropPosition == "top" || dropPosition == "bottom"
+            require(if (positioned) delays.size == 6 else delays.size == 4) {
+                "drag sequence requires exactly ${if (positioned) 6 else 4} delays for drop position '$dropPosition'"
+            }
             val targetJson = pulsarObjectMapper().writeValueAsString(targetCssPath)
+            val positionJson = pulsarObjectMapper().writeValueAsString(dropPosition)
+            // Positioned drops interpolate two sweep dragover events between
+            // the source point and the final drop point.
+            val sweepBlock = if (positioned) """
+                    const sweep = [ { t: 0.34, delay: ${delays[2]} }, { t: 0.67, delay: ${delays[3]} } ];
+                    for (const step of sweep) {
+                        const t = step.t;
+                        const ix = $sourceX + (dropX - $sourceX) * t;
+                        const iy = $sourceY + (dropY - $sourceY) * t;
+                        fire(document.elementFromPoint(ix, iy) || hit, 'dragover', ix, iy);
+                        await sleep(step.delay);
+                    }
+            """.trimIndent() else ""
+            // After dragenter the event pace depends on the drop mode: center
+            // sleeps once before the single dragover; positioned sleeps per
+            // sweep step, then once more before the final dragover.
+            val (dragoverIndex, dropIndex) = if (positioned) 4 to 5 else 2 to 3
             // CDP Runtime.callFunctionOn requires a *function declaration*, not
             // an expression — an IIFE is rejected with "Given expression does
             // not evaluate to a function".  `async function()` + awaitPromise
@@ -477,7 +522,15 @@ open class Browser4WebDriver(
                             error: 'Target element was not found at drag time'
                         });
                     }
-                    const hit = document.elementFromPoint($targetX, $targetY);
+                    var dropX = $targetX;
+                    var dropY = $targetY;
+                    if ($positionJson === 'top' || $positionJson === 'bottom') {
+                        const targetRect = target.getBoundingClientRect();
+                        if (targetRect.height > 4) {
+                            dropY = $positionJson === 'bottom' ? targetRect.bottom - 2 : targetRect.top + 2;
+                        }
+                    }
+                    const hit = document.elementFromPoint(dropX, dropY);
                     // The hit must be the target itself or one of its
                     // descendants (b.contains(a): the target contains the
                     // hit).  A hit on an *ancestor* means the target is not
@@ -505,13 +558,14 @@ open class Browser4WebDriver(
                     };
                     fire(source, 'dragstart', $sourceX, $sourceY);
                     await sleep(${delays[0]});
-                    fire(hit, 'dragenter', $targetX, $targetY);
+                    fire(hit, 'dragenter', dropX, dropY);
                     await sleep(${delays[1]});
-                    fire(hit, 'dragover', $targetX, $targetY);
-                    await sleep(${delays[2]});
-                    fire(hit, 'drop', $targetX, $targetY);
-                    await sleep(${delays[3]});
-                    fire(source, 'dragend', $targetX, $targetY);
+            $sweepBlock
+                    fire(hit, 'dragover', dropX, dropY);
+                    await sleep(${delays[dragoverIndex]});
+                    fire(hit, 'drop', dropX, dropY);
+                    await sleep(${delays[dropIndex]});
+                    fire(source, 'dragend', dropX, dropY);
                     return JSON.stringify({ ok: true });
                 }
             """.trimIndent()
@@ -529,7 +583,111 @@ open class Browser4WebDriver(
             }
             return parsed?.get("error")?.asText() ?: "Unknown drag failure"
         }
+
+        /**
+         * The `function()` body evaluated with `this` bound to an element.
+         * Returns a comparable fingerprint of the element's DOM position
+         * (parent key + child index + sibling count).  The element is bound
+         * via its CDP object id, which stays valid across reparenting, so the
+         * fingerprint can be re-read after a dispatch to verify the element
+         * actually moved.
+         */
+        internal fun dragPositionFingerprintJs(): String =
+            """
+            function() {
+                if (!(this instanceof Element)) {
+                    return JSON.stringify({ ok: false });
+                }
+                const parent = this.parentElement;
+                if (!parent) {
+                    return JSON.stringify({ ok: false });
+                }
+                const kids = Array.prototype.filter.call(parent.children, (c) => c.nodeType === 1);
+                const parentKey = parent.tagName.toLowerCase() + (parent.id ? '#' + parent.id : '');
+                return JSON.stringify({
+                    ok: true,
+                    parentKey: parentKey,
+                    index: kids.indexOf(this),
+                    total: kids.length
+                });
+            }
+            """.trimIndent()
+
+        /**
+         * The `function()` body evaluated with `this` bound to the dragged
+         * element (re-located by its original locator after the drag).  Returns
+         * the element's tag/id and its position among its siblings' parent.
+         */
+        internal fun dragPositionReportJs(): String =
+            """
+            function() {
+                if (!(this instanceof Element)) {
+                    return JSON.stringify({ ok: false });
+                }
+                const parent = this.parentElement;
+                if (!parent) {
+                    return JSON.stringify({ ok: false });
+                }
+                const kids = Array.prototype.filter.call(parent.children, (c) => c.nodeType === 1);
+                return JSON.stringify({
+                    ok: true,
+                    tag: this.tagName.toLowerCase(),
+                    id: this.id || '',
+                    parentTag: parent.tagName.toLowerCase(),
+                    parentId: parent.id || '',
+                    index: kids.indexOf(this),
+                    total: kids.length
+                });
+            }
+            """.trimIndent()
+
+        /**
+         * Render the JSON produced by [dragPositionReportJs] into a
+         * human-readable placement summary, or null when the value is missing,
+         * malformed, or reports `ok: false`.
+         */
+        internal fun parseDragPositionReport(value: Any?): String? {
+            val json = value as? String ?: return null
+            val node = runCatching { pulsarObjectMapper().readTree(json) }.getOrNull() ?: return null
+            if (node.get("ok")?.asBoolean() != true) {
+                return null
+            }
+            val tag = node.get("tag")?.asText()?.takeIf { it.isNotBlank() } ?: "element"
+            val id = node.get("id")?.asText().orEmpty()
+            val parentTag = node.get("parentTag")?.asText()?.takeIf { it.isNotBlank() } ?: "element"
+            val parentId = node.get("parentId")?.asText().orEmpty()
+            val index = node.get("index")?.takeIf { it.isNumber }?.asInt() ?: return null
+            val total = node.get("total")?.takeIf { it.isNumber }?.asInt() ?: return null
+            if (total <= 0 || index < 0 || index >= total) {
+                return null
+            }
+            val self = "$tag${if (id.isNotEmpty()) "#$id" else ""}"
+            val parent = "$parentTag${if (parentId.isNotEmpty()) "#$parentId" else ""}"
+            return "Dropped $self as child ${index + 1} of $total in $parent"
+        }
     }
+
+/**
+ * Where on the target element a drag should drop.  `top`/`bottom` pin the
+ * drop point to the target's live top/bottom edge region, making
+ * insert-before/insert-after deterministic on child-index-based reorder
+ * lists (the legacy `center` point sits exactly on the insert boundary, so
+ * ±2px jitter decides the outcome).
+ */
+internal enum class DragDropPosition(val key: String) {
+    CENTER("center"),
+    TOP("top"),
+    BOTTOM("bottom");
+
+    companion object {
+        /** Resolve [key] (case-insensitive) to a [DragDropPosition]. */
+        fun from(key: String): DragDropPosition =
+            entries.firstOrNull { it.key == key.trim().lowercase() }
+                ?: throw IllegalArgumentException(
+                    "Unknown drag position '$key' (expected one of: ${entries.joinToString { it.key }})"
+                )
+    }
+}
 
     // ---------------------------------------------------------------------------
     // Extension surface
@@ -608,6 +766,180 @@ open class Browser4WebDriver(
         } finally {
             dialogHandler.drainAutoDismiss()
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Click & double-click fixes — upstream pulsar-browser:4.11.x dispatches
+    // Windows clicks through pure DOM JS (dispatchDomClick), which never moves
+    // the mouse.  Two consequences: CSS :hover stays stuck on whatever element
+    // a previous operation hovered (not the element being clicked), and a
+    // click whose handler opens a native JS dialog (alert/confirm/prompt)
+    // blocks the CDP evaluate until the dialog is handled — the caller hangs
+    // for its full HTTP timeout with no explanation.  These overrides move the
+    // pointer to the click target first (so hover state reflects the element
+    // under the pointer when the click lands) and watch the driver's
+    // [dialogHandler] while the click is in flight, responding immediately
+    // when the page opens a dialog instead of hanging.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Driver-scoped scope for parked click dispatches.  A click that opened a
+     * native dialog is *parked* here — still awaiting the CDP response that
+     * arrives once the dialog is handled — while the click method returns an
+     * early, actionable error.  The scope intentionally outlives any single
+     * request: the parked click finishes when the user later runs
+     * dialog-accept / dialog-dismiss, so the page state the click was meant to
+     * trigger still lands.
+     */
+    private val clickWatchScope: CoroutineScope by lazy {
+        CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    }
+
+    /**
+     * Move the pointer to the click target's center before dispatching the
+     * click, so the pointer physically rests on the element when its click
+     * events fire.  The upstream Windows click path never moves the mouse
+     * (pure DOM JS), so without this step CSS `:hover` keeps reflecting the
+     * previous operation's element — stale highlights and hover tooltips
+     * persist across clicks and snapshots taken right after a click miss the
+     * tooltip that a real user would see.
+     *
+     * Uses the drag-style instant scroll + visibility poll, so the resolved
+     * center is stable before the pointer moves.  Best-effort: when the
+     * element cannot be resolved or never becomes visible, the pointer is
+     * left alone and the upstream click proceeds as before.
+     */
+    private suspend fun movePointerToClickTarget(selector: String) {
+        runCatching {
+            evaluateValue(
+                selector,
+                "function(){ this.scrollIntoView({ block: 'center', behavior: 'instant' }); return true; }",
+            )
+        }
+        // Poll until the resolved center lands inside the viewport (the scroll
+        // commits asynchronously on the renderer).  Never re-scrolls inside
+        // the poll — that would restart any in-flight scroll animation.
+        var center: DragCenter? = null
+        for (attempt in 0 until 15) {
+            center = resolveDragCenter(selector)
+            if (center == null) {
+                return
+            }
+            val c = center ?: return
+            val visible = c.viewportWidth <= 0 || (
+                c.x >= 0 && c.y >= 0 && c.x <= c.viewportWidth && c.y <= c.viewportHeight
+                )
+            if (visible) {
+                break
+            }
+            delay(150)
+        }
+        val point = center ?: return
+        val visible = point.viewportWidth <= 0 || (
+            point.x >= 0 && point.y >= 0 && point.x <= point.viewportWidth && point.y <= point.viewportHeight
+            )
+        if (visible) {
+            mouseMove(point.x, point.y)
+        }
+    }
+
+    /**
+     * Run a click-family [block] in the background while watching the driver's
+     * [dialogHandler] for a native dialog opened by the click.
+     *
+     * A dialog-opening click blocks the renderer's main thread at the
+     * `alert()`/`confirm()`/`prompt()` call, so the CDP evaluation never
+     * returns until the dialog is handled — without this watch the caller
+     * hangs for its full HTTP timeout.  Here the click is parked in
+     * [clickWatchScope] and the watch responds as soon as the dialog event
+     * arrives:
+     *
+     *  - auto-dismiss mode ([DialogHandler.isAutoDismissEnabled]): the dialog
+     *    is accepted immediately, so the parked click completes and the
+     *    overall click succeeds (this makes `--auto-dismiss-dialogs` actually
+     *    work for dialog-triggering clicks, which the upstream drain — only
+     *    run after a completed click — cannot unblock).
+     *  - otherwise a [WebDriverException] with an actionable message is
+     *    thrown *without* cancelling the parked click.  The CDP evaluation is
+     *    blocked on the dialog and stays in flight; a later
+     *    dialog-accept/dialog-dismiss unblocks it, the click completes, and
+     *    the page state updates as if the click had never been interrupted.
+     *
+     * Stale dialogs are drained first so the watch can only ever report a
+     * dialog opened by *this* click (the upstream implementation repeats the
+     * drain at the start of every click).
+     */
+    private suspend fun <T> withDialogWatch(action: String, block: suspend () -> T): T {
+        dialogHandler.dismissAllPending()
+        val outcome = CompletableDeferred<Result<T>>()
+        clickWatchScope.launch {
+            outcome.complete(runCatching { block() })
+        }
+        while (true) {
+            val dialog = dialogHandler.peekPendingDialog()
+            if (dialog != null) {
+                if (dialogHandler.isAutoDismissEnabled) {
+                    // Auto-dismiss mode: accept the dialog so the parked click
+                    // can resume; keep watching in case the handler opens more.
+                    dialogHandler.acceptDialog()
+                    delay(150)
+                    continue
+                }
+                // The page opened a dialog and the click is paused on it.
+                // Report promptly (the caller would otherwise hang for its
+                // full HTTP timeout) but leave the click parked — see the
+                // KDoc above.
+                val type = dialog.type
+                val dialogMessage = dialog.message.takeIf { it.isNotBlank() }
+                val detail = if (dialogMessage != null) {
+                    val clipped = if (dialogMessage.length > 100) dialogMessage.take(100) + "..." else dialogMessage
+                    ": \"$clipped\""
+                } else {
+                    ""
+                }
+                throw WebDriverException(
+                    "The $action opened a native $type dialog$detail and is paused until the dialog is handled. " +
+                        "Run 'dialog-accept' (or 'dialog-dismiss') to let the click finish; do not re-run the click.",
+                    driver = this@Browser4WebDriver,
+                )
+            }
+            if (outcome.isCompleted) {
+                break
+            }
+            delay(150)
+        }
+        return outcome.await().getOrThrow()
+    }
+
+    /**
+     * Left-click [count] times on [selector], with the pointer moved onto the
+     * element first and native dialogs reported as they open (see
+     * [movePointerToClickTarget] and [withDialogWatch]).
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun click(selector: String, count: Int) {
+        movePointerToClickTarget(selector)
+        withDialogWatch("click") { super.click(selector, count) }
+    }
+
+    /**
+     * Click [selector] with a [modifier] key held; see [click] for the
+     * pointer-move and dialog-watch behaviour.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun click(selector: String, modifier: String) {
+        movePointerToClickTarget(selector)
+        withDialogWatch("click") { super.click(selector, modifier) }
+    }
+
+    /**
+     * Double-click [selector] (with an optional [modifier]); see [click] for
+     * the pointer-move and dialog-watch behaviour.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun dblclick(selector: String, modifier: String) {
+        movePointerToClickTarget(selector)
+        withDialogWatch("dblclick") { super.dblclick(selector, modifier) }
     }
 
     // ---------------------------------------------------------------------------
@@ -1228,6 +1560,41 @@ open class Browser4WebDriver(
      */
     @Throws(WebDriverException::class)
     override suspend fun drag(sourceSelector: String, targetSelector: String): Unit {
+        dragAt(sourceSelector, targetSelector, DragDropPosition.CENTER.key)
+    }
+
+    /**
+     * Drag and drop [sourceSelector] onto [targetSelector] with an explicit
+     * drop [position] on the target, returning a short summary of where the
+     * source element ended up (used by the CLI `drag --at` flow).
+     *
+     * The interface-level [drag] (two-argument) stays a `Unit` override for
+     * upstream callers; tool callers that want the placement summary (and
+     * deterministic positioning) use this overload.
+     *
+     * @param position One of `"center"` (legacy: resolved center point with
+     *        ±2px jitter), `"top"` (drop at the target's top edge region —
+     *        insert *before* the target on child-index-based reorder lists),
+     *        or `"bottom"` (drop at the target's bottom edge region — insert
+     *        *after* the target).  Top/bottom points are read from the live
+     *        rect inside the page at dispatch time, so they cannot drift
+     *        outside the target and carry no jitter.
+     * @return A human-readable summary of the source's resulting DOM position,
+     *         e.g. `Dropped li#priorityHigh as child 4 of 4 in ul#priorityList`.
+     * @throws IllegalArgumentException if [position] is not a known value.
+     * @throws WebDriverException if the source or target cannot be located or the drag fails.
+     */
+    @Throws(WebDriverException::class)
+    suspend fun drag(sourceSelector: String, targetSelector: String, position: String): String {
+        val normalized = DragDropPosition.from(position).key
+        return dragAt(sourceSelector, targetSelector, normalized)
+    }
+
+    private suspend fun dragAt(
+        sourceSelector: String,
+        targetSelector: String,
+        position: String,
+    ): String {
         // Phase 1 — resolve (retryable pieces are covered by their own RPC
         // layers; deterministic failures like a missing element must surface
         // directly instead of being wrapped by the outer retry machinery).
@@ -1266,10 +1633,17 @@ open class Browser4WebDriver(
         // Humanize the sequence: jitter the press/release points (±2px) and
         // randomize inter-event delays (120-300ms, the same magnitude as the
         // type() bucket).  Constant centers and fixed delays are a fingerprint
-        // for synthetic drags.
+        // for synthetic drags.  Positioned drops (top/bottom) pin their own
+        // point from the live rect inside the page script, so no jitter is
+        // applied here — ±2px around a center line is exactly what makes
+        // insert-before/insert-after a coin flip on child-index-based reorder
+        // lists, and a jittered point could drift outside the edge region.
+        val positioned = position == DragDropPosition.TOP.key || position == DragDropPosition.BOTTOM.key
         val sourcePoint = Pair(source.x + randomOffset(2.0), source.y + randomOffset(2.0))
-        val targetPoint = Pair(target.x + randomOffset(2.0), target.y + randomOffset(2.0))
-        val delays = List(4) { randomDragDelayMillis() }
+        val targetPoint = if (positioned) Pair(target.x, target.y) else Pair(target.x + randomOffset(2.0), target.y + randomOffset(2.0))
+        // Positioned drops add two intermediate dragover sweep events, so they
+        // pace six inter-event delays instead of four.
+        val delays = List(if (positioned) 6 else 4) { randomDragDelayMillis() }
 
         val script = buildDragSequenceScript(
             targetCssPath = target.cssPath,
@@ -1278,6 +1652,7 @@ open class Browser4WebDriver(
             targetX = targetPoint.first,
             targetY = targetPoint.second,
             delays = delays,
+            dropPosition = position,
         )
 
         // Phase 2 — execute the sequence.  The source element is bound as
@@ -1288,6 +1663,15 @@ open class Browser4WebDriver(
         // transient CDP failures are retried, manually, inside this block.
         withNodeObjectId(browserProtocol, sourceNode) { sourceObjectId ->
             var lastCdpFailure: ChromeDriverException? = null
+            // DOM-position fingerprint of the source before any dispatch.
+            // An earlier attempt can dispatch the full lifecycle and then die
+            // with a *transient* CDP error; the retry's script pre-check then
+            // reports the target as occluded/moved only because the page
+            // already reordered.  When that happens, verify by measuring:
+            // if the source demonstrably moved, the drag took effect and the
+            // failure is a false negative — report success instead of throwing.
+            val positionBefore = sourcePositionFingerprint(sourceObjectId)
+            var dragSucceeded = false
             repeat(3) { attempt ->
                 try {
                     val result = browserProtocol.callFunctionOn(
@@ -1299,7 +1683,20 @@ open class Browser4WebDriver(
                     )
                     val scriptError = dragScriptErrorMessage(result?.result?.value)
                     if (scriptError == null) {
+                        dragSucceeded = true
                         return@repeat
+                    }
+                    if (attempt > 0 && positionBefore != null) {
+                        val positionAfter = sourcePositionFingerprint(sourceObjectId)
+                        if (positionAfter != null && positionAfter != positionBefore) {
+                            logger.warn(
+                                "Drag of '$sourceSelector' to '$targetSelector' failed its retry pre-check " +
+                                    "($scriptError) but the source element already moved in the DOM — an earlier " +
+                                    "attempt dispatched the drag lifecycle. Treating the drag as completed."
+                            )
+                            dragSucceeded = true
+                            return@repeat
+                        }
                     }
                     throw WebDriverException(
                         "Failed to drag '$sourceSelector' to '$targetSelector': $scriptError",
@@ -1314,10 +1711,49 @@ open class Browser4WebDriver(
                     }
                 }
             }
-            lastCdpFailure?.let { throw it }
+            if (!dragSucceeded) {
+                lastCdpFailure?.let { throw it }
+            }
         }
 
+        // Report where the source ended up so callers can verify the placement
+        // (deterministic intent) instead of trusting the drop silently.
+        val summary = elementPositionReport(sourceSelector)
         gap("drag")
+        return summary
+    }
+
+    /**
+     * Read the current DOM position of the drag source (by CDP object id) as a
+     * comparable fingerprint string: `{ok, parentKey, index, total}`.  Returns
+     * null when the read fails (transient CDP error) — callers treat null as
+     * "cannot verify" and keep the original error instead of guessing.
+     */
+    private suspend fun sourcePositionFingerprint(sourceObjectId: String): String? =
+        try {
+            val result = browserProtocol.callFunctionOn(
+                dragPositionFingerprintJs(),
+                objectId = sourceObjectId,
+                returnByValue = true,
+            )
+            result?.result?.value as? String
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.debug("Failed to read the drag source position fingerprint: ${e.message}")
+            null
+        }
+
+    /**
+     * Describe where the element matched by [selector] currently sits in the
+     * DOM (parent element and child index).  Used after a drag to report the
+     * resulting placement to the caller.  Falls back to a notice when the
+     * element can no longer be located (a drop target may have consumed it).
+     */
+    internal suspend fun elementPositionReport(selector: String): String {
+        val value = evaluateValue(selector, dragPositionReportJs())
+        return parseDragPositionReport(value)
+            ?: "The source element is no longer in the document after the drag; the drop target may have consumed it."
     }
 
     /**

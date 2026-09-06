@@ -718,6 +718,39 @@ class BrowserTabToolExecutorTest {
     }
 
     @Test
+    fun `get text normalizes whitespace by default and returns the raw text with raw=true`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            val readJs = java.util.concurrent.atomic.AtomicReference<String>()
+            Mockito.doAnswer { inv ->
+                readJs.set(inv.getArgument(1))
+                JsEvaluation(value = "ok")
+            }.`when`(driver).evaluateValueDetail(Mockito.anyString(), Mockito.anyString())
+
+            executor.callFunctionOn(
+                ToolCall("tab", "selectFirstTextOrNull", mutableMapOf<String, Any?>("selector" to "#title")),
+                driver
+            )
+            // Default: the read JS collapses whitespace runs and trims the ends,
+            // so layout whitespace (indentation/newlines) does not leak into the
+            // extracted text.
+            val normalizedJs = readJs.get()
+            assertTrue(normalizedJs.contains("text.replace(/\\s+/g, ' ').trim()"), "unexpected read JS: $normalizedJs")
+
+            executor.callFunctionOn(
+                ToolCall(
+                    "tab", "selectFirstTextOrNull",
+                    mutableMapOf<String, Any?>("selector" to "#title", "raw" to true)
+                ),
+                driver
+            )
+            // --raw: plain concatenation of the text nodes, no normalization.
+            val rawJs = readJs.get()
+            assertTrue(rawJs.contains("text += n.nodeValue;") && !rawJs.contains(".trim()"), "unexpected read JS: $rawJs")
+        }
+    }
+
+    @Test
     fun `get text with a CSS selector that matches nothing returns null`() {
         runBlocking {
             val driver = Mockito.mock(WebDriver::class.java)

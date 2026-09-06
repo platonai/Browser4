@@ -78,23 +78,34 @@ browser4-cli snapshot grep -A 3 -B 1 "Checkout"   # show surrounding context lin
 ```bash
 # Hover — reveal tooltips, expand menus, trigger hover effects
 browser4-cli hover <ref>                          # hover over an element
-browser4-cli snapshot grep "tooltip"              # verify tooltip appeared
+browser4-cli mousemove 5 5                        # move the pointer to blank space (clears any CSS :hover)
 
 # Double-click — trigger dblclick handlers
 browser4-cli dblclick <ref>                       # double-click an element
 
 # Drag-and-drop — move elements between containers
-browser4-cli drag <source-ref> <target-ref>       # drag source onto target
-browser4-cli snapshot grep "new position"         # verify element was moved
+browser4-cli drag <source-ref> <target-ref>            # drag source onto target (drop at target center)
+browser4-cli drag <source-ref> <target-ref> --at top   # insert the source BEFORE the target
+browser4-cli drag <source-ref> <target-ref> --at bottom # insert the source AFTER the target
+```
+
+Clicks, double-clicks, and hovers move the pointer onto the element first, so CSS `:hover` styles match the element under the pointer — they no longer linger on a previously hovered element. `drag --at bottom`/`--at top` pin the drop point to the target's edge so live-reorder lists land deterministically, and the command prints where the source landed (e.g. `Dropped li#item3 as child 4 of 4 in ul#list`).
+
+**Verifying hover-revealed content:** snapshot text is not a visibility proof — full-page snapshots can include `visibility:hidden` text and viewport snapshots may omit a hover-visible tooltip. Verify hover effects with an eval of the computed style or geometry instead:
+
+```bash
+browser4-cli hover <ref>
+browser4-cli eval "getComputedStyle(document.querySelector('.tooltip')).visibility"  # "visible"
+browser4-cli eval "document.querySelector('.card-detail').clientHeight"              # grew past 0
 ```
 
 ### 5. Dialog Handling
 
-Native browser dialogs (`alert()`, `confirm()`, `prompt()`) block the page's main thread. When a dialog appears (e.g., after clicking a button), `click` will time out. Handle the dialog with a separate command:
+Native browser dialogs (`alert()`, `confirm()`, `prompt()`) block the page's main thread while they are open. A click that triggers a dialog returns quickly with a "dialog is pending" error instead of hanging — the click stays parked server-side and completes on its own once the dialog is handled. Do not re-run the triggering click (it would open a second dialog):
 
 ```bash
-browser4-cli click "#alertBtn"                    # triggers alert — click will time out
-browser4-cli dialog-accept                        # dismiss the alert ("OK")
+browser4-cli click "#alertBtn"                    # prints: native dialog pending — run dialog-accept
+browser4-cli dialog-accept                        # dismiss the alert ("OK") — the parked click then completes
 
 browser4-cli click "#confirmBtn"                  # triggers confirm
 browser4-cli dialog-accept                        # click "OK" (returns true to page)
@@ -105,7 +116,7 @@ browser4-cli dialog-accept "Hello from Browser4"  # fill prompt and accept
 browser4-cli dialog-dismiss                       # cancel/dismiss any dialog
 ```
 
-**Note:** `dialog-accept` and `dialog-dismiss` must be run in a separate invocation — they cannot be part of the same command as the triggering `click`. Alternatively, use `click --auto-dismiss-dialogs <ref>` to auto-accept any dialog triggered by the click in a single invocation.
+**Note:** `dialog-accept` and `dialog-dismiss` must be run in a separate invocation — they cannot be part of the same command as the triggering `click`. The triggering `click` fails fast with a "dialog pending" message instead of hanging, and the underlying click stays parked and finishes when `dialog-accept`/`dialog-dismiss` releases the dialog — run the two commands as separate invocations (e.g. in a script: `browser4-cli click "#alertBtn" || true; browser4-cli dialog-accept`). Alternatively, use `click --auto-dismiss-dialogs <ref>` to auto-accept any dialog triggered by the click in a single invocation (auto-accept only — it cannot exercise the dismiss path of `confirm`/`prompt`).
 
 ### 6. Verifying Results (verify-after-interaction)
 
@@ -114,16 +125,16 @@ browser4-cli dialog-dismiss                       # cancel/dismiss any dialog
 browser4-cli click <submit-ref>
 browser4-cli snapshot -v 0 --auto-diff --stdout   # shows only what changed
 
-# After hover — search for expected content
+# After hover — check the computed style of the revealed content
 browser4-cli hover <ref>
-browser4-cli snapshot grep "expected-tooltip-text"
+browser4-cli eval "getComputedStyle(document.querySelector('#tooltip')).visibility"  # expect "visible"
 
-# After drag — confirm reordering
-browser4-cli drag <source> <target>
-browser4-cli snapshot grep "new order|reordered|moved"
+# After drag — the command itself reports where the source landed
+browser4-cli drag <source> <target> --at bottom     # e.g. "Dropped li#x as child 4 of 4 in ul#list"
 
-# After dialog — verify the interaction log
-browser4-cli click "#alertBtn" && browser4-cli dialog-accept
+# After dialog — handle the dialog, then verify the interaction log
+browser4-cli click "#alertBtn" || true          # "dialog pending" error is expected
+browser4-cli dialog-accept
 browser4-cli snapshot grep "\[alert\]|\[confirm\]|\[prompt\]"
 
 # Generate resilient CSS selectors from snapshot refs
@@ -230,7 +241,7 @@ See **[agent.md](agent.md)** for full details including LLM key configuration, e
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `click` times out after a dialog | `alert`/`confirm`/`prompt` blocks the page | `dialog-accept` / `dialog-dismiss` in a separate invocation, or `click --auto-dismiss-dialogs <ref>` |
+| `click` errors with "dialog is pending" | the click triggered a native dialog and returned early by design — it did not hang | handle the dialog with `dialog-accept` / `dialog-dismiss` in a separate invocation (the parked click then completes), or use `click --auto-dismiss-dialogs <ref>`
 | Refs fail after an interaction | Refs are single-use | Re-snapshot before reusing refs — see [SKILL.md §5](../SKILL.md#5-critical-warnings) |
 | `agent status` never completes | Task failed (417/4xx/5xx) or LLM key missing | Inspect `message`; configure the LLM key |
 | SQL errors on inline `--sql` | Shell escaping on Windows | Use `--sql @file.sql` — see [shell-quoting.md](shell-quoting.md) |

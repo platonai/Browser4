@@ -122,7 +122,7 @@ Need to process multiple pages?
 ├─ List of known URLs (in a file)? → crawl --seed-file urls.txt --depth 0 --sql @query.sql
 ├─ Crawl from a start URL (follow links)? → crawl <url> --out-link-selector "..." --depth N
 ├─ Need parallel execution (high throughput)? → swarm create → swarm query --seed-file ...
-├─ Repeated monitoring (check every hour)? → loop -- eval "..." -i 3600
+├─ Repeated monitoring (check every hour)? → loop -i 3600 -- eval "..."
 └─ Just a few URLs in a shell script?
    → browser4-cli open --headed "https://first-url"   # humans: open once, visibly
    → for url in ...; do browser4-cli goto "$url"; ... done

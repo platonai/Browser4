@@ -59,7 +59,7 @@ browser4-cli swarm create [--profile-mode SEQUENTIAL|TEMPORARY] [--max-open-tabs
 | `--profile-mode` | `SEQUENTIAL` | `SEQUENTIAL` reuses profile across runs; `TEMPORARY` starts fresh |
 | `--max-open-tabs` | `8` | Max open tabs per browser context |
 | `--max-browser-contexts` | `2` | Number of isolated browser instances |
-| `--display-mode` | `GUI` | `GUI`, `HEADLESS`, or `SUPERVISED` |
+| `--display-mode` | `HEADLESS` | `GUI`, `HEADLESS`, or `SUPERVISED` (headless-first convention: only an explicit `GUI` opens visible windows) |
 | `--clear-stale` | (flag) | Automatically clear stale tasks from prior sessions before creating |
 
 The session persists until `browser4-cli swarm close` or `close`.
@@ -80,7 +80,7 @@ browser4-cli swarm submit <url> [--seed-file ./urls.txt] [--deadline ISO] [--exp
 | `--parse` | Parse page immediately after fetching (required for later X-SQL queries) |
 | `--wait` | Block until all submitted jobs complete (polls every 2s, 5-minute timeout) |
 
-> **Important:** Without `--sql`, `swarm submit` only fetches and loads the page — no data is extracted. The `resultSet` will be empty. The `pageContentBytes` field in the result confirms the page was fetched. For structured data extraction, use `swarm query --sql @query.sql` instead.
+> **Important:** Without `--sql`, `swarm submit` only fetches and loads the page — no data columns are extracted. The `resultSet` contains a single `url` row per submitted URL (a fetch-confirmation marker), and `pageContentBytes` confirms the page content was fetched. For structured data extraction, use `swarm query --sql @query.sql` instead.
 
 > **Tip:** Use `--wait` to avoid manual polling for short-lived jobs. The CLI prints a progress summary when all jobs complete.
 
@@ -191,7 +191,7 @@ Swarm tasks progress through these states:
 |----------|---------|
 | All subcommands exit non-zero | Check stderr for details |
 | Task not done yet | `swarm status` shows `isDone: false` — wait and retry, or use `--wait` on submission. A `statusCode` of `200` also indicates completion even if `isDone` lags. |
-| Task stuck as "queued" (201) | Workers may be busy. Check with `swarm list`. If all tasks show `queued` for >30s, the worker pool may be stalled — try `swarm list --clear` to remove stale tasks, then `swarm close` and `swarm create` to restart the session. Add `--wait` to block until jobs complete. |
+| Task stuck as "queued" (201) | Workers may be busy. Check with `swarm list`. **On a freshly created session, a queued phase of up to ~60s is normal cold start** while the browser contexts boot — check once after 60–90s before suspecting a stall. If all tasks still show `queued` after warm-up, the worker pool may be stalled — try `swarm list --clear` to remove stale tasks, then `swarm close` and `swarm create` to restart the session. Add `--wait` to block until jobs complete. |
 | Missing LLM/API key | Surfaces as task-level error in `swarm status` / `swarm result` |
 | Long-running tasks | Set `--deadline` to bound execution |
 | Swarm subcommands in batch mode | Not supported — use standalone commands |

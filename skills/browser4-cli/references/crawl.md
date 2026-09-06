@@ -20,7 +20,7 @@ browser4-cli crawl "https://example.com" --out-link-selector "a[href]"
 browser4-cli crawl --seed-file urls.txt --depth 0
 
 # Bulk fetch + X-SQL extraction to CSV
-browser4-cli crawl --seed-file urls.txt --sql @extract.sql --format csv -o results.csv
+browser4-cli crawl --seed-file urls.txt --sql "@extract.sql" --format csv -o results.csv
 ```
 
 > **Note:** `--out-link-selector` is required for link discovery.
@@ -42,7 +42,7 @@ Crawl loads seed URLs, optionally follows links up to a configurable depth, dedu
 ```bash
 # Extract product URLs from search results (via eval or X-SQL), write to urls.txt
 browser4-cli crawl --seed-file urls.txt --depth 0 --refresh \
-  --sql @extract.sql --format csv -o products.csv
+  --sql "@extract.sql" --format csv -o products.csv
 ```
 
 `extract.sql`:
@@ -95,7 +95,7 @@ browser4-cli crawl --seed-file urls.txt --depth 0 --sql-stdin --format table < q
 ### X-SQL from file (@ prefix)
 
 ```bash
-browser4-cli crawl --seed-file urls.txt --depth 0 --sql @extract.sql --format csv -o out.csv
+browser4-cli crawl --seed-file urls.txt --depth 0 --sql "@extract.sql" --format csv -o out.csv
 ```
 
 ## Modes
@@ -193,11 +193,11 @@ browser4-cli crawl --seed-file urls.txt --depth 0 --sql "
 | `--args` | `-a` | string | Raw LoadOptions passthrough (see [LoadOptions Guide](load-options-guide.md)) |
 | `--refresh` | | bool | Force fresh fetch (ignore cache) |
 | `--parse` | | bool | Parse pages after fetch |
-| `--expires` | | string | Cache TTL: `1d`, `1h`, `30m`, etc. |
-| `--priority` | `-p` | int | Queue priority (lower = higher priority) |
-| `--page-load-timeout` | | string | Max wait for each page load |
-| `--ignore-url-query` | | bool | Strip query params from URLs |
-| `--no-norm` | | bool | Disable URL normalization |
+| `--expires` | | string | Cache TTL: `1d`, `1h`, `30m`, etc. Invalid values are rejected by the CLI (non-zero exit) |
+| `--priority` | `-p` | int | Queue priority (non-negative integer; lower = higher priority) |
+| `--page-load-timeout` | | string | Max wait per page load: seconds number (`30`) or duration (`30s`, `1m`) |
+| `--ignore-url-query` | | bool | Strip query params from **discovered out-link** hrefs (no effect on seed URLs in depth-0 bulk fetch) |
+| `--no-norm` | | bool | Disable URL normalization of **discovered out-link** hrefs (no effect on seed URLs in depth-0 bulk fetch) |
 | `--readonly` | | bool | Non-destructive mode |
 
 ### Async flag
@@ -271,6 +271,14 @@ Crawl completed. 3 pages found.
 The mock e-commerce site (`./bin/test.ps1 mock-site`) provides predictable
 product pages for testing crawl extraction without hitting live websites.
 
+> **Browser vs. raw HTML:** MockSite serves a JavaScript-hydrated page variant
+> to browsers (the crawl fetch pipeline), which can differ from the static
+> HTML a plain `curl` receives — e.g. category/navigation anchors arrive as
+> `href="#"` and the rendered product list may be a subset.  When debugging
+> link-discovery counts, verify the *browser* DOM with `eval` or
+> `htmlsnapshot inspect` rather than assuming `curl` output matches what the
+> crawler sees.
+
 ### MockSite selectors
 
 MockSite's product pages use ID selectors (unlike the class selectors common on
@@ -318,7 +326,7 @@ SQLEOF
 
 # 4. Run the crawl
 browser4-cli crawl --seed-file seed-urls.txt --depth 0 --refresh \
-  --sql @extract.sql --format table
+  --sql "@extract.sql" --format table
 ```
 
 > **Tip:** When selectors don't match, use `htmlsnapshot grep` with `--selector`
@@ -336,12 +344,20 @@ browser4-cli crawl "https://example.com" -ol "a[href]" -a "-nMaxRetry 5 -lazyFlu
 ## URL deduplication
 
 - Visited URLs are normalized: lowercase, trailing slash removed, query string
-  always stripped for dedup purposes.
+  and URL fragment always stripped for dedup purposes.
 - The same URL is never visited twice within a crawl session.
+- Fragment-only anchors (`href="#"`, `href="#section"`) can never navigate to
+  a new document and are skipped during link extraction — they are not counted
+  as discovered out-links.
 - Use `--ignore-url-query` to additionally strip query parameters from extracted
   link hrefs before resolution.
 - Use `--no-norm` to disable LoadOptions-level normalization (does not affect
   internal dedup normalization).
+
+> **Scope note:** `--ignore-url-query` and `--no-norm` only affect links
+> *discovered* during depth ≥ 1 link discovery.  Seed URLs in a depth-0 bulk
+> fetch are always fetched and reported verbatim, so these flags produce no
+> observable change there.
 
 ## Seed files
 
@@ -400,20 +416,26 @@ browser4-cli crawl status <task-id>
 ```
 
 Shows whether the task is CREATED, PROCESSING, or completed (OK), along with
-pages found so far and any error information.
+pages found so far and any error information.  Prints a compact one-line
+summary in front of the raw task record.
 
 ### crawl result
 
-Retrieve the full result of a completed crawl task.  Returns the same output
-as a foreground crawl: page listing (without `--sql`) or formatted extraction
-data (with `--sql`).
+Retrieve the current record of a crawl task.  A terminal task (OK, TIMEOUT,
+ERROR) returns the full result: page listing (without `--sql`) or extracted
+data (with `--sql`).  The record also carries the live status field, so
+polling a task that is still PROCESSING returns the record with
+`status: PROCESSING` and whatever partial progress exists — the CLI prints a
+hint when the task is not yet terminal.
 
 ```bash
 browser4-cli crawl result <task-id>
 ```
 
-> **Note:** Only returns results for tasks in terminal state (OK, TIMEOUT,
-> ERROR).  Use `crawl status` first to verify completion.
+> **Note:** `crawl result` returns the task's current record including its
+> `status` field — it does not refuse non-terminal tasks.  While a task is
+> PROCESSING, `crawl result` and `crawl status` show equivalent partial
+> records; use either to poll.
 
 ### crawl cancel
 
@@ -424,7 +446,10 @@ browser4-cli crawl cancel <task-id>
 ```
 
 The task transitions to TIMEOUT status.  Cancelled tasks remain visible in
-`crawl list` until manually cleared or expired by TTL.
+`crawl list` until manually cleared or expired by TTL.  If no running worker
+is found for the task (`{"cancelled": false}`), the CLI explains that the
+worker is already gone; the task record is still queryable and expires by
+TTL.
 
 ### crawl clear
 

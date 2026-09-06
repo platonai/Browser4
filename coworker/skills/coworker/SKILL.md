@@ -85,7 +85,7 @@ This repository contains a **file-queue automation system** called **Coworker**.
 ### Main task lifecycle
 
 1. **Draft** in `coworker/tasks/main/0draft` (manual authoring area). (`coworker/README.md:16-28`, `coworker/tasks/main/0draft/README.md:1-37`)
-2. **Queue** by moving/copying the task file to `coworker/tasks/main/1ready`. (`coworker/README.md:30-40`)
+2. **Queue** by moving/copying the task file to `coworker/tasks/main/1ready`. (`coworker/README.md:30-40`) The runner scans `1ready` **recursively**, so tasks placed in date-organized subfolders (e.g. `1ready/2026/0905/...`, as written by `review-recent-issues`/organize workers) are picked up too; dot-prefixed files/folders (`.gitkeep`, `.locks`, `.hidden.md`) are always ignored. (`coworker/scripts/engineer.ps1:248-253`, `coworker/scripts/common/Watchers.ps1:17-78`)
 3. **Rename + start work**: Coworker generates a descriptive kebab-case name and moves the file to `coworker/tasks/main/2working`. (`coworker/scripts/engineer.ps1:417-500`, `coworker/scripts/workers/rename.ps1:30-60`, `coworker/scripts/workers/rename.ps1:153-178`)
 4. **Execute**: Copilot works against the repo; logs are written under `coworker/tasks/300logs/YYYY/MM/DD`. (`coworker/scripts/engineer.ps1:548-552`, `coworker/scripts/engineer.ps1:575-687`)
 5. **Finish**:

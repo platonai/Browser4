@@ -17,8 +17,13 @@ function Test-HasPendingCoworkerTasks {
         [string]$RepoRoot
     )
 
-    $createdTasks = Get-ChildItem -Path (Get-CoworkerStageDirectory -PipelineName 'main' -StageId '1ready') -File -ErrorAction SilentlyContinue
-    $approvedTasks = Get-ChildItem -Path (Get-CoworkerStageDirectory -PipelineName 'main' -StageId '5approved') -File -Recurse -ErrorAction SilentlyContinue
+    # Scan 1ready recursively (tasks may sit in date-organized YYYY/MMDD
+    # subdirectories) and skip dot entries (.gitkeep, .locks, .hidden files)
+    # so placeholders never count as pending work.
+    $createdTasks = Get-ChildItem -Path (Get-CoworkerStageDirectory -PipelineName 'main' -StageId '1ready') -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { -not (Test-CoworkerIgnoredFile -Item $_) }
+    $approvedTasks = Get-ChildItem -Path (Get-CoworkerStageDirectory -PipelineName 'main' -StageId '5approved') -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { -not (Test-CoworkerIgnoredFile -Item $_) }
     return [bool]($createdTasks -or $approvedTasks)
 }
 
