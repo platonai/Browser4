@@ -2,6 +2,8 @@ package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.rest.api.service.CrawlResponse
 import ai.platon.pulsar.test.TestUrls
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
@@ -189,13 +191,24 @@ class CrawlFixtureMetadataTest : RestAPITestBase() {
         var last: CrawlResponse? = null
         while (Instant.now().isBefore(deadline)) {
             Thread.sleep(2000)
-            val result = client.get().uri("/api/crawl/$taskId/result")
+            // Fetch the raw body and deserialize with the Kotlin-aware Jackson
+            // mapper.  `expectBody<CrawlResponse>()` uses the client-side
+            // converter without the Kotlin module: CrawlResponse's all-default
+            // constructor lets it instantiate the class, but no field is ever
+            // bound — status would stay at its "CREATED" default forever even
+            // though the server reports PROCESSING/OK.
+            val raw = client.get().uri("/api/crawl/$taskId/result")
                 .exchange()
                 .expectStatus().is2xxSuccessful
-                .expectBody<CrawlResponse>()
+                .expectBody<String>()
                 .returnResult()
                 .responseBody
-            checkNotNull(result)
+            val result = requireNotNull(raw) { "Empty crawl result body for $taskId" }
+                .let {
+                    jacksonObjectMapper()
+                        .registerModule(JavaTimeModule())
+                        .readValue(it, CrawlResponse::class.java)
+                }
             last = result
             if (result.status == "OK" || result.status == "SC_OK" ||
                 result.status == "SC_REQUEST_TIMEOUT" || result.status == "SC_INTERNAL_SERVER_ERROR"
