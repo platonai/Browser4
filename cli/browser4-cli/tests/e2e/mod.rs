@@ -4869,6 +4869,9 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "tab-new",
         "tab-select",
         "tab-close",
+        // test_e2e_frame_switch_commands
+        "frame",
+        "frames",
         "page-info",
         // eval is exercised directly by dedicated scenarios and shared helpers
         "eval",
