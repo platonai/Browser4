@@ -546,7 +546,7 @@ function Ensure-CleanDirectory([string]$path) {
     New-Item -ItemType Directory -Force -Path $path | Out-Null
 }
 
-function Reset-CleanDirectory([string]$path, [string]$label = $path) {
+function Reset-CleanDirectory([string]$path, [string]$label = $path, [bool]$Recreate = $true) {
     # Rename-then-delete reset.  On Windows, renaming a directory that holds
     # open/locked files (e.g. a backend daemon auto-started from this bundle)
     # fails atomically — nothing is deleted, so a failed reset never corrupts
@@ -563,7 +563,12 @@ function Reset-CleanDirectory([string]$path, [string]$label = $path) {
         }
         Remove-Item -LiteralPath $trash -Recurse -Force -ErrorAction SilentlyContinue
     }
-    New-Item -ItemType Directory -Force -Path $path | Out-Null
+    # Most callers need the directory back (empty) for the next phase, but
+    # jlink refuses to write into an output directory that exists at all —
+    # even an empty one — so the jlink pre-reset passes -Recreate:$false.
+    if ($Recreate) {
+        New-Item -ItemType Directory -Force -Path $path | Out-Null
+    }
 }
 
 function Get-PathSeparator {
@@ -1463,12 +1468,13 @@ if ($modules.Count -eq 0) {
 $phaseIndex = 4
 Write-BuildProgress -Status $buildPhases[$phaseIndex - 1].Label
 
-# jlink refuses to write into an existing (non-empty) output directory, so
-# reset the runtime directory immediately before invoking it.  This makes the
-# script idempotent over an existing build: a plain re-run after a source
-# change must not fail with 'directory already exists' or leave a broken
-# runtime behind.
-Reset-CleanDirectory $runtimeDirectory 'runtime (jlink output) directory'
+# jlink refuses to write into an output directory that exists — even an
+# empty one — so remove the runtime directory entirely (rename-then-delete
+# for lock safety) WITHOUT recreating it; jlink creates it itself.  This
+# makes the script idempotent over an existing build: a plain re-run after
+# a source change must not fail with 'directory already exists' or leave a
+# broken runtime behind.
+Reset-CleanDirectory $runtimeDirectory 'runtime (jlink output) directory' -Recreate:$false
 
 Write-Host "Running jlink with modules: $($modules -join ',')" -ForegroundColor Cyan
 Write-Host "Using jlink compression mode: $jlinkCompressValue" -ForegroundColor Cyan
