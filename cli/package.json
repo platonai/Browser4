@@ -1,6 +1,6 @@
 {
   "name": "browser4-cli",
-  "version": "4.14.0-rc.3",
+  "version": "4.14.0-rc.4",
   "description": "Browser automation CLI for AI agents",
   "type": "module",
   "files": [
