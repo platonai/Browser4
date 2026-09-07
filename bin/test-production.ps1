@@ -790,12 +790,17 @@ if ($existingCli) {
     Update-SessionPath
     $stillOnPath = Resolve-CliPath
     if ($stillOnPath) {
-        $standaloneCliPaths = @((Join-Path $env:HOME '.local/bin/browser4-cli'))   # Linux/macOS
+        $standaloneCliPaths = @()
         if ($OSWin) {
             # Windows: binary link (or .cmd wrapper fallback) inside the install dir.
             # LOCALAPPDATA is $null on Unix — only touch it on Windows.
             $standaloneCliPaths += Join-Path $env:LOCALAPPDATA 'Programs\browser4-cli\browser4-cli.exe'
             $standaloneCliPaths += Join-Path $env:LOCALAPPDATA 'Programs\browser4-cli\browser4-cli.cmd'
+        } else {
+            # Linux/macOS: standalone binary lives under ~/.local/bin.
+            # $env:HOME is always set on Unix but commonly ABSENT on Windows,
+            # so this Join-Path must never run on the Windows path.
+            $standaloneCliPaths += Join-Path $env:HOME '.local/bin/browser4-cli'
         }
         if ($stillOnPath -in $standaloneCliPaths) {
             Write-Info "Standalone binary remains at $stillOnPath — outside uninstall scope; the install cycle will refresh it"
