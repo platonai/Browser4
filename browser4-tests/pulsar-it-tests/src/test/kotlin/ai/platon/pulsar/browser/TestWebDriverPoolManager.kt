@@ -34,7 +34,7 @@ class TestWebDriverPoolManager {
     @Test
         @DisplayName("test createUnmanagedDriverPool")
     fun testCreateUnmanagedDriverPool() {
-        val driverPool = driverPoolManager.createUnmanagedDriverPool(BrowserId.RANDOM_TEMP)
+        val driverPool = driverPoolManager.createUnmanagedDriverPool(BrowserId.createRandomTemp())
         val workingDrivers = mutableListOf<WebDriver>()
         var numDrivers = 0
         assertTrue("driverPool.capacity should not be too large, actual ${driverPool.capacity}") {
@@ -83,7 +83,7 @@ class TestWebDriverPoolManager {
     @Ignore("Time consuming (and also bugs)")
     @Test
     fun testWebDriverPoolMultiThreaded() {
-        val driverPool = driverPoolManager.createUnmanagedDriverPool(BrowserId.RANDOM_TEMP)
+        val driverPool = driverPoolManager.createUnmanagedDriverPool(BrowserId.createRandomTemp())
         val workingDrivers = ArrayBlockingQueue<WebDriver>(30)
 
         val consumer = Thread {

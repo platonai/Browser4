@@ -30,7 +30,7 @@ class PulsarWebDriverProxyTests : WebDriverTestBase() {
     // val ipTestUrl = "https://ip.tool.chinaz.com/"
     // val ipTestUrl = "https://whatismyipaddress.com/"
     val ipTestUrl = "https://www.baidu.com/"
-    val browserId = BrowserId.RANDOM_TEMP
+    val browserId = BrowserId.createRandomTemp()
 
     @BeforeEach
     fun setupBrowserContext() {
@@ -91,7 +91,7 @@ class PulsarWebDriverProxyTests : WebDriverTestBase() {
             return
         }
 
-        val browserId = BrowserId.RANDOM_TEMP
+        val browserId = BrowserId.createRandomTemp()
         browserId.setProxy(proxyEntry)
 
         val browser = browserFactory.launch(browserId)

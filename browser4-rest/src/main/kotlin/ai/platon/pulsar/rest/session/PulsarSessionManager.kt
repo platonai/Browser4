@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.session
 
 import ai.platon.pulsar.api.AbstractBrowser
+import ai.platon.pulsar.api.BrowserId
 import ai.platon.pulsar.api.WebDriver
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarBrowser
@@ -592,8 +593,13 @@ class PulsarSessionManager(
         val extChrome = ExtensionChromeService(sender, sessionId)
 
         // Wrap it as a PulsarBrowser so the session can use it.
+        // The extension browser is an EXTERNAL browser: it is not launched by this JVM and
+        // owns its user data dir on the user's machine. Name it with a deterministic
+        // external identity keyed by the session id, so every reconnect of the same session
+        // (and every restart with the same session id) refers to the same browser identity —
+        // no random disposable profile is ever fabricated, and no local directory is created.
         val browser = PulsarBrowser(
-            id = ai.platon.pulsar.api.BrowserId.RANDOM_TEMP,
+            id = BrowserId.external(sessionId),
             chrome = extChrome,
             settings = BrowserSettings(),
             launcher = null
