@@ -1,5 +1,7 @@
 package ai.platon.pulsar.rest.session
 
+import ai.platon.pulsar.api.AbstractBrowser
+import ai.platon.pulsar.api.WebDriver
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarBrowser
 import ai.platon.pulsar.chrome.PulsarWebDriver
@@ -12,6 +14,7 @@ import ai.platon.pulsar.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.common.B4Constants.PROFILE_MODE_CAPABILITY
 import ai.platon.pulsar.common.B4Constants.SESSION_ID_CAPABILITY
 import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_ID
+import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.context.AbstractAgenticContext
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.agentic.context.AgenticContexts
@@ -21,6 +24,7 @@ import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_MODE
 import ai.platon.pulsar.core.api.PulsarSettings
+import ai.platon.pulsar.skeleton.session.choosePageTab
 import kotlinx.coroutines.runBlocking
 import org.slf4j.LoggerFactory
 import java.io.Closeable
@@ -346,9 +350,30 @@ class PulsarSessionManager(
             createManagedSession(sessionId, normalizedCapabilities, SessionKind.CDP_ATTACHED)
         }
 
+        // Idempotent re-attach: if the session already has a healthy driver on
+        // the same browser port, keep the existing binding. Creating a fresh
+        // PulsarBrowser wrapper + driver on every attach would leak their
+        // DevTools connections until the session closes.
+        val existingDriver = session.agenticSession.boundDriver
+        if (existingDriver != null && (existingDriver.browser as? PulsarBrowser)?.port == port &&
+            runCatching { runBlocking { existingDriver.healthy().isOK } }.getOrDefault(false)
+        ) {
+            (existingDriver.browser as? AbstractBrowser)?.frontDriver = existingDriver
+            logger.info(
+                "Re-attached session {} to browser at port {} (existing driver kept)",
+                sessionId, port
+            )
+            return session
+        }
+
         // Bind the external browser to the session
         val browser = PulsarBrowser(port = port, settings = BrowserSettings())
         session.agenticSession.bindBrowser(browser)
+
+        // Bind to the user's existing page tab so subsequent eval/call targets
+        // it instead of a freshly-created about:blank tab.
+        runCatching { bindToExistingPageTab(browser, session.agenticSession) }
+            .onFailure { logger.warn("attach --cdp: no existing page tab bound for {}; {}", sessionId, it.message) }
 
         logger.info(
             "Attached session {} to browser at port {} (endpoint: {})",
@@ -594,15 +619,25 @@ class PulsarSessionManager(
                     tabs = browser.listTabs()
                 }
                 if (tabs.isNotEmpty()) {
-                    val driver = browser.newDriverForTab(tabs.first())
-                    driver.free()
-                    // Initialize CDP so the driver is operational.
-                    runBlocking { driver.browserProtocol.pageEnable() }
-                    agenticSession.bindDriver(driver)
-                    logger.info(
-                        "Created extension driver for session {} (tab: {})",
-                        sessionId, driver.chromeTab.url
-                    )
+                    // Prefer a non-about:blank page tab; null when tabs exist
+                    // but none is a page target (e.g. devtools windows).
+                    val chosen = choosePageTab(tabs.toList())
+                    if (chosen != null) {
+                        val driver = browser.newDriverForTab(chosen)
+                        driver.free()
+                        // Initialize CDP so the driver is operational.
+                        runBlocking { driver.browserProtocol.pageEnable() }
+                        val b4Driver = toBrowser4Driver(driver)
+                        agenticSession.bindDriver(b4Driver)
+                        // Track the active tab so switchTab / listTabs work correctly.
+                        (browser as AbstractBrowser).frontDriver = b4Driver
+                        logger.info(
+                            "Created extension driver for session {} (tab: {})",
+                            sessionId, driver.chromeTab.url
+                        )
+                    } else {
+                        logger.warn("No page tabs available for extension session {}", sessionId)
+                    }
                 } else {
                     logger.warn(
                         "No tabs available for extension session {} after waiting",
@@ -789,23 +824,66 @@ class PulsarSessionManager(
             // cannot hang on the dead link. The new tab opens at the last
             // known URL to mirror what the user was looking at.
             val lastUrl = (staleDriver as? PulsarWebDriver)?.navigateUrl
-            val rawDriver = browser.newDriver(lastUrl ?: "about:blank")
-            val replacement = when (rawDriver) {
-                is Browser4WebDriver -> rawDriver
-                is PulsarWebDriver -> Browser4WebDriver.from(rawDriver)
-                else -> rawDriver
-            }
+
+            // Prefer binding to an existing page tab (avoids creating a
+            // spurious new about:blank tab when the user's old tab is still
+            // open). The stale driver's own tab MUST be excluded:
+            // newDriverForTab reuses the driver already registered for a tab
+            // (PulsarBrowser.newDriverIfAbsent), which for that tab is the
+            // dead stale driver itself — binding it back would fail the
+            // health check below and abort recovery. Fall back to a fresh
+            // tab at the last known URL when no other tab is available.
+            val staleTabId = (staleDriver as? PulsarWebDriver)?.chromeTab?.id
+            val tabs = runCatching { (browser as? PulsarBrowser)?.listTabs() }
+                .getOrNull()?.toList().orEmpty()
+            val chosen = choosePageTab(tabs, preferUrl = lastUrl, excludeTabId = staleTabId)
+            val rawDriver = chosen?.let { (browser as PulsarBrowser).newDriverForTab(it) }
+                ?: browser.newDriver(lastUrl ?: "about:blank")
+            val replacement = toBrowser4Driver(rawDriver)
 
             // Unbind the stale driver before binding the replacement so
             // boundDriver (the first WebDriver bean) resolves to the new one.
             agenticSession.unbindDriver(staleDriver)
             agenticSession.bindDriver(replacement)
+            // Update frontDriver so switchTab / listTabs track the recovered tab.
+            (browser as? AbstractBrowser)?.frontDriver = replacement
 
             runBlocking { replacement.healthy().isOK }
         }.getOrElse { e ->
             logger.warn("Failed to recover driver link for session {}: {}", session.sessionId, e.message)
             false
         }
+    }
+
+    /**
+     * Wraps [rawDriver] in a [Browser4WebDriver] when needed, so every bound
+     * driver exposes the Browser4 extension points.
+     */
+    private fun toBrowser4Driver(rawDriver: WebDriver): WebDriver = when (rawDriver) {
+        is Browser4WebDriver -> rawDriver
+        is PulsarWebDriver -> Browser4WebDriver.from(rawDriver)
+        else -> rawDriver
+    }
+
+    /**
+     * Binds a driver to an existing page tab on [browser], preferring a
+     * non-about:blank tab. Sets [AbstractBrowser.frontDriver] so switchTab /
+     * listTabs track the active tab correctly after attach or reconnect.
+     *
+     * Returns the bound driver, or null if no page tab exists (caller falls
+     * back to newDriver()).
+     */
+    private fun bindToExistingPageTab(
+        browser: PulsarBrowser,
+        agenticSession: AgenticSession,
+    ): WebDriver? {
+        val tabs = runCatching { browser.listTabs() }.getOrNull()?.toList().orEmpty()
+        val chosen = choosePageTab(tabs) ?: return null
+
+        val b4Driver = toBrowser4Driver(browser.newDriverForTab(chosen))
+        agenticSession.bindDriver(b4Driver)
+        (browser as AbstractBrowser).frontDriver = b4Driver
+        return b4Driver
     }
 
     private fun markSessionActive(session: ManagedSession): ManagedSession {

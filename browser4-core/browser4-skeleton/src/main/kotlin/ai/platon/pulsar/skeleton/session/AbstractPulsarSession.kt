@@ -1,10 +1,13 @@
 package ai.platon.pulsar.skeleton.session
 
+import ai.platon.pulsar.api.AbstractBrowser
 import ai.platon.pulsar.api.Browser
 import ai.platon.pulsar.api.BrowserId
 import ai.platon.pulsar.api.BrowserProfile
 import ai.platon.pulsar.api.model.BrowserSettings
+import ai.platon.pulsar.api.model.BrowserTab
 import ai.platon.pulsar.chrome.Browser4WebDriver
+import ai.platon.pulsar.chrome.PulsarBrowser
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.AppPaths.WEB_CACHE_DIR
@@ -41,6 +44,27 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+
+/**
+ * Chooses the page tab to bind a driver to, shared by [AbstractPulsarSession]
+ * and the REST layer. Picks a tab whose URL starts with [preferUrl] (when
+ * given), else the first non-about:blank page tab, else the first page tab.
+ * [excludeTabId] removes a tab from consideration — used during driver-link
+ * recovery to skip the stale driver's own tab.
+ *
+ * Returns null when no candidate remains.
+ */
+fun choosePageTab(
+    tabs: List<BrowserTab>,
+    preferUrl: String? = null,
+    excludeTabId: String? = null,
+): BrowserTab? {
+    val pageTabs = tabs.filter { it.isPageType() && it.id != excludeTabId }
+    val preferred = preferUrl?.let { url -> pageTabs.firstOrNull { it.url?.startsWith(url) == true } }
+    return preferred
+        ?: pageTabs.firstOrNull { it.urlOrEmpty.equals("about:blank", ignoreCase = true).not() }
+        ?: pageTabs.firstOrNull()
+}
 
 /**
  * Created by Vincent on 18-1-17.
@@ -240,9 +264,20 @@ abstract class AbstractPulsarSession(
             // would silently start a fresh anonymous profile.
             val existingBrowser = boundBrowser
             if (existingBrowser != null) {
-                val driver = existingBrowser.newDriver() as PulsarWebDriver
-                val b4Driver = Browser4WebDriver.from(driver)
+                // Prefer binding to an existing page tab (e.g. the user's
+                // active tab after attach --cdp) instead of creating a
+                // new about:blank tab. Falls back to newDriver() when
+                // no existing page tab is available.
+                val driver = (existingBrowser as? PulsarBrowser)
+                    ?.let { pb ->
+                        val tabs = runCatching { pb.listTabs() }.getOrNull()?.toList().orEmpty()
+                        choosePageTab(tabs)?.let { pb.newDriverForTab(it) }
+                    }
+                    ?: existingBrowser.newDriver()
+                val pulsarDriver = driver as PulsarWebDriver
+                val b4Driver = Browser4WebDriver.from(pulsarDriver)
                 bindDriver(b4Driver)
+                (existingBrowser as? AbstractBrowser)?.frontDriver = b4Driver
                 return b4Driver
             }
 
