@@ -1,6 +1,6 @@
 {
   "name": "@browser4/extension",
-  "version": "0.0.1",
+  "version": "0.2.2",
   "description": "Browser4 Browser Extension",
   "private": true,
   "repository": {
