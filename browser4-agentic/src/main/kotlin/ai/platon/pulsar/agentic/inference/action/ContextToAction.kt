@@ -227,6 +227,13 @@ open class ContextToAction(
                 ),
                 maxIterations = toolLoopMaxIterations,
                 requestTokenLimiter = requestTokenLimiter,
+                // Per-LLM-call timeout (parity with the CLI engine): a hung
+                // provider call fails fast; long multi-tool rounds keep
+                // progressing instead of dying to a whole-loop budget.
+                inferenceTimeoutMs = conf.getLong("browser4.agent.llmInferenceTimeoutMs", 600_000L),
+                // Bound the main request's output deterministically.
+                maxOutputTokens = conf.getLong("browser4.agent.toolLoop.maxOutputTokens", 8_192L)
+                    .toInt().coerceIn(256, 65_536),
                 compressor = compressor,
                 pageViewDeduper = PageViewDeduper(
                     enabled = pageViewDedupEnabled,

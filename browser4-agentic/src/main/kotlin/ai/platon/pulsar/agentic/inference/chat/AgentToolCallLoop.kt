@@ -7,6 +7,7 @@ import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.external.BrowserChatModel
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
+import kotlinx.coroutines.withTimeout
 import dev.langchain4j.agent.tool.ToolExecutionRequest
 import dev.langchain4j.agent.tool.ToolSpecification as LangChain4jToolSpec
 import dev.langchain4j.data.message.AiMessage
@@ -47,6 +48,21 @@ class AgentToolCallLoop(
     private val coordinator: ToolExecutionCoordinator,
     private val maxIterations: Int = 40,
     private val requestTokenLimiter: RequestTokenLimiter = RequestTokenLimiter(),
+    /**
+     * Per-LLM-call timeout in milliseconds. `0` = no timeout (legacy
+     * behavior). Applied to EACH [model.langChainChat] round-trip — NOT to the
+     * whole [generate] loop — so a slow/hung provider call fails fast while
+     * long multi-round tool chains keep making progress. Callers that used to
+     * wrap the whole loop in `withTimeout` get the same per-call safety with
+     * the semantics fixed.
+     */
+    private val inferenceTimeoutMs: Long = 0L,
+    /**
+     * Explicit `maxOutputTokens` for the main model request. `null` leaves the
+     * provider default untouched; setting it bounds runaway output (e.g. long
+     * taskComplete reports) deterministically.
+     */
+    private val maxOutputTokens: Int? = null,
     private val compressor: ToolLoopCompressor? = null,
     /**
      * Web-context optimization: folds repeated page content (identical
@@ -115,6 +131,16 @@ class AgentToolCallLoop(
 
     /** Progressive disclosure state: grows as the model calls system.exposeTools. */
     private val exposedToolSpecs: MutableList<LangChain4jToolSpec> = toolSpecifications.toMutableList()
+
+    /**
+     * Snapshot of the currently exposed tool specifications.
+     *
+     * Callers that rebuild the loop every outer round (the CLI engine does)
+     * can carry the exposed set across rounds instead of resetting to the
+     * curated core — pass it back as [toolSpecifications] on the next round
+     * so `system.exposeTools` results survive past the round that made them.
+     */
+    fun exposedSpecsSnapshot(): List<LangChain4jToolSpec> = exposedToolSpecs.toList()
 
     private val allToolSpecsByName: Map<String, LangChain4jToolSpec> =
         allToolSpecifications.associateBy { it.name() }
@@ -188,13 +214,22 @@ class AgentToolCallLoop(
             // the caller discards the list.
             onBeforeGenerate(messages, exposedToolSpecs + metaSpecs)
 
-            val request = ChatRequest.builder()
+            val requestBuilder = ChatRequest.builder()
                 .messages(messages)
                 .toolSpecifications(exposedToolSpecs + metaSpecs)
-                .build()
+            // Explicit output cap (P3-7); null keeps the provider default.
+            this.maxOutputTokens?.let { requestBuilder.maxOutputTokens(it) }
+            val request = requestBuilder.build()
 
             response = try {
-                model.langChainChat(request, "cta")
+                // Per-call timeout: a hung provider call fails fast, while a
+                // long multi-tool round keeps progressing (P1-1).
+                val chat: suspend () -> ChatResponse = { model.langChainChat(request, "cta") }
+                if (inferenceTimeoutMs > 0) {
+                    withTimeout(inferenceTimeoutMs) { chat() }
+                } else {
+                    chat()
+                }
             } catch (e: Exception) {
                 // Provider-confirmed context-window overflow: recover by
                 // pruning + compacting, then retry the SAME request. Any other
@@ -262,11 +297,13 @@ class AgentToolCallLoop(
                 onToolDecorated(request, resultMessage, decorated)
                 messages.add(decorated)
                 // Meta tools are protocol plumbing, not task progress: keep
-                // them out of the overflow digest.
+                // them out of the overflow digest AND out of onToolExecuted,
+                // otherwise a listTools-only round would count as real work
+                // and bypass the caller's finish gate ("≥1 tool executed").
                 if (request.name() !in ToolDisclosureTools.META_NAMES) {
                     executedTools += request.name()
+                    onToolExecuted()
                 }
-                onToolExecuted()
             }
         }
 
@@ -358,7 +395,13 @@ class AgentToolCallLoop(
         /**
          * Loose detection of provider-confirmed context-window overflow across
          * the exception chain. Browser4 has no unified LLM error-code seam, so
-         * the check matches common provider error strings (case-insensitive).
+         * the check matches provider error strings (case-insensitive).
+         *
+         * Deliberately NARROW: only phrases tied to the model's context window
+         * match. Generic rate-limit terminology ("too many tokens", "token
+         * limit exceeded") is excluded — those errors are NOT recoverable by
+         * compaction and would only waste the retry budget on a meaningless
+         * compress+retry cycle.
          */
         fun isContextOverflowError(error: Throwable): Boolean {
             val haystack = buildString {
@@ -372,13 +415,21 @@ class AgentToolCallLoop(
         }
 
         private val CONTEXT_OVERFLOW_KEYWORDS = listOf(
-            "context window",
+            "context window exceeded",
+            "context window is exceeded",
+            "exceeds the context window",
+            "maximum context window",
+            "context window length",
+            "context window of",
             "context length",
             "context_length_exceeded",
+            "maximum context length",
+            "exceeds the context length",
             "maximum context",
             "exceeds the context",
-            "too many tokens",
-            "token limit exceeded",
+            "too many tokens in the context",
+            "input is longer than the model's maximum context",
+            "prompt is too long",
         )
     }
 }

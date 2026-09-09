@@ -194,6 +194,43 @@ internal fun buildCliEngineToolSet(
     return CliEngineToolSet(registry, specs, initialSpecs, disclosureSpecs, usedMode)
 }
 
+// ─── Per-round tool digest (P1-2) ──────────────────────────────────────────
+
+/** How many newest executed tools the per-round digest summarizes. */
+private const val ROUND_DIGEST_RESULTS = 6
+
+/** Hard cap on the whole per-round digest. */
+private const val ROUND_DIGEST_MAX_CHARS = 2_000
+
+/** One executed tool inside a CLI-engine round, for the continuation digest. */
+internal data class RoundToolRecord(
+    val name: String,
+    val resultText: String,
+)
+
+/**
+ * Bounded digest of what ONE outer round actually executed, fed back to the
+ * model in the next round's continuation message.
+ *
+ * The inner [AgentToolCallLoop] builds its own (local) message list, so tool
+ * calls and results die with the round; without this digest the model would
+ * re-execute tools it already ran. Keeps the newest [ROUND_DIGEST_RESULTS]
+ * records, first line only (<=200 chars), whole digest capped at
+ * [ROUND_DIGEST_MAX_CHARS].
+ *
+ * Pure logic — no IO — so it is unit-testable without an agent session.
+ */
+internal fun cliRoundToolDigest(records: List<RoundToolRecord>): String? {
+    if (records.isEmpty()) return null
+    val summaries = records.takeLast(ROUND_DIGEST_RESULTS).map { record ->
+        val firstLine = record.resultText.lineSequence().firstOrNull().orEmpty().trim().take(200)
+        "${record.name} -> $firstLine"
+    }
+    if (summaries.isEmpty()) return null
+    return "This round executed ${records.size} tool(s): " +
+        summaries.joinToString(" | ").take(ROUND_DIGEST_MAX_CHARS)
+}
+
 open class RobustBrowserAgent(
     session: AgenticSession, val maxSteps: Int = 100, config: AgentConfig = AgentConfig(maxSteps = maxSteps)
 ) : BasicBrowserAgent(session, config) {
@@ -759,7 +796,6 @@ open class RobustBrowserAgent(
             // memory tools undisclosed to the model.
             val taskId = context.sid
             agentMemory.currentTaskId = taskId
-            val loop = buildCliToolLoop(action.action, completionRef, toolExecutions)
             cliLoopTracer.logEvent("run.start", mapOf("instruction" to action.action))
             // Agent memory: observe the run and inject the recall section
             // (design §5 — static for the whole run, KV prefix preserved).
@@ -789,17 +825,37 @@ open class RobustBrowserAgent(
             //    report (the finish-gate's zero-tool guard still rejects
             //    fabricated completions).
             // 3. Pure text-only streak with no tools ever executed = stall.
+            //
+            // P1-2: the inner loop's tool calls/results die with its local
+            // message copy, so every round appends a bounded digest of what
+            // this round actually executed — the model keeps working FROM
+            // THAT POINT in the next round instead of re-executing tools.
+            // P2-3: system.exposeTools results are carried across rounds via
+            // [exposedSpecsThisRun], so the model never has to re-disclose.
+            var exposedSpecsThisRun: List<dev.langchain4j.agent.tool.ToolSpecification>? = null
             while (!isClosed && turn < maxTurns) {
                 val toolsBefore = toolExecutions.get()
+                // Per-round executed-tool records, populated by the loop's
+                // onToolResult callback and summarized into the continuation.
+                val roundToolRecords = mutableListOf<RoundToolRecord>()
                 // Working memory: re-inject the scratchpad as the tail message
                 // every round (replace-tail — all earlier prefixes stay intact
                 // for KV reuse, and the compressor never touches the tail).
                 val scratchpadText = agentMemory.scratchpad.render()
                 val roundMessages =
                     if (scratchpadText != null) messages + UserMessage.from(scratchpadText) else messages
-                val response = withTimeout(config.llmInferenceTimeoutMs.milliseconds) {
-                    loop.generate(roundMessages)
-                }
+                val loop = buildCliToolLoop(
+                    action.action, completionRef, toolExecutions,
+                    initialSpecsOverride = exposedSpecsThisRun,
+                    toolRecords = roundToolRecords,
+                )
+                // P1-1: the inference timeout now applies PER LLM CALL inside
+                // AgentToolCallLoop — NOT to the whole round. A round with many
+                // tool calls and long subprocess commands (b4.run up to 600s)
+                // must not be killed mid-progress by a single global budget.
+                val response = loop.generate(roundMessages)
+                // P2-3: keep whatever the model exposed on the next round.
+                exposedSpecsThisRun = loop.exposedSpecsSnapshot()
                 val completion = completionRef.get()
                 if (completion != null && completion.isDecidedComplete) {
                     return completeCliRun(completion, context)
@@ -835,6 +891,12 @@ open class RobustBrowserAgent(
                         break
                     }
                 }
+                val roundDigest = cliRoundToolDigest(roundToolRecords)
+                val continuation = if (roundDigest != null) {
+                    "$CLI_CONTINUE_NUDGE\n\n$roundDigest"
+                } else {
+                    CLI_CONTINUE_NUDGE
+                }
                 messages = when {
                     // Overflow: the inner loop's message list dies with the
                     // generate() call, so without this hand-off the model would
@@ -846,8 +908,13 @@ open class RobustBrowserAgent(
                         cliLoopTracer.logEvent("overflow", mapOf("modelError" to response.modelError!!))
                         messages + UserMessage.from(overflowContinuationMessage(response.modelError!!))
                     }
-                    text.isBlank() -> messages + UserMessage.from(CLI_CONTINUE_NUDGE)
-                    else -> messages + AiMessage.from(text) + UserMessage.from(CLI_CONTINUE_NUDGE)
+                    // Blank model text: keep the nudge-only append (a blank
+                    // AiMessage risks provider "content required" rejections;
+                    // consecutive UserMessages are accepted by the OpenAI/
+                    // DeepSeek-compatible APIs this engine targets, and the
+                    // text-only stall fuse still bounds the loop).
+                    text.isBlank() -> messages + UserMessage.from(continuation)
+                    else -> messages + AiMessage.from(text) + UserMessage.from(continuation)
                 }
                 turn++
             }
@@ -865,6 +932,22 @@ open class RobustBrowserAgent(
             agentMemory.consolidator?.schedule(context.sid)
             val actResult = buildFinalActResult(initContext.instruction, context, startTime, stopReason)
             return ResolveResult(context, actResult)
+        } catch (e: TimeoutCancellationException) {
+            // P1-1: a single LLM call exceeded the per-call inference timeout.
+            // This is NOT a user cancellation — surface it as a distinct
+            // failure reason so the task status says "inference timed out"
+            // instead of "cancelled" (the two have very different retry cues).
+            logger.warn("⛔ cli-agent.inference-timeout sid={} after {} ms: {}",
+                context.sid, config.llmInferenceTimeoutMs, e.message)
+            agentMemory.sink.failed(
+                context.sid, uuid.toString(),
+                "LLM inference timed out after ${config.llmInferenceTimeoutMs}ms", step = context.step,
+            )
+            agentMemory.consolidator?.schedule(context.sid)
+            val timeoutError = IllegalStateException(
+                "LLM inference timed out after ${config.llmInferenceTimeoutMs} ms", e,
+            )
+            return ResolveResult(context, ActResultHelper.failed(timeoutError, initContext.instruction))
         } catch (e: CancellationException) {
             logger.info(
                 "🛑 cli-agent.cancelled sid={} reason={}",
@@ -883,6 +966,16 @@ open class RobustBrowserAgent(
         instruction: String,
         completionRef: AtomicReference<ActionDescription?>,
         toolExecutions: AtomicInteger,
+        /**
+         * P2-3: tools exposed by the model in earlier rounds of the SAME run.
+         * When non-null it replaces the curated core as the initial set, so
+         * `system.exposeTools` results survive across outer rounds instead of
+         * being forgotten (the old code rebuilt the loop from the core set
+         * every round, forcing re-disclosure).
+         */
+        initialSpecsOverride: List<dev.langchain4j.agent.tool.ToolSpecification>? = null,
+        /** P1-2: per-round executed-tool records for the continuation digest. */
+        toolRecords: MutableList<RoundToolRecord> = mutableListOf(),
     ): AgentToolCallLoop {
         val conf = session.sessionConfig
         val initialToolSet = conf.get("browser4.agent.toolLoop.initialToolSet") ?: "core"
@@ -902,6 +995,7 @@ open class RobustBrowserAgent(
                 initialToolSet, toolSet.usedMode
             )
         }
+        val initialSpecs = initialSpecsOverride ?: toolSet.initialSpecs
         val taskCompleteName = ToolSpecificationConverter.toolName("system", "taskComplete")
         // One traceability ledger shared by compressor, deduper and loop
         // (compaction-traceability-design.md): references stay resolvable
@@ -913,12 +1007,12 @@ open class RobustBrowserAgent(
         )
         logger.info(
             "cli-agent tools exposed: {} initial (of {} CLI-domain, disclosure={}, mode='{}', profile={})",
-            toolSet.initialSpecs.size, toolSet.specs.size, toolSet.disclosureSpecs.isNotEmpty(),
+            initialSpecs.size, toolSet.specs.size, toolSet.disclosureSpecs.isNotEmpty(),
             toolSet.usedMode, if (codingMode) "coding" else "browsing",
         )
         return AgentToolCallLoop(
             model = cta.chatModel,
-            toolSpecifications = toolSet.initialSpecs,
+            toolSpecifications = initialSpecs,
             allToolSpecifications = toolSet.disclosureSpecs,
             disclosureListingLimit = conf.getLong("browser4.agent.toolLoop.toolDisclosureListingLimit", 200L)
                 .toInt().coerceIn(10, 1_000),
@@ -929,6 +1023,14 @@ open class RobustBrowserAgent(
             // (the model resumes from the executed-tools digest).
             maxIterations = config.toolLoopMaxIterations.coerceAtLeast(40),
             requestTokenLimiter = cta.requestTokenLimiter,
+            // P1-1: per-LLM-call timeout — a long multi-tool round keeps
+            // progressing; a hung provider call fails fast instead of
+            // killing the whole round mid-work.
+            inferenceTimeoutMs = config.llmInferenceTimeoutMs,
+            // P3-7: bound the main request's output deterministically instead
+            // of relying on provider defaults.
+            maxOutputTokens = conf.getLong("browser4.agent.toolLoop.maxOutputTokens", 8_192L)
+                .toInt().coerceIn(256, 65_536),
             // One shared traceability ledger across compressor, deduper and
             // loop (compaction-traceability-design.md).
             compressor = cliToolLoopCompressor(toolSet.specs, compactionLedger),
@@ -946,6 +1048,11 @@ open class RobustBrowserAgent(
             onModelResponse = { seq, response -> cliLoopTracer.logResponse(seq, response) },
             onToolResult = { req, result, durationMs ->
                 cliLoopTracer.logTool(req, result, durationMs)
+                // P1-2: record executed tools (meta plumbing excluded — it is
+                // neither task progress nor useful context for the model).
+                if (req.name() !in ToolDisclosureTools.META_NAMES) {
+                    toolRecords += RoundToolRecord(req.name(), result.text())
+                }
                 // Agent memory: every executed tool becomes a ToolExecuted
                 // event (sanitized at the sink boundary).
                 val memory = agentMemory
@@ -1135,6 +1242,30 @@ open class RobustBrowserAgent(
                 jsonlWriter.writeTo(payload, runDir.resolve("cli-usage.jsonl"))
             } catch (e: Exception) {
                 logger.warn("Failed to write CLI usage trace: {}", e.message)
+            }
+        }
+
+        /**
+         * Persist the usage of an auxiliary (compaction-summarization) model
+         * call to `cli-usage.jsonl` — paired with the main-loop lines by
+         * category so token accounting covers compaction too (P2-5).
+         */
+        fun logCompactionUsage(response: ChatResponse) {
+            if (!enabled) return
+            try {
+                val usage = response.tokenUsage()
+                val payload = mapOf(
+                    "timestamp" to AppPaths.fromNow(),
+                    "requestSeq" to 0,
+                    "category" to "compaction",
+                    "inputTokens" to usage?.inputTokenCount(),
+                    "outputTokens" to usage?.outputTokenCount(),
+                    "totalTokens" to usage?.totalTokenCount(),
+                    "finishReason" to response.finishReason()?.name,
+                )
+                jsonlWriter.writeTo(payload, runDir.resolve("cli-usage.jsonl"))
+            } catch (e: Exception) {
+                logger.warn("Failed to write CLI compaction usage trace: {}", e.message)
             }
         }
 
@@ -1386,12 +1517,20 @@ open class RobustBrowserAgent(
         prefix: List<ChatMessage>,
         toolSpecifications: List<dev.langchain4j.agent.tool.ToolSpecification>,
     ): String {
+        // P2-5: the compaction summary cap is configurable like the
+        // ContextToAction path, not hardcoded.
+        val maxTokens = session.sessionConfig
+            .getLong("browser4.agent.toolLoop.summarizationMaxTokens", 2_048L)
+            .toInt().coerceIn(128, 16_384)
         val request = ChatRequest.builder()
             .messages(prefix + UserMessage.from(ToolLoopCompressor.COMPACTION_INSTRUCTION))
             .toolSpecifications(toolSpecifications)
-            .maxOutputTokens(2_048)
+            .maxOutputTokens(maxTokens)
             .build()
         val response = cta.chatModel.langChainChat(request, "cta-compaction")
+        // P2-5: record the compaction call's usage so token accounting is not
+        // blind to the auxiliary summarization requests.
+        cliLoopTracer.logCompactionUsage(response)
         return response.aiMessage().text() ?: ""
     }
 

@@ -17,9 +17,12 @@ import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -426,6 +429,165 @@ class AgentToolCallLoopTest {
 
         org.junit.jupiter.api.Assertions.assertEquals(2, executions.get(),
             "the callback must fire for every executed tool (feeds the stall fuse)")
+    }
+
+    @Test
+    @DisplayName("meta tools (listTools/exposeTools) do NOT count as executed work")
+    fun metaToolsDoNotCountAsExecutedWork() = runBlocking {
+        val model = mockk<BrowserChatModel>()
+        val coordinator = mockk<ToolExecutionCoordinator>()
+        val callList = AiMessage.from(
+            "listing",
+            listOf(toolRequest("c1", name = ToolDisclosureTools.LIST_TOOLS_NAME))
+        )
+        val finalMessage = AiMessage.from("done")
+        coEvery { model.langChainChat(any<ChatRequest>(), any()) } returnsMany listOf(
+            chatResponseOf(callList),
+            chatResponseOf(finalMessage),
+        )
+        every { coordinator.execute(any()) } returns
+            ToolExecutionResultMessage.from("unexpected", "unexpected", "coordinator must not run meta tools")
+
+        val all = ToolSpecificationConverter.toToolSpecifications(listOf(ToolSpec("coding", "read")))
+        val executions = AtomicInteger()
+        val loop = AgentToolCallLoop(
+            model = model,
+            toolSpecifications = emptyList(),
+            coordinator = coordinator,
+            allToolSpecifications = all,
+            maxIterations = 3,
+            onToolExecuted = { executions.incrementAndGet() },
+        )
+
+        val response = loop.generate(listOf(UserMessage.from("do it")))
+
+        verify(exactly = 0) { coordinator.execute(any()) }
+        assertEquals(0, executions.get(),
+            "a listTools-only round is protocol plumbing, not task progress — " +
+                "counting it would bypass the caller's finish gate")
+        assertEquals(null, response.modelError, "the loop must end normally after the meta round")
+    }
+
+    @Test
+    @DisplayName("inferenceTimeoutMs fails a hung LLM call fast while leaving the round budget intact")
+    fun perCallTimeoutKillsHungModelCall() {
+        val model = mockk<BrowserChatModel>()
+        val coordinator = mockk<ToolExecutionCoordinator>()
+        coEvery { model.langChainChat(any<ChatRequest>(), any()) } coAnswers {
+            delay(500)
+            chatResponseOf(AiMessage.from("late"))
+        }
+
+        val loop = AgentToolCallLoop(
+            model = model,
+            toolSpecifications = emptyList(),
+            coordinator = coordinator,
+            maxIterations = 10,
+            inferenceTimeoutMs = 50,
+        )
+
+        val error = assertThrows(TimeoutCancellationException::class.java) {
+            runBlocking { loop.generate(listOf(UserMessage.from("do it"))) }
+        }
+        assertTrue(error.message?.contains("Timed out") == true, error.message)
+    }
+
+    @Test
+    @DisplayName("zero inferenceTimeoutMs keeps the legacy unbounded behavior")
+    fun zeroInferenceTimeoutKeepsUnboundedBehavior() = runBlocking {
+        val model = mockk<BrowserChatModel>()
+        val coordinator = mockk<ToolExecutionCoordinator>()
+        coEvery { model.langChainChat(any<ChatRequest>(), any()) } returns chatResponseOf(AiMessage.from("done"))
+
+        val response = AgentToolCallLoop(
+            model = model,
+            toolSpecifications = emptyList(),
+            coordinator = coordinator,
+            maxIterations = 1,
+            inferenceTimeoutMs = 0,
+        ).generate(listOf(UserMessage.from("do it")))
+
+        assertEquals("done", response.content)
+    }
+
+    @Test
+    @DisplayName("maxOutputTokens is applied to every model request")
+    fun maxOutputTokensAppliedToRequest() = runBlocking {
+        val model = mockk<BrowserChatModel>()
+        val coordinator = mockk<ToolExecutionCoordinator>()
+        val requests = mutableListOf<ChatRequest>()
+        coEvery { model.langChainChat(any<ChatRequest>(), any()) } answers {
+            requests += firstArg<ChatRequest>()
+            chatResponseOf(AiMessage.from("done"))
+        }
+
+        val loop = AgentToolCallLoop(
+            model = model,
+            toolSpecifications = emptyList(),
+            coordinator = coordinator,
+            maxIterations = 1,
+            maxOutputTokens = 4096,
+        )
+        loop.generate(listOf(UserMessage.from("do it")))
+
+        assertEquals(4096, requests.single().maxOutputTokens(),
+            "the request must carry the explicit output cap")
+    }
+
+    @Test
+    @DisplayName("exposedSpecsSnapshot carries disclosure results for the next round")
+    fun exposedSpecsSnapshotCarriesDisclosure() = runBlocking {
+        val model = mockk<BrowserChatModel>()
+        val coordinator = mockk<ToolExecutionCoordinator>()
+        val callExpose = AiMessage.from(
+            "exposing",
+            listOf(toolRequest(
+                "c1", name = ToolDisclosureTools.EXPOSE_TOOLS_NAME,
+                arguments = """{"toolNames":["coding_read"]}""",
+            ))
+        )
+        coEvery { model.langChainChat(any<ChatRequest>(), any()) } returnsMany listOf(
+            chatResponseOf(callExpose),
+            chatResponseOf(AiMessage.from("done")),
+        )
+
+        val all = ToolSpecificationConverter.toToolSpecifications(listOf(ToolSpec("coding", "read")))
+        val loop = AgentToolCallLoop(
+            model = model,
+            toolSpecifications = emptyList(),
+            coordinator = coordinator,
+            allToolSpecifications = all,
+            maxIterations = 2,
+        )
+
+        loop.generate(listOf(UserMessage.from("do it")))
+
+        val exposedNames = loop.exposedSpecsSnapshot().map { it.name() }
+        assertTrue(exposedNames.contains(ToolSpecificationConverter.toolName("coding", "read")),
+            "exposeTools must be reflected in the snapshot: $exposedNames")
+    }
+
+    @Test
+    @DisplayName("isContextOverflowError accepts context-window phrases and rejects rate-limit phrases")
+    fun isContextOverflowErrorMatchesWindowOnly() {
+        assertTrue(AgentToolCallLoop.isContextOverflowError(RuntimeException(
+            "This model's maximum context length is 131072 tokens. Please reduce the length of the messages."
+        )), "context-window phrase must match")
+        assertTrue(AgentToolCallLoop.isContextOverflowError(RuntimeException(
+            "context_length_exceeded: context too long"
+        )), "provider error code must match")
+        assertTrue(AgentToolCallLoop.isContextOverflowError(RuntimeException(
+            "prompt is too long: 12345 tokens > 8192 maximum"
+        )), "long-prompt phrase must match")
+        assertFalse(AgentToolCallLoop.isContextOverflowError(RuntimeException(
+            "rate limit reached: token limit exceeded"
+        )), "rate-limit phrase must NOT match (compaction cannot fix it)")
+        assertFalse(AgentToolCallLoop.isContextOverflowError(RuntimeException(
+            "429 too many tokens per minute"
+        )), "rate-limit phrase must NOT match (compaction cannot fix it)")
+        assertTrue(AgentToolCallLoop.isContextOverflowError(IllegalStateException("boom",
+            RuntimeException("inner context window exceeded"))),
+            "cause chain must be walked")
     }
 
     @Test
