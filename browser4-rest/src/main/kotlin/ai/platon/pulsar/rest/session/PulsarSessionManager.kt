@@ -1,5 +1,7 @@
 package ai.platon.pulsar.rest.session
 
+import ai.platon.pulsar.api.BrowserId
+import ai.platon.pulsar.api.WebDriver
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarBrowser
 import ai.platon.pulsar.chrome.PulsarWebDriver
@@ -14,6 +16,7 @@ import ai.platon.pulsar.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.common.B4Constants.PROFILE_MODE_CAPABILITY
 import ai.platon.pulsar.common.B4Constants.SESSION_ID_CAPABILITY
 import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_ID
+import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.context.AbstractAgenticContext
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.agentic.context.AgenticContexts
@@ -741,7 +744,10 @@ class PulsarSessionManager(
      */
     fun onExtensionConnected(sessionId: String, sender: ExtensionMessageSender, ua: String? = null) {
         val pending = pendingExtensionConnections.remove(sessionId)
-            ?: throw IllegalStateException("No pending extension connection for session $sessionId")
+        val isReconnect = pending == null && extensionSessionIds.contains(sessionId)
+        if (pending == null && !isReconnect) {
+            throw IllegalStateException("No pending extension connection for session $sessionId")
+        }
 
         val managedSession = sessions[sessionId]
             ?: throw IllegalStateException("Session $sessionId not found")
@@ -753,14 +759,22 @@ class PulsarSessionManager(
             sessionId, managedSession.attachChannel ?: "default",
             identity.name ?: identity.family, identity.version ?: "", identity.rawUa ?: "n/a"
         )
+        if (isReconnect) {
+            logger.info("Extension reconnected to registered session {} — rebinding relay browser", sessionId)
+        }
 
         // Create the ExtensionChromeService that bridges the WebSocket
         // relay protocol to the internal ChromeService abstraction.
         val extChrome = ExtensionChromeService(sender, sessionId)
 
         // Wrap it as a PulsarBrowser so the session can use it.
+        // The extension browser is an EXTERNAL browser: it is not launched by this JVM and
+        // owns its user data dir on the user's machine. Name it with a deterministic
+        // external identity keyed by the session id, so every reconnect of the same session
+        // (and every restart with the same session id) refers to the same browser identity —
+        // no random disposable profile is ever fabricated, and no local directory is created.
         val browser = PulsarBrowser(
-            id = ai.platon.pulsar.api.BrowserId.RANDOM_TEMP,
+            id = BrowserId.external(sessionId),
             chrome = extChrome,
             settings = BrowserSettings(),
             launcher = null
@@ -776,7 +790,21 @@ class PulsarSessionManager(
         // extension.initialized event is delivered on the same Jetty thread that
         // calls afterConnectionEstablished, so blocking here would deadlock event
         // delivery.
-        val agenticSession = managedSession.agenticSession
+        bindExtensionDriver(sessionId, managedSession.agenticSession, browser)
+
+        logger.info(
+            "Extension connected and bound to session {} (reconnect={}) | elapsed={}ms",
+            sessionId, isReconnect,
+            if (pending != null) System.currentTimeMillis() - pending.createdAt else 0L
+        )
+    }
+
+    /**
+     * Binds a driver to the extension browser for the given agentic session in
+     * a background thread, preferring a non-about:blank page tab. Both the
+     * initial connect and the reconnect paths share this logic.
+     */
+    private fun bindExtensionDriver(sessionId: String, agenticSession: AgenticSession, browser: PulsarBrowser) {
         Thread {
             try {
                 val deadline = System.currentTimeMillis() + 15_000
@@ -831,11 +859,6 @@ class PulsarSessionManager(
             isDaemon = true
             start()
         }
-
-        logger.info(
-            "Extension connected and bound to session {} | elapsed={}ms",
-            sessionId, System.currentTimeMillis() - pending.createdAt
-        )
     }
 
     /**

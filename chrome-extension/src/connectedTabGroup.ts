@@ -76,6 +76,53 @@ export class ConnectedTabGroup {
     return [...this._groupTabIds];
   }
 
+  /**
+   * Heartbeats every attached tab. Sending a lightweight CDP command keeps
+   * the tab's renderer "busy" so Chromium's Memory Saver does not freeze or
+   * discard an idle controlled tab (a discarded tab stops answering CDP and
+   * only a close + recreate recovers it). When a command fails — typically
+   * because the debugger was dropped by an SPA navigation — try to re-attach
+   * the debugger once.
+   */
+  async heartbeat(): Promise<void> {
+    for (const tabId of [...this._connection.attachedTabs]) {
+      try {
+        await chrome.debugger.sendCommand(
+          { tabId },
+          'Runtime.evaluate',
+          { expression: '1', silent: true, returnByValue: true },
+        );
+      } catch (error) {
+        debugLog('Heartbeat failed for tab', tabId, ':', (error as Error)?.message);
+        await this._reviveTab(tabId);
+      }
+    }
+  }
+
+  // Best-effort re-attach for a tab whose debugger got dropped (SPA
+  // navigation, renderer swap). Does not steal focus from the user.
+  private async _reviveTab(tabId: number): Promise<void> {
+    try {
+      await chrome.debugger.detach({ tabId }).catch(() => {});
+      await chrome.debugger.attach({ tabId }, '1.3');
+      await chrome.debugger.sendCommand(
+        { tabId },
+        'Runtime.evaluate',
+        { expression: '1', silent: true, returnByValue: true },
+      );
+      if (!this._connection.attachedTabs.has(tabId)) {
+        const tab = await (chrome.tabs as any).get?.(tabId).catch(() => undefined);
+        if (tab)
+          this._connection.attachTab(tab);
+      }
+      debugLog('Revived tab', tabId);
+    } catch (error) {
+      // Tab is likely discarded or gone; leave cleanup to the backend
+      // (it observes chrome.debugger.onDetach) and the user.
+      debugLog('Failed to revive tab', tabId, ':', (error as Error)?.message);
+    }
+  }
+
   close(reason: string): void {
     this._connection.close(reason);
   }

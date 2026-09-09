@@ -104,11 +104,11 @@ abstract class AbstractPulsarSession(
          * profile the legacy `launch(mode)` path would have chosen.
          */
         internal fun browserIdFor(mode: BrowserProfileMode): BrowserId = when (mode) {
-            BrowserProfileMode.SYSTEM_DEFAULT -> BrowserId.SYSTEM_DEFAULT
-            BrowserProfileMode.DEFAULT -> BrowserId.DEFAULT
-            BrowserProfileMode.PROTOTYPE -> BrowserId.PROTOTYPE
-            BrowserProfileMode.SEQUENTIAL -> BrowserId.NEXT_SEQUENTIAL
-            BrowserProfileMode.TEMPORARY -> BrowserId.RANDOM_TEMP
+            BrowserProfileMode.SYSTEM_DEFAULT -> BrowserId.createSystemDefault()
+            BrowserProfileMode.DEFAULT -> BrowserId.createDefault()
+            BrowserProfileMode.PROTOTYPE -> BrowserId.createPrototype()
+            BrowserProfileMode.SEQUENTIAL -> BrowserId.createNextSequential()
+            BrowserProfileMode.TEMPORARY -> BrowserId.createRandomTemp()
         }
     }
 

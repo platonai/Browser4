@@ -59,6 +59,11 @@ export class RelayConnection {
     return this._attachedTabs;
   }
 
+  /** True while the relay WebSocket is open and usable. */
+  get isOpen(): boolean {
+    return this._ws.readyState === WebSocket.OPEN;
+  }
+
   constructor(ws: WebSocket) {
     this._ws = ws;
     const context: RelayContext = {

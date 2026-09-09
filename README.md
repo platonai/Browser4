@@ -61,10 +61,10 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 
 ## Quick Start
 
-Paste the following instruction to your favorite AI agent like claude, codex, workbuddy or openclaw and run it:
+Paste the following instruction to your favorite AI agent like dsh, claude, codex, workbuddy or openclaw and run it:
 
 ```
-Read https://browser4.io/SKILL.md and install browser4-cli (if not installed) for browser automation to perform the following task:
+Read https://browser4.io/SKILL.md, install or upgrade browser4-cli for browser automation, perform the following task:
 
 1. Open the browser in headed mode (`open --headed`) so the window is visible — this is a human-facing demo
 2. go to amazon.com
