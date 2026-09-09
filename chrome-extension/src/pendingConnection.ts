@@ -61,7 +61,7 @@ export class PendingConnections {
   }
 }
 
-async function openRelayConnection(mcpRelayUrl: string): Promise<RelayConnection> {
+export async function openRelayConnection(mcpRelayUrl: string): Promise<RelayConnection> {
   let socket: WebSocket | undefined;
   try {
     socket = new WebSocket(mcpRelayUrl);
