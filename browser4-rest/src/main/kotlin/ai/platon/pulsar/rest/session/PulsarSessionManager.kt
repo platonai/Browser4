@@ -583,10 +583,17 @@ class PulsarSessionManager(
      */
     fun onExtensionConnected(sessionId: String, sender: ExtensionMessageSender) {
         val pending = pendingExtensionConnections.remove(sessionId)
-            ?: throw IllegalStateException("No pending extension connection for session $sessionId")
+        val isReconnect = pending == null && extensionSessionIds.contains(sessionId)
+        if (pending == null && !isReconnect) {
+            throw IllegalStateException("No pending extension connection for session $sessionId")
+        }
 
         val managedSession = sessions[sessionId]
             ?: throw IllegalStateException("Session $sessionId not found")
+
+        if (isReconnect) {
+            logger.info("Extension reconnected to registered session {} — rebinding relay browser", sessionId)
+        }
 
         // Create the ExtensionChromeService that bridges the WebSocket
         // relay protocol to the internal ChromeService abstraction.
@@ -615,7 +622,21 @@ class PulsarSessionManager(
         // extension.initialized event is delivered on the same Jetty thread that
         // calls afterConnectionEstablished, so blocking here would deadlock event
         // delivery.
-        val agenticSession = managedSession.agenticSession
+        bindExtensionDriver(sessionId, managedSession.agenticSession, browser)
+
+        logger.info(
+            "Extension connected and bound to session {} (reconnect={}) | elapsed={}ms",
+            sessionId, isReconnect,
+            if (pending != null) System.currentTimeMillis() - pending.createdAt else 0L
+        )
+    }
+
+    /**
+     * Binds a driver to the extension browser for the given agentic session in
+     * a background thread, preferring a non-about:blank page tab. Both the
+     * initial connect and the reconnect paths share this logic.
+     */
+    private fun bindExtensionDriver(sessionId: String, agenticSession: AgenticSession, browser: PulsarBrowser) {
         Thread {
             try {
                 val deadline = System.currentTimeMillis() + 15_000
@@ -661,11 +682,6 @@ class PulsarSessionManager(
             isDaemon = true
             start()
         }
-
-        logger.info(
-            "Extension connected and bound to session {} | elapsed={}ms",
-            sessionId, System.currentTimeMillis() - pending.createdAt
-        )
     }
 
     /**

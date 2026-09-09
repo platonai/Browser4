@@ -1087,6 +1087,51 @@ where
     let state = require_session(session_name)?;
     let session_id = get_session_id(&state)?.to_string();
 
+    // Extension-attached sessions can lose their WebSocket without any command
+    // erroring (the relay answers stale commands with null results instead of
+    // transport errors).  Probe liveness up front and transparently reconnect
+    // so workflows keep running instead of operating on a dead session.
+    if state.kind == crate::state::SessionKind::ExtensionAttached {
+        let ready = call_tool(
+            client,
+            base_url,
+            "check_session_ready",
+            json!({ "sessionId": session_id }),
+        )
+        .await
+        .ok()
+        .and_then(|r| serde_json::from_str::<Value>(&r).ok())
+        .map(|v| {
+            let r = v.get("ready").and_then(|x| x.as_bool()).unwrap_or(false);
+            let h = v.get("healthy").and_then(|x| x.as_bool()).unwrap_or(false);
+            r && h
+        })
+        .unwrap_or(false);
+        if !ready {
+            cli_println!(
+                "Detected stale extension session {} — attempting automatic reconnect...",
+                session_id
+            );
+            let channel = state.browser_channel.clone();
+            if let Ok(new_id) =
+                auto_reattach_extension(client, base_url, session_name, channel.as_deref()).await
+            {
+                let mut refreshed = read_state(None, session_name);
+                refreshed.session_id = Some(new_id.clone());
+                refreshed.kind = crate::state::SessionKind::ExtensionAttached;
+                refreshed.is_attached = true;
+                refreshed.attach_type = Some("extension".to_string());
+                refreshed.session_name = session_name.map(|s| s.to_string());
+                let _ = write_state(&refreshed, None, session_name);
+                cli_println!(
+                    "Reconnected extension session as {} — resuming command.",
+                    new_id
+                );
+                return action(new_id).await;
+            }
+        }
+    }
+
     match action(session_id.clone()).await {
         Ok(result) => Ok(result),
         Err(err) => {
@@ -1316,28 +1361,42 @@ async fn get_or_create_navigation_session(
                 );
                 new_id
             } else {
-                let attach_cmd = if state.attach_type.as_deref() == Some("extension") {
-                    "attach --extension"
-                } else {
-                    "attach --cdp"
-                };
-                let mut msg = format!(
-                    "Attached session {} is no longer healthy. \
-                     The browser or extension may have disconnected.\n\
-                     Re-run `{}` to reconnect, or \
-                     `close` / `close-all` to clear this session state.",
-                    attached_id, attach_cmd
-                );
-                // Add chrome:// page hint for extension sessions
-                if state.attach_type.as_deref() == Some("extension") {
-                    msg.push_str(
-                        "\n\nNote: Navigating to chrome:// internal pages \
-                         (chrome://version, chrome://settings, etc.) may \
-                         cause the extension connection to drop. After such \
-                         navigation, re-attach with `attach --extension`.",
+                // Extension-attached session went stale (service-worker
+                // restart, transient WebSocket drop).  Try to reconnect
+                // transparently so the current command keeps going instead of
+                // failing — multi-command workflows stay alive.
+                if state.kind == crate::state::SessionKind::ExtensionAttached {
+                    cli_println!(
+                        "Detected stale extension session {} — attempting automatic reconnect...",
+                        attached_id
                     );
+                    let channel = state.browser_channel.clone();
+                    if let Ok(new_id) = auto_reattach_extension(
+                        client,
+                        base_url,
+                        session_name,
+                        channel.as_deref(),
+                    )
+                    .await
+                    {
+                        let mut refreshed = read_state(None, session_name);
+                        refreshed.session_id = Some(new_id.clone());
+                        refreshed.kind = crate::state::SessionKind::ExtensionAttached;
+                        refreshed.is_attached = true;
+                        refreshed.attach_type = Some("extension".to_string());
+                        refreshed.session_name = session_name.map(|s| s.to_string());
+                        let _ = write_state(&refreshed, None, session_name);
+                        cli_println!(
+                            "Reconnected extension session as {} — resuming command.",
+                            new_id
+                        );
+                        new_id
+                    } else {
+                        return Err(stale_attach_message(&state, attached_id));
+                    }
+                } else {
+                    return Err(stale_attach_message(&state, attached_id));
                 }
-                return Err(msg);
             }
         } else {
             return Err(
@@ -1587,6 +1646,235 @@ fn resolve_cdp_params_file(file_path: &str) -> Result<Option<String>, CliError> 
 /// Extensions installed from the Web Store into Edge use the same ID.
 const BROWSER4_EXTENSION_ID: &str = "jdcmdidbgjeebbhkoepjgifeibipfimi";
 
+/// Resolves the extension ID used to open the connect page.
+///
+/// Priority:
+///   1. `BROWSER4_EXTENSION_ID` environment variable (explicit override).
+///   2. A locally loaded ("unpacked", developer-mode) Browser4 Extension
+///      found in the browser's Preferences — unpacked extensions get a
+///      path-derived ID that differs from the Web Store listing.
+///   3. The published store ID ([BROWSER4_EXTENSION_ID]).
+fn resolve_browser4_extension_id(channel: Option<&str>) -> String {
+    if let Ok(id) = std::env::var("BROWSER4_EXTENSION_ID") {
+        let id = id.trim().to_string();
+        if id.len() == 32 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()) {
+            return id;
+        }
+    }
+    if let Some(id) = detect_unpacked_extension_id(channel) {
+        return id;
+    }
+    BROWSER4_EXTENSION_ID.to_string()
+}
+
+/// Scans browser user-data directories for a dev-mode ("unpacked") Browser4
+/// Extension and returns its ID. Unpacked extensions record their load path
+/// in `extensions.settings.<id>.path` of the profile's Preferences (or the
+/// encrypted variant, Secure Preferences). The entry is verified against the
+/// extension's on-disk manifest because the preferences copy of `manifest`
+/// is not populated for locally loaded extensions.
+fn detect_unpacked_extension_id(channel: Option<&str>) -> Option<String> {
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            let base = std::path::PathBuf::from(local);
+            roots.push(base.join("Microsoft").join("Edge").join("User Data"));
+            roots.push(base.join("Google").join("Chrome").join("User Data"));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            let base = std::path::PathBuf::from(home)
+                .join("Library")
+                .join("Application Support");
+            roots.push(base.join("Microsoft Edge"));
+            roots.push(base.join("Google").join("Chrome"));
+        }
+    }
+    #[cfg(all(target_os = "linux", not(target_os = "macos")))]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            let base = std::path::PathBuf::from(home).join(".config");
+            roots.push(base.join("microsoft-edge"));
+            roots.push(base.join("google-chrome"));
+        }
+    }
+
+    if is_edge_channel(channel) {
+        roots.rotate_left(1);
+    }
+
+    for root in roots {
+        if !root.is_dir() {
+            continue;
+        }
+        let mut profiles: Vec<std::path::PathBuf> = vec![root.join("Default")];
+        if let Ok(entries) = std::fs::read_dir(&root) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with("Profile ") && entry.path().is_dir() {
+                    profiles.push(entry.path());
+                }
+            }
+        }
+        for profile in profiles {
+            for prefs_file in ["Secure Preferences", "Preferences"] {
+                let preferences = profile.join(prefs_file);
+                let Ok(text) = std::fs::read_to_string(&preferences) else {
+                    continue;
+                };
+                let Ok(json) = serde_json::from_str::<Value>(&text) else {
+                    continue;
+                };
+                let Some(settings) = json
+                    .get("extensions")
+                    .and_then(|v| v.get("settings"))
+                    .and_then(|v| v.as_object())
+                else {
+                    continue;
+                };
+                for (id, meta) in settings {
+                    let Some(path_str) = meta.get("path").and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    if path_str.is_empty() || id.len() != 32 {
+                        continue;
+                    }
+                    let path = std::path::PathBuf::from(path_str);
+                    if !path.is_absolute() || !path.is_dir() {
+                        continue;
+                    }
+                    let manifest_ok = std::fs::read_to_string(path.join("manifest.json"))
+                        .ok()
+                        .and_then(|m| serde_json::from_str::<Value>(&m).ok())
+                        .and_then(|m| {
+                            m.get("name")
+                                .and_then(|v| v.as_str())
+                                .map(|n| n == "Browser4 Extension")
+                        })
+                        .unwrap_or(false);
+                    if manifest_ok {
+                        return Some(id.clone());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Error message shown to the user when an attached session is stale and
+/// automatic reconnect is not possible.
+fn stale_attach_message(state: &CliState, attached_id: &str) -> String {
+    let attach_cmd = if state.kind == crate::state::SessionKind::ExtensionAttached {
+        "attach --extension"
+    } else {
+        "attach --cdp"
+    };
+    let mut msg = format!(
+        "Attached session {} is no longer healthy. \
+         The browser or extension may have disconnected.\n\
+         Re-run `{}` to reconnect, or \
+         `close` / `close-all` to clear this session state.",
+        attached_id, attach_cmd
+    );
+    // Add chrome:// page hint for extension sessions
+    if state.kind == crate::state::SessionKind::ExtensionAttached {
+        msg.push_str(
+            "\n\nNote: Navigating to chrome:// internal pages \
+             (chrome://version, chrome://settings, etc.) may \
+             cause the extension connection to drop. After such \
+             navigation, re-attach with `attach --extension`.",
+        );
+    }
+    msg
+}
+
+/// Transparently re-establishes an extension-attached session after it went
+/// stale (service-worker restart, transient WebSocket drop).  Opens the
+/// connect page and polls until the extension reconnects; returns the new
+/// session id on success.
+async fn auto_reattach_extension(
+    client: &Client,
+    base_url: &str,
+    _session_name: Option<&str>,
+    channel: Option<&str>,
+) -> Result<String, String> {
+    let mut attach_params = json!({ "extension": true });
+    if let Some(ch) = channel {
+        attach_params["channel"] = json!(ch);
+    }
+    let result = call_tool(client, base_url, "attach_browser", attach_params)
+        .await
+        .map_err(|e| format!("attach_browser failed: {e}"))?;
+    let parsed = serde_json::from_str::<Value>(&result)
+        .map_err(|e| format!("Failed to parse attach_browser response: {e}"))?;
+    let session_id = parsed
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("attach_browser response missing sessionId: {}", &result))?
+        .to_string();
+    let ws_endpoint = parsed
+        .get("wsEndpoint")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "attach_browser response missing wsEndpoint".to_string())?
+        .to_string();
+
+    let client_info = json!({"name": "browser4-cli"}).to_string();
+    let client_encoded = urlencoding::encode(&client_info);
+    let ws_encoded = urlencoding::encode(&ws_endpoint);
+    let mut connect_url = format!(
+        "chrome-extension://{}/connect.html?mcpRelayUrl={}&client={}",
+        resolve_browser4_extension_id(channel),
+        ws_encoded,
+        client_encoded,
+    );
+    connect_url.push_str("&newTab=true");
+    if let Ok(token) = std::env::var("BROWSER4_EXTENSION_TOKEN") {
+        let token = token.trim().to_string();
+        if !token.is_empty() {
+            connect_url.push_str("&token=");
+            connect_url.push_str(&urlencoding::encode(&token));
+        }
+    }
+    let _ = open_url_in_browser(&connect_url, channel);
+
+    let poll_start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(30);
+    loop {
+        if poll_start.elapsed() >= timeout {
+            return Err(format!(
+                "Timed out waiting for extension to reconnect (session {})",
+                session_id
+            ));
+        }
+        let ready_params = json!({ "sessionId": &session_id });
+        if let Ok(ready_result) =
+            call_tool(client, base_url, "check_session_ready", ready_params).await
+        {
+            let ready_parsed = serde_json::from_str::<Value>(&ready_result).ok();
+            let ready = ready_parsed
+                .as_ref()
+                .and_then(|v| v.get("ready"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let healthy = ready_parsed
+                .as_ref()
+                .and_then(|v| v.get("healthy"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if ready && healthy {
+                return Ok(session_id);
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
 async fn handle_attach(
     client: &Client,
     base_url: &str,
@@ -1718,7 +2006,7 @@ async fn handle_attach(
         let ws_encoded = urlencoding::encode(&ws_endpoint);
         let mut connect_url = format!(
             "chrome-extension://{}/connect.html?mcpRelayUrl={}&client={}",
-            BROWSER4_EXTENSION_ID,
+            resolve_browser4_extension_id(channel.as_deref()),
             ws_encoded,
             client_encoded,
         );
@@ -1745,6 +2033,7 @@ async fn handle_attach(
         state.base_url = effective_base_url.clone();
         state.active_selector = None;
         state.last_mouse_position = None;
+        state.kind = crate::state::SessionKind::ExtensionAttached;
         state.is_attached = true;
         state.attach_type = Some("extension".to_string());
         state.browser_channel = channel.clone();
