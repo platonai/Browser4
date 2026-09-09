@@ -421,6 +421,13 @@ class CliProcessManager(
         // M0: force the CLI onto the same backend and disable plugin warm restart.
         env["BROWSER4_CLI_DISABLE_PLUGIN_WARM_RESTART"] = "1"
         backendBaseUrl?.let { env["BROWSER4_CLI_SERVER"] = it }
+        // Extension-attach passthrough: the agent may drive `attach --extension`
+        // through the b4 domain.  The local dev extension (loaded unpacked)
+        // often has a path-derived ID that differs from the published store ID,
+        // and the token bypasses the manual approval dialog — both must reach
+        // the CLI subprocess or the connect page opens against the wrong ID.
+        pick("BROWSER4_EXTENSION_ID")?.let { env["BROWSER4_EXTENSION_ID"] = it }
+        pick("BROWSER4_EXTENSION_TOKEN")?.let { env["BROWSER4_EXTENSION_TOKEN"] = it }
         return env
     }
 

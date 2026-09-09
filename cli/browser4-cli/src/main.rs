@@ -1778,9 +1778,17 @@ async fn handle_attach(
         let client_info_str = client_info.to_string();
         let client_encoded = urlencoding::encode(&client_info_str);
         let ws_encoded = urlencoding::encode(&ws_endpoint);
+        // Dev-mode override: unpacked extensions loaded from a local directory
+        // get a path-derived ID instead of the published store ID.  Point
+        // BROWSER4_EXTENSION_ID at the locally installed ID to connect.
+        let extension_id = std::env::var("BROWSER4_EXTENSION_ID")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && s.len() == 32)
+            .unwrap_or_else(|| BROWSER4_EXTENSION_ID.to_string());
         let mut connect_url = format!(
             "chrome-extension://{}/connect.html?mcpRelayUrl={}&client={}",
-            BROWSER4_EXTENSION_ID, ws_encoded, client_encoded,
+            extension_id, ws_encoded, client_encoded,
         );
         // Always request a new blank tab for the session — the extension
         // will create an about:blank page instead of showing the tab picker.
@@ -22634,6 +22642,7 @@ async fn run(
                 .and_then(|v| v.as_str())
                 .map(str::trim)
                 .filter(|v| !v.is_empty())
+            {
                 // --stdin and --base64 take precedence; skip --file if they were already used.
                 if !use_stdin && !use_base64 {
                     let resolved = resolve_file_path_with_root_fallback(file_path)?;

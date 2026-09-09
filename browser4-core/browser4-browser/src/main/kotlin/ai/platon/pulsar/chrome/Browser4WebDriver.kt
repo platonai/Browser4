@@ -882,27 +882,6 @@ internal enum class DragDropPosition(val key: String) {
     }
 
     /**
-     * Click on the element identified by [selector] the given number of times.
-     *
-     * On Windows the parent implementation dispatches a synthetic DOM click
-     * (`dispatchDomClick`) instead of CDP mouse events, because CDP
-     * `Input.dispatchMouseEvent` does not reliably trigger DOM click events in
-     * headless Chrome.  A synthetic `HTMLElement.click()` never transfers focus
-     * to the clicked element though — unlike a real mouse click.  Focus the
-     * target first (best-effort) so that clicking an `<input>` behaves like a
-     * native click and subsequent typing lands in the right element.
-     *
-     * @param selector A CSS selector, XPath, or "backend:nodeId" locator for the target element.
-     * @param count Number of consecutive clicks (1 = single, 2 = double, etc.).
-     * @throws WebDriverException if the element cannot be found or interacted with.
-     */
-    @Throws(WebDriverException::class)
-    override suspend fun click(selector: String, count: Int) {
-        focusElementBeforeClick(selector)
-        super.click(selector, count)
-    }
-
-    /**
      * Click on an element identified by [selector] with optional [button] and [count].
      *
      * Extends [PulsarWebDriver.click] with a [button] parameter for right-click,
