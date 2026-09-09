@@ -47,10 +47,6 @@
 
 ## 🌟 项目简介
 
-💖 **Browser4：一个快速、智能、可扩展、适用于多种场景的智能体浏览器** 💖
-
-## 🌟 简介
-
 💖 **Browser4 — 面向 AI Agent 的新一代智能浏览器引擎，连接网页、数据与自动化任务。** 💖
 
 ### ✨ 核心能力
@@ -63,10 +59,10 @@
 
 ## 快速开始
 
-把下面这段说明粘贴给你喜欢的 AI 智能体（如 claude、codex、workbuddy 或 openclaw）并执行：
+把下面这段说明粘贴给你喜欢的 AI 智能体（如 dsh、claude、codex、workbuddy 或 openclaw）并执行：
 
 ```
-Read https://browser4.io/SKILL.md and install browser4-cli (if not installed) for browser automation to perform the following task:
+Read https://browser4.io/SKILL.md, install or upgrade browser4-cli for browser automation, perform the following task:
 
 1. Open the browser in headed mode (`open --headed`) so the window is visible — this is a human-facing demo
 2. go to amazon.com
