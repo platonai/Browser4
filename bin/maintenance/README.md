@@ -77,7 +77,6 @@ bin/maintenance/
 | F  | Dependency Management | 3 | Nightly + Weekly |
 | G  | Infrastructure Health | 3 | CI + Nightly |
 | H  | Operational Health | 3 | Nightly + Weekly |
-| I  | AI-Assisted Quality | 2 | On-demand + Scheduled |
 
 ## Execution Modes
 
@@ -140,7 +139,7 @@ Override any value via environment variable:
 
 ```powershell
 $env:MAINTENANCE_Coverage_Global = "0.70"
-$env:MAINTENANCE_LogHealth_MaxTotalMB = "200"
+$env:MAINTENANCE_LogHealth_MaxTotalMB = "500"
 ```
 
 ## Adding a New Check
@@ -176,6 +175,7 @@ Every check script outputs a `PSCustomObject`:
 - Cargo (for Rust CLI checks)
 - Docker (for Qodana, integration tests, Dockerfile checks)
 - Python 3 (for `bin/quality/fix-links.py`)
+- Node.js (for `bin/version.mjs` — version consistency checks)
 - `ripgrep` (`rg`) recommended for fast content search
 
 ## See Also

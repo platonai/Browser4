@@ -111,7 +111,7 @@ Checks if the required dependency skill (web-scraping) is available in the regis
 
 ## Implementation Notes
 
-- **Headless mode is the default for AI agents:** Always open browsers in headless mode unless the user explicitly requests a visible browser window (e.g., "show me the browser", "open visibly", "headed"). Headless mode is faster, uses fewer resources, and avoids unnecessary GUI windows.
+- **Headless mode is the default for AI agents:** Always open browsers in headless mode unless the user explicitly requests a visible browser window (e.g., "show me the browser", "open visibly", "headed"). Headless mode is faster, uses fewer resources, and avoids unnecessary GUI windows. If user participation in the page interaction is required — e.g., logging in or entering a verification code (CAPTCHA) — open a **headed** browser so the user can see and act on the page.
 - Supports various input types: text, email, password, textarea, select, checkbox, radio
 - Automatically handles form field detection and mapping
 - Respects CSRF tokens and hidden fields

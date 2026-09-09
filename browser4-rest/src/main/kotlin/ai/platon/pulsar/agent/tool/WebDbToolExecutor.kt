@@ -82,6 +82,20 @@ class WebDbToolExecutor(
             val targetDir = Path.of(outputDir).also { it.createDirectories() }
             val urlList = urls.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 
+            // Fail loud on space-separated input instead of silently exporting
+            // only the first page.  A space-joined list ("a b c") becomes one
+            // lookup URL whose spaces are truncated away during normalization,
+            // which used to export 1 of N pages while reporting full success —
+            // downstream corpus corruption with no warning.  URLs must be
+            // comma-separated (as documented in webdb export --help).
+            urlList.firstOrNull { it.any { ch -> ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' } }
+                ?.let { bad ->
+                    throw IllegalArgumentException(
+                        "URLs for webdb export must be comma-separated — found whitespace inside '$bad'. " +
+                            "Example: webdb export \"http://a/1,http://a/2\" <output-dir>"
+                    )
+                }
+
             val results = urlList.map { url ->
                 runCatching {
                     exportPage(session, url, targetDir)

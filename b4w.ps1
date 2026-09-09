@@ -86,7 +86,8 @@ for ($i = 0; $i -lt $args.Count; $i++) {
 # ── Git-Bash (MSYS) mangled-argument guard ──────────────────────────────
 # Git Bash rewrites '/'-leading arguments into Windows paths rooted at the
 # Git installation directory when spawning pwsh ('/ec/dp/' arrives here as
-# 'C:/Program Files/Git/ec/dp/').  The original token is lost before this
+# 'C:/Program Files/Git/ec/dp/'; a bare '/' arrives as the Git root itself,
+# 'C:/Program Files/Git/').  The original token is lost before this
 # script runs — a mangled argument would be forwarded to the CLI and
 # silently produce wrong results (e.g. a snapshot grep pattern reporting
 # '0 matches found').  Detect the rewritten form and fail fast with
@@ -113,11 +114,22 @@ if ($env:MSYSTEM) {
     }
 
     if ($MsysRoot) {
-        $RootFwd = ($MsysRoot -replace '\\', '/').TrimEnd('/') + '/'
+        # Normalize the root to a trailing-slash-free form on both sides of
+        # the comparison: a bare '/' argument is rewritten to the Git root
+        # ITSELF ('C:/Program Files/Git' with or without a trailing slash),
+        # so the rewritten value can be exactly as long as the root — the
+        # check must catch equality, not just a longer-than-root prefix.
+        $RootFwd = ($MsysRoot -replace '\\', '/').TrimEnd('/')
         foreach ($MangledArg in $RemainingArgs) {
             $ArgFwd = $MangledArg -replace '\\', '/'
-            if ($ArgFwd.Length -gt $RootFwd.Length -and $ArgFwd.StartsWith($RootFwd, [StringComparison]::OrdinalIgnoreCase)) {
-                $ProbableOriginal = '/' + $ArgFwd.Substring($RootFwd.Length).TrimStart('/')
+            $ArgIsRoot = $ArgFwd.TrimEnd('/').Equals($RootFwd, [StringComparison]::OrdinalIgnoreCase)
+            # Sub-paths must clear the '/' boundary so sibling directories
+            # (e.g. 'C:/Program Files/GitHub/...') are never mistaken for
+            # the Git root.
+            $Boundary = $RootFwd + '/'
+            $ArgUnderRoot = $ArgFwd.Length -gt $Boundary.Length -and $ArgFwd.StartsWith($Boundary, [StringComparison]::OrdinalIgnoreCase)
+            if ($ArgIsRoot -or $ArgUnderRoot) {
+                $ProbableOriginal = if ($ArgIsRoot) { '/' } else { '/' + $ArgFwd.Substring($Boundary.Length).TrimStart('/') }
                 Write-Host "Error: argument '$MangledArg' (probably typed as '$ProbableOriginal') was rewritten by" -ForegroundColor Red
                 Write-Host "Git Bash's MSYS path conversion before PowerShell started.  The original value" -ForegroundColor Red
                 Write-Host 'is unrecoverable, and using the rewritten path would silently produce wrong' -ForegroundColor Red

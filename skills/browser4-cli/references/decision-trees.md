@@ -66,7 +66,7 @@ Need to process multiple pages?
 ├─ Multiple known URLs (list in a file)? → crawl --seed-file urls.txt --depth 0 --sql @query.sql
 ├─ Crawl from a start URL (follow links)? → crawl <url> --out-link-selector "..." --depth N
 ├─ Need parallel execution (high throughput)? → swarm create → swarm query --seed-file ...
-├─ Repeated monitoring (check every hour)? → loop -- eval "..." -i 3600
+├─ Repeated monitoring (check every hour)? → loop -i 3600 -- eval "..."
 └─ Just a few URLs in a shell script?
    → browser4-cli open --headless (once) then use goto for each URL; add wait between iterations
 ```

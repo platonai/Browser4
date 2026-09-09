@@ -20,8 +20,12 @@ browser4-cli loop "load https://example.com and extract the page title"
 browser4-cli loop --shell "curl -s https://api.example.com/health" -i 60 -n 10
 
 # Run eval every 5 minutes
-browser4-cli loop -- eval "document.title" -i 300
+browser4-cli loop -i 300 -- eval "document.title"
 ```
+
+> Loop flags (`-i`, `-n`, `--name`, …) go **before** `--`. A known loop flag
+> placed after `--` is passed through to the nested `browser4-cli` command
+> with a warning — it is not applied to the loop.
 
 ## When to Use
 
@@ -75,9 +79,10 @@ Everything after `--` is passed as arguments to a nested `browser4-cli` process.
 Uses the current binary path so the same version is always invoked.
 
 ```bash
-browser4-cli loop -- eval "document.title" -i 300
-browser4-cli loop -- snapshot -i 600
-browser4-cli loop -- screenshot --full-page -i 1800
+# Loop flags before --, subcommand args after
+browser4-cli loop -i 300 -- eval "document.title"
+browser4-cli loop -i 600 -- snapshot
+browser4-cli loop -i 1800 -- screenshot --full-page
 ```
 
 ## Patterns
@@ -139,7 +144,7 @@ loop (no `--name`) uses `~/.browser4/loop-state.json`.
 browser4-cli loop --name health --shell "curl -s https://api.example.com/health" -i 300
 
 # Start a second loop independently
-browser4-cli loop --name monitor -- eval "document.title" -i 600
+browser4-cli loop --name monitor -i 600 -- eval "document.title"
 
 # List all loops
 browser4-cli loop --list

@@ -245,7 +245,11 @@ foreach ($taskRoot in $taskRoots) {
         }
     }
 
-    $files = Get-ChildItem -Path $createdDir -File |
+    # Scan 1ready recursively so tasks staged in date-organized subdirectories
+    # (YYYY/MMDD, written by review-recent-issues / organize-task-files) are
+    # picked up too. Test-CoworkerIgnoredFile still skips dot-prefixed files,
+    # files under dot-prefixed folders (e.g. .locks), and .gitkeep placeholders.
+    $files = Get-ChildItem -Path $createdDir -Recurse -File |
         Where-Object { -not (Test-CoworkerIgnoredFile -Item $_) }
 
     # Process each task file found in the created directory

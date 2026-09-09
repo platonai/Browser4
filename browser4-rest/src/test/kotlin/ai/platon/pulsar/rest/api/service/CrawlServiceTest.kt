@@ -191,4 +191,67 @@ class CrawlServiceTest {
         val response = CrawlResponse(taskId = "test-1", taskTTLMinutes = 30)
         assertEquals(30, response.taskTTLMinutes)
     }
+
+    // ------------------------------------------------------------------
+    // Timeout / cancellation state-machine hardening
+    // ------------------------------------------------------------------
+
+    /**
+     * Regression: a task whose worker died while PROCESSING (e.g. the internal
+     * withTimeout fired mid-seed) must not stay PROCESSING forever.  When a
+     * running job is cancelled, cancel() writes a terminal record first, so a
+     * PROCESSING record observed right after submission must always be able to
+     * reach a terminal state.
+     */
+    @Test
+    fun `cancelled task transitions to terminal timeout state`() = runBlocking {
+        val request = CrawlRequest(url = "", depth = 0)
+        val taskId = crawlService.submit(request)
+
+        // Give the coroutine a chance to pick the task up.
+        delay(100)
+
+        val cancelled = crawlService.cancel(taskId)
+        // Either the worker was still running (true) or already finished
+        // (false) — in both cases the record must end in a terminal state
+        // and never remain PROCESSING/CREATED.
+        delay(200)
+        val result = crawlService.getResult(taskId)
+        assertTrue(
+            result.status in setOf(
+                ResourceStatus.getStatusText(ResourceStatus.SC_OK),
+                ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
+                ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
+            ),
+            "Task should be terminal after cancel, got: ${result.status} (cancelled=$cancelled)"
+        )
+        assertNotNull(result.finishTime, "Terminal task should record a finish time")
+    }
+
+    /**
+     * Regression: cancel must never leave a PROCESSING record behind — the
+     * CLI's `crawl cancel` shows `{"cancelled": false}` when no live worker
+     * exists, and the task store must not keep the task in PROCESSING for
+     * the record to be recoverable via status/result.
+     */
+    @Test
+    fun `cancel on a task with no live worker still yields a queryable record`() = runBlocking {
+        // No-URL submit fails immediately, so by the time we cancel there is
+        // no running job — cancel() returns false but the record is terminal.
+        val request = CrawlRequest(url = "", depth = 0)
+        val taskId = crawlService.submit(request)
+        delay(300)
+
+        val cancelled = crawlService.cancel(taskId)
+        val result = crawlService.getResult(taskId)
+        assertFalse(cancelled, "No live worker should make cancel return false")
+        assertTrue(
+            result.status in setOf(
+                ResourceStatus.getStatusText(ResourceStatus.SC_OK),
+                ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
+                ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
+            ),
+            "Task should be terminal, got: ${result.status}"
+        )
+    }
 }

@@ -108,10 +108,25 @@ data class ExtractOptions(
     val frameId: String? = null
 )
 
+/**
+ * Structured extraction result.
+ *
+ * @property success Whether the extraction pipeline completed without error.
+ * @property message Human-readable status message.
+ * @property data The clean extraction payload (schema fields only, as returned
+ * by the model) — task bookkeeping (token counts, timing, evaluation
+ * metadata) is never merged into it.  When serialized through the tool layer,
+ * the payload is transported in the envelope's `description` and the
+ * [completed] flag is exposed at the envelope level.
+ * @property completed Whether the extraction task is complete.  `true` whenever
+ * usable content is present in [data] (a successful extraction must never
+ * report `false`), otherwise falls back to the evaluator model's judgment.
+ */
 data class ExtractResult(
     val success: Boolean,
     val message: String = "",
-    val data: JsonNode
+    val data: JsonNode,
+    val completed: Boolean = true
 ) {
     override fun toString(): String {
         return if (success) data.toString() else "Extract failed: $message"

@@ -22,40 +22,45 @@ function Test-CoworkerDotPath {
         Uses string-based path-segment inspection (no filesystem parent traversal)
         with a per-directory memoization cache so repeated checks on files in the
         same directory return instantly.
+
+        The cache stores only whether the *containing directory* path has a
+        dot-prefixed segment — that result is shared by every item in that
+        directory. Whether the item's own leaf name starts with a dot is checked
+        separately, so a dot-named file (e.g. .gitkeep) can never poison the
+        cached result for its non-dot siblings.
     #>
     param(
         [Parameter(Mandatory = $true)]
         [System.IO.FileSystemInfo]$Item
     )
 
-    # Resolve the containing directory as the cache key
-    $dirPath = if ($Item.PSIsContainer) {
-        $Item.FullName
-    } else {
-        Split-Path -Parent $Item.FullName
+    # Fast path: a dot-prefixed leaf (file or folder) is itself a dot path.
+    $name = $Item.Name
+    if ($name.Length -gt 0 -and $name[0] -eq '.') {
+        return $true
     }
 
-    # Fast path: cache hit
-    $cached = $false
-    if ($script:DotPathCache.TryGetValue($dirPath, [ref]$cached)) {
-        return $cached
-    }
+    # Everything below depends only on the parent directory path, which is the
+    # same for every sibling — safe to memoize per directory.
+    $dirPath = Split-Path -Parent $Item.FullName
 
-    # String-based segment scan — walks only the path string, never the filesystem
-    $result = $false
-    $fullName = $Item.FullName
-    foreach ($segment in $fullName.Split(
-        [System.IO.Path]::DirectorySeparatorChar,
-        [System.IO.Path]::AltDirectorySeparatorChar
-    )) {
-        if ($segment.Length -gt 0 -and $segment[0] -eq '.') {
-            $result = $true
-            break
+    $dirHasDot = $false
+    if (-not $script:DotPathCache.TryGetValue($dirPath, [ref]$dirHasDot)) {
+        # String-based segment scan — walks only the path string, never the filesystem
+        foreach ($segment in $dirPath.Split(
+            [System.IO.Path]::DirectorySeparatorChar,
+            [System.IO.Path]::AltDirectorySeparatorChar
+        )) {
+            if ($segment.Length -gt 0 -and $segment[0] -eq '.') {
+                $dirHasDot = $true
+                break
+            }
         }
+
+        $script:DotPathCache[$dirPath] = $dirHasDot
     }
 
-    $script:DotPathCache[$dirPath] = $result
-    return $result
+    return $dirHasDot
 }
 
 function Test-CoworkerIgnoredFile {

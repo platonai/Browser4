@@ -1,0 +1,230 @@
+{
+  "meta": {
+    "scenario": "crawl-advanced-extraction",
+    "mode": "dev",
+    "date": "20260905-171533",
+    "source": "20260905-171533-crawl-advanced-extraction.full.md"
+  },
+  "background": {
+    "executionContext": "1. **Prep** — verified repo root; checked MockSite (HTTP 200); read `SKILL.md` and `references/crawl.md` fully; ran `./b4w.ps1 help` and `./b4w.ps1 crawl --help`; confirmed every required flag exists.\n2. **Seed + query files** created under `.test-sessions/`; selectors validated against the fixture HTML.\n3. **Foreground crawl** → 3 rows extracted (first command auto-started the backend; 24.7 s wall).\n4. **Background crawl** → task ID noted; **step 5** `crawl list` while running showed `processing`.\n5. **Steps 6–8** — flag-variant crawls, each with a control run: distinct-query seeds (±`--ignore-url-query`), trailing-slash seeds (±`--no-norm`, MockSite 404s the slash variant), and a full `--readonly` extraction crawl.\n6. **Step 9** — final `crawl list`: all 13 session tasks completed; background result fetched.\n7. **Deep-dive investigations** (evidence for findings): depth-1 link-discovery crawls; `crawl status` vs `crawl result` diff (byte-identical); `webdb export` (requires a session — abandoned); X-SQL `COUNT(*)/a[href]` = 9 vs curl = 25 anchors; headless `open` + `eval` showed the browser DOM has `href=\"#\"` nav anchors — MockSite serves a JS variant to browsers; invalid-value probes (`--expires 1x`, `--page-load-timeout banana`, `--priority -5` — all silently accepted). Session closed after tests.\n\n# C & D. Issues and Overall Assessment",
+    "task": "All 9 steps succeeded against MockSite (localhost:18080), and the full evaluation report is saved at `.test-sessions/evaluation-report-crawl.md` (all scratch files kept under `.test-sessions/`).\n\n**Extracted data** (identical across the foreground, background, and `--readonly` crawls):\n\n| url | title | price |\n|---|---|---|\n| http://localhost:18080/ec/dp/B0E000001 | 4K OLED TV 55 | $899.99 |\n| http://localhost:18080/ec/dp/B0E000002 | Wireless Noise-Cancelling Headphones | $199.99 |\n| http://localhost:18080/ec/dp/B0E000003 | Portable Bluetooth Speaker | $49.99 |\n\n- Seed file `.test-sessions/ec-seed-urls.txt`; X-SQL file `.test-sessions/extract-title-price.sql` (`#productTitle` / `#product-price`, verified against live markup first).\n- Foreground crawl (`--depth 0 --sql @file --format table --refresh --parse --expires 1h --priority 1 --page-load-timeout 30s`): exit 0, 3 rows in ~25 s.\n- Background crawl: task `66c3f13e-14dc-47f5-b523-4731f04cfaf4`, submitted in 0.56 s; `crawl list` mid-run showed `processing`, later `completed`; `crawl status` → `OK` with all rows.\n- `--ignore-url-query`, `--no-norm`, `--readonly` crawls all ran cleanly; the first two produced output byte-identical to their baselines at depth 0 (finding #4 below)."
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "Invalid values for --expires/--page-load-timeout/--priority are silently accepted with exit 0",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 crawl --seed-file .test-sessions/one-url.txt --depth 0 --expires 1x → exit 0, crawl 'completed'\n./b4w.ps1 crawl --seed-file .test-sessions/one-url.txt --depth 0 --page-load-timeout banana → exit 0, crawl 'completed'\n./b4w.ps1 crawl --seed-file .test-sessions/one-url.txt --depth 0 --priority -5 → exit 0, crawl 'completed'",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Invalid values for typed options should be rejected with a clear message and non-zero exit (as the CLI already does for --format: 'Invalid --format ... Expected: json, csv, or table'). The user must be able to detect that '--expires 1x' or '--priority -5' was not applied.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "All three invalid values produced exit 0 and a normal 'Crawl completed. 1 pages found.' The crawl runs with the option silently dropped/defaulted; the user believes the requested 1h expiry / 30s timeout / priority was honored.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The CLI parses these crawl options as raw strings and forwards them to the backend without type/duration validation; backend LoadOptions parsing fails softly and falls back to defaults, with no error surfaced to the CLI. Investigation needed to confirm whether the backend logs the parse failure.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/commands.rs:2994 (crawl OptionDef block) — add CLI-side validation for --expires (duration), --page-load-timeout (duration/seconds), --priority (integer) mirroring the existing --format validation",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Validate --expires and --page-load-timeout client-side against the documented duration format (\\d+(ms|s|m|h|d)) and reject anything else with a non-zero exit naming the offending value\n- Validate --priority is a finite integer; reject negatives or clamp with an explicit warning\n- If validation must stay server-side, propagate the backend parse failure into the crawl result/error so the CLI exits non-zero",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "Fragment-only hrefs ('#') treated as out-links: silent empty discovery, missing warning, and trailing-'#' URL artifact",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "./b4w.ps1 crawl \"http://localhost:18080/ec/b?node=1292115012\" -ol \"a[href]\" -olp \"node=\" -d 1 --refresh\n→ 'Crawl completed. 1 pages found.' with the seed listed as 'http://localhost:18080/ec/b?node=1292115012#' and zero out-link pages fetched; crawl status shows linksDiscovered: 1; no 'Link discovery found no out-links' warning. Same command without -olp discovers 7 links and fetches 6 pages (so the page does contain discoverable links).",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Fragment-only anchors (href='#', '#details') cannot navigate to a new document and should be skipped during link extraction. When a discovery crawl fetches no NEW pages, the CLI should print the documented diagnostic warning (crawl.md: '⚠ Link discovery found no out-links'). Reported page URLs should be canonical (no '#' appended).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "href='#' nav anchors (present on MockSite's browser-served Electronics listing) are resolved against the page URL and counted as discovered out-links. With -olp 'node=' they match after resolution (the seed URL carries '?node=…'), dedupe against the visited seed, and yield linksDiscovered=1 — so the CLI's warning gate (links_discovered == 0) never fires and the crawl reports a hollow success. The page listing also renders the seed URL with a spurious trailing '#'.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Backend out-link extraction resolves fragment-only hrefs to the current page instead of discarding them; the CLI warning gate at main.rs only checks linksDiscovered == 0, so 'discovered but all already-visited' is treated as success. The trailing '#' comes from server-side URL canonicalization that re-appends an empty fragment (visible only in depth>=1 crawls; depth-0 reports seed URLs verbatim). --out-link-pattern is applied to the resolved absolute URL, which is not documented.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:12414 (warning gate: discovery_requested && links_discovered == 0) and backend out-link resolution in browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/CrawlService.kt (normalizeForVisit ~line 1348); the '#'-appending URL canonicalization is server-side (needs follow-up)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Filter hrefs that are empty or fragment-only ('#', '#section') before resolution — they can never lead to a new document\n- Change the warning gate to fire when discovery was requested and zero NEW pages were fetched from out-links (not just linksDiscovered == 0)\n- Fix URL canonicalization/reporting to not append a bare '#' when the fragment is empty",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "crawl result ignores --format and is byte-identical to crawl status; docs promise 'same output as a foreground crawl'",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 crawl --seed-file .test-sessions/ec-seed-urls.txt --depth 0 --sql @.test-sessions/extract-title-price.sql --format table --background (task 66c3f13e-14dc-47f5-b523-4731f04cfaf4)\n./b4w.ps1 crawl result 66c3f13e-14dc-47f5-b523-4731f04cfaf4 > r.json\n./b4w.ps1 crawl status 66c3f13e-14dc-47f5-b523-4731f04cfaf4 > s.json\ndiff r.json s.json → identical",
+          "label": "Reproduction"
+        },
+        {
+          "body": "crawl.md: 'crawl result — Returns the same output as a foreground crawl: page listing (without --sql) or formatted extraction data (with --sql).' Since the task was submitted with --format table, result should print the aligned table. crawl status should print a compact human status (CREATED/PROCESSING/completed, pages so far, progress).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "crawl result returns the raw server JSON envelope (pages[], extracted[], seedStatuses[]) regardless of the submission's --format. crawl status on a completed task returns exactly the same raw JSON — diff shows the files byte-identical — so the two commands are indistinguishable and neither gives the human-readable view a foreground crawl produces.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "handle_crawl_result (main.rs) fetches the raw task JSON and prints it without re-applying the stored --format; crawl status shares the same code path when the task is terminal. The CLI-side table/CSV/JSON formatting applied to foreground crawls is not applied to stored tasks.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:11615 (handle_crawl_result) and crawl-list/status polling path at cli/browser4-cli/src/main.rs:11352; doc: skills/browser4-cli/references/crawl.md 'crawl result' section",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Persist the submission's --format with the task and have crawl result render table/csv/json output exactly like a foreground crawl (add --format override on the result command)\n- Make crawl status print a compact human summary (state, pages found/discovered, elapsed, seed statuses) and only dump full JSON with an explicit --json flag\n- Update crawl.md wording to state that crawl result returns the raw JSON envelope until rendering is implemented",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "--ignore-url-query and --no-norm have no observable effect in depth-0 mode; help text overpromises",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "./b4w.ps1 crawl --seed-file .test-sessions/ec-seed-dup-query.txt --depth 0 → 2 pages found, URLs reported verbatim with query strings\n./b4w.ps1 crawl --seed-file .test-sessions/ec-seed-dup-query.txt --depth 0 --ignore-url-query → identical output\n./b4w.ps1 crawl --seed-file .test-sessions/ec-seed-trailing-slash.txt --depth 0 → 2 pages (slash variant 404s)\n./b4w.ps1 crawl --seed-file .test-sessions/ec-seed-trailing-slash.txt --depth 0 --no-norm → identical output",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Help says --ignore-url-query 'Remove query parameters from URLs during normalization' and --no-norm 'Disable URL normalization' — a first-time user following the task 'run a crawl with --ignore-url-query to strip query parameters from URLs ... and observe the difference' expects the fetched/reported URLs to lose query strings, or at least some observable difference.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "At depth 0 (bulk fetch — the mode both the docs' quick start and this task use), output is byte-identical with and without either flag: seed URLs are fetched and reported verbatim (query strings intact; trailing-slash variant fetched as-is and 404s). The flags only affect discovered out-link hrefs in depth>=1 crawls (crawl.md 'URL deduplication' section) — but even there the effect is hard to observe, and crawl.md never states seeds are exempt.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The options are forwarded to backend LoadOptions where they apply to out-link normalization, while depth-0 seeds bypass that path entirely. CLI help text (commands.rs OptionDef descriptions) describes the general intent without the scope caveat, so users cannot predict when the flags do nothing.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/commands.rs:2994 (OptionDef descriptions for ignore-url-query/no-norm); docs: skills/browser4-cli/references/crawl.md 'URL deduplication' section",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Reword help: '--ignore-url-query: strip query parameters from discovered out-link hrefs before loading (no effect on seed URLs in depth-0 bulk fetch)' and likewise for --no-norm\n- Add a crawl.md note: 'These flags only affect link discovery; depth-0 seed crawls are unaffected'\n- Consider printing a stderr note when the flags are given without link discovery so users learn they have no effect",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 5,
+      "title": "MockSite 'predictable product pages' promise breaks for link discovery: browser DOM differs from static HTML",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "curl -s http://localhost:18080/ec/b?node=1292115012 → 25 <a href> anchors (7 category links with real hrefs, 10 product links, 3 home links), 13531 bytes\n./b4w.ps1 crawl \"http://localhost:18080/ec/b?node=1292115012\" -ol \"a[href]\" -d 1 --refresh → only 7 links discovered (6 product links)\n./b4w.ps1 open --headless ... + eval 'JSON.stringify([...document.querySelectorAll(\"a[href]\")].map(a=>a.getAttribute(\"href\")))' → [\"#\",\"#\",\"#\",\"/ec/dp/B0E000001\"...\"/ec/dp/B0E000006\"] (9 anchors; nav links are href='#')",
+          "label": "Reproduction"
+        },
+        {
+          "body": "crawl.md's 'Testing locally with MockSite' section presents MockSite as 'predictable product pages for testing crawl extraction'. A user debugging link discovery against it should be able to tell fixture behavior from crawler behavior.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "MockSite serves a browser variant (JS-hydrated page: nav anchors kept as href='#', 6 product cards) that differs from the static HTML curl receives (25 real anchors). Crawls therefore discover only a subset of the links visible in the raw HTML, and combined with the '#'-href handling (see related issue) produce confusing depth-1 results. Nothing in crawl.md warns that the browser-rendered DOM differs from the raw fixture HTML.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "MockSite fixture design: the page's JS variant rewrites navigation links to href='#' and renders only a subset of products; the crawl fetch pipeline captures the browser DOM (9944 bytes vs 13531 static). Not a crawler defect, but undocumented fixture behavior that undermines the docs' predictability claim.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "skills/browser4-cli/references/crawl.md 'Testing locally with MockSite' section; fixture sources under browser4-tests/pulsar-tests-common/src/main/resources/static/b4/ (needs follow-up to confirm exact files)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add a crawl.md note: 'MockSite serves a JS variant to browsers — category/nav anchors appear as href=\"#\" and the product list is a subset; verify expected links with eval or htmlsnapshot inspect before debugging discovery counts'\n- Consider making the MockSite browser variant static (real hrefs) so link-discovery behavior is deterministic for test scenarios",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 6,
+      "title": "--page-load-timeout help contradicts accepted values and reference docs",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "./b4w.ps1 crawl --help → '--page-load-timeout <seconds>  Maximum time to wait for page load'\ncrawl.md flags table: '--page-load-timeout | string | Max wait for each page load' (no format)\nTask instructions and SKILL examples use '30s'; both '--page-load-timeout 30s' and '--page-load-timeout 30' run successfully (exit 0).",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Help text should state the accepted value forms (seconds number, duration string, or both) consistently with crawl.md and actual behavior.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Help implies a plain seconds number ('<seconds>'), crawl.md implies an untyped string, and both '30' and '30s' are accepted. A user cannot tell which form is correct; related flag --expires documents the duration form ('1d, 1h, 30m') while --page-load-timeout does not.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "OptionDef help string in commands.rs and the crawl.md flags table were written inconsistently (one says seconds, the other string) while the backend accepts both forms.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/commands.rs:2994 (--page-load-timeout OptionDef); skills/browser4-cli/references/crawl.md LoadOptions flags table",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Change help to '--page-load-timeout <dur>  Max wait per page load (seconds number or duration such as 30s, 1m)'\n- Align crawl.md flags table with the same wording",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}

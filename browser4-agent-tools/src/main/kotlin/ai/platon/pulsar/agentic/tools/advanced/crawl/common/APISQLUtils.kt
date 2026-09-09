@@ -12,7 +12,22 @@ object APISQLUtils {
             throw IllegalArgumentException("Sql is required")
         }
 
-        var sql0 = sql.trim().lowercase(Locale.getDefault())
+        // Strip full-line '--' comments BEFORE statement-type detection.  A
+        // query file that begins with a comment line (a natural way to annotate
+        // a .sql file) is valid SQL; previously the lowercase+startsWith guard
+        // ran first, so a leading comment failed with a misleading
+        // "Only select statements are supported" even though the file contains
+        // a single valid SELECT.  Comments can also carry ';' characters that
+        // tripped the single-statement check.
+        val withoutComments = sql.split("\n")
+            .filterNot { it.trim().startsWith("--") }
+            .joinToString("\n")
+        val cleaned = withoutComments.trim()
+        if (cleaned.isEmpty()) {
+            throw IllegalArgumentException("Sql is empty or contains only comments")
+        }
+
+        var sql0 = cleaned.lowercase(Locale.getDefault())
         if (!sql0.startsWith("select")) {
             throw IllegalArgumentException("Only select statements are supported")
         }
@@ -28,9 +43,6 @@ object APISQLUtils {
             throw IllegalArgumentException("Statement is forbidden")
         }
 
-        return sql.split("\n")
-            .filterNot { it.trim().startsWith("--") }
-            .joinToString("\n")
-
+        return cleaned
     }
 }

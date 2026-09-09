@@ -23,7 +23,7 @@ Site crawling and Markdown conversion plugin for [Browser4](https://github.com/p
 <dependency>
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4-markdown</artifactId>
-    <version>4.12.3-SNAPSHOT</version>
+    <version>4.13.14-SNAPSHOT</version>
 </dependency>
 ```
 

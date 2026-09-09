@@ -8,7 +8,7 @@ This scenario exercises the `crawl` command's link discovery options: depth cont
 
 1. **AC1 — Basic crawl (depth 0):** Running `crawl <url> --depth 0 --refresh` fetches exactly one page with no link discovery.
 2. **AC2 — Link selector + pattern:** Running `crawl <url> -d 2 -ol "a.product" -olp "/product/"` follows only product-class links whose URLs match `/product/`. Category links (class `category-link`) are not followed.
-3. **AC3 — Deep crawl (depth 3):** Running `crawl <url> --depth 3 --refresh` traverses 4 levels (0–3) and reaches terminal depth-3 pages containing "Deep Widget".
+3. **AC3 — Deep crawl (depth 3):** Running `crawl <url> --depth 3 --refresh -ol "a.product"` traverses 4 levels (0–3) and reaches terminal depth-3 pages containing "Deep Widget". (Link discovery requires `--out-link-selector`; without it, only seed URLs are processed whatever the depth.)
 4. **AC4 — Seed file crawl:** Running `crawl --seed-file <path> --depth 0 --refresh` fetches only the URLs listed in the file, with no additional link discovery.
 
 ## Steps
@@ -44,15 +44,17 @@ Wait for the crawl to complete. Verify:
 
 ### 3. Deep crawl — depth 3 with refresh (AC3)
 
-Run a crawl with depth 3 to verify multi-level traversal reaches terminal depth-3 pages:
+Run a crawl with depth 3 to verify multi-level traversal reaches terminal depth-3 pages.
+Link discovery needs an out-link selector, so the command carries `-ol "a.product"`
+(use `-ol "a[href]"` to follow every link on the page):
 
 ```
-crawl http://localhost:18080/generated/crawl/index.html --depth 3 --refresh
+crawl http://localhost:18080/generated/crawl/index.html --depth 3 --refresh -ol "a.product"
 ```
 
 Wait for the crawl to complete. Verify:
 - The output contains a completion message.
-- The results include at least one "Deep Widget" page (Theda or Iota at depth 3).
+- The results include at least one "Deep Widget" page (Theta or Iota at depth 3).
 - The results include intermediate pages from depth 1 and 2.
 - The total crawled page count suggests multi-level traversal (several pages from different depths).
 
