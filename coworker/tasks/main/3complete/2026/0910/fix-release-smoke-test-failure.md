@@ -98,3 +98,9 @@ Smoke test (macOS ARM64)	Build CLI binary	2026-09-09T22:51
    the specific test that failed. Make sure your change would resolve it.
 6. **Commit:** Use a conventional-commit message, e.g.:
    `fix(test): update test assertions for changed CLI output`
+
+## Resolution
+
+Root cause: `cli/scripts/smoke-test-runtime-bundle.sh` started `python3 -m http.server` without `--directory`, so it served the CI workspace (repo checkout) instead of `$TEMP_DIR` where the fixture `test.html` lives. Every smoke run actually browsed Python's 404 "Error response" page. Older backends tolerated `type`/`click` on a missing element, so the suite passed anyway; 4.14.x type fails loudly on a missing selector ("no element found for selector [#input1]"), exposing the harness bug on all three OSes.
+
+Fix (commit X): serve the fixture dir (`--directory "$TEMP_DIR"`) and make the readiness probe `curl -sf` so a non-serving server fails fast instead of silently 404ing. Verified locally: old invocation 404, new invocation 200. Release v4.14.0-rc.5 will be re-triggered from the fixed commit.
