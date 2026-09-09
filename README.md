@@ -282,14 +282,14 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | Command | Description |
 |---|---|
 | `open [url]` | Open a browser session or reconnect to an existing one. **Headless by default.** Supports `--headed` (visible window), `--headless`, `--profile <path>`, `--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`, `--interact-level <FASTEST\|FAST\|DEFAULT>`. **Note:** `SYSTEM_DEFAULT` is deprecated and unsupported on Chrome ≥ 143 — use `attach` + `state-save`/`state-load` to reuse system browser state (see [browser-state-import.md](skills/browser4-cli/references/browser-state-import.md)). |
-| `attach` | Attach to an existing browser via CDP or the Browser4 extension. Supports `--cdp <url\|port\|channel>` and remote endpoint options. |
+| `attach` | Attach to an existing browser via CDP or the Browser4 extension. Supports `--cdp <url\|port\|channel>` and remote endpoint options. After a successful attach the CLI prints the browser that actually connected (`Connected browser: …` / `Attached to … at …`) and shows a ⚠ warning when it conflicts with the requested channel (e.g. requested msedge but Chrome connected) — verify it before driving the session. |
 | `close` | Close the active browser session. |
-| `list` | List browser sessions with their status and next-open behavior. Supports `--all`. |
+| `list` | List browser sessions with their status and next-open behavior. The Connection column prefers the backend-reported actual browser and annotates channel conflicts (e.g. `requested msedge · actual Google Chrome`). Supports `--all`. |
 | `session-default <name>` | Make a named session become the default unnamed session. |
 | `close-all` | Close all sessions without stopping the backend. |
 | `kill-all` | Force-stop the backend and Browser4-managed browser processes. |
 | `stop` | Gracefully stop the Browser4 server. |
-| `status` | Show server version, port, health, and the web status panel URL (`http://<server>:8182/status`). |
+| `status` | Show server version, port, health, and the web status panel URL (`http://<server>:8182/status`). When a session is active it also prints a current-session block: Name / Session ID / Status / Connection / Next open. |
 | `doctor` | Run diagnostics: build info, LLM status, stale daemon cleanup, optional repair. Supports `--verbose` and `--fix`. |
 | `doctor log [name]` | List, view, tail, or grep backend log files. Supports `--tail`, grep-style flags, and `doctor log <name> grep <pattern>`. |
 | `doctor metrics [filter]` | List, filter, or grep backend metrics. Supports `doctor metrics grep <pattern>`. |
@@ -349,13 +349,14 @@ All interaction commands accept a snapshot ref such as `e15` or a CSS selector u
 | `dblclick <ref> [button]` | Double-click an element. Supports `--modifiers`, `--follow`, `--auto-dismiss-dialogs`. |
 | `hover <ref>` | Hover over an element. |
 | `fill <ref> <text>` | Clear and fill text into an editable field. Supports `--submit`, `--verify`. |
-| `type <text> [ref]` | Type text into the focused element or a target element. Supports `--submit`, `--verify`, `--focus`, `--interactable-timeout`. |
+| `type <text> [ref]` | Type text into the focused element or a target element. Supports `--submit`, `--verify`, `--focus`, `--interactable-timeout`, and `--method auto\|chars\|exec` (requires a target ref; `auto` types short text per-character and bulk-inserts long/multi-line text on textarea/contenteditable via a single `execCommand('insertText')`, `chars` forces per-character typing, `exec` forces the bulk insert). |
 | `press <key> [ref]` | Press a key on the focused element or a target element. Supports `--verify`, `--follow`. |
 | `select <ref> <value>` | Select a dropdown value. Supports `--verify`. |
 | `check <ref>` | Check a checkbox or radio button. |
 | `uncheck <ref>` | Uncheck a checkbox or radio button. |
 | `drag <startRef> <endRef>` | Drag and drop from one element to another. |
 | `wait [target]` | Wait for a selector/ref, duration, text, URL pattern, page-load state, or JavaScript expression. Supports `--timeout`, `--text`, `--url`, `--load`, `--fn`. |
+| `upload <ref> <file> [file...]` | Upload one or more local files to a page file input. The target must be an `<input type="file">` (anything else errors); the paths must be readable by the browser process — local mode: the same machine, and empty/missing files are rejected with a hint; remote backend: paths resolve on the backend host. Supports `--no-snapshot`. |
 
 `wait --load` accepts `domcontentloaded`, `load`, and `networkidle`.
 
@@ -383,7 +384,7 @@ browser4-cli wait --load networkidle
 
 | Command | Description |
 |---|---|
-| `snapshot` | Capture an accessibility-tree snapshot. Supports `--boxes`, `-i/--interactive`, `-u/--urls`, `-c/--compact`, `--no-compact`, `-d/--depth`, `-l/--limit`, `-s/--selector`, `--raw`, `--stdout`, `-vp/--viewport`, `--filename`. |
+| `snapshot` | Capture an accessibility-tree snapshot. Supports `--boxes`/`--no-boxes`, `-i/--interactive`, `-u/--urls`, `-c/--compact`, `--no-compact`, `-d/--depth`, `-l/--limit`, `-s/--selector`, `--raw`, `--stdout`, `-vp/--viewport`, `--filename`. `--stdout`/`--raw` output is paginated at 2000 lines/page by default — when truncated, stdout (if piped) gets a `# … output truncated: showing N of M lines …` hint and the full footer goes to stderr; use `--all` or `--page-size 0` for the complete tree, and bound very large pages with `-v N`/`--depth`/`--selector`/`--no-boxes`. |
 | `snapshot grep <pattern>` | Search saved/current snapshot YAML with grep-style flags such as `-i`, `-v`, `-c`, `-l`, `-F`, `-w`, `-A`, `-B`, `-C`, `--selector`, `--page`, `--page-size`, `--all`. |
 | `snapshot list` | List saved snapshot files with timestamps and sizes. |
 | `snapshot clean` | Remove old snapshot files. Supports `--dry-run`. |
@@ -624,7 +625,7 @@ These commands operate on Browser4's learned experience store.
 
 | Command | Description |
 |---|---|
-| `experience save <url> <trace>` | Save a task execution trace. Supports `--outcome`, `--intent`, `--task-type`. |
+| `experience save <url> <trace>` | Save a task execution trace. Supports `--outcome`, `--intent`, `--task-type` (canonical types including `publish_post`), and `--facts <inline JSON \| @file.json>` — merges retrospective knowledge (`selectors` / `interaction_hints` / `known_blockers` / `anti_patterns`, camelCase or snake_case keys) into the (domain, intent) facts entry; the merge is refused when that entry is VERIFIED (immutable). |
 | `experience query <url>` | Query known selectors, blockers, and hints for a URL/domain. Supports `--intent`. |
 | `experience list` | List stored experience entries. Supports `--filter`, `--intent-filter`, `--page`, `--page-size`. |
 | `experience deep-learn <url> <intent>` | Run deeper analysis on stored traces. Supports `--force`. |
@@ -646,7 +647,6 @@ These commands exist in the CLI but are intentionally kept out of the default pu
 
 | Command | Description |
 |---|---|
-| `upload <ref> <file>` | Upload one or multiple files to a file input. |
 | `act <description>` | Experimental natural-language action translator that turns plain text into a browser command and runs it. |
 
 ### Timeout environment variables

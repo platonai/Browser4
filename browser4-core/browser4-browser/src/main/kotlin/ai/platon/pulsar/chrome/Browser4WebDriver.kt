@@ -112,6 +112,16 @@ open class Browser4WebDriver(
         /** Settle delay after the post-navigation body wait (see [waitForNavigationSettled]). */
         private const val NAVIGATION_DOM_SETTLE_DELAY_MS = 1_000L
 
+        /** Supported [typeAuto] insertion methods. */
+        internal val TYPE_METHODS = setOf("auto", "chars", "exec")
+
+        /**
+         * Text length above which [typeAuto]'s `auto` method prefers one bulk
+         * `execCommand('insertText')` over per-code-point typing (~150 chars ≈
+         * 13-36 s at the 90-240 ms/char type cadence).
+         */
+        internal const val TYPE_EXEC_LONG_THRESHOLD = 150
+
         /** The dual-world runtime global probed by [ensurePulsarUtilsInjected]. */
         private const val PULSAR_UTILS_FUNCTION = "__pulsar_utils__"
 
@@ -240,6 +250,99 @@ open class Browser4WebDriver(
             null -> "Option target could not be resolved (not found or locator failure): $selector"
             else -> "Option target not found: $selector"
         }
+
+        /**
+         * Probe used by [Browser4WebDriver.typeAuto] before choosing an insertion
+         * strategy.  Evaluated with `this` bound to the target element; returns
+         * `{found:false}` when the locator resolves to nothing, otherwise the
+         * element kind, disabled/readOnly flags, and its CURRENT text (for the
+         * verify read-back).
+         */
+        fun typeTargetProbeJs(): String =
+            """
+            function() {
+                var el = this;
+                if (!el) { return { found: false }; }
+                var tag = (el.tagName || '').toUpperCase();
+                var kind = el.isContentEditable ? 'contenteditable'
+                    : (tag === 'TEXTAREA' ? 'textarea'
+                    : (tag === 'INPUT' ? 'input' : 'other'));
+                var text = (tag === 'INPUT' || tag === 'TEXTAREA') ? (el.value || '')
+                    : ((el.innerText !== undefined ? el.innerText : '') || '');
+                return { found: true, kind: kind, disabled: !!el.disabled, readOnly: !!el.readOnly, text: text };
+            }
+            """.trimIndent()
+
+        /**
+         * Bulk-insert [text] via `document.execCommand('insertText')` on the
+         * element bound as `this`.  Focuses the element, collapses the cursor to
+         * the end of the content, then inserts the whole string in one editor
+         * transaction.  Returns `{ok: true}` on success or `{ok: false,
+         * reason}` when the element is not editable or the command is rejected.
+         *
+         * Note: `execCommand` is deprecated but supported in Chrome/Edge/Firefox
+         * (no removal schedule).  It synthesizes `beforeinput`/`input` events
+         * WITHOUT a key event chain — sites that require keyboard events
+         * (shortcuts, autocomplete) will not see it; that trade-off is why
+         * typeAuto keeps per-code-point `chars` as the default for short text.
+         */
+        fun typeExecJs(text: String): String =
+            """
+            function() {
+                var el = this;
+                if (!el) { return { ok: false, reason: 'no element' }; }
+                if (!el.isContentEditable && !(el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+                    return { ok: false, reason: 'target is not an editable input/textarea/contenteditable' };
+                }
+                if (el.disabled || el.readOnly) {
+                    return { ok: false, reason: 'target is disabled or read-only' };
+                }
+                try { el.focus(); } catch (e) {}
+                if (el.isContentEditable) {
+                    try {
+                        var sel = window.getSelection();
+                        var range = document.createRange();
+                        range.selectNodeContents(el);
+                        range.collapse(false);
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                    } catch (e) {}
+                } else {
+                    try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) {}
+                }
+                var text = '${escapeJsString(text)}';
+                var ok = false;
+                try { ok = document.execCommand('insertText', false, text); } catch (e) { ok = false; }
+                return ok ? { ok: true } : { ok: false, reason: "execCommand('insertText') returned false" };
+            }
+            """.trimIndent()
+
+        /**
+         * Read the current text of the element bound as `this` — `value` for
+         * input/textarea, `innerText` for contenteditable — used by the
+         * typeAuto verify read-back.
+         */
+        fun typeReadBackJs(): String =
+            """
+            function() {
+                var el = this;
+                if (!el) { return null; }
+                var tag = (el.tagName || '').toUpperCase();
+                if (tag === 'INPUT' || tag === 'TEXTAREA') { return el.value || ''; }
+                return (el.innerText !== undefined ? el.innerText : '') || '';
+            }
+            """.trimIndent()
+
+        /**
+         * Normalize editor text before verification compares: NBSP → space and
+         * CRLF/CR → LF (browsers and editors differ in how they store line
+         * breaks).  Trailing whitespace differences are handled by the caller
+         * (trimmed on both sides of the comparison).
+         */
+        fun normalizeEditorText(text: String): String =
+            text.replace("\u00a0", " ")
+                .replace("\r\n", "\n")
+                .replace('\r', '\n')
 
         /**
          * The IIFE used by [submitFormFallback] (and the executor's fallback) to
@@ -1258,6 +1361,121 @@ internal enum class DragDropPosition(val key: String) {
     }
 
     /**
+     * Type [text] into the element identified by [selector] with a pluggable
+     * insertion strategy and optional read-back verification.
+     *
+     * ## Methods
+     * - `chars` — per-code-point `Input.insertText` with randomized 90-240ms
+     *   delays (the classic [typeSafe] path; keeps the cursor semantics for
+     *   chained operations like `ArrowLeft` → type).
+     * - `exec` — one `document.execCommand('insertText')` call for the WHOLE
+     *   text after focusing and collapsing the cursor to the end.  Fast and
+     *   reliable on contenteditable editors that accept `beforeinput`
+     *   `insertText` transactions (X.com composer and many DraftJS/ProseMirror
+     *   based editors), but produces NO keyboard event chain — sites that
+     *   require key events (shortcuts, autocomplete) may not react to it.
+     * - `auto` (default) — `exec` when the text is long (>150 chars) or
+     *   multi-line AND the target can hold the text (textarea/contenteditable,
+     *   or input without newlines — `<input>` drops newlines); otherwise
+     *   `chars`.
+     *
+     * ## Verification
+     * When [verify] is true the driver reads the element text back after the
+     * insert (normalized: NBSP→space, CRLF→LF, trailing whitespace trimmed)
+     * and compares it against `old + text`.  Any mismatch throws
+     * [IllegalStateException] — typing never fails silently.  Verification is
+     * off by default so existing callers keep their current behavior; the
+     * `exec` path still throws immediately when the editor rejects the insert
+     * (returned false / not editable) regardless of [verify].
+     *
+     * @throws IllegalArgumentException for an unknown method, an unresolvable
+     *   target, a non-editable/disabled/read-only target, or an exec insert
+     *   the editor rejected.
+     * @throws IllegalStateException when [verify] is true and the read-back
+     *   does not match.
+     */
+    @Throws(WebDriverException::class)
+    suspend fun typeAuto(selector: String, text: String, method: String = "auto", verify: Boolean = false) {
+        require(selector.isNotBlank()) { "typeAuto requires a selector (verification needs a read-back target)" }
+        require(text.isNotEmpty()) { "typeAuto requires non-empty text" }
+        val mode = method.lowercase()
+        require(mode in TYPE_METHODS) { "type method must be one of ${TYPE_METHODS.joinToString("|")} (got '$method')" }
+
+        // Probe the target once: kind / disabled / readOnly / current text.
+        val probeResult = evaluateValue(selector, typeTargetProbeJs())
+        val probe = probeResult as? Map<*, *>
+        if (probe == null || probe["found"] != true) {
+            throw IllegalArgumentException(
+                "type: no element found for selector [$selector]. " +
+                    "The selector may be stale — re-run `snapshot` to refresh refs."
+            )
+        }
+        val kind = (probe["kind"] as? String) ?: "other"
+        val disabled = probe["disabled"] == true
+        val readOnly = probe["readOnly"] == true
+        if (disabled || readOnly) {
+            throw IllegalArgumentException(
+                "type: target [$selector] is ${if (disabled) "disabled" else "read-only"} — user input is blocked."
+            )
+        }
+        val oldText = (probe["text"] as? String) ?: ""
+
+        val hasNewline = text.contains('\n') || text.contains('\r')
+        val isLong = text.length > TYPE_EXEC_LONG_THRESHOLD
+        // exec cannot deliver newlines into <input> (they are dropped silently).
+        val execCapable = kind == "contenteditable" || kind == "textarea" || (kind == "input" && !hasNewline)
+        val useExec = when {
+            kind == "other" -> false
+            mode == "exec" -> true
+            mode == "auto" -> execCapable && (isLong || hasNewline)
+            else -> false
+        }
+
+        if (useExec) {
+            val execResult = evaluateValue(selector, typeExecJs(text))
+            val exec = execResult as? Map<*, *>
+            if (exec?.get("ok") != true) {
+                val reason = (exec?.get("reason") as? String) ?: "editor rejected the bulk insert"
+                throw IllegalArgumentException(
+                    "type (method=$mode): bulk insert into [$selector] failed: $reason. " +
+                        "The page may need per-character input — use method=chars (browser4-cli type --method chars) " +
+                        "or paste the content manually."
+                )
+            }
+        } else {
+            // Per-code-point typing (also the fallback for non-editable-looking
+            // targets like plain divs, preserving legacy behavior).
+            typeSafe(text, selector)
+        }
+
+        if (verify) {
+            verifyTypedText(selector, oldText, text)
+        }
+    }
+
+    /**
+     * Read back the element text after a type operation and compare it with
+     * `old + text` (both normalized); throw on mismatch so typing never fails
+     * silently.  See [typeAuto] for the normalization rules.
+     */
+    private suspend fun verifyTypedText(selector: String, oldText: String, typedText: String) {
+        val newValue = evaluateValue(selector, typeReadBackJs())
+        val newText = newValue as? String ?: ""
+        val expected = (normalizeEditorText(oldText) + normalizeEditorText(typedText)).trimEnd()
+        val actual = normalizeEditorText(newText).trimEnd()
+        if (actual != expected) {
+            throw IllegalStateException(
+                "type: verification failed — the editor content does not match the typed text.\n" +
+                    "  expected (suffix): ...${expected.takeLast(120)}\n" +
+                    "  actual   (suffix): ...${actual.takeLast(120)}\n" +
+                    "The page may have rewritten, truncated, or dropped characters. " +
+                    "If the editor is a rich-text composer, retry with method=exec " +
+                    "(browser4-cli type --method exec) or check the element constraints."
+            )
+        }
+    }
+
+    /**
      * Press a [key] on the element identified by [selector] — an alias of
      * [press] kept for backward compatibility with the original
      * Browser4WebDriver extension surface.
@@ -1987,6 +2205,132 @@ internal enum class DragDropPosition(val key: String) {
 
     /** Randomized inter-event delay for the drag sequence, 120-300 ms. */
     private fun randomDragDelayMillis(): Long = Random.nextLong(120L, 301L)
+
+    // ---------------------------------------------------------------------------
+    // upload fix — the upstream pulsar-browser upload
+    // (1) silently reports success when the selector matches no element
+    //     (RobustRPC.invokeOnElement skips the block for a null node),
+    // (2) fails with an opaque CDP -32000 error when the target is not a
+    //     file input or a path is not readable by the browser process, and
+    // (3) sets files through the session-scoped `nodeId`, which is unstable
+    //     across CDP sessions.
+    //
+    // This override keeps the whole chain — element resolution, DOM.describeNode
+    // and DOM.setFileInputFiles — inside ONE RobustRPC call (same CDP session),
+    // switches to the stable backendNodeId (agent-browser style), validates the
+    // target is really an `<input type="file">`, and turns every silent or
+    // opaque failure into an explicit, actionable error.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Upload [paths] to the file input identified by [selector], failing loudly
+     * (never silently) on every error path:
+     *
+     * - no element matches [selector] → `IllegalArgumentException` with a
+     *   stale-ref hint;
+     * - the target is not an `<input type="file">` → `IllegalArgumentException`;
+     * - `DOM.setFileInputFiles` is rejected by Chromium (unreadable/relative
+     *   path, wrong host topology) → `WebDriverException` wrapping the original
+     *   CDP error with deployment guidance.
+     *
+     * The file paths are read by the **browser process** — in local mode that is
+     * this machine (the CLI canonicalizes paths before dispatch); with a remote
+     * backend the paths must exist on the backend/browser host.
+     *
+     * @param selector A CSS selector, XPath, or "backend:nodeId" locator for the file input.
+     * @param paths Absolute paths of the files to upload (one or more).
+     * @throws IllegalArgumentException on empty paths, a missing target, or a non-file-input target.
+     * @throws WebDriverException when the CDP upload fails.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun upload(selector: String, paths: List<String>) {
+        if (paths.isEmpty() || paths.any { it.isBlank() }) {
+            throw IllegalArgumentException(
+                "upload requires at least one non-empty file path (got ${paths.size} path(s))"
+            )
+        }
+
+        // All CDP steps run inside one RobustRPC attempt so the resolved DOM
+        // node ids stay valid for the whole chain.
+        val uploaded = rpc.invokeOnElement(selector, "upload", focus = true) { nodeRef ->
+            if (!nodeRef.mayExist()) {
+                // WebDriverException (not IllegalStateException): exceptions
+                // thrown inside the RobustRPC block must be of a type RobustRPC
+                // rethrows verbatim (ChromeDriverException/WebDriverException),
+                // otherwise they are wrapped into a generic "Unexpected error in
+                // [upload]" that hides the real cause from the user.
+                throw WebDriverException(
+                    "upload: could not resolve element for selector [$selector]",
+                    driver = this
+                )
+            }
+
+            val node = browserProtocol.describeNode(
+                nodeId = nodeRef.nodeId.takeIf { it > 0 },
+                backendNodeId = nodeRef.backendNodeId.takeIf { it > 0 },
+                objectId = nodeRef.objectId,
+            )
+
+            // nodeName is uppercase for HTML elements ("INPUT"); missing
+            // attributes means an <input> without an explicit type — which is
+            // type=text, i.e. NOT a file input.
+            val nodeName = node.nodeName?.uppercase()
+            if (nodeName != "INPUT") {
+                throw WebDriverException(
+                    "upload: the target [$selector] is a <${nodeName ?: "unknown"}>, not a file input. " +
+                        "Upload targets must be <input type=\"file\"> elements.",
+                    driver = this
+                )
+            }
+            val attributes = node.attributes.orEmpty()
+            val isFileType = attributes
+                .chunked(2)
+                .any { (name, value) ->
+                    name.equals("type", ignoreCase = true) && value.equals("file", ignoreCase = true)
+                }
+            if (!isFileType) {
+                throw WebDriverException(
+                    "upload: the target [$selector] is an <input> without type=\"file\" — " +
+                        "only file inputs accept uploads.",
+                    driver = this
+                )
+            }
+            val backendNodeId = node.backendNodeId
+            if (backendNodeId == null || backendNodeId <= 0) {
+                throw WebDriverException(
+                    "upload: DOM.describeNode returned no backendNodeId for selector [$selector]",
+                    driver = this
+                )
+            }
+
+            // The typed BrowserProtocol.setFileInputFiles only accepts the
+            // session-scoped nodeId; the generic CDP channel accepts the
+            // stable backendNodeId (browser_protocol.json:8358-8363) and works
+            // over both the direct and the extension-relay transports.
+            try {
+                browserProtocol.executeCdpCommand(
+                    "DOM.setFileInputFiles",
+                    mapOf("files" to paths, "backendNodeId" to backendNodeId)
+                )
+            } catch (e: Exception) {
+                throw WebDriverException(
+                    "upload to [$selector] failed. DOM.setFileInputFiles requires absolute paths " +
+                        "that are readable by the browser process (the machine hosting the backend). " +
+                        "Original error: ${e.message}",
+                    e,
+                    driver = this
+                )
+            }
+            true
+        }
+
+        if (uploaded != true) {
+            throw IllegalArgumentException(
+                "upload: no element found for selector [$selector]. " +
+                    "The selector may be stale — re-run `snapshot` to refresh refs."
+            )
+        }
+    }
 
     // ---------------------------------------------------------------------------
     // selectOption fix — the upstream pulsar-browser selectOption reports

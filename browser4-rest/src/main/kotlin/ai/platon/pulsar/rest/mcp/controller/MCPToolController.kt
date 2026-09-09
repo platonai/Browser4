@@ -462,6 +462,15 @@ class MCPToolController(
                 "ownsBrowser" to s.ownsBrowser,
                 "createdAt" to s.createdAt,
                 "lastAccessedAt" to s.lastAccessedAt,
+                // Attach identity: the REQUESTED channel vs the browser that
+                // REALLY connected.  Clients (CLI list/status) use these to
+                // surface wrong-browser attachments instead of showing only
+                // the requested channel.
+                "channel" to (s.attachChannel ?: ""),
+                "browserFamily" to (s.browserIdentity?.family ?: ""),
+                "browserName" to (s.browserIdentity?.name ?: ""),
+                "browserVersion" to (s.browserIdentity?.version ?: ""),
+                "browserUa" to (s.browserIdentity?.rawUa ?: ""),
             )
         }
         val json = pulsarObjectMapper().writeValueAsString(sessions)
@@ -543,9 +552,18 @@ class MCPToolController(
             session.sessionId,
             cdpEndpoint ?: "port $cdpPort"
         )
-        return ResponseEntity.ok(
-            textResponse("""{"sessionId":"${session.sessionId}"}""")
+        // Surface the verified browser identity (from /json/version) so the
+        // CLI can print which browser the endpoint really drives instead of
+        // just the requested endpoint/channel.
+        val identity = session.browserIdentity
+        val payload = mapOf(
+            "sessionId" to session.sessionId,
+            "browser" to (identity?.name ?: ""),
+            "browserFamily" to (identity?.family ?: ""),
+            "browserVersion" to (identity?.version ?: ""),
+            "browserUa" to (identity?.rawUa ?: ""),
         )
+        return ResponseEntity.ok(textResponse(pulsarObjectMapper().writeValueAsString(payload)))
     }
 
     /**
@@ -566,9 +584,20 @@ class MCPToolController(
         } else {
             false
         }
-        return ResponseEntity.ok(
-            textResponse("""{"ready":$ready,"healthy":$healthy}""")
+        // Include attach identity so the CLI can report WHICH browser really
+        // connected (and warn when it differs from the requested channel)
+        // right at the ready/polling point.
+        val identity = session?.browserIdentity
+        val payload = mapOf(
+            "ready" to ready,
+            "healthy" to healthy,
+            "channel" to (session?.attachChannel ?: ""),
+            "browserFamily" to (identity?.family ?: ""),
+            "browserName" to (identity?.name ?: ""),
+            "browserVersion" to (identity?.version ?: ""),
+            "browserUa" to (identity?.rawUa ?: ""),
         )
+        return ResponseEntity.ok(textResponse(pulsarObjectMapper().writeValueAsString(payload)))
     }
 
     // =========================================================================

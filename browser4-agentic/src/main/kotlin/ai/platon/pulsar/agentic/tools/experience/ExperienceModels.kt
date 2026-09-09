@@ -22,7 +22,8 @@ enum class TaskType(val displayName: String) {
     @JsonProperty("login") LOGIN("login"),
     @JsonProperty("extract_table") EXTRACT_TABLE("extract_table"),
     @JsonProperty("download_file") DOWNLOAD_FILE("download_file"),
-    @JsonProperty("monitor_change") MONITOR_CHANGE("monitor_change");
+    @JsonProperty("monitor_change") MONITOR_CHANGE("monitor_change"),
+    @JsonProperty("publish_post") PUBLISH_POST("publish_post");
 
     companion object {
         fun fromString(value: String): TaskType {
@@ -158,6 +159,41 @@ data class ExperienceQueryResult(
 )
 
 // =============================================================================
+// Facts Patch (input to experience_save's optional `facts` argument)
+// =============================================================================
+
+/**
+ * Retrospective knowledge contributed alongside an [ExecutionTrace] — the
+ * writer path for the otherwise writer-less `selectors` / `interactionHints` /
+ * `knownBlockers` / `antiPatterns` fields of [KnowledgeFacts] (see
+ * KnowledgeFacts.kt).  Accepted as a JSON string or a structured object
+ * (`experience_save ... --facts @file.json`); nested keys accept both
+ * camelCase and snake_case spellings (parsed manually, see
+ * ExperienceToolExecutor.parseFactsPatch).
+ */
+@JsonIgnoreProperties(ignoreUnknown = true)
+@JsonInclude(JsonInclude.Include.NON_NULL)
+data class FactsPatch(
+    @JsonProperty("selectors") val selectors: Map<String, VerifiedSelector> = emptyMap(),
+    @JsonProperty("interaction_hints") val interactionHints: List<String> = emptyList(),
+    @JsonProperty("known_blockers") val knownBlockers: List<BlockerInfo> = emptyList(),
+    @JsonProperty("anti_patterns") val antiPatterns: List<String> = emptyList(),
+) {
+    val isEmpty: Boolean
+        get() = selectors.isEmpty() && interactionHints.isEmpty() &&
+            knownBlockers.isEmpty() && antiPatterns.isEmpty()
+}
+
+/** Outcome of [KnowledgeStore.mergeFacts]. */
+data class FactsMergeResult(
+    val facts: KnowledgeFacts,
+    /** True when the merge was refused (VERIFIED knowledge is immutable). */
+    val rejected: Boolean = false,
+    /** Human-readable note when [rejected], or a short confirmation otherwise. */
+    val message: String = "",
+)
+
+// =============================================================================
 // Save Result
 // =============================================================================
 
@@ -174,6 +210,11 @@ data class ExperienceSaveResult(
     @JsonProperty("retrieval_tier") val retrievalTier: String = "P4",
     @JsonProperty("failure_category") @JsonInclude(JsonInclude.Include.ALWAYS) val failureCategory: String? = null,
     @JsonProperty("message") val message: String? = null,
+    /** Whether a `facts` knowledge patch was applied (and its outcome). */
+    @JsonProperty("facts_merged") val factsMerged: Boolean? = null,
+    @JsonProperty("facts_status") val factsStatus: String? = null,
+    @JsonProperty("facts_rejected") val factsRejected: Boolean? = null,
+    @JsonProperty("facts_message") val factsMessage: String? = null,
 )
 
 // =============================================================================

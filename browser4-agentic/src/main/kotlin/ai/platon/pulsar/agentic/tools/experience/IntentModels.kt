@@ -41,6 +41,12 @@ enum class Intent(
         "Compare",
         listOf("search", "extract", "compare"),
     ),
+    PUBLISH(
+        "Publish",
+        // Distinctive actions only — generic verbs (navigate/click/type) would
+        // award free +2 points to unrelated texts via substring matching.
+        listOf("compose", "tweet", "publish", "发帖", "发布"),
+    ),
     DOWNLOAD(
         "Download",
         listOf("navigate", "click", "wait"),
@@ -119,8 +125,22 @@ enum class Intent(
                 scores[DOWNLOAD] = (scores[DOWNLOAD] ?: 0) + 4
             }
             // Read-specific keywords
-            if (anyWordIn(lower, "read", "article", "news", "blog", "post", "story")) {
+            // NOTE: "post" was REMOVED from this list — posting/publishing
+            // content is PUBLISH territory ("post to x.com"); keeping it here
+            // would create a READ(+4)/PUBLISH(+4) tie that resolves by enum
+            // order (PUBLISH is declared before READ and would win anyway,
+            // but relying on tie-break order is fragile).
+            if (anyWordIn(lower, "read", "article", "news", "blog", "story")) {
                 scores[READ] = (scores[READ] ?: 0) + 4
+            }
+            // Publish-specific keywords (English + Chinese).  High weight so
+            // "post to x.com" and "发帖到 X" land on PUBLISH, not READ/OTHER.
+            if (anyWordIn(
+                    lower, "publish", "post to", "tweet", "compose", "发帖", "发布",
+                    "推文", "发推", "微博", "上传媒体", "配图", "带图"
+                )
+            ) {
+                scores[PUBLISH] = (scores[PUBLISH] ?: 0) + 4
             }
             // Fill-form-specific keywords
             if (anyWordIn(lower, "fill", "form", "register", "sign up", "subscribe", "apply")) {

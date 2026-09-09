@@ -497,6 +497,11 @@ class PulsarSessionManager(
             createManagedSession(sessionId, normalizedCapabilities, SessionKind.CDP_ATTACHED)
         }
 
+        // The /json/version probe already parsed the product string — keep it
+        // so attach responses / list / status can show which browser the CDP
+        // endpoint actually drives (the CLI cannot infer it from the port).
+        session.browserIdentity = BrowserIdentity.parse(verification.browser)
+
         // Bind the external browser to the session
         val browser = PulsarBrowser(port = port, settings = BrowserSettings())
         session.agenticSession.bindBrowser(browser)
@@ -690,6 +695,11 @@ class PulsarSessionManager(
         val session = sessions.computeIfAbsent(sessionId) {
             createManagedSession(sessionId, normalizedCapabilities, SessionKind.EXTENSION_ATTACHED)
         }
+        // Remember the REQUESTED channel.  It is informational: the browser
+        // that actually connects may differ (wrong-browser attach), which is
+        // why the real identity is captured from the WS handshake in
+        // onExtensionConnected and surfaced alongside this field.
+        session.attachChannel = channel
 
         // An extension session is not usable until the extension connects via
         // WebSocket — mark it stopped up front (onExtensionConnected flips it
@@ -721,13 +731,28 @@ class PulsarSessionManager(
      * Called by [ExtensionWebSocketHandler] when an extension WebSocket
      * connection is established.  Creates an [ExtensionChromeService] wrapping
      * the connection and binds it as the browser for the pending session.
+     *
+     * @param ua The User-Agent header of the WebSocket handshake — the only
+     *   reliable signal of WHICH browser really connected (Chrome vs Edge
+     *   both run the same store extension id, so Origin cannot distinguish
+     *   them).  Parsed into [BrowserIdentity] and stored on the session for
+     *   attach/list/status display; a mismatch with the requested channel
+     *   surfaces the "attached to the wrong browser" case.
      */
-    fun onExtensionConnected(sessionId: String, sender: ExtensionMessageSender) {
+    fun onExtensionConnected(sessionId: String, sender: ExtensionMessageSender, ua: String? = null) {
         val pending = pendingExtensionConnections.remove(sessionId)
             ?: throw IllegalStateException("No pending extension connection for session $sessionId")
 
         val managedSession = sessions[sessionId]
             ?: throw IllegalStateException("Session $sessionId not found")
+
+        val identity = BrowserIdentity.parse(ua)
+        managedSession.browserIdentity = identity
+        logger.info(
+            "Extension handshake for session {} | requestedChannel={} | actualBrowser={} {} | ua={}",
+            sessionId, managedSession.attachChannel ?: "default",
+            identity.name ?: identity.family, identity.version ?: "", identity.rawUa ?: "n/a"
+        )
 
         // Create the ExtensionChromeService that bridges the WebSocket
         // relay protocol to the internal ChromeService abstraction.

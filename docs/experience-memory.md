@@ -54,7 +54,7 @@ TraceRecord              ExperienceStats           KnowledgeFacts
 | **Stats** | `experience/<domain>/` | Mutable, continuously updated | Aggregated success/failure counts; confidence derived here |
 | **Facts** | `facts/<domain>/` | Immutable once VERIFIED | Authoritative selectors, blockers, interaction hints for replay |
 
-A fourth layer — **Patterns** (`patterns/families/`, `patterns/categories/`, `patterns/universal/`) — stores cross-site generalizations promoted from multiple domains.
+A fourth layer — **Patterns** (`patterns/families/`, `patterns/categories/`, `patterns/universal/`) — is reserved for cross-site generalizations: the query fallback chain reads these directories when they exist, but nothing in the current implementation writes to them (cross-site promotion is planned, not active; see [Storage Layout](#storage-layout)).
 
 ## Four MCP Tools
 
@@ -68,7 +68,8 @@ Records a task trace and updates statistics. Runs in ~tens of milliseconds. No a
 | `trace` | Yes | String (JSON) | JSON-encoded `ExecutionTrace` (steps, selectors, extraction results) |
 | `outcome` | No | String | `"success"` (default) or `"failure"` |
 | `intent` | No | String | Free-text description of what the task was trying to do |
-| `task_type` | No | String | One of the 12 canonical task types |
+| `task_type` | No | String | Canonical task type (e.g., `extract_product_list`, `publish_post`) |
+| `facts` | No | String (JSON) | Retrospective knowledge patch — `selectors` / `interaction_hints` / `known_blockers` / `anti_patterns` (camelCase and snake_case keys both accepted), merged into the `(domain, intent)` facts entry; the writer path for lessons learned on a task. Refused when the entry is VERIFIED (immutable) |
 
 **What it does:**
 
@@ -78,8 +79,9 @@ Records a task trace and updates statistics. Runs in ~tens of milliseconds. No a
 4. For failures, classifies the error via `FailureCategory.classify()`
 5. Writes a `TraceRecord` to `traces/<domain>/<timestamp>-<intent>.yaml`
 6. Updates `ExperienceStats` via `withSuccess()` or `withFailure()`
+7. If `facts` was supplied, merges it into the `(domain, intent)` facts entry (`KnowledgeStore.mergeFacts()`); a VERIFIED entry is immutable and the merge is refused — the error is reported back, it is never silently dropped
 
-**Returns:** `ExperienceSaveResult` — `{saved, domain, intent, confidence, retrieval_tier, failure_category, message}`
+**Returns:** `ExperienceSaveResult` — `{saved, domain, intent, confidence, retrieval_tier, failure_category, facts_merged, facts_status, facts_rejected, facts_message, message}` (`facts_*` fields are populated when `facts` was supplied; `facts_rejected=true` + `facts_message` explain a refused merge)
 
 ### experience_query — Intent-Based Retrieval
 
@@ -190,7 +192,7 @@ HYPOTHESIS  ──▶  CANDIDATE  ──▶  VERIFIED (locked, immutable)
 
 ## Intent Classification
 
-Twelve intents, each with canonical action sequences used for keyword matching:
+Thirteen intents, each with canonical action sequences used for keyword matching:
 
 | Intent | Canonical Actions | Trigger Keywords |
 |--------|-------------------|------------------|
@@ -199,8 +201,9 @@ Twelve intents, each with canonical action sequences used for keyword matching:
 | `BOOK` | search → select → fill_form → confirm | book, reserve, appointment, ticket, flight, hotel |
 | `EXTRACT` | navigate → extract | extract, scrape, get data, fetch, collect |
 | `COMPARE` | search → extract → compare | compare, vs, versus, difference between |
+| `PUBLISH` | compose → tweet → publish (发帖/发布) | publish, post to, tweet, compose, 发帖, 发布, 推文, 发推, 微博, 上传媒体, 配图, 带图 |
 | `DOWNLOAD` | navigate → click → wait | download, save file, export |
-| `READ` | navigate → scroll → extract | read, article, news, blog, post |
+| `READ` | navigate → scroll → extract | read, article, news, blog, story — note: plain "post" belongs to `PUBLISH` ("post to x.com" / 发帖) and was removed from READ keywords |
 | `LOGIN` | navigate → fill → submit | login, sign in, authenticate |
 | `CHECKOUT` | review → fill → confirm | checkout, place order, confirm purchase |
 | `FILL_FORM` | navigate → fill → submit | fill, form, register, sign up, subscribe |
@@ -259,16 +262,14 @@ Patterns like `/dp/*` match concrete URLs like `/dp/B0CXJ1NT4B`. When multiple p
 ├── experience/
 │   └── <domain>/
 │       └── <intent>.yaml                       ← ExperienceStats (mutable)
-├── facts/
-│   └── <domain>/
-│       └── <intent>.yaml                       ← KnowledgeFacts (verified, immutable)
-├── patterns/
-│   ├── families/<name>.yaml                    ← L4: site-family patterns
-│   ├── categories/<name>.yaml                  ← L4: site-category patterns
-│   └── universal/<name>.yaml                   ← L4: universal patterns
-├── .index.yaml                                 ← in-memory index (regenerated lazily)
-└── .archive/                                   ← evicted artifacts
+└── facts/
+    └── <domain>/
+        └── <intent>.yaml                       ← KnowledgeFacts (verified, immutable)
 ```
+
+The knowledge tiers are **file-level YAML keyed by `(domain, intent)`** (one file per intent under `facts/<domain>/`). The store root `{knowledge_dir}` defaults to `knowledge/`, resolved **relative to the backend process's current working directory** — `KnowledgeStore` uses `DEFAULT_BASE_DIR = Path.of("knowledge")`. There is **no `knowledge.dir` config property**; earlier documentation claiming one is wrong (a Java system property of the same name only affects the separate generic agent-memory subsystem, not this PEM store). To relocate the store, change the backend working directory.
+
+> The reserved `patterns/` family/category/universal directories are only *read* for cross-site fallback lookups; `initializeStore()` creates `traces/`, `experience/`, `facts/` (and `.archive/` for evicted artifacts) under the root on first start.
 
 ## Concurrency Model
 
@@ -281,7 +282,8 @@ Patterns like `/dp/*` match concrete URLs like `/dp/B0CXJ1NT4B`. When multiple p
 | Property | Default | Description |
 |----------|---------|-------------|
 | `browser4.experience.enabled` | `true` | Enable/disable the entire PEM system |
-| `knowledge.dir` | `knowledge/` (relative) | Knowledge store root directory |
+
+There is **no `knowledge.dir` property** — the store root defaults to `knowledge/` relative to the backend process working directory (see [Storage Layout](#storage-layout)); the row documented in earlier revisions of this page was removed because no such config option exists.
 
 The `ExperienceToolMountConfiguration` in `browser4-rest` registers the executor via Spring Boot auto-configuration (conditional on `browser4.experience.enabled=true`). The executor implements `ToolMount`, so `PluginManager` automatically wires it into both the MCP dispatcher and the LLM agent tool system.
 

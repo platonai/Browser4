@@ -52,6 +52,37 @@ Before the session is bound, the backend probes the resolved endpoint:
 
 Both failures produce a loud error (naming the endpoint and how to fix it) instead of a silent success. After a successful attach, the CLI prints the target browser's real current page URL so you can confirm it is driving the browser you intended.
 
+### Verify the Actual Browser After Attach
+
+`attach` reports **which browser actually connected**, not just the channel you requested:
+
+- **Extension attach (`--extension`)** prints `Extension connected and healthy!` followed by `Connected browser: Google Chrome 138`. Identity comes from the extension WebSocket handshake User-Agent — Chrome and Edge run the same extension id, and Edge advertises an `Edg/` UA token, so the User-Agent is the only reliable signal.
+- **CDP attach (`--cdp`)** prints `Attached to Google Chrome 138 at http://localhost:9222`. Identity comes from the browser's `GET /json/version` response.
+
+**Channel-mismatch warning:** when the actual browser family conflicts with the requested channel (e.g. `attach --extension msedge` landing on Chrome), the CLI warns immediately with ⚠:
+
+```text
+⚠  Requested channel was 'msedge', but the browser that actually connected is Google Chrome 138 — you may have attached to the WRONG browser, and login state on this browser likely differs.
+   Run `close`, then re-run `browser4-cli attach --extension msedge` and approve the connection in the correct browser.
+```
+
+Always **check the printed browser** right after attaching — the silent failure mode is driving the wrong profile and later reporting "lost login state".
+
+**Session listings also show the real browser:**
+
+- `list` — the Connection column prefers the backend-reported actual browser over the locally requested channel and annotates conflicts, e.g. `Extension (requested msedge · actual Google Chrome 138.0.0.0)` or `CDP (requested msedge · actual Google Chrome 138)`; without a conflict it reads `Extension (Google Chrome 138)` / `CDP: http://localhost:9222 (Google Chrome 138)`.
+- `status` — when a session is active it prints a current-session block: Name / Session ID / Status / Connection / Next open.
+
+**Disconnected attached sessions are never silently replaced.** If an attached session goes stale (extension relay dropped, browser closed), subsequent commands fail with an explicit error instead of quietly launching a fresh Browser4 browser (which would have no profile or login state):
+
+```text
+The attached browser session <session-id> is no longer reachable (it was NOT replaced with a new browser, so no login state was lost — the old browser may still be running).
+Re-attach to the same browser explicitly: `browser4-cli attach --extension msedge`
+Then verify the connection shows the browser you expect (use `browser4-cli list`).
+```
+
+Re-run the suggested attach command, then confirm with `list` that the connection shows the browser you expect.
+
 ## Patterns
 
 ### 1. Attach by Channel Name (Simplest)
@@ -166,6 +197,8 @@ browser4-cli screenshot --filename remote-state.png
 | `CDP endpoint ... is not reachable` | Start the target browser with `--remote-debugging-port` and retry; the endpoint named in the error is not answering |
 | `... reachable but has no page targets` | Open a tab in the target browser, then retry attach — the browser has nothing to navigate yet |
 | Attached, but the reported page looks wrong | The CLI prints the real current page URL after attach; if it does not match the window you expect, the endpoint pointed at a different browser — target the correct port |
+| Attached to the wrong browser (requested msedge, Chrome connected) | The CLI prints `Connected browser:` / `Attached to …` plus a ⚠ warning when the actual family conflicts with the requested channel — run `close`, then re-run attach with the correct channel and approve it in the correct browser |
+| Attached session went stale after a disconnect | The error states the session was NOT replaced with a new browser — re-run `attach --extension …` / `attach --cdp …` explicitly, then verify with `list` |
 | Extension session goes stale | Run `close` first, then re-attach with `attach --extension`; avoid navigating to chrome:// internal pages |
 | Extension not found / not installed | Install the Browser4 Chrome Extension in the target browser first |
 

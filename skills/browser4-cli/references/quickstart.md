@@ -70,7 +70,7 @@ refs are temporary handles: any interaction (click/fill/type/press/select/check/
 
 - **Selectors go stale**: they break when sites change their HTML. Discover selectors with `htmlsnapshot inspect` / `summary` before extracting; scenario docs are patterns, not recipes.
 - **Shell quoting (Windows)**: for complex JS/SQL use `--sql @file.sql`, `--sql-stdin`, `eval --file` / `--stdin` / `--base64`; quote `@file` paths in PowerShell (`--sql "@q.sql"`). Never inline double-quoted CSS selectors.
-- **Paginated output**: read `snapshot -v 0` per screen; locate with `snapshot grep`; `get html` / `grep` paginate at 2K lines by default (`--page N` to page). **Don't cat snapshot files** (they can exceed 256KB).
+- **Paginated output**: read `snapshot -v 0` per screen; locate with `snapshot grep`; `get html` / `grep` and `snapshot --stdout` paginate at 2K lines by default (`--page N` to page; `--all` or `--page-size 0` for the full tree — a `# … output truncated …` hint is appended to stdout when piped). **Don't cat snapshot files** (they can exceed 256KB).
 - **eval --ref must be an arrow function**: `element => element.textContent`; writing `element.textContent` returns null — the most common mistake.
 - **Dialogs**: clicking something that triggers `alert`/`confirm`/`prompt` times out; handle with `dialog-accept` / `dialog-dismiss` (or `click --auto-dismiss-dialogs <ref>`).
 - **Sandboxed environments**: when the JVM cannot write its logs, `open`/`goto` time out at startup — set `BROWSER4_RUNTIME_DIR` / `BROWSER4_CLI_STATE_DIR` to writable directories.

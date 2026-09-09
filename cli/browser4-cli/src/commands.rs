@@ -1150,7 +1150,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "type",
-            description: "Type text into the focused element or an optional target ref. Passing a ref is recommended for reliable targeting; without a ref, text may go nowhere if no element is currently focused.",
+            description: "Type text into the focused element or an optional target ref. Passing a ref is recommended for reliable targeting; without a ref, text may go nowhere if no element is currently focused. Long text (>150 chars) or multi-line text types in one bulk insert when a ref is given (method=exec/auto) instead of character by character.",
             category: Category::Keyboard,
             hidden: false,
             batch_supported: true,
@@ -1160,7 +1160,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "submit", description: "Whether to submit entered text (press Enter after)", is_bool: true, short: None },
-                OptionDef { name: "verify", description: "Verify text was correctly typed after completion", is_bool: true, short: None },
+                OptionDef { name: "verify", description: "Verify text was correctly typed after completion (advisory CLI-side report on stderr; the strict driver read-back is available to tool callers via the verify argument)", is_bool: true, short: None },
+                OptionDef { name: "method", description: "Insertion strategy with a ref: auto (default; per-character for short text, one execCommand('insertText') bulk insert for long/multi-line text), chars (always per-character), exec (always bulk insert)", is_bool: false, short: None },
                 OptionDef { name: "focus", description: "Click the target element to focus it before typing, ensuring the element is in an interactive state", is_bool: true, short: None },
                 OptionDef { name: "timeout", description: "Max seconds to wait for the element to become interactable (default: 30)", is_bool: false, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
@@ -1175,6 +1176,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if let Some(submit) = get_bool(args, "submit") {
                     p["submit"] = json!(submit);
+                }
+                if let Some(method) = get_opt_str(args, "method") {
+                    p["method"] = json!(method);
                 }
                 if let Some(timeout) = get_opt_str(args, "timeout") {
                     if let Ok(secs) = timeout.parse::<u64>() {
@@ -1468,20 +1472,35 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "upload",
-            description: "Upload one or multiple files",
+            description: "Upload one or multiple local files to a file input on the page: upload <ref> <file> [file...]. Files must be readable by the browser process on the host running the backend (local mode: the same machine). Use --no-snapshot to skip the automatic post-command accessibility tree snapshot.",
             category: Category::Core,
-            hidden: true,
+            hidden: false,
             batch_supported: true,
             args: &[
                 ArgDef { name: "ref", description: "CSS selector or element reference for the file input", optional: false },
-                ArgDef { name: "file", description: "The absolute paths to the files to upload", optional: false },
+                ArgDef { name: "file", description: "Absolute path of a file to upload (repeatable: multiple file paths upload together)", optional: false },
             ],
-            options: &[],
+            options: &[
+                OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
+            ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_file_upload".to_string(),
             tool_params_fn: |args| {
-                let file = get_str(args, "file").unwrap_or_default();
-                json!({ "ref": get_str(args, "ref").unwrap_or_default(), "paths": [file] })
+                let mut p = json!({ "ref": get_str(args, "ref").unwrap_or_default() });
+                // The upload-specific arg builder (build_upload_args) provides
+                // `paths` as a JSON array of every file positional.  Fall back
+                // to the single `file` value for direct tool_params_fn callers
+                // (unit tests, batch compilation).
+                let paths: Vec<String> = args
+                    .get("paths")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                    .filter(|a: &Vec<String>| !a.is_empty())
+                    .unwrap_or_else(|| {
+                        vec![get_str(args, "file").unwrap_or_default().to_string()]
+                    });
+                p["paths"] = json!(paths);
+                p
             },
         },
         CommandDef {
@@ -1642,11 +1661,11 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "depth", description: "Limit tree depth to n levels", is_bool: false, short: Some("d") },
                 OptionDef { name: "selector", description: "Scope snapshot to a CSS selector (use --selector; -s is reserved for --session globally). Note: root-to-leaf ancestor elements outside the matched scope are included for tree-path context.", is_bool: false, short: None },
                 OptionDef { name: "raw", description: "Strip page info and return only snapshot content (alias for --stdout)", is_bool: true, short: None },
-                OptionDef { name: "stdout", description: "Print snapshot content to stdout instead of saving to file", is_bool: true, short: None },
+                OptionDef { name: "stdout", description: "Print snapshot content to stdout instead of saving to file. Large trees are paginated (default 2000 lines/page) — when truncated, a hint is appended to stdout (and the full footer goes to stderr). Use --all or --page-size 0 to print the complete tree.", is_bool: true, short: None },
                 OptionDef { name: "viewport", description: "Capture specific screen-height page chunks (viewports). Each chunk = one screen height (~viewport height px). Indices are scroll-relative: 0 = current visible screen, 1 = one below, -1 = one above. Formats: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7). Example: -v 1-3 captures the 2nd through 4th screen-heights.", is_bool: false, short: Some("v") },
                 OptionDef { name: "auto-diff", description: "Diff against the previous snapshot — show only what changed since the last capture. Note: after page navigation (goto/open), all elements appear as changed because the entire DOM is new.", is_bool: true, short: None },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated snapshot output (1-based, default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 2000)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 2000; 0 = unlimited)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
                 OptionDef { name: "brief", short: Some("b"), is_bool: true, description: "Output only page URL and title (skip the accessibility tree). Useful for quick 'am I on the right page?' checks without the full snapshot output." },
             ],
@@ -4409,7 +4428,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Experience ----
         CommandDef {
             name: "experience-save",
-            description: "Save a task execution trace to the progressive experience memory. Records the steps taken, selectors used, and outcome so future tasks on the same domain can replay them.",
+            description: "Save a task execution trace to the progressive experience memory. Records the steps taken, selectors used, and outcome so future tasks on the same domain can replay them. Optionally pass --facts @file.json (or inline JSON) to merge retrospective knowledge (selectors, interaction_hints, known_blockers, anti_patterns) into the domain's facts entry.",
             category: Category::Agent,
             hidden: false,
             batch_supported: false,
@@ -4420,7 +4439,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "outcome", description: "Task outcome: success (default) or failure", is_bool: false, short: None },
                 OptionDef { name: "intent", description: "Free-text description of what the task was trying to do", is_bool: false, short: None },
-                OptionDef { name: "task-type", description: "Canonical task type (e.g. extract_product_detail, search, navigate)", is_bool: false, short: None },
+                OptionDef { name: "task-type", description: "Canonical task type (e.g. extract_product_detail, search, navigate, publish_post)", is_bool: false, short: None },
+                OptionDef { name: "facts", description: "Retrospective knowledge patch: inline JSON or @file.json with selectors/interaction_hints/known_blockers/anti_patterns (merged into the domain facts entry; refused when VERIFIED)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "experience_save".to_string(),
@@ -4430,6 +4450,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(outcome) = get_opt_str(args, "outcome") { params["outcome"] = json!(outcome); }
                 if let Some(intent) = get_opt_str(args, "intent") { params["intent"] = json!(intent); }
                 if let Some(task_type) = get_opt_str(args, "task-type") { params["task_type"] = json!(task_type); }
+                if let Some(facts) = get_opt_str(args, "facts") { params["facts"] = json!(facts); }
                 params
             },
         },

@@ -136,6 +136,7 @@ Element commands (`click`, `fill`, `type`, …) resolve CSS selectors against th
 | `snapshot` | Capture accessibility tree (AXTree) with element refs | **Page structure & interaction** — find elements to click, fill, etc. Use `snapshot` when you need refs (e5, e36) to interact with. | [snapshot.md](references/snapshot.md) |
 | `snapshot grep` | Search snapshot content with regex | Find elements by text or pattern | — |
 | `click`, `dblclick`, `drag`, `hover`, `fill`, `type`, `press`, `select`, `check`, `generate-locator` | Page interaction | Form filling, button clicks, mouse actions, navigation | — |
+| `upload <ref> <file> [file...]` | Upload local files to a page file input | Send attachments/photos/documents to an `<input type="file">`; the target must be a file input, paths must be readable on the machine running the browser | [upload.md](references/upload.md) |
 | `focus`, `key`, `keyboard` | Focus an element / press a key (key & keyboard alias `press`) | Explicit focus before typing, agent-browser-style keypresses | — |
 | `is visible\|enabled\|checked <sel>` | Element state assertions | Verify visibility, enabled-ness, or checked state before acting | — |
 | `dialog-accept`, `dialog-dismiss`, `dialog-status` | Native JS dialog handling | After clicking buttons that trigger alert/confirm/prompt; `dialog-status` inspects the pending dialog | — |
@@ -153,7 +154,7 @@ Element commands (`click`, `fill`, `type`, …) resolve CSS selectors against th
 | `swarm` | Parallel scraping across browser contexts | High-throughput extraction | [swarm.md](references/swarm.md) |
 | `loop` | Repeated task execution with persistence | Monitoring, scheduled checks | [loop.md](references/loop.md) |
 | `state-save`, `state-load`, `cookie-*`, `*-storage-*` | Browser storage management | Auth state reuse, cookie manipulation | [storage-state.md](references/storage-state.md) |
-| `attach` | Connect to existing Chrome/Edge via CDP | Debug live browser, reuse auth | [attach.md](references/attach.md) |
+| `attach` | Connect to existing Chrome/Edge via CDP | Debug live browser, reuse auth — after attaching, check the printed actual browser; a ⚠ warning flags a channel mismatch (e.g. requested msedge but Chrome connected) | [attach.md](references/attach.md) |
 | `webdb export`, `webdb normalize` | Export cached pages, normalize URLs to database keys | Post-crawl content extraction, URL key lookup | [webdb.md](references/webdb.md) |
 | `skills`, `skills get`, `skills path`, `skills unpack` | Bundled AI agent skill files | Refresh agent instructions, unpack skill files | [skills.md](references/skills.md) |
 | `skill-list`, `skill-info`, `skill-install`, `skill-uninstall`, `skill-reload` | Backend skill management | Install/manage server-side skills | [skills.md](references/skills.md) |
@@ -194,6 +195,8 @@ Choosing how to extract or process data? The full decision trees, comparisons, a
 > **Warning:** Don't cat snapshot files — they can exceed 256KB. The same applies to `--stdout`, which may dump large accessibility trees (63KB+ for content-rich pages). Use viewport pagination (`snapshot -v 0`), `snapshot grep <pattern>`, or `snapshot --stdout --page 1` instead. For targeted extraction, prefer `snapshot grep` or `htmlsnapshot` commands over full-tree dumps.
 
 > **Note:** Output pagination defaults — `get html`, `get all html`, and `grep` paginate at 2K lines. `get text` and `get all text` are not paginated by default. Use `--all` to disable pagination, or `--page N` for subsequent pages.
+
+> **Note — `snapshot --stdout`/`--raw` pagination:** large stdout trees are paginated at **2000 lines/page** by default. When truncated, the footer goes to stderr, and when stdout is a pipe/redirect a `# … output truncated: showing N of M lines — re-run with --all (or --page-size 0) for the full tree.` hint is appended to stdout so the cut is visible in captured output. `--page-size 0` (or `--all`) disables paging. For very large pages, prefer bounding the capture with `-v N`, `--depth`, `--selector`, or `--no-boxes` over full-tree dumps.
 
 > **Snapshot modes — when to use `-v 0` vs `-i` vs default:**
 >
@@ -246,6 +249,8 @@ Proven copy-paste recipes — full walkthroughs in **[quick-patterns.md](referen
 9. **PowerCSS** — `:expr()` visual-feature selectors; full reference in [power-dom.md](references/power-dom.md)
 10. **Agent Task Lifecycle** — `agent run` (async) → `status` → `result`; or `--wait [--wait-timeout]`
 11. **Agent Memory** — run-start `## Memory` recall, `memory_note`, `memory_search`/`read`/`forget`, auto-deposit
+12. **Typing text (`type`)** — `type "text" <ref>`; add `--method auto|chars|exec` (requires a target ref): `auto` (default) types short text per-character and switches to a one-shot `execCommand('insertText')` bulk insert for long (>150 chars) or multi-line text on textarea/contenteditable; `chars` forces per-character typing; `exec` forces the bulk insert. `--verify` keeps its strict read-back semantics for tool callers.
+13. **File Upload** — `upload <ref> <file> [file...]` uploads one or more local files to a page file input (`<input type="file">` only); the paths must be readable by the browser process (remote backend: resolved on the backend host). Multi-file, absolute paths, `--no-snapshot` supported; see [upload.md](references/upload.md).
 ## 7. Reference Map
 
 Organized by task — follow the link that matches what you're trying to do:
@@ -253,6 +258,7 @@ Organized by task — follow the link that matches what you're trying to do:
 **Start here (distilled core):** [quickstart.md](references/quickstart.md) — distilled resident quick reference (core loop, copy-paste template, key commands, snapshot vs htmlsnapshot, critical warnings); embedded in the CLI engine's system prompt — full details live in this SKILL.md.
 
 **Interact with pages (accessibility tree & element refs):** [snapshot.md](references/snapshot.md) — `snapshot`, `snapshot grep`, `-v` viewport paging, `--auto-diff`, `-i` interactive mode, element refs
+[upload.md](references/upload.md) — upload local files to a page `<input type="file">` (multi-file, `--no-snapshot`, browser-host path rules)
 
 **Extract data from pages:**
 [htmlsnapshot.md](references/htmlsnapshot.md) — `get`, `get all`, `query`, `grep`, `summary`, `inspect`, `export`

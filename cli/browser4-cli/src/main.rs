@@ -44,8 +44,8 @@ use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 
 use args::{
-    build_command_args, build_short_option_map, parse_batch_args, parse_batch_json_commands,
-    COMMAND_ARG_ALIASES,
+    build_command_args, build_short_option_map, build_upload_args, parse_batch_args,
+    parse_batch_json_commands, COMMAND_ARG_ALIASES,
     parse_command_string, parse_global_flags, parse_raw_args, GlobalFlags,
 };
 use commands::{commands_map, is_element_reference};
@@ -1148,6 +1148,14 @@ where
                 return Err(err);
             }
             invalidate_session(&state, base_url, session_name);
+            // Attached sessions (CDP / extension relay) must NEVER be
+            // silently replaced by a fresh Browser4-managed browser — the new
+            // browser has no profile and no login state, which used to
+            // surface as mysterious "session lost login" incidents.  Fail
+            // loudly and point at the explicit re-attach command instead.
+            if state.kind.is_attached() {
+                return Err(reconnect_attached_session_message(&state));
+            }
             if !recover_stale {
                 return Err(saved_session_expired_message());
             }
@@ -1156,6 +1164,35 @@ where
             action(new_session_id).await
         }
     }
+}
+
+/// Error message telling the user how to re-attach a stale attached session
+/// (extension relay or CDP), instead of silently creating a new browser.
+fn reconnect_attached_session_message(state: &CliState) -> String {
+    let attach_cmd = match state.kind {
+        crate::state::SessionKind::ExtensionAttached => {
+            if let Some(ref channel) = state.browser_channel {
+                format!("attach --extension {channel}")
+            } else {
+                "attach --extension".to_string()
+            }
+        }
+        crate::state::SessionKind::CdpAttached => {
+            if let Some(ref endpoint) = state.cdp_endpoint {
+                format!("attach --cdp {endpoint}")
+            } else {
+                "attach --cdp <endpoint>".to_string()
+            }
+        }
+        _ => "attach".to_string(),
+    };
+    let session_id = state.session_id.as_deref().unwrap_or("?");
+    format!(
+        "The attached browser session {session_id} is no longer reachable (it was NOT replaced \
+         with a new browser, so no login state was lost — the old browser may still be running).\n\
+         Re-attach to the same browser explicitly: `browser4-cli {attach_cmd}`\n\
+         Then verify the connection shows the browser you expect (use `browser4-cli list`)."
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1463,10 +1500,12 @@ async fn resolve_attached_session_id(
     };
 
     let ready_params = json!({ "sessionId": attached_id });
-    let healthy = call_tool(client, base_url, "check_session_ready", ready_params)
+    let ready_response = call_tool(client, base_url, "check_session_ready", ready_params)
         .await
         .ok()
-        .and_then(|r| serde_json::from_str::<Value>(&r).ok())
+        .and_then(|r| serde_json::from_str::<Value>(&r).ok());
+    let healthy = ready_response
+        .as_ref()
         .map(|v| {
             let ready = v.get("ready").and_then(|r| r.as_bool()).unwrap_or(false);
             let h = v.get("healthy").and_then(|h| h.as_bool()).unwrap_or(false);
@@ -1475,6 +1514,24 @@ async fn resolve_attached_session_id(
         .unwrap_or(false);
 
     if healthy {
+        // Reuse is only safe when the session still points at the browser we
+        // think it does — echo the backend-reported actual browser so a
+        // wrong-browser reconnect is visible instead of a silent "reuse".
+        let actual_browser = ready_response.as_ref().map(|v| {
+            let family = v.get("browserFamily").and_then(|f| f.as_str()).unwrap_or("");
+            let name = v.get("browserName").and_then(|n| n.as_str()).unwrap_or("");
+            let version = v.get("browserVersion").and_then(|x| x.as_str()).unwrap_or("");
+            match (name, version) {
+                (n, v) if !n.is_empty() && !v.is_empty() => format!("{n} {v}"),
+                (n, _) if !n.is_empty() => n.to_string(),
+                (_, v) if !v.is_empty() => format!("{family} {v}"),
+                _ if !family.is_empty() => family.to_string(),
+                _ => String::new(),
+            }
+        });
+        if let Some(browser) = actual_browser.filter(|b| !b.is_empty()) {
+            cli_println!("Reconnected to session {} (browser: {})", attached_id, browser);
+        }
         return Ok(attached_id.to_string());
     }
 
@@ -1881,11 +1938,55 @@ async fn handle_attach(
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
 
+                    // The backend reports WHICH browser actually connected
+                    // (from the WS handshake User-Agent — the extension id is
+                    // identical in Chrome and Edge, so this is the only
+                    // reliable signal).  Compare against the requested channel
+                    // so an accidental wrong-browser attach is visible the
+                    // moment the connection succeeds instead of surfacing
+                    // later as "lost login state".
+                    let actual_family = ready_parsed
+                        .as_ref()
+                        .and_then(|v| v.get("browserFamily"))
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("unknown");
+                    let actual_name = ready_parsed
+                        .as_ref()
+                        .and_then(|v| v.get("browserName"))
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty());
+                    let actual_version = ready_parsed
+                        .as_ref()
+                        .and_then(|v| v.get("browserVersion"))
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty());
+                    let actual_browser = match (actual_name, actual_version) {
+                        (Some(name), Some(version)) => format!("{name} {version}"),
+                        (Some(name), None) => name.to_string(),
+                        (None, Some(version)) => {
+                            format!("{actual_family} {version}")
+                        }
+                        (None, None) => actual_family.to_string(),
+                    };
+                    let requested = channel.as_deref().unwrap_or("(unspecified)");
+                    let mismatch = channel_family_conflict(requested, actual_family);
+
                     if ready && healthy {
                         cli_println!(
                             "Extension connected and healthy! ({:.0}s)",
                             elapsed.as_secs()
                         );
+                        cli_println!("Connected browser: {actual_browser}");
+                        if mismatch {
+                            cli_println!(
+                                "⚠  Requested channel was '{requested}', but the browser that actually \
+                                 connected is {actual_browser} — you may have attached to the WRONG \
+                                 browser, and login state on this browser likely differs. \
+                                 Run `close`, then re-run `browser4-cli attach --extension {requested}` \
+                                 and approve the connection in the correct browser."
+                            );
+                        }
                         cli_println!("Session ready: {}", session_id);
                         return Ok(());
                     }
@@ -1960,15 +2061,32 @@ async fn handle_attach(
     let result = call_tool(client, &effective_base_url, "attach_browser", attach_params).await?;
 
     // Extract session ID from the response
-    let session_id = if let Ok(parsed) = serde_json::from_str::<Value>(&result) {
-        parsed
-            .get("sessionId")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&result)
-            .to_string()
-    } else {
-        result.clone()
-    };
+    let (session_id, browser_name, browser_version, browser_family) =
+        if let Ok(parsed) = serde_json::from_str::<Value>(&result) {
+            let sid = parsed
+                .get("sessionId")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&result)
+                .to_string();
+            let name = parsed
+                .get("browser")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            let version = parsed
+                .get("browserVersion")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            let family = parsed
+                .get("browserFamily")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            (sid, name, version, family)
+        } else {
+            (result.clone(), None, None, None)
+        };
 
     // Persist session state for subsequent commands
     let mut state = read_state(None, session_name);
@@ -1986,7 +2104,19 @@ async fn handle_attach(
     json_field("session_id", json!(&session_id));
     json_field("cdp_endpoint", json!(&cdp_endpoint));
 
-    cli_println!("Attached to browser at {}", cdp_endpoint);
+    let browser_label = match (browser_name, browser_version) {
+        (Some(name), Some(version)) => format!("{name} {version}"),
+        (Some(name), None) => name.to_string(),
+        (None, Some(version)) => {
+            format!("{} {version}", browser_family.unwrap_or_else(|| "browser".to_string()))
+        }
+        (None, None) => String::new(),
+    };
+    if !browser_label.is_empty() {
+        cli_println!("Attached to {} at {}", browser_label, cdp_endpoint);
+    } else {
+        cli_println!("Attached to browser at {}", cdp_endpoint);
+    }
     cli_println!(
         "{}",
         format_session_opened_message(session_name, &session_id)
@@ -3949,6 +4079,77 @@ fn connection_label(state: &CliState) -> String {
     }
 }
 
+/// Whether the requested attach channel conflicts with the browser family
+/// that actually connected.  `attach --extension msedge` landing on Chrome
+/// (or the reverse) is the "wrong browser" incident this guards against.
+/// Chrome-family forks (Brave/Opera/…) never conflict with a chrome request
+/// and always conflict with an edge request.
+fn channel_family_conflict(requested_channel: &str, actual_family: &str) -> bool {
+    if requested_channel.is_empty() || actual_family.is_empty() {
+        return false;
+    }
+    let requested = requested_channel.to_ascii_lowercase();
+    if requested.contains("edge") {
+        actual_family != "edge"
+    } else if requested.contains("chrome") {
+        actual_family == "edge"
+    } else {
+        false
+    }
+}
+
+/// Compose the Connection column for one session row, preferring the
+/// backend-reported ACTUAL browser identity over the locally recorded
+/// *requested* channel (which is what [connection_label] alone shows).
+/// When the actual browser conflicts with the requested channel — the
+/// "attached to the wrong browser" case — the label says so explicitly.
+fn connection_label_full(state: &CliState, record: Option<&BackendSessionRecord>) -> String {
+    let Some(rec) = record else {
+        return connection_label(state);
+    };
+
+    let actual = match (rec.browser_name.as_deref(), rec.browser_version.as_deref()) {
+        (Some(name), Some(version)) if !name.is_empty() && !version.is_empty() =>
+            format!("{name} {version}"),
+        (Some(name), _) if !name.is_empty() => name.to_string(),
+        (_, Some(version)) if !version.is_empty() =>
+            format!("{} {version}", family_display_name(rec.browser_family.as_deref().unwrap_or(""))),
+        _ => return connection_label(state),
+    };
+    let requested = state.browser_channel.as_deref().unwrap_or("");
+    let actual_family = rec.browser_family.as_deref().unwrap_or("");
+    let conflict = channel_family_conflict(requested, actual_family);
+
+    match state.kind {
+        crate::state::SessionKind::ExtensionAttached => {
+            if conflict {
+                format!("Extension (requested {requested} · actual {actual})")
+            } else {
+                format!("Extension ({actual})")
+            }
+        }
+        crate::state::SessionKind::CdpAttached => {
+            let endpoint = state.cdp_endpoint.as_deref().unwrap_or("cdp");
+            if conflict {
+                format!("CDP (requested {requested} · actual {actual})")
+            } else {
+                format!("CDP: {endpoint} ({actual})")
+            }
+        }
+        _ => connection_label(state),
+    }
+}
+
+/// Display name for a browser family (used when the product name is missing).
+fn family_display_name(family: &str) -> &'static str {
+    match family {
+        "edge" => "Edge",
+        "chrome" => "Chrome",
+        "chromium-other" => "Chromium-based",
+        _ => "Browser",
+    }
+}
+
 /// Get display timestamps for a session, preferring backend (canonical) over local state.
 /// Returns a pair of `(created, last_accessed)` display strings in "YYYY-MM-DD HH:MM:SS" format.
 fn list_session_timestamps(
@@ -4029,7 +4230,10 @@ async fn handle_list(client: &Client, base_url: &str, verbose: bool) -> Result<(
                                 let status = list_session_status(backend_sessions.as_deref(), sid);
                                 let next_open =
                                     list_session_next_open_action(backend_sessions.as_deref(), sid);
-                                let conn = connection_label(&state);
+                                let backend_record = backend_sessions.as_ref().and_then(|records| {
+                                    records.iter().find(|r| r.session_id == *sid)
+                                });
+                                let conn = connection_label_full(&state, backend_record);
                                 let (created, last_access) = list_session_timestamps(
                                     backend_sessions.as_deref(),
                                     sid,
@@ -4061,7 +4265,10 @@ async fn handle_list(client: &Client, base_url: &str, verbose: bool) -> Result<(
         if backend_knows_session {
             let status = list_session_status(backend_sessions.as_deref(), sid);
             let next_open = list_session_next_open_action(backend_sessions.as_deref(), sid);
-            let conn = connection_label(&default_state);
+            let backend_record = backend_sessions
+                .as_ref()
+                .and_then(|records| records.iter().find(|r| r.session_id == *sid));
+            let conn = connection_label_full(&default_state, backend_record);
             let (created, last_access) =
                 list_session_timestamps(backend_sessions.as_deref(), sid, Some(&default_state));
             rows.push(SessionRow {
@@ -4190,6 +4397,38 @@ struct BackendSessionRecord {
     healthy: Option<bool>,
     created_at: Option<i64>,
     last_accessed_at: Option<i64>,
+    /// Session kind as reported by the backend (BROWSER4_LAUNCHED /
+    /// CDP_ATTACHED / EXTENSION_ATTACHED).  Older backends omit it.
+    kind: Option<String>,
+    /// Whether the session owns its browser lifecycle.
+    owns_browser: Option<bool>,
+    /// Requested attach channel (msedge/chrome) stored server-side.
+    channel: Option<String>,
+    /// Actual browser identity reported by the backend (WS-handshake UA for
+    /// extension sessions, /json/version product for CDP sessions).
+    browser_family: Option<String>,
+    browser_name: Option<String>,
+    browser_version: Option<String>,
+    browser_ua: Option<String>,
+}
+
+impl Default for BackendSessionRecord {
+    fn default() -> Self {
+        BackendSessionRecord {
+            session_id: String::new(),
+            status: None,
+            healthy: None,
+            created_at: None,
+            last_accessed_at: None,
+            kind: None,
+            owns_browser: None,
+            channel: None,
+            browser_family: None,
+            browser_name: None,
+            browser_version: None,
+            browser_ua: None,
+        }
+    }
 }
 
 fn list_session_status(
@@ -4310,6 +4549,13 @@ fn parse_backend_session_records(result: &str) -> Vec<BackendSessionRecord> {
                                 healthy: None,
                                 created_at: None,
                                 last_accessed_at: None,
+                                kind: None,
+                                owns_browser: None,
+                                channel: None,
+                                browser_family: None,
+                                browser_name: None,
+                                browser_version: None,
+                                browser_ua: None,
                             })
                             .or_else(|| {
                                 entry
@@ -4329,6 +4575,41 @@ fn parse_backend_session_records(result: &str) -> Vec<BackendSessionRecord> {
                                         last_accessed_at: entry
                                             .get("lastAccessedAt")
                                             .and_then(|v| v.as_i64()),
+                                        // Newer backends report attach identity —
+                                        // parse tolerantly so older backends and
+                                        // string-array responses still work.
+                                        kind: entry
+                                            .get("kind")
+                                            .and_then(|value| value.as_str())
+                                            .map(str::to_string),
+                                        owns_browser: entry
+                                            .get("ownsBrowser")
+                                            .and_then(|value| value.as_bool()),
+                                        channel: entry
+                                            .get("channel")
+                                            .and_then(|value| value.as_str())
+                                            .filter(|s| !s.is_empty())
+                                            .map(str::to_string),
+                                        browser_family: entry
+                                            .get("browserFamily")
+                                            .and_then(|value| value.as_str())
+                                            .filter(|s| !s.is_empty())
+                                            .map(str::to_string),
+                                        browser_name: entry
+                                            .get("browserName")
+                                            .and_then(|value| value.as_str())
+                                            .filter(|s| !s.is_empty())
+                                            .map(str::to_string),
+                                        browser_version: entry
+                                            .get("browserVersion")
+                                            .and_then(|value| value.as_str())
+                                            .filter(|s| !s.is_empty())
+                                            .map(str::to_string),
+                                        browser_ua: entry
+                                            .get("browserUa")
+                                            .and_then(|value| value.as_str())
+                                            .filter(|s| !s.is_empty())
+                                            .map(str::to_string),
                                     })
                             })
                     })
@@ -5427,6 +5708,11 @@ async fn handle_snapshot(
     let (page, page_size, show_all) = parse_page_opts(tool_params);
 
     if raw {
+        // When the raw/stdout output is paginated, the truncation footer goes
+        // to stderr — but in a pipe/redirect (agent or file capture) stderr is
+        // lost, leaving a silently cut snapshot (see weibo2x lessons, 2026-09).
+        // Mirror a one-line hint onto stdout when stdout is not a terminal.
+        let stdout_not_terminal = !std::io::stdout().is_terminal();
         if let Some(ref pm) = server_pagination {
             // Server already paginated — just print the content and footer.
             println!("{}", snap);
@@ -5438,12 +5724,26 @@ async fn handle_snapshot(
                     (pm.page.min(pm.total_pages) * pm.page_size).min(pm.total_lines),
                     pm.total_lines
                 );
+                if stdout_not_terminal {
+                    println!(
+                        "# … output truncated: showing {} of {} lines — re-run with --all (or --page-size 0) for the full tree.",
+                        (pm.page.min(pm.total_pages) * pm.page_size).min(pm.total_lines),
+                        pm.total_lines
+                    );
+                }
             }
         } else if !skip_pagination(show_all) {
             let (page_text, meta) = paginate_output(snap, page, page_size);
             println!("{}", page_text);
             if meta.is_truncated && !json_active() {
                 eprintln!("{}", format_pagination_footer(&meta));
+                if stdout_not_terminal {
+                    println!(
+                        "# … output truncated: showing {} of {} lines — re-run with --all (or --page-size 0) for the full tree.",
+                        (meta.current_page.min(meta.total_pages) * meta.page_size).min(meta.total_lines),
+                        meta.total_lines
+                    );
+                }
             }
         } else {
             println!("{}", snap);
@@ -18419,7 +18719,11 @@ async fn handle_stop() -> Result<(), String> {
     Ok(())
 }
 
-async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
+async fn handle_status(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+) -> Result<(), String> {
     cli_println!("Browser4 Status");
     cli_println!("===============");
     cli_println!("CLI version: {}", VERSION);
@@ -18503,6 +18807,44 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
     // is reachable, regardless of health.
     cli_println!("Status panel: {}/status", base_url);
     json_field("status_panel", json!(format!("{base_url}/status")));
+
+    // Current-session summary — which browser this CLI session talks to,
+    // including the ACTUAL connected browser for attached sessions (the
+    // "attached to the wrong browser" detector).
+    let state = read_state(None, session_name);
+    if let Some(sid) = state.session_id.as_deref() {
+        let name = session_name.unwrap_or("(default)").to_string();
+        let records = if health == "UP" {
+            call_tool(client, base_url, "list_sessions", json!({}))
+                .await
+                .ok()
+                .map(|r| parse_backend_session_records(&r))
+        } else {
+            None
+        };
+        let record = records
+            .as_ref()
+            .and_then(|recs| recs.iter().find(|r| r.session_id == *sid));
+        let status = list_session_status(records.as_deref(), sid);
+        let next_open = list_session_next_open_action(records.as_deref(), sid);
+        let conn = connection_label_full(&state, record);
+        cli_println!("\nSession:");
+        cli_println!("  Name: {}", name);
+        cli_println!("  Session ID: {}", sid);
+        cli_println!("  Status: {}", status);
+        cli_println!("  Connection: {}", conn);
+        cli_println!("  Next open: {}", next_open);
+        json_field(
+            "session",
+            json!({
+                "name": name,
+                "session_id": sid,
+                "status": status,
+                "connection": conn,
+                "next_open": next_open,
+            }),
+        );
+    }
 
     // Version comparison: use the live server version if available; fall back
     // to the installed bundle only when the server is unreachable.
@@ -20247,6 +20589,27 @@ fn validate_command_semantics(
             Some(_) => {
                 return Err(
                     "invalid --content for har start. Valid options: all, text, none".to_string(),
+                );
+            }
+        }
+    }
+    if command == "type" {
+        // --method needs a ref target: exec/verify need a read-back target and
+        // auto/chars make no sense on the "currently focused element" path.
+        if let Some(method) = parsed.get("method").and_then(|v| v.as_str()) {
+            if !matches!(method, "auto" | "chars" | "exec") {
+                return Err(format!(
+                    "invalid --method '{method}' for type. Valid options: auto, chars, exec"
+                ));
+            }
+            let has_ref = parsed
+                .get("ref")
+                .map(|v| v.as_str().map(|s| !s.is_empty()).unwrap_or(false))
+                .unwrap_or(false);
+            if !has_ref {
+                return Err(
+                    "type --method requires a target ref: type <text> <ref> --method <auto|chars|exec>"
+                        .to_string(),
                 );
             }
         }
@@ -22101,8 +22464,14 @@ async fn run(
     let (short_to_long, bool_opts) = build_short_option_map(cmd_def.options);
     let raw_parsed = parse_raw_args(&global.args, Some(&short_to_long), Some(&bool_opts));
     let arg_names: Vec<&str> = cmd_def.args.iter().map(|a| a.name).collect();
-    let parsed =
-        build_command_args(&raw_parsed, &arg_names, COMMAND_ARG_ALIASES).map_err(|e| e.to_string())?;
+    // `upload` accepts multiple file positionals; the generic builder would
+    // join them into one space-joined path (upload e5 a.txt b.txt → "a.txt
+    // b.txt").  Use the upload-specific builder that keeps each file intact.
+    let parsed = if command == "upload" {
+        build_upload_args(&raw_parsed).map_err(|e| e.to_string())?
+    } else {
+        build_command_args(&raw_parsed, &arg_names, COMMAND_ARG_ALIASES).map_err(|e| e.to_string())?
+    };
 
     // Validate required positional arguments (fast-fail for malformed commands).
     validate_required_args(cmd_def, &parsed)?;
@@ -22125,6 +22494,75 @@ async fn run(
     // Resolve tool name and parameters
     let tool_name = (cmd_def.tool_name_fn)(&parsed);
     let mut tool_params = (cmd_def.tool_params_fn)(&parsed);
+
+    // Early validation for `upload`: file paths must be non-empty; in local
+    // topology (CLI runs on the same host as the backend/browser) they must
+    // exist on this machine and are canonicalized to absolute paths before
+    // dispatch.  With a remote backend the browser process reads files on
+    // the backend host, so existence cannot be checked client-side — a note
+    // is printed instead of a hard error.
+    if command == "upload" {
+        let is_local = base_url.contains("localhost") || base_url.contains("127.0.0.1");
+        let paths: Vec<String> = tool_params
+            .get("paths")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        if paths.is_empty() {
+            return Err(CliError(
+                ExitCode::Usage,
+                "upload requires at least one file path (usage: upload <ref> <file> [file...])"
+                    .to_string(),
+            ));
+        }
+        if paths.iter().any(|p| p.is_empty()) {
+            return Err(CliError(
+                ExitCode::Usage,
+                "upload: file path must not be empty.".to_string(),
+            ));
+        }
+        if is_local {
+            let mut missing: Vec<String> = Vec::new();
+            let mut canonicalized: Vec<String> = Vec::new();
+            for p in &paths {
+                match std::fs::canonicalize(p) {
+                    Ok(c) => canonicalized.push(c.to_string_lossy().into_owned()),
+                    Err(_) => missing.push(p.clone()),
+                }
+            }
+            if !missing.is_empty() {
+                return Err(CliError(
+                    ExitCode::Usage,
+                    format!(
+                        "upload: file(s) not found or not readable on this machine: {}. \
+                         The browser process reads files on the host running the backend — in local mode that is this machine.",
+                        missing.join(", ")
+                    ),
+                ));
+            }
+            tool_params["paths"] = json!(canonicalized);
+        } else if !json_active() && !quiet_active() {
+            eprintln!(
+                "ℹ️  Remote backend: upload file paths are resolved on the host running the \
+                 backend — verify the files exist there."
+            );
+        }
+    }
+
+    // experience-save --facts @file: expand the file into the facts payload
+    // (JSON knowledge patches are long — PowerShell quoting pain is avoided
+    // by reading them from a file, like --sql/--selector @file).
+    if command == "experience-save" {
+        if let Some(facts_raw) = tool_params.get("facts").and_then(|v| v.as_str()) {
+            let expanded = if let Some(file_path) = facts_raw.strip_prefix('@') {
+                resolve_sql_file(file_path)
+                    .map_err(|e| CliError(ExitCode::Usage, format!("cannot read --facts file: {e}")))?
+            } else {
+                facts_raw.to_string()
+            };
+            tool_params["facts"] = json!(expanded);
+        }
+    }
 
     // Early validation for cookie/storage domain options — an explicitly
     // provided but invalid domain (e.g. "." or "a b.com") must fail loudly
@@ -22308,7 +22746,7 @@ async fn run(
             handle_stop().await?;
         }
         "status" => {
-            handle_status(&client, &base_url).await?;
+            handle_status(&client, &base_url, global.session_name.as_deref()).await?;
         }
         "doctor" => {
             handle_doctor(&client, &base_url, &parsed).await?;
@@ -26085,14 +26523,14 @@ mod tests {
                 status: Some("active".to_string()),
                 healthy: None,
                 created_at: None,
-                last_accessed_at: None,
+                last_accessed_at: None,                ..Default::default()
             },
             BackendSessionRecord {
                 session_id: "session-2".to_string(),
                 status: Some("stopped".to_string()),
                 healthy: None,
                 created_at: None,
-                last_accessed_at: None,
+                last_accessed_at: None,                ..Default::default()
             },
         ];
 
@@ -26111,14 +26549,14 @@ mod tests {
                 status: Some("active".to_string()),
                 healthy: Some(false),
                 created_at: None,
-                last_accessed_at: None,
+                last_accessed_at: None,                ..Default::default()
             },
             BackendSessionRecord {
                 session_id: "session-2".to_string(),
                 status: Some("active".to_string()),
                 healthy: Some(true),
                 created_at: None,
-                last_accessed_at: None,
+                last_accessed_at: None,                ..Default::default()
             },
         ];
 
@@ -26160,14 +26598,14 @@ mod tests {
                 status: Some("active".to_string()),
                 healthy: None,
                 created_at: None,
-                last_accessed_at: None,
+                last_accessed_at: None,                ..Default::default()
             },
             BackendSessionRecord {
                 session_id: "session-2".to_string(),
                 status: Some("stopped".to_string()),
                 healthy: None,
                 created_at: None,
-                last_accessed_at: None,
+                last_accessed_at: None,                ..Default::default()
             },
         ];
 
@@ -26184,6 +26622,102 @@ mod tests {
             "Refresh"
         );
         assert_eq!(list_session_next_open_action(None, "session-1"), "Refresh");
+    }
+
+    #[test]
+    fn channel_family_conflict_matrix() {
+        // edge request + edge actual → no conflict
+        assert!(!channel_family_conflict("msedge", "edge"));
+        assert!(!channel_family_conflict("MsEdge-Beta", "edge"));
+        // edge request + anything non-edge → conflict (the wrong-browser case)
+        assert!(channel_family_conflict("msedge", "chrome"));
+        assert!(channel_family_conflict("msedge", "chromium-other"));
+        assert!(channel_family_conflict("msedge", "unknown"));
+        // chrome request + chrome/chromium-other → ok
+        assert!(!channel_family_conflict("chrome", "chrome"));
+        assert!(!channel_family_conflict("chrome", "chromium-other"));
+        // chrome request + edge actual → conflict
+        assert!(channel_family_conflict("chrome", "edge"));
+        // unspecified/missing → never a conflict
+        assert!(!channel_family_conflict("", "chrome"));
+        assert!(!channel_family_conflict("msedge", ""));
+        assert!(!channel_family_conflict("weird-channel", "chrome"));
+    }
+
+    #[test]
+    fn connection_label_full_prefers_backend_identity_and_flags_conflicts() {
+        // Extension attached with requested msedge, backend reports Edge → clean label.
+        let state = CliState {
+            kind: crate::state::SessionKind::ExtensionAttached,
+            browser_channel: Some("msedge".to_string()),
+            ..Default::default()
+        };
+        let record = BackendSessionRecord {
+            session_id: "s1".to_string(),
+            channel: Some("msedge".to_string()),
+            browser_family: Some("edge".to_string()),
+            browser_name: Some("Microsoft Edge".to_string()),
+            browser_version: Some("138.0.0.0".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            connection_label_full(&state, Some(&record)),
+            "Extension (Microsoft Edge 138.0.0.0)"
+        );
+
+        // Wrong browser: requested msedge but Chrome actually connected.
+        let chrome_record = BackendSessionRecord {
+            browser_family: Some("chrome".to_string()),
+            browser_name: Some("Google Chrome".to_string()),
+            browser_version: Some("138.0.0.0".to_string()),
+            ..Default::default()
+        };
+        let label = connection_label_full(&state, Some(&chrome_record));
+        assert!(label.contains("requested msedge"), "label: {label}");
+        assert!(label.contains("actual Google Chrome 138.0.0.0"), "label: {label}");
+
+        // No backend record → fall back to the requested-channel label.
+        assert_eq!(
+            connection_label_full(&state, None),
+            "Extension (msedge)"
+        );
+
+        // CDP attach shows the verified browser next to the endpoint.
+        let cdp_state = CliState {
+            kind: crate::state::SessionKind::CdpAttached,
+            cdp_endpoint: Some("http://localhost:9222".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            connection_label_full(&cdp_state, Some(&chrome_record)),
+            "CDP: http://localhost:9222 (Google Chrome 138.0.0.0)"
+        );
+    }
+
+    #[test]
+    fn parse_backend_session_records_parses_attach_identity_fields() {
+        let result = r#"[
+            {"sessionId":"s1","status":"active","healthy":true,"kind":"EXTENSION_ATTACHED",
+             "ownsBrowser":false,"createdAt":1000,"lastAccessedAt":2000,
+             "channel":"msedge","browserFamily":"chrome","browserName":"Google Chrome",
+             "browserVersion":"138.0.0.0","browserUa":"Mozilla/5.0 ... Chrome/138.0 Safari/537.36"},
+            {"sessionId":"s2","status":"active"}
+        ]"#;
+        let records = parse_backend_session_records(result);
+        assert_eq!(records.len(), 2);
+        let r1 = records.iter().find(|r| r.session_id == "s1").unwrap();
+        assert_eq!(r1.kind.as_deref(), Some("EXTENSION_ATTACHED"));
+        assert_eq!(r1.owns_browser, Some(false));
+        assert_eq!(r1.channel.as_deref(), Some("msedge"));
+        assert_eq!(r1.browser_family.as_deref(), Some("chrome"));
+        assert_eq!(r1.browser_name.as_deref(), Some("Google Chrome"));
+        assert_eq!(r1.browser_version.as_deref(), Some("138.0.0.0"));
+        assert!(r1.browser_ua.as_deref().unwrap_or("").contains("Chrome/138"));
+
+        // Older backend entries without identity fields stay parseable.
+        let r2 = records.iter().find(|r| r.session_id == "s2").unwrap();
+        assert_eq!(r2.kind, None);
+        assert_eq!(r2.browser_name, None);
     }
 
     #[test]
@@ -26380,7 +26914,7 @@ mod tests {
             status: Some("active".to_string()),
             healthy: None,
             created_at: None,
-            last_accessed_at: None,
+            last_accessed_at: None,            ..Default::default()
         }];
         assert_eq!(list_session_status(Some(&records), "s1"), "Active");
     }
@@ -26392,7 +26926,7 @@ mod tests {
             status: Some("stopped".to_string()),
             healthy: None,
             created_at: None,
-            last_accessed_at: None,
+            last_accessed_at: None,            ..Default::default()
         }];
         assert_eq!(list_session_status(Some(&records), "s1"), "Stale");
     }
@@ -26404,7 +26938,7 @@ mod tests {
             status: Some("active".to_string()),
             healthy: None,
             created_at: None,
-            last_accessed_at: None,
+            last_accessed_at: None,            ..Default::default()
         }];
         // s2 is not in the backend records → Stale
         assert_eq!(list_session_status(Some(&records), "s2"), "Stale");
