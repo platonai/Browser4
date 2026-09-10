@@ -110,6 +110,10 @@ Browser4 can launch Chrome in two display modes:
 | **Headless** | `--headless` | No GUI window | **Default for AI agents** — scraping, automation, CI/CD, server environments |
 | **Headed** | `--headed` | Visible browser window | Debugging, user demonstration, interactive development |
 
+> **Choosing the whole setup** (session × display × browser source — including
+> when to attach to your own browser instead of launching one): see
+> [browser-modes.md](references/browser-modes.md).
+
 **Rule for AI agents: always use `--headless` by default.** Headless mode is faster, uses fewer resources, and avoids cluttering the user's desktop with browser windows. The only reason to use `--headed` is when the user **explicitly** requests a visible browser — look for phrases like "show me the browser", "I want to see", "open visibly", "headed", "watch what happens", or "debug visually". If user participation in the page interaction is required — e.g., logging in or entering a verification code (CAPTCHA) — open a **headed** browser so the user can see and act on the page.
 
 Set the display mode with the `open` command when starting a **new** session. The `goto` command does **not** accept `--headless`/`--headed` directly — it inherits the session's existing display mode:
@@ -789,6 +793,9 @@ Organized by task — follow the link that matches what you're trying to do:
 [storage-state.md](references/storage-state.md) — cookies, localStorage, sessionStorage, state save/load
 [webdb.md](references/webdb.md) — export cached pages, normalize URLs for database lookups
 [attach.md](references/attach.md) — connect to existing Chrome/Edge via CDP
+
+**Choose how the browser runs:**
+[browser-modes.md](references/browser-modes.md) — session (default / named / swarm) × display (headless / headed / SUPERVISED) × browser source (managed / `attach --cdp` / `attach --extension`), plus profile mode, interact level, contexts, and their failure modes
 
 **Manage skills and agent instructions:**
 [skills.md](references/skills.md) — bundled skill files, backend skill management
