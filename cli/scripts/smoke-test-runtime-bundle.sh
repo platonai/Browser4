@@ -162,17 +162,32 @@ cat > "$TEST_PAGE" <<'HTML'
 </body></html>
 HTML
 
-python3 -m http.server "$TEST_PORT" --bind 127.0.0.1 > /dev/null 2>&1 &
+# Serve the fixture from $TEMP_DIR: without --directory, python http.server
+# serves the *current working directory* (the CI workspace / repo checkout),
+# so every run browsed Python's 404 "Error response" page instead of the
+# fixture.  Backends that tolerate type/click on a missing element let that
+# pass silently; the loud "no element found for selector [#input1]" failure
+# exposed the harness bug on all three platforms.
+python3 -m http.server "$TEST_PORT" --bind 127.0.0.1 --directory "$TEMP_DIR" > /dev/null 2>&1 &
 HTTP_PID=$!
 TEST_URL="http://127.0.0.1:$TEST_PORT/test.html"
 
-# Wait for HTTP server to be ready
+# Wait for the HTTP server to actually serve the fixture.  curl -f fails on
+# 4xx/5xx, so a server serving the wrong directory (or not yet ready) cannot
+# silently hand the browser an error page — earlier runs typed into a 404
+# page whenever the interactive commands tolerated a missing element.
+SERVING_OK=""
 for i in $(seq 1 10); do
-    if curl -s -o /dev/null "$TEST_URL" 2>/dev/null; then
+    if curl -sf -o /dev/null "$TEST_URL" 2>/dev/null; then
+        SERVING_OK=1
         break
     fi
     sleep 0.5
 done
+if [ -z "$SERVING_OK" ]; then
+    info "FATAL: test page not served at $TEST_URL (python http.server not serving $TEMP_DIR?)"
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # step 3: determine server URL (let CLI auto-start the server)
