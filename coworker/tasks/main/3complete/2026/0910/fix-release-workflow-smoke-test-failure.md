@@ -96,3 +96,40 @@ Smoke test (macOS ARM64)	Build CLI binary	2026-09-10T05:30:31.1604760Z [1m[94m
    the specific test that failed. Make sure your change would resolve it.
 6. **Commit:** Use a conventional-commit message, e.g.:
    `fix(test): update test assertions for changed CLI output`
+
+## Resolution
+
+**Outcome:** fixed in 0f2a3a292f (`fix(ci): serve the smoke-test fixture page from its own temp dir`).
+
+**Categorisation:** CI-harness bug (not a product regression, not a flake).
+
+**Root cause:** `cli/scripts/smoke-test-runtime-bundle.sh` started
+`python3 -m http.server` without `--directory`, so it served the CI workspace root
+instead of `$TEMP_DIR` where the fixture `test.html` is written. Every smoke run
+browsed Python's 404 page ("Error code: 404 - Nothing matches the given URI." — the
+page title/snapshot in the failure log). Earlier 4.13.x backends tolerated `type`
+on a missing element, so the suite passed anyway (see the green 4.13.x run
+34321679775, "SMOKE TEST PASSED (11/11 steps OK)"); the weibo2x backport
+(8eabd1acf2) makes `type` fail loudly on a missing selector, which turned the
+harness bug into three red jobs on v4.13.17.
+
+**Fix:** backport of 5bfb03dade (4.14.x) — start the server with
+`--directory "$TEMP_DIR"` and make the readiness probe `curl -sf`, so a server
+serving the wrong directory aborts with a clear FATAL message instead of silently
+handing the browser a 404 page.
+
+**Verification:** locally, the old invocation returns the exact 404 body from CI and
+`curl -sf` exits 22, the new invocation serves the fixture (title "Smoke Test",
+`#input1` present) and `curl -sf` exits 0; the full script driven against a stubbed
+CLI reaches all 11 steps and exits 0. Upstream evidence: the same change made run
+34415858047 (v4.14.0-rc.5) green on the identical Linux/macOS/Windows matrix.
+
+**Deliberately not backported** (upstream 4.14.x harness hardening, not required on
+4.13.x today): d4faa02046 (best-effort EXIT-trap cleanup on Windows) — the 09-09
+4.13.x Windows smoke job passed 11/11 with this same cleanup code, so the
+"Device or resource busy" false red is not manifesting here; 52cc0a3915
+(`BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1`) — its failure mode (local Maven rebuild of
+`browser4-bundle` failing on the runners) does not occur on 4.13.x, where the local
+bundle build succeeds (`Building local Browser4 runtime bundle ...` in the failing
+run). Note that on 4.13.x the smoke test therefore exercises the locally rebuilt
+bundle rather than the downloaded archive; that is a separate test-validity gap.
