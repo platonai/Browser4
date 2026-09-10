@@ -563,7 +563,124 @@ if (-not $repoRoot) {
 }
 Set-Location $repoRoot
 
+# ── Run discovery helpers ──────────────────────────────────────────
+# Step 2 must locate the run that THIS tag push triggered.  Matching on the tag
+# (headBranch) alone is not enough: re-pushing a moved tag — or re-running CI
+# for an existing tag — leaves OLDER runs with the same headBranch, `gh run
+# list` returns them newest-first, and the monitor then reports the stale,
+# already completed run's conclusion as the result of the new push.  Run ids
+# increase monotonically, so a run can only be ours when its id is not one of
+# the ids seen before the push; the run's createdAt is applied as a second
+# guard in case the baseline lookup failed.
+
+<#
+.SYNOPSIS
+    List recent runs of a workflow as objects (empty array on any failure).
+
+.PARAMETER WorkflowFile
+    Workflow file name, e.g. "release.yml" / "ci.yml".
+
+.PARAMETER Limit
+    Maximum number of runs to fetch (newest first).
+#>
+function Get-WorkflowRuns {
+    param(
+        [string]$WorkflowFile,
+        [int]$Limit = 30
+    )
+
+    try {
+        $runs = gh run list --workflow "$WorkflowFile" `
+            --json databaseId,headBranch,status,conclusion,createdAt,url `
+            --limit $Limit 2>$null | ConvertFrom-Json
+    } catch {
+        return @()
+    }
+
+    return @($runs)
+}
+
+<#
+.SYNOPSIS
+    Pick the run that the just-pushed tag triggered, or $null while it is not
+    visible yet.
+
+.DESCRIPTION
+    Pure function (no gh call) so it is unit-testable: it only inspects the run
+    objects it is given.  A candidate must
+      * have headBranch equal to the tag,
+      * have a databaseId that was NOT present before the push, and
+      * (when run metadata carries createdAt) not predate the push by more than
+        -ClockSkewSeconds, so a missed baseline cannot resurrect a stale run.
+    The newest surviving candidate wins.
+
+.PARAMETER Runs
+    Run objects as returned by `gh run list --json ...`.
+
+.PARAMETER Tag
+    The tag that was just pushed; compared against each run's headBranch.
+
+.PARAMETER BaselineIds
+    databaseId values observed BEFORE the tag push (may be empty).
+
+.PARAMETER TriggeredAfter
+    UTC timestamp taken immediately before the tag push (optional).
+
+.PARAMETER ClockSkewSeconds
+    Tolerance applied to TriggeredAfter (default 120).
+
+.OUTPUTS
+    The matching run object, or $null when no NEW run is visible yet.
+#>
+function Select-TriggeredRun {
+    param(
+        [object[]]$Runs,
+        [string]$Tag,
+        $BaselineIds = @(),
+        [datetime]$TriggeredAfter = [datetime]::MinValue,
+        [double]$ClockSkewSeconds = 120
+    )
+
+    if (-not $Runs -or [string]::IsNullOrWhiteSpace($Tag)) { return $null }
+
+    $baseline = @()
+    if ($BaselineIds) { $baseline = @($BaselineIds | ForEach-Object { [string]$_ }) }
+
+    $cutoff = [datetime]::MinValue
+    if ($TriggeredAfter -gt [datetime]::MinValue) {
+        $cutoff = $TriggeredAfter.AddSeconds(-[Math]::Abs($ClockSkewSeconds)).ToUniversalTime()
+    }
+
+    $candidates = @($Runs | Where-Object {
+        if ($_.headBranch -ne $Tag) { return $false }
+        if ($baseline -contains [string]$_.databaseId) { return $false }
+
+        if ($cutoff -gt [datetime]::MinValue -and $_.createdAt) {
+            # ConvertFrom-Json already turns the ISO-8601 timestamp into a
+            # DateTime; keep string handling for hand-built/older inputs.
+            $created = [datetime]::MinValue
+            if ($_.createdAt -is [datetime]) {
+                $created = $_.createdAt
+            } elseif (-not [datetime]::TryParse([string]$_.createdAt, [ref]$created)) {
+                return $true
+            }
+            if ($created.ToUniversalTime() -lt $cutoff) { return $false }
+        }
+
+        return $true
+    })
+
+    if ($candidates.Count -eq 0) { return $null }
+
+    return ($candidates | Sort-Object { [long]$_.databaseId } -Descending | Select-Object -First 1)
+}
+
 # ── 1. Trigger CI ──────────────────────────────────────────────────
+
+# CI workflow filename (the one triggered by ci tags)
+$workflowFile = "ci.yml"
+$baselineRunIds = @()
+$triggeredAt = [datetime]::MinValue
 
 $triggerScript = Join-Path $repoRoot "bin\ci\trigger-ci.ps1"
 if (-not (Test-Path $triggerScript)) {
@@ -574,6 +691,13 @@ if (-not (Test-Path $triggerScript)) {
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 Write-Host "  Step 1/3: Triggering CI via tag push" -ForegroundColor Cyan
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+
+# Remember what already exists (and when we pushed) so Step 2 can only ever
+# pick the run this push triggers.
+$baselineRunIds = @(Get-WorkflowRuns -WorkflowFile $workflowFile -Limit 30 |
+    ForEach-Object { $_.databaseId })
+$triggeredAt = (Get-Date).ToUniversalTime()
+Write-Host "Baseline: $($baselineRunIds.Count) existing run(s) of $workflowFile recorded (the new run must be newer)." -ForegroundColor DarkGray
 
 $tagOutput = & $triggerScript -PreReleaseVersion $PreReleaseVersion -remote $remote 2>&1
 $exitCode = $LASTEXITCODE
@@ -595,42 +719,47 @@ Write-Host "━━━━━━━━━━━━━━━━━━━━━━�
 Write-Host "  Step 2/3: Waiting for workflow run to appear" -ForegroundColor Cyan
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 
-# CI workflow filename (the one triggered by ci tags)
-$workflowFile = "ci.yml"
 $maxWaitSeconds = 120
 $elapsed = 0
 
-# --- Helper: resolve a run ID from a tag by polling gh run list ----------
+# --- Helper: resolve the run the tag push triggered ----------------------
 function Find-RunByTag {
     param(
         [string]$Tag,
-        [string]$WorkflowFile
+        [string]$WorkflowFile,
+        $BaselineIds = @(),
+        [datetime]$TriggeredAfter = [datetime]::MinValue
     )
-    # gh run list returns newest first; filter by the workflow file and the tag
-    $runs = gh run list --workflow "$WorkflowFile" --json databaseId,headBranch,status,conclusion,url `
-        --limit 5 2>$null `
-        | ConvertFrom-Json
 
-    if (-not $runs) { return $null }
-
-    # The tag should appear as the headBranch
-    $match = $runs | Where-Object { $_.headBranch -eq $Tag } | Select-Object -First 1
-    return $match
+    $runs = Get-WorkflowRuns -WorkflowFile $WorkflowFile -Limit 30
+    return Select-TriggeredRun -Runs $runs -Tag $Tag -BaselineIds $BaselineIds -TriggeredAfter $TriggeredAfter
 }
 
 $run = $null
 do {
-    $run = Find-RunByTag -Tag $tag -WorkflowFile $workflowFile
+    $run = Find-RunByTag -Tag $tag -WorkflowFile $workflowFile `
+        -BaselineIds $baselineRunIds -TriggeredAfter $triggeredAt
     if ($run) { break }
 
-    Write-Host "  Run not yet visible (${elapsed}s elapsed) — retrying in ${PollIntervalSeconds}s ..."
+    Write-Host "  No NEW run for '$tag' yet (${elapsed}s elapsed) — runs that already existed before the push are ignored; retrying in ${PollIntervalSeconds}s ..."
     Start-Sleep -Seconds $PollIntervalSeconds
     $elapsed += $PollIntervalSeconds
 } while ($elapsed -lt $maxWaitSeconds)
 
 if (-not $run) {
-    Write-Error "Workflow run for tag '$tag' did not appear within ${maxWaitSeconds}s.`n" +
-                "Check manually: gh run list --workflow '$workflowFile'"
+    # Write-Host (not Write-Error): $ErrorActionPreference is 'Stop' here, so
+    # Write-Error would terminate before these diagnostics could print.
+    Write-Host "ERROR: the run triggered by tag '$tag' did not appear within ${maxWaitSeconds}s." -ForegroundColor Red
+
+    # A stale run for the same tag is the usual cause of confusion — show what
+    # exists so the operator can tell the two apart.
+    $sameTag = @(Get-WorkflowRuns -WorkflowFile $workflowFile -Limit 30 |
+        Where-Object { $_.headBranch -eq $tag })
+    foreach ($stale in $sameTag | Select-Object -First 5) {
+        Write-Host "  Existing run for '$tag' NOT triggered by this push: id=$($stale.databaseId) status=$($stale.status) conclusion=$($stale.conclusion) created=$($stale.createdAt)" -ForegroundColor Yellow
+    }
+
+    Write-Host "  Check manually: gh run list --workflow '$workflowFile'" -ForegroundColor Red
     exit 1
 }
 
