@@ -431,9 +431,9 @@ class ExperienceModelsExtendedTest {
         }
 
         @Test
-        @DisplayName("there are 12 task types")
+        @DisplayName("there are 13 task types")
         fun testTaskTypeCount() {
-            assertEquals(12, TaskType.entries.size)
+            assertEquals(13, TaskType.entries.size)
         }
     }
 

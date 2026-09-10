@@ -56,6 +56,21 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "loadStorageState"
         )
 
+        // JS-execution actions that must NOT run while a native JS dialog
+        // (alert/confirm/prompt) is open.  Chrome queues CDP Runtime.evaluate
+        // (and similar) commands behind the dialog and they never complete,
+        // so these hang until the caller gives up.  Keep them separate from
+        // READ_PAGE_STATE_ACTIONS: eval-family actions may mutate the DOM, so
+        // they intentionally do not participate in the read-timing whitelist,
+        // but they still need the dialog guard.
+        private val EVAL_EXECUTION_ACTIONS = setOf(
+            "evaluate", "evaluateDetail", "eval", "evaluateValue", "evaluateValueDetail"
+        )
+
+        /** Actions guarded against an open native JS dialog. */
+        private val DIALOG_GUARDED_ACTIONS: Set<String> =
+            READ_PAGE_STATE_ACTIONS + EVAL_EXECUTION_ACTIONS
+
         private const val NAVIGATION_POLL_TIMEOUT_MS = 30_000L
         private const val NAVIGATION_DOM_READY_TIMEOUT_MS = 10_000L
         private const val NAVIGATION_DOM_SETTLE_DELAY_MS = 1_000L
@@ -184,16 +199,24 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             method = "type",
             arguments = listOf(
                 ToolSpec.Arg("text", "String"),
-                ToolSpec.Arg("selector", "String?", "null")
+                ToolSpec.Arg("selector", "String?", "null"),
+                ToolSpec.Arg("method", "String?", "auto"),
+                ToolSpec.Arg("verify", "Boolean", "false")
             ),
             returnType = "Unit",
-            description = "Insert text into the currently focused element or the element matched by selector.",
+            description = "Insert text into the currently focused element or the element matched by selector. " +
+                "method=auto|chars|exec: auto (default) uses per-character typing for short text and one " +
+                "execCommand('insertText') bulk insert for long (>150 chars) or multi-line text; chars forces " +
+                "per-character typing; exec forces the bulk insert (selector required). verify=true reads the " +
+                "element back after typing and fails when the content does not match (never silently lose text).",
             help = """
                 tab.type(text: String)
                 tab.type(text: String, selector: String?)
+                tab.type(text: String, selector: String, method: String?, verify: Boolean?)
 
                 Types text into the currently focused element when selector is omitted.
                 When selector is provided, the executor focuses the matched element first and then types text.
+                method: auto|chars|exec — see the tool description. method/verify require a selector.
             """.trimIndent()
         )
         toolSpec["press"] = ToolSpec(
@@ -563,14 +586,21 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         waitBeforeReadIfNeeded(functionName)
 
         // Detect if a native JavaScript dialog (alert/confirm/prompt) is
-        // blocking the page.  Read-state actions like ariaSnapshot, evaluate,
-        // and select* require JS execution via CDP; when a dialog is open,
-        // Chrome queues CDP commands behind the dialog and they never complete.
-        // Instead of hanging, surface a clear error so the user knows to accept
-        // or dismiss the dialog first.  The guard itself lives in
-        // Browser4WebDriver.requireNoPendingDialog; non-Browser4WebDriver
+        // blocking the page.  Read-state actions (ariaSnapshot, select*, …)
+        // AND the eval family (eval/evaluate/evaluateValue/…) require JS/CDP
+        // execution; when a dialog is open, Chrome queues those CDP commands
+        // behind the dialog and they never complete.  Instead of hanging,
+        // surface a clear error so the user knows to accept or dismiss the
+        // dialog first (dialogStatus shows the pending dialog;
+        // dialog-accept/dialog-dismiss resolve it).  The guard itself lives
+        // in Browser4WebDriver.requireNoPendingDialog; non-Browser4WebDriver
         // drivers keep the legacy inline check.
-        if (functionName in READ_PAGE_STATE_ACTIONS && driver is PulsarWebDriver) {
+        //
+        // Interactive actions (click/fill/type/press/…) are intentionally NOT
+        // guarded here: whether their Input.* CDP path also queues behind a
+        // dialog is not established, and some of them run with the
+        // autoDismissDialogs option which resolves dialogs first.
+        if (functionName in DIALOG_GUARDED_ACTIONS && driver is PulsarWebDriver) {
             val b4Driver = driver as? Browser4WebDriver
             if (b4Driver != null) {
                 b4Driver.requireNoPendingDialog()
@@ -882,18 +912,37 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "type" -> {
                 when {
                     args.containsKey("selector") && args.containsKey("text") -> {
-                        validateArgs(args, allowed("selector", "text", "submit", "timeoutMillis"), setOf("selector", "text"), functionName)
+                        validateArgs(
+                            args,
+                            allowed("selector", "text", "submit", "timeoutMillis", "method", "verify"),
+                            setOf("selector", "text"),
+                            functionName
+                        )
                         val selector = paramString(args, "selector", functionName)!!
                         val timeoutMillis = paramLong(args, "timeoutMillis", functionName, required = false)
+                        val method = paramString(args, "method", functionName, required = false)
+                        val verify = paramBool(args, "verify", functionName, required = false) ?: false
                         val typeBlock: suspend () -> Unit = {
                             val text = paramString(args, "text", functionName)!!
                             val b4Driver = driver as? Browser4WebDriver
                             if (b4Driver != null) {
-                                // Use Browser4WebDriver.typeSafe — code-point-aware
-                                // typing that avoids the charAt() surrogate-splitting
-                                // bug in Keyboard.type() (pulsar-browser:4.11.2)
-                                b4Driver.typeSafe(text, selector)
+                                // Browser4WebDriver.typeAuto — pluggable insertion
+                                // strategy (auto|chars|exec) with optional read-back
+                                // verification.  Long/multi-line text goes through one
+                                // execCommand('insertText') bulk insert; short text
+                                // keeps the per-code-point chars path.
+                                b4Driver.typeAuto(selector, text, method ?: "auto", verify)
                             } else {
+                                if (method == "exec") {
+                                    throw IllegalArgumentException(
+                                        "type method=exec requires the Browser4 driver (unavailable on ${driver::class.simpleName})"
+                                    )
+                                }
+                                if (verify) {
+                                    logger.warning(
+                                        "type verify requested on a non-Browser4WebDriver driver — verification is only supported on the Browser4 driver; skipping"
+                                    )
+                                }
                                 // Fallback: inline the same fix via PulsarWebDriver API
                                 val pulsarDriver = driver as? PulsarWebDriver
                                 if (pulsarDriver != null) {

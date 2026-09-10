@@ -281,6 +281,94 @@ class ExperienceToolExecutorTest {
     }
 
     @Nested
+    @DisplayName("experience_save with facts patch")
+    inner class FastSaveWithFacts {
+        private fun traceJson(): String = mapper.writeValueAsString(
+            ExecutionTrace(
+                url = "https://x.com/compose/post",
+                taskType = "publish_post",
+                outcome = "success",
+                steps = listOf(ActionStep(1, "navigate", value = "https://x.com/compose/post")),
+            )
+        )
+
+        @Test
+        @DisplayName("facts as JSON string merges knowledge and reports outcome")
+        fun testSaveFactsJsonString(): Unit = runBlocking {
+            val facts = """{
+                "selectors": {"tweetButton": {"primary": "[data-testid='tweetButton']", "note": "composer submit"}},
+                "interaction_hints": ["单帖最多 4 张图"],
+                "known_blockers": [{"type": "media limit", "selector": "[data-testid='tweetButton']", "note": "silent reject beyond 4"}],
+                "anti_patterns": ["don't scroll the virtual list"]
+            }"""
+            val result = executor.callFunctionOn(
+                domain = "experience", functionName = "save",
+                args = mapOf(
+                    "url" to "https://x.com/compose/post",
+                    "trace" to traceJson(),
+                    "intent" to "publish to x.com",
+                    "facts" to facts,
+                ),
+                receiver = knowledgeStore,
+            )
+            val json = mapper.readTree(result as String)
+            assertEquals("publish", json["intent"].asText())
+            assertEquals(true, json["facts_merged"].asBoolean())
+            assertEquals(false, json["facts_rejected"].asBoolean())
+            assertEquals("hypothesis", json["facts_status"].asText())
+            assertTrue(json["facts_message"].asText().contains("Merged 1 selector"))
+
+            val stored = knowledgeStore.loadFacts("x.com", "publish")
+            assertNotNull(stored)
+            assertEquals("[data-testid='tweetButton']", stored.selectors["tweetButton"]?.primary)
+            assertEquals(1, stored.interactionHints.size)
+            assertEquals(1, stored.knownBlockers.size)
+            assertEquals(1, stored.antiPatterns.size)
+        }
+
+        @Test
+        @DisplayName("facts as a structured Map (MCP native object) is accepted")
+        fun testSaveFactsStructuredMap(): Unit = runBlocking {
+            val result = executor.callFunctionOn(
+                domain = "experience", functionName = "save",
+                args = mapOf(
+                    "url" to "https://weibo.com/u/12345",
+                    "trace" to traceJson(),
+                    "intent" to "发帖到 X",
+                    "facts" to mapOf(
+                        "interaction_hints" to listOf("虚拟滚动：改用 mymblog JSON 接口"),
+                        "anti_patterns" to listOf("scroll-DOM"),
+                    ),
+                ),
+                receiver = knowledgeStore,
+            )
+            val json = mapper.readTree(result as String)
+            assertEquals("publish", json["intent"].asText())
+            assertEquals(true, json["facts_merged"].asBoolean())
+
+            val stored = knowledgeStore.loadFacts("weibo.com", "publish")
+            assertNotNull(stored)
+            assertTrue(stored.interactionHints.first().contains("mymblog"))
+        }
+
+        @Test
+        @DisplayName("invalid facts JSON fails loudly")
+        fun testSaveFactsInvalidJson(): Unit = runBlocking {
+            assertFailsWith<IllegalArgumentException> {
+                executor.callFunctionOn(
+                    domain = "experience", functionName = "save",
+                    args = mapOf(
+                        "url" to "https://x.com/compose/post",
+                        "trace" to traceJson(),
+                        "facts" to "{not json",
+                    ),
+                    receiver = knowledgeStore,
+                )
+            }
+        }
+    }
+
+    @Nested
     @DisplayName("executor metadata")
     inner class Metadata {
         @Test

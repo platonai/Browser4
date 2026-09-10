@@ -341,6 +341,48 @@ fn looks_like_negative_value(token: &str) -> bool {
             .all(|c| c.is_ascii_digit() || c == '-' || c == '.' || c == ',')
 }
 
+/// Build the argument map for the `upload` command.
+///
+/// Upload accepts a target ref followed by ONE OR MORE file paths
+/// (`upload <ref> <file> [file...]`).  The generic [build_command_args]
+/// would join surplus positionals into the last slot with spaces
+/// (`upload e5 a.txt b.txt` → `paths: ["a.txt b.txt"]`), silently creating
+/// one non-existent path.  This builder keeps every trailing positional as
+/// its own file path instead:
+/// - `ref`   = first positional,
+/// - `file`  = first file (kept so generic required-arg validation passes),
+/// - `paths` = JSON array of ALL file paths (used by `upload`'s
+///   tool_params_fn),
+/// - named options (e.g. `--no-snapshot`) are preserved untouched.
+pub fn build_upload_args(raw: &HashMap<String, Value>) -> Result<HashMap<String, Value>, String> {
+    let mut result = raw.clone();
+
+    let positional: Vec<String> = match raw.get("_") {
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .skip(1) // skip command name
+            .map(|v| v.as_str().unwrap_or("").to_string())
+            .collect(),
+        _ => vec![],
+    };
+
+    if positional.is_empty() {
+        return Err("error: upload requires a target ref and at least one file path (usage: upload <ref> <file> [file...])".to_string());
+    }
+    if positional.len() < 2 {
+        return Err("error: upload requires a file path after the target ref (usage: upload <ref> <file> [file...])".to_string());
+    }
+
+    result.insert("ref".to_string(), json!(positional[0]));
+    result.insert("file".to_string(), json!(positional[1]));
+    result.insert(
+        "paths".to_string(),
+        Value::Array(positional[1..].iter().map(|p| json!(p)).collect()),
+    );
+
+    Ok(result)
+}
+
 /// Build a flat argument map from parsed raw args for use in command dispatch.
 ///
 /// Positional arguments are mapped to their named positions as defined in
@@ -1428,5 +1470,68 @@ mod tests {
         ];
         let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
         assert_eq!(map.get("regexp"), Some(&json!("price")));
+    }
+
+    #[test]
+    fn test_build_upload_args_single_file() {
+        let raw = parse_raw_args(
+            &["upload".to_string(), "#file-input".to_string(), "C:\\a.txt".to_string()],
+            None,
+            None,
+        );
+        let map = build_upload_args(&raw).unwrap();
+        assert_eq!(map.get("ref"), Some(&json!("#file-input")));
+        assert_eq!(map.get("file"), Some(&json!("C:\\a.txt")));
+        assert_eq!(map.get("paths"), Some(&json!(["C:\\a.txt"])));
+    }
+
+    #[test]
+    fn test_build_upload_args_multiple_files_kept_separate() {
+        // Regression: the generic builder joins surplus positionals with
+        // spaces ("upload e5 a.txt b.txt" → paths:["a.txt b.txt"]).
+        let raw = parse_raw_args(
+            &[
+                "upload".to_string(),
+                "e5".to_string(),
+                "a.txt".to_string(),
+                "b.txt".to_string(),
+                "dir with space\\c.txt".to_string(),
+            ],
+            None,
+            None,
+        );
+        let map = build_upload_args(&raw).unwrap();
+        assert_eq!(map.get("ref"), Some(&json!("e5")));
+        assert_eq!(map.get("file"), Some(&json!("a.txt")));
+        assert_eq!(
+            map.get("paths"),
+            Some(&json!(["a.txt", "b.txt", "dir with space\\c.txt"]))
+        );
+    }
+
+    #[test]
+    fn test_build_upload_args_preserves_flags() {
+        let raw = parse_raw_args(
+            &[
+                "upload".to_string(),
+                "e5".to_string(),
+                "a.txt".to_string(),
+                "--no-snapshot".to_string(),
+            ],
+            None,
+            None,
+        );
+        let map = build_upload_args(&raw).unwrap();
+        assert_eq!(map.get("no-snapshot"), Some(&json!(true)));
+        assert_eq!(map.get("paths"), Some(&json!(["a.txt"])));
+    }
+
+    #[test]
+    fn test_build_upload_args_requires_ref_and_file() {
+        let raw = parse_raw_args(&["upload".to_string()], None, None);
+        assert!(build_upload_args(&raw).is_err());
+
+        let raw = parse_raw_args(&["upload".to_string(), "e5".to_string()], None, None);
+        assert!(build_upload_args(&raw).is_err());
     }
 }

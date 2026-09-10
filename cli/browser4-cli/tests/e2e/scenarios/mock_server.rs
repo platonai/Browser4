@@ -5858,7 +5858,7 @@ pub(super) fn test_upload_error_backend_failure(ctx: &mut E2ECtx) {
 
     let result = run_command_expecting_failure(
         ctx,
-        &["upload", &tmp_path.to_string_lossy(), "#file-input"],
+        &["upload", "#file-input", &tmp_path.to_string_lossy()],
         "simulated upload failure",
     );
     assert_ne!(

@@ -43,7 +43,7 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 | Command | Description |
 |---|---|
 | `press <key> [ref]` | Press a key on the focused element or an optional target ref. `--verify`, `--follow` (detect new tabs) |
-| `type <text> [ref]` | Type text into the focused element or an optional target ref |
+| `type <text> [ref]` | Type text into the focused element or an optional target ref. `--method auto\|chars\|exec` (needs a target ref): `auto` (default) per-character for short text, one `execCommand('insertText')` bulk insert for long/multi-line text; `chars`/`exec` force either mode |
 | `keydown <key>` | Press a key down on the keyboard |
 | `keyup <key>` | Press a key up on the keyboard |
 | `fill <ref> <text>` | Fill text into an editable element |
@@ -66,7 +66,7 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 
 | Command | Description |
 |---|---|
-| `snapshot` | Capture page snapshot to obtain element refs. Supports `--boxes`, `-i`/`--interactive`, `-u`/`--urls`, `-c`/`--compact`, `-d`/`--depth <n>`, `-s`/`--selector <sel>`, `--raw` |
+| `snapshot` | Capture page snapshot to obtain element refs. Supports `--boxes`, `-i`/`--interactive`, `-u`/`--urls`, `-c`/`--compact`, `-d`/`--depth <n>`, `-s`/`--selector <sel>`, `--raw`, `--stdout`. `--stdout`/`--raw` paginate large trees at 2000 lines/page by default (truncated output appends a hint to stdout when piped; footer goes to stderr) — use `--page N`, `--page-size N`, or `--all`/`--page-size 0` for the complete tree |
 | `get <mode> <selector> [name]` | Extract data from a page element (text, html, box, styles, property, attr) |
 | `eval [expression] [ref]` | Evaluate JavaScript expression on page or element |
 | `wait [target]` | Wait for a condition: element, time, text, URL pattern, page load, or JS expression |
@@ -77,6 +77,7 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 | `dialog-dismiss` | Dismiss a dialog |
 | `resize <w> <h>` | Resize the browser window |
 | `delete-data` | Delete session data |
+| `upload <ref> <file> [file...]` | Upload one or more local files to a page file input (target must be an `<input type="file">`; paths must be readable by the browser process — remote backend: resolved on the backend host; supports multi-file and `--no-snapshot`) |
 | `batch [command...]` | Execute multiple commands in one invocation |
 
 ### Save as

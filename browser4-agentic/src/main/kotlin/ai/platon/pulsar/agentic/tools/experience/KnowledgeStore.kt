@@ -195,11 +195,74 @@ class KnowledgeStore(
     suspend fun saveFacts(facts: KnowledgeFacts) {
         val lock = domainLocks.getOrPut(facts.domain) { Mutex() }
         lock.withLock {
-            val dir = factsDir.resolve(facts.domain)
-            if (!dir.exists()) Files.createDirectories(dir)
-            val file = factsFilePath(facts.domain, facts.intent)
-            writeAtomicYaml(file, mapFromFacts(facts))
+            writeFactsLocked(facts)
         }
+    }
+
+    /**
+     * Merge retrospective knowledge ([FactsPatch]) into the stored facts for a
+     * `(domain, intent)` pair, atomically under the domain lock
+     * (read-modify-write without interleaving).
+     *
+     * - When no facts exist yet, a HYPOTHESIS entry is created from [urlPattern].
+     * - VERIFIED facts are immutable: the merge is REFUSED (returned via
+     *   [FactsMergeResult.rejected]) instead of silently overwriting
+     *   double-confirmed knowledge.
+     * - Otherwise selectors/hints/blockers/anti-patterns are merged in
+     *   (patch wins for the same selector key; lists are appended deduped).
+     *   Merging does NOT bump confidence/successes — status stays where it
+     *   was (HYPOTHESIS when created here); promotion still goes through
+     *   trace-based [promoteToVerified].
+     */
+    suspend fun mergeFacts(
+        domain: String,
+        intent: String,
+        urlPattern: String,
+        patch: FactsPatch,
+    ): FactsMergeResult {
+        require(!patch.isEmpty) { "mergeFacts requires a non-empty facts patch" }
+        val lock = domainLocks.getOrPut(domain) { Mutex() }
+        return lock.withLock {
+            val existing = loadFacts(domain, intent)
+            if (existing?.status == VerificationStatus.VERIFIED) {
+                return@withLock FactsMergeResult(
+                    facts = existing,
+                    rejected = true,
+                    message = "Facts for $domain/$intent are VERIFIED and immutable — " +
+                        "the knowledge patch was NOT applied. Record it as a new trace instead " +
+                        "(experience-save without --facts)."
+                )
+            }
+
+            val base = existing ?: KnowledgeFacts.createHypothesis(intent, domain, urlPattern)
+            val merged = base.copy(
+                urlPattern = urlPattern,
+                siteFacts = base.siteFacts.copy(domain = domain),
+                selectors = base.selectors + patch.selectors,
+                interactionHints = (base.interactionHints + patch.interactionHints).distinct(),
+                knownBlockers = (base.knownBlockers + patch.knownBlockers)
+                    .distinctBy { Triple(it.type, it.selector, it.action) },
+                antiPatterns = (base.antiPatterns + patch.antiPatterns).distinct(),
+                updatedAt = Instant.now(),
+            )
+            writeFactsLocked(merged)
+            FactsMergeResult(
+                facts = merged,
+                message = "Merged ${patch.selectors.size} selector(s), " +
+                    "${patch.interactionHints.size} hint(s), " +
+                    "${patch.knownBlockers.size} blocker(s), " +
+                    "${patch.antiPatterns.size} anti-pattern(s) into $domain/$intent " +
+                    "(status=${merged.status.name.lowercase()})."
+            )
+        }
+    }
+
+    /** Write one facts file; caller must hold the domain lock. */
+    private fun writeFactsLocked(facts: KnowledgeFacts) {
+        val dir = factsDir.resolve(facts.domain)
+        if (!dir.exists()) Files.createDirectories(dir)
+        val file = factsFilePath(facts.domain, facts.intent)
+        writeAtomicYaml(file, mapFromFacts(facts))
         updateIndex(facts.domain, facts.intent, facts)
         logger.info("Facts saved: {}/{} status={}", facts.domain, facts.intent, facts.status)
     }

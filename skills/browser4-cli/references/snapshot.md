@@ -74,6 +74,15 @@ browser4-cli snapshot -v -1    # one screen above the current position
 
 Without `--viewport`, the snapshot captures the full page in a single file — this can be very large on long pages. Prefer `-v 0` for what's visible; use `-v 1`, `-v 2`, ... or scroll the page for elements further down.
 
+## Stdout Pagination
+
+`--stdout` (and its alias `--raw`) prints the snapshot to stdout **paginated at 2000 lines/page by default**. When the tree is truncated:
+
+- the page footer goes to **stderr** (e.g. `[Page 1/12 · 2000 lines of 23400 total · use --page N for next page · --all to show all]`), and
+- when stdout is a pipe or redirect, a one-line hint is appended **to stdout** so captured output is not silently cut: `# … output truncated: showing 2000 of 23400 lines — re-run with --all (or --page-size 0) for the full tree.`
+
+Pass `--page N` to page through (`--page-size N` changes the size), or `--all` / `--page-size 0` to print the complete tree in one go. For genuinely huge pages, prefer bounding the capture itself with `-v N` (viewport chunks), `--depth`, `--selector`, or `--no-boxes` over printing everything.
+
 ## Auto-Diff
 
 `--auto-diff` compares the current snapshot against the most recent snapshot for the same session and viewport, highlighting changes:
@@ -161,7 +170,7 @@ To keep the output genuinely small and focused, use:
 | Default | *(none)* | Human-readable output on stdout, tips on stderr |
 | JSON | `--json` | Single-line JSON envelope on stdout only; tips/hints/warnings suppressed |
 | Quiet | `--quiet`, `-q` | Suppress all normal output; only errors on stderr |
-| Stdout | `--stdout` | Print snapshot content to stdout instead of saving to file |
+| Stdout | `--stdout` | Print snapshot content to stdout instead of saving to file. Large trees are paginated at 2000 lines/page (see Stdout Pagination above) — use `--all` or `--page-size 0` for the full tree. `--raw` is an alias. |
 
 ## Where Snapshots Are Stored
 
@@ -227,18 +236,21 @@ browser4-cli snapshot -v 0 --json   # clean JSON for scripts/agents
 | Option | Description |
 |---|---|
 | `--viewport N`, `-v N` | Capture viewport N (0 = current visible screen; negative = above). Paginates long pages into fixed-height chunks. |
-| `--stdout` | Print snapshot to stdout instead of saving to file. |
+| `--stdout` | Print snapshot to stdout instead of saving to file. Large trees are paginated (default 2000 lines/page); when truncated, a hint is appended to stdout when piped and the full footer goes to stderr. |
+| `--raw` | Alias of `--stdout` — strip page info and print only snapshot content. |
 | `--auto-diff` | Diff against the previous snapshot — shows added/removed/changed elements. |
 | `--interactive`, `-i` | Interactive-oriented rendering: inner text is aggregated into the enclosing element's name so ref lines read as self-contained targets. This is **not** a strict interactive-only filter — addressable headings, paragraphs and generic containers remain in the tree. |
 | `--json` | Single-line JSON envelope on stdout only. All tips, hints, and warnings are suppressed. |
 | `--quiet`, `-q` | Suppress all normal output; only errors appear on stderr. |
-| `--page N` | When used with `--stdout`, show only page N of the output. |
+| `--page N` | When used with `--stdout`, show only page N of the output (1-based). |
+| `--page-size N` | Lines per page for stdout output (default: 2000; `0` = unlimited). |
+| `--all` | Disable stdout pagination — print the complete tree. |
 
 ## Errors & Recovery
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `snapshot --stdout` dumps a huge tree | Full page captured; stdout output is not paginated by default | Use `-v 0` or `--stdout --page N`; or `snapshot grep` for targeted reads |
+| `snapshot --stdout` dumps a huge tree | Full page captured; stdout output is paginated at 2000 lines/page by default, but a single page is still large | Use `-v 0` viewport chunks, or `--stdout --page N` / `--page-size N`; `--all` / `--page-size 0` for the complete tree; `snapshot grep` for targeted reads |
 | `snapshot grep` finds nothing | Pattern doesn't match the accessibility tree (refs/labels, not raw HTML) | Match against element names and labels; use `htmlsnapshot grep` for raw HTML |
 | Missing elements in `-i` mode | Interactive mode strips generic `<div>` containers | Use `--viewport 0` or `htmlsnapshot` for shopping/search pages |
 | Stale refs after interaction | Refs are single-use handles | Re-snapshot after any interaction — see [SKILL.md §5](../SKILL.md#5-critical-warnings) |

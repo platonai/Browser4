@@ -1137,6 +1137,73 @@ pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
         "Expected uploadName to become 'upload.txt' after upload",
     );
 
+    // Multi-file upload (the fixture input now has the `multiple` attribute):
+    // the CLI must keep each path separate instead of joining them.
+    let second_upload_path = ctx.workspace_dir.join("_e2e_upload_second.txt");
+    std::fs::write(&second_upload_path, "second file").expect("write second temp file");
+    run_command(
+        ctx,
+        &[
+            "upload",
+            "#file-input",
+            &upload_path,
+            &second_upload_path.to_string_lossy(),
+        ],
+    );
+    wait_for_state_or_abort(
+        ctx,
+        |s| {
+            s["uploadName"].as_str() == Some("upload.txt")
+                && s["uploadCount"].as_u64() == Some(2)
+        },
+        3_000,
+        "Expected uploadCount to become 2 (two separate files) after multi-file upload",
+    );
+    let _ = std::fs::remove_file(&second_upload_path);
+
+    // Negative: uploading to a non-file input must fail loudly (the driver
+    // validates the target instead of letting CDP report an opaque error).
+    let non_file_result = run_command_expecting_failure(
+        ctx,
+        &["upload", "#fill-target", &upload_path],
+        "only file inputs accept uploads",
+    );
+    assert_ne!(
+        non_file_result.exit_code, 0,
+        "upload to a non-file input must fail:\n{}",
+        non_file_result.stderr
+    );
+
+    // Negative: a missing local file fails before dispatch (CLI usage error).
+    let missing_path = ctx.workspace_dir.join("_e2e_upload_missing.txt");
+    let _ = std::fs::remove_file(&missing_path);
+    let missing_result = run_command_expecting_failure(
+        ctx,
+        &["upload", "#file-input", &missing_path.to_string_lossy()],
+        "not found or not readable",
+    );
+    assert_ne!(
+        missing_result.exit_code, 0,
+        "upload of a missing file must fail:\n{}",
+        missing_result.stderr
+    );
+
+    // Long-text typing through the executor's bulk-insert path (method=exec):
+    // 200 CJK characters must arrive in one execCommand('insertText') insert
+    // and be tracked by the page (the driver read-back semantics run
+    // server-side; the page state proves the editor received the text).
+    let long_text: String = (0..200).map(|_| "长").collect();
+    run_command(
+        ctx,
+        &["type", &long_text, "#type-target", "--method", "exec"],
+    );
+    wait_for_state_or_abort(
+        ctx,
+        |s| s["typeValue"].as_str().map(|v| v.chars().count()) == Some(200),
+        5_000,
+        "Expected typeValue to contain the full 200-char bulk-inserted text",
+    );
+
     // Verify the console command is recognised by the backend (was previously "Unknown tool")
     let console_result = run_command(ctx, &["console", "info"]);
     assert!(

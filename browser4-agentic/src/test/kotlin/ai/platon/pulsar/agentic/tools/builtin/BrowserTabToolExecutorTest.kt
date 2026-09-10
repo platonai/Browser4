@@ -4,9 +4,12 @@ import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarWebDriver
+import ai.platon.pulsar.chrome.protocol.DialogEvent
+import ai.platon.pulsar.chrome.protocol.DialogHandler
 import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -182,6 +185,68 @@ class BrowserTabToolExecutorTest {
             assertTrue(js.contains("isContentEditable"), "JS must handle contenteditable: $js")
             // maxlength guard still present
             assertTrue(js.contains("maxLength"), "JS must guard maxlength: $js")
+        }
+    }
+
+    @Test
+    fun `eval is guarded when a native dialog is pending`() {
+        runBlocking {
+            val driver = Mockito.mock(PulsarWebDriver::class.java)
+            val handler = Mockito.mock(DialogHandler::class.java)
+            `when`(driver.dialogHandler).thenReturn(handler)
+            `when`(handler.hasPendingDialog()).thenReturn(true)
+            `when`(handler.peekPendingDialog()).thenReturn(DialogEvent(message = "Are you sure?", type = "confirm"))
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "eval", mutableMapOf<String, Any?>("expression" to "document.title")),
+                driver
+            )
+
+            // AbstractToolExecutor wraps thrown errors into TcEvaluate.
+            assertFalse(result.success)
+            assertTrue(result.exception?.message.orEmpty().contains("blocked by a native"))
+            // The page evaluation must never reach the driver while the dialog is open.
+            Mockito.verify(driver, Mockito.never()).evaluateValueDetail(Mockito.anyString())
+            Mockito.verify(driver, Mockito.never()).evaluate(Mockito.anyString())
+        }
+    }
+
+    @Test
+    fun `evaluateValue is guarded when a native dialog is pending`() {
+        runBlocking {
+            val driver = Mockito.mock(PulsarWebDriver::class.java)
+            val handler = Mockito.mock(DialogHandler::class.java)
+            `when`(driver.dialogHandler).thenReturn(handler)
+            `when`(handler.hasPendingDialog()).thenReturn(true)
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "evaluateValue", mutableMapOf<String, Any?>("expression" to "document.title")),
+                driver
+            )
+
+            assertFalse(result.success)
+            assertTrue(result.exception?.message.orEmpty().contains("blocked by a native"))
+            Mockito.verify(driver, Mockito.never()).evaluateValueDetail(Mockito.anyString())
+        }
+    }
+
+    @Test
+    fun `eval proceeds when no dialog is pending`() {
+        runBlocking {
+            val driver = Mockito.mock(PulsarWebDriver::class.java)
+            val handler = Mockito.mock(DialogHandler::class.java)
+            `when`(driver.dialogHandler).thenReturn(handler)
+            `when`(handler.hasPendingDialog()).thenReturn(false)
+            `when`(driver.evaluateValueDetail("document.title"))
+                .thenReturn(JsEvaluation(value = "Browser4 CLI Other Fixture"))
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "eval", mutableMapOf<String, Any?>("expression" to "document.title")),
+                driver
+            )
+
+            assertEquals("Browser4 CLI Other Fixture", result.value)
+            verify(driver).evaluateValueDetail("document.title")
         }
     }
 

@@ -47,7 +47,15 @@ class ExtensionWebSocketHandler(
         val sessionId = extractSessionId(session.uri)
 
         val remoteAddr = session.remoteAddress
-        logger.info("Extension WebSocket connected | sessionId={} | remote={}", sessionId, remoteAddr)
+        // The handshake User-Agent identifies the browser that REALLY
+        // connected (Edge UAs carry Edg/, Chrome does not).  It is the only
+        // reliable wrong-browser detector — the extension id is identical in
+        // Chrome and Edge so the Origin header cannot distinguish them.
+        val userAgent = session.handshakeHeaders.getFirst("User-Agent")
+        logger.info(
+            "Extension WebSocket connected | sessionId={} | remote={} | ua={}",
+            sessionId, remoteAddr, userAgent ?: "n/a"
+        )
 
         try {
             // Wrap the Spring WebSocket session as an ExtensionMessageSender
@@ -55,7 +63,7 @@ class ExtensionWebSocketHandler(
             val sender = SpringWebSocketMessageSender(session)
             wsSessions[sessionId] = session
 
-            sessionManager.onExtensionConnected(sessionId, sender)
+            sessionManager.onExtensionConnected(sessionId, sender, userAgent)
 
             // Disable the Jetty connector's 30s idle timeout on this
             // WebSocket connection.  Sending pings keeps the Chrome side

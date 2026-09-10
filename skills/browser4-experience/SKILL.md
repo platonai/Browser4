@@ -75,11 +75,26 @@ Persists a task execution trace to the knowledge store.
 | `url` | Yes | The URL the task operated on |
 | `trace` | Yes | JSON-encoded ExecutionTrace (steps, selectors, extraction results) |
 | `outcome` | No | `"success"` (default) or `"failure"` |
-| `task_type` | No | One of the 12 canonical task types (e.g., `extract_product_list`) |
+| `task_type` | No | Canonical task type (e.g., `extract_product_list`, `publish_post`) |
 | `intent` | No | Free-text description of what the task was trying to do |
+| `facts` | No | Retrospective knowledge patch (inline JSON, or `@file.json` through the CLI): `selectors` / `interaction_hints` / `known_blockers` / `anti_patterns` (camelCase and snake_case keys both accepted), merged into the `(domain, intent)` facts entry — the writer path for lessons learned. Refused when the entry is VERIFIED (immutable); the response then reports `facts_rejected` |
 
 **Success path:** Knowledge promoted with initial confidence 0.50. Subsequent verified successes raise confidence.
-**Failure path:** Negative evidence recorded. Failed selectors added to anti-patterns. Blocker awareness updated.
+**Failure path:** Negative evidence recorded (failure category classified from the trace). Failed selectors are **not** automatically turned into anti-patterns — record lessons explicitly with `facts` (e.g. `anti_patterns`) via `experience_save --facts` (or the `facts` argument), or let `experience_deep_learn` promote knowledge later.
+**Response:** the save result includes `facts_merged`, `facts_status`, `facts_rejected`, and `facts_message` when `facts` was supplied.
+
+**Recording a lesson with `facts`:** a lesson (a selector that broke, a blocker, an anti-pattern) can be recorded immediately after the task — no need to wait for `deep_learn`:
+
+```text
+# MCP tool form
+experience_save(url="<target-url>", trace="<execution trace JSON>", outcome="success",
+                intent="extract product details", task_type="extract_product_list",
+                facts='{"interaction_hints":["open the price popover before reading"],
+                        "anti_patterns":["clicking the thumbnail before the modal loads"]}')
+
+# CLI equivalent — trace is inline JSON; --facts accepts inline JSON or @file.json
+browser4-cli experience save "https://example.com/products" '<trace-json>' --facts @lessons.json
+```
 
 ### experience_query
 
@@ -89,7 +104,6 @@ Queries stored knowledge before starting a task.
 |----------|----------|-------------|
 | `url` | Yes | The target URL |
 | `intent` | No | Free-text intent description |
-| `task_type` | No | Filter to a specific task type |
 
 **Returns:** JSON with `tier`, `confidence`, `primary_selectors`, `extraction_query`, `known_blockers`, `warnings`, `steps`.
 
@@ -100,7 +114,7 @@ Lists stored knowledge entries (diagnostic/debug tool).
 | Argument | Required | Description |
 |----------|----------|-------------|
 | `filter` | No | Filter by domain (partial match) |
-| `task_type` | No | Filter by task type |
+| `intent_filter` | No | Filter by intent (partial match) |
 | `page` | No | Page number (default 1) |
 | `page_size` | No | Results per page (default 20, max 100) |
 
@@ -112,17 +126,18 @@ Lists stored knowledge entries (diagnostic/debug tool).
 
 > **Warning:** Knowledge stored for one URL pattern (e.g., `/dp/*`) is not automatically available for a different pattern (e.g., `/s?k=*`). The query matches by URL pattern specificity.
 
-> **Note:** The knowledge store is file-backed YAML under `knowledge/` in the agent data directory. It is safe to version with git. Traces (under `knowledge/.traces/`) are ephemeral (30-day TTL) and not versioned.
+> **Note:** The knowledge store is file-backed YAML under `knowledge/`, resolved **relative to the backend process working directory** (there is no `knowledge.dir` config option to relocate it). The store is safe to version with git. Raw traces (under `knowledge/traces/<domain>/`) are ephemeral (30-day TTL) and not versioned; facts entries (`knowledge/facts/<domain>/<intent>.yaml`) are immutable once VERIFIED.
 
 ## 6. Knowledge Store Layout
 
+The store is **file-level YAML per (domain, intent)** — no per-site blob files:
+
 ```
-knowledge/
-├── sites/<domain>.yaml       — One file per domain (L1–L3 knowledge)
-├── .index.yaml               — In-memory index, materialized on write
-├── .traces/<domain>/          — Raw execution traces (30-day TTL)
-├── .archive/                  — Evicted artifacts (recoverable)
-└── .wal/<domain>.log          — Write-ahead log (Phase 5+)
+knowledge/                          ← root: relative to the backend process CWD
+├── traces/<domain>/                ← TraceRecords (immutable, 30-day TTL)
+├── experience/<domain>/            ← ExperienceStats (mutable; confidence source)
+└── facts/<domain>/                 ← KnowledgeFacts — one <intent>.yaml per (domain, intent)
+                                      (VERIFIED entries are immutable; merge is refused)
 ```
 
 ## 7. Reference Map

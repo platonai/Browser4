@@ -286,14 +286,14 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | 命令 | 说明 |
 |---|---|
 | `open [url]` | 打开浏览器会话，或重新连接已有会话。**默认为无头模式。** 支持 `--headed`（可视窗口）、`--headless`、`--profile <path>`、`--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`、`--interact-level <FASTEST\|FAST\|DEFAULT>`。 |
-| `attach` | 通过 CDP 或 Browser4 扩展附加到现有浏览器。支持 `--cdp <url\|port\|channel>` 与远程 endpoint 选项。 |
+| `attach` | 通过 CDP 或 Browser4 扩展附加到现有浏览器。支持 `--cdp <url\|port\|channel>` 与远程 endpoint 选项。成功附加后 CLI 会打印实际连接的浏览器（`Connected browser: …` / `Attached to … at …`），当实际浏览器与请求的 channel 不符（如请求 msedge 却连到 Chrome）时会输出 ⚠ 告警——请在驱动会话前核对。 |
 | `close` | 关闭当前活动浏览器会话。 |
-| `list` | 列出浏览器会话及其状态和下次打开行为。支持 `--all`。 |
+| `list` | 列出浏览器会话及其状态和下次打开行为。Connection 列优先显示后端上报的真实浏览器，并在 channel 冲突时标注（如 `requested msedge · actual Google Chrome`）。支持 `--all`。 |
 | `session-default <name>` | 把一个命名会话设为默认未命名会话。 |
 | `close-all` | 关闭所有会话，但不停止后端。 |
 | `kill-all` | 强制停止后端以及 Browser4 管理的浏览器进程。 |
 | `stop` | 优雅停止 Browser4 服务。 |
-| `status` | 显示服务版本、端口和健康状态。 |
+| `status` | 显示服务版本、端口、健康状态，以及 Web 状态面板地址（`http://<server>:8182/status`）。存在活动会话时还会打印当前会话小节：Name / Session ID / Status / Connection / Next open。 |
 | `doctor` | 运行诊断：构建信息、LLM 状态、陈旧 daemon 清理、可选修复。支持 `--verbose` 与 `--fix`。 |
 | `doctor log [name]` | 列出、查看、tail 或 grep 后端日志文件。支持 `--tail`、grep 风格参数，以及 `doctor log <name> grep <pattern>`。 |
 | `doctor metrics [filter]` | 列出、过滤或 grep 后端指标。支持 `doctor metrics grep <pattern>`。 |
@@ -329,13 +329,14 @@ browser4-cli doctor metrics grep request
 | `dblclick <ref> [button]` | 双击元素。支持 `--modifiers`、`--follow`、`--auto-dismiss-dialogs`。 |
 | `hover <ref>` | 悬停到元素上。 |
 | `fill <ref> <text>` | 清空并填写可编辑字段。支持 `--submit`、`--verify`。 |
-| `type <text> [ref]` | 向当前焦点元素或指定目标元素输入文本。支持 `--submit`、`--verify`、`--focus`、`--interactable-timeout`。 |
+| `type <text> [ref]` | 向当前焦点元素或指定目标元素输入文本。支持 `--submit`、`--verify`、`--focus`、`--interactable-timeout`，以及 `--method auto\|chars\|exec`（需同时给目标 ref：`auto` 默认——短文本逐字符输入，长文本/多行文本对 textarea/contenteditable 通过一次 `execCommand('insertText')` 批量插入；`chars` 强制逐字符；`exec` 强制批量插入）。 |
 | `press <key> [ref]` | 向当前焦点元素或指定目标元素发送按键。支持 `--verify`、`--follow`。 |
 | `select <ref> <value>` | 选择下拉框值。支持 `--verify`。 |
 | `check <ref>` | 勾选复选框或单选框。 |
 | `uncheck <ref>` | 取消勾选复选框或单选框。 |
 | `drag <startRef> <endRef>` | 从一个元素拖放到另一个元素。 |
 | `wait [target]` | 等待 selector/ref、时长、文本、URL 模式、页面加载状态或 JavaScript 表达式。支持 `--timeout`、`--text`、`--url`、`--load`、`--fn`。 |
+| `upload <ref> <file> [file...]` | 把本地文件上传到页面的文件输入框。目标必须是 `<input type="file">`（其他元素会报错）；文件路径须能被浏览器进程读取——本地模式下即本机，且空文件/不存在的文件会被拒绝并提示；远程后端时路径在后端主机上解析。支持 `--no-snapshot`。 |
 
 `wait --load` 接受 `domcontentloaded`、`load` 和 `networkidle`。
 
@@ -363,7 +364,7 @@ browser4-cli wait --load networkidle
 
 | 命令 | 说明 |
 |---|---|
-| `snapshot` | 捕获可访问性树快照。支持 `--boxes`、`-i/--interactive`、`-u/--urls`、`-c/--compact`、`--no-compact`、`-d/--depth`、`-l/--limit`、`-s/--selector`、`--raw`、`--stdout`、`-vp/--viewport`、`--filename`。 |
+| `snapshot` | 捕获可访问性树快照。支持 `--boxes`/`--no-boxes`、`-i/--interactive`、`-u/--urls`、`-c/--compact`、`--no-compact`、`-d/--depth`、`-l/--limit`、`-s/--selector`、`--raw`、`--stdout`、`-vp/--viewport`、`--filename`。`--stdout`/`--raw` 输出默认按 2000 行/页截断分页——截断时若 stdout 是管道会追加一行 `# … output truncated: showing N of M lines …` 提示，完整 footer 走 stderr；需要完整树请用 `--all` 或 `--page-size 0`，超大页面建议用 `-v N`/`--depth`/`--selector`/`--no-boxes` 约束。 |
 | `snapshot grep <pattern>` | 用 grep 风格参数搜索保存的 / 当前 snapshot YAML，例如 `-i`、`-v`、`-c`、`-l`、`-F`、`-w`、`-A`、`-B`、`-C`、`--selector`、`--page`、`--page-size`、`--all`。 |
 | `snapshot list` | 列出保存的快照文件及其时间戳、大小。 |
 | `snapshot clean` | 删除旧快照文件。支持 `--dry-run`。 |
@@ -577,7 +578,7 @@ Browser4 中有两套不同的 “skill” 表面：
 
 | 命令 | 说明 |
 |---|---|
-| `experience save <url> <trace>` | 保存任务执行轨迹。支持 `--outcome`、`--intent`、`--task-type`。 |
+| `experience save <url> <trace>` | 保存任务执行轨迹。支持 `--outcome`、`--intent`、`--task-type`（规范任务类型，含 `publish_post`），以及 `--facts <inline JSON \| @file.json>`——把复盘式知识（`selectors` / `interaction_hints` / `known_blockers` / `anti_patterns`，camelCase 或 snake_case 键均可）合并进 (domain, intent) 的 facts 条目；当该条目为 VERIFIED（不可变）时合并会被拒绝。 |
 | `experience query <url>` | 查询某个 URL / 域名已知的选择器、阻塞因素和提示。支持 `--intent`。 |
 | `experience list` | 列出已存储的经验条目。支持 `--filter`、`--intent-filter`、`--page`、`--page-size`。 |
 | `experience deep-learn <url> <intent>` | 对已存储轨迹做更深入分析。支持 `--force`。 |
@@ -599,7 +600,6 @@ Browser4 中有两套不同的 “skill” 表面：
 
 | 命令 | 说明 |
 |---|---|
-| `upload <ref> <file>` | 向文件输入框上传一个或多个文件。 |
 | `act <description>` | 实验性自然语言动作翻译器：把自然语言转换成浏览器命令并立即执行。 |
 
 ### 超时环境变量
