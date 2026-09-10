@@ -117,7 +117,6 @@ CLI defaults (`config.json`) and server-side runtime overrides are managed by th
 ```bash
 browser4-cli config                              # List all values + config file path
 browser4-cli config set server http://localhost:8182
-browser4-cli config set agent.llm.maxRequestTokens 800000   # server-side runtime override
 ```
 
 ### Tab Management
@@ -251,6 +250,7 @@ Proven copy-paste recipes — full walkthroughs in **[quick-patterns.md](referen
 11. **Agent Memory** — run-start `## Memory` recall, `memory_note`, `memory_search`/`read`/`forget`, auto-deposit
 12. **Typing text (`type`)** — `type "text" <ref>`; add `--method auto|chars|exec` (requires a target ref): `auto` (default) types short text per-character and switches to a one-shot `execCommand('insertText')` bulk insert for long (>150 chars) or multi-line text on textarea/contenteditable; `chars` forces per-character typing; `exec` forces the bulk insert. `--verify` keeps its strict read-back semantics for tool callers.
 13. **File Upload** — `upload <ref> <file> [file...]` uploads one or more local files to a page file input (`<input type="file">` only); the paths must be readable by the browser process (remote backend: resolved on the backend host). Multi-file, absolute paths, `--no-snapshot` supported; see [upload.md](references/upload.md).
+
 ## 7. Reference Map
 
 Organized by task — follow the link that matches what you're trying to do:
@@ -295,9 +295,15 @@ Organized by task — follow the link that matches what you're trying to do:
 **Troubleshoot:** [shell-quoting.md](references/shell-quoting.md) — avoid shell-quoting breakage for complex JS/X-SQL on Windows / Git Bash
 
 **Manage configuration:** [config.md](references/config.md) — `config` command family: CLI defaults and server-side runtime overrides
-## Installation
 
-```
-https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1
-and install-browser4-cli.sh
+## 8. Installation
+
+```bash
+# When Node.js available:
+npm install -g browser4-cli
+browser4-cli install
+# Or on Windows:
+irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
+# Or on Linux/macOS:
+curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
 ```
