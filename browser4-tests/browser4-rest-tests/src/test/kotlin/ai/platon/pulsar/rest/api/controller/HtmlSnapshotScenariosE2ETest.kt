@@ -793,6 +793,43 @@ private val createdSessions = mutableListOf<String>()
         )
     }
 
+    @Test
+    @DisplayName("9c — Capture and export carry vi bounding boxes and the normalized page URL")
+    fun test9c_captureAndExportCarryViBoundingBoxes() {
+        // A session that only navigated has no annotation yet, so the capture
+        // must produce it: without the vi data every interactive element loses
+        // its bounding box and the weighted list degrades to empty, and without
+        // the page link the exported HTML is not self-describing (issue #588).
+        val sessionId = openAndNavigate(TestUrls.MOCK_PRODUCT_DETAIL_URL)
+        awaitPageTitle(sessionId, "4K OLED TV")
+
+        val response = callTool("html_snapshot_capture", mapOf("sessionId" to sessionId))
+        assertNotError(response)
+        val captureResult = objectMapper.readTree(textContent(response))
+
+        val elements = captureResult["interactiveElements"]
+        assertNotNull(elements, "Capture should include interactiveElements")
+        assertTrue(elements.size() > 0, "Capture should list interactive elements, got: $captureResult")
+        assertTrue(
+            elements.any { it.has("box") && it["box"].asText().isNotBlank() },
+            "Interactive elements must carry a bounding box extracted from the vi data, got: $elements"
+        )
+
+        val html = exportHtmlSnapshot(sessionId)
+        assertTrue(
+            html.contains("vi=\""),
+            "Exported HTML must carry the vi attribute, got: ${html.take(400)}"
+        )
+
+        val normalizedUri = Regex("""<link rel="normalizedURI" href="([^"]*)"""")
+            .find(html)?.groupValues?.get(1).orEmpty()
+        assertEquals(
+            TestUrls.MOCK_PRODUCT_DETAIL_URL.trimEnd('/'),
+            normalizedUri.trimEnd('/'),
+            "Exported HTML must carry the normalized page URL, got: ${html.take(400)}"
+        )
+    }
+
     // =========================================================================
     // Scenario 10 — Agent-Assisted Form Discovery
     // =========================================================================

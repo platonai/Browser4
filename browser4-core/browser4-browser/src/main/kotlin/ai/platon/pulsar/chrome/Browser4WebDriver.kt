@@ -768,6 +768,141 @@ open class Browser4WebDriver(
             val parent = "$parentTag${if (parentId.isNotEmpty()) "#$parentId" else ""}"
             return "Dropped $self as child ${index + 1} of $total in $parent"
         }
+
+        // ---------------------------------------------------------------------
+        // Capture annotations: visual information (vi) and the normalized URI
+        //
+        // The runtime materializes `vi` bounding boxes and the capture meta links
+        // only in the HTML it serializes: the boxes live in a WeakMap that
+        // `compute()` fills, the links in `_captureMetaLinks`, and the serializer
+        // injects both while it walks the document.  Every read that skips those
+        // steps therefore loses the annotation silently.  The statuses below let
+        // the driver tell "nothing to do" apart from "nothing that can be done",
+        // so the failure is logged instead of being smuggled into an unannotated
+        // HTML string.
+        // ---------------------------------------------------------------------
+
+        /** [viDataStatusJs] status: the document already has vi data, or has it now. */
+        internal const val VI_DATA_COMPUTED = "computed"
+
+        /** [viDataStatusJs] status: the document cannot be annotated yet (no body, or not parsed). */
+        internal const val VI_DATA_NOT_READY = "not-ready"
+
+        /** [viDataStatusJs] status: the Browser4 runtime (and its serializer) is not on this tab. */
+        internal const val VI_DATA_UNAVAILABLE = "unavailable"
+
+        /** [viDataStatusJs] status: the runtime is present but produced no vi data. */
+        internal const val VI_DATA_FAILED = "failed"
+
+        /**
+         * The `rel` of the capture meta link that records the page URL, matching
+         * `AppConstants.PULSAR_DOCUMENT_NORMALIZED_URI`.  The serializer writes it
+         * into the serialized `<head>` so an offline copy of the page stays
+         * self-describing.
+         */
+        internal const val CAPTURE_META_LINK_REL = "normalizedURI"
+
+        /**
+         * Field separator of the [viDataStatusJs] result.  A control character
+         * cannot occur in a status, a URL or an attribute value, so the single
+         * evaluation result splits without a JSON round trip.
+         *
+         * The generated JS spells it out as the `\u0001` escape sequence (see
+         * [fieldSeparatorJsEscape]) so the evaluated source stays plain ASCII.
+         */
+        internal const val VI_DATA_FIELD_SEPARATOR = "\u0001"
+
+        /**
+         * [VI_DATA_FIELD_SEPARATOR] as it appears inside the generated JS source,
+         * i.e. the escape sequence the JavaScript engine turns back into the
+         * control character at evaluation time.
+         */
+        internal val fieldSeparatorJsEscape: String =
+            "\\u" + VI_DATA_FIELD_SEPARATOR.first().code.toString(16).padStart(4, '0')
+
+        /**
+         * Probe evaluated on the live tab: the vi (visual-information) state of
+         * the document — computing the data when the document has none yet — the
+         * `normalizedURI` currently stored for serialization, and the live
+         * document URL.
+         *
+         * Evaluated as a single CDP call so the check and the computation cannot
+         * be interleaved by a navigation.  The status is one of the `VI_DATA_*`
+         * constants rather than a boolean so the caller can log the difference
+         * between an expected no-op and a real failure; the stored link and the
+         * document URL let the caller decide — without a second round trip —
+         * whether the link has to be (re)stored before serializing.
+         */
+        internal fun viDataStatusJs(): String =
+            """
+            (function () {
+              var u = window.$PULSAR_UTILS_FUNCTION;
+              var url = document.URL || '';
+              if (!u || typeof u.getAnnotatedHTML !== 'function') {
+                return '$VI_DATA_UNAVAILABLE$fieldSeparatorJsEscape$fieldSeparatorJsEscape' + url;
+              }
+              var links = u._captureMetaLinks || {};
+              var stored = links['$CAPTURE_META_LINK_REL'] || '';
+              var status;
+              if (u._viDataComputed === true) {
+                status = '$VI_DATA_COMPUTED';
+              } else if (typeof u.compute !== 'function') {
+                status = '$VI_DATA_UNAVAILABLE';
+              } else if (!document.body || !document.body.firstChild) {
+                status = '$VI_DATA_NOT_READY';
+              } else {
+                try { u.compute(); } catch (e) { /* reported as failed below */ }
+                status = u._viDataComputed === true ? '$VI_DATA_COMPUTED' : '$VI_DATA_FAILED';
+              }
+              return status + '$fieldSeparatorJsEscape' + stored + '$fieldSeparatorJsEscape' + url;
+            })()
+            """.trimIndent()
+
+        /**
+         * JS storing [normalizedUri] as the page URL the annotated serializer
+         * writes into the serialized `<head>`.
+         *
+         * Best effort by construction: the value lands in the runtime's capture
+         * meta links (no DOM mutation), and the serializer emits it only while
+         * serializing, so the live page stays untouched.
+         */
+        internal fun storeCaptureMetaLinkJs(normalizedUri: String): String =
+            """
+            (function () {
+              var u = window.$PULSAR_UTILS_FUNCTION;
+              if (!u) return false;
+              u._captureMetaLinks = u._captureMetaLinks || {};
+              u._captureMetaLinks['$CAPTURE_META_LINK_REL'] = '${escapeJsString(normalizedUri)}';
+              return true;
+            })()
+            """.trimIndent()
+
+        /**
+         * The vi state of the live document as reported by [viDataStatusJs]:
+         * the [status], the page URL currently stored for serialization
+         * ([storedUri], blank when none is stored), and the live document URL
+         * ([documentUrl]).
+         */
+        internal data class ViDataProbe(val status: String, val storedUri: String, val documentUrl: String)
+
+        /**
+         * Parse a [viDataStatusJs] result, or null when the evaluation produced
+         * something unexpected (a truncated or non-string result).
+         */
+        internal fun parseViDataProbe(value: Any?): ViDataProbe? {
+            val text = value as? String ?: return null
+            val parts = text.split(VI_DATA_FIELD_SEPARATOR)
+            if (parts.size != 3) return null
+            return ViDataProbe(parts[0], parts[1], parts[2])
+        }
+
+        /**
+         * Whether a vi failure on [documentUrl] still has to be reported, given
+         * the URL of the last reported failure.  One warning per document keeps
+         * a page that cannot be annotated from flooding the log on every read.
+         */
+        internal fun shouldReportViFailure(lastReportedUrl: String?, documentUrl: String): Boolean =
+            lastReportedUrl != documentUrl
     }
 
 /**
@@ -1553,6 +1688,192 @@ internal enum class DragDropPosition(val key: String) {
             }
             verified
         }.getOrDefault(false)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Capture annotations — the annotated serializer behind [pageSource] /
+    // [outerHTML] emits `vi` bounding boxes and the `normalizedURI` link only
+    // once the runtime holds them, and silently degrades to plain `outerHTML`
+    // otherwise.  Layout-dependent consumers (html snapshot bounding boxes,
+    // X-SQL visual features) and offline consumers of a captured page (the page
+    // URL of the artifact) therefore cannot rely on the serializer alone.  The
+    // fetch/capture pipeline annotates the pages it captures itself;
+    // [ensureViDataComputed] gives every other WebDriver-layer HTML read the same
+    // guarantee on demand.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Normalizes the URL of the live document for the `normalizedURI` capture
+     * link, returning null when the URL has no normal form.
+     *
+     * Normalization is a session-scoped policy (`PulsarSession.normalize`), so
+     * the session that binds this driver installs it here; a driver without one
+     * cannot annotate captured HTML with a page URL and leaves the link alone.
+     */
+    @Volatile
+    var pageUrlNormalizer: ((url: String) -> String?)? = null
+
+    /**
+     * The document URL of the last reported vi failure, so a page that cannot be
+     * annotated does not log one warning per serialization.
+     */
+    @Volatile
+    private var viFailureReportedForUrl: String? = null
+
+    /**
+     * Ensure the live document of this tab is annotated for serialization: its
+     * visual-information (`vi`) data is computed when the document has none yet,
+     * and the page URL used by offline consumers (`link[rel=normalizedURI]`) is
+     * stored so both annotations reach the HTML together.
+     *
+     * `__pulsar_utils__.getAnnotatedHTML()` — the serializer behind [pageSource]
+     * and [outerHTML] — returns plain `documentElement.outerHTML` while
+     * `_viDataComputed` is false, and the boxes cannot be recovered afterwards:
+     * the runtime keeps them in a WeakMap that only `compute()` fills.  The link
+     * has the same shape: it is injected into the serialized `<head>` from
+     * `_captureMetaLinks`, which only the fetch/capture pipeline used to store.
+     * Without this call the HTML of a session that merely navigated (goto, tab
+     * switch, form submission) carries no annotation at all, while the same page
+     * fetched by the crawl pipeline carries both.
+     *
+     * Idempotent and cheap on an annotated document (one CDP evaluation): the
+     * link is stored only when it is missing or describes another URL — a page
+     * the fetch/capture pipeline already annotated keeps its value, and a
+     * document whose URL changed since (a same-document navigation) is corrected
+     * instead of shipped with a stale link.  On a tab without the runtime, or on
+     * a document that cannot be annotated yet, it reports false instead of
+     * failing the caller.
+     *
+     * Note that computing the features is not read-only: the runtime stores its
+     * metadata elements in the document (`#PulsarMetaInformation`,
+     * `#PulsarScriptSection`) and settles the page (`window.stop()`), exactly as
+     * the fetch/capture pipeline already does for every page it captures.
+     *
+     * @param normalizedUri The page URL to record, already normalized by the
+     * session; when null the driver resolves it from the live document URL
+     * through [pageUrlNormalizer].
+     * @return true when `vi` data is available for the current document.
+     */
+    @Throws(WebDriverException::class)
+    suspend fun ensureViDataComputed(normalizedUri: String? = null): Boolean {
+        var probe = probeViData()
+        if (probe?.status == VI_DATA_UNAVAILABLE) {
+            // The runtime is registered into the tab's isolated world when the
+            // tab navigates.  A driver bound to an already-loaded tab (tab-new
+            // then select, or a driver swap) has no cached context for it, so
+            // neither the runtime nor its serializer exists until the world is
+            // re-registered.
+            ensurePulsarUtilsInjected()
+            probe = probeViData()
+        }
+
+        if (probe == null) {
+            logger.debug("The Browser4 runtime is unavailable on tab {}; its HTML carries no annotation", guid)
+            return false
+        }
+
+        storeCaptureMetaLink(probe, normalizedUri)
+
+        return when (probe.status) {
+            VI_DATA_COMPUTED -> true
+
+            VI_DATA_NOT_READY -> {
+                logger.debug("Tab {} has no document body yet; its HTML carries no vi data", guid)
+                false
+            }
+
+            VI_DATA_UNAVAILABLE -> {
+                logger.debug("The Browser4 runtime is unavailable on tab {}; its HTML carries no vi data", guid)
+                false
+            }
+
+            else -> {
+                // A document that cannot be annotated fails on every read; warn
+                // once per document so an unusable page does not turn every
+                // serialization into a warning.
+                if (shouldReportViFailure(viFailureReportedForUrl, probe.documentUrl)) {
+                    viFailureReportedForUrl = probe.documentUrl
+                    logger.warn(
+                        "The Browser4 runtime did not produce visual information (vi) on tab {} for '{}'; " +
+                            "the serialized HTML carries no bounding boxes",
+                        guid, probe.documentUrl
+                    )
+                }
+                false
+            }
+        }
+    }
+
+    /** Evaluate [viDataStatusJs]; an unreachable page reports no probe at all. */
+    private suspend fun probeViData(): ViDataProbe? =
+        runCatching { parseViDataProbe(evaluate(viDataStatusJs())) }.getOrNull()
+
+    /**
+     * Store the `normalizedURI` capture link for the document described by
+     * [probe], so the serializer writes `<link rel="normalizedURI">` into the
+     * serialized `<head>` next to the `vi` attributes.
+     *
+     * The caller's [explicitUri] wins; otherwise the live document URL is
+     * normalized through [pageUrlNormalizer].  The link is stored only when it is
+     * missing or describes a different URL, so the value the fetch/capture
+     * pipeline already stored for this document is never rewritten with an
+     * equivalent one — and a document whose URL changed since (a same-document
+     * navigation) is corrected instead of shipped with a stale link.
+     */
+    private suspend fun storeCaptureMetaLink(probe: ViDataProbe, explicitUri: String?) {
+        val uri = explicitUri?.takeIf { it.isNotBlank() }
+            ?: run {
+                val normalizer = pageUrlNormalizer ?: return
+                runCatching { normalizer(probe.documentUrl) }
+                    .onFailure { logger.debug("Failed to normalize '{}' on tab {}: {}", probe.documentUrl, guid, it.message) }
+                    .getOrNull()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: return
+            }
+
+        if (uri == probe.storedUri) {
+            return
+        }
+
+        runCatching { evaluate(storeCaptureMetaLinkJs(uri)) }
+            .onFailure { logger.debug("Failed to store the normalized URI on tab {}: {}", guid, it.message) }
+    }
+
+    /**
+     * Serialize the live document, ensuring its capture annotations (`vi`
+     * bounding boxes and the `normalizedURI` link) are available first.
+     *
+     * The upstream serializer emits them only after `__pulsar_utils__.compute()`
+     * has run and the capture meta links are stored, and falls back to plain
+     * `outerHTML` otherwise — so the documented guarantee of the WebDriver layer
+     * is enforced here instead of at every call site.  The guarantee is best
+     * effort: a document without the runtime, or without a body, still
+     * serializes — just without annotations.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun pageSource(): String? {
+        ensureViDataComputedQuietly()
+        return super.pageSource()
+    }
+
+    /**
+     * Serialize a subtree of the live document, ensuring its capture annotations
+     * are available first — the same guarantee as [pageSource].
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun outerHTML(selector: String): String? {
+        ensureViDataComputedQuietly()
+        return super.outerHTML(selector)
+    }
+
+    /**
+     * Best-effort [ensureViDataComputed] for the serialization paths: a page
+     * that cannot carry `vi` data must still serialize.
+     */
+    private suspend fun ensureViDataComputedQuietly() {
+        runCatching { ensureViDataComputed() }.onFailure {
+            logger.debug("vi data unavailable before serializing HTML on tab {}: {}", guid, it.message)
+        }
     }
 
     // ---------------------------------------------------------------------------
