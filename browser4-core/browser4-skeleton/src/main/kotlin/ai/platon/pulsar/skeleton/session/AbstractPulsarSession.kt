@@ -336,6 +336,14 @@ abstract class AbstractPulsarSession(
         synchronized(context) {
             sessionConfig.putBean(driver)
             bindBrowser(driver.browser)
+            // HTML captured through this driver records the page URL as a
+            // `link[rel=normalizedURI]`, next to the `vi` bounding boxes it also
+            // injects while serializing.  Normalization is this session's policy
+            // (`PulsarSession.normalize`), so the session installs it on the
+            // driver instead of letting every capture path invent its own URL.
+            (driver as? Browser4WebDriver)?.pageUrlNormalizer = { url ->
+                runCatching { normalize(url).takeIf { it.isNotNil }?.urlString }.getOrNull()
+            }
         }
     }
 

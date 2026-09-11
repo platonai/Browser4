@@ -2,11 +2,14 @@ package ai.platon.pulsar.browser
 
 import ai.platon.pulsar.FastWebDriverService
 import ai.platon.pulsar.WebDriverTestBase
+import ai.platon.pulsar.chrome.Browser4WebDriver
+import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.sleepSeconds
 import org.junit.jupiter.api.DisplayName
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -285,6 +288,12 @@ class PulsarWebDriverTests : WebDriverTestBase() {
             html.trimStart().startsWith("<body"),
             "outerHTML('body') should start with <body>: ${html.take(80)}"
         )
+        // The page URL describes the document, not a subtree: the serializer only
+        // writes it into a serialized <head>, so a subtree must not carry it.
+        assertFalse(
+            html.contains("normalizedURI"),
+            "outerHTML('body') must not carry the page link: ${html.take(200)}"
+        )
     }
 
     @Test
@@ -309,6 +318,57 @@ class PulsarWebDriverTests : WebDriverTestBase() {
         assertEquals(
             false, hasHiddenAttr,
             "Live DOM must NOT have _h attributes after compute()"
+        )
+    }
+
+    @Test
+    @DisplayName("test pageSource annotates the HTML with vi data and the normalized page URL")
+    fun testPageSourceAnnotatesViDataAndNormalizedUri() = runWebDriverTest(interactiveUrl, browser) { driver ->
+        // No compute() here: this test opens the page and reads HTML straight
+        // away, which is what a session that only navigated looks like.  The
+        // driver must annotate the HTML itself, otherwise it silently loses
+        // every bounding box and the page URL (issue #588).
+        //
+        // Every session is bound to a Browser4WebDriver
+        // (AbstractPulsarSession.createBoundDriver); a raw browser hands out the
+        // plain driver, so wrap it here and install the same URL normalization
+        // policy the session installs when it binds a driver.
+        val b4Driver = Browser4WebDriver.from(driver as PulsarWebDriver)
+        b4Driver.pageUrlNormalizer = { url -> session.normalize(url).takeIf { it.isNotNil }?.urlString }
+
+        val computedBefore = b4Driver.evaluateValue("window.__pulsar_utils__?._viDataComputed") as? Boolean ?: false
+        assertEquals(false, computedBefore, "the test must not start from an already annotated document")
+
+        val pageSource = b4Driver.pageSource() ?: ""
+        val viMatches = Regex(
+            """\bvi="([0-9a-z]+,[0-9a-z]+,[0-9a-z]+,[0-9a-z]+|\d+(?:\.\d+)?\s+\d+(?:\.\d+)?\s+\d+(?:\.\d+)?\s+\d+(?:\.\d+)?)""""
+        ).findAll(pageSource).toList()
+
+        assertTrue(
+            viMatches.isNotEmpty(),
+            "pageSource() must compute the vi data on demand | ${pageSource.take(500)}"
+        )
+
+        val normalizedUri = Regex("""<link rel="normalizedURI" href="([^"]*)"""")
+            .find(pageSource)?.groupValues?.get(1).orEmpty()
+        assertEquals(
+            session.normalize(interactiveUrl).urlString,
+            normalizedUri,
+            "pageSource() must carry the session-normalized page URL | ${pageSource.take(500)}"
+        )
+    }
+
+    @Test
+    @DisplayName("test outerHTML computes vi data on demand without an explicit compute")
+    fun testOuterHTMLComputesViDataOnDemand() = runWebDriverTest(interactiveUrl, browser) { driver ->
+        val b4Driver = Browser4WebDriver.from(driver as PulsarWebDriver)
+        b4Driver.pageUrlNormalizer = { url -> session.normalize(url).takeIf { it.isNotNil }?.urlString }
+
+        val html = b4Driver.outerHTML() ?: ""
+
+        assertTrue(
+            html.contains("vi=\""),
+            "outerHTML() must compute the vi data on demand | ${html.take(500)}"
         )
     }
 }
