@@ -223,12 +223,19 @@ class HTMLSnapshotToolExecutor(
      *
      * Uses a single CDP evaluation so URL, title, content type and content all
      * describe the same document at the same instant (see
-     * [buildLiveDocumentJs]).  When the Browser4 page helper
-     * (__pulsar_utils__) is absent — a session whose tab predates the backend
-     * process, or a tab-new target that never received the runtime — the
-     * annotated serializer is not available and plain `documentElement.outerHTML`
-     * is returned instead.  Plain outerHTML is still a LIVE serialization and
-     * keeps any vi (visual-information) attributes already present in the DOM.
+     * [buildLiveDocumentJs]).  The capture annotations behind the annotated
+     * serializer — the visual-information (`vi`) bounding boxes and the
+     * `link[rel=normalizedURI]` page link — are produced first when the document
+     * has none yet: without them `getAnnotatedHTML()` silently returns plain
+     * `outerHTML`, so the capture loses every bounding box (interactive
+     * elements, link groups, visual `:expr` selectors) and the exported HTML
+     * stops identifying the page it came from.  The driver resolves the page URL
+     * through the normalization policy of the session it is bound to.  When the
+     * Browser4 page helper (`__pulsar_utils__`) is absent — a session whose tab
+     * predates the backend process, or a tab-new target that never received the
+     * runtime — the annotated serializer is not available and plain
+     * `documentElement.outerHTML` is returned instead.  Plain outerHTML is still
+     * a LIVE serialization.
      *
      * @return null when there is no usable live document (no driver, the
      * evaluation failed, the document is not a navigable http(s)/file page, or
@@ -237,12 +244,14 @@ class HTMLSnapshotToolExecutor(
     private suspend fun captureLiveDocumentSnapshot(managed: ManagedSession): LiveDocumentSnapshot? {
         val driver = runCatching { managed.driver }.getOrNull() ?: return null
 
-        // Best-effort re-injection of the page helper so the annotated
-        // serializer is available when possible.  Failure is not fatal — the
-        // serialization below falls back to plain outerHTML.
+        // Best-effort annotation guarantee: the annotated serializer only emits
+        // `vi` boxes and the page link once the runtime holds them, so produce
+        // them before serializing.  Failure is not fatal — the serialization
+        // below falls back to plain outerHTML for a page that cannot be
+        // annotated.
         (driver as? Browser4WebDriver)?.let { b4 ->
-            runCatching { b4.ensurePulsarUtilsInjected() }.onFailure {
-                logger.debug("Failed to (re-)inject the page helper before live capture: {}", it.message)
+            runCatching { b4.ensureViDataComputed() }.onFailure {
+                logger.debug("Failed to compute the vi data before live capture: {}", it.message)
             }
         }
 
@@ -779,10 +788,15 @@ internal data class LiveDocumentSnapshot(
  * the transport cost is a single CDP evaluation and the result splits apart
  * without a JSON round trip of the (potentially large) HTML.  The content is
  * serialized with the annotated serializer (`getAnnotatedHTML`) when the
- * Browser4 page helper is available — it preserves the vi (visual-information)
- * attributes downstream consumers rely on — and plain `outerHTML` otherwise.
- * Plain outerHTML is still a live serialization and keeps vi attributes that
- * are already present in the DOM.
+ * Browser4 page helper is available — it injects the `vi`
+ * (visual-information) bounding boxes that downstream consumers rely on — and
+ * with plain `outerHTML` otherwise.
+ *
+ * The serializer carries the annotations only after the caller has made sure the
+ * runtime holds them ([Browser4WebDriver.ensureViDataComputed]): `vi` is not a
+ * DOM attribute, and the page link is injected into a serialized `<head>` from
+ * the runtime's capture meta links, so a plain serialization cannot recover
+ * either.
  */
 internal fun buildLiveDocumentJs(): String {
     val marker = "\u0001"

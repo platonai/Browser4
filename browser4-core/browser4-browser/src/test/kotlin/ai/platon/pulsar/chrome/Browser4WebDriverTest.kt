@@ -715,6 +715,188 @@ class Browser4WebDriverTest {
         )
     }
 
+    // -------------------------------------------------------------------------
+    // Capture annotations (vi and the normalizedURI link)
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("viDataStatusJs short-circuits a document that already has vi data")
+    fun viDataStatusJsShortCircuitsOnComputedData() {
+        val js = Browser4WebDriver.viDataStatusJs()
+
+        assertTrue(
+            js.indexOf("u._viDataComputed === true") < js.indexOf("u.compute()"),
+            "an already annotated document must not be computed again: $js"
+        )
+        assertTrue(
+            js.contains("status = '${Browser4WebDriver.VI_DATA_COMPUTED}'"),
+            "the short circuit must report the computed status: $js"
+        )
+    }
+
+    @Test
+    @DisplayName("viDataStatusJs reports a tab without the Browser4 runtime")
+    fun viDataStatusJsReportsMissingRuntime() {
+        val js = Browser4WebDriver.viDataStatusJs()
+
+        assertTrue(
+            js.contains("window.__pulsar_utils__"),
+            "the runtime must be read defensively so a missing one does not throw: $js"
+        )
+        assertTrue(
+            js.contains("typeof u.getAnnotatedHTML !== 'function'"),
+            "a runtime without the annotated serializer must not be computed for: $js"
+        )
+        assertTrue(
+            js.contains("'${Browser4WebDriver.VI_DATA_UNAVAILABLE}'"),
+            "the missing runtime must report the unavailable status: $js"
+        )
+    }
+
+    @Test
+    @DisplayName("viDataStatusJs leaves a document without a body alone")
+    fun viDataStatusJsSkipsDocumentsWithoutBody() {
+        val js = Browser4WebDriver.viDataStatusJs()
+
+        assertTrue(
+            js.contains("!document.body || !document.body.firstChild"),
+            "compute() no-ops without a body, so it must not be called: $js"
+        )
+        assertTrue(
+            js.contains("'${Browser4WebDriver.VI_DATA_NOT_READY}'"),
+            "a bodyless document must report the not-ready status: $js"
+        )
+    }
+
+    @Test
+    @DisplayName("viDataStatusJs reports a runtime that produced no vi data")
+    fun viDataStatusJsReportsFailure() {
+        val js = Browser4WebDriver.viDataStatusJs()
+
+        assertTrue(
+            js.contains("try { u.compute(); } catch (e)"),
+            "a compute failure must not escape into the serialization path: $js"
+        )
+        assertTrue(
+            js.contains(
+                "u._viDataComputed === true ? '${Browser4WebDriver.VI_DATA_COMPUTED}' " +
+                    ": '${Browser4WebDriver.VI_DATA_FAILED}'"
+            ),
+            "the flag must be verified after computing, not assumed: $js"
+        )
+    }
+
+    @Test
+    @DisplayName("viDataStatusJs reports the stored page URL and the live document URL")
+    fun viDataStatusJsReportsLinkAndDocumentUrl() {
+        val js = Browser4WebDriver.viDataStatusJs()
+
+        assertTrue(js.contains("u._captureMetaLinks"), "the stored capture links must be read: $js")
+        assertTrue(
+            js.contains("'${Browser4WebDriver.CAPTURE_META_LINK_REL}'"),
+            "the normalizedURI link must be the one reported: $js"
+        )
+        assertTrue(js.contains("document.URL"), "the live document URL must be reported: $js")
+        // The three fields travel inside one JS string joined by the separator,
+        // spelled as an escape so the generated source stays plain ASCII.
+        val separatorEscape = Browser4WebDriver.fieldSeparatorJsEscape
+        assertTrue(
+            js.contains("'$separatorEscape'"),
+            "the fields must be joined by the '$separatorEscape' escape: $js"
+        )
+        assertTrue(
+            !js.contains(Browser4WebDriver.VI_DATA_FIELD_SEPARATOR),
+            "the raw control character must not be emitted into the JS source: $js"
+        )
+    }
+
+    @Test
+    @DisplayName("the field separator escape matches the parsed separator")
+    fun fieldSeparatorEscapeMatchesParsedSeparator() {
+        assertEquals("\u0001", Browser4WebDriver.VI_DATA_FIELD_SEPARATOR)
+        assertEquals("\\u0001", Browser4WebDriver.fieldSeparatorJsEscape)
+    }
+
+    @Test
+    @DisplayName("parseViDataProbe splits the status, the stored link and the document URL")
+    fun parseViDataProbeSplitsFields() {
+        val probe = Browser4WebDriver.parseViDataProbe(
+            "computed\u0001https://example.com/\u0001https://example.com/?th=1"
+        )
+
+        assertEquals("computed", probe?.status)
+        assertEquals("https://example.com/", probe?.storedUri)
+        assertEquals("https://example.com/?th=1", probe?.documentUrl)
+    }
+
+    @Test
+    @DisplayName("parseViDataProbe keeps a blank link for an unannotated document")
+    fun parseViDataProbeKeepsBlankLink() {
+        val probe = Browser4WebDriver.parseViDataProbe("unavailable\u0001\u0001about:blank")
+
+        assertEquals("unavailable", probe?.status)
+        assertEquals("", probe?.storedUri)
+        assertEquals("about:blank", probe?.documentUrl)
+    }
+
+    @Test
+    @DisplayName("parseViDataProbe rejects unexpected evaluation results")
+    fun parseViDataProbeRejectsUnexpectedResults() {
+        assertNull(Browser4WebDriver.parseViDataProbe(null), "null is not a probe")
+        assertNull(Browser4WebDriver.parseViDataProbe(42), "a number is not a probe")
+        assertNull(Browser4WebDriver.parseViDataProbe("computed"), "a missing separator is not a probe")
+        assertNull(
+            Browser4WebDriver.parseViDataProbe("computed\u0001a\u0001b\u0001c"),
+            "extra fields mean the result was not produced by the probe"
+        )
+    }
+
+    @Test
+    @DisplayName("storeCaptureMetaLinkJs writes the normalized URI without dropping other links")
+    fun storeCaptureMetaLinkJsMergesTheLink() {
+        val js = Browser4WebDriver.storeCaptureMetaLinkJs("https://example.com/a'b")
+
+        assertTrue(
+            js.contains("u._captureMetaLinks = u._captureMetaLinks || {}"),
+            "existing capture links must be preserved: $js"
+        )
+        assertTrue(
+            js.contains("""u._captureMetaLinks['normalizedURI'] = 'https://example.com/a\'b'"""),
+            "the URL must be stored escaped under the normalizedURI rel: $js"
+        )
+    }
+
+    @Test
+    @DisplayName("a vi failure is reported once per document URL")
+    fun viFailureIsReportedOncePerDocument() {
+        assertTrue(
+            Browser4WebDriver.shouldReportViFailure(null, "https://example.com/"),
+            "the first failure on a document must be reported"
+        )
+        assertFalse(
+            Browser4WebDriver.shouldReportViFailure("https://example.com/", "https://example.com/"),
+            "a repeated read of the same failing document must stay quiet"
+        )
+        assertTrue(
+            Browser4WebDriver.shouldReportViFailure("https://example.com/", "https://example.com/other"),
+            "a failure on another document must be reported"
+        )
+    }
+
+    @Test
+    @DisplayName("vi statuses are distinct non-blank tokens")
+    fun viStatusesAreDistinct() {
+        val statuses = setOf(
+            Browser4WebDriver.VI_DATA_COMPUTED,
+            Browser4WebDriver.VI_DATA_NOT_READY,
+            Browser4WebDriver.VI_DATA_UNAVAILABLE,
+            Browser4WebDriver.VI_DATA_FAILED,
+        )
+
+        assertEquals(4, statuses.size, "the statuses must be distinguishable")
+        assertTrue(statuses.none { it.isBlank() }, "statuses must not be blank: $statuses")
+    }
+
     private fun dialogDriver(protocol: BrowserProtocol = mock()): Browser4WebDriver {
         val browser = mock<PulsarBrowser>()
         whenever(browser.settings).thenReturn(BrowserSettings())
