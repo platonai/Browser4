@@ -449,8 +449,19 @@ function Invoke-TrackedCli {
     if (-not $isWin) { $isWin = ($env:OS -eq 'Windows_NT') }
     if ($isWin -and $cliExe -match '\.cmd$') {
         $cmdContent = Get-Content -LiteralPath $cliExe -TotalCount 3 -ErrorAction SilentlyContinue
-        $found = $cmdContent | ForEach-Object {
-            if ($_ -match '"([^"]+\.exe)"') { $matches[1]; break }
+        # NOTE: this scan must NOT use `break` inside ForEach-Object — that
+        # terminates the whole calling script instead of the pipeline.  A real
+        # foreach statement is safe.
+        $found = $null
+        foreach ($line in $cmdContent) {
+            if ($line -match '"([^"]+\.exe)"') { $found = $Matches[1]; break }
+        }
+        # npm shims reference their target through `%~dp0`, which the match above
+        # captures verbatim (e.g. "%~dp0node_modules\...\browser4-cli.exe").
+        # Expand it relative to the .cmd before probing the file system.
+        if ($found -and $found -match '%~dp0') {
+            $shimDir = Split-Path -Parent $cliExe
+            $found = $found -replace '%~dp0', ($shimDir.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar)
         }
         if ($found -and (Test-Path $found)) {
             $cliExe = $found

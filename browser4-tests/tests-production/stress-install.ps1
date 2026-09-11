@@ -116,8 +116,15 @@ function Invoke-Cli {
         # Read the .cmd shim to find the real .exe path.  npm-generated
         # .cmd shims have the form: @"<path>\<binary>.exe" %*
         $cmdContent = Get-Content -LiteralPath $cliExe -TotalCount 3 -ErrorAction SilentlyContinue
-        $found = $cmdContent | ForEach-Object {
-            if ($_ -match '"([^"]+\.exe)"') { $matches[1]; break }
+        # NOTE: no `break` inside ForEach-Object — it terminates the whole script.
+        $found = $null
+        foreach ($line in $cmdContent) {
+            if ($line -match '"([^"]+\.exe)"') { $found = $Matches[1]; break }
+        }
+        # npm shims use `%~dp0`; expand it relative to the shim.
+        if ($found -and $found -match '%~dp0') {
+            $shimDir = Split-Path -Parent $cliExe
+            $found = $found -replace '%~dp0', ($shimDir.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar)
         }
         if ($found -and (Test-Path $found)) {
             $cliExe = $found
