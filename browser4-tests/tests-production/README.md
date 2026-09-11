@@ -50,6 +50,16 @@ browser4-tests/tests-production/run-tests.sh smoke
 | `multi-scenarios.ps1` | orchestrator | Multi-iteration loop over core scenarios |
 | `test-and-fix.ps1` | orchestrator | Two-phase workflow: run acceptance tests, then auto-fix failures via AI analysis |
 | `bundle-download-speed.ps1` | infra | Measure bundle download speed from each configured mirror |
+| `verify-named-session-profile.ps1` | verify | **Measure** whether a named session keeps its dedicated profile across a backend restart (destructive restart phase is opt-in via `-RestartBackend`) |
+| `verify-attach-close-tabs.ps1` | verify | **Measure** what `close` does to tabs on a CDP-attached session (needs a browser started with `--remote-debugging-port`) |
+
+> **Verification (`verify`) scripts measure, they do not assert.** Each prints an
+> explicit verdict (`STABLE` / `REBOUND`, `PROCESS SURVIVED` / `TABS CLOSED` /
+> `TABS UNTOUCHED`) and exits 0 for any measured outcome; only precondition
+> failures (no CLI, no CDP endpoint, server cannot start) fail the run. They exist
+> because the corresponding behaviour is documented but not covered by an
+> assertion — see
+> [browser-modes.md §7](../../skills/browser4-cli/references/browser-modes.md).
 
 ### Bash tests
 

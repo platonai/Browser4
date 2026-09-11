@@ -167,8 +167,11 @@ listing the process's listening ports — this tier is Windows-only.** On
 Linux/macOS, pass an explicit endpoint (or start the target browser with a fixed
 `--remote-debugging-port`) instead of relying on the channel name.
 
-Attaching binds the session to an existing page tab of the target browser, so
-subsequent commands act on the page you already have open.
+Attaching binds the session to a page tab of the target browser — an existing page
+when one is available, otherwise a newly created `about:blank` tab. Subsequent
+commands act on that bound tab, and `close` closes it (see
+[attach.md](attach.md#close-vs-disconnect)); tabs you opened yourself and never
+drove through the session are left alone.
 
 **`attach --extension` — constraints**
 
@@ -246,15 +249,80 @@ Need to drive a browser
 
 ## 7. Limits Worth Verifying Before You Rely On Them
 
-- **Named-session profile binding across a backend restart.** Named sessions get
-  the dedicated profile directory `cx.<sessionUuid>`, and the CLI reuses a stored
-  session id only while the backend still reports that session as active.
-  The backend's name→UUID mapping is in memory, so after a backend/daemon restart
-  a re-open by name may resolve to a *new* UUID and therefore a new (empty)
-  profile directory. If login state must survive restarts, verify this on your
-  setup or persist auth with `state-save` / `state-load`.
-- **`close` on attached sessions** closes the tab(s) Browser4 was driving (see
-  [attach.md](attach.md#close-vs-disconnect)); the browser *process* survives.
+Two behaviours below are documented but not covered by an assertion. Both have a
+runnable measurement script under `browser4-tests/tests-production/` (they print a
+verdict and never assert, so any measured outcome exits 0).
+
+**A. Named-session profile binding across a backend restart**
+
+Named sessions get the dedicated profile directory `cx.<sessionUuid>`, and the CLI
+reuses a stored session id only while the backend still reports that session as
+active. The backend's name→UUID mapping is in memory, so after a backend/daemon
+restart a re-open by name may resolve to a *new* UUID and therefore a new (empty)
+profile directory.
+
+```powershell
+# automated (the restart phase is destructive → opt-in)
+pwsh browser4-tests/tests-production/verify-named-session-profile.ps1 -RestartBackend
+```
+
+Manual equivalent:
+
+```bash
+browser4-cli -s repro open --headless https://example.com
+browser4-cli -s repro cookie-set b4_repro_marker keepme --expires 7d   # persistent marker
+browser4-cli -s repro cookie-list                                      # marker present
+browser4-cli stop                                                      # stops the backend
+browser4-cli -s repro open --headless https://example.com              # auto-starts a fresh backend
+browser4-cli -s repro cookie-list                                      # marker still present?
+```
+
+Also compare the directories under `~/.browser4/context/groups/named/PULSAR_CHROME/`
+(a **new** `cx.<uuid>` directory means a new, empty profile).
+
+- **STABLE** — same session id and the marker cookie came back: reopening by name
+  really restores the same profile.
+- **REBOUND** — the session identity was not preserved (new session id) and/or the
+  marker cookie was lost: login state is *not* guaranteed across a restart. Persist
+  auth with `state-save` / `state-load` instead of relying on the profile.
+  A lost cookie alone does not prove a new profile directory — a non-persistent
+  (temporary/incognito-like) context drops it too — so the script reports the
+  session id, the cookie, and the profile directories as separate signals. The
+  on-disk profile layout has differed between versions, so the directory signal is
+  best effort: both `context/groups/named/**` and `browser/chrome/**` are searched
+  for `cx.*` directories.
+
+> **Careful with the restart step:** `browser4-cli stop` also sweeps orphaned
+> browser processes, so every browser Browser4 launched is closed with it.
+
+**B. What `close` does to the tabs of an attached session**
+
+```powershell
+# 1. start a target browser with remote debugging enabled
+chrome --remote-debugging-port=9222 https://example.com
+# 2. measure (observes /json/version and /json/list directly, not through the CLI)
+pwsh browser4-tests/tests-production/verify-attach-close-tabs.ps1 -Cdp 9222
+```
+
+It reports `PROCESS SURVIVED` / `PROCESS KILLED` plus `TABS CLOSED` (listing the
+tabs that disappeared) or `TABS UNTOUCHED`. Extension-attached sessions can be
+checked by hand: `attach --extension`, note the tabs with `tab-list`, `close`, then
+compare — the relay removes the tabs it drove via `chrome.tabs.remove`.
+
+**Measured results (reference machine, 2026-09-11)**
+
+Measured with CLI `4.13.17` and the local runtime bundle `4.13.14-SNAPSHOT` — the
+CLI warned that the served backend was **older than the checked-out sources**
+(`4.13.18-SNAPSHOT`), so re-run both scripts after a bundle rebuild before treating
+these as current behaviour.
+
+| Measurement | Observed |
+|---|---|
+| Named-session profile across a backend restart | **REBOUND** — the session id changed (`b8c986c7…` → `8d99d197…`) after `stop` + re-open by name, and the persistent marker cookie (`--expires 7d`) was gone (`cookie-list` → `[]`, `document.cookie` empty). No `named`/`cx.*` profile directories existed on that build, so the directory signal could not be attributed. |
+| `close` on a CDP-attached session | **PROCESS SURVIVED + TABS CLOSED** — the browser kept answering `/json/version`; the tab the session had bound (a newly created `about:blank`) disappeared, while the pre-existing `https://example.com/` tab stayed open. Confirms the close semantics in [attach.md](attach.md#close-vs-disconnect). |
+
+**Other open points**
+
 - **`PROTOTYPE` profile mode** is documented as the base for `SEQUENTIAL`/
   `TEMPORARY`, while the in-repo generator for it currently creates a default
   profile. Treat it as advanced/unverified.
