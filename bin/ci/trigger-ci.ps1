@@ -60,6 +60,10 @@ param(
 $repoRoot = (git rev-parse --show-toplevel 2>$null)
 Set-Location $repoRoot
 
+# VERSION parsing (major.minor.patch core + pre-release label) lives in a shared
+# helper so rc lines like 4.14.0-rc.5 never reach an [int] cast.
+. (Join-Path $PSScriptRoot 'lib/VersionInfo.ps1')
+
 # ═══════════════════════════════════════════════════════════════════
 # 0. Verify local version is the latest GitHub release patch + 1
 # ═══════════════════════════════════════════════════════════════════
@@ -86,7 +90,8 @@ function Get-LatestStableRelease {
 }
 
 $localSnapshot = Get-Content "$repoRoot\VERSION" -TotalCount 1
-$localVersion = ($localSnapshot -replace '-SNAPSHOT', '').Trim()
+$localVersionInfo = Get-VersionInfo $localSnapshot
+$localVersion = $localVersionInfo.Full
 
 # Version branches (X.Y.x) must be validated against the same X.Y release line:
 # comparing 4.14.x against the latest 4.13.x release would demand "4.13.8" and
@@ -96,8 +101,7 @@ $branch = git rev-parse --abbrev-ref HEAD 2>$null
 $branchMajorMinor = if ($branch -match '^(\d+)\.(\d+)\.x$') { "$($matches[1]).$($matches[2])" } else { '' }
 
 if ($branchMajorMinor) {
-    $localParts = $localVersion -split '\.'
-    if ($localParts.Count -ge 2 -and "$($localParts[0]).$($localParts[1])" -ne $branchMajorMinor) {
+    if ($localVersionInfo.MajorMinor -ne $branchMajorMinor) {
         # Hard failure, NOT a confirmable warning: a CI tag built from a
         # mismatched VERSION claims a version that does not exist. Real-world
         # case: branch 4.14.x with a stale VERSION 4.13.6-SNAPSHOT produced the
@@ -157,34 +161,30 @@ if ($branch -match '^(\d+)\.(\d+)\.x$') {
     Write-Host "Branch '$branch' -> version prefix: $majorMinor (branch-based, ci counter will bump)"
 } else {
     # Non-version branch → fall back to VERSION file
-    $SNAPSHOT_VERSION = Get-Content "$repoRoot\VERSION" -TotalCount 1
-    $version = $SNAPSHOT_VERSION -replace "-SNAPSHOT", ""
-    $parts = $version -split "\."
-    $majorMinor = $parts[0] + "." + $parts[1]
+    $versionInfo = Get-VersionInfo (Get-Content "$repoRoot\VERSION" -TotalCount 1)
+    $version = $versionInfo.Full
+    $majorMinor = $versionInfo.MajorMinor
     Write-Host "Branch '$branch' (non-version) -> VERSION file prefix: $majorMinor"
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# 2. Find existing CI tags for this version prefix
+# 2. Find existing CI tags for this exact version
 # ═══════════════════════════════════════════════════════════════════
 
-$escapedPrefix = [regex]::Escape($majorMinor)
-$tagPattern = "^v${escapedPrefix}\.\d+-$([regex]::Escape($PreReleaseVersion))\.\d+$"
+# CI tags are scoped to the exact VERSION base — '-SNAPSHOT' dropped, any
+# pre-release label kept: v4.13.18-ci.N on a 4.13.18-SNAPSHOT line,
+# v4.14.0-rc.5-ci.N on a 4.14.0-rc.5 line (ci.yml accepts both shapes). The base
+# IS the VERSION file's version, so a tag can never name a version that does not
+# exist.
+$fileVersionInfo = Get-VersionInfo (Get-Content "$repoRoot\VERSION" -TotalCount 1)
+$escapedBase = [regex]::Escape("v$($fileVersionInfo.Full)")
+$tagPattern = "^${escapedBase}-$([regex]::Escape($PreReleaseVersion))\.\d+$"
 $tags = @(git tag --list | Where-Object { $_ -match $tagPattern })
 
 if ($tags.Count -eq 0) {
-    # No existing CI tags for this prefix — seed from VERSION file or start at 0
-    $SNAPSHOT_VERSION = Get-Content "$repoRoot\VERSION" -TotalCount 1
-    $fileVersion = $SNAPSHOT_VERSION -replace "-SNAPSHOT", ""
-    $fileParts = $fileVersion -split "\."
-    $fileMajorMinor = $fileParts[0] + "." + $fileParts[1]
-    $initialPatch = if ($fileMajorMinor -eq $majorMinor) { [int]$fileParts[2] } else { 0 }
-    $newTag = "v$majorMinor.$initialPatch-$PreReleaseVersion.1"
-    if ("v$majorMinor.$initialPatch" -ne "v$fileVersion") {
-        Write-Error "Aborted: seed tag base 'v$majorMinor.$initialPatch' does not match VERSION file '$fileVersion'. Refusing to create a CI tag for a version that does not exist."
-        exit 1
-    }
-    Write-Host "No existing tags for v$majorMinor.*-$PreReleaseVersion.*. Creating new tag: $newTag"
+    # No CI tags for this exact version yet — seed the counter at 1.
+    $newTag = "v$($fileVersionInfo.Full)-$PreReleaseVersion.1"
+    Write-Host "No existing tags for v$($fileVersionInfo.Full)-$PreReleaseVersion.*. Creating new tag: $newTag"
     git tag $newTag
     git push $remote $newTag
     Write-Host "Created new tag '$newTag' and pushed it to remote '$remote'."
@@ -197,42 +197,32 @@ if ($tags.Count -eq 0) {
 # ═══════════════════════════════════════════════════════════════════
 
 if ($branchBased) {
-    # ── Branch-based: base the tag on the CURRENT version's patch (read from
-    #    the VERSION file) and bump only the pre-release counter (ci.N). This
-    #    keeps the tag tracking version bumps (e.g. VERSION 4.13.3-SNAPSHOT →
-    #    v4.13.3-ci.1) instead of freezing at the patch that was current when
-    #    the first CI tag was seeded (the old behavior pinned every tag to
-    #    v4.13.0-ci.N regardless of later version bumps). ──
-    $SNAPSHOT_VERSION = Get-Content "$repoRoot\VERSION" -TotalCount 1
-    $currentVersion = $SNAPSHOT_VERSION -replace "-SNAPSHOT", ""
-    $currentParts = $currentVersion -split "\."
-    $currentPatch = if ($currentParts.Count -ge 3) { [int]$currentParts[2] } else { 0 }
-
-    # The tag base must be exactly the VERSION file's version — never a blend
-    # of branch major.minor with a patch from a stale/unrelated VERSION file
-    # (that blend is how the non-existent v4.14.6-ci.N tags were created).
-    if ("v$majorMinor.$currentPatch" -ne "v$currentVersion") {
-        Write-Error "Aborted: tag base 'v$majorMinor.$currentPatch' (branch '$branch' major.minor + VERSION patch) does not match VERSION file '$currentVersion'. Refusing to create a CI tag for a version that does not exist."
-        exit 1
-    }
-
-    $escapedCurrent = [regex]::Escape("v$majorMinor.$currentPatch")
+    # ── Branch-based: the tag base tracks the VERSION file (4.13.3-SNAPSHOT →
+    #    v4.13.3-ci.1, 4.14.0-rc.5 → v4.14.0-rc.5-ci.1) and only the pre-release
+    #    counter (ci.N) is bumped, so every version bump restarts at ci.1
+    #    instead of freezing at the patch that was current when the first CI tag
+    #    was seeded (the old behavior pinned every tag to v4.13.0-ci.N regardless
+    #    of later version bumps). The base is read straight from the VERSION
+    #    file, so it can never blend the branch major.minor with a stale patch
+    #    (that blend is how the non-existent v4.14.6-ci.N tags were created). ──
+    $currentInfo = Get-VersionInfo (Get-Content "$repoRoot\VERSION" -TotalCount 1)
+    $escapedCurrent = [regex]::Escape("v$($currentInfo.Full)")
     $exactPattern = "^${escapedCurrent}-$([regex]::Escape($PreReleaseVersion))\.(\d+)$"
     $matchingTags = @($tags | Where-Object { $_ -match $exactPattern })
 
     if ($matchingTags.Count -eq 0) {
-        $newTag = "v$majorMinor.$currentPatch-$PreReleaseVersion.1"
-        Write-Host "No existing tags for v$majorMinor.$currentPatch-$PreReleaseVersion.*. Creating new tag: $newTag"
+        $newTag = "v$($currentInfo.Full)-$PreReleaseVersion.1"
+        Write-Host "No existing tags for v$($currentInfo.Full)-$PreReleaseVersion.*. Creating new tag: $newTag"
     } else {
         $latestTag = $matchingTags | Sort-Object {
             if ($_ -match $exactPattern) { return [int]$matches[1] }
             return 0
         } -Descending | Select-Object -First 1
-        Write-Host "Latest tag for v$majorMinor.$currentPatch-$PreReleaseVersion.*: $latestTag"
+        Write-Host "Latest tag for v$($currentInfo.Full)-$PreReleaseVersion.*: $latestTag"
         if ($latestTag -match $exactPattern) {
             $ciNumber = [int]$matches[1]
             $newCiNumber = $ciNumber + 1
-            $newTag = "v$majorMinor.$currentPatch-$PreReleaseVersion.$newCiNumber"
+            $newTag = "v$($currentInfo.Full)-$PreReleaseVersion.$newCiNumber"
         } else {
             Write-Error "Latest tag $latestTag does not match expected pattern."
             exit 1
