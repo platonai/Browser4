@@ -61,8 +61,9 @@ $repoRoot = (git rev-parse --show-toplevel 2>$null)
 Set-Location $repoRoot
 
 # VERSION parsing (major.minor.patch core + pre-release label) lives in a shared
-# helper so rc lines like 4.14.0-rc.5 never reach an [int] cast.
-. (Join-Path $PSScriptRoot 'lib/VersionInfo.ps1')
+# helper so rc lines like 4.14.0-rc.5 never reach an [int] cast.  It sits next to
+# this script because a `lib/` directory is git-ignored repo-wide.
+. (Join-Path $PSScriptRoot 'VersionInfo.ps1')
 
 # ═══════════════════════════════════════════════════════════════════
 # 0. Verify local version is the latest GitHub release patch + 1

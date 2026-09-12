@@ -37,7 +37,7 @@ param()
 $ErrorActionPreference = 'Continue'
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$VersionInfoPath = Join-Path $ScriptDir '..\lib\VersionInfo.ps1'
+$VersionInfoPath = Join-Path $ScriptDir '..\VersionInfo.ps1'
 
 if (-not (Test-Path $VersionInfoPath)) {
     Write-Host "FATAL: VersionInfo.ps1 not found at $VersionInfoPath" -ForegroundColor Red
