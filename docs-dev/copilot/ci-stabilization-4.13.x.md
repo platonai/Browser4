@@ -102,7 +102,7 @@ org.opentest4j.AssertionFailedError: http://127.0.0.1:32769/json
   本轮报告记录证据与分类，修复落地后再补一轮 CI 验证。
 * 顺带发现：`monitor-ci.ps1` 的错误提取抓的是 `Check Test Status`（汇报步骤）而不是真正的
   `[ERROR] ... FAILURE` 行，生成的任务正文里前 3 个 block 都是汇报脚本；建议后续改为优先提取
-  `FAILED_LIST=` / `[ERROR] Tests run: ... Failures: [1-9]` / `<<< FAILURE!` 行（见 §8.4）。
+  `FAILED_LIST=` / `[ERROR] Tests run: ... Failures: [1-9]` / `<<< FAILURE!` 行（见 §8.5）。
 
 ## 4. 本地"一次跑全"的复现命令
 
@@ -223,6 +223,23 @@ root `pom.xml` 的默认值是"排除所有非 Fast"：
 * 本地排查时如果只写 `-Dtest=<类名>` 而不放开 group，被选中的 `IntegrationTest` 类会被默认
   `excludedGroups` 排除，surefire 给出 `Tests run: 0` **且退出码 0** —— 静默通过，极易误判为"通过"。
   复跑单类的完整命令见 `docs/TESTING.md`。
+
+### 5.2 本地与 CI 的用例数口径差异（未完全解释，已列为核查项）
+
+| 模块 | 本地全量 | CI ci.4 | 差 |
+|---|---|---|---|
+| browser4-agentic | 957 | 664 | −293 |
+| browser4-rest | 331 | 244 | −87 |
+| browser4-browser | 266 | 223 | −43 |
+| browser4-skeleton | 393 | 359 | −34 |
+| 其余 12 个有测试的模块 | 557 | 557 | 0 |
+| **合计** | **2504** | **2047** | **−457** |
+
+两边失败数都是 0，不影响本轮结论；但"本地跑得到、CI 跑不到"本身是一类潜在假绿。
+已排除"整类没跑"是主因：`browser4-agentic` 在 CI 的 surefire 报告里只缺 2 个仓库中存在的类
+（`AgentStateManagerPersistenceTest`、`Browser4MCPServerE2ETest`），撑不起 −293。
+建议按 §8.2 的模块/类覆盖对比把口径钉死（例如 JDK 17 vs GraalVM 25、`@Nested` 计数方式、
+平台条件裁剪）。
 
 ## 7. 本轮改动
 
