@@ -376,6 +376,92 @@ class Browser4WebDriverTest {
         )
     }
 
+    // -------------------------------------------------------------------------
+    // Cookie reads over the extension relay (raw CDP result parsing)
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("extractCookiesFromCdpResult reads the CDP getAllCookies envelope")
+    fun extractCookiesFromCdpResultReadsEnvelope() {
+        val raw = mapOf(
+            "cookies" to listOf(
+                mapOf("name" to "UserToken", "value" to "abc", "domain" to ".csdn.net", "path" to "/"),
+                mapOf("name" to "SESSION", "value" to "xyz", "domain" to "msg.csdn.net", "path" to "/"),
+            )
+        )
+
+        val cookies = Browser4WebDriver.extractCookiesFromCdpResult(raw)
+
+        assertEquals(2, cookies.size)
+        assertEquals("UserToken", cookies[0]["name"])
+        assertEquals(".csdn.net", cookies[0]["domain"])
+    }
+
+    @Test
+    @DisplayName("extractCookiesFromCdpResult accepts a bare array and JSON nodes")
+    fun extractCookiesFromCdpResultAcceptsBareArrayAndNodes() {
+        val bare = listOf(mapOf("name" to "a", "value" to "1", "domain" to "example.com"))
+        assertEquals(1, Browser4WebDriver.extractCookiesFromCdpResult(bare).size)
+
+        // The relay may answer with Jackson nodes instead of plain maps.
+        val node = ai.platon.pulsar.common.serialize.json.pulsarObjectMapper()
+            .readTree("""{"cookies":[{"name":"a","value":"1","domain":"example.com"}]}""")
+        assertEquals(1, Browser4WebDriver.extractCookiesFromCdpResult(node).size)
+    }
+
+    @Test
+    @DisplayName("extractCookiesFromCdpResult returns empty for absent cookie payloads")
+    fun extractCookiesFromCdpResultReturnsEmptyForAbsentPayloads() {
+        assertTrue(Browser4WebDriver.extractCookiesFromCdpResult(null).isEmpty())
+        assertTrue(Browser4WebDriver.extractCookiesFromCdpResult("not a cookie payload").isEmpty())
+        assertTrue(Browser4WebDriver.extractCookiesFromCdpResult(mapOf("other" to 1)).isEmpty())
+        assertTrue(Browser4WebDriver.extractCookiesFromCdpResult(mapOf("cookies" to "oops")).isEmpty())
+    }
+
+    @Test
+    @DisplayName("raw CDP cookies normalize into the storage-state round-trip shape")
+    fun rawCdpCookiesNormalizeIntoStorageStateShape() {
+        // A single entry as returned by the live extension relay: extra CDP
+        // fields (priority, size, sourcePort, session) must not leak into the
+        // state payload, and a session cookie (-1 expiry) must drop `expires`.
+        val raw = mapOf(
+            "cookies" to listOf(
+                mapOf(
+                    "name" to "UserToken", "value" to "abc", "domain" to ".csdn.net", "path" to "/",
+                    "expires" to -1.0, "httpOnly" to true, "secure" to false, "sameSite" to "Lax",
+                    "priority" to "Medium", "size" to 36, "sourcePort" to 443, "session" to true,
+                )
+            )
+        )
+
+        val normalized = Browser4WebDriver.extractCookiesFromCdpResult(raw)
+            .map { Browser4WebDriver.normalizeStorageStateCookie(it) }
+
+        assertEquals(1, normalized.size)
+        assertEquals(
+            linkedMapOf(
+                "name" to "UserToken",
+                "value" to "abc",
+                "domain" to ".csdn.net",
+                "path" to "/",
+                "httpOnly" to true,
+                "secure" to false,
+                "sameSite" to "Lax",
+            ),
+            normalized[0]
+        )
+        assertFalse(normalized[0].containsKey("expires"), "session cookies must not carry an expiry")
+        assertFalse(normalized[0].containsKey("priority"), "CDP-only fields must not leak into the state")
+    }
+
+    @Test
+    @DisplayName("captureLocalStorageScript serializes localStorage as a JSON object")
+    fun captureLocalStorageScriptSerializesLocalStorage() {
+        val script = Browser4WebDriver.captureLocalStorageScript()
+        assertTrue(script.contains("JSON.stringify"), "expected a JSON result: $script")
+        assertTrue(script.contains("window.localStorage"), "expected localStorage read: $script")
+    }
+
     @Test
     @DisplayName("parseDragCenter reads resolved coordinates, css path and frame flag")
     fun parseDragCenterReadsCoordinates() {

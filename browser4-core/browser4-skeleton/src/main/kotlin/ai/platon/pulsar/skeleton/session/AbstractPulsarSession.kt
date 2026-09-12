@@ -87,6 +87,20 @@ abstract class AbstractPulsarSession(
     override val id: Long
 ) : PulsarSession {
 
+    /**
+     * Which user data directory a session launch must bind.
+     */
+    internal enum class LaunchProfileSource {
+        /** `open --profile <path>` — the caller named the directory. */
+        PROFILE_PATH,
+
+        /** The session's own context dir (named sessions keep one per session). */
+        CONTEXT_DIR,
+
+        /** Neither was set: the profile mode decides. */
+        NONE,
+    }
+
     companion object {
         private val SEQUENCER = AtomicLong()
         fun nextId() = SEQUENCER.incrementAndGet()
@@ -109,6 +123,28 @@ abstract class AbstractPulsarSession(
             BrowserProfileMode.PROTOTYPE -> BrowserId.createPrototype()
             BrowserProfileMode.SEQUENTIAL -> BrowserId.createNextSequential()
             BrowserProfileMode.TEMPORARY -> BrowserId.createRandomTemp()
+        }
+
+        /**
+         * Resolve which user data directory source a launch must use.
+         *
+         * An explicit `open --profile <path>` ([BROWSER_PROFILE_PATH]) always
+         * wins over the session's computed context dir
+         * ([BROWSER_CONTEXT_DIR]).  The caller asked for that exact directory —
+         * e.g. a Chrome profile snapshot produced by `profile-import` — so
+         * silently launching into the managed context dir instead would mount
+         * the wrong profile and hide every imported cookie, bookmark and login.
+         *
+         * @param contextDir The session's computed context dir, if any.
+         * @param profilePath The requested profile path, if any.
+         */
+        internal fun resolveLaunchProfileSource(
+            contextDir: String?,
+            profilePath: String?,
+        ): LaunchProfileSource = when {
+            !profilePath.isNullOrBlank() -> LaunchProfileSource.PROFILE_PATH
+            !contextDir.isNullOrBlank() -> LaunchProfileSource.CONTEXT_DIR
+            else -> LaunchProfileSource.NONE
         }
     }
 
@@ -286,28 +322,34 @@ abstract class AbstractPulsarSession(
             val contextDir = sessionConfig[BROWSER_CONTEXT_DIR]?.toString()?.takeIf { it.isNotBlank() }
             val profilePath = sessionConfig[BROWSER_PROFILE_PATH]?.toString()?.takeIf { it.isNotBlank() }
             val mode = BrowserProfileMode.fromString(sessionConfig[BROWSER_CONTEXT_MODE])
-            val browser = when {
-                contextDir != null -> {
-                    // Named session (e.g. `open --name <n>`): the backend
-                    // computed a dedicated context dir from the stable session
-                    // id. Bind the same chrome user data dir on every launch
-                    // instead of rotating through the SEQUENTIAL pool, so the
-                    // session's cookies / login state survive across restarts.
-                    val contextDirPath = Path.of(contextDir)
-                    Files.createDirectories(contextDirPath)
-                    val profile = BrowserProfile.create(BrowserType.PULSAR_CHROME, contextDirPath)
-                    context.browserManager.launch(BrowserId(profile), BrowserSettings(sessionConfig))
-                }
-                profilePath != null -> {
+            // An explicit `open --profile <path>` wins over the session's
+            // computed context dir — see resolveLaunchProfileSource.  Named
+            // sessions always carry a context dir, so checking profilePath first
+            // is what makes `--profile` (and `profile-import`'s "mount the
+            // snapshot" step) actually take effect instead of being silently
+            // ignored.
+            val browser = when (resolveLaunchProfileSource(contextDir, profilePath)) {
+                LaunchProfileSource.PROFILE_PATH -> {
                     // `open --profile <path>`: launch Chrome with the given
                     // directory as the user data dir. The path is used as-is,
                     // so it must point at a full Chrome user data directory
                     // (e.g. a copied system profile), not a Browser4-managed
                     // context dir.
-                    val profile = BrowserProfile(Path.of(profilePath), Fingerprint.DEFAULT)
+                    val profile = BrowserProfile(Path.of(profilePath!!), Fingerprint.DEFAULT)
                     context.browserManager.launch(BrowserId(profile), BrowserSettings(sessionConfig))
                 }
-                sessionConfig[BROWSER_DISPLAY_MODE] != null -> {
+                LaunchProfileSource.CONTEXT_DIR -> {
+                    // Named session (e.g. `open --name <n>`): the backend
+                    // computed a dedicated context dir from the stable session
+                    // id. Bind the same chrome user data dir on every launch
+                    // instead of rotating through the SEQUENTIAL pool, so the
+                    // session's cookies / login state survive across restarts.
+                    val contextDirPath = Path.of(contextDir!!)
+                    Files.createDirectories(contextDirPath)
+                    val profile = BrowserProfile.create(BrowserType.PULSAR_CHROME, contextDirPath)
+                    context.browserManager.launch(BrowserId(profile), BrowserSettings(sessionConfig))
+                }
+                LaunchProfileSource.NONE -> if (sessionConfig[BROWSER_DISPLAY_MODE] != null) {
                     // The session explicitly requested a display mode (e.g.
                     // `headed=true` from `open --headed`). The context-level browser
                     // manager launches with the server-wide configuration, which
@@ -316,8 +358,7 @@ abstract class AbstractPulsarSession(
                     // session's choice. Launch with the session's own settings so
                     // the requested display mode actually reaches Chrome.
                     context.browserManager.launch(browserIdFor(mode), BrowserSettings(sessionConfig))
-                }
-                else -> {
+                } else {
                     // No explicit display mode on the session — keep the legacy
                     // launch path so server-level defaults apply unchanged.
                     context.browserManager.launch(mode)

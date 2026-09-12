@@ -20,6 +20,8 @@ import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.urls.URLUtils
 import com.fasterxml.jackson.annotation.JsonInclude
+import com.fasterxml.jackson.core.type.TypeReference
+import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
@@ -482,6 +484,47 @@ open class Browser4WebDriver(
               return entries.length;
             })()
             """.trimIndent()
+
+        /**
+         * JavaScript returning the active origin's `localStorage` as a JSON
+         * object (`{"name": "value"}`), the capture counterpart of
+         * [restoreLocalStorageScript].  Used by `saveStorageState()`.
+         */
+        fun captureLocalStorageScript(): String =
+            "JSON.stringify(Object.fromEntries(Object.entries(window.localStorage)))"
+
+        /** Target type for one raw CDP cookie object. */
+        private val COOKIE_MAP_TYPE = object : TypeReference<Map<String, Any?>>() {}
+
+        /**
+         * Extract the cookie list from a raw `Network.getAllCookies` CDP result.
+         *
+         * The command answers `{"cookies": [...]}`, but the runtime shape depends
+         * on the transport: a direct CDP connection deserializes into typed CDP
+         * objects, while the extension relay hands back generic JSON maps/nodes.
+         * Nothing here is cast to
+         * `ai.platon.cdt.kt.protocol.types.network.Cookie` — that cast is what
+         * makes cookie reads fail on `attach --extension` sessions.
+         *
+         * @param result The raw value returned by `executeCdpCommand`.
+         * @return One map per cookie; empty when [result] carries no cookie array.
+         */
+        fun extractCookiesFromCdpResult(result: Any?): List<Map<String, Any?>> {
+            if (result == null) return emptyList()
+
+            val root = runCatching { pulsarObjectMapper().valueToTree<JsonNode>(result) }.getOrNull()
+                ?: return emptyList()
+            val cookies = when {
+                root.isArray -> root
+                root.isObject -> root.get("cookies") ?: return emptyList()
+                else -> return emptyList()
+            }
+            if (!cookies.isArray) return emptyList()
+
+            return cookies.mapNotNull { node ->
+                runCatching { pulsarObjectMapper().convertValue(node, COOKIE_MAP_TYPE) }.getOrNull()
+            }
+        }
 
         /**
          * True once the evaluated `location.origin` has committed to exactly
@@ -2145,6 +2188,81 @@ internal enum class DragDropPosition(val key: String) {
                 localStorageEntries = restoredLocalStorageEntries,
             )
         )
+    }
+
+    /**
+     * Saves the browser's cookies plus the active origin's localStorage as the
+     * storage-state JSON consumed by [loadStorageState].
+     *
+     * Overrides the upstream pulsar-browser implementation, which reads cookies
+     * through the typed CDP layer: it casts every element of the
+     * `Network.getAllCookies` result to
+     * `ai.platon.cdt.kt.protocol.types.network.Cookie`.  Over the extension
+     * relay that response arrives as generic JSON maps, so the cast throws
+     * `ClassCastException: LinkedHashMap cannot be cast to Cookie` and every
+     * cookie-reading tool (`state-save`, `cookie-list`, `cookie-get`) fails on
+     * `attach --extension` sessions — the documented "reuse your logged-in
+     * browser" path.  Reading the raw result and normalizing the fields here
+     * works over both transports.
+     *
+     * @return A JSON storage-state payload:
+     *   `{"cookies": [...], "origins": [{"origin": "...", "localStorage": [...]}]}`.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun saveStorageState(): String {
+        val payload = linkedMapOf<String, Any?>(
+            "cookies" to readAllCookiesViaCdp(),
+            "origins" to captureCurrentOriginLocalStorage(),
+        )
+        return storageStateMapper.writeValueAsString(payload)
+    }
+
+    /**
+     * Every cookie in the browser cookie jar, as `name -> value` maps.
+     *
+     * Uses the same raw-CDP read as [saveStorageState] — see there for why the
+     * typed upstream implementation cannot be used on extension-attached
+     * sessions.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun getCookies(): List<Map<String, String>> =
+        readAllCookiesViaCdp().map { cookie ->
+            cookie.entries.associate { (key, value) -> key to (value?.toString() ?: "") }
+        }
+
+    /**
+     * Read the whole cookie jar through `Network.getAllCookies` and normalize
+     * every entry into the canonical storage-state field set
+     * ([normalizeStorageStateCookie]).
+     */
+    private suspend fun readAllCookiesViaCdp(): List<Map<String, Any?>> {
+        val raw = executeCdpCommand("Network.getAllCookies", emptyMap())
+        return extractCookiesFromCdpResult(raw).map(::normalizeStorageStateCookie)
+    }
+
+    /**
+     * Capture the active origin and its localStorage entries as the `origins`
+     * section of the storage-state payload.
+     *
+     * Only the origin of the document that is currently open is captured:
+     * localStorage is origin-scoped and the browser exposes no API to enumerate
+     * every origin's store.  Returns an empty list when the active document has
+     * no standard origin (e.g. `about:blank`).
+     */
+    private suspend fun captureCurrentOriginLocalStorage(): List<Map<String, Any?>> {
+        val origin = runCatching { evaluateValue("location.origin")?.toString()?.trim() }.getOrNull()
+        if (origin.isNullOrEmpty() || !URLUtils.isStandard(origin)) {
+            return emptyList()
+        }
+
+        val json = runCatching { evaluateValue(captureLocalStorageScript())?.toString() }.getOrNull()
+        if (json.isNullOrBlank()) {
+            return emptyList()
+        }
+
+        val entries: Map<String, String> = storageStateMapper.readValue(json)
+        val localStorage = entries.map { (name, value) -> mapOf("name" to name, "value" to value) }
+        return listOf(mapOf("origin" to origin, "localStorage" to localStorage))
     }
 
     /**
