@@ -573,7 +573,7 @@ create_symlinks() {
   local b4_exists=false
   local b4_is_ours=false
 
-  # Check in install dir first — anything here is ours
+  # Check in install dir first - anything here is ours
   if [[ -e "$short_path" ]] || [[ -L "$short_path" ]]; then
     b4_exists=true
     b4_is_ours=true

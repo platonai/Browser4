@@ -508,3 +508,49 @@ Linux 那半边会第一次真正执行这些断言**——如果某条依赖 ru
 `.old` 仅在目标存在时清理；非 Arm64 一律映射 x64；`-SkipIfInstalled` 与 `-Version` 的交互
 （带 `-Version` 时不会跳过）；下载失败后残留空安装目录；Windows 侧 `Add-DirectoryToUserPath`
 会真实写入用户 PATH，因此测试套件刻意不覆盖该分支（避免污染开发机）。
+
+## 12. v4.13.19-ci.1 的唯一红点：`install-browser4-cli.sh` 里的一个非 ASCII 字节（已修）
+
+`ci.yml` 的 `Validate install script tests` 步骤（`65 / 66 passed`）唯一失败的是
+`no non-ASCII bytes`；该步骤是本轮（§11）刚刚加进每一轮 CI 的（commit `871933cdd7`）。
+
+### 12.1 根因：文件里真有一个非 ASCII 字节，不是断言的问题
+
+`install-browser4-cli.sh` 的注释（`check_symlinks` 内）用了 em dash：
+
+```
+  # Check in install dir first — anything here is ours
+```
+
+该字符自 2026-07-21 起就在（blame `87e85c6e41c`，与 `4.14.x`/`main` 一致），不属本轮改动。
+
+### 12.2 为什么现在才红：两次"真正的断言"叠加
+
+先是 §10.4 发现 `test()` 助手把断言变成恒真（`grep -P` 那条从未真正执行），
+`1a62bd71b4` 修好助手；接着 `871933cdd7` 把套件接进每一轮 CI——Linux（UTF-8）第一次执行
+这条断言，立刻命中那个字节。**"测试刚变绿又变红"不代表有新改动，很可能是断言第一次真的跑。**
+
+### 12.3 一个只在本机出现的"假绿"
+
+本机（Windows Git Bash + zh-CN 码页）：`grep -P` 把文件按 GBK 解码，em dash 的 3 个字节
+不在 `\x00-\x7F` 范围内。实测**对照实验**：对一个确认含 3 个非 ASCII 字节的副本执行该
+断言，本机同样返回 0 —— 即本机根本无法区分该文件是否含非 ASCII 字节。所以本机看到的
+`66 / 66` 与 CI 看到的 `65 / 66` 并不矛盾，是两个不同的东西。CI 的 `ci-build` 跑在
+`ubuntu-latest`（UTF-8 locale），断言在那里是有效的。
+
+### 12.4 修复与验证
+
+* 只改 1 行：em dash → ASCII `-`（正是"不删除/不跳过测试、修产品或脚本"的路线）。
+* 字节级验证：Python 读原始字节，>0x7F 计数为 **0**；按 `grep -P '[^\x00-\x7F]'`
+  的语义（POSIX/UTF-8 下匹配任何 >0x7F 的字节）该断言必然通过。
+* `bash cli/scripts/tests/install-browser4-cli.tests.sh` → **66 / 66 passed**；
+  `bash cli/scripts/tests/wait-for-npm-version.tests.sh` → **All 11 tests passed**；
+  `bash -n cli/scripts/install-browser4-cli.sh` 通过。
+* 顺带核对 release 的 `Run install-browser4-cli.tests.sh`（Linux）——同一个套件，
+  即本修复同时解掉 release 侧的同款红点。
+
+### 12.5 边界说明（不在本门禁内，故不动）
+
+`b4w.sh`（15）、`b4w.ps1`（3051）、`cli/scripts/smoke-test-runtime-bundle.sh`（78）都不是
+纯 ASCII，但**没有任何测试对这些文件做 ASCII 断言**（两个安装器套件的 `no non-ASCII bytes`
+只检查各自的安装脚本），因此不在本 CI 门禁范围内、也没有功能性风险——本次刻意不扩大改动。
