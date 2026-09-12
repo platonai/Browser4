@@ -249,7 +249,7 @@ class SwarmServicePersistenceTest {
         // Regression: a one-shot 100-URL submit used to have 98 of its queued
         // tasks killed at the 120s mark while the pipeline was still fetching
         // earlier pages of the very same batch.
-        val service = TestableSwarmService(tempDir)
+        val service = newService()
         redirectPersistenceFile(service, tempDir)
         service.staleTaskTimeoutSeconds = 120
         service.queueStallTimeoutSeconds = 600
@@ -273,7 +273,7 @@ class SwarmServicePersistenceTest {
 
     @Test
     fun `transitionStaleTasks reaps queued tasks once the whole pipeline stalls`(@TempDir tempDir: Path) {
-        val service = TestableSwarmService(tempDir)
+        val service = newService()
         redirectPersistenceFile(service, tempDir)
         service.staleTaskTimeoutSeconds = 120
         service.queueStallTimeoutSeconds = 600
@@ -301,7 +301,7 @@ class SwarmServicePersistenceTest {
 
     @Test
     fun `batchStatus aggregates tasks by batch id`(@TempDir tempDir: Path) {
-        val service = TestableSwarmService(tempDir)
+        val service = newService()
         val now = Instant.now()
         val start = now.minusSeconds(120)
 
@@ -354,7 +354,7 @@ class SwarmServicePersistenceTest {
 
     @Test
     fun `batchStatus reports the finished window once the batch settles`(@TempDir tempDir: Path) {
-        val service = TestableSwarmService(tempDir)
+        val service = newService()
         val start = Instant.now().minusSeconds(60)
 
         val a = ScrapeResponse(id = "c1", statusCode = 200, pageStatusCode = 200)
@@ -380,7 +380,7 @@ class SwarmServicePersistenceTest {
 
     @Test
     fun `batchStatus of an unknown batch is empty`(@TempDir tempDir: Path) {
-        val service = TestableSwarmService(tempDir)
+        val service = newService()
         service.responseCache.put(
             "x1",
             ScrapeResponse(id = "x1", statusCode = 200, pageStatusCode = 200).apply { isDone = true }
@@ -414,7 +414,7 @@ class SwarmServicePersistenceTest {
         Files.createDirectories(tempDir)
         Files.writeString(jsonlPath, objectMapper.writeValueAsString(task) + "\n")
 
-        val service = TestableSwarmService(tempDir)
+        val service = newService()
         invokeRestore(service, tempDir)
 
         val restored = service.responseCache.getIfPresent("r1")
