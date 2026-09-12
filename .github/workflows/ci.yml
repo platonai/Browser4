@@ -103,6 +103,16 @@ jobs:
           }
           Write-Host "`nAll $($scripts.Count) scripts parsed successfully." -ForegroundColor Green
 
+      - name: Validate install script tests
+        shell: bash
+        run: |
+          # The installer suites are fast (~25 s) and need no Java, Docker or
+          # browser.  They used to run only inside the release workflow, so a
+          # suite whose assertions had silently stopped executing stayed green
+          # for months; run them on every CI round instead.
+          bash cli/scripts/tests/install-browser4-cli.tests.sh
+          bash cli/scripts/tests/wait-for-npm-version.tests.sh
+
       - name: Run Tests
         id: run-tests
         if: inputs.skip_tests != true
