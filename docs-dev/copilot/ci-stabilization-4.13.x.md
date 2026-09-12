@@ -554,3 +554,69 @@ Linux 那半边会第一次真正执行这些断言**——如果某条依赖 ru
 `b4w.sh`（15）、`b4w.ps1`（3051）、`cli/scripts/smoke-test-runtime-bundle.sh`（78）都不是
 纯 ASCII，但**没有任何测试对这些文件做 ASCII 断言**（两个安装器套件的 `no non-ASCII bytes`
 只检查各自的安装脚本），因此不在本 CI 门禁范围内、也没有功能性风险——本次刻意不扩大改动。
+
+## 13. v4.13.19-ci.2 的唯一红点：`SwarmCrawlFixtureTest`（守卫拒绝沿用了 30–45 s 远程退避）（已修）
+
+红 run 34712923110 的 `Run Tests` 终局是 `browser4-rest-tests` 的 `SwarmCrawlFixtureTest`：
+`Tests run: 3, Failures: 2 … Time elapsed: 156.4 s`，上一轮绿 run（ci.6，`f3c1a6202c`）同一
+用例是 `3 / 0`、`33.56 s`。红 run 的代码侧没有任何相关改动：`e018b73107` 只动安装脚本、
+文档与版本号；守卫代码与测试和 `4.14.x` 逐字节相同，`main` 上甚至没有该守卫。**判定为
+负载敏感的 flake，不是回归**，故按"不删测试、不跳过、补重试/修竞态"的路线处理。
+
+### 13.1 机制（由失败 run 自身日志反推）
+
+1. 测试 1（`testSubmitGeneratedCrawlProductUrl`）在 `19:11:37.372` 提交任务，然后
+   `waitForScrapeCompletion` 轮询 2 分钟（`19:13:37` 到期）。
+2. 同一个 run 里有大量并发 fetch 在争抢同一批 fixture 页面。快照来源守卫
+   （`captureNavigationSnapshot`）反复拒绝本次 fetch 的抓取：
+   `Tab origin mismatch: refusing to capture '…/product/1.html' for fetch '…'`，
+   时间点 `19:11:20.9 / 19:11:33.1 / 19:12:09.4 / 19:12:48.5 / 19:13:34.5`，每次随后
+   `🤺 Trying Nth 32–43s later`。全 run 共 78 条（绿 run 74 条——**该冲突在绿 run 里
+   同样存在**，差别只在量级）。
+3. 拒绝走的是"退役 driver + CRAWL 重试"（`ForwardingResponse.crawlRetry`），延迟由
+   `page.retryDelay ?: retryDelayPolicy(...)` 决定，而默认策略是
+   `AbstractTaskRunner.retryDelayPolicy` 的 **30 + rand(15) s**（远程失败退避）。
+   3 次重试合计 90–135 s ≈ 整个 2 分钟等待窗口 ⇒ **调用方必然先放弃**。
+4. 结果：测试 1 在 `19:13:37` 时看到 `isDone=false`（最后一次状态还是 202/1601 retrying）
+   而失败（`Time elapsed: 121.1 s`）；页面在 `19:14:09.779` 才打印
+   `Gone … got 408 … retry budget exhausted (4)`，即**比调用方的 deadline 晚 32 s**。
+5. 测试 2（`19:13:38.385` 提交，`35.26 s`）因为同一 URL 已经失败（417）而提前退出，
+   于是 `assertEquals(200, statusCode)` 也失败。同一个 run 里 78 次拒绝、0 次
+   `withTimeout` 取消——**问题不是"抓取失败"，是"重试节拍与调用方 deadline 不匹配"**。
+
+### 13.2 修复（`browser4-protocol`，最小改动）
+
+* `emulator/Exceptions.kt`：新增 `TabOriginMismatchException(message, driver)`，父类仍是
+  `WebDriverException`（`open class`，见 §9 同类用法）。**故意保持子类型**，这样
+  `browseWithDriver` 里既有的 `catch (e: WebDriverException)` 语义不变：退役 driver +
+  `crawlRetry`——拒绝的 driver 会在 `put` 时被关闭（`isWorking == false`），下一次重试
+  落在**新 driver/新 tab** 上，正是 §8 里 #592 记录的既定方向"换新 driver/tab 重试"。
+* 新增 `TAB_ORIGIN_MISMATCH_RETRY_DELAY = 10 s` 与 `crawlRetryDelayFor(e): Duration?`
+  （只对守卫拒绝返回非 null），在同一个 catch 里 `crawlRetryDelayFor(e)?.let {
+  task.page.retryDelay = it }`。
+* 10 s 不是新造的魔数，是本模块已有的两个先例：`MultiPrivacyContextManager`
+  （"No driver available" → `FetchResult.crawlRetry(task, delay = 10s, …)`）与
+  `StreamingTaskRunner` 的 cancel 路径（`page?.retryDelay ?: Duration.ofSeconds(10)`）。
+  改完后最坏节拍从 `30 + 10 …` 变成 `~30 s + 3×10 s`，落在 2 分钟窗口内。
+* 两个守卫抛点改为抛新异常；catch 里对守卫拒绝只记 `[Handled]`（不带栈），守卫自身的
+  warn 仍带完整文档信息——避免每 run 78 条 `[Unexpected] WebDriverException` 栈噪声。
+* 测试（`ExceptionsTest`，纯单元、无浏览器）：子类型契约 + 携带 driver（可被 retire）、
+  `crawlRetryDelayFor` 只对守卫拒绝返回 10 s（其它 `WebDriverException` 仍走默认策略）、
+  以及"4 次尝试 × 10 s 必须落在调用方 2 分钟窗口内、且小于退避下限 30 s"。
+
+### 13.3 验证
+
+`./mvnw -ntp -o -pl browser4-core/browser4-protocol -am test -Dtest=ExceptionsTest` 全绿
+（新增用例含"必须小于 30 s / 4 次重试必须小于 2 分钟"两条边界断言，在改动前必然失败）。
+
+下一轮的**可观测信号**：守卫拒绝后的重试日志行 `🤺 Trying Nth <delay> later` 应由
+`32–43s` 变为 `10s`（`delay.readable()`），而 `Tab origin mismatch` 行数与绿 run 同量级
+（70+）仍属正常——**看节拍，不要只看拒绝次数**。
+
+### 13.4 边界（未修，仍指向 #592）
+
+本轮只修"**把瞬时、本地的拒绝当成远程失败来退避**"这一放大环节，没有修**两个 fetch 共用
+一个 tab** 这个根因（§5/#592，涉及驱动复用，不在本仓可改范围）。因此：如果争用持续超过
+约 30 s，fetch 现在会**在调用方窗口内快速失败**（测试 1 会改在 `statusCode` 断言上失败，
+而不是死在 deadline 上）。同一份日志显示争用是瞬时的（同一批页面在 `19:14:18` 以 200
+成功、绿 run 也有 74 次同类拒绝），所以这一轮把"调用方必然先放弃"变成"重试能在窗口内跑完"。
