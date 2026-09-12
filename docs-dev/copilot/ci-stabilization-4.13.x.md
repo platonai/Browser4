@@ -182,6 +182,23 @@ org.opentest4j.AssertionFailedError: http://127.0.0.1:32769/json
 | `AgenticContextTest` / `AgentFileSystemTest` / `AgentShellTest` / `AgentEventBusTest` / `RobustBrowserAgentTest` | 3 / 44 / 52 / 10 / 1，全部 0 失败 ✅（4.14 分支上曾红的 `browser4-agentic` 系列在本分支全绿） |
 | `CrawlFixtureMetadataTest` | ❌ 唯一失败点，见上 |
 
+### 5.2 本地与 CI 的用例数口径差异（未完全解释，已列为核查项）
+
+| 模块 | 本地全量 | CI ci.4 | 差 |
+|---|---|---|---|
+| browser4-agentic | 957 | 664 | −293 |
+| browser4-rest | 331 | 244 | −87 |
+| browser4-browser | 266 | 223 | −43 |
+| browser4-skeleton | 393 | 359 | −34 |
+| 其余 12 个有测试的模块 | 557 | 557 | 0 |
+| **合计** | **2504** | **2047** | **−457** |
+
+两边失败数都是 0，不影响本轮结论；但"本地跑得到、CI 跑不到"本身是一类潜在假绿。
+已排除"整类没跑"是主因：`browser4-agentic` 在 CI 的 surefire 报告里只缺 2 个仓库中存在的类
+（`AgentStateManagerPersistenceTest`、`Browser4MCPServerE2ETest`），撑不起 −293。
+建议按 §8.2 的模块/类覆盖对比把口径钉死（例如 JDK 17 vs GraalVM 25、`@Nested` 计数方式、
+平台条件裁剪）。
+
 ## 6. tag / 排除清单核对（更正早期判断）
 
 `AGENTS.md` 原文只写"CI 排除 `Slow`/`Heavy`/`Integration`/`E2E`/`SDK`/`Requires*`/`ManualOnly`"，
@@ -222,23 +239,6 @@ root `pom.xml` 的默认值是"排除所有非 Fast"：
 * 本地排查时如果只写 `-Dtest=<类名>` 而不放开 group，被选中的 `IntegrationTest` 类会被默认
   `excludedGroups` 排除，surefire 给出 `Tests run: 0` **且退出码 0** —— 静默通过，极易误判为"通过"。
   复跑单类的完整命令见 `docs/TESTING.md`。
-
-### 5.2 本地与 CI 的用例数口径差异（未完全解释，已列为核查项）
-
-| 模块 | 本地全量 | CI ci.4 | 差 |
-|---|---|---|---|
-| browser4-agentic | 957 | 664 | −293 |
-| browser4-rest | 331 | 244 | −87 |
-| browser4-browser | 266 | 223 | −43 |
-| browser4-skeleton | 393 | 359 | −34 |
-| 其余 12 个有测试的模块 | 557 | 557 | 0 |
-| **合计** | **2504** | **2047** | **−457** |
-
-两边失败数都是 0，不影响本轮结论；但"本地跑得到、CI 跑不到"本身是一类潜在假绿。
-已排除"整类没跑"是主因：`browser4-agentic` 在 CI 的 surefire 报告里只缺 2 个仓库中存在的类
-（`AgentStateManagerPersistenceTest`、`Browser4MCPServerE2ETest`），撑不起 −293。
-建议按 §8.2 的模块/类覆盖对比把口径钉死（例如 JDK 17 vs GraalVM 25、`@Nested` 计数方式、
-平台条件裁剪）。
 
 ## 7. 本轮改动
 
@@ -320,3 +320,22 @@ root `pom.xml` 的默认值是"排除所有非 Fast"：
   不会误报。
 - 全模块：`./mvnw -ntp -o -pl browser4-core/browser4-protocol test`
   → `Tests run: 82, Failures: 0, Errors: 0, Skipped: 2`，BUILD SUCCESS。
+
+### 9.4 独立复核（本轮排查方，非修复方）
+
+同一提交在**更宽的模块面**上重跑（`-pl browser4-core/browser4-protocol,browser4-core/browser4-browser,browser4-rest -am`，
+CI 同款开关：`-Dsurefire.excludes=**integration**` + 同款 `excludedGroups` + `-DrunITs=true`）：
+
+| 模块 | 用例 | 失败 |
+|---|---|---|
+| Browser4 Protocol | 82（新增 2：`LoadingWebDriverPoolTest`，显示名 "LoadingWebDriverPool polling"，4.008 s） | 0 |
+| Browser4 Agentic | 957 | 0 |
+| Browser4 Skeleton | 393 | 0 |
+| Browser4 Rest | 331 | 0 |
+| Browser4 Browser | 266 | 0 |
+| 其余 8 个模块（Common/Parse/Agent Tools/Boot 等） | 103 | 0 |
+| **合计** | **2132** | **0** |
+
+`Browser4 Protocol` 由 80 增至 82，其余模块计数与修复前完全一致（无副作用）；新增的诊断日志
+`The system is over the critical load, will not create a new driver` 在日志中可见。
+端到端由 ci.6（tag `v4.13.18-ci.6`，提交 `f3c1a6202c`）验证。
