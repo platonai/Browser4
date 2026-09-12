@@ -15,9 +15,9 @@
    仍在后台提交链接 → platonai/Browser4#592。
 4. 本轮**修掉 2 个 CI 判定可信度缺口**（超时可被"零失败"洗白、一轮只暴露一个失败模块），
    并**更正了排除清单的误判**（见 §6）。
-5. 当前 CI 状态：`v4.13.18-ci.3` CI/CD Pipeline **success**；加固后的 **`v4.13.18-ci.4` success**
-   （2047 个用例、0 失败，`CrawlFixtureMetadataTest` 第三轮连续通过：207.2 s），同轮
-   Cross-Platform Smoke Test 也是 success。
+5. 当前 CI 状态（本轮结束时）：**`v4.13.18-ci.6` CI/CD Pipeline success**（2049 用例 / 0 失败，
+   `TestLoadResources` 4.5 s 通过、新增驱动池用例 2/0）+ 同轮 Cross-Platform Smoke Test success；
+   此前 `ci.3`、`ci.4` 亦为 success，`ci.5` 的唯一红点已定位并修复（§3.1、§9）。
 
 ---
 
@@ -76,6 +76,7 @@ Maven 默认在第一个失败模块停止（CI 没有 `-fae` / `-Dmaven.test.fa
 | （以上全部） | — | — | **ci.3 全绿 ✅** |
 | **CI 判定加固 + 文档**（见 §2、§7） | 提交 `efc650490a` | — | **ci.4 全绿 ✅**（`Total 2047 / Failed 0 / Passed 1991 / Skipped 56`，26m13s；Cross-Platform Smoke Test 同轮 success） |
 | 排除列表语义注释 | 提交 `39779e079c` | — | ci.5 红 ❌（见 §3.1） |
+| **驱动池分片轮询修复**（§9，提交 `2671e1574d`）+ 报告 | 提交 `f3c1a6202c` | — | **ci.6 全绿 ✅**（`Total 2049 / Failed 0 / Passed 1993`，26m+；`TestLoadResources` 4.522 s 通过、`LoadingWebDriverPoolTest` 2/0；Cross-Platform Smoke Test 同轮 success） |
 
 ### 3.1 ci.5 的 flaky 失败：`TestLoadResources.testLoadResource`
 
@@ -98,7 +99,13 @@ org.opentest4j.AssertionFailedError: http://127.0.0.1:32769/json
   代码差异只有工作流注释和文档，不可能影响该测试。
 * 处置：`monitor-ci.ps1` 自动落了 coworker 任务 `fix-ci-yml-tag-failure.md`（提取到的失败类
   `FAILED_LIST="ai.platon.pulsar.browser.TestLoadResources"` 明确），已由提交 `2671e1574d` 修复
-  ——机制反推与对照实验见 §9；本轮对修复做了**独立复核**（见 §7 末行），再用 ci.6 做端到端验证。
+  ——机制反推与对照实验见 §9；本轮对修复做了**独立复核**（见 §7 末行），ci.6 完成端到端验证。
+* **ci.6 端到端验证（决定性证据）**：`TestLoadResources` 变成 `Tests run: 3, Failures: 0, Errors: 0,
+  Skipped: 1`，耗时从 63.16 s 降到 **4.522 s**；更关键的是 ci.6 日志里**同一条件再次出现**——
+  14:44:21（正是该用例执行窗口内）打出
+  `LoadingWebDriverPool - The system is over the critical load, will not create a new driver`，
+  也就是说守卫那次确实又拒绝了创建，而修复后 `poll` 在负载恢复后立刻拿到 driver，不再空等 60 s。
+  新增的 `LoadingWebDriverPoolTest` 在 CI 上 `Tests run: 2, Failures: 0`（3.015 s）。
 * 顺带发现：`monitor-ci.ps1` 的错误提取抓的是 `Check Test Status`（汇报步骤）而不是真正的
   `[ERROR] ... FAILURE` 行，生成的任务正文里前 3 个 block 都是汇报脚本；建议后续改为优先提取
   `FAILED_LIST=` / `[ERROR] Tests run: ... Failures: [1-9]` / `<<< FAILURE!` 行（见 §8.5）。
