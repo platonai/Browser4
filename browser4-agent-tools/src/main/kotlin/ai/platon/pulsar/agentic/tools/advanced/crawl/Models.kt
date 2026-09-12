@@ -45,7 +45,16 @@ data class ScrapeResponse(
     var pageStatusCode: Int = ProtocolStatusCodes.SC_CREATED,
     var pageContentBytes: Int = 0,
 
+    /**
+     * True once the task reached a terminal state.
+     *
+     * The JSON name is pinned to `isDone` on purpose: the Spring REST mapper
+     * applies the Java Bean convention and would otherwise emit `done`, while
+     * every client (CLI, MCP tools, tests) and the docs read `isDone`.
+     */
     @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @get:JsonProperty("isDone")
+    @set:JsonProperty("isDone")
     var isDone: Boolean = false,
 
     var resultSet: List<Map<String, Any?>>? = null,

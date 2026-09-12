@@ -450,7 +450,9 @@ class SwarmService(
     fun getStatus(request: ScrapeStatusRequest): ScrapeResponse {
         return responseCache.getIfPresent(request.id) ?: run {
             logger.warn("Swarm task not found: {}", request.id)
-            ScrapeResponse(request.id, ResourceStatus.SC_NOT_FOUND, ProtocolStatusCodes.SC_NOT_FOUND)
+            // notFound() clears createdTime: the placeholder describes a task
+            // that does not exist, so it must not look like a freshly created one.
+            ScrapeResponse.notFound(request.id).also { it.message = "Swarm task not found: ${request.id}" }
         }
     }
 

@@ -11807,21 +11807,38 @@ async fn handle_swarm_status(
         return Err("Task ID is required.".to_string());
     }
 
+    // A task id and a batch id are both uuids handed out by `swarm submit`, so
+    // accepting either here is what users expect: an unknown id is retried as a
+    // batch before reporting "not found".
     let result = get_swarm_status(client, base_url, id).await?;
     let parsed: Value =
         serde_json::from_str(&result).unwrap_or(Value::String(result.clone()));
 
+    let task_status_code = parsed.get("statusCode").and_then(|v| v.as_i64()).unwrap_or(0);
+    // The backend answers an unknown id with a 404 placeholder for *both* the
+    // task and the page, and never with isDone; a real task that failed a 404
+    // page still reports its own (non-404) status code.
+    let task_unknown = parsed.is_string()
+        || (task_status_code == 404
+            && parsed.get("pageStatusCode").and_then(|v| v.as_i64()) == Some(404)
+            && !parsed.get("isDone").and_then(|v| v.as_bool()).unwrap_or(false));
+    if task_unknown {
+        if let Some(report) = swarm_batch_report(client, base_url, id).await {
+            cli_println!("{}", report);
+            return Ok(());
+        }
+    }
+
     // Show metadata only: id, status, isDone, message, timestamps.
-    // Note: the backend may omit isDone when it is false (Jackson NON_DEFAULT),
-    // so we resolve it explicitly: true if the JSON says true, false otherwise.
-    let is_done = parsed.get("isDone").and_then(|v| v.as_bool()).unwrap_or(false);
+    // `effective_is_done` below is the authoritative terminal check, so the raw
+    // isDone flag does not need to be read separately here.
     let status_code = parsed.get("statusCode").and_then(|v| v.as_i64()).unwrap_or(0);
 
     // Treat any terminal status as done — not just success (200).
     // Failed tasks (417, 4xx, 5xx) and timeout tasks (408) have reached
     // a terminal state and should show isDone: true.  Tasks that are still
     // in progress (201=Created, 202=Accepted) are NOT terminal.
-    let effective_is_done = is_done || status_code == 200 || status_code >= 400;
+    let effective_is_done = swarm_task_terminal(&parsed);
 
     let summary = json!({
         "id": parsed.get("id").and_then(|v| v.as_str()).unwrap_or(&id),
@@ -11949,11 +11966,6 @@ async fn refresh_tracked_swarm_statuses(
             match get_swarm_status(client, base_url, &entry.task_id).await {
                 Ok(result) => {
                     if let Ok(parsed) = serde_json::from_str::<Value>(&result) {
-                        // isDone is now always present in the JSON (backend fix).
-                        let is_done = parsed
-                            .get("isDone")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false);
                         let status_code = parsed
                             .get("statusCode")
                             .and_then(|v| v.as_i64())
@@ -11966,15 +11978,28 @@ async fn refresh_tracked_swarm_statuses(
                         // Map the backend status to a user-friendly label.
                         // The raw `status` field reflects HTTP semantics (e.g. "Created"
                         // for 201), but users expect task-lifecycle labels.
-                        if is_done || status_code == 200 {
-                            entry.last_status = "completed".to_string();
-                        } else if !status_text.is_empty() {
-                            entry.last_status = friendly_swarm_status(status_code, status_text);
-                        } else if status_code > 0 {
-                            entry.last_status = format!("status={}", status_code);
+                        let terminal = swarm_task_terminal(&parsed);
+                        if terminal {
+                            entry.last_status = if status_code == 200 {
+                                "completed".to_string()
+                            } else {
+                                friendly_swarm_status(status_code, status_text)
+                            };
+                            if entry.last_status == "completed" && status_code != 200 {
+                                // friendly_swarm_status maps unknown codes to the raw
+                                // text; keep the label honest for terminal failures.
+                                entry.last_status = format!("failed (status {})", status_code);
+                            }
+                        } else if parsed
+                            .get("startedTime")
+                            .and_then(|v| v.as_str())
+                            .map(|s| !s.is_empty())
+                            .unwrap_or(false)
+                        {
+                            entry.last_status = "processing".to_string();
+                        } else {
+                            entry.last_status = "queued".to_string();
                         }
-                        // If we couldn't determine status, leave last_status as-is
-                        // (empty → shown as "pending").
 
                         // Use backend timestamps when available (added in backend v4.12+).
                         // Prefer finishTime for completion; fall back to local clock.
@@ -11984,7 +12009,7 @@ async fn refresh_tracked_swarm_statuses(
                             .filter(|s| !s.is_empty())
                         {
                             entry.completed_at = Some(ts.to_string());
-                        } else if is_done || status_code == 200 || status_code >= 400 {
+                        } else if terminal {
                             // Backend doesn't have finishTime yet — use local time.
                             // Covers failed tasks (417, 4xx, 5xx) that have reached
                             // a terminal state but whose finishTime may be missing.
@@ -12298,7 +12323,9 @@ async fn swarm_wait_for_jobs(
                                 .unwrap_or(false);
                             let status_code =
                                 row.get("statusCode").and_then(|v| v.as_i64()).unwrap_or(0);
-                            if is_done || status_code == 200 || status_code >= 400 {
+                            // The batch endpoint reports isDone explicitly; a 200
+                            // status alone only means the page's query started.
+                            if is_done || status_code >= 400 {
                                 completed[idx] = true;
                                 outcomes[idx] = if status_code == 200 {
                                     TaskOutcome::Succeeded
@@ -12326,17 +12353,14 @@ async fn swarm_wait_for_jobs(
             match get_swarm_status(client, base_url, id).await {
                 Ok(result) => {
                     let parsed: Value = serde_json::from_str(&result).unwrap_or_default();
-                    let is_done = parsed
-                        .get("isDone")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    // Also check statusCode: 200 = SC_OK completed, 4xx/5xx = failed.
-                    // Any terminal state means the task is done, not just success.
+                    // Terminal means the backend says so (isDone), or the task
+                    // reported an error status: a 200 statusCode is emitted when
+                    // the page's query starts, not when the task finishes.
                     let status_code = parsed
                         .get("statusCode")
                         .and_then(|v| v.as_i64())
                         .unwrap_or(0);
-                    if is_done || status_code == 200 || status_code >= 400 {
+                    if swarm_task_terminal(&parsed) {
                         completed[i] = true;
                         outcomes[i] = if status_code == 200 {
                             TaskOutcome::Succeeded
@@ -12616,6 +12640,146 @@ fn report_swarm_wait_outcome(
         json_field("pending_task_ids", json!(pending));
     }
     Ok(())
+}
+
+/// Render the aggregate status of a batch, or `None` when the id is not a batch.
+///
+/// This is what makes `swarm status <batch-uuid>` work: a batch id is just as
+/// valid an input as a task id, and the aggregate is a single backend request.
+/// Failed tasks are matched against the local tracker so the report can name
+/// their URLs instead of bare uuids.
+async fn swarm_batch_report(client: &Client, base_url: &str, batch_id: &str) -> Option<String> {
+    let payload = get_swarm_batch_status(client, base_url, batch_id).await.ok()?;
+    let parsed: Value = serde_json::from_str(&payload).ok()?;
+
+    let total = parsed.get("total").and_then(|v| v.as_i64()).unwrap_or(0);
+    if total == 0 {
+        // Unknown to both namespaces: let the caller report the task id as missing.
+        return None;
+    }
+    let completed = parsed.get("completed").and_then(|v| v.as_i64()).unwrap_or(0);
+    let failed = parsed.get("failed").and_then(|v| v.as_i64()).unwrap_or(0);
+    let pending = parsed.get("pending").and_then(|v| v.as_i64()).unwrap_or(0);
+    let window = match (
+        parsed.get("startedAt").and_then(|v| v.as_str()),
+        parsed.get("finishedAt").and_then(|v| v.as_str()),
+        parsed.get("durationMillis").and_then(|v| v.as_i64()),
+    ) {
+        (Some(_), Some(finished), Some(ms)) => format!(
+            "{} → {} ({})",
+            parsed
+                .get("startedAt")
+                .and_then(|v| v.as_str())
+                .and_then(state::parse_timestamp)
+                .map(|t| t.format("%H:%M:%S").to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            state::parse_timestamp(finished)
+                .map(|t| t.format("%H:%M:%S").to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            state::format_duration_ms(ms)
+        ),
+        _ => "(still running)".to_string(),
+    };
+
+    let mut out = String::new();
+    out.push_str(&format!("Batch {}: {} task(s)\n", batch_id, total));
+    out.push_str(&format!(
+        "  completed: {}  failed: {}  pending: {}\n",
+        completed, failed, pending
+    ));
+    out.push_str(&format!("  window: {}\n", window));
+
+    let tracked = read_async_tasks(None);
+    let url_of = |id: &str| -> Option<String> {
+        tracked
+            .tasks
+            .iter()
+            .find(|t| t.task_id == id)
+            .map(|t| t.description.clone())
+            .filter(|d| !d.is_empty())
+    };
+
+    if let Some(rows) = parsed.get("tasks").and_then(|v| v.as_array()) {
+        let mut failed_lines: Vec<String> = Vec::new();
+        let mut slowest: Vec<(i64, String)> = Vec::new();
+        for row in rows {
+            let Some(task_id) = row.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if let Some(ms) = row.get("durationMillis").and_then(|v| v.as_i64()) {
+                slowest.push((ms, task_id.to_string()));
+            }
+            let status_code = row.get("statusCode").and_then(|v| v.as_i64()).unwrap_or(0);
+            let is_done = row.get("isDone").and_then(|v| v.as_bool()).unwrap_or(false);
+            if is_done && status_code != 200 {
+                let url = url_of(task_id).unwrap_or_else(|| "(unknown url)".to_string());
+                let message = row.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                failed_lines.push(format!(
+                    "    [{}] {} (status {}){}",
+                    short_task_id(task_id),
+                    url,
+                    status_code,
+                    if message.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" — {}", message.lines().next().unwrap_or(""))
+                    }
+                ));
+            }
+        }
+        if !failed_lines.is_empty() {
+            out.push_str("  failures:\n");
+            out.push_str(&failed_lines.join("\n"));
+            out.push('\n');
+        }
+        slowest.sort_by(|a, b| b.0.cmp(&a.0));
+        if let Some((ms, id)) = slowest.first() {
+            out.push_str(&format!(
+                "  slowest task: {} ({})\n",
+                short_task_id(id),
+                state::format_duration_ms(*ms)
+            ));
+        }
+    }
+
+    // The caller prints the returned report, so this function must not print it
+    // as well (that produced a duplicated block on `swarm status <batch-id>`).
+    json_field("batch_id", json!(batch_id));
+    json_field("total", json!(total));
+    json_field("completed", json!(completed));
+    json_field("failed", json!(failed));
+    json_field("pending", json!(pending));
+    json_field(
+        "duration_ms",
+        parsed.get("durationMillis").cloned().unwrap_or(Value::Null),
+    );
+    Some(out)
+}
+
+/// Whether a swarm task response describes a terminal (settled) task.
+///
+/// `isDone` is the backend's own terminal flag and the only reliable signal:
+/// `statusCode == 200` is set when the page's X-SQL starts executing, well
+/// before the task finishes, so treating it as success made `--wait` return
+/// while pages were still being extracted.  Older backends do not emit the flag
+/// over REST, so a recorded `finishTime` (or a legacy `done` field, or an error
+/// status) also counts as settled.
+fn swarm_task_terminal(parsed: &Value) -> bool {
+    if parsed.get("isDone").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return true;
+    }
+    if parsed.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return true;
+    }
+    let status_code = parsed.get("statusCode").and_then(|v| v.as_i64()).unwrap_or(0);
+    if status_code >= 400 {
+        return true;
+    }
+    parsed
+        .get("finishTime")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
 }
 
 /// First 8 characters of a task id — enough to address it in follow-up commands.
@@ -27301,6 +27465,34 @@ mod tests {
         // A blank --batch-id must not become the batch's identity.
         let generated = resolve_batch_id(&json!({ "batchId": "   " }));
         assert_eq!(generated.len(), 36);
+    }
+
+    // -----------------------------------------------------------------------
+    // Terminal-state detection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn swarm_task_terminal_requires_evidence_of_completion() {
+        // Regression: the backend sets statusCode 200 when the page's X-SQL
+        // starts, so `--wait` used to return while pages were still extracting.
+        assert!(
+            !swarm_task_terminal(&json!({"statusCode": 200, "pageStatusCode": 200})),
+            "a 200 status alone is not completion"
+        );
+
+        assert!(swarm_task_terminal(&json!({"isDone": true, "statusCode": 200})));
+        assert!(swarm_task_terminal(&json!({"isDone": false, "statusCode": 408})));
+        assert!(swarm_task_terminal(&json!({"statusCode": 500})));
+        // Older backends omit isDone over REST but record finishTime.
+        assert!(swarm_task_terminal(&json!({
+            "statusCode": 200,
+            "finishTime": "2026-09-12T05:42:04.748574Z"
+        })));
+        // Legacy wire name.
+        assert!(swarm_task_terminal(&json!({"done": true, "statusCode": 200})));
+
+        assert!(!swarm_task_terminal(&json!({"statusCode": 201})));
+        assert!(!swarm_task_terminal(&json!({"statusCode": 202, "startedTime": "2026-09-12T05:42:04Z"})));
     }
 
     /// Spawn a TCP server that answers `requests` status GETs with [body].

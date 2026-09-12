@@ -186,13 +186,33 @@ Common extraction functions: `DOM_BASE_URI`, `DOM_FIRST_TEXT`, `DOM_ALL_TEXTS`, 
 ### 4. Poll Status & Fetch Results
 
 ```bash
-browser4-cli swarm status <task-id>   # returns metadata: id, isDone, statusCode, message
-browser4-cli swarm result <task-id>   # returns result payload: resultSet, pageContentBytes
+browser4-cli swarm status <task-id>    # one task: id, isDone, statusCode, message, timestamps
+browser4-cli swarm status <batch-id>   # a whole submission: counts, window, failures, slowest task
+browser4-cli swarm result <task-id>    # result payload: resultSet, pageContentBytes
 ```
 
-Wait for `isDone: true` before calling `swarm result`.
+Both ids come from `swarm submit`, so `swarm status` accepts either: a task id
+reports that task, and a batch id reports the submission as a unit (the CLI
+falls back to the batch endpoint when the id is not a task).
 
-Example status output:
+```
+Batch smoke-final: 2 task(s)
+  completed: 2  failed: 0  pending: 0
+  window: 05:46:16 → 05:46:17 (1.2s)
+  slowest task: 1b2832e3 (13ms)
+```
+
+When a batch has failures the report lists them with their URLs:
+
+```
+Batch amazon-run3: 100 task(s)
+  completed: 96  failed: 3  pending: 1
+  window: (still running)
+  failures:
+    [a1b2c3d4] https://example.com/p/42 (status 408) — Task timed out: no progress for 120s
+```
+
+Example single-task status output:
 ```json
 {"id":"<task-id>","isDone":true,"statusCode":200,"message":"","lastModifiedTime":"2026-03-30T12:00:00Z"}
 ```
@@ -202,10 +222,12 @@ Example result output:
 {"id":"<task-id>","resultSet":[{"url":"...","title":"...","price":"$29.99"}],"pageContentBytes":null,"error":null}
 ```
 
-> **Terminal ≠ successful:** `isDone: true` means the task stopped running.
-> A failed fetch/timeout also returns `isDone: true` with a 4xx/5xx
-> `statusCode` (e.g. `408`) and a `message` explaining why.  Always read
-> `statusCode` (200 = data extracted) before trusting a result.
+> **Terminal ≠ successful, and `statusCode: 200` ≠ finished.**  `isDone: true` is
+> the backend's terminal flag.  A task reports `statusCode: 200` as soon as the
+> page's X-SQL *starts*, so clients must wait for `isDone` (the CLI does, and
+> falls back to a recorded `finishTime` on older backends).  A failed
+> fetch/timeout also ends with `isDone: true` plus a 4xx/5xx `statusCode` and an
+> explanatory `message`.
 
 ### 4b. Check Batch Completion
 
@@ -261,6 +283,10 @@ browser4-cli swarm submit --seed-file failed-urls.txt --wait
 > in one request (counts, the batch's `startedAt`/`finishedAt`/`durationMillis`,
 > and per-task rows with `durationMillis`) — `--wait` polls this instead of one
 > status request per task, which matters for 100-URL batches.
+
+> **MCP clients:** the `swarm` tool domain exposes the same grouping —
+> `swarm.submit(payload, batchId?)`, `swarm.query(url, query, args?, batchId?)`
+> and `swarm.batchStatus(batchId)` for the aggregate.
 
 ### 5. List Tracked Tasks
 

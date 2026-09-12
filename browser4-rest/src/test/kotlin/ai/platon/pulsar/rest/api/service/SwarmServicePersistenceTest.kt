@@ -434,6 +434,37 @@ class SwarmServicePersistenceTest {
     }
 
     // -----------------------------------------------------------------
+    // Wire format of the task status payload
+    // -----------------------------------------------------------------
+
+    @Test
+    fun `task status serializes isDone under its documented name`(@TempDir tempDir: Path) {
+        // Every client (CLI, MCP tools, tests) reads `isDone`, and the docs name
+        // it that way; the Java Bean convention would strip the `is` and emit
+        // `done`, which silently turns the flag into a no-op for those clients.
+        val response = ScrapeResponse(id = "w1", statusCode = 200, pageStatusCode = 200)
+            .apply { isDone = true }
+
+        val json = objectMapper.writeValueAsString(response)
+
+        assertTrue(json.contains("\"isDone\""), "expected an isDone field, got: $json")
+        val restored = objectMapper.readValue(json, ScrapeResponse::class.java)
+        assertTrue(restored.isDone, "isDone must survive a round trip: $json")
+    }
+
+    @Test
+    fun `task status emits isDone false explicitly`(@TempDir tempDir: Path) {
+        val response = ScrapeResponse(id = "w2", statusCode = 201, pageStatusCode = 201)
+
+        val json = objectMapper.writeValueAsString(response)
+
+        assertTrue(
+            json.contains("\"isDone\":false"),
+            "a queued task must still carry isDone=false (JsonInclude.ALWAYS): $json"
+        )
+    }
+
+    // -----------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------
 
