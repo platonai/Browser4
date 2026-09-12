@@ -18,7 +18,9 @@ import org.mockito.Mockito
 import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
 import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.argumentCaptor
+import org.mockito.kotlin.eq
 
 class SwarmControllerTest {
     @Test
@@ -80,7 +82,7 @@ class SwarmControllerTest {
             controller.submit("   ")
         }
         assertEquals("Request body must be a non-blank URL or X-SQL", exception.message)
-        verify(swarmService, never()).submit(any<ScrapeRequest>())
+        verify(swarmService, never()).submit(any<ScrapeRequest>(), anyOrNull())
     }
 
     @Test
@@ -89,13 +91,13 @@ class SwarmControllerTest {
         val swarmService = Mockito.mock(SwarmService::class.java)
         val controller = SwarmController(sessionManager, swarmService)
 
-        Mockito.`when`(swarmService.submit(any<ScrapeRequest>())).thenReturn("mock-uuid")
+        Mockito.`when`(swarmService.submit(any<ScrapeRequest>(), anyOrNull())).thenReturn("mock-uuid")
 
         val result = controller.submit("https://example.com")
 
         assertEquals("mock-uuid", result)
         val captor = argumentCaptor<ScrapeRequest>()
-        verify(swarmService).submit(captor.capture())
+        verify(swarmService).submit(captor.capture(), anyOrNull())
         assertEquals(
             "select dom_base_uri(dom) as url from load_and_select('https://example.com', ':root')",
             captor.firstValue.sql
@@ -111,7 +113,127 @@ class SwarmControllerTest {
         assertThrows<IllegalArgumentException> {
             controller.submit("DROP TABLE users")
         }
-        verify(swarmService, never()).submit(any<ScrapeRequest>())
+        verify(swarmService, never()).submit(any<ScrapeRequest>(), anyOrNull())
+    }
+
+    @Test
+    fun submitWithUrlContainingApostropheEscapesTheSqlLiteral() {
+        // Entry-page hrefs can contain apostrophes; interpolating them raw would
+        // both break the statement and let the URL text escape the literal.
+        val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
+        val swarmService = Mockito.mock(SwarmService::class.java)
+        val controller = SwarmController(sessionManager, swarmService)
+
+        Mockito.`when`(swarmService.submit(any<ScrapeRequest>(), anyOrNull())).thenReturn("mock-uuid")
+
+        controller.submit("https://example.com/o'brien?q=it's -refresh")
+
+        val captor = argumentCaptor<ScrapeRequest>()
+        verify(swarmService).submit(captor.capture(), anyOrNull())
+        assertEquals(
+            "select dom_base_uri(dom) as url from load_and_select(" +
+                "'https://example.com/o''brien?q=it''s -refresh', ':root')",
+            captor.firstValue.sql
+        )
+    }
+
+    @Test
+    fun submitWithLoadOptionsPassesThemThroughTheSqlLiteral() {
+        val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
+        val swarmService = Mockito.mock(SwarmService::class.java)
+        val controller = SwarmController(sessionManager, swarmService)
+
+        Mockito.`when`(swarmService.submit(any<ScrapeRequest>(), anyOrNull())).thenReturn("mock-uuid")
+
+        controller.submit("https://example.com/p/1 -refresh -requireNotBlank #title -nMaxRetry 3")
+
+        val captor = argumentCaptor<ScrapeRequest>()
+        verify(swarmService).submit(captor.capture(), anyOrNull())
+        assertEquals(
+            "select dom_base_uri(dom) as url from load_and_select(" +
+                "'https://example.com/p/1 -refresh -requireNotBlank #title -nMaxRetry 3', ':root')",
+            captor.firstValue.sql
+        )
+    }
+
+    // -----------------------------------------------------------------
+    // submit() batch id tests
+    // -----------------------------------------------------------------
+
+    @Test
+    fun submitStampsTheBatchIdOnTheRequest() {
+        val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
+        val swarmService = Mockito.mock(SwarmService::class.java)
+        val controller = SwarmController(sessionManager, swarmService)
+
+        Mockito.`when`(swarmService.submit(any<ScrapeRequest>(), anyOrNull())).thenReturn("mock-uuid")
+
+        controller.submit("https://example.com", "batch-42")
+
+        val captor = argumentCaptor<ScrapeRequest>()
+        verify(swarmService).submit(captor.capture(), eq("batch-42"))
+        assertEquals("batch-42", captor.firstValue.batchId)
+    }
+
+    @Test
+    fun submitWithoutBatchIdLeavesItNull() {
+        val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
+        val swarmService = Mockito.mock(SwarmService::class.java)
+        val controller = SwarmController(sessionManager, swarmService)
+
+        Mockito.`when`(swarmService.submit(any<ScrapeRequest>(), anyOrNull())).thenReturn("mock-uuid")
+
+        controller.submit("https://example.com")
+
+        val captor = argumentCaptor<ScrapeRequest>()
+        verify(swarmService).submit(captor.capture(), eq(null))
+        assertEquals(null, captor.firstValue.batchId)
+    }
+
+    @Test
+    fun submitTreatsBlankBatchIdAsAbsent() {
+        val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
+        val swarmService = Mockito.mock(SwarmService::class.java)
+        val controller = SwarmController(sessionManager, swarmService)
+
+        Mockito.`when`(swarmService.submit(any<ScrapeRequest>(), anyOrNull())).thenReturn("mock-uuid")
+
+        controller.submit("https://example.com", "   ")
+
+        val captor = argumentCaptor<ScrapeRequest>()
+        verify(swarmService).submit(captor.capture(), eq(null))
+        assertEquals(null, captor.firstValue.batchId)
+    }
+
+    // -----------------------------------------------------------------
+    // batchStatus() tests
+    // -----------------------------------------------------------------
+
+    @Test
+    fun batchStatusDelegatesToService() {
+        val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
+        val swarmService = Mockito.mock(SwarmService::class.java)
+        val controller = SwarmController(sessionManager, swarmService)
+        val payload = mapOf<String, Any?>("batchId" to "batch-1", "total" to 3)
+
+        Mockito.`when`(swarmService.batchStatus("batch-1")).thenReturn(payload)
+
+        val result = controller.batchStatus("batch-1")
+
+        assertEquals(payload, result)
+        verify(swarmService).batchStatus("batch-1")
+    }
+
+    @Test
+    fun batchStatusWithBlankBatchIdThrows() {
+        val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
+        val swarmService = Mockito.mock(SwarmService::class.java)
+        val controller = SwarmController(sessionManager, swarmService)
+
+        assertThrows<IllegalArgumentException> {
+            controller.batchStatus("  ")
+        }
+        verify(swarmService, never()).batchStatus(Mockito.anyString())
     }
 
     // -----------------------------------------------------------------

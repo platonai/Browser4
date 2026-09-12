@@ -62,18 +62,29 @@ class SwarmController(
      * Submit a URL to scrape or submit an X-SQL to execute
      *
      * @param payload The url to scrape or an X-SQL to execute
+     * @param batchId Optional id shared by every task of one batch submission;
+     *        tasks carrying it can be tracked and summarised as a group.
      * */
     @PostMapping("submit")
-    fun submit(@RequestBody payload: String): String {
+    fun submit(
+        @RequestBody payload: String,
+        @RequestParam(value = "batchId", required = false) batchId: String? = null,
+    ): String {
         if (payload.isBlank()) {
             throw IllegalArgumentException("Request body must be a non-blank URL or X-SQL")
         }
 
         val payload = payload.trim()
-        logger.info("Swarm submit: payload='{}'", payload.take(200))
+        logger.info("Swarm submit: batch={} payload='{}'", batchId, payload.take(200))
 
         val sql = if (payload.startsWith("http")) {
-            "select dom_base_uri(dom) as url from load_and_select('$payload', ':root')"
+            // The payload is a URL plus optional LoadOptions ("<url> -expires 1d
+            // -requireNotBlank '#productTitle'"), and it is embedded in an X-SQL
+            // string literal.  Entry-page hrefs legitimately contain apostrophes,
+            // and an unescaped quote would both break the statement and let the
+            // URL text escape the literal — escape it instead of rejecting it.
+            val literal = escapeSqlStringLiteral(payload)
+            "select dom_base_uri(dom) as url from load_and_select('$literal', ':root')"
         } else payload
 
         runCatching { ScrapeAPIUtils.checkSql(sql) }.onFailure {
@@ -81,8 +92,13 @@ class SwarmController(
         }
 
         // Returns raw UUID string (not JSON-wrapped). CLI depends on this format.
-        return swarmService.submit(ScrapeRequest(sql))
+        val normalizedBatchId = batchId?.trim()?.takeIf { it.isNotEmpty() }
+        return swarmService.submit(ScrapeRequest(sql, normalizedBatchId), normalizedBatchId)
     }
+
+    /** Escape a value for use inside a single-quoted X-SQL string literal. */
+    private fun escapeSqlStringLiteral(value: String): String =
+        value.replace("'", "''").replace("\r", " ").replace("\n", " ")
 
     /**
      * Submit an X-SQL query to execute against a loaded webpage.
@@ -99,8 +115,27 @@ class SwarmController(
      */
     @PostMapping("query")
     fun query(@RequestBody query: QueryRequest): String {
-        logger.info("Swarm query: url='{}' query='{}'", query.url, query.query.take(200))
+        logger.info("Swarm query: batch='{}' url='{}' query='{}'", query.batchId, query.url, query.query.take(200))
         return swarmService.submit(query)
+    }
+
+    /**
+     * Aggregate status of one batch submission: task counts, the batch's
+     * wall-clock window and per-task rows (each with its duration).
+     *
+     * A batch id is assigned by the caller when submitting (the CLI generates one
+     * per `swarm submit` / `swarm query` invocation and stamps every task with
+     * it); this endpoint answers "is my batch done, and how long did it take?"
+     * in a single request instead of one status call per task.
+     * */
+    @GetMapping("/batch/{batchId}", consumes = [MediaType.ALL_VALUE], produces = [MediaType.APPLICATION_JSON_VALUE])
+    fun batchStatus(
+        @PathVariable(value = "batchId") batchId: String,
+    ): Map<String, Any?> {
+        if (batchId.isBlank()) {
+            throw IllegalArgumentException("batchId must not be blank")
+        }
+        return swarmService.batchStatus(batchId)
     }
 
     /**

@@ -684,13 +684,22 @@ pub async fn execute_act_command(
     }
 }
 
+/// Append an optional `batchId` query parameter to a REST path.
+fn with_batch_id(path: &str, batch_id: Option<&str>) -> String {
+    match batch_id.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(id) => format!("{}?batchId={}", path, urlencoding::encode(id)),
+        None => path.to_string(),
+    }
+}
+
 /// Submit a swarm payload through `SwarmController.submit(payload)`.
 pub async fn submit_swarm_payload(
     client: &Client,
     base_url: &str,
     payload: &str,
+    batch_id: Option<&str>,
 ) -> Result<String, String> {
-    let url = build_endpoint_url(base_url, "/api/swarm/submit");
+    let url = build_endpoint_url(base_url, &with_batch_id("/api/swarm/submit", batch_id));
     send_rest_request(
         client
             .post(url)
@@ -704,14 +713,41 @@ pub async fn submit_swarm_payload(
 pub async fn submit_swarm_query(
     client: &Client,
     base_url: &str,
-    query: serde_json::Value,
+    mut query: serde_json::Value,
+    batch_id: Option<&str>,
 ) -> Result<String, String> {
-    let url = build_endpoint_url(base_url, "/api/swarm/query");
+    // The query endpoint takes a JSON body; carry the batch id in the body so
+    // the backend can stamp it on the created task.
+    if let Some(id) = batch_id.map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(obj) = query.as_object_mut() {
+            obj.insert("batchId".to_string(), serde_json::json!(id));
+        }
+    }
+    let url = build_endpoint_url(base_url, &with_batch_id("/api/swarm/query", batch_id));
     send_rest_request(
         client
             .post(url)
             .header("Content-Type", "application/json; charset=utf-8")
             .body(query.to_string()),
+    )
+    .await
+}
+
+/// Read the aggregate status of one batch submission.
+///
+/// One request answers "is my batch done, and how long did it take?" for every
+/// task in the batch, instead of one status call per task.
+pub async fn get_swarm_batch_status(
+    client: &Client,
+    base_url: &str,
+    batch_id: &str,
+) -> Result<String, String> {
+    let path = format!("/api/swarm/batch/{}", urlencoding::encode(batch_id));
+    let url = build_endpoint_url(base_url, &path);
+    send_rest_request(
+        client
+            .get(url)
+            .timeout(std::time::Duration::from_secs(15)),
     )
     .await
 }
@@ -1569,7 +1605,7 @@ mod tests {
         let base_url = spawn_swarm_mock_server("/api/swarm/submit", r#""swarm-task-42""#);
         let client = make_client();
 
-        let result = submit_swarm_payload(&client, &base_url, "https://example.com -parse")
+        let result = submit_swarm_payload(&client, &base_url, "https://example.com -parse", None)
             .await
             .expect("submit_swarm_payload should succeed");
 
@@ -1585,6 +1621,7 @@ mod tests {
             &client,
             &base_url,
             json!({"url": "https://example.com", "args": "-parse", "query": "SELECT 1"}),
+            Some("batch-1"),
         )
         .await
         .expect("submit_swarm_query should succeed");

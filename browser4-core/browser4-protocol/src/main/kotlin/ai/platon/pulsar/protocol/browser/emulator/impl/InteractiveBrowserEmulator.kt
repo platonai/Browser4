@@ -553,7 +553,9 @@ open class InteractiveBrowserEmulator(
             logger.warn(message)
             throw WebDriverException(message, driver = driver)
         }
-        if (entry.mainRequestId.isNotBlank()) {
+        if (entry.mainRequestId.isNotBlank() ||
+            urlsReferToSamePageIgnoringQuery(committedUrl, taskUrl)
+        ) {
             logger.debug(
                 "Snapshot origin verified: shows '{}' for fetch '{}' — a main-document " +
                 "request was issued for this navigation (redirect or committed error page)",
@@ -607,33 +609,21 @@ open class InteractiveBrowserEmulator(
     }
 
     /**
-     * Compare two URLs as referring to the same document: scheme + host
-     * (case-insensitive) + effective port + path (trailing slash ignored) +
-     * query.  Fragments never affect which document is fetched.
+     * Compare two URLs as referring to the same document (query included).
+     *
+     * @see UrlDocumentMatcher.referToSameDocument
      */
-    private fun urlsReferToSameDocument(a: String, b: String): Boolean {
-        if (a == b) return true
-        return runCatching {
-            val ua = java.net.URI(a.substringBefore('#'))
-            val ub = java.net.URI(b.substringBefore('#'))
-            val ha = ua.host?.lowercase() ?: return@runCatching false
-            val hb = ub.host?.lowercase() ?: return@runCatching false
-            val pa = (ua.path ?: "").removeSuffix("/")
-            val pb = (ub.path ?: "").removeSuffix("/")
-            ha == hb && ua.scheme == ub.scheme &&
-                effectivePort(ua) == effectivePort(ub) &&
-                pa == pb && (ua.query ?: "") == (ub.query ?: "")
-        }.getOrDefault(false)
-    }
+    private fun urlsReferToSameDocument(a: String, b: String): Boolean =
+        UrlDocumentMatcher.referToSameDocument(a, b)
 
-    private fun effectivePort(uri: java.net.URI): Int {
-        if (uri.port > 0) return uri.port
-        return when (uri.scheme?.lowercase()) {
-            "http" -> 80
-            "https" -> 443
-            else -> -1
-        }
-    }
+    /**
+     * Compare two URLs as referring to the same page, ignoring the query string
+     * (variant/tracking redirects such as `?psc=1` -> `?th=1`).
+     *
+     * @see UrlDocumentMatcher.referToSamePageIgnoringQuery
+     */
+    private fun urlsReferToSamePageIgnoringQuery(a: String, b: String): Boolean =
+        UrlDocumentMatcher.referToSamePageIgnoringQuery(a, b)
 
     @Throws(NavigateTaskCancellationException::class, WebDriverException::class)
     private suspend fun navigateAndInteract(

@@ -132,10 +132,17 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 | Command | Description |
 |---|---|
 | `swarm create` | Create a swarm scrape session with parallel browser contexts |
-| `swarm submit [url]` | Submit URL(s) or X-SQL payloads as scrape jobs |
+| `swarm submit [url]` | Submit URL(s) or X-SQL payloads as scrape jobs (`--seed-file`, `--load-options`, `--batch-id`, `--wait`) |
 | `swarm query <url>` | Submit an X-SQL query to extract structured data from a loaded webpage |
 | `swarm status <id>` | Check the status of a scrape job |
 | `swarm result <id>` | Get the result of a completed scrape job |
+| `swarm list` | List tracked tasks with STARTED / FINISHED / DURATION (`--batch <id>`, `--status <state>`, `--json`) |
+
+Every `swarm submit` / `swarm query` invocation is a **batch**: the CLI mints a
+batch id (or takes `--batch-id <id>`), stamps it on every task and prints it, so
+the submission can be inspected afterwards with `swarm list --batch <id>` — e.g.
+`swarm list --batch <id> --status failed --json` prints exactly the URLs that
+failed, with each task's `duration_ms`.
 
 ### Crawl
 

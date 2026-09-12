@@ -228,6 +228,9 @@ const TIPS_SWARM: &[Tip] = &[
         text: "Use `swarm query` with X-SQL to run the same structured extraction across all swarm results",
     },
     Tip {
+        text: "Every `swarm submit` gets a batch id — check that submission later with `swarm list --batch <id>` (add `--status failed` for just the failures)",
+    },
+    Tip {
         text: "Use `--display-mode HEADLESS` for swarm operations to reduce resource usage",
     },
 ];

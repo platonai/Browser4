@@ -64,7 +64,7 @@ use http::{
     call_tool, call_tool_with_result, call_tool_with_timeout_override, cancel_crawl,
     clear_all_crawls, clear_crawls, close_swarm_session, crawl_request_timeout,
     get_command_result, get_command_status, get_crawl_result, get_crawl_status,
-    get_swarm_result, get_swarm_status, is_stale_session_error, make_client,
+    get_swarm_batch_status, get_swarm_result, get_swarm_status, is_stale_session_error, make_client,
     submit_batch_commands, submit_crawl, submit_plain_command, submit_swarm_payload,
     submit_swarm_query, CallToolResult,
 };
@@ -77,6 +77,7 @@ use state::{
     clear_all_state, clear_state, epoch_millis_to_display, format_async_task_list,
     format_timestamp_display, read_async_tasks, read_state,
     resolve_default_state_dir, resolve_ref, summarize_async_tasks, track_async_task,
+    track_async_task_in_batch,
     update_async_task_status, write_async_tasks, write_state, CliState, MousePosition,
     Table,
 };
@@ -11378,6 +11379,9 @@ async fn handle_swarm_submit(
     base_url: &str,
     tool_params: &Value,
 ) -> Result<(), String> {
+    // Every invocation gets one batch id; all of its tasks carry it so the batch
+    // can be tracked as a unit (`swarm list --batch <id>`).
+    let batch_id = resolve_batch_id(tool_params);
     let url = tool_params
         .get("url")
         .and_then(|v| v.as_str())
@@ -11441,6 +11445,15 @@ async fn handle_swarm_submit(
     {
         load_opts.push("-parse".to_string());
     }
+    // Free-form LoadOptions last, so an explicit user option wins over a
+    // convenience flag expanded above.
+    if let Some(v) = tool_params.get("loadOptions").and_then(|v| v.as_str()) {
+        let v = v.trim();
+        if !v.is_empty() {
+            warn_on_hash_in_load_options(v);
+            load_opts.push(v.to_string());
+        }
+    }
     let opts_str = load_opts.join(" ");
 
     // Submit each URL through the appropriate REST API.
@@ -11454,7 +11467,7 @@ async fn handle_swarm_submit(
                 "query": q,
             });
             (
-                submit_swarm_query(client, base_url, payload).await?,
+                submit_swarm_query(client, base_url, payload, Some(&batch_id)).await?,
                 "query",
             )
         } else {
@@ -11465,7 +11478,7 @@ async fn handle_swarm_submit(
                 format!("{} {}", u, opts_str)
             };
             (
-                submit_swarm_payload(client, base_url, &command).await?,
+                submit_swarm_payload(client, base_url, &command, Some(&batch_id)).await?,
                 "submit",
             )
         };
@@ -11480,12 +11493,21 @@ async fn handle_swarm_submit(
         json_submissions.push(json!({
             "url": u,
             "task_id": task_id,
+            "batch_id": batch_id,
         }));
 
-        // Persist each task for cross-session tracking
-        let _ = track_async_task(&task_id, "swarm-submit", u, None);
+        // Persist each task for cross-session tracking, tagged with its batch
+        let _ = track_async_task_in_batch(&task_id, "swarm-submit", u, Some(&batch_id), None);
     }
     json_field("submissions", json!(json_submissions));
+
+    // The batch id is how a caller refers to this submission as a whole
+    // afterwards (`swarm list --batch <id>`, `GET /api/swarm/batch/<id>`).
+    cli_println!(
+        "Batch ID: {} — track it with 'swarm list --batch {}'",
+        batch_id, batch_id
+    );
+    json_field("batch_id", json!(batch_id));
 
     if urls.len() > 1 {
         cli_println!("{} URL(s) submitted. Use 'browser4-cli swarm list' to view all tracked tasks.", urls.len());
@@ -11502,7 +11524,7 @@ async fn handle_swarm_submit(
             .filter_map(|s| s.get("task_id").and_then(|v| v.as_str()).map(|s| s.to_string()))
             .collect();
         if !task_ids.is_empty() {
-            swarm_wait_for_jobs(client, base_url, &task_ids).await?;
+            swarm_wait_for_jobs(client, base_url, &task_ids, Some(&batch_id)).await?;
         }
     }
 
@@ -11514,6 +11536,8 @@ async fn handle_swarm_query(
     base_url: &str,
     tool_params: &Value,
 ) -> Result<(), String> {
+    // One batch id per invocation, stamped on every task it submits.
+    let batch_id = resolve_batch_id(tool_params);
     let url = tool_params
         .get("url")
         .and_then(|v| v.as_str())
@@ -11614,6 +11638,15 @@ async fn handle_swarm_query(
     {
         load_opts.push("-refresh".to_string());
     }
+    // Free-form LoadOptions last, so an explicit user option wins over a
+    // convenience flag expanded above.
+    if let Some(v) = tool_params.get("loadOptions").and_then(|v| v.as_str()) {
+        let v = v.trim();
+        if !v.is_empty() {
+            warn_on_hash_in_load_options(v);
+            load_opts.push(v.to_string());
+        }
+    }
     let opts_str = load_opts.join(" ");
 
     // Submit each URL via /api/swarm/query
@@ -11625,7 +11658,7 @@ async fn handle_swarm_query(
             "args": opts_str,
             "query": q,
         });
-        let result = submit_swarm_query(client, base_url, payload).await?;
+        let result = submit_swarm_query(client, base_url, payload, Some(&batch_id)).await?;
         let task_id = result.trim().trim_matches('"').to_string();
         cli_println!("Query Submitted: {} -> Task ID: {}", u, task_id);
         json_submissions.push(json!({
@@ -11634,9 +11667,14 @@ async fn handle_swarm_query(
         }));
 
         // Persist each task for cross-session tracking (so they appear in swarm list)
-        let _ = track_async_task(&task_id, "swarm-query", u, None);
+        let _ = track_async_task_in_batch(&task_id, "swarm-query", u, Some(&batch_id), None);
     }
     json_field("submissions", json!(json_submissions));
+    cli_println!(
+        "Batch ID: {} — track it with 'swarm list --batch {}'",
+        batch_id, batch_id
+    );
+    json_field("batch_id", json!(batch_id));
 
     if urls.len() > 1 {
         cli_println!("{} URL(s) queried. Use 'browser4-cli swarm list' to view all tracked tasks.", urls.len());
@@ -11653,7 +11691,7 @@ async fn handle_swarm_query(
             .filter_map(|s| s.get("task_id").and_then(|v| v.as_str()).map(|s| s.to_string()))
             .collect();
         if !task_ids.is_empty() {
-            swarm_wait_for_jobs(client, base_url, &task_ids).await?;
+            swarm_wait_for_jobs(client, base_url, &task_ids, Some(&batch_id)).await?;
         }
     } else {
         // Without --wait, jobs are submitted asynchronously. The user needs
@@ -11955,14 +11993,31 @@ async fn refresh_tracked_swarm_statuses(
                                     Some(chrono::Utc::now().to_rfc3339());
                             }
                         }
+                        // Record when the backend started the task.  This is a
+                        // separate field from submitted_at: the duration of a
+                        // task is started -> finished, and overwriting the
+                        // submission time (as this used to) made the DURATION
+                        // column meaningless for queued tasks.
                         if let Some(ts) = parsed
                             .get("startedTime")
                             .and_then(|v| v.as_str())
                             .filter(|s| !s.is_empty())
                         {
-                            // Override local submitted_at with backend's startedTime
-                            // for more accurate start display.
-                            entry.submitted_at = ts.to_string();
+                            entry.started_at = Some(ts.to_string());
+                        }
+                        if let Some(bid) = parsed
+                            .get("batchId")
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                        {
+                            entry.batch_id = Some(bid.to_string());
+                        }
+                        if let Some(ms) = parsed.get("durationMillis").and_then(|v| v.as_i64()) {
+                            entry.duration_ms = Some(ms);
+                        } else if entry.completed_at.is_some() {
+                            // Backend duration missing (older build): keep the
+                            // derived value consistent with the new timestamps.
+                            entry.duration_ms = None;
                         }
                     }
                 }
@@ -12023,6 +12078,89 @@ async fn handle_swarm_list(
     // depends on the backend's iteration order, which changes on every call.
     filtered.sort_by(|a, b| a.submitted_at.cmp(&b.submitted_at));
 
+    // Optional batch filter: after a `swarm submit --seed-file` the batch id is
+    // the natural handle for "this submission", so it must be usable directly.
+    if let Some(batch) = tool_params
+        .get("batch")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let before = filtered.len();
+        filtered.retain(|t| t.batch_id.as_deref() == Some(batch));
+        cli_println!(
+            "Batch {}: {} of {} tracked swarm task(s)",
+            batch, filtered.len(), before
+        );
+    }
+
+    // Optional lifecycle filter: the practical question after a batch submit is
+    // "which URLs failed?" / "what is still running?", and answering it from a
+    // 100-row table is needlessly awkward.
+    if let Some(status) = tool_params
+        .get("status")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("all"))
+    {
+        let wanted = status.to_ascii_lowercase();
+        let before = filtered.len();
+        filtered.retain(|t| swarm_status_matches(&t.last_status, &wanted));
+        cli_println!(
+            "Filter: {} ({} of {} tracked swarm task(s))",
+            wanted, filtered.len(), before
+        );
+    }
+
+    // Batch summary: total wall-clock window derived from the tasks' own
+    // timestamps (earliest start -> latest finish), which is what a caller
+    // usually wants to know about a submission.
+    if !filtered.is_empty() {
+        let batch_id = tool_params
+            .get("batch")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                let ids: std::collections::BTreeSet<&str> = filtered
+                    .iter()
+                    .filter_map(|t| t.batch_id.as_deref())
+                    .collect();
+                if ids.len() == 1 {
+                    ids.iter().next().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            });
+        let started = filtered
+            .iter()
+            .filter_map(|t| {
+                t.started_at
+                    .as_deref()
+                    .or(Some(t.submitted_at.as_str()))
+                    .and_then(state::parse_timestamp)
+            })
+            .min();
+        let finished = filtered
+            .iter()
+            .filter_map(|t| t.completed_at.as_deref().and_then(state::parse_timestamp))
+            .max();
+        if let (Some(started), Some(finished)) = (started, finished) {
+            let window_ms = (finished - started).num_milliseconds().max(0);
+            cli_println!(
+                "Batch window: {} -> {} ({}), {} task(s)",
+                started.format("%H:%M:%S"),
+                finished.format("%H:%M:%S"),
+                state::format_duration_ms(window_ms),
+                filtered.len()
+            );
+        }
+        if let Some(id) = batch_id {
+            json_field("batch_id", json!(id));
+        }
+    }
+
     if !filtered.is_empty() {
         cli_println!("{}", summarize_async_tasks(&filtered));
 
@@ -12059,9 +12197,55 @@ async fn handle_swarm_list(
         .get("offset")
         .and_then(|v| v.as_u64())
         .map(|n| n as usize);
+
+    // Machine-readable mode: id / url / status per task, so scripts and agents
+    // can compute their own completion checks instead of scraping the table.
+    if tool_params
+        .get("json")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let tasks: Vec<Value> = filtered
+            .iter()
+            .map(|t| {
+                json!({
+                    "task_id": t.task_id,
+                    "command": t.command,
+                    "url": t.description,
+                    "status": if t.last_status.is_empty() { "pending" } else { t.last_status.as_str() },
+                    "batch_id": t.batch_id,
+                    "submitted_at": t.submitted_at,
+                    "started_at": t.started_at,
+                    "completed_at": t.completed_at,
+                    "duration_ms": state::task_duration_ms(t),
+                })
+            })
+            .collect();
+        json_field("count", json!(tasks.len()));
+        json_field("tasks", json!(tasks));
+        return Ok(());
+    }
+
     let display = state::AsyncTaskList { tasks: filtered };
     cli_println!("{}", format_async_task_list(&display, limit, offset));
     Ok(())
+}
+
+/// Whether a tracked task's status label belongs to the requested filter.
+///
+/// Filters name the *lifecycle* state, not the raw label: "failed" matches
+/// every `failed (...)` variant (timeout, expectation failed, closed, ...),
+/// "pending" matches anything that is neither completed nor failed.
+fn swarm_status_matches(last_status: &str, wanted: &str) -> bool {
+    let status = last_status.to_ascii_lowercase();
+    match wanted {
+        "failed" | "failure" | "error" => status.starts_with("failed"),
+        "completed" | "complete" | "done" | "succeeded" => status == "completed",
+        "queued" => status == "queued" || status.is_empty(),
+        "processing" | "running" => status == "processing",
+        "pending" => !status.starts_with("failed") && status != "completed",
+        other => status == other,
+    }
 }
 
 /// Poll a list of swarm task IDs until all complete or timeout.
@@ -12069,22 +12253,72 @@ async fn swarm_wait_for_jobs(
     client: &Client,
     base_url: &str,
     task_ids: &[String],
+    batch_id: Option<&str>,
 ) -> Result<(), String> {
     let total = task_ids.len();
-    cli_println!(
-        "Waiting for {} job(s) to complete...",
-        total
-    );
+    match batch_id {
+        Some(id) => cli_println!(
+            "Waiting for {} job(s) of batch {} to complete...",
+            total, id
+        ),
+        None => cli_println!("Waiting for {} job(s) to complete...", total),
+    }
 
     let poll_interval = std::time::Duration::from_secs(2);
     let max_wait = std::time::Duration::from_secs(300); // 5-minute timeout
     let start = std::time::Instant::now();
 
     let mut completed = vec![false; total];
+    let mut outcomes: Vec<TaskOutcome> = (0..total).map(|_| TaskOutcome::Pending).collect();
     let mut last_report = start;
 
     loop {
         let mut all_done = true;
+        // Prefer the batch endpoint: one request reports every task of the batch
+        // instead of N status calls per poll (a 100-URL batch used to make 100
+        // requests every 2 seconds).  Falls back to per-task polling when the
+        // batch id is unknown or the backend has no batch endpoint.
+        if let Some(batch_id) = batch_id {
+            if let Ok(payload) = get_swarm_batch_status(client, base_url, batch_id).await {
+                if let Ok(parsed) = serde_json::from_str::<Value>(&payload) {
+                    if let Some(rows) = parsed.get("tasks").and_then(|v| v.as_array()) {
+                        for row in rows {
+                            let Some(id) = row.get("id").and_then(|v| v.as_str()) else {
+                                continue;
+                            };
+                            let Some(idx) = task_ids.iter().position(|t| t == id) else {
+                                continue;
+                            };
+                            if completed[idx] {
+                                continue;
+                            }
+                            let is_done = row
+                                .get("isDone")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            let status_code =
+                                row.get("statusCode").and_then(|v| v.as_i64()).unwrap_or(0);
+                            if is_done || status_code == 200 || status_code >= 400 {
+                                completed[idx] = true;
+                                outcomes[idx] = if status_code == 200 {
+                                    TaskOutcome::Succeeded
+                                } else {
+                                    TaskOutcome::Failed {
+                                        code: status_code,
+                                        message: row
+                                            .get("message")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("")
+                                            .to_string(),
+                                    }
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         for (i, id) in task_ids.iter().enumerate() {
             if completed[i] {
                 continue;
@@ -12104,6 +12338,18 @@ async fn swarm_wait_for_jobs(
                         .unwrap_or(0);
                     if is_done || status_code == 200 || status_code >= 400 {
                         completed[i] = true;
+                        outcomes[i] = if status_code == 200 {
+                            TaskOutcome::Succeeded
+                        } else {
+                            TaskOutcome::Failed {
+                                code: status_code,
+                                message: parsed
+                                    .get("message")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                            }
+                        };
                     } else {
                         all_done = false;
                     }
@@ -12116,20 +12362,7 @@ async fn swarm_wait_for_jobs(
         }
 
         if all_done {
-            cli_println!(
-                "All {} job(s) completed in {:.0}s.",
-                total,
-                start.elapsed().as_secs_f64()
-            );
-            // Print a summary table
-            cli_println!("\n  {:^8}  {:^12}  {}", "STATUS", "TASK ID", "URL");
-            cli_println!("  {:-<8}  {:-<12}  {:-<40}", "", "", "");
-            for (i, id) in task_ids.iter().enumerate() {
-                let short_id = if id.len() > 8 { &id[..8] } else { id };
-                let status = if completed[i] { "done" } else { "timeout" };
-                cli_println!("  {:^8}  {:<12}  ...", status, short_id);
-            }
-            return Ok(());
+            return report_swarm_wait_outcome(task_ids, &outcomes, start, total, batch_id);
         }
 
         if start.elapsed() > max_wait {
@@ -12139,13 +12372,25 @@ async fn swarm_wait_for_jobs(
                 .filter(|(i, _)| !completed[*i])
                 .map(|(_, id)| id.clone())
                 .collect();
+            let succeeded = outcomes
+                .iter()
+                .filter(|o| matches!(o, TaskOutcome::Succeeded))
+                .count();
+            let failed = outcomes
+                .iter()
+                .filter(|o| matches!(o, TaskOutcome::Failed { .. }))
+                .count();
             cli_println!(
-                "Timeout after {:.0}s. {} of {} job(s) completed. {} job(s) still pending. Use 'swarm status <id>' to check manually.",
+                "Timeout after {:.0}s: {} succeeded, {} failed, {} still pending.\n  \
+                 Use 'swarm list --status pending' to see what is still running, or \
+                 'swarm list --status failed' to see what failed.",
                 start.elapsed().as_secs_f64(),
-                completed.iter().filter(|&&c| c).count(),
-                total,
+                succeeded,
+                failed,
                 pending.len(),
             );
+            json_field("succeeded", json!(succeeded));
+            json_field("failed", json!(failed));
             json_field("pending_task_ids", json!(pending));
             return Ok(());
         }
@@ -12153,16 +12398,232 @@ async fn swarm_wait_for_jobs(
         // Progress report every 30 seconds
         if last_report.elapsed() >= std::time::Duration::from_secs(30) {
             let done_count = completed.iter().filter(|&&c| c).count();
+            let failed_count = outcomes
+                .iter()
+                .filter(|o| matches!(o, TaskOutcome::Failed { .. }))
+                .count();
             cli_println!(
-                "  ... {}/{} job(s) completed (elapsed: {:.0}s)",
+                "  ... {}/{} job(s) terminal ({} failed) (elapsed: {:.0}s)",
                 done_count,
                 total,
+                failed_count,
                 start.elapsed().as_secs_f64()
             );
             last_report = std::time::Instant::now();
         }
 
         tokio::time::sleep(poll_interval).await;
+    }
+}
+
+/// Outcome of a single swarm job, as observed while `--wait` polled it.
+/// Warn when free-form LoadOptions contain a `#`.
+///
+/// The URL/args splitter treats `#` as a fragment delimiter, so everything
+/// after it — including the option's value and any options that follow — is
+/// silently dropped before parsing.  A `#id` selector therefore never reaches
+/// the page-quality gate.  Failing loudly here beats a silent no-op.
+fn warn_on_hash_in_load_options(opts: &str) {
+    if opts.contains('#') {
+        eprintln!(
+            "⚠ --load-options contains '#': the URL/args parser treats '#' as a fragment \
+             delimiter and drops the rest of the option string.\n  \
+             Use an attribute selector instead, e.g. -requireNotBlank \"[id=productTitle]\"."
+        );
+    }
+}
+
+/// Resolve the batch id for one `swarm submit` / `swarm query` invocation.
+///
+/// Uses `--batch-id <id>` when given (so a caller can name its own batches and
+/// correlate them with an external system), otherwise mints a fresh one.  Every
+/// task of the invocation is stamped with it, which makes the submission
+/// addressable as a unit afterwards.
+fn resolve_batch_id(tool_params: &Value) -> String {
+    tool_params
+        .get("batchId")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(new_batch_id)
+}
+
+/// Mint a random RFC-4122 v4 batch id.
+///
+/// Uses the `sha2` dependency the CLI already has (no new crates): 16 bytes are
+/// derived from the current time, the process id and a per-process random seed,
+/// then version/variant bits are stamped as v4 requires.
+fn new_batch_id() -> String {
+    use sha2::{Digest, Sha256};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    static SEED: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+    let seed = *SEED.get_or_init(|| {
+        // RandomState is seeded from the OS once per process; hashing it gives a
+        // value that differs between runs even on the same machine.
+        use std::collections::hash_map::RandomState;
+        use std::hash::{BuildHasher, Hasher};
+        let mut hasher = RandomState::new().build_hasher();
+        hasher.write_u64(std::process::id() as u64);
+        hasher.finish()
+    });
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+
+    let mut hasher = Sha256::new();
+    hasher.update(seed.to_le_bytes());
+    hasher.update(nanos.to_le_bytes());
+    hasher.update(seq.to_le_bytes());
+    hasher.update(std::process::id().to_le_bytes());
+    let digest = hasher.finalize();
+
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
+
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+    )
+}
+
+/// Outcome of a single swarm job, as observed while `--wait` polled it.
+enum TaskOutcome {
+    Succeeded,
+    Failed { code: i64, message: String },
+    Pending,
+}
+
+/// Report the final state of a `swarm submit --wait` batch.
+///
+/// A terminal task is not necessarily a *successful* task: the backend reports
+/// timeouts and fetch failures with a 4xx/5xx `statusCode` while still being
+/// "done".  Printing "all jobs completed" for a batch in which every fetch
+/// failed hides the failure from scripts and users, so the summary separates
+/// succeeded / failed / pending, lists the failed URLs, and emits the counts as
+/// JSON fields for programmatic checks.
+fn report_swarm_wait_outcome(
+    task_ids: &[String],
+    outcomes: &[TaskOutcome],
+    start: std::time::Instant,
+    total: usize,
+    batch_id: Option<&str>,
+) -> Result<(), String> {
+    let succeeded: Vec<&String> = task_ids
+        .iter()
+        .zip(outcomes)
+        .filter(|(_, o)| matches!(o, TaskOutcome::Succeeded))
+        .map(|(id, _)| id)
+        .collect();
+    let failed: Vec<(&String, i64, &str)> = task_ids
+        .iter()
+        .zip(outcomes)
+        .filter_map(|(id, o)| match o {
+            TaskOutcome::Failed { code, message } => Some((id, *code, message.as_str())),
+            _ => None,
+        })
+        .collect();
+    let pending: Vec<&String> = task_ids
+        .iter()
+        .zip(outcomes)
+        .filter(|(_, o)| matches!(o, TaskOutcome::Pending))
+        .map(|(id, _)| id)
+        .collect();
+
+    let elapsed = start.elapsed().as_secs_f64();
+    let batch_suffix = batch_id
+        .map(|id| format!(" (batch {})", id))
+        .unwrap_or_default();
+    if failed.is_empty() && pending.is_empty() {
+        cli_println!("All {} job(s) completed in {:.0}s{}.", total, elapsed, batch_suffix);
+    } else {
+        cli_println!(
+            "{} job(s) finished in {:.0}s{}: {} succeeded, {} failed, {} pending.",
+            total,
+            elapsed,
+            batch_suffix,
+            succeeded.len(),
+            failed.len(),
+            pending.len(),
+        );
+    }
+
+    // URL for each task id, when the local tracker knows it.
+    let tracked = read_async_tasks(None);
+    let url_of = |id: &str| -> Option<String> {
+        tracked
+            .tasks
+            .iter()
+            .find(|t| t.task_id == id)
+            .map(|t| t.description.clone())
+            .filter(|d| !d.is_empty())
+    };
+
+    if !failed.is_empty() {
+        cli_println!("\n  Failed job(s):");
+        for (id, code, message) in &failed {
+            let url = url_of(id).unwrap_or_else(|| "(unknown url)".to_string());
+            let detail = if message.is_empty() {
+                String::new()
+            } else {
+                format!(" — {}", message.lines().next().unwrap_or(""))
+            };
+            cli_println!("    [{}] {} (status {}){}", short_task_id(id), url, code, detail);
+        }
+        cli_println!(
+            "  Re-submit the failed URLs with: swarm submit --seed-file <file> --wait"
+        );
+    }
+    if !pending.is_empty() {
+        cli_println!("\n  Still pending after the wait window: {}", pending.len());
+        for id in &pending {
+            let url = url_of(id).unwrap_or_else(|| "(unknown url)".to_string());
+            cli_println!("    [{}] {}", short_task_id(id), url);
+        }
+        cli_println!("  Check with: swarm status <id>");
+    }
+
+    json_field("succeeded", json!(succeeded.len()));
+    json_field("failed", json!(failed.len()));
+    json_field("pending", json!(pending.len()));
+    if let Some(id) = batch_id {
+        json_field("batch_id", json!(id));
+    }
+    if !failed.is_empty() {
+        let entries: Vec<Value> = failed
+            .iter()
+            .map(|(id, code, message)| {
+                json!({
+                    "task_id": id,
+                    "url": url_of(id),
+                    "status_code": code,
+                    "message": message,
+                })
+            })
+            .collect();
+        json_field("failed_tasks", json!(entries));
+    }
+    if !pending.is_empty() {
+        json_field("pending_task_ids", json!(pending));
+    }
+    Ok(())
+}
+
+/// First 8 characters of a task id — enough to address it in follow-up commands.
+fn short_task_id(id: &str) -> &str {
+    if id.len() > 8 {
+        &id[..8]
+    } else {
+        id
     }
 }
 
@@ -26408,6 +26869,7 @@ mod tests {
                 submitted_at: "t1".to_string(),
                 last_status: "running".to_string(),
                 completed_at: None,
+                ..Default::default()
             },
             state::AsyncTaskEntry {
                 task_id: "a1".to_string(),
@@ -26416,6 +26878,7 @@ mod tests {
                 submitted_at: "t2".to_string(),
                 last_status: "done".to_string(),
                 completed_at: None,
+                ..Default::default()
             },
             state::AsyncTaskEntry {
                 task_id: "s1".to_string(),
@@ -26424,6 +26887,7 @@ mod tests {
                 submitted_at: "t3".to_string(),
                 last_status: "done".to_string(),
                 completed_at: None,
+                ..Default::default()
             },
             state::AsyncTaskEntry {
                 task_id: "c2".to_string(),
@@ -26432,6 +26896,7 @@ mod tests {
                 submitted_at: "t4".to_string(),
                 last_status: "pending".to_string(),
                 completed_at: None,
+                ..Default::default()
             },
         ];
 
@@ -26455,6 +26920,7 @@ mod tests {
             submitted_at: "t1".to_string(),
             last_status: "done".to_string(),
             completed_at: None,
+                ..Default::default()
         }];
 
         let filtered: Vec<_> = tasks
@@ -26632,6 +27098,7 @@ mod tests {
                 submitted_at: "t1".to_string(),
                 last_status: "done".to_string(),
                 completed_at: None,
+                ..Default::default()
             },
             state::AsyncTaskEntry {
                 task_id: "c1".to_string(),
@@ -26640,6 +27107,7 @@ mod tests {
                 submitted_at: "t2".to_string(),
                 last_status: "done".to_string(),
                 completed_at: None,
+                ..Default::default()
             },
             state::AsyncTaskEntry {
                 task_id: "a2".to_string(),
@@ -26648,6 +27116,7 @@ mod tests {
                 submitted_at: "t3".to_string(),
                 last_status: "in_progress".to_string(),
                 completed_at: None,
+                ..Default::default()
             },
         ];
 
@@ -26667,7 +27136,7 @@ mod tests {
         let base_url = "http://127.0.0.1:1"; // unused since list is empty
         let task_ids: Vec<String> = vec![];
 
-        let result = swarm_wait_for_jobs(&client, base_url, &task_ids).await;
+        let result = swarm_wait_for_jobs(&client, base_url, &task_ids, None).await;
 
         assert!(
             result.is_ok(),
@@ -26718,7 +27187,7 @@ mod tests {
         let base_url = spawn_swarm_status_done_server("swarm-task-1");
         let task_ids = vec!["swarm-task-1".to_string()];
 
-        let result = swarm_wait_for_jobs(&client, &base_url, &task_ids).await;
+        let result = swarm_wait_for_jobs(&client, &base_url, &task_ids, None).await;
 
         assert!(
             result.is_ok(),
@@ -26732,8 +27201,138 @@ mod tests {
         let client = crate::http::make_client();
         let base_url = "http://127.0.0.1:1"; // unused
 
-        let result = swarm_wait_for_jobs(&client, base_url, &[]).await;
+        let result = swarm_wait_for_jobs(&client, base_url, &[], None).await;
         assert!(result.is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // swarm completion-status checking
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn swarm_status_filter_matches_lifecycle_labels() {
+        // A failed task carries the reason in the label; the filter must match
+        // every variant instead of requiring an exact string.
+        assert!(swarm_status_matches("failed (request timeout)", "failed"));
+        assert!(swarm_status_matches("failed (expectation failed)", "failed"));
+        assert!(swarm_status_matches("failed (closed)", "failed"));
+        assert!(!swarm_status_matches("completed", "failed"));
+
+        assert!(swarm_status_matches("completed", "completed"));
+        assert!(!swarm_status_matches("failed (request timeout)", "completed"));
+
+        assert!(swarm_status_matches("queued", "pending"));
+        assert!(swarm_status_matches("processing", "pending"));
+        assert!(swarm_status_matches("", "pending"));
+        assert!(!swarm_status_matches("completed", "pending"));
+        assert!(!swarm_status_matches("failed (request timeout)", "pending"));
+
+        assert!(swarm_status_matches("queued", "queued"));
+        assert!(swarm_status_matches("processing", "processing"));
+        assert!(swarm_status_matches("completed", "done"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn swarm_wait_reports_failed_jobs_as_failures() {
+        // Regression: a batch whose fetches all failed used to be reported as
+        // "All N job(s) completed" because any terminal status counted as done,
+        // which hid every failure from scripts and users.
+        let client = crate::http::make_client();
+        let base_url = spawn_swarm_status_server(
+            r#"{"id":"t-fail","statusCode":408,"isDone":true,"status":"Request Timeout","message":"Task timed out: no progress"}"#,
+            2,
+        );
+        let task_ids = vec!["t-fail-a".to_string(), "t-fail-b".to_string()];
+
+        let result = swarm_wait_for_jobs(&client, &base_url, &task_ids, None).await;
+
+        assert!(result.is_ok(), "failed jobs must still end the wait cleanly");
+    }
+
+    #[test]
+    fn short_task_id_keeps_ids_addressable() {
+        assert_eq!(short_task_id("1234567890abcdef"), "12345678");
+        assert_eq!(short_task_id("abc"), "abc");
+    }
+
+    // -----------------------------------------------------------------------
+    // Batch ids
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn new_batch_id_is_a_v4_uuid() {
+        let id = new_batch_id();
+        assert_eq!(id.len(), 36, "uuid string length: {id}");
+        let parts: Vec<&str> = id.split('-').collect();
+        assert_eq!(
+            parts.iter().map(|p| p.len()).collect::<Vec<_>>(),
+            vec![8, 4, 4, 4, 12],
+            "uuid shape: {id}"
+        );
+        assert!(
+            id.chars().all(|c| c.is_ascii_hexdigit() || c == '-'),
+            "hex only: {id}"
+        );
+        // version nibble 4 and RFC-4122 variant
+        assert_eq!(&id[14..15], "4", "version nibble: {id}");
+        assert!(
+            matches!(&id[19..20], "8" | "9" | "a" | "b"),
+            "variant nibble: {id}"
+        );
+    }
+
+    #[test]
+    fn new_batch_id_is_unique_per_call() {
+        let ids: std::collections::HashSet<String> = (0..64).map(|_| new_batch_id()).collect();
+        assert_eq!(ids.len(), 64, "batch ids must not repeat");
+    }
+
+    #[test]
+    fn resolve_batch_id_honours_explicit_option() {
+        let params = json!({ "batchId": "amazon0911-run3" });
+        assert_eq!(resolve_batch_id(&params), "amazon0911-run3");
+    }
+
+    #[test]
+    fn resolve_batch_id_generates_when_missing_or_blank() {
+        let generated = resolve_batch_id(&json!({}));
+        assert_eq!(generated.len(), 36);
+
+        // A blank --batch-id must not become the batch's identity.
+        let generated = resolve_batch_id(&json!({ "batchId": "   " }));
+        assert_eq!(generated.len(), 36);
+    }
+
+    /// Spawn a TCP server that answers `requests` status GETs with [body].
+    fn spawn_swarm_status_server(body: &'static str, requests: usize) -> String {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind swarm status test server");
+        let addr = listener.local_addr().expect("read swarm status test server addr");
+
+        thread::spawn(move || {
+            for _ in 0..requests {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                    .ok();
+                let mut buffer = [0_u8; 8192];
+                let _ = stream.read(&mut buffer);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+
+        format!("http://{}", addr)
     }
 
     // -----------------------------------------------------------------------
@@ -26751,6 +27350,7 @@ mod tests {
                     submitted_at: "s1".to_string(),
                     last_status: "queued".to_string(),
                     completed_at: None,
+                ..Default::default()
                 },
                 state::AsyncTaskEntry {
                     task_id: "t2".to_string(),
@@ -26759,6 +27359,7 @@ mod tests {
                     submitted_at: "s2".to_string(),
                     last_status: "processing".to_string(),
                     completed_at: None,
+                ..Default::default()
                 },
                 state::AsyncTaskEntry {
                     task_id: "t3".to_string(),
@@ -26767,6 +27368,7 @@ mod tests {
                     submitted_at: "s3".to_string(),
                     last_status: String::new(), // never polled
                     completed_at: None,
+                ..Default::default()
                 },
                 state::AsyncTaskEntry {
                     task_id: "t4".to_string(),
@@ -26775,6 +27377,7 @@ mod tests {
                     submitted_at: "s4".to_string(),
                     last_status: "completed".to_string(),
                     completed_at: Some("c4".to_string()),
+                ..Default::default()
                 },
                 state::AsyncTaskEntry {
                     task_id: "t5".to_string(),
@@ -26783,6 +27386,7 @@ mod tests {
                     submitted_at: "s5".to_string(),
                     last_status: "failed (timeout)".to_string(),
                     completed_at: Some("c5".to_string()),
+                ..Default::default()
                 },
                 state::AsyncTaskEntry {
                     task_id: "t6".to_string(),
@@ -26791,6 +27395,7 @@ mod tests {
                     submitted_at: "s6".to_string(),
                     last_status: "queued".to_string(),
                     completed_at: None,
+                ..Default::default()
                 },
             ],
         };

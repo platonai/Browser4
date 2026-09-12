@@ -1,6 +1,6 @@
 ---
 title: "WebDB Command Reference"
-description: "Reference for webdb-export and webdb-normalize commands. Export cached pages from the web database to local files, and normalize URLs into consistent database keys."
+description: "Reference for the `webdb export` and `webdb normalize` commands. Export cached pages from the web database to local files, and normalize URLs into consistent database keys."
 tier: procedure
 ---
 
@@ -13,21 +13,25 @@ pages to local files and normalize URLs into consistent database keys.
 
 ```bash
 # Export specific pages by URL
-browser4-cli webdb-export "https://example.com,https://example.com/about" ./out
+browser4-cli webdb export "https://example.com,https://example.com/about" ./out
 
 # Normalize a URL to its webdb key form
-browser4-cli webdb-normalize "https://example.com/page?utm=tracking"
+browser4-cli webdb normalize "https://example.com/page?utm=tracking"
 ```
+
+> **Command form:** `webdb` is a command group — use the spaced form
+> (`webdb export`, `webdb normalize`). The flat aliases `webdb-export` /
+> `webdb-normalize` are rejected with a pointer to the spaced form.
 
 ## When to Use
 
-Use **webdb-export** to extract cached page content from the web database after
+Use **webdb export** to extract cached page content from the web database after
 a crawl or browsing session — the pages have already been fetched and stored;
 export copies them to local files without re-fetching.  Use
-**webdb-normalize** to discover the exact database key for a URL, which is
+**webdb normalize** to discover the exact database key for a URL, which is
 useful for scripting or debugging cache lookups.
 
-Prefer **webdb-export** when you need raw page content (HTML) on disk after a
+Prefer **webdb export** when you need raw page content (HTML) on disk after a
 crawl.  Prefer **htmlsnapshot export** when you need structured DOM snapshots
 rather than raw HTML.  Prefer **crawl --sql** or **htmlsnapshot query** when
 you need extracted data fields, not full page content.
@@ -39,9 +43,9 @@ When you `goto`, `crawl`, or otherwise load a page, the fetched content is
 stored in webdb.  Subsequent visits to the same URL reuse the cached copy
 (controlled by LoadOptions `-expires` / `-refresh`).
 
-- **webdb-export** looks up each URL in the cache, normalizes it, retrieves
+- **webdb export** looks up each URL in the cache, normalizes it, retrieves
   the stored page, and writes it as an `.htm` file to the output directory.
-- **webdb-normalize** runs URL normalization (lowercase, trailing-slash
+- **webdb normalize** runs URL normalization (lowercase, trailing-slash
   removal, redirect resolution) and returns the result — the exact key used
   for webdb lookups.
 
@@ -51,7 +55,7 @@ redirect resolution to work.  Both commands require an open session (use
 
 ## Commands
 
-### `webdb-export`
+### `webdb export`
 
 Export cached pages to a local directory.
 
@@ -78,7 +82,7 @@ The output is a JSON summary:
 }
 ```
 
-### `webdb-normalize`
+### `webdb normalize`
 
 Normalize a URL to its webdb key form.
 
@@ -99,13 +103,13 @@ Returns the normalized URL string.  Normalization includes:
 
 ```bash
 browser4-cli crawl --seed-file urls.txt --depth 0
-browser4-cli webdb-export "https://example.com/page1,https://example.com/page2" ./crawl-output
+browser4-cli webdb export "https://example.com/page1,https://example.com/page2" ./crawl-output
 ```
 
 ### Export specific pages for offline analysis
 
 ```bash
-browser4-cli webdb-export \
+browser4-cli webdb export \
   "https://example.com/page1,https://example.com/page2,https://example.com/page3" \
   ./analysis-pages
 ```
@@ -114,14 +118,14 @@ browser4-cli webdb-export \
 
 ```bash
 browser4-cli goto "https://example.com"
-browser4-cli webdb-normalize "HTTPS://Example.COM/page?ref=ad#section"
+browser4-cli webdb normalize "HTTPS://Example.COM/page?ref=ad#section"
 # → https://example.com/page
 ```
 
 ### Script-friendly export with error handling
 
 ```bash
-result=$(browser4-cli webdb-export "https://example.com/page1,https://example.com/page2" ./out --json)
+result=$(browser4-cli webdb export "https://example.com/page1,https://example.com/page2" ./out --json)
 succeeded=$(echo "$result" | jq '.succeeded')
 failed=$(echo "$result" | jq '.failed')
 echo "Exported $succeeded pages ($failed failed)"
@@ -145,7 +149,7 @@ The `webdb` commands take positional arguments only (see [Commands](#commands));
 
 | Command | Exports | Format | Requires cache? |
 |---------|---------|--------|-----------------|
-| `webdb-export` | Raw page HTML | `.htm` files | Yes (webdb) |
+| `webdb export` | Raw page HTML | `.htm` files | Yes (webdb) |
 | `htmlsnapshot export` | Formatted HTML DOM | HTML (use `--clean` for minimal LLM-ready output) | No (works from current page) |
 | `screenshot` | Visual page image | PNG | No (renders live) |
 | `pdf` | Print-formatted page | PDF | No (renders live) |
