@@ -642,13 +642,109 @@ Assert-ContainsString -Label 'Session: -SessionPath accepted' -Haystack $output 
 $output = pwsh -NoProfile -Command "& '$testPs1Abs' --session-path out/test.json -Show fast *>&1" *>&1 | Out-String
 Assert-ContainsString -Label 'Session: --session-path accepted' -Haystack $output -Needle '[SHOW] Would execute'
 
-Write-Host "━━━ Session flags: -NoSession skips persistence ━━━" -ForegroundColor Cyan
+Write-Host "━━━ Session flags: -Show creates no run directory ━━━" -ForegroundColor Cyan
 
-# With -NoSession, the session module should not be loaded (no "Persist session" output)
+# -Show never executes anything, so it must not mint a run directory either
+# (the session module itself is still imported — -NoSession only suppresses
+# persistence, it no longer implies "no session bookkeeping at all").
 $output = pwsh -NoProfile -Command "& '$testPs1Abs' -NoSession -Show ps *>&1" *>&1 | Out-String
-# The -Show output should NOT mention the session module being loaded
 $hasSessionRef = $output -match 'test-session'
-Assert-Returns -Label 'Session: -NoSession suppresses module load' -Actual $hasSessionRef -Expected $false
+Assert-Returns -Label 'Session: -Show emits no session output' -Actual $hasSessionRef -Expected $false
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: One subdirectory per run
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ Session: one subdirectory per run ━━━" -ForegroundColor Cyan
+
+$repoRootAbs   = Split-Path -Parent (Split-Path -Parent $testPs1Abs)
+$sessionsRoot  = Join-Path $repoRootAbs '.test-sessions'
+$runIdPattern  = '^\d{8}T\d{6}\d+Z$'
+
+function Get-RunDirs {
+    if (-not (Test-Path -LiteralPath $sessionsRoot -PathType Container)) { return @() }
+    return @(Get-ChildItem -Path $sessionsRoot -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match $runIdPattern })
+}
+
+# A read-only inspection must not create a run directory
+$runDirsBefore = @(Get-RunDirs).Count
+$null = pwsh -NoProfile -Command "& '$testPs1Abs' session list *>&1" *>&1 | Out-String
+Assert-Returns -Label 'Session: "session list" creates no run dir' `
+    -Actual @(Get-RunDirs).Count -Expected $runDirsBefore
+
+# Lazy creation: an invocation that never executes a test leaves no trace.
+# `rws dir --tree` only *lists* task directories.
+$beforeNames = @(Get-RunDirs | ForEach-Object { $_.Name })
+$null = pwsh -NoProfile -Command "& '$testPs1Abs' rws dir --tree *>&1" *>&1 | Out-String
+$newRunDirs = @(Get-RunDirs | Where-Object { $_.Name -notin $beforeNames })
+Assert-Returns -Label 'Session: display-only run creates no run dir' -Actual $newRunDirs.Count -Expected 0
+
+# -Show likewise never executes anything
+$beforeNames = @(Get-RunDirs | ForEach-Object { $_.Name })
+$null = pwsh -NoProfile -Command "& '$testPs1Abs' -Show fast *>&1" *>&1 | Out-String
+$newRunDirs = @(Get-RunDirs | Where-Object { $_.Name -notin $beforeNames })
+Assert-Returns -Label 'Session: -Show creates no run dir' -Actual $newRunDirs.Count -Expected 0
+
+Write-Host "━━━ Session: directory appears on first real need ━━━" -ForegroundColor Cyan
+
+# Publishing the path must not touch the filesystem; the session write (which
+# creates its own parent directory) is what materialises the run directory.
+$writeProbe = @'
+$repo = (Get-Location).Path
+Remove-Item Env:BROWSER4_TEST_SESSION_DIR -ErrorAction SilentlyContinue
+Import-Module (Join-Path $repo 'bin/common/test-session.psm1') -Force
+$dir = Publish-TestSessionRunDir -RepoRoot $repo
+$beforeWrite = Test-Path -LiteralPath $dir -PathType Container
+Update-TestSessionResult -RepoRoot $repo -TestKey 'probe:write' -Status 'pass' -ExitCode 0 -DurationSec 0.1
+$afterWrite = Test-Path -LiteralPath (Join-Path $dir 'test-session.json') -PathType Leaf
+Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+"$beforeWrite|$afterWrite"
+'@
+$writeProbeFile = Join-Path ([System.IO.Path]::GetTempPath()) "b4-run-dir-write-$PID.ps1"
+$writeProbe | Out-File -LiteralPath $writeProbeFile -Encoding utf8
+$writeProbeOut = (pwsh -NoProfile -File $writeProbeFile 2>&1 | Out-String).Trim()
+Remove-Item -LiteralPath $writeProbeFile -Force -ErrorAction SilentlyContinue
+Assert-Returns -Label 'Session: publish defers creation, write materialises' `
+    -Actual $writeProbeOut -Expected 'False|True'
+
+Write-Host "━━━ Session: run-dir helper contract ━━━" -ForegroundColor Cyan
+
+# Exercised in a child process so the environment changes do not leak into
+# this test run: fresh dir, idempotent, JSON inside it, env var exported,
+# and always under .test-sessions/.
+$probe = @'
+$repo = (Get-Location).Path
+Remove-Item Env:BROWSER4_TEST_SESSION_DIR -ErrorAction SilentlyContinue
+Import-Module (Join-Path $repo 'bin/common/test-session.psm1') -Force
+$dir  = New-TestSessionRunDir -RepoRoot $repo
+$json = Get-TestSessionPath -RepoRoot $repo
+$same     = (New-TestSessionRunDir -RepoRoot $repo) -eq $dir
+$inRun    = $json -eq (Join-Path $dir 'test-session.json')
+$exported = [bool]$env:BROWSER4_TEST_SESSION_DIR
+$under    = $dir -like (Join-Path $repo '.test-sessions*')
+$created  = Test-Path -LiteralPath $dir -PathType Container
+Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+"$created|$same|$inRun|$exported|$under"
+'@
+$probeFile = Join-Path ([System.IO.Path]::GetTempPath()) "b4-run-dir-probe-$PID.ps1"
+$probe | Out-File -LiteralPath $probeFile -Encoding utf8
+$probeOut = (pwsh -NoProfile -File $probeFile 2>&1 | Out-String).Trim()
+Remove-Item -LiteralPath $probeFile -Force -ErrorAction SilentlyContinue
+Assert-Returns -Label 'Session: run-dir helper contract' `
+    -Actual $probeOut -Expected 'True|True|True|True|True'
+
+Write-Host "━━━ Session: prune protects the _legacy archive ━━━" -ForegroundColor Cyan
+
+# _legacy/ holds pre-restructure artifacts and must never be pruned, even by
+# an explicit --all.
+$legacyDir = Join-Path $sessionsRoot '_legacy'
+if (Test-Path -LiteralPath $legacyDir -PathType Container) {
+    $pruneOut = pwsh -NoProfile -Command "& '$testPs1Abs' -DryRun session prune --all *>&1" *>&1 | Out-String
+    $mentionsLegacy = $pruneOut -match '_legacy'
+    Assert-Returns -Label 'Session: prune --all never targets _legacy' -Actual $mentionsLegacy -Expected $false
+} else {
+    Write-Host '    (skipped: no _legacy archive present)' -ForegroundColor DarkGray
+}
 
 # ═══════════════════════════════════════════════════════════════════
 # TESTS: RWS dir display flags (--tree, --files, --absolute, --metadata)

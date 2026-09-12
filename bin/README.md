@@ -188,7 +188,7 @@ Shared PowerShell utility modules imported by other scripts.
 
 - **`Util.ps1`**: Common utilities including `Fix-Encoding-UTF8` — sets the console code page and output encoding to UTF-8 to prevent mojibake in Windows PowerShell.
 - **`agent-utils.psm1`**: AI agent utilities — resolve and invoke AI assistants (`claude`, `copilot`, etc.) on PATH. Provides `Get-AiAnalyzer`, `Test-AiAvailable`, and `Invoke-AiAnalysis` for AI-powered log analysis in test runners.
-- **`test-session.psm1`**: Cross-run persistable test-session state module. Maintains a single JSON session file (`target/test-session.json`) recording the last result, log paths, aggregate pass/fail counts, and rolling history for each test type. Imported by test runners; soft dependency — tests still run if the module is absent.
+- **`test-session.psm1`**: Cross-run persistable test-session state module. Every test run owns one subdirectory, `.test-sessions/<run-id>/`, holding `test-session.json` (last result, log paths, aggregate pass/fail counts, rolling history per test type) alongside that run's scratch files. `Publish-TestSessionRunDir` resolves the directory and exports `BROWSER4_TEST_SESSION_DIR` so spawned scenario runners, coworker workers and agents all write into the same per-run directory instead of the shared `.test-sessions/` root; `New-TestSessionRunDir` additionally creates it. Creation is lazy — a runner that only prints usage or lists directories leaves nothing behind, and the directory materialises on the first session write or the first child that needs it. Imported by test runners; soft dependency — tests still run if the module is absent.
 
 ### `git/`
 

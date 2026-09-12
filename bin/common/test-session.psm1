@@ -7,9 +7,14 @@
 
 .DESCRIPTION
     Maintains one JSON file per test invocation under
-    .test-sessions/<timestamp>/test-session.json. Each file records the last
+    .test-sessions/<run-id>/test-session.json. Each file records the last
     result, log paths, aggregate pass/fail counts, and rolling history for
     each test type. System environment is captured once and reused.
+
+    The <run-id> directory doubles as that run's scratch area: agent and
+    scenario scratch files belong next to test-session.json, never loose in
+    the .test-sessions/ root. bin/test.ps1 publishes the directory through
+    BROWSER4_TEST_SESSION_DIR so spawned processes reuse it.
 
     Test types are keyed by category:
       - "ps"                — all PowerShell *.tests.ps1 files (bin/test.ps1 ps)
@@ -34,7 +39,148 @@
 
 $script:MaxHistory = 5
 $script:SchemaVersion = 1
-$script:DefaultSessionIds = @{}
+
+# Environment variable that hands the per-run scratch directory down to child
+# processes (scenario runners, coworker workers, agents).  See New-TestSessionRunDir.
+$script:RunDirEnvVar = 'BROWSER4_TEST_SESSION_DIR'
+
+# Memoised per-repo-root run directories, so every call inside one PowerShell
+# process resolves to the same directory.
+$script:RunDirs = @{}
+
+# ═══════════════════════════════════════════════════════════════════
+# Public: resolve the per-run scratch directory
+# ═══════════════════════════════════════════════════════════════════
+<#
+.SYNOPSIS
+    Create a fresh run ID (sortable, UTC).
+
+.DESCRIPTION
+    Format: yyyyMMddTHHmmssfffffffZ — identical to the historical session-dir
+    naming, so existing `test.ps1 session list` sorting and `session view`
+    prefix matching keep working unchanged.
+#>
+function New-TestSessionRunId {
+    [CmdletBinding()]
+    param()
+    return (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffffffZ')
+}
+
+<#
+.SYNOPSIS
+    Resolve the scratch directory for the current test run.
+
+.DESCRIPTION
+    Every test run owns exactly one subdirectory:
+
+        <repo-root>/.test-sessions/<run-id>/
+
+    Resolution order:
+
+      1. A directory inherited from a parent run via the environment variable
+         BROWSER4_TEST_SESSION_DIR.  This is how `bin/test.ps1` hands one shared
+         directory down to the scenario runners, coworker workers and agents it
+         spawns, so all artifacts of a single run land together.
+      2. Otherwise a fresh timestamped run ID, memoised per repo root so that
+         repeated calls inside one process agree.
+
+    This function does NOT touch the filesystem — use New-TestSessionRunDir to
+    also create the directory and publish it to child processes.
+
+.PARAMETER RepoRoot
+    Absolute path to the repository root.
+#>
+function Get-TestSessionRunDir {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot
+    )
+
+    $repoRootKey = [System.IO.Path]::GetFullPath($RepoRoot)
+
+    # ── 1. Inherited from a parent run ──────────────────────────────
+    $inherited = [System.Environment]::GetEnvironmentVariable($script:RunDirEnvVar)
+    if (-not [string]::IsNullOrWhiteSpace($inherited)) {
+        if (-not [System.IO.Path]::IsPathRooted($inherited)) {
+            $inherited = Join-Path $repoRootKey $inherited
+        }
+        return [System.IO.Path]::GetFullPath($inherited)
+    }
+
+    # ── 2. Fresh run directory for this process ─────────────────────
+    if (-not $script:RunDirs.ContainsKey($repoRootKey)) {
+        $script:RunDirs[$repoRootKey] = Join-Path (Join-Path $repoRootKey '.test-sessions') (New-TestSessionRunId)
+    }
+    return $script:RunDirs[$repoRootKey]
+}
+
+<#
+.SYNOPSIS
+    Resolve the run directory and publish it to child processes, without creating it.
+
+.DESCRIPTION
+    Exports BROWSER4_TEST_SESSION_DIR so that every process spawned afterwards
+    agrees on one per-run directory, but does NOT touch the filesystem.  Use this
+    from a runner that wants its children to share the directory while still
+    leaving no trace behind when no test actually executes (argument errors,
+    display-only listings, -Show).
+
+    The directory is materialised on first real need — by New-TestSessionRunDir,
+    by Write-TestSession (which creates its parent directory), or by a child
+    process that needs the scratch area.
+
+.PARAMETER RepoRoot
+    Absolute path to the repository root.
+
+.OUTPUTS
+    System.String — the absolute run directory path. Not guaranteed to exist yet.
+#>
+function Publish-TestSessionRunDir {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot
+    )
+
+    $runDir = Get-TestSessionRunDir -RepoRoot $RepoRoot
+    [System.Environment]::SetEnvironmentVariable($script:RunDirEnvVar, $runDir)
+    return $runDir
+}
+
+<#
+.SYNOPSIS
+    Create the current run directory and publish it to child processes.
+
+.DESCRIPTION
+    Creates <repo-root>/.test-sessions/<run-id>/ (idempotent) and exports
+    BROWSER4_TEST_SESSION_DIR so that every process spawned afterwards writes its
+    scratch files into the same per-run subdirectory instead of the shared
+    .test-sessions/ root.
+
+    Safe to call more than once: subsequent calls return the same directory.
+
+.PARAMETER RepoRoot
+    Absolute path to the repository root.
+
+.OUTPUTS
+    System.String — the absolute run directory path (guaranteed to exist).
+#>
+function New-TestSessionRunDir {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot
+    )
+
+    $runDir = Publish-TestSessionRunDir -RepoRoot $RepoRoot
+
+    if (-not (Test-Path -LiteralPath $runDir -PathType Container)) {
+        $null = New-Item -Path $runDir -ItemType Directory -Force -ErrorAction Stop
+    }
+
+    return $runDir
+}
 
 # ═══════════════════════════════════════════════════════════════════
 # Public: resolve the session file path
@@ -44,9 +190,11 @@ $script:DefaultSessionIds = @{}
     Return the canonical path to the session JSON file.
 
 .DESCRIPTION
-    Resolves from the provided $RepoRoot. When SessionPath is omitted, each
-    PowerShell process creates one timestamp-based session ID.
-    The file lives at <repo-root>/.test-sessions/<session-id>/test-session.json.
+    When SessionPath is omitted the file lives inside this run's dedicated
+    subdirectory: <repo-root>/.test-sessions/<run-id>/test-session.json.
+
+    SessionPath is an explicit escape hatch for callers that want the JSON
+    somewhere else entirely; the run scratch directory is unaffected by it.
 
 .PARAMETER RepoRoot
     Absolute path to the repository root.
@@ -65,14 +213,8 @@ function Get-TestSessionPath {
         }
         return Join-Path $RepoRoot $SessionPath
     }
-    $repoRootKey = [System.IO.Path]::GetFullPath($RepoRoot)
-    if (-not $script:DefaultSessionIds.ContainsKey($repoRootKey)) {
-        $script:DefaultSessionIds[$repoRootKey] = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffffffZ')
-    }
 
-    $sessionRoot = Join-Path $repoRootKey '.test-sessions'
-    $sessionRoot = Join-Path $sessionRoot $script:DefaultSessionIds[$repoRootKey]
-    return Join-Path $sessionRoot 'test-session.json'
+    return Join-Path (Get-TestSessionRunDir -RepoRoot $RepoRoot) 'test-session.json'
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -414,6 +556,10 @@ function Update-TestSessionResult {
 # Exports
 # ═══════════════════════════════════════════════════════════════════
 Export-ModuleMember -Function @(
+    'New-TestSessionRunId',
+    'Get-TestSessionRunDir',
+    'Publish-TestSessionRunDir',
+    'New-TestSessionRunDir',
     'Get-TestSessionPath',
     'Read-TestSession',
     'Write-TestSession',

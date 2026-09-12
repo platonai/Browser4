@@ -631,6 +631,40 @@ $script:IssuesDraftDir = [System.IO.Path]::GetFullPath(
 # slashes are used so paths work in bash/Git Bash shells that agents run in.
 $RepoRootPath = $script:RepoRoot -replace '\\', '/'
 
+# ── Per-run scratch directory ────────────────────────────────────────────────
+# Every test run owns exactly one subdirectory: .test-sessions/<run-id>/
+#
+# When a parent run already created one (bin/test.ps1 exports
+# BROWSER4_TEST_SESSION_DIR before spawning us), we reuse it so that the session
+# JSON and every scratch artifact of a single run land in the same place.
+# Standalone invocations (run-tests.ps1 / run-task.ps1 called directly) mint a
+# fresh directory here.
+$script:TestSessionDirEnvVar = 'BROWSER4_TEST_SESSION_DIR'
+
+$script:TestSessionDir = ''
+if ($env:BROWSER4_TEST_SESSION_DIR) {
+    $candidate = $env:BROWSER4_TEST_SESSION_DIR
+    if (-not [System.IO.Path]::IsPathRooted($candidate)) {
+        $candidate = Join-Path $script:RepoRoot $candidate
+    }
+    $script:TestSessionDir = [System.IO.Path]::GetFullPath($candidate)
+}
+if (-not $script:TestSessionDir) {
+    $runId = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffffffZ')
+    $script:TestSessionDir = Join-Path (Join-Path $script:RepoRoot '.test-sessions') $runId
+    $env:BROWSER4_TEST_SESSION_DIR = $script:TestSessionDir
+}
+
+# Relative + absolute aliases for prompt interpolation.  Issue reports should
+# quote the relative form so they stay machine-independent.
+$TestSessionRelPath = '.test-sessions/' + (Split-Path -Leaf $script:TestSessionDir)
+$TestSessionPath    = $script:TestSessionDir -replace '\\', '/'
+
+# NOTE: the directory is deliberately NOT created here.  Merely dot-sourcing
+# this file (as the tests do to inspect $generalPrompt) must not leave an empty
+# run directory behind.  Invoke-Agent creates it right before spawning an agent,
+# which is the first moment anything actually needs it.
+
 # ── Mode detection ──────────────────────────────────────────────────────────
 # The caller may set $browser4cliMode = 'production' before dot-sourcing, or
 # set $env:BROWSER4CLI_MODE = 'production' (useful when run-tests.ps1 spawns a
@@ -664,7 +698,7 @@ You are evaluating the usability, discoverability, and reliability of browser4-c
 Before performing any browser interaction:
 
 0. Verify your working directory is the repository root: ``$RepoRootPath``. If ``pwd`` is anything other than this directory, navigate there immediately with ``cd "$RepoRootPath"``. All browser4-cli commands use ``$cliInvocation`` which works from the repo root — stay in this directory for all commands.
-    **IMPORTANT — Temporary files:** Create ALL temporary, intermediate, and scratch files (scripts, data dumps, HTML snapshots, JSON exports, markdown drafts, log files, etc.) inside `./.test-sessions/` (not the repo root). Before creating any file, ensure the directory exists with `mkdir -p .test-sessions`. Do NOT pollute the repository root with temporary files — every generated file that is not a permanent project asset belongs under `.test-sessions/`.
+    **IMPORTANT — Temporary files:** Create ALL temporary, intermediate, and scratch files (scripts, data dumps, HTML snapshots, JSON exports, markdown drafts, log files, etc.) inside this run's dedicated scratch directory ``$TestSessionRelPath/`` (absolute: ``$TestSessionPath/``). This directory belongs to *this run only* — do not write into the shared ``.test-sessions/`` root next to it, and do not write into the repository root. The directory already exists; if it is missing, create it with ``mkdir -p "$TestSessionPath"``. Every generated file that is not a permanent project asset belongs under this run directory.
 1. Run ``$helpCmd``.
 2. Read ``$skillPath`` completely.
 3. Learn the available commands, workflows, and conventions directly from the documentation.
@@ -849,7 +883,7 @@ Include:
 * Prefer evidence gathered from actual usage over assumptions.
 * Record both major and minor usability issues.
 * The task is considered successful only if both the task itself and the usability evaluation are completed.
-* **ALL temporary files** (scripts, data files, HTML exports, JSON dumps, screenshots, logs, markdown drafts, etc.) **MUST** be created inside `./.test-sessions/`. Never write temporary files to the repository root. Before creating any file, run `mkdir -p .test-sessions` if the directory does not already exist.
+* **ALL temporary files** (scripts, data files, HTML exports, JSON dumps, screenshots, logs, markdown drafts, etc.) **MUST** be created inside ``$TestSessionRelPath/`` — this run's dedicated scratch directory. Never write temporary files to the repository root, and never write them into the shared ``.test-sessions/`` root. The directory already exists; create it with ``mkdir -p "$TestSessionPath"`` if it is missing.
 
 # Task
 
@@ -2216,7 +2250,7 @@ function Start-NativeCommand {
                     $stepCount = $nativeHandler.GetCheckpointStepCount()
                     if ($stepCount -gt 0) {
                         [Console]::WriteLine(
-                            "  · Checkpoints: $stepCount step(s) completed → .test-sessions/${CheckpointScenario}-progress.json"
+                            "  · Checkpoints: $stepCount step(s) completed → $(Join-Path $CheckpointDir "${CheckpointScenario}-progress.json")"
                         )
                     }
                 }
@@ -2766,13 +2800,14 @@ function Invoke-Agent {
     if ($Silent) { $getArgsParams['Silent'] = $true }
     $agentArgs = Get-ScenarioAgentArgs @getArgsParams
 
-    # ── Ensure .test-sessions directory exists ────────────────────────────────
+    # ── Ensure this run's scratch directory exists ────────────────────────────
     # Agents are instructed to create temp files here.  Pre-create the directory
-    # so the agent doesn't fail on the very first `mkdir -p .test-sessions` call.
-    $testSessionsDir = Join-Path $script:RepoRoot '.test-sessions'
+    # so the agent doesn't fail on the very first `mkdir -p` call.  One directory
+    # per run — never the shared .test-sessions/ root.
+    $testSessionsDir = $script:TestSessionDir
     if (-not (Test-Path -LiteralPath $testSessionsDir)) {
         New-Item -ItemType Directory -Path $testSessionsDir -Force | Out-Null
-        Write-Host "  Created .test-sessions/ for agent temp files" -ForegroundColor DarkGray
+        Write-Host "  Created $TestSessionRelPath/ for agent temp files" -ForegroundColor DarkGray
     }
 
     # ── Resolve capture file path ──────────────────────────────────────────

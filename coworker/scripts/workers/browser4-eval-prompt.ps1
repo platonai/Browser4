@@ -100,10 +100,36 @@ function New-Browser4EvalPrompt {
     }
 
     # Resolve the repository root path (with forward slashes for cross-shell compatibility)
+    # and this run's dedicated scratch directory.
     $RepoRootPath = ''
+    $TestSessionRelPath = '.test-sessions/<run-id>'
     try {
         $wsRoot = Get-WorkspaceRoot
         $RepoRootPath = ($wsRoot -replace '\\', '/')
+
+        # One subdirectory per run: .test-sessions/<run-id>/
+        # Reuse the directory exported by a parent run (bin/test.ps1) so the
+        # session JSON and every scratch artifact of one run land together;
+        # otherwise mint a fresh one and publish it for the processes we spawn.
+        if ($env:BROWSER4_TEST_SESSION_DIR) {
+            $testSessionDir = $env:BROWSER4_TEST_SESSION_DIR
+            if (-not [System.IO.Path]::IsPathRooted($testSessionDir)) {
+                $testSessionDir = Join-Path $wsRoot $testSessionDir
+            }
+            $testSessionDir = [System.IO.Path]::GetFullPath($testSessionDir)
+        } else {
+            $runId = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffffffZ')
+            $testSessionDir = Join-Path (Join-Path $wsRoot '.test-sessions') $runId
+            $env:BROWSER4_TEST_SESSION_DIR = $testSessionDir
+        }
+        # Materialise it: the prompt promises a directory that already exists,
+        # and bin/test.ps1 defers creation to whoever needs it first.
+        if (-not (Test-Path -LiteralPath $testSessionDir -PathType Container)) {
+            $null = New-Item -Path $testSessionDir -ItemType Directory -Force -ErrorAction SilentlyContinue
+        }
+        # Quoted relative to the repo root — the agent is told to work from
+        # there, and relative paths keep issue reports machine-independent.
+        $TestSessionRelPath = ('.test-sessions/' + (Split-Path -Leaf $testSessionDir)) -replace '\\', '/'
     } catch {
         # If Get-WorkspaceRoot fails (e.g. no .git directory found), leave empty
         $RepoRootPath = '<repository-root>'
@@ -117,7 +143,7 @@ You are evaluating the usability, discoverability, and reliability of browser4-c
 Before performing any browser interaction:
 
 0. Verify your working directory is the repository root: ``$RepoRootPath``. If ``pwd`` is anything other than this directory, navigate there immediately with ``cd "$RepoRootPath"``. All browser4-cli commands use ``$cliInvocation`` which works from the repo root — stay in this directory for all commands.
-    **IMPORTANT — Temporary files:** Create ALL temporary, intermediate, and scratch files (scripts, data dumps, HTML snapshots, JSON exports, markdown drafts, log files, etc.) inside `./.test-sessions/` (not the repo root). Before creating any file, ensure the directory exists with `mkdir -p .test-sessions`. Do NOT pollute the repository root with temporary files — every generated file that is not a permanent project asset belongs under `.test-sessions/`.
+    **IMPORTANT — Temporary files:** Create ALL temporary, intermediate, and scratch files (scripts, data dumps, HTML snapshots, JSON exports, markdown drafts, log files, etc.) inside this run's dedicated scratch directory ``$TestSessionRelPath/``. This directory belongs to *this run only* — do not write into the shared ``.test-sessions/`` root next to it, and do not write into the repository root. The directory already exists; if it is missing, create it with ``mkdir -p "$TestSessionRelPath"``. Every generated file that is not a permanent project asset belongs under this run directory.
 1. Run $helpCmd.
 2. Read $skillPath completely.
 3. Learn the available commands, workflows, and conventions directly from the documentation.
