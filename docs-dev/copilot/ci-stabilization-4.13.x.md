@@ -15,9 +15,9 @@
    仍在后台提交链接 → platonai/Browser4#592。
 4. 本轮**修掉 2 个 CI 判定可信度缺口**（超时可被"零失败"洗白、一轮只暴露一个失败模块），
    并**更正了排除清单的误判**（见 §6）。
-5. 当前 CI 状态：`v4.13.18-ci.3` CI/CD Pipeline **success**；加固后的 **`v4.13.18-ci.4` success**
-   （2047 个用例、0 失败，`CrawlFixtureMetadataTest` 第三轮连续通过：207.2 s），同轮
-   Cross-Platform Smoke Test 也是 success。
+5. 当前 CI 状态（本轮结束时）：**`v4.13.18-ci.6` CI/CD Pipeline success**（2049 用例 / 0 失败，
+   `TestLoadResources` 4.5 s 通过、新增驱动池用例 2/0）+ 同轮 Cross-Platform Smoke Test success；
+   此前 `ci.3`、`ci.4` 亦为 success，`ci.5` 的唯一红点已定位并修复（§3.1、§9）。
 
 ---
 
@@ -76,6 +76,7 @@ Maven 默认在第一个失败模块停止（CI 没有 `-fae` / `-Dmaven.test.fa
 | （以上全部） | — | — | **ci.3 全绿 ✅** |
 | **CI 判定加固 + 文档**（见 §2、§7） | 提交 `efc650490a` | — | **ci.4 全绿 ✅**（`Total 2047 / Failed 0 / Passed 1991 / Skipped 56`，26m13s；Cross-Platform Smoke Test 同轮 success） |
 | 排除列表语义注释 | 提交 `39779e079c` | — | ci.5 红 ❌（见 §3.1） |
+| **驱动池分片轮询修复**（§9，提交 `2671e1574d`）+ 报告 | 提交 `f3c1a6202c` | — | **ci.6 全绿 ✅**（`Total 2049 / Failed 0 / Passed 1993`，26m+；`TestLoadResources` 4.522 s 通过、`LoadingWebDriverPoolTest` 2/0；Cross-Platform Smoke Test 同轮 success） |
 
 ### 3.1 ci.5 的 flaky 失败：`TestLoadResources.testLoadResource`
 
@@ -98,7 +99,13 @@ org.opentest4j.AssertionFailedError: http://127.0.0.1:32769/json
   代码差异只有工作流注释和文档，不可能影响该测试。
 * 处置：`monitor-ci.ps1` 自动落了 coworker 任务 `fix-ci-yml-tag-failure.md`（提取到的失败类
   `FAILED_LIST="ai.platon.pulsar.browser.TestLoadResources"` 明确），已由提交 `2671e1574d` 修复
-  ——机制反推与对照实验见 §9；本轮对修复做了**独立复核**（见 §7 末行），再用 ci.6 做端到端验证。
+  ——机制反推与对照实验见 §9；本轮对修复做了**独立复核**（见 §7 末行），ci.6 完成端到端验证。
+* **ci.6 端到端验证（决定性证据）**：`TestLoadResources` 变成 `Tests run: 3, Failures: 0, Errors: 0,
+  Skipped: 1`，耗时从 63.16 s 降到 **4.522 s**；更关键的是 ci.6 日志里**同一条件再次出现**——
+  14:44:21（正是该用例执行窗口内）打出
+  `LoadingWebDriverPool - The system is over the critical load, will not create a new driver`，
+  也就是说守卫那次确实又拒绝了创建，而修复后 `poll` 在负载恢复后立刻拿到 driver，不再空等 60 s。
+  新增的 `LoadingWebDriverPoolTest` 在 CI 上 `Tests run: 2, Failures: 0`（3.015 s）。
 * 顺带发现：`monitor-ci.ps1` 的错误提取抓的是 `Check Test Status`（汇报步骤）而不是真正的
   `[ERROR] ... FAILURE` 行，生成的任务正文里前 3 个 block 都是汇报脚本；建议后续改为优先提取
   `FAILED_LIST=` / `[ERROR] Tests run: ... Failures: [1-9]` / `<<< FAILURE!` 行（见 §8.5）。
@@ -182,6 +189,23 @@ org.opentest4j.AssertionFailedError: http://127.0.0.1:32769/json
 | `AgenticContextTest` / `AgentFileSystemTest` / `AgentShellTest` / `AgentEventBusTest` / `RobustBrowserAgentTest` | 3 / 44 / 52 / 10 / 1，全部 0 失败 ✅（4.14 分支上曾红的 `browser4-agentic` 系列在本分支全绿） |
 | `CrawlFixtureMetadataTest` | ❌ 唯一失败点，见上 |
 
+### 5.2 本地与 CI 的用例数口径差异（未完全解释，已列为核查项）
+
+| 模块 | 本地全量 | CI ci.4 | 差 |
+|---|---|---|---|
+| browser4-agentic | 957 | 664 | −293 |
+| browser4-rest | 331 | 244 | −87 |
+| browser4-browser | 266 | 223 | −43 |
+| browser4-skeleton | 393 | 359 | −34 |
+| 其余 12 个有测试的模块 | 557 | 557 | 0 |
+| **合计** | **2504** | **2047** | **−457** |
+
+两边失败数都是 0，不影响本轮结论；但"本地跑得到、CI 跑不到"本身是一类潜在假绿。
+已排除"整类没跑"是主因：`browser4-agentic` 在 CI 的 surefire 报告里只缺 2 个仓库中存在的类
+（`AgentStateManagerPersistenceTest`、`Browser4MCPServerE2ETest`），撑不起 −293。
+建议按 §8.2 的模块/类覆盖对比把口径钉死（例如 JDK 17 vs GraalVM 25、`@Nested` 计数方式、
+平台条件裁剪）。
+
 ## 6. tag / 排除清单核对（更正早期判断）
 
 `AGENTS.md` 原文只写"CI 排除 `Slow`/`Heavy`/`Integration`/`E2E`/`SDK`/`Requires*`/`ManualOnly`"，
@@ -223,23 +247,6 @@ root `pom.xml` 的默认值是"排除所有非 Fast"：
   `excludedGroups` 排除，surefire 给出 `Tests run: 0` **且退出码 0** —— 静默通过，极易误判为"通过"。
   复跑单类的完整命令见 `docs/TESTING.md`。
 
-### 5.2 本地与 CI 的用例数口径差异（未完全解释，已列为核查项）
-
-| 模块 | 本地全量 | CI ci.4 | 差 |
-|---|---|---|---|
-| browser4-agentic | 957 | 664 | −293 |
-| browser4-rest | 331 | 244 | −87 |
-| browser4-browser | 266 | 223 | −43 |
-| browser4-skeleton | 393 | 359 | −34 |
-| 其余 12 个有测试的模块 | 557 | 557 | 0 |
-| **合计** | **2504** | **2047** | **−457** |
-
-两边失败数都是 0，不影响本轮结论；但"本地跑得到、CI 跑不到"本身是一类潜在假绿。
-已排除"整类没跑"是主因：`browser4-agentic` 在 CI 的 surefire 报告里只缺 2 个仓库中存在的类
-（`AgentStateManagerPersistenceTest`、`Browser4MCPServerE2ETest`），撑不起 −293。
-建议按 §8.2 的模块/类覆盖对比把口径钉死（例如 JDK 17 vs GraalVM 25、`@Nested` 计数方式、
-平台条件裁剪）。
-
 ## 7. 本轮改动
 
 | 文件 | 改动 | 验证 |
@@ -267,7 +274,9 @@ root `pom.xml` 的默认值是"排除所有非 Fast"：
    `<<< FAILURE! -- in <class>`、`[ERROR] <class>.<method> -- Time elapsed: ... <<< FAILURE!`、
    `FAILED_LIST="..."` 都不识别，于是自动任务里没有 `## Failing Tests` 段、正文被汇报步骤淹没。
    建议给 Pass 1 补这三条模式（`bin/ci/tests/monitor-ci.tests.ps1` 可直接加用例；`bin/release/monitor-release.ps1`
-   有同名函数的副本，需同步）。本轮**只记录不改**，以免在最终验证轮引入脚本改动。
+   有同名函数的副本，需同步）。本轮**只记录不改**，原因有二：一是避免在最终验证轮引入脚本改动；
+   二是 `.github/workflows/ps1-tests.yml` **只在 `main` 的每日 cron 上跑**（不响应 push/tag），
+   4.13.x 上的 `.ps1` 改动实际上拿不到 CI 覆盖，只能在本地跑 Pester（`pwsh bin/ci/tests/monitor-ci.tests.ps1`）。
 6. `TestLoadResources.testLoadResource`（§3.1/§9）修复后仍需观察：它依赖 `/json` 这类非 HTML 资源的
    抓取，若 ci.6 再红，优先看 `Driver pool is exhausted` 与 `over the critical load` 两条日志。
 
@@ -320,3 +329,22 @@ root `pom.xml` 的默认值是"排除所有非 Fast"：
   不会误报。
 - 全模块：`./mvnw -ntp -o -pl browser4-core/browser4-protocol test`
   → `Tests run: 82, Failures: 0, Errors: 0, Skipped: 2`，BUILD SUCCESS。
+
+### 9.4 独立复核（本轮排查方，非修复方）
+
+同一提交在**更宽的模块面**上重跑（`-pl browser4-core/browser4-protocol,browser4-core/browser4-browser,browser4-rest -am`，
+CI 同款开关：`-Dsurefire.excludes=**integration**` + 同款 `excludedGroups` + `-DrunITs=true`）：
+
+| 模块 | 用例 | 失败 |
+|---|---|---|
+| Browser4 Protocol | 82（新增 2：`LoadingWebDriverPoolTest`，显示名 "LoadingWebDriverPool polling"，4.008 s） | 0 |
+| Browser4 Agentic | 957 | 0 |
+| Browser4 Skeleton | 393 | 0 |
+| Browser4 Rest | 331 | 0 |
+| Browser4 Browser | 266 | 0 |
+| 其余 8 个模块（Common/Parse/Agent Tools/Boot 等） | 103 | 0 |
+| **合计** | **2132** | **0** |
+
+`Browser4 Protocol` 由 80 增至 82，其余模块计数与修复前完全一致（无副作用）；新增的诊断日志
+`The system is over the critical load, will not create a new driver` 在日志中可见。
+端到端由 ci.6（tag `v4.13.18-ci.6`，提交 `f3c1a6202c`）验证。
