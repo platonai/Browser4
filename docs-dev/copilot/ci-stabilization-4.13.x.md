@@ -15,7 +15,9 @@
    仍在后台提交链接 → platonai/Browser4#592。
 4. 本轮**修掉 2 个 CI 判定可信度缺口**（超时可被"零失败"洗白、一轮只暴露一个失败模块），
    并**更正了排除清单的误判**（见 §6）。
-5. 当前 CI 状态：`v4.13.18-ci.3` CI/CD Pipeline **success**、Cross-Platform Smoke Test **success**。
+5. 当前 CI 状态：`v4.13.18-ci.3` CI/CD Pipeline **success**；加固后的 **`v4.13.18-ci.4` success**
+   （2047 个用例、0 失败，`CrawlFixtureMetadataTest` 第三轮连续通过：207.2 s），同轮
+   Cross-Platform Smoke Test 也是 success。
 
 ---
 
@@ -72,6 +74,8 @@ Maven 默认在第一个失败模块停止（CI 没有 `-fae` / `-Dmaven.test.fa
 | `CrawlFixtureMetadataTest`（browser4-rest-tests） | 测试侧缺陷：客户端 Jackson 缺 Kotlin module，轮询永远读到默认 `CREATED`（4.14 修过，未回灌 4.13.x） | `cae4042735` | ci.1 红 |
 | `PulsarSessionTests.testLoadLocalFile`（pulsar-it-tests） | **真缺陷**：快照 origin 守卫不认 `file://` 翻译（无重定向、无 main request），本地文件抓取被拒 | `4d0af69110` | ci.2 红 |
 | （以上全部） | — | — | **ci.3 全绿 ✅** |
+| **CI 判定加固 + 文档**（见 §2、§7） | 提交 `efc650490a` | — | **ci.4 全绿 ✅**（`Total 2047 / Failed 0 / Passed 1991 / Skipped 56`，26m13s；Cross-Platform Smoke Test 同轮 success） |
+| 排除列表语义注释 | 提交 `39779e079c` | — | ci.5（仅注释差异，见 §7） |
 
 ## 4. 本地"一次跑全"的复现命令
 
@@ -141,6 +145,16 @@ Maven 默认在第一个失败模块停止（CI 没有 `-fae` / `-Dmaven.test.fa
   而 `CrawlResponse.status = OK`，没有"失败页"字段可查；
 * 任务终态也不等于工作结束：`18:00:58.749 Crawl task 69f2b470 completed: 8 pages`，之后
   `18:03:30.261 ... submitted 2 links at depth 2`（+2m31s），与下一次 crawl 重叠。
+
+### 5.1 历史红点在本分支的逐个复核（同一份本地日志）
+
+| 曾经在 tag/分支 CI 上红的类 | 本次本地全量结果 |
+|---|---|
+| `ExtensionWebSocketHandlerTest`（browser4-rest） | `Tests run: 9, Failures: 0` ✅ |
+| `PulsarSessionTests`（含 ci.2 的 `testLoadLocalFile`） | `Tests run: 4, Failures: 0, Skipped: 0` ✅ |
+| `HTMLSnapshotToolExecutorTest`（browser4-rest） | `Tests run: 18, Failures: 0` ✅ |
+| `AgenticContextTest` / `AgentFileSystemTest` / `AgentShellTest` / `AgentEventBusTest` / `RobustBrowserAgentTest` | 3 / 44 / 52 / 10 / 1，全部 0 失败 ✅（4.14 分支上曾红的 `browser4-agentic` 系列在本分支全绿） |
+| `CrawlFixtureMetadataTest` | ❌ 唯一失败点，见上 |
 
 ## 6. tag / 排除清单核对（更正早期判断）
 
