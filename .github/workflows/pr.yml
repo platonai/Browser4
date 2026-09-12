@@ -97,6 +97,11 @@ jobs:
         with:
           # quality-gate profile activates JaCoCo prepare-agent + report + check
           # (see pom.xml). All non-fast tags are excluded to keep the PR fast.
+          #
+          # NOTE: excluded_groups REPLACES the root pom's <surefire.excludedGroups>
+          # default, it does not extend it — so every tag to skip has to be listed
+          # here. This list intentionally mirrors the pom default (i.e. "exclude
+          # everything that is not Fast"); dropping a tag re-enables those tests.
           maven_profiles: 'all-main-modules,quality-gate'
           excluded_groups: 'ManualOnly,RequiresAI,E2E,E2ETest,Slow,Heavy,HeavyTest,Integration,IntegrationTest,RequiresServer,RequiresBrowser,RequiresDocker,TestInfraCheck'
           timeout_minutes: '25'

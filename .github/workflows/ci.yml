@@ -109,6 +109,14 @@ jobs:
         uses: ./.github/actions/run-tests
         with:
           maven_profiles: 'all-main-modules,all-test-modules'
+          # NOTE: excluded_groups REPLACES the root pom's <surefire.excludedGroups>
+          # default, it does not extend it. Compared with that default
+          # (Slow,Heavy,RequiresServer,RequiresBrowser,RequiresAI,RequiresDocker,
+          #  Integration,E2E,ManualOnly,TestInfraCheck,IntegrationTest,E2ETest,HeavyTest)
+          # this short list deliberately re-enables Integration/IntegrationTest/
+          # Heavy/Requires* so the pipeline also covers the integration and
+          # infrastructure suite (Chrome, Docker and the started app are available
+          # here). See docs-dev/copilot/ci-stabilization-4.13.x.md before editing.
           excluded_groups: 'ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck'
           timeout_minutes: '35'
 
