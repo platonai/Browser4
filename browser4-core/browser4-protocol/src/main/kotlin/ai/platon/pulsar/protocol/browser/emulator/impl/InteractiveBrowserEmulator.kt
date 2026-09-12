@@ -477,6 +477,8 @@ open class InteractiveBrowserEmulator(
      * Capture the document this fetch produced — origin and content together —
      * and return its serialized HTML only when the snapshot's origin is the
      * document this navigation produced, or an unambiguous redirect of it.
+     * A local-file fetch is recognised through the driver's own `file://`
+     * translation of the requested path (see [UrlDocumentMatcher.referToSameLocalFile]).
      *
      * Content crossing (page N recorded with page M's title/contentLength)
      * happens when a fetch captures the document of an earlier fetch that is
@@ -518,6 +520,19 @@ open class InteractiveBrowserEmulator(
         val committedUrl = snapshot.origin.trim()
         if (committedUrl.isEmpty() || committedUrl == "null") return null
         if (urlsReferToSameDocument(committedUrl, taskUrl)) return snapshot.html
+        // A local-file fetch is served by the driver's own translation to the
+        // file:// URL of the requested path, so the committed document matches
+        // it as a URL only through that translation: no redirect, no
+        // main-document request.  Accept the snapshot when the committed
+        // document is exactly the file this fetch encoded.
+        if (urlsReferToSameLocalFile(committedUrl, taskUrl)) {
+            logger.debug(
+                "Snapshot origin verified: shows '{}' for local-file fetch '{}' — the " +
+                    "driver's own file:// translation of the requested path",
+                committedUrl, taskUrl
+            )
+            return snapshot.html
+        }
         if (!isNavigablePageUrl(committedUrl)) {
             // The snapshot shows a non-navigable document (e.g. about:blank on a
             // fresh driver).  Its content is empty or an error page, never
@@ -624,6 +639,15 @@ open class InteractiveBrowserEmulator(
      */
     private fun urlsReferToSamePageIgnoringQuery(a: String, b: String): Boolean =
         UrlDocumentMatcher.referToSamePageIgnoringQuery(a, b)
+
+    /**
+     * Whether the committed document is the local file a local-file fetch asked
+     * for, served by the driver's own `file://` translation of the URL.
+     *
+     * @see UrlDocumentMatcher.referToSameLocalFile
+     */
+    private fun urlsReferToSameLocalFile(committedUrl: String, taskUrl: String): Boolean =
+        UrlDocumentMatcher.referToSameLocalFile(committedUrl, taskUrl)
 
     @Throws(NavigateTaskCancellationException::class, WebDriverException::class)
     private suspend fun navigateAndInteract(
