@@ -50,7 +50,8 @@
 
 .PARAMETER Force
   Force reinstallation even if the binary is already installed at the target path.
-  Overrides -SkipIfInstalled and bypasses locked-file workarounds.
+  Overrides -SkipIfInstalled (the locked-file workaround in Set-BinaryFile is
+  always attempted, with or without this switch).
 
 .PARAMETER SkipBackend
   Skip installing/upgrading the Browser4 backend (runtime bundle).
@@ -114,6 +115,17 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# Windows PowerShell 5.1 on an older .NET defaults to TLS 1.0, which GitHub and
+# the OSS mirror both refuse ("Could not create SSL/TLS secure channel").  Pin
+# 1.2 when the runtime offers it; PowerShell 6+ already negotiates correctly.
+if ($PSVersionTable.PSVersion.Major -lt 6) {
+    try {
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+    } catch {
+        # Runtime without TLS 1.2 support -- keep its default
+    }
+}
 
 # ----------------------------------------------
 # Script location -- find ourselves on disk
@@ -280,14 +292,26 @@ function Test-ChinaLocale {
         return $true
     }
 
-    # 3 -- .NET TimeZoneInfo (works on Windows and Unix PowerShell 7+)
+    # 3 -- .NET TimeZoneInfo (works on Windows and Unix PowerShell 7+).
+    # Windows reports Windows ids ("China Standard Time"); the IANA ids only
+    # appear on Unix, so matching IANA alone made this branch dead on Windows.
     try {
         $tzId = [System.TimeZoneInfo]::Local.Id
-        if ($tzId -match '^Asia/(Shanghai|Chongqing|Urumqi|Harbin)$') {
+        if ($tzId -eq 'China Standard Time' -or $tzId -match '^Asia/(Shanghai|Chongqing|Urumqi|Harbin)$') {
             return $true
         }
     } catch {
         # TimeZoneInfo not available (unlikely on PS 5.1+ but guard anyway)
+    }
+
+    # 3b -- current culture: a Chinese Windows install reports zh-CN even when
+    # no locale environment variables are set.
+    try {
+        if ([System.Globalization.CultureInfo]::CurrentCulture.Name -match '^zh-(CN|Hans)') {
+            return $true
+        }
+    } catch {
+        # Culture lookup failed -- not fatal
     }
 
     # 4 -- /etc/timezone (PowerShell on Linux/macOS)
@@ -345,6 +369,43 @@ function Get-DownloadUrls {
     return $urls
 }
 
+<#
+.SYNOPSIS
+  Check that a downloaded file really is a native executable.
+  Magic bytes are the cheapest integrity signal that needs no network and no
+  published checksum file: an HTML error page or a truncated body that happens
+  to be larger than the size threshold is rejected here.
+#>
+function Test-BinaryMagic {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) { return $false }
+    # Read exactly four bytes through .NET: works on 5.1 and 7.x alike
+    # (Get-Content -Encoding Byte is gone in PowerShell 7).
+    $bytes = New-Object byte[] 4
+    $read = 0
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        try {
+            $read = $stream.Read($bytes, 0, 4)
+        } finally {
+            $stream.Dispose()
+        }
+    } catch {
+        return $false
+    }
+    if ($read -lt 4) { return $false }
+
+    $magic = ($bytes | ForEach-Object { $_.ToString('x2') }) -join ''
+
+    switch -Regex ($magic) {
+        '^7f454c46' { return $true }   # ELF (linux glibc / musl)
+        '^4d5a'     { return $true }   # PE / MZ (windows)
+        '^(feedface|feedfacf|cefaedfe|cffaedfe|cafebabe)$' { return $true }  # Mach-O, incl. fat
+        default     { return $false }
+    }
+}
+
 function Invoke-Download {
     param([string]$Url, [string]$OutFile, [string]$Label)
 
@@ -359,12 +420,16 @@ function Invoke-Download {
     try {
         $ProgressPreference = if ($Silent) { "SilentlyContinue" } else { "Continue" }
 
-        # Use Invoke-WebRequest with progress bar
         Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
 
         if (Test-Path $OutFile) {
             $size = (Get-Item $OutFile).Length
             if ($size -gt 102400) {  # > 100 KB minimum
+                if (-not (Test-BinaryMagic -Path $OutFile)) {
+                    Write-WarnMsg "Downloaded file is not a native executable (bad magic bytes) -- refusing it"
+                    Remove-Item $OutFile -Force -ErrorAction SilentlyContinue
+                    return $false
+                }
                 Write-Check "Downloaded $( [math]::Round($size / 1MB, 1) ) MB"
                 return $true
             } else {
@@ -586,29 +651,39 @@ function Add-DirectoryToUserPath {
 
     $dirResolved = (Resolve-Path $Dir -ErrorAction SilentlyContinue).Path
     if (-not $dirResolved) { $dirResolved = $Dir }
+    # Trailing separators would defeat the duplicate check below.
+    $dirResolved = $dirResolved.TrimEnd('\', '/')
 
     # Read current user PATH
     $currentUserPath = [System.Environment]::GetEnvironmentVariable("Path", [System.EnvironmentVariableTarget]::User)
     $paths = if ($currentUserPath) { $currentUserPath -split ";" | Where-Object { $_ } } else { @() }
 
-    # Check if already present
-    $normalized = $paths | ForEach-Object { $rp = Resolve-Path $_ -ErrorAction SilentlyContinue; if ($rp) { $rp.Path } else { $_ } }
-    if ($normalized -contains $dirResolved) {
-        Write-Check "Already in user PATH: $Dir"
+    # Check if already present. Compare normalized, case-insensitively: Windows
+    # paths differ in case, a relative entry has to be resolved first, and a
+    # trailing separator is not a different directory.
+    $normalized = $paths | ForEach-Object {
+        $rp = Resolve-Path $_ -ErrorAction SilentlyContinue
+        $p = if ($rp) { $rp.Path } else { $_ }
+        $p.TrimEnd('\', '/')
+    }
+    if ($normalized | Where-Object { $_.Equals($dirResolved, [System.StringComparison]::OrdinalIgnoreCase) }) {
+        Write-Check "Already in user PATH: $dirResolved"
         return
     }
 
     if ($DryRun) {
-        Write-Check "[DRY-RUN] Would add to user PATH: $Dir"
+        Write-Check "[DRY-RUN] Would add to user PATH: $dirResolved"
         return
     }
 
-    $newPath = if ($currentUserPath) { "$currentUserPath;$Dir" } else { $Dir }
+    # Append the resolved absolute path: `-InstallDir .\b4` used to write a
+    # relative entry into the persistent user PATH.
+    $newPath = if ($currentUserPath) { "$currentUserPath;$dirResolved" } else { $dirResolved }
     [System.Environment]::SetEnvironmentVariable("Path", $newPath, [System.EnvironmentVariableTarget]::User)
-    Write-Check "Added to user PATH: $Dir"
+    Write-Check "Added to user PATH: $dirResolved"
 
     # Also update current session
-    $env:Path = "$env:Path;$Dir"
+    $env:Path = "$env:Path;$dirResolved"
 }
 
 # ----------------------------------------------
@@ -622,10 +697,16 @@ function Add-DirectoryToUserPath {
 #>
 function Get-BackendAction {
     param([string]$StatusOutput)
-    if ($StatusOutput -match 'Installed bundle: not installed') {
+    # Only a status that positively reports an installed bundle means upgrade.
+    # An empty status (no CLI yet, or `status` itself failed) must not turn a
+    # fresh machine into an `upgrade`.
+    if ($StatusOutput -match 'Installed bundle:\s*not installed') {
         return "install"
     }
-    return "upgrade"
+    if ($StatusOutput -match 'Installed bundle:') {
+        return "upgrade"
+    }
+    return "install"
 }
 
 <#
@@ -635,27 +716,33 @@ function Get-BackendAction {
     - no backend installed yet -> browser4-cli install
     - backend already present  -> browser4-cli upgrade (to the latest)
   Passes -Version through as --tag so the backend matches the CLI version.
-  Non-fatal: failures print guidance and leave the CLI usable.
+  Returns $true when the backend is in place (or was skipped on request) and
+  $false when the step failed -- the caller turns that into the exit code, so a
+  broken backend is visible to scripts even though the CLI stays usable.
 #>
 function Install-Backend {
     param([string]$CliPath, [string]$Tag)
 
     if ($SkipBackend) {
         Write-Step "Skipping backend install/upgrade (-SkipBackend)"
-        return
+        return $true
     }
 
     Write-Step "Checking for an existing Browser4 backend..."
 
-    $statusOutput = ""
-    try {
-        $statusOutput = (& $CliPath status 2>&1 | Out-String)
-    } catch {
-        # Binary missing or not runnable yet (e.g. --dry-run) -- fall through.
+    # -DryRun must not touch the installed CLI at all: ask what would happen
+    # instead of running `status`.
+    $action = "install"
+    if (-not $DryRun) {
         $statusOutput = ""
+        try {
+            $statusOutput = (& $CliPath status 2>&1 | Out-String)
+        } catch {
+            # Binary missing or not runnable -- treat as "no backend yet".
+            $statusOutput = ""
+        }
+        $action = Get-BackendAction -StatusOutput $statusOutput
     }
-
-    $action = Get-BackendAction -StatusOutput $statusOutput
 
     $backendArgs = @($action)
     if ($Tag) { $backendArgs += @('--tag', $Tag) }
@@ -668,9 +755,10 @@ function Install-Backend {
 
     if ($DryRun) {
         Write-Check "[DRY-RUN] Would run: $CliPath $($backendArgs -join ' ')"
-        return
+        return $true
     }
 
+    $backendOk = $false
     if ($Silent) {
         $backendOutput = ""
         try {
@@ -678,7 +766,8 @@ function Install-Backend {
         } catch {
             $backendOutput = $_.Exception.Message
         }
-        if ($LASTEXITCODE -eq 0) {
+        $backendOk = ($LASTEXITCODE -eq 0)
+        if ($backendOk) {
             Write-Check "Backend $action succeeded ($($backendArgs -join ' '))."
         } else {
             Write-WarnMsg "Backend $action failed ($($backendArgs -join ' ')). Retry with: browser4-cli $($backendArgs -join ' ')"
@@ -686,12 +775,15 @@ function Install-Backend {
         }
     } else {
         & $CliPath @backendArgs
-        if ($LASTEXITCODE -eq 0) {
+        $backendOk = ($LASTEXITCODE -eq 0)
+        if ($backendOk) {
             Write-Check "Backend $action succeeded ($($backendArgs -join ' '))."
         } else {
             Write-WarnMsg "Backend $action failed ($($backendArgs -join ' ')). Retry with: browser4-cli $($backendArgs -join ' ')"
         }
     }
+
+    return $backendOk
 }
 
 # ----------------------------------------------
@@ -703,6 +795,19 @@ function Main {
     Write-Summary "    browser4-cli Installer" -Color Cyan
     Write-Summary "==========================================" -Color Cyan
     Write-Summary ""
+
+    # Validate -Version before it is interpolated into a download URL: a value
+    # like '../../evil' used to produce a valid-looking URL and also reached
+    # `--tag`.  A bare semver gets the 'v' prefix, as in the Unix installer.
+    if ($Version) {
+        if ($Version -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
+            throw "-Version must be a release tag such as v4.13.18 (got '$Version')"
+        }
+        if ($Version -match '^[0-9]+\.[0-9]+\.[0-9]+') {
+            Write-Step "Using release tag 'v$Version' (release tags are prefixed with 'v')"
+            $Version = "v$Version"
+        }
+    }
 
     # Auto-detect China mainland locale when no explicit source is given
     if (-not $Source) {
@@ -723,7 +828,7 @@ function Main {
         Write-Step "Script dir:       $ScriptDir"
         Write-Step "Platform key:     $platformKey"
         Write-Step "Binary name:      $binaryName"
-        Write-Step "Default install:  $(Get-DefaultInstallDir)"
+        Write-Step "Default install:  $(if ($InstallDir) { $InstallDir } else { Get-DefaultInstallDir })"
         Write-Step "China locale:     $script:ChinaDetected"
         Write-Step "Source override:  $(if ($Source) { $Source } else { 'auto' })"
         Write-Step "OS:               $(if ($script:OSWin) { 'Windows' } elseif ($script:OSMac) { 'macOS' } elseif ($script:OSLinux) { 'Linux' } else { 'Unknown' })"
@@ -810,18 +915,20 @@ function Main {
         }
 
         $downloaded = $false
+        # The temp file is always cleaned up, including on -DryRun (where the
+        # download never consumes it) and on the failure path.
         $tempFile = [System.IO.Path]::GetTempFileName()
 
-        foreach ($entry in $urls) {
-            if (Invoke-Download -Url $entry.Url -OutFile $tempFile -Label $entry.Label) {
-                $downloaded = $true
-                break
+        try {
+            foreach ($entry in $urls) {
+                if (Invoke-Download -Url $entry.Url -OutFile $tempFile -Label $entry.Label) {
+                    $downloaded = $true
+                    break
+                }
             }
-        }
 
-        if (-not $downloaded) {
-            if (Test-Path $tempFile) { Remove-Item $tempFile -Force }
-            throw @"
+            if (-not $downloaded) {
+                throw @"
 Could not download browser4-cli binary.
 
 Tried:
@@ -833,13 +940,16 @@ Please check:
   - For GitHub rate limits, set GITHUB_TOKEN environment variable
   - If you have a local copy, place it alongside this script and re-run
 "@
-        }
+            }
 
-        # Move from temp to install dir
-        if (-not $DryRun) {
-            Set-BinaryFile -TargetPath $binaryPath -SourcePath $tempFile -Move
+            # Move from temp to install dir
+            if (-not $DryRun) {
+                Set-BinaryFile -TargetPath $binaryPath -SourcePath $tempFile -Move
+            }
+            Write-Check "Installed: $binaryPath"
+        } finally {
+            if (Test-Path $tempFile) { Remove-Item $tempFile -Force -ErrorAction SilentlyContinue }
         }
-        Write-Check "Installed: $binaryPath"
     }
 
     # On Unix, ensure executable bit
@@ -875,16 +985,28 @@ Please check:
         }
     }
 
-    # Verify
+    # Verify.  A binary that cannot report its version is a failed install --
+    # report it red and exit non-zero instead of printing a green success line.
     Write-Summary ""
+    $script:ExitCode = 0
     if (-not $DryRun) {
+        $versionOutput = ""
+        $versionOk = $false
         try {
-            $versionOutput = & $binaryPath --version 2>&1
+            $versionOutput = (& $binaryPath --version 2>&1 | Out-String).Trim()
+            $versionOk = ($LASTEXITCODE -eq 0) -and ($versionOutput -match '\d')
+        } catch {
+            $versionOk = $false
+        }
+
+        if ($versionOk) {
             Write-Summary "[v] browser4-cli installed successfully" -Color Green
             Write-Summary "  Version: $versionOutput"
-        } catch {
-            Write-Summary "[v] Binary installed at: $binaryPath" -Color Green
-            Write-WarnMsg "Could not verify --version (this is normal on first install)"
+        } else {
+            Write-Summary "[x] Installed $binaryPath but it cannot run:" -Color Red
+            Write-Summary "  $versionOutput"
+            Write-WarnMsg "The binary may be corrupt or built for a different platform. Delete it and re-run the installer."
+            $script:ExitCode = 1
         }
     } else {
         Write-Summary "[DRY-RUN] Installation plan complete" -Color Yellow
@@ -893,8 +1015,12 @@ Please check:
     # Install / upgrade the Browser4 backend (runtime bundle) using the CLI
     # binary we just installed.  Fresh machines get `browser4-cli install`;
     # machines that already have a backend get `browser4-cli upgrade`.
+    # A backend failure keeps the CLI usable but must be visible to scripts
+    # and CI, so it is reflected in the exit code.
     Write-Summary ""
-    Install-Backend -CliPath $binaryPath -Tag $Version
+    if ((Install-Backend -CliPath $binaryPath -Tag $Version) -eq $false) {
+        $script:ExitCode = 1
+    }
 
     Write-Summary ""
     Write-Summary "Run 'browser4-cli --help' to get started." -Color Cyan
@@ -903,6 +1029,8 @@ Please check:
         Write-Summary "If the command isn't found, restart your terminal or run:"
         Write-Summary "  `$env:Path = [System.Environment]::GetEnvironmentVariable('Path','User') + ';' + [System.Environment]::GetEnvironmentVariable('Path','Machine')"
     }
+
+    exit $script:ExitCode
 }
 
 Main

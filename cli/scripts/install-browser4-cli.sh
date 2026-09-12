@@ -55,10 +55,40 @@ SCRIPT_DIR=""
 # ----------------------------------------------
 
 say()    { if [[ "$SILENT" != true ]]; then echo -e "$*"; fi; }
+# Informational note for helpers whose stdout is captured by the caller --
+# anything these functions print on stdout ends up inside the captured value.
+note()   { if [[ "$SILENT" != true ]]; then echo -e "    [i] $*" >&2; fi; }
 step()   { say "  -> $*"; }
 ok()     { say "    [v] $*"; }
 warn()   { say "    [!] $*" >&2; }
 die()    { echo "ERROR: $*" >&2; exit 1; }
+
+# Validate the value that must follow an option.  A missing value and a value
+# that is really the next option are both rejected: `--version --dry-run` used
+# to install the literal tag "--dry-run" (and `--install-dir --silent` created
+# a directory called "--silent"), which fails much later with a confusing 404.
+# Runs in the current shell so `die` really stops the installer -- a `die`
+# inside `$( ... )` only kills the subshell and the install would continue.
+validate_value() {
+  local flag="$1" value="${2:-}"
+  if [[ -z "$value" ]]; then
+    die "$flag requires a value"
+  fi
+  if [[ "$value" == -* ]]; then
+    die "$flag requires a value (got '$value', which looks like another option)"
+  fi
+}
+
+# Release tags on GitHub are prefixed with "v" (v4.13.18).  Accepting a bare
+# "4.13.18" and fixing it up front is friendlier than a 404 from the CDN.
+normalize_tag() {
+  local tag="$1"
+  if [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+    note "Using release tag 'v$tag' (release tags are prefixed with 'v')"
+    tag="v$tag"
+  fi
+  printf '%s' "$tag"
+}
 
 color_cyan='\033[0;36m'
 color_green='\033[0;32m'
@@ -157,13 +187,12 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version|-v)
-      shift; [[ -z "${1:-}" ]] && die "--version requires a value"
-      VERSION="$1"; shift ;;
+      shift; validate_value "--version" "${1:-}"; VERSION=$(normalize_tag "$1"); shift ;;
     --install-dir|-d)
-      shift; [[ -z "${1:-}" ]] && die "--install-dir requires a value"
-      INSTALL_DIR="$1"; shift ;;
+      shift; validate_value "--install-dir" "${1:-}"; INSTALL_DIR="$1"; shift ;;
     --source)
-      shift; [[ -z "${1:-}" ]] && die "--source requires a value"
+      shift
+      validate_value "--source" "${1:-}"
       if [[ "$1" != "github" && "$1" != "oss" ]]; then
         die "--source must be 'github' or 'oss'"
       fi
@@ -316,7 +345,7 @@ get_default_install_dir() {
 
 check_commands() {
   local missing=()
-  for cmd in curl mktemp stat awk grep ln mkdir chmod; do
+  for cmd in curl mktemp stat awk grep ln mkdir chmod od cp mv tail cat; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
       missing+=("$cmd")
     fi
@@ -324,6 +353,21 @@ check_commands() {
   if [[ ${#missing[@]} -gt 0 ]]; then
     die "Required command(s) not found: ${missing[*]}. Install them and retry."
   fi
+}
+
+# A downloaded file must really be a native executable, not an HTML error page
+# or a wrong-architecture body that happens to be large.  Magic bytes are the
+# cheapest check that needs no network and no published checksum file.
+verify_binary_magic() {
+  local path="$1"
+  local magic
+  magic=$(od -An -tx1 -N4 "$path" 2>/dev/null | tr -d ' \n')
+  case "$magic" in
+    7f454c46) return 0 ;;                                     # ELF (linux glibc/musl)
+    4d5a*) return 0 ;;                                        # PE / MZ (windows)
+    feedface|feedfacf|cefaedfe|cffaedfe|cafebabe) return 0 ;;  # Mach-O, incl. fat
+    *) return 1 ;;
+  esac
 }
 
 get_download_urls() {
@@ -374,8 +418,15 @@ download_file() {
   curl_stderr=$(mktemp)
   local http_code curl_exit
 
+  # Only GitHub needs (and only GitHub may receive) the token: the same header
+  # must never be sent to the Aliyun OSS mirror.
+  local -a auth_args=()
+  if [[ -n "${GITHUB_TOKEN:-}" ]] && [[ "$url" == https://github.com/* ]]; then
+    auth_args=(-H "Authorization: Bearer $GITHUB_TOKEN")
+  fi
+
   http_code=$(curl -sSfL -w "%{http_code}" -o "$dest" \
-    ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} \
+    ${auth_args[@]+"${auth_args[@]}"} \
     "$url" 2>"$curl_stderr")
   curl_exit=$?
 
@@ -398,6 +449,11 @@ download_file() {
 
     # Sanity check: binary must be > 100 KB
     if [[ "$size" -gt 102400 ]]; then
+      if ! verify_binary_magic "$dest"; then
+        warn "Downloaded file is not a native executable (bad magic bytes) -- refusing it"
+        rm -f "$dest"
+        return 1
+      fi
       local size_mb
       size_mb=$(awk "BEGIN { printf \"%.1f\", $size / 1048576 }")
       ok "Downloaded ${size_mb} MB"
@@ -439,7 +495,11 @@ add_to_shell_rc() {
     rc_file="$HOME/.profile"
   fi
 
-  if grep -qF "$dir" "$rc_file" 2>/dev/null; then
+  local path_line="export PATH=\"$dir:\$PATH\""
+
+  # Idempotency: only PATH assignment lines count, so an unrelated mention of the
+  # directory (a comment, another tool's variable) does not suppress the entry.
+  if grep -E '^[[:space:]]*(export[[:space:]]+)?PATH=' "$rc_file" 2>/dev/null | grep -qF "$dir"; then
     ok "PATH entry already in $rc_file"
     return
   fi
@@ -454,23 +514,25 @@ add_to_shell_rc() {
     fi
   fi
 
-  # Use a lock file to prevent concurrent append races (best-effort).
+  # Serialize concurrent installs when the platform has flock (Linux).  macOS
+  # ships without it, and waiting for a lock that can never be taken only made
+  # every install pause and print a bogus warning.
   local lock_file="${rc_file}.browser4-install.lock"
-  local lock_fd=9
-  # Wait up to 10 seconds for another install process to release the lock.
-  local waited=0
-  while ! (umask 0002 && command -v flock >/dev/null 2>&1 && flock -n 9 2>/dev/null); do
-    if [[ $waited -ge 10 ]]; then
-      warn "Could not acquire lock on ${rc_file} after 10s; appending anyway"
-      break
-    fi
-    sleep 0.5
-    waited=$((waited + 1))
-  done 9>"$lock_file"
+  if command -v flock >/dev/null 2>&1; then
+    local waited=0
+    while ! flock -n 9 2>/dev/null; do
+      if [[ $waited -ge 20 ]]; then
+        warn "Could not acquire lock on ${rc_file} after 10s; appending anyway"
+        break
+      fi
+      sleep 0.5
+      waited=$((waited + 1))
+    done 9>"$lock_file"
+  fi
 
   {
     echo "# browser4-cli"
-    echo "export PATH=\"$dir:\$PATH\""
+    echo "$path_line"
   } >> "$rc_file"
 
   # Clean up (flock auto-releases when fd 9 is closed)
@@ -620,7 +682,6 @@ install_backend() {
 # ----------------------------------------------
 
 main() {
-  check_commands
   header
 
   # Locate ourselves on disk (only works when run as a file, not piped)
@@ -663,9 +724,9 @@ main() {
       step "Local binary:     not found alongside script"
     fi
 
-    # Check for already-installed binary
+    # Check for already-installed binary (honour an explicit --install-dir)
     local default_dir existing_path
-    default_dir=$(get_default_install_dir)
+    default_dir="${INSTALL_DIR:-$(get_default_install_dir)}"
     existing_path="${default_dir}/${binary_name}"
     if [[ -f "$existing_path" ]]; then
       step "Already installed: $existing_path"
@@ -690,6 +751,10 @@ main() {
   step "Platform:  $platform_key"
   step "Binary:    $binary_name"
 
+  # Everything below downloads, unpacks or writes: check the tooling now, so
+  # `--locate` still works on a box that has none of it.
+  check_commands
+
   # Install directory
   if [[ -z "$INSTALL_DIR" ]]; then
     INSTALL_DIR=$(get_default_install_dir)
@@ -699,10 +764,15 @@ main() {
 
   # Ensure install directory exists
   if [[ ! -d "$INSTALL_DIR" ]]; then
-    if [[ "$DRY_RUN" != true ]]; then
-      mkdir -p "$INSTALL_DIR"
+    if [[ -e "$INSTALL_DIR" ]]; then
+      die "Install path exists but is not a directory: $INSTALL_DIR"
     fi
-    step "Created directory: $INSTALL_DIR"
+    if [[ "$DRY_RUN" == true ]]; then
+      step "[DRY-RUN] Would create directory: $INSTALL_DIR"
+    else
+      mkdir -p "$INSTALL_DIR" || die "Could not create install directory: $INSTALL_DIR"
+      step "Created directory: $INSTALL_DIR"
+    fi
   fi
 
   local binary_path="${INSTALL_DIR}/${binary_name}"

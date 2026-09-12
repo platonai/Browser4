@@ -442,3 +442,69 @@ CI 同款开关：`-Dsurefire.excludes=**integration**` + 同款 `excludedGroups
   checkout 出来的树里没有这个脚本，该步骤会以 "No such file or directory" 失败；
   安全做法是用该 tag 自己的 workflow 版本（`gh workflow run release.yml --ref <tag> -f tag=<tag>`）。
   当前 tag `v4.13.18` 不受影响：版本已在 npm 上 → `should_publish=false` → 该步骤被跳过。
+
+## 11. 安装脚本 + 两个测试套件的重审（按脚本实际行为对齐）
+
+起因：§10.4 发现 `install-browser4-cli.tests.sh` 的断言助手恒为 PASS。本轮按用户要求，
+以**安装脚本的实际行为**为准重审 `install-browser4-cli.sh` / `.ps1` 与两个测试套件，
+并把审出来的健壮性问题一并修掉。
+
+### 11.1 安装脚本 `install-browser4-cli.sh`
+
+| 问题 | 后果 | 修复 |
+|---|---|---|
+| `--version --dry-run` 把 `--dry-run` 当成 tag | 生成 `releases/download/--dry-run/...`，很久之后以 404 失败；`--install-dir --silent` 会建一个名为 `--silent` 的目录 | 新增 `validate_value`：缺值或值像选项即报错退出 |
+| `die` 放在 `$( ... )` 里（本轮改动中自查发现） | 只杀掉子 shell，安装继续，退出码 0 —— 校验形同虚设 | 校验函数在**当前 shell** 执行 |
+| `GITHUB_TOKEN` 对**所有** URL 附加 Authorization | 令牌被发给阿里云 OSS 镜像（第三方） | 仅当 URL 是 `https://github.com/*` 时才加头 |
+| 只按 >100 KB 判断下载内容 | 大于 100 KB 的 HTML 错误页/被截断的内容会被当二进制安装 | 新增 `verify_binary_magic`（ELF / MZ / Mach-O），不通过即拒绝 |
+| `--locate` 也要求 curl/od 等下载工具 | 诊断命令在精简系统上直接失败 | `check_commands` 移到安装路径（locate 早退之后） |
+| 无 `flock` 时提示"Could not acquire lock after 10s"并空等（macOS 默认无 flock） | 每次安装在 macOS 上白等数秒 + 假警告 | 无 flock 时直接跳过加锁 |
+| PATH 幂等用 `grep -F "$dir"` 全文匹配 | 目录名出现在注释/其他变量里就再也不写 PATH | 只在 `PATH=` 赋值行里匹配 |
+| `--install-dir` 指向已存在的文件 | `mkdir -p` 报错信息晦涩 | 明确 `die "Install path exists but is not a directory"` |
+| `--locate` 忽略 `--install-dir` | 诊断结果误导 | 按 `--install-dir` 显示 |
+
+### 11.2 安装脚本 `install-browser4-cli.ps1`
+
+| 问题（独立审计编号） | 后果 | 修复 |
+|---|---|---|
+| R2 `& $binaryPath --version` 不检查 `$LASTEXITCODE` | 损坏/错架构的二进制照样打印绿色"installed successfully" | 检查退出码与输出，失败打印红色 `[x]` 并置退出码 1 |
+| R3 后端安装失败只 warn，脚本仍 exit 0 | CI/自动化无法发现后端失败 | `Install-Backend` 返回布尔值，失败时最终 `exit 1`；成功横幅移到后端步骤之前 |
+| R4 `Get-BackendAction` 空状态默认 `upgrade` | 全新机器（或无 CLI 响应时）会跑 `upgrade` | 只有状态里确实出现已安装 bundle 才 `upgrade`，否则 `install` |
+| R5 `-DryRun` 仍会真的调用已安装 CLI 的 `status`，并打印 `[v] Installed:` | 干跑有副作用、输出不实；每次泄漏一个临时文件 | dry-run 不再探测 CLI；临时文件放进 `try/finally` 清理 |
+| R6 PATH 去重用解析路径、追加却用原始 `$Dir` | `-InstallDir .\b4` 会把**相对路径**永久写进用户 PATH，尾斜杠会重复追加 | 追加解析后的绝对路径，比较大小写不敏感 |
+| R7 中国区检测只匹配 IANA 时区 | Windows 返回 `China Standard Time`，检测恒为 false（在华语 Windows 上实测 False） | 一并匹配 `China Standard Time` 与 `zh-CN/zh-Hans` 文化（实测已变 True） |
+| R8 `-Version` 未校验 | `-Version ../../evil` 生成穿越 URL 并传给 `--tag` | 校验 tag 形态；裸 semver 自动补 `v` 前缀（与 .sh 一致） |
+| R1 下载无完整性校验（仅 >100 KB） | 截断/错误内容可能被安装 | 新增 `Test-BinaryMagic`（ELF/MZ/Mach-O）并在下载后校验 |
+| R9 未 pin TLS / `-Force` 文档不实 / `-Locate` 忽略 `-InstallDir` | 老 .NET 上 TLS 1.0 握手失败；文档误导 | 5.1 下 pin TLS 1.2；修正 `-Force` 文档；`-Locate` 尊重 `-InstallDir` |
+
+### 11.3 两个测试套件
+
+* **`.sh`**：助手改为 `shift` + `"$@"`（53 处断言第一次真正执行）；4 条恒真断言
+  （`detect_china_locale && true || true`、`... || true` 的 box-drawing 检查、
+  `grep -vq 'Added to PATH'`、`grep -qi '...|Install'`）改成真断言；过期的
+  `--locate | grep -q version` 重写为 `--version` 语义检查；新增 9 条用例：参数值拒绝、
+  裸 semver 归一化、`--locate` 在缺少下载工具时仍可用（自建最小 PATH）、下载拒绝 HTML、
+  下载接受 ELF、令牌只发给 GitHub（stub curl 记录参数）。
+* **`.ps1`**：新增 **harness 自检**（故意失败一次，验证失败会被计数）；`RunScript` 不再
+  返回 AutomationNull（这正是两条断言"永远不会失败"的根因）；`-Force rejected` 这条
+  过期断言改为验证 `-Force` 覆盖 `-SkipIfInstalled`；`-Source invalid` 改为断言退出码；
+  剥离末尾 `Main` 改为按 AST 范围（原来用正则，一旦有人在 `Main` 后加一行，套件就会执行
+  真实安装并改用户 PATH）；新增 `Test-BinaryMagic`、`-Version` 三条、`-DryRun` 不探测 CLI、
+  以及此前完全没覆盖的 `Find-LocalBinary` 捆绑二进制路径。
+
+### 11.4 验证
+
+| 套件 | 结果 | 耗时 |
+|---|---|---|
+| `bash cli/scripts/tests/install-browser4-cli.tests.sh` | **66 / 66 passed** | 16.5 s |
+| `pwsh -NoProfile -File cli/scripts/tests/install-browser4-cli.tests.ps1` | **47 / 47 passed** | 8.6 s |
+
+两者都远低于 release 的 `test-install-scripts` job 超时（5 分钟）。注意：**下一次打 tag 时，
+Linux 那半边会第一次真正执行这些断言**——如果某条依赖 runner 环境，会在 release 里暴露。
+
+### 11.5 未修（已记录，供后续判断）
+
+`Content-Length` 比对（`Invoke-WebRequest -OutFile` 不暴露响应头，需要额外 HEAD 请求）；
+`.old` 仅在目标存在时清理；非 Arm64 一律映射 x64；`-SkipIfInstalled` 与 `-Version` 的交互
+（带 `-Version` 时不会跳过）；下载失败后残留空安装目录；Windows 侧 `Add-DirectoryToUserPath`
+会真实写入用户 PATH，因此测试套件刻意不覆盖该分支（避免污染开发机）。
