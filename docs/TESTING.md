@@ -147,6 +147,52 @@ AND NOT ManualOnly
 
 ---
 
+## 本地复现 CI 测试范围（一次跑全）
+
+不要靠 tag CI 逐轮试错（一轮约 26 分钟，而且 Maven 在第一个失败模块就停，所以一轮只暴露一个失败）。
+本地用与 `ci.yml` **相同**的开关跑一次，把失败全部列出来：
+
+```powershell
+# Windows
+./mvnw.cmd -o -B "-Pall-main-modules,all-test-modules" `
+  "-Dsurefire.excludes=**integration**" `
+  "-Dsurefire.excludedGroups=ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck" `
+  -DrunITs=true "-Dmaven.test.failure.ignore=true" test
+```
+
+```bash
+# Linux / macOS
+./mvnw -o -B -Pall-main-modules,all-test-modules \
+  -Dsurefire.excludes='**integration**' \
+  -Dsurefire.excludedGroups=ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck \
+  -DrunITs=true -Dmaven.test.failure.ignore=true test
+```
+
+* `-Dmaven.test.failure.ignore=true`：Maven 不在第一个失败模块停下，一轮即可看到**全部**失败模块（CI 没开这个开关，所以 CI 一次只暴露一个失败 —— 这正是"每轮修一个"的来源）。
+* PowerShell 中 `-P...` 必须整体加引号（`,` 会被解析成参数数组）。
+* 汇总方式：按 `[INFO] Building <模块>` 分组取 `Tests run:` 行；已知结果与处置见
+  [4.13.x CI 稳定化报告](../docs-dev/copilot/ci-stabilization-4.13.x.md)。
+* 复跑单个模块：模块必须先进入 reactor（只给 `-pl` 会报
+  "Could not find the selected project in the reactor"），例如
+  `-Pall-test-modules -pl browser4-tests/browser4-rest-tests test`。
+* **`-Dsurefire.excludedGroups=` 是"整体替换"而不是"追加"**：root `pom.xml` 的默认值
+  （`Slow,Heavy,RequiresServer,RequiresBrowser,RequiresAI,RequiresDocker,Integration,E2E,ManualOnly,TestInfraCheck,IntegrationTest,E2ETest,HeavyTest`
+  —— 即"排除所有非 Fast"）会被命令行**覆盖**；传了 `-Dsurefire.excludedGroups=` 就必须把想排除的
+  tag 全部再列一遍，否则像 `IntegrationTest` 这类测试会意外跑起来。
+* 想再窄到某个类：必须同时放开 group 过滤，否则选中的类被默认 `excludedGroups` 排除后
+  surefire 会给出 `Tests run: 0` **且退出码为 0**（静默通过，极易误判）：
+
+  ```powershell
+  ./mvnw.cmd -o -B -Pall-test-modules -pl browser4-tests/browser4-rest-tests `
+    -DrunITs=true `
+    "-Dsurefire.excludedGroups=ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck" `
+    "-Dtest=CrawlFixtureMetadataTest" test
+  ```
+
+  过滤后先看 `Running <类名>` 行确认真的跑起来了。
+
+---
+
 ## Reviewer / AI Checklist
 
 * 是否声明 **Level**？
