@@ -75,7 +75,34 @@ Maven 默认在第一个失败模块停止（CI 没有 `-fae` / `-Dmaven.test.fa
 | `PulsarSessionTests.testLoadLocalFile`（pulsar-it-tests） | **真缺陷**：快照 origin 守卫不认 `file://` 翻译（无重定向、无 main request），本地文件抓取被拒 | `4d0af69110` | ci.2 红 |
 | （以上全部） | — | — | **ci.3 全绿 ✅** |
 | **CI 判定加固 + 文档**（见 §2、§7） | 提交 `efc650490a` | — | **ci.4 全绿 ✅**（`Total 2047 / Failed 0 / Passed 1991 / Skipped 56`，26m13s；Cross-Platform Smoke Test 同轮 success） |
-| 排除列表语义注释 | 提交 `39779e079c` | — | ci.5（仅注释差异，见 §7） |
+| 排除列表语义注释 | 提交 `39779e079c` | — | ci.5 红 ❌（见 §3.1） |
+
+### 3.1 ci.5 的 flaky 失败：`TestLoadResources.testLoadResource`
+
+`v4.13.18-ci.5`（提交 `07b6019ace`，相对 ci.4 **只多了 YAML 注释与文档**）红了，
+失败点是 `browser4-tests/pulsar-it-tests` 的 `ai.platon.pulsar.browser.TestLoadResources`：
+
+```
+[ERROR] Tests run: 3, Failures: 1, Errors: 0, Skipped: 1, Time elapsed: 63.16 s <<< FAILURE! -- in ai.platon.pulsar.browser.TestLoadResources
+[ERROR] ai.platon.pulsar.browser.TestLoadResources.testLoadResource(Continuation) -- Time elapsed: 61.72 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: http://127.0.0.1:32769/json
+	at ai.platon.pulsar.browser.TestLoadResources.testLoadResource$suspendImpl(TestLoadResources.kt:44)
+```
+
+* 断言内容是 `assertTrue(resourceUrl) { page.protocolStatus.isSuccess }`，失败的是第 2 个资源
+  `$baseURL/json`（`baseURL = http://127.0.0.1:$port`，`port` 是本测试 Spring 上下文
+  `RANDOM_PORT` 的随机端口，见 `MockSiteAccess.kt:48,83`）；
+* 该用例自身耗时 61.72 s（本地同一用例 14.5 s）——典型的"重试到超时"形态；
+* **分类：环境敏感 / flaky（非回归）**。依据：ci.3、ci.4 同一用例通过，本地全量也通过
+  （`Tests run: 3, Failures: 0, Errors: 0, Skipped: 1`，14.50 s），而 ci.5 与 ci.4 的
+  代码差异只有工作流注释和文档，不可能影响该测试。
+* 处置：`monitor-ci.ps1` 已自动落 coworker 任务
+  `coworker/tasks/main/2working/fix-ci-yml-tag-failure.md`（提取到的失败类
+  `FAILED_LIST="ai.platon.pulsar.browser.TestLoadResources"` 明确），修复由该任务跟进；
+  本轮报告记录证据与分类，修复落地后再补一轮 CI 验证。
+* 顺带发现：`monitor-ci.ps1` 的错误提取抓的是 `Check Test Status`（汇报步骤）而不是真正的
+  `[ERROR] ... FAILURE` 行，生成的任务正文里前 3 个 block 都是汇报脚本；建议后续改为优先提取
+  `FAILED_LIST=` / `[ERROR] Tests run: ... Failures: [1-9]` / `<<< FAILURE!` 行（见 §8.4）。
 
 ## 4. 本地"一次跑全"的复现命令
 
@@ -219,3 +246,53 @@ root `pom.xml` 的默认值是"排除所有非 Fast"：
 3. `CrawlFixtureMetadataTest` 在 CI 上仍需 171–215 s，是主 CI 里最慢的单类之一；若后续把它移出主 CI，
    请同步 `AGENTS.md` 与本报告的排除清单。
 4. 本地全量自检约 23 分钟，建议在改动跨模块/序列化/Spring 装配时作为 tag 前的预检（见 `docs/TESTING.md`）。
+
+---
+
+## 9. ci.5 的第 2 个 tag 红点：驱动池在资源守卫拒绝后空等满 60 s（已修，本轮唯一的产品代码改动）
+
+`v4.13.18-ci.5`（run 34694569292，1985 用例）只有 1 个失败：
+`ai.platon.pulsar.browser.TestLoadResources.testLoadResource`，
+断言 `assertTrue(resourceUrl) { page.protocolStatus.isSuccess }`（第 2 个 URL `/json`）。
+
+**定性：不是回归，是负载敏感的既有缺陷。** ci.4（success）与 ci.5 之间只差一个纯文档提交
+`07b6019ace`，没有任何产品代码改动 —— 失败的是"同一提交在不同负载下"的确定性机制，
+不是随机 flake。
+
+### 9.1 机制（由失败 run 自身日志反推）
+
+1. `/json` 落在**新创建的临时隐私上下文**上，其驱动池没有 standby driver；
+   创建 driver 的唯一一次尝试被资源守卫拒绝：`AppSystemInfo.isSystemOverCriticalLoad`
+   被瞬时 CPU 负载顶到 true（阈值 0.85，`/proc/stat` 全机口径，共享 runner 上极易触发）。
+2. `LoadingWebDriverPool.shouldCreateWebDriver()` 的**"系统过载"分支当时没有任何日志**，
+   这一步在日志里完全不可见。
+3. 随后 `statefulDriverPool.poll(60 s)` 整段阻塞：日志从 `12:59:31.405` 到 `13:00:31.414`
+   没有任何输出（整整 60.009 s），期间**不重新评估守卫**、也不重试创建。
+4. 60 s 到点返回 null → `WebDriverPoolExhaustedException`
+   （`active: 0, standby: 0, waiting: 0, working: 0, slots: 50`）→ `FetchResult.crawlRetry` →
+   status 1601 → `protocolStatus.isSuccess == false` → 断言失败。
+5. ci.4 同一测试通过，只是因为那次 fetch 恰好命中一个已有 standby driver 的上下文（7 ms 完成）。
+
+### 9.2 修复（`LoadingWebDriverPool`，最小改动）
+
+| 改动 | 作用 |
+|---|---|
+| `pollWebDriver` → 新增 `pollDriverInSlices`：按 `POLLING_SLICE = 500 ms` 分片等待，**每片重新调用 `resourceSafeCreateDriverIfNecessary`** | 守卫的拒绝是瞬时的（尖峰过去即可创建）；分片让等待方在负载恢复后立刻拿到 driver，而不是空等超时后抛异常 |
+| 每片前检查 `isActive`，池被 retire/close 时立即返回 | 不再对空池空等整个超时（60 s"假死"） |
+| `shouldCreateWebDriver()` 过载分支新增节流 INFO 日志（`ThrottlingLogger`，TTL 1 min） | 补上缺失的诊断信号；消息保持**逐字稳定**（限流键是**格式化后**的消息，含变量则永不触发限流）；变量细节降到 debug 级 |
+| KDoc 说明分片的两个目的：重评估守卫、周期性释放 `ConcurrentStatefulDriverPool` 的监视器 | `ConcurrentStatefulDriverPool.poll` 仍是 `@Synchronized`（等待期间持锁），分片把持锁时长限制在 ≤500 ms；本轮**不改**其签名 |
+
+### 9.3 验证（本地，纯 mock，无浏览器）
+
+新增 `browser4-core/browser4-protocol/src/test/.../driver/LoadingWebDriverPoolTest.kt`（2 用例）：
+
+- `testPollCreatesDriverWhenTheResourceGuardAllowsItAgain`：把守卫调成必然拒绝
+  （`CRITICAL_CPU_THRESHOLD = -1.0`、`CRITICAL_MEMORY_THRESHOLD_MIB = 1.0`），1 s 后放行 →
+  修复后 `poll` 在 **1.13 s** 返回 driver（`pool.numCreated == 1`）。
+  **对照实验**：把 `pollDriverInSlices` 临时还原成"创建一次 + 整段阻塞"，同一用例
+  **37.99 s 后**以 `WebDriverPoolExhaustedException` 失败 —— 与 CI 的失败签名一致。
+- `testPollFailsFastWhenThePoolIsRetired`：`retire()` 后 `poll` 立即失败（修复前会等满超时）。
+- 用例在系统**真的**处于临界负载（磁盘剩 <10 GiB 等）的机器上以 JUnit assumption 跳过，
+  不会误报。
+- 全模块：`./mvnw -ntp -o -pl browser4-core/browser4-protocol test`
+  → `Tests run: 82, Failures: 0, Errors: 0, Skipped: 2`，BUILD SUCCESS。
