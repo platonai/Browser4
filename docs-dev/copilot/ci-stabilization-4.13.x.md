@@ -267,7 +267,9 @@ root `pom.xml` 的默认值是"排除所有非 Fast"：
    `<<< FAILURE! -- in <class>`、`[ERROR] <class>.<method> -- Time elapsed: ... <<< FAILURE!`、
    `FAILED_LIST="..."` 都不识别，于是自动任务里没有 `## Failing Tests` 段、正文被汇报步骤淹没。
    建议给 Pass 1 补这三条模式（`bin/ci/tests/monitor-ci.tests.ps1` 可直接加用例；`bin/release/monitor-release.ps1`
-   有同名函数的副本，需同步）。本轮**只记录不改**，以免在最终验证轮引入脚本改动。
+   有同名函数的副本，需同步）。本轮**只记录不改**，原因有二：一是避免在最终验证轮引入脚本改动；
+   二是 `.github/workflows/ps1-tests.yml` **只在 `main` 的每日 cron 上跑**（不响应 push/tag），
+   4.13.x 上的 `.ps1` 改动实际上拿不到 CI 覆盖，只能在本地跑 Pester（`pwsh bin/ci/tests/monitor-ci.tests.ps1`）。
 6. `TestLoadResources.testLoadResource`（§3.1/§9）修复后仍需观察：它依赖 `/json` 这类非 HTML 资源的
    抓取，若 ci.6 再红，优先看 `Driver pool is exhausted` 与 `over the critical load` 两条日志。
 
