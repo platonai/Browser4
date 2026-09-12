@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env pwsh
+#!/usr/bin/env pwsh
 #requires -Version 7
 
 # ===================================================================
@@ -287,10 +287,12 @@ function Print-Usage {
     Write-Host "Options:"
     Write-Host "  -DryRun      Compile only (test-compile), do not run tests"
     Write-Host "  -Show        Print the final command, do not execute anything"
-    Write-Host "  -NoSession     Skip persisting test results to .test-sessions/<session-id>/test-session.json"
+    Write-Host "  -NoSession     Skip persisting test results to .test-sessions/<run-id>/test-session.json"
+    Write-Host "                 (each run still gets its own scratch subdirectory)"
     Write-Host "  -BuildBackend  Run mvnw test-compile before any tests (fail fast on build errors)"
-    Write-Host "  -SessionPath   Custom path for the test-session JSON file"
-    Write-Host "               (default: <repo-root>/.test-sessions/<timestamp>/test-session.json)"
+    Write-Host "  -SessionPath   Custom path for the test-session JSON file (escape hatch only;"
+    Write-Host "                 the run's scratch directory is unaffected)"
+    Write-Host "               (default: <repo-root>/.test-sessions/<run-id>/test-session.json)"
     Write-Host ""
     Write-Host "Test Types:"
     Write-Host "  fast        Run fast unit tests only"
@@ -319,8 +321,9 @@ function Print-Usage {
     Write-Host "              dir --metadata, -m [path]  list files with size and date"
     Write-Host "              dir --interactive, -Interactive  pick directories interactively"
     Write-Host "              task <file>               run a single task via run-task.ps1"
-    Write-Host "  session     List or view persisted test sessions (list, view)"
+    Write-Host "  session     Inspect persisted test sessions (list, view, prune)"
     Write-Host "              list --all | --count N   Paginate session listing (default: 15)"
+    Write-Host "              prune --keep N | --all   Delete old run directories"
     Write-Host ""
     Write-Host "  RWS options (accepted after the mode):"
     Write-Host "    --production                Use installed browser4-cli instead of cargo run"
@@ -339,6 +342,7 @@ function Print-Usage {
     Write-Host "  test.ps1 -BuildBackend fast         # Build backend, then run fast tests"
     Write-Host "  test.ps1 -NoSession fast              # Run fast tests without persisting session"
     Write-Host "  test.ps1 -SessionPath out/session.json ps  # Write session to a custom path"
+    Write-Host "  test.ps1 session prune --keep 5      # Delete all but the newest 5 run directories"
     Write-Host "  test.ps1 -DryRun fast               # Show the Maven command for fast tests"
     Write-Host "  test.ps1 -DryRun it -pl browser4-core  # Show the Maven command with extra args"
     Write-Host "  test.ps1 it                         # Run integration tests"
@@ -454,7 +458,7 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
     $sw.Stop()
 
     # -- Persist session --------------------------------------------------
-    if ($script:SessionAvailable) {
+    if ($script:PersistSession) {
         Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
         $status = if ($exitCode -eq 0) { 'pass' } else { 'fail' }
         $dur = [math]::Round($sw.Elapsed.TotalSeconds, 1)
@@ -536,7 +540,7 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
     }
 
     # -- Persist session --------------------------------------------------
-    if ($script:SessionAvailable) {
+    if ($script:PersistSession) {
         Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
         $status = if ($exitCode -eq 0) { 'pass' } else { 'fail' }
         $dur = [math]::Round($sw.Elapsed.TotalSeconds, 1)
@@ -3120,7 +3124,7 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
     }
 
     # -- Persist session --------------------------------------------------
-    if ($script:SessionAvailable) {
+    if ($script:PersistSession) {
         Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
         $status = if ($exitCode -eq 0) { 'pass' } else { 'fail' }
         $dur = [math]::Round($sw.Elapsed.TotalSeconds, 1)
@@ -3335,7 +3339,7 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
     Write-Rule
 
     # -- Persist session --------------------------------------------------
-    if ($script:SessionAvailable) {
+    if ($script:PersistSession) {
         Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
         Update-TestSessionResult -RepoRoot $repoRoot -TestKey 'ps' `
             -Status $overallStatus -ExitCode $overallExit -DurationSec $totalSec `
@@ -3467,14 +3471,18 @@ function Invoke-ResumeTests([string[]]$additionalArgs) {
 function Invoke-SessionCommand([string[]]$additionalArgs) {
     <#
     .SYNOPSIS
-        List or view persisted test sessions from .test-sessions/.
+        List, view, or prune persisted test sessions from .test-sessions/.
 
     .DESCRIPTION
-        Operates on the .test-sessions/ directory in the repo root.
+        Operates on the .test-sessions/ directory in the repo root, where every
+        test run owns one subdirectory (<run-id>/test-session.json plus that
+        run's scratch files).
+
         Subcommands:
           list              List all past test sessions in a summary table.
           view <sessionId>  Pretty-print a single session's JSON.
                             Supports prefix matching on the timestamp ID.
+          prune             Delete old run directories, keeping the newest N.
 
         Without a subcommand, shows session-specific usage.
     #>
@@ -3488,9 +3496,9 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
     $subArgs = @($additionalArgs | Select-Object -Skip 1)
 
     # -- Help (no subcommand or unknown) -------------------------------
-    if ($subcommand -eq '' -or $subcommand -notin @('list', 'view')) {
-        if ($subcommand -ne '' -and $subcommand -notin @('list', 'view')) {
-            Write-Error "Unknown session subcommand '$subcommand'. Valid subcommands: list, view"
+    if ($subcommand -eq '' -or $subcommand -notin @('list', 'view', 'prune')) {
+        if ($subcommand -ne '' -and $subcommand -notin @('list', 'view', 'prune')) {
+            Write-Error "Unknown session subcommand '$subcommand'. Valid subcommands: list, view, prune"
         }
         Write-Host ''
         Write-Host 'Usage: test.ps1 session <subcommand> [options]'
@@ -3500,6 +3508,9 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
         Write-Host '                      --all        Show all sessions'
         Write-Host '                      --count N    Show last N sessions'
         Write-Host '  view <sessionId>  Show the full JSON for a session'
+        Write-Host '  prune             Delete old run directories (default: keep newest 10)'
+        Write-Host '                      --keep N     Keep the newest N run directories'
+        Write-Host '                      --all        Delete every run directory'
         Write-Host ''
         Write-Host 'Options:'
         Write-Host '  -Show             Print the command, do not execute'
@@ -3509,12 +3520,88 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
         Write-Host '  test.ps1 session list'
         Write-Host '  test.ps1 session view 20260724T1917'
         Write-Host '  test.ps1 session view 20260724T1917366034791Z'
+        Write-Host '  test.ps1 session prune --keep 5'
         exit 0
     }
 
     # -- Guard: .test-sessions directory must exist --------------------
     if (-not (Test-Path -LiteralPath $sessionsDir -PathType Container)) {
         Write-Host 'No .test-sessions directory found. Run some tests first.' -ForegroundColor Yellow
+        exit 0
+    }
+
+    # ===================================================================
+    # session prune [--keep N] [--all]
+    # ===================================================================
+    if ($subcommand -eq 'prune') {
+        $keep = 10
+        $pruneAll = $false
+
+        $i = 0
+        while ($i -lt $subArgs.Count) {
+            $a = $subArgs[$i]
+            if ($a -eq '--all') {
+                $pruneAll = $true
+                $i++
+            } elseif ($a -in @('--keep', '-Keep', '-k') -and ($i + 1) -lt $subArgs.Count) {
+                $val = $subArgs[$i + 1]
+                if ($val -match '^\d+$') {
+                    $keep = [int]$val
+                    $i += 2
+                } else {
+                    Write-Error "session prune --keep requires a non-negative integer, got: $val"
+                    exit 1
+                }
+            } else {
+                Write-Error "Unknown session prune flag: $a. Valid flags: --keep N, --all"
+                exit 1
+            }
+        }
+
+        # '_legacy' holds pre-restructure artifacts and is deliberately excluded
+        # from pruning so old evidence is never destroyed by a routine cleanup.
+        $runDirs = @(Get-ChildItem -Path $sessionsDir -Directory |
+            Where-Object { $_.Name -ne '_legacy' } |
+            Sort-Object LastWriteTime -Descending)
+
+        if ($runDirs.Count -eq 0) {
+            Write-Host 'Nothing to prune - no run directories in .test-sessions/.' -ForegroundColor Yellow
+            exit 0
+        }
+
+        $doomed = @(if ($pruneAll) { $runDirs } else { $runDirs | Select-Object -Skip $keep })
+
+        if ($doomed.Count -eq 0) {
+            $total = $runDirs.Count
+            Write-Host "Nothing to prune - $total run $(if ($total -eq 1) { 'directory' } else { 'directories' }) present, keeping the newest $keep." -ForegroundColor Green
+            exit 0
+        }
+
+        $isPreview = $script:Show -or $script:DryRun
+        $noun = if ($doomed.Count -eq 1) { 'directory' } else { 'directories' }
+        $keptLabel = if ($pruneAll) { 'none' } else { "the newest $keep" }
+
+        Write-Host ''
+        Write-Host "$(if ($isPreview) { '[DRY RUN] Would delete' } else { 'Deleting' }) $($doomed.Count) run $noun, keeping ${keptLabel}:" -ForegroundColor $(if ($isPreview) { 'Yellow' } else { 'Cyan' })
+
+        foreach ($dir in $doomed) {
+            $bytes = (Get-ChildItem -LiteralPath $dir.FullName -Recurse -File -ErrorAction SilentlyContinue |
+                Measure-Object -Property Length -Sum).Sum
+            if (-not $bytes) { $bytes = 0 }
+            $sizeMb = [math]::Round($bytes / 1MB, 2)
+            Write-Host ("  - {0,-34} {1,8} MB  {2}" -f $dir.Name, $sizeMb, $dir.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))
+
+            if (-not $isPreview) {
+                Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        Write-Host ''
+        if ($isPreview) {
+            Write-Host 'Re-run without -DryRun/-Show to actually delete.' -ForegroundColor DarkGray
+        } else {
+            Write-Host "Pruned $($doomed.Count) run $noun." -ForegroundColor Green
+        }
         exit 0
     }
 
@@ -3558,6 +3645,17 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
 
         if ($sessionDirs.Count -eq 0) {
             Write-Host 'No test sessions found in .test-sessions/.' -ForegroundColor Yellow
+            # Pre-restructure runs were archived under _legacy/ and are
+            # deliberately excluded from the live listing — point at them
+            # instead of implying the history is empty.
+            $legacyRoot = Join-Path $sessionsDir '_legacy'
+            if (Test-Path -LiteralPath $legacyRoot -PathType Container) {
+                $archived = @(Get-ChildItem -Path $legacyRoot -Directory -ErrorAction SilentlyContinue |
+                    Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'test-session.json') -PathType Leaf })
+                if ($archived.Count -gt 0) {
+                    Write-Host "  $($archived.Count) archived session(s) present under .test-sessions/_legacy/ - use 'session view <id>' to read one." -ForegroundColor DarkGray
+                }
+            }
             exit 0
         }
 
@@ -3659,8 +3757,17 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
             return
         }
 
-        # Find matching session directories (support prefix matching)
-        $matches = @(Get-ChildItem -Path $sessionsDir -Directory |
+        # Find matching session directories across live runs and the _legacy
+        # archive (support prefix matching)
+        $searchRoots = @($sessionsDir)
+        $legacyRoot = Join-Path $sessionsDir '_legacy'
+        if (Test-Path -LiteralPath $legacyRoot -PathType Container) {
+            $searchRoots += $legacyRoot
+        }
+
+        $matches = @($searchRoots | ForEach-Object {
+                Get-ChildItem -Path $_ -Directory -ErrorAction SilentlyContinue
+            } |
             Where-Object {
                 $_.Name -like "$sessionIdPattern*" -and
                 (Test-Path -LiteralPath (Join-Path $_.FullName 'test-session.json') -PathType Leaf)
@@ -3807,16 +3914,37 @@ if ($testTypes.Count -eq 0) {
 }
 
 # ===================================================================
-# Load test-session module (soft dependency, skipped when -NoSession)
+# Load test-session module (soft dependency)
 # ===================================================================
+# The module is loaded even with -NoSession: every run still gets its own
+# scratch subdirectory.  -NoSession only suppresses the test-session.json write.
 $script:SessionAvailable = $false
+$script:PersistSession = $false
+$script:SessionRunDir = ''
 $script:_NextIsSessionPath = $false
-if (-not $script:NoSession) {
-    $sessionModulePath = Join-Path $scriptDir 'common' 'test-session.psm1'
-    if (Test-Path $sessionModulePath) {
-        Import-Module $sessionModulePath -Force -ErrorAction SilentlyContinue
-        $script:SessionAvailable = $true
-    }
+$sessionModulePath = Join-Path $scriptDir 'common' 'test-session.psm1'
+if (Test-Path $sessionModulePath) {
+    Import-Module $sessionModulePath -Force -ErrorAction SilentlyContinue
+    $script:SessionAvailable = $true
+}
+
+# -------------------------------------------------------------------
+# One subdirectory per run
+# -------------------------------------------------------------------
+# .test-sessions/<run-id>/ holds test-session.json AND every scratch file the
+# run produces.  The path is resolved and published through
+# BROWSER4_TEST_SESSION_DIR up-front so scenario runners, coworker workers and
+# agents spawned below all inherit the same directory instead of scattering
+# files across the .test-sessions/ root.
+#
+# The directory itself is created lazily — by the first session write
+# (Write-TestSession creates its parent) or by the first child that needs it.
+# Invocations that never execute a test therefore leave nothing behind:
+# argument errors, display-only `rws dir` listings, -Show, and `session`.
+$wantsRunDir = -not ($script:Show -or ($testTypes -contains 'session'))
+if ($script:SessionAvailable -and $wantsRunDir) {
+    $script:SessionRunDir = Publish-TestSessionRunDir -RepoRoot $repoRoot
+    $script:PersistSession = -not $script:NoSession
 }
 
 # Timestamped log directory for this test run. Lives in .test/ so it
@@ -3904,6 +4032,14 @@ if ($psTests.Count -gt 0) {
 
 if ($launchTargets.Count -gt 0) {
     Invoke-MockSiteBoot -additionalArgs $additionalArgs
+}
+
+# -- Report where this run's artifacts landed -------------------------
+# Printed only when a run directory was actually materialised (see the lazy
+# creation note above), so invocations that executed nothing stay silent.
+if ($script:SessionRunDir -and (Test-Path -LiteralPath $script:SessionRunDir -PathType Container)) {
+    Write-Host ''
+    Write-Host "  Session: $($script:SessionRunDir)" -ForegroundColor DarkGray
 }
 
 exit 0

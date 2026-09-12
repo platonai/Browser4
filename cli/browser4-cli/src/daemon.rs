@@ -33,6 +33,118 @@ use crate::state::{
 const EXISTING_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(120);
 const JAR_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(120);
 const SERVER_READY_INITIAL_QUIET_WAIT: Duration = Duration::from_secs(5);
+
+/// Windows: stdin / stdout / stderr pseudo handle ids (`GetStdHandle`).
+#[cfg(windows)]
+const STD_INPUT_HANDLE_ID: u32 = 0xFFFF_FFF6; // -10 as u32
+#[cfg(windows)]
+const STD_OUTPUT_HANDLE_ID: u32 = 0xFFFF_FFF5; // -11 as u32
+#[cfg(windows)]
+const STD_ERROR_HANDLE_ID: u32 = 0xFFFF_FFF4; // -12 as u32
+/// Windows: `HANDLE_FLAG_INHERIT` — the bit `SetHandleInformation` toggles.
+#[cfg(windows)]
+const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
+
+/// Prevents the long-lived backend JVM from inheriting this process's std
+/// handles while it is being spawned.
+///
+/// On Windows, `CreateProcess` with `bInheritHandles = TRUE` (what Rust's
+/// `Command::spawn` uses) hands *every* inheritable handle to the child, not
+/// just the ones named by the `Stdio` configuration.  Redirecting the child's
+/// stdio to `NUL`/files therefore does NOT stop it from also inheriting the
+/// caller's std handles.
+///
+/// That matters when the CLI runs inside a shell pipeline, e.g.
+/// `./b4w.ps1 open <url> | Out-File log.txt`: PowerShell keeps the pipeline
+/// open until every writer of the pipe has closed it.  The detached backend
+/// JVM (and the Chrome processes it launches in turn) inherited the pipe's
+/// write end, so the pipeline never completed — the CLI finished in seconds
+/// while the calling script hung forever, which looks exactly like "the CLI
+/// command hangs".  Clearing the inherit bit around the spawn keeps the pipe
+/// private to the CLI process.
+///
+/// The previous handle flags are restored on drop; a handle that cannot be
+/// read or re-flagged is left untouched (best effort — this must never make
+/// spawning the server fail).
+#[cfg(windows)]
+pub(crate) struct StdHandleInheritanceGuard {
+    saved: Vec<(*mut core::ffi::c_void, u32)>,
+}
+
+#[cfg(windows)]
+impl StdHandleInheritanceGuard {
+    pub(crate) fn drop_inheritance() -> Self {
+        extern "system" {
+            fn GetStdHandle(n_std_handle: u32) -> *mut core::ffi::c_void;
+            fn GetHandleInformation(h_object: *mut core::ffi::c_void, lpdw_flags: *mut u32) -> i32;
+            fn SetHandleInformation(
+                h_object: *mut core::ffi::c_void,
+                dw_mask: u32,
+                dw_flags: u32,
+            ) -> i32;
+        }
+
+        let mut saved = Vec::new();
+        for id in [
+            STD_INPUT_HANDLE_ID,
+            STD_OUTPUT_HANDLE_ID,
+            STD_ERROR_HANDLE_ID,
+        ] {
+            // SAFETY: the three calls are plain Win32 handle queries/mutations
+            // on this process's own std handles; every handle is checked before
+            // use and failures are ignored.
+            unsafe {
+                let handle = GetStdHandle(id);
+                if handle.is_null() || handle as isize == -1 {
+                    continue;
+                }
+                let mut flags: u32 = 0;
+                if GetHandleInformation(handle, &mut flags) == 0 {
+                    continue;
+                }
+                if flags & HANDLE_FLAG_INHERIT == 0 {
+                    continue;
+                }
+                if SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) == 0 {
+                    continue;
+                }
+                saved.push((handle, flags));
+            }
+        }
+        Self { saved }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for StdHandleInheritanceGuard {
+    fn drop(&mut self) {
+        extern "system" {
+            fn SetHandleInformation(
+                h_object: *mut core::ffi::c_void,
+                dw_mask: u32,
+                dw_flags: u32,
+            ) -> i32;
+        }
+        for (handle, flags) in self.saved.drain(..) {
+            // SAFETY: handles were validated when they were recorded.
+            unsafe {
+                SetHandleInformation(handle, HANDLE_FLAG_INHERIT, flags & HANDLE_FLAG_INHERIT);
+            }
+        }
+    }
+}
+
+/// No-op stand-in for non-Windows platforms (Unix sets `FD_CLOEXEC` on the
+/// descriptors it creates, so a detached child cannot hold a shell pipe open).
+#[cfg(not(windows))]
+pub(crate) struct StdHandleInheritanceGuard;
+
+#[cfg(not(windows))]
+impl StdHandleInheritanceGuard {
+    pub(crate) fn drop_inheritance() -> Self {
+        Self
+    }
+}
 const CLI_TEMP_DIR_COMPONENTS: [&str; 2] = ["tmp", "cli"];
 /// Subdirectory of the runtime data dir that holds versioned installs.
 const RUNTIME_VERSIONS_DIR_NAME: &str = "runtime";
@@ -6079,17 +6191,22 @@ async fn start_server(
         .stdout(startup_log.stdout)
         .stderr(startup_log.stderr);
 
-    let mut child = command.spawn().map_err(|e| {
-        let error = format_server_startup_failure_message(
-            base_url,
-            Some("Browser4 could not be launched."),
-            &format!("Failed to start server: {e}"),
-            None,
-            Some(startup_log.path.as_path()),
-        );
-        append_startup_log_message(&startup_log.path, &error);
-        error
-    })?;
+    let mut child = {
+        // The backend outlives this CLI process: make sure it cannot hold the
+        // caller's stdout/stderr pipe open (see StdHandleInheritanceGuard).
+        let _guard = StdHandleInheritanceGuard::drop_inheritance();
+        command.spawn().map_err(|e| {
+            let error = format_server_startup_failure_message(
+                base_url,
+                Some("Browser4 could not be launched."),
+                &format!("Failed to start server: {e}"),
+                None,
+                Some(startup_log.path.as_path()),
+            );
+            append_startup_log_message(&startup_log.path, &error);
+            error
+        })?
+    };
     append_startup_log_message(
         &startup_log.path,
         format!("Spawned launcher process with pid {}", child.id()),

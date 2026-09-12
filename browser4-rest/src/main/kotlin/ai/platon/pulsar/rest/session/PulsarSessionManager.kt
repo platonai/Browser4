@@ -505,6 +505,23 @@ class PulsarSessionManager(
         // endpoint actually drives (the CLI cannot infer it from the port).
         session.browserIdentity = BrowserIdentity.parse(verification.browser)
 
+        // Idempotent re-attach: if the session already has a healthy driver on
+        // the same browser port, keep the existing binding. Creating a fresh
+        // PulsarBrowser wrapper + driver on every attach would leak their
+        // DevTools connections until the session closes.
+        val existingDriver = session.agenticSession.boundDriver
+        if (existingDriver != null && (existingDriver.browser as? PulsarBrowser)?.port == port &&
+            runCatching { runBlocking { existingDriver.healthy().isOK } }.getOrDefault(false)
+        ) {
+            (existingDriver.browser as? AbstractBrowser)?.frontDriver = existingDriver
+            logger.info(
+                "Re-attached session {} to browser at port {} (existing driver kept)",
+                sessionId, port
+            )
+            return session
+        }
+
+
         // Bind the external browser to the session
         val browser = PulsarBrowser(port = port, settings = BrowserSettings())
         session.agenticSession.bindBrowser(browser)

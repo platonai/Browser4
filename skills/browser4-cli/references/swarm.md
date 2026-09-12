@@ -67,7 +67,7 @@ The session persists until `browser4-cli swarm close` or `close`.
 ### 2. Submit Scrape Jobs
 
 ```bash
-browser4-cli swarm submit <url> [--seed-file ./urls.txt] [--deadline ISO] [--expires 1d] [--refresh] [--parse] [--wait]
+browser4-cli swarm submit <url> [--seed-file ./urls.txt] [--deadline ISO] [--expires 1d] [--refresh] [--parse] [--load-options "<opts>"] [--batch-id <id>] [--wait]
 ```
 
 | Argument/Option | Description |
@@ -78,11 +78,72 @@ browser4-cli swarm submit <url> [--seed-file ./urls.txt] [--deadline ISO] [--exp
 | `--expires` | Cache expiration (e.g. `1d`, `1h`, `30m`) |
 | `--refresh` | Force fresh fetch, ignore cache |
 | `--parse` | Parse page immediately after fetching (required for later X-SQL queries) |
-| `--wait` | Block until all submitted jobs complete (polls every 2s, 5-minute timeout) |
+| `--load-options` | Free-form LoadOptions appended verbatim: page-quality gates, cache freshness, retry control (e.g. `-requireNotBlank '#productTitle' -nMaxRetry 3`) |
+| `--batch-id` | Batch id stamped on every task of this submission. Generated when omitted; use your own to correlate with an external system |
+| `--wait` | Block until all submitted jobs reach a terminal state (polls every 2s, 5-minute window) |
+
+#### Batch ids
+
+Every `swarm submit` / `swarm query` invocation is one **batch**, and the CLI
+prints its id:
+
+```
+Task Submitted: https://example.com/p/1 -> Task ID: 4b6b4309-… (via submit)
+…
+Batch ID: 9f2c1d84-7a3e-4a1c-9d5f-2b8e6c4a1f03 — track it with 'swarm list --batch 9f2c1d84-7a3e-4a1c-9d5f-2b8e6c4a1f03'
+```
+
+The id is carried by every task of that submission (and stored in the local
+tracker), so the submission can be inspected, filtered and summarised as a unit
+afterwards — no need to remember individual task uuids.
+
+> **Why it matters:** without a batch id, "did my 100-URL submission finish, and
+> which pages failed?" means cross-referencing 100 task uuids by hand. With one,
+> `swarm list --batch <id> --status failed --json` answers it directly, and
+> `--wait` reports the batch id in its summary.
 
 > **Important:** Without `--sql`, `swarm submit` only fetches and loads the page — no data columns are extracted. The `resultSet` contains a single `url` row per submitted URL (a fetch-confirmation marker), and `pageContentBytes` confirms the page content was fetched. For structured data extraction, use `swarm query --sql @query.sql` instead.
 
-> **Tip:** Use `--wait` to avoid manual polling for short-lived jobs. The CLI prints a progress summary when all jobs complete.
+> **Tip:** Use `--wait` to avoid manual polling for short-lived jobs. The CLI prints a progress summary when all jobs reach a terminal state.
+
+> **LoadOptions for real data collection:** crawling almost always needs tuning —
+> `-requireNotBlank '<selector>'` (page-quality gate), `-requireSize`,
+> `-nMaxRetry N` / `-ignoreFailure` (retry control), `-expires 1d` /
+> `-expireAt 1970-01-01T00:00:00Z` (cache freshness), `-scrollCount`,
+> `-interactLevel`.  `--load-options` passes them through verbatim; the
+> convenience flags (`--refresh`, `--parse`, `--expires`, `--deadline`) are
+> expanded first so an explicit `--load-options` value wins.
+
+> **Submitting entry-page hrefs:** put the URLs into the pool exactly as the
+> entry page links them (the raw `href` values) rather than hand-built
+> canonical forms — Browser4 normalizes each one internally and keeps the
+> alternative representations, while a hand-built URL that the site
+> 302-redirects can trip the fetch origin guard.  A large batch is submitted in
+> one command (`--seed-file`) and the pool drains it in parallel across the
+> session's browser contexts.
+
+> **Note:** Prefer `swarm query` over `swarm submit --sql` for X-SQL extraction — it enforces `--sql` as required.
+
+> **Backend note — task timeouts:** a task that a worker actually picked up is
+> failed if it makes no progress for `swarm.task-stale-timeout-seconds`
+> (default 120s).  A task that is still *queued* is only failed when the whole
+> pipeline has made no progress for `swarm.queue-stall-timeout-seconds`
+> (default 600s), so a large one-shot batch legitimately spends minutes in the
+> queue while earlier pages of the same batch complete.
+
+> **Backend note — resource throttling:** the runner pauses when free memory
+> drops below its reserve (~2 GiB) and resumes automatically once pages finish
+> and memory is released.  A batch of heavy JavaScript pages is bounded by the
+> box, not by the number of URLs submitted: size the session with
+> `--max-browser-contexts` / `--max-open-tabs` for the machine (2 × 4 is a safe
+> default for JS-heavy product pages) and prefer many small batches over one
+> huge burst on a memory-constrained host.
+
+> **LoadOptions pitfall — `#` in a value:** the URL/args parser treats `#` as a
+> fragment delimiter, so `-requireNotBlank '#productTitle'` silently loses the
+> rest of the option string (the CLI prints a warning).  Use an attribute
+> selector — `-requireNotBlank "[id=productTitle]"` — or another gate
+> (`-requireSize`, `-requireImages`) instead.
 
 > **Note:** Prefer `swarm query` over `swarm submit --sql` for X-SQL extraction — it enforces `--sql` as required.
 
@@ -125,13 +186,33 @@ Common extraction functions: `DOM_BASE_URI`, `DOM_FIRST_TEXT`, `DOM_ALL_TEXTS`, 
 ### 4. Poll Status & Fetch Results
 
 ```bash
-browser4-cli swarm status <task-id>   # returns metadata: id, isDone, statusCode, message
-browser4-cli swarm result <task-id>   # returns result payload: resultSet, pageContentBytes
+browser4-cli swarm status <task-id>    # one task: id, isDone, statusCode, message, timestamps
+browser4-cli swarm status <batch-id>   # a whole submission: counts, window, failures, slowest task
+browser4-cli swarm result <task-id>    # result payload: resultSet, pageContentBytes
 ```
 
-Wait for `isDone: true` before calling `swarm result`.
+Both ids come from `swarm submit`, so `swarm status` accepts either: a task id
+reports that task, and a batch id reports the submission as a unit (the CLI
+falls back to the batch endpoint when the id is not a task).
 
-Example status output:
+```
+Batch smoke-final: 2 task(s)
+  completed: 2  failed: 0  pending: 0
+  window: 05:46:16 → 05:46:17 (1.2s)
+  slowest task: 1b2832e3 (13ms)
+```
+
+When a batch has failures the report lists them with their URLs:
+
+```
+Batch amazon-run3: 100 task(s)
+  completed: 96  failed: 3  pending: 1
+  window: (still running)
+  failures:
+    [a1b2c3d4] https://example.com/p/42 (status 408) — Task timed out: no progress for 120s
+```
+
+Example single-task status output:
 ```json
 {"id":"<task-id>","isDone":true,"statusCode":200,"message":"","lastModifiedTime":"2026-03-30T12:00:00Z"}
 ```
@@ -140,6 +221,72 @@ Example result output:
 ```json
 {"id":"<task-id>","resultSet":[{"url":"...","title":"...","price":"$29.99"}],"pageContentBytes":null,"error":null}
 ```
+
+> **Terminal ≠ successful, and `statusCode: 200` ≠ finished.**  `isDone: true` is
+> the backend's terminal flag.  A task reports `statusCode: 200` as soon as the
+> page's X-SQL *starts*, so clients must wait for `isDone` (the CLI does, and
+> falls back to a recorded `finishTime` on older backends).  A failed
+> fetch/timeout also ends with `isDone: true` plus a 4xx/5xx `statusCode` and an
+> explanatory `message`.
+
+### 4b. Check Batch Completion
+
+`--wait` separates the three outcomes instead of lumping every terminal task
+into "completed", and names the batch it waited on:
+
+```
+100 job(s) finished in 312s (batch 9f2c1d84-7a3e-4a1c-9d5f-2b8e6c4a1f03): 96 succeeded, 3 failed, 1 pending.
+
+  Failed job(s):
+    [a1b2c3d4] https://example.com/p/42 (status 408) — Task timed out: no progress for 120s
+  Still pending after the wait window: 1
+    [e5f6a7b8] https://example.com/p/99
+  Check with: swarm status <id>
+```
+
+It also emits the counts (and the failed task list) as JSON fields
+(`batch_id`, `succeeded`, `failed`, `pending`, `failed_tasks`) for scripts.
+
+For a batch you did not wait on — or to re-check one later — filter the tracked
+list by batch and lifecycle state:
+
+```bash
+browser4-cli swarm list --batch 9f2c1d84-7a3e-4a1c-9d5f-2b8e6c4a1f03              # just this submission
+browser4-cli swarm list --batch <id> --status failed     # only failures (matches "failed (...)" variants)
+browser4-cli swarm list --batch <id> --status pending    # queued + processing
+browser4-cli swarm list --batch <id> --json              # machine-readable, includes duration_ms
+```
+
+`swarm list` answers "how long did each task take?" directly — every row carries
+STARTED, FINISHED and **DURATION** (started → finished; tasks that never ran fall
+back to submitted → finished), and a batch summary line gives the whole
+submission's window:
+
+```
+Status: 100 total, 96 completed, 3 failed, 1 queued
+Batch window: 10:04:11 -> 10:09:23 (5m12s), 100 task(s)
+  TASK ID       COMMAND       DESCRIPTION   STARTED              FINISHED             DURATION  STATUS
+  ------------  ------------  ------------  -------------------  -------------------  --------  -----------
+  4b6b4309-d2a8  swarm-submit  https://…/p1  2026-09-12 10:04:11  2026-09-12 10:04:38  27.4s     completed
+```
+
+`--json` adds `batch_id`, `started_at`, `completed_at` and `duration_ms` per task.
+
+Re-submitting exactly the failures is a one-liner:
+
+```bash
+browser4-cli swarm list --batch <id> --status failed --json > failed.json   # .output.tasks[].url
+browser4-cli swarm submit --seed-file failed-urls.txt --wait
+```
+
+> **Backend endpoint:** `GET /api/swarm/batch/{batchId}` returns the same picture
+> in one request (counts, the batch's `startedAt`/`finishedAt`/`durationMillis`,
+> and per-task rows with `durationMillis`) — `--wait` polls this instead of one
+> status request per task, which matters for 100-URL batches.
+
+> **MCP clients:** the `swarm` tool domain exposes the same grouping —
+> `swarm.submit(payload, batchId?)`, `swarm.query(url, query, args?, batchId?)`
+> and `swarm.batchStatus(batchId)` for the aggregate.
 
 ### 5. List Tracked Tasks
 

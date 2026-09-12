@@ -902,7 +902,6 @@ class Browser4WebDriverTest {
         whenever(browser.settings).thenReturn(BrowserSettings())
         return Browser4WebDriver("test", BrowserTab(), protocol, browser)
     }
-
     @Suppress("UNCHECKED_CAST")
     private fun pendingDialogs(driver: Browser4WebDriver): Queue<DialogEvent> {
         val field = driver.dialogHandler.javaClass.getDeclaredField("pendingDialogs")

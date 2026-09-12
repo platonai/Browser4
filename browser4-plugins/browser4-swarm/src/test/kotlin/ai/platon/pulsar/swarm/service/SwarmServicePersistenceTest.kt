@@ -210,14 +210,16 @@ class SwarmServicePersistenceTest {
         val service = newService()
         redirectPersistenceFile(service, tempDir)
         service.staleTaskTimeoutSeconds = 120
+        service.queueStallTimeoutSeconds = 600
         val now = Instant.now()
 
-        // Never picked up by a worker (createdTime only).
+        // Never picked up by a worker (createdTime only) while a sibling task is
+        // still completing — the batch is draining, so this task must survive.
         val neverPicked = ScrapeResponse(id = "s1", statusCode = 201, pageStatusCode = 200)
-            .apply { createdTime = now.minusSeconds(300); lastModifiedTime = null; startedTime = null }
+            .apply { createdTime = now.minusSeconds(1800); lastModifiedTime = null; startedTime = null }
         // Picked up by a worker but hung mid-fetch (startedTime set, no updates).
         val hungWorker = ScrapeResponse(id = "s2", statusCode = 201, pageStatusCode = 200)
-            .apply { createdTime = now.minusSeconds(300); lastModifiedTime = now.minusSeconds(200); startedTime = now.minusSeconds(200) }
+            .apply { createdTime = now.minusSeconds(1800); lastModifiedTime = now.minusSeconds(200); startedTime = now.minusSeconds(200) }
         // Actively progressing (recent updates) — must NOT be transitioned.
         val active = ScrapeResponse(id = "s3", statusCode = 201, pageStatusCode = 200)
             .apply { createdTime = now.minusSeconds(300); lastModifiedTime = now; startedTime = now.minusSeconds(200) }
@@ -232,14 +234,224 @@ class SwarmServicePersistenceTest {
 
         invokeTransitionStaleTasks(service)
 
-        assertTrue(neverPicked.isDone, "Never-picked tasks must be transitioned")
-        assertEquals(ResourceStatus.SC_REQUEST_TIMEOUT, neverPicked.statusCode)
         assertTrue(hungWorker.isDone, "Hung-worker tasks must be transitioned")
         assertEquals(ResourceStatus.SC_REQUEST_TIMEOUT, hungWorker.statusCode)
+        assertFalse(neverPicked.isDone, "Queued tasks must survive while siblings still progress")
+        assertEquals(201, neverPicked.statusCode)
         assertFalse(active.isDone, "Progressing tasks must not be transitioned")
         assertEquals(201, active.statusCode)
         assertTrue(done.isDone)
         assertEquals(200, done.statusCode, "Terminal tasks must not be touched")
+    }
+
+    @Test
+    fun `transitionStaleTasks keeps a large queued batch alive while the pool drains it`(@TempDir tempDir: Path) {
+        // Regression: a one-shot 100-URL submit used to have 98 of its queued
+        // tasks killed at the 120s mark while the pipeline was still fetching
+        // earlier pages of the very same batch.
+        val service = TestableSwarmService(tempDir)
+        redirectPersistenceFile(service, tempDir)
+        service.staleTaskTimeoutSeconds = 120
+        service.queueStallTimeoutSeconds = 600
+        val now = Instant.now()
+
+        val queued = (0 until 98).map { i ->
+            ScrapeResponse(id = "q$i", statusCode = 201, pageStatusCode = 200)
+                .apply { createdTime = now.minusSeconds(1200); lastModifiedTime = null; startedTime = null }
+        }
+        queued.forEach { service.responseCache.put(it.id!!, it) }
+        // One task completed a moment ago: the pipeline is demonstrably alive.
+        val justFinished = ScrapeResponse(id = "done1", statusCode = 200, pageStatusCode = 200)
+            .apply { isDone = true; createdTime = now.minusSeconds(1200); lastModifiedTime = now }
+        service.responseCache.put("done1", justFinished)
+
+        invokeTransitionStaleTasks(service)
+
+        assertTrue(queued.none { it.isDone }, "No queued task may be failed while the pool is progressing")
+        assertTrue(queued.all { it.statusCode == 201 })
+    }
+
+    @Test
+    fun `transitionStaleTasks reaps queued tasks once the whole pipeline stalls`(@TempDir tempDir: Path) {
+        val service = TestableSwarmService(tempDir)
+        redirectPersistenceFile(service, tempDir)
+        service.staleTaskTimeoutSeconds = 120
+        service.queueStallTimeoutSeconds = 600
+        val now = Instant.now()
+
+        // Nothing has moved in this swarm for 20 minutes: the pool cannot
+        // consume the queue, so the task can never run.
+        val queued = ScrapeResponse(id = "stuck1", statusCode = 201, pageStatusCode = 200)
+            .apply { createdTime = now.minusSeconds(1200); lastModifiedTime = null; startedTime = null }
+        service.responseCache.put("stuck1", queued)
+
+        invokeTransitionStaleTasks(service)
+
+        assertTrue(queued.isDone, "A queued task belonging to a stalled swarm must be reaped")
+        assertEquals(ResourceStatus.SC_REQUEST_TIMEOUT, queued.statusCode)
+        assertTrue(
+            queued.message?.contains("never picked up") == true,
+            "The failure message must explain that the task was never picked up: ${queued.message}"
+        )
+    }
+
+    // -----------------------------------------------------------------
+    // Batch aggregate status
+    // -----------------------------------------------------------------
+
+    @Test
+    fun `batchStatus aggregates tasks by batch id`(@TempDir tempDir: Path) {
+        val service = TestableSwarmService(tempDir)
+        val now = Instant.now()
+        val start = now.minusSeconds(120)
+
+        val ok = ScrapeResponse(id = "b1-ok", statusCode = 200, pageStatusCode = 200)
+            .apply {
+                batchId = "batch-A"; isDone = true; createdTime = start
+                startedTime = start; finishTime = start.plusSeconds(30)
+            }
+        val slow = ScrapeResponse(id = "b1-slow", statusCode = 200, pageStatusCode = 200)
+            .apply {
+                batchId = "batch-A"; isDone = true; createdTime = start
+                startedTime = start.plusSeconds(10); finishTime = now
+            }
+        val failed = ScrapeResponse(id = "b1-fail", statusCode = 408, pageStatusCode = 408)
+            .apply {
+                batchId = "batch-A"; isDone = true; createdTime = start
+                startedTime = start.plusSeconds(5); finishTime = start.plusSeconds(15)
+                message = "Task timed out"
+            }
+        val queued = ScrapeResponse(id = "b1-queued", statusCode = 201, pageStatusCode = 200)
+            .apply { batchId = "batch-A"; createdTime = now }
+        // A task of another batch must never leak into this one's aggregate.
+        val other = ScrapeResponse(id = "b2-ok", statusCode = 200, pageStatusCode = 200)
+            .apply { batchId = "batch-B"; isDone = true }
+
+        listOf(ok, slow, failed, queued, other).forEach { service.responseCache.put(it.id!!, it) }
+
+        @Suppress("UNCHECKED_CAST")
+        val tasks = service.batchStatus("batch-A")["tasks"] as List<Map<String, Any?>>
+
+        val status = service.batchStatus("batch-A")
+        assertEquals("batch-A", status["batchId"])
+        assertEquals(4, status["total"])
+        assertEquals(2, status["completed"], "only status 200 counts as completed")
+        assertEquals(1, status["failed"])
+        assertEquals(1, status["pending"], "a task without isDone is still pending")
+        assertEquals(4, tasks.size)
+
+        // The batch window is only final once every task settled.
+        assertEquals(null, status["finishedAt"])
+        assertEquals(null, status["durationMillis"])
+
+        val okRow = tasks.first { it["id"] == "b1-ok" }
+        assertEquals(30_000L, okRow["durationMillis"], "duration is started -> finished")
+        val failedRow = tasks.first { it["id"] == "b1-fail" }
+        assertEquals(10_000L, failedRow["durationMillis"])
+        val queuedRow = tasks.first { it["id"] == "b1-queued" }
+        assertEquals(null, queuedRow["durationMillis"], "a running task has no duration yet")
+    }
+
+    @Test
+    fun `batchStatus reports the finished window once the batch settles`(@TempDir tempDir: Path) {
+        val service = TestableSwarmService(tempDir)
+        val start = Instant.now().minusSeconds(60)
+
+        val a = ScrapeResponse(id = "c1", statusCode = 200, pageStatusCode = 200)
+            .apply {
+                batchId = "batch-C"; isDone = true; createdTime = start
+                startedTime = start; finishTime = start.plusSeconds(20)
+            }
+        val b = ScrapeResponse(id = "c2", statusCode = 200, pageStatusCode = 200)
+            .apply {
+                batchId = "batch-C"; isDone = true; createdTime = start.plusSeconds(40)
+                startedTime = start.plusSeconds(40); finishTime = start.plusSeconds(55)
+            }
+        listOf(a, b).forEach { service.responseCache.put(it.id!!, it) }
+
+        val status = service.batchStatus("batch-C")
+
+        assertEquals(2, status["total"])
+        assertEquals(0, status["pending"])
+        assertNotNull(status["finishedAt"])
+        // Window: earliest start (t0) -> latest finish (t0 + 55s)
+        assertEquals(55_000L, status["durationMillis"])
+    }
+
+    @Test
+    fun `batchStatus of an unknown batch is empty`(@TempDir tempDir: Path) {
+        val service = TestableSwarmService(tempDir)
+        service.responseCache.put(
+            "x1",
+            ScrapeResponse(id = "x1", statusCode = 200, pageStatusCode = 200).apply { isDone = true }
+        )
+
+        val status = service.batchStatus("nope")
+
+        assertEquals(0, status["total"])
+        assertEquals(0, status["completed"])
+        assertEquals(0, status["failed"])
+        assertEquals(0, status["pending"])
+    }
+
+    // -----------------------------------------------------------------
+    // Batch id persists with the task
+    // -----------------------------------------------------------------
+
+    @Test
+    fun `batchId survives a serialization round trip`(@TempDir tempDir: Path) {
+        // durationMillis is a derived property; make sure writing a response
+        // through the object mapper and restoring it does not break.
+        val jsonlPath = tempDir.resolve("swarm-tasks.jsonl")
+        val task = ScrapeResponse(id = "r1", statusCode = 200, pageStatusCode = 200)
+            .apply {
+                batchId = "batch-R"
+                isDone = true
+                createdTime = Instant.now().minusSeconds(30)
+                startedTime = Instant.now().minusSeconds(30)
+                finishTime = Instant.now()
+            }
+        Files.createDirectories(tempDir)
+        Files.writeString(jsonlPath, objectMapper.writeValueAsString(task) + "\n")
+
+        val service = TestableSwarmService(tempDir)
+        invokeRestore(service, tempDir)
+
+        val restored = service.responseCache.getIfPresent("r1")
+        assertNotNull(restored)
+        assertEquals("batch-R", restored!!.batchId)
+        assertTrue(restored.durationMillis != null && restored.durationMillis!! >= 29_000)
+    }
+
+    // -----------------------------------------------------------------
+    // Wire format of the task status payload
+    // -----------------------------------------------------------------
+
+    @Test
+    fun `task status serializes isDone under its documented name`(@TempDir tempDir: Path) {
+        // Every client (CLI, MCP tools, tests) reads `isDone`, and the docs name
+        // it that way; the Java Bean convention would strip the `is` and emit
+        // `done`, which silently turns the flag into a no-op for those clients.
+        val response = ScrapeResponse(id = "w1", statusCode = 200, pageStatusCode = 200)
+            .apply { isDone = true }
+
+        val json = objectMapper.writeValueAsString(response)
+
+        assertTrue(json.contains("\"isDone\""), "expected an isDone field, got: $json")
+        val restored = objectMapper.readValue(json, ScrapeResponse::class.java)
+        assertTrue(restored.isDone, "isDone must survive a round trip: $json")
+    }
+
+    @Test
+    fun `task status emits isDone false explicitly`(@TempDir tempDir: Path) {
+        val response = ScrapeResponse(id = "w2", statusCode = 201, pageStatusCode = 201)
+
+        val json = objectMapper.writeValueAsString(response)
+
+        assertTrue(
+            json.contains("\"isDone\":false"),
+            "a queued task must still carry isDone=false (JsonInclude.ALWAYS): $json"
+        )
     }
 
     // -----------------------------------------------------------------

@@ -40,6 +40,7 @@ When you pass a channel name (`attach --cdp chrome`), the CLI finds the browser 
 1. **Process scan** — enumerates running processes whose command line contains `--remote-debugging-port=N`:
    - `N != 0` (e.g. `chrome --remote-debugging-port=9222`): use that port directly.
    - `N == 0` (Browser4-launched browsers use this — Chrome picks a free port at random): the requested value is not a usable endpoint, so the CLI resolves the real port by asking the process which ports it is actually listening on (Windows: `Get-NetTCPConnection` keyed to the process id), then probing each listener with a CDP health check (`GET /json/version`) and returning the first that answers. This is what makes Browser4-managed browsers (random debug port) discoverable via `attach --cdp chrome`.
+     > **⚠ Windows-only tier:** the listening-port resolution runs only on Windows. On Linux/macOS a browser started with `--remote-debugging-port=0` cannot be resolved from a channel name — resolution falls through to the default port and the 9222–9333 scan, and attach usually fails. There, pass an explicit endpoint (`--cdp http://localhost:9222`, `--cdp host:port`, `--cdp 9222`) or start the target browser with a fixed `--remote-debugging-port`.
 2. **Channel default port** — probes the channel's conventional port (9222 for Chrome), for browsers started manually with the documented flag.
 3. **Port-range scan** — concurrently probes a range of ports for any CDP responder, as a last resort.
 
@@ -215,7 +216,11 @@ browser4-cli close       # or: browser4-cli disconnect
 | Session Type | Behavior |
 |-------------|----------|
 | Browser4-launched (via `open`) | `close` terminates the browser process |
-| Extension-attached (via `attach --extension`) | `close` disconnects from the extension relay — your Chrome browser and its tabs remain untouched |
-| CDP-attached (via `attach --cdp`) | `close` disconnects from the remote debugging port — the browser continues running |
+| Extension-attached (via `attach --extension`) | `close` disconnects from the extension relay — Chrome keeps running. **The tab(s) Browser4 drove are removed** (`chrome.tabs.remove`); tabs you opened yourself and never touched through the session stay open |
+| CDP-attached (via `attach --cdp`) | `close` disconnects from the remote debugging port — the browser process continues running. **The tab Browser4 was bound to is closed** with the session |
+
+> **Keep the page you were working on:** `close` on an attached session closes the
+> tab the session was driving (the browser process itself survives). Save the URL
+> first (`page-url`) if you need to reopen it after re-attaching.
 
 The `disconnect` alias is available as a more accurate command name for attached sessions, but it's identical to `close` in behavior.

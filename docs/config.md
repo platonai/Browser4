@@ -324,7 +324,9 @@ docker run -d -p 8182:8182 `
 
     * `GUI`: Launches a visible browser window.
     * `HEADLESS`: Runs without a graphical window.
-    * `SUPERVISED`: Linux-only; uses Xvfb for headless GUI simulation.
+    * `SUPERVISED`: Linux-only; wraps the browser launch in an external supervisor process — in practice an Xvfb-based program such as `xvfb-run`, to simulate a GUI without a display.
+      The supervisor must be configured: set `browser.launch.supervisor.process` (and optionally `browser.launch.supervisor.process.args`), e.g.
+      `browser.launch.supervisor.process=xvfb-run`. Without a configured — and locatable — supervisor the mode has no effect (Chrome is launched normally), and it does **not** imply headless.
 
   > **Session-level override wins:** when a session is created with an explicit
   > display mode (e.g. `open --headed` / `open --headless` sets the `headed`

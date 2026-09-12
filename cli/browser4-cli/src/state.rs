@@ -915,7 +915,7 @@ fn parse_loop_history_file(path: &Path) -> Vec<LoopHistoryEntry> {
 // ---------------------------------------------------------------------------
 
 /// Represents a single async task tracked by the CLI.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AsyncTaskEntry {
     /// Task ID returned by the server.
     #[serde(rename = "taskId")]
@@ -943,6 +943,70 @@ pub struct AsyncTaskEntry {
         default
     )]
     pub completed_at: Option<String>,
+    /// Batch id shared by every task of one submission (None for legacy entries).
+    #[serde(rename = "batchId", skip_serializing_if = "Option::is_none", default)]
+    pub batch_id: Option<String>,
+    /// ISO-8601 timestamp the backend started the task (None while it is queued).
+    #[serde(rename = "startedAt", skip_serializing_if = "Option::is_none", default)]
+    pub started_at: Option<String>,
+    /// Task duration in milliseconds, as reported by the backend.
+    #[serde(rename = "durationMs", skip_serializing_if = "Option::is_none", default)]
+    pub duration_ms: Option<i64>,
+}
+
+/// Parse an ISO-8601 timestamp (with or without offset) into UTC.
+pub fn parse_timestamp(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    chrono::DateTime::parse_from_rfc3339(trimmed)
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .ok()
+        .or_else(|| {
+            // Timestamps persisted by older versions may lack a timezone.
+            chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%dT%H:%M:%S%.f")
+                .ok()
+                .map(|naive| naive.and_utc())
+        })
+}
+
+/// Wall-clock duration of a task in milliseconds.
+///
+/// Prefers the duration reported by the backend; otherwise derives it from the
+/// recorded start (`startedAt`, falling back to `submittedAt`) and completion
+/// timestamps. Returns `None` while the task has not finished.
+pub fn task_duration_ms(entry: &AsyncTaskEntry) -> Option<i64> {
+    if let Some(ms) = entry.duration_ms {
+        return Some(ms.max(0));
+    }
+    let finished = entry.completed_at.as_deref().and_then(parse_timestamp)?;
+    let started = entry
+        .started_at
+        .as_deref()
+        .and_then(parse_timestamp)
+        .or_else(|| parse_timestamp(&entry.submitted_at))?;
+    Some((finished - started).num_milliseconds().max(0))
+}
+
+/// Human-readable duration: `850ms`, `12.3s`, `4m05s`, `1h02m`.
+pub fn format_duration_ms(ms: i64) -> String {
+    let ms = ms.max(0);
+    if ms < 1_000 {
+        return format!("{}ms", ms);
+    }
+    let secs = ms as f64 / 1000.0;
+    if secs < 60.0 {
+        return format!("{:.1}s", secs);
+    }
+    let total_secs = (ms / 1000) as i64;
+    let minutes = total_secs / 60;
+    let rem_secs = total_secs % 60;
+    if minutes < 60 {
+        return format!("{}m{:02}s", minutes, rem_secs);
+    }
+    let hours = minutes / 60;
+    format!("{}h{:02}m", hours, minutes % 60)
 }
 
 /// Persisted list of tracked async tasks.
@@ -1014,6 +1078,17 @@ pub fn track_async_task(
     description: &str,
     state_dir: Option<&std::path::Path>,
 ) -> std::io::Result<()> {
+    track_async_task_in_batch(task_id, command, description, None, state_dir)
+}
+
+/// Add a task to the tracked list, tagging it with the batch it belongs to.
+pub fn track_async_task_in_batch(
+    task_id: &str,
+    command: &str,
+    description: &str,
+    batch_id: Option<&str>,
+    state_dir: Option<&std::path::Path>,
+) -> std::io::Result<()> {
     let mut list = read_async_tasks(state_dir);
     list.tasks.push(AsyncTaskEntry {
         task_id: task_id.to_string(),
@@ -1022,6 +1097,10 @@ pub fn track_async_task(
         submitted_at: chrono::Utc::now().to_rfc3339(),
         last_status: String::new(),
         completed_at: None,
+        batch_id: batch_id.map(|s| s.to_string()),
+        started_at: None,
+        duration_ms: None,
+                ..Default::default()
     });
     write_async_tasks(&list, state_dir)
 }
@@ -1134,33 +1213,31 @@ pub fn format_async_task_list(
         .unwrap_or(6)
         .max(6);
     let time_w = 19; // "2026-07-22 15:04:05"
+    let dur_w = page
+        .iter()
+        .map(|t| task_duration_ms(t).map(format_duration_ms).map(|s| s.len()).unwrap_or(1))
+        .max()
+        .unwrap_or(8)
+        .max(8);
 
     out.push(format!(
-        "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {:<time_w$}  {:<time_w$}  {:<status_w$}",
-        "TASK ID",
-        "COMMAND",
-        "DESCRIPTION",
-        "STARTED",
-        "FINISHED",
-        "STATUS",
+        "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {:<time_w$}  {:<time_w$}  {:<dur_w$}  {:<status_w$}",
+        "TASK ID", "COMMAND", "DESCRIPTION", "STARTED", "FINISHED", "DURATION", "STATUS",
         id_w = id_w,
         cmd_w = cmd_w,
         desc_w = desc_w,
         time_w = time_w,
+        dur_w = dur_w,
         status_w = status_w,
     ));
     out.push(format!(
-        "  {:-<id_w$}  {:-<cmd_w$}  {:-<desc_w$}  {:-<time_w$}  {:-<time_w$}  {:-<status_w$}",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
+        "  {:-<id_w$}  {:-<cmd_w$}  {:-<desc_w$}  {:-<time_w$}  {:-<time_w$}  {:-<dur_w$}  {:-<status_w$}",
+        "", "", "", "", "", "", "",
         id_w = id_w,
         cmd_w = cmd_w,
         desc_w = desc_w,
         time_w = time_w,
+        dur_w = dur_w,
         status_w = status_w,
     ));
 
@@ -1183,24 +1260,32 @@ pub fn format_async_task_list(
         } else {
             entry.last_status.clone()
         };
-        let started = format_timestamp_display(&entry.submitted_at);
+        // STARTED shows when the backend actually began the task; a task that is
+        // still queued has no start time yet, so its submission time is shown
+        // instead (that is the useful number while waiting).
+        let started = format_timestamp_display(entry.started_at.as_deref().unwrap_or(&entry.submitted_at));
         let finished = entry
             .completed_at
             .as_ref()
             .map(|s| format_timestamp_display(s))
             .unwrap_or_else(|| "-".to_string());
+        let duration = task_duration_ms(entry)
+            .map(format_duration_ms)
+            .unwrap_or_else(|| "-".to_string());
         out.push(format!(
-            "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {:<time_w$}  {:<time_w$}  {:<status_w$}",
+            "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {:<time_w$}  {:<time_w$}  {:<dur_w$}  {:<status_w$}",
             entry.task_id,
             entry.command,
             desc,
             started,
             finished,
+            duration,
             status,
             id_w = id_w,
             cmd_w = cmd_w,
             desc_w = desc_w,
             time_w = time_w,
+            dur_w = dur_w,
             status_w = status_w,
         ));
     }
@@ -1779,6 +1864,7 @@ mod tests {
                 submitted_at: "2026-01-01T00:00:00+00:00".to_string(),
                 last_status: "running".to_string(),
                 completed_at: None,
+                ..Default::default()
             }],
         };
         let output = format_async_task_list(&list, None, None);
@@ -1801,6 +1887,7 @@ mod tests {
                     submitted_at: "2026-01-01T00:00:00+00:00".to_string(),
                     last_status: "completed".to_string(),
                     completed_at: Some("2026-01-01T00:01:00+00:00".to_string()),
+                ..Default::default()
                 },
                 AsyncTaskEntry {
                     task_id: "new".to_string(),
@@ -1809,6 +1896,7 @@ mod tests {
                     submitted_at: "2026-07-22T15:00:00+00:00".to_string(),
                     last_status: "pending".to_string(),
                     completed_at: None,
+                ..Default::default()
                 },
             ],
         };
@@ -1843,6 +1931,7 @@ mod tests {
                 submitted_at: "2026-07-22T14:00:00+00:00".to_string(),
                 last_status: "completed".to_string(),
                 completed_at: Some("2026-07-22T14:05:30+00:00".to_string()),
+                ..Default::default()
             }],
         };
         let output = format_async_task_list(&list, None, None);
@@ -1874,6 +1963,7 @@ mod tests {
                 submitted_at: "2026-07-22T16:00:00+00:00".to_string(),
                 last_status: "queued".to_string(),
                 completed_at: None,
+                ..Default::default()
             }],
         };
         let output = format_async_task_list(&list, None, None);
@@ -1905,6 +1995,7 @@ mod tests {
                 submitted_at: format!("2026-07-22T1{}:00:00+00:00", i),
                 last_status: "pending".to_string(),
                 completed_at: None,
+                ..Default::default()
             });
         }
         let list = AsyncTaskList { tasks };
@@ -1933,6 +2024,7 @@ mod tests {
                 submitted_at: format!("2026-07-22T1{}:00:00+00:00", i),
                 last_status: "pending".to_string(),
                 completed_at: None,
+                ..Default::default()
             });
         }
         let list = AsyncTaskList { tasks };
@@ -1960,6 +2052,7 @@ mod tests {
                 submitted_at: "2026-07-22T12:00:00+00:00".to_string(),
                 last_status: "completed".to_string(),
                 completed_at: None,
+                ..Default::default()
             }],
         };
         let output = format_async_task_list(&list, Some(10), None);
@@ -1979,6 +2072,7 @@ mod tests {
                 submitted_at: format!("2026-07-22T{:02}:00:00+00:00", i),
                 last_status: "pending".to_string(),
                 completed_at: None,
+                ..Default::default()
             });
         }
         let list = AsyncTaskList { tasks };
@@ -1999,6 +2093,7 @@ mod tests {
                     submitted_at: "2026-07-22T12:00:00Z".to_string(),
                     last_status: "pending".to_string(),
                     completed_at: None,
+                ..Default::default()
                 }],
             },
             None,
@@ -2025,7 +2120,105 @@ mod tests {
             submitted_at: "2026-07-22T00:00:00+00:00".to_string(),
             last_status: status.to_string(),
             completed_at: None,
+            ..Default::default()
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Task duration and batch tracking
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn task_duration_prefers_backend_reported_value() {
+        let mut e = entry("swarm-submit", "completed");
+        e.submitted_at = "2026-07-22T00:00:00Z".to_string();
+        e.started_at = Some("2026-07-22T00:00:10Z".to_string());
+        e.completed_at = Some("2026-07-22T00:00:40Z".to_string());
+        e.duration_ms = Some(5_000);
+
+        assert_eq!(task_duration_ms(&e), Some(5_000));
+    }
+
+    #[test]
+    fn task_duration_derives_from_start_and_finish() {
+        let mut e = entry("swarm-submit", "completed");
+        e.submitted_at = "2026-07-22T00:00:00Z".to_string();
+        e.started_at = Some("2026-07-22T00:00:10Z".to_string());
+        e.completed_at = Some("2026-07-22T00:00:40Z".to_string());
+
+        // started -> finished, not submitted -> finished: a task that waited in
+        // the queue must not count queue time as its own duration.
+        assert_eq!(task_duration_ms(&e), Some(30_000));
+    }
+
+    #[test]
+    fn task_duration_falls_back_to_submission_time() {
+        let mut e = entry("swarm-submit", "failed (request timeout)");
+        e.submitted_at = "2026-07-22T00:00:00Z".to_string();
+        e.started_at = None;
+        e.completed_at = Some("2026-07-22T00:02:00Z".to_string());
+
+        assert_eq!(task_duration_ms(&e), Some(120_000));
+    }
+
+    #[test]
+    fn task_duration_is_none_while_running() {
+        let mut e = entry("swarm-submit", "queued");
+        e.started_at = Some("2026-07-22T00:00:10Z".to_string());
+        e.completed_at = None;
+
+        assert_eq!(task_duration_ms(&e), None);
+    }
+
+    #[test]
+    fn format_duration_is_readable_across_scales() {
+        assert_eq!(format_duration_ms(0), "0ms");
+        assert_eq!(format_duration_ms(850), "850ms");
+        assert_eq!(format_duration_ms(12_340), "12.3s");
+        assert_eq!(format_duration_ms(65_000), "1m05s");
+        assert_eq!(format_duration_ms(3_725_000), "1h02m");
+        // Negative input (clock skew) must not produce nonsense.
+        assert_eq!(format_duration_ms(-5), "0ms");
+    }
+
+    #[test]
+    fn legacy_tracker_json_without_batch_fields_still_loads() {
+        // A tracker file written by an older CLI must keep working.
+        let legacy = r#"{"tasks":[{"taskId":"t1","command":"swarm-submit","description":"u",
+            "submittedAt":"2026-07-22T00:00:00Z","lastStatus":"completed",
+            "completedAt":"2026-07-22T00:01:00Z"}]}"#;
+
+        let list: AsyncTaskList = serde_json::from_str(legacy).expect("legacy JSON must deserialize");
+        assert_eq!(list.tasks.len(), 1);
+        assert_eq!(list.tasks[0].task_id, "t1");
+        assert_eq!(list.tasks[0].batch_id, None);
+        assert_eq!(list.tasks[0].started_at, None);
+        assert_eq!(list.tasks[0].duration_ms, None);
+        // Duration still derivable from submission -> completion.
+        assert_eq!(task_duration_ms(&list.tasks[0]), Some(60_000));
+    }
+
+    #[test]
+    fn tracker_json_round_trips_batch_fields() {
+        let list = AsyncTaskList {
+            tasks: vec![AsyncTaskEntry {
+                task_id: "t1".to_string(),
+                command: "swarm-submit".to_string(),
+                description: "https://example.com".to_string(),
+                submitted_at: "2026-07-22T00:00:00Z".to_string(),
+                last_status: "completed".to_string(),
+                completed_at: Some("2026-07-22T00:00:30Z".to_string()),
+                batch_id: Some("batch-42".to_string()),
+                started_at: Some("2026-07-22T00:00:10Z".to_string()),
+                duration_ms: Some(20_000),
+            }],
+        };
+
+        let json = serde_json::to_string(&list).unwrap();
+        assert!(json.contains("\"batchId\":\"batch-42\""));
+        let restored: AsyncTaskList = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.tasks[0].batch_id.as_deref(), Some("batch-42"));
+        assert_eq!(task_duration_ms(&restored.tasks[0]), Some(20_000));
     }
 
     #[test]

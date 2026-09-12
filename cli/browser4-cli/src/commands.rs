@@ -3596,6 +3596,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "expires <dur>", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false, short: None },
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
                 OptionDef { name: "parse", description: "Parse page immediately after fetching", is_bool: true, short: None },
+                OptionDef { name: "load-options <opts>", description: "Extra LoadOptions appended verbatim (e.g. --load-options \"-requireNotBlank '#productTitle' -nMaxRetry 3 -expires 1d\"): page quality gates, cache freshness and retry control", is_bool: false, short: None },
+                OptionDef { name: "batch-id <id>", description: "Batch id stamped on every task of this submission (generated when omitted). Track the submission later with `swarm list --batch <id>`", is_bool: false, short: None },
                 OptionDef { name: "wait", description: "Block until all submitted jobs complete", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
@@ -3609,6 +3611,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
                 if let Some(b) = get_bool(args, "refresh") { p["refresh"] = json!(b); }
                 if let Some(b) = get_bool(args, "parse") { p["parse"] = json!(b); }
+                if let Some(v) = get_opt_str(args, "load-options") { p["loadOptions"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "batch-id") { p["batchId"] = json!(v); }
                 if let Some(b) = get_bool(args, "wait") { p["wait"] = json!(b); }
                 p
             },
@@ -3628,6 +3632,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "deadline <iso>", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false, short: None },
                 OptionDef { name: "expires <dur>", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false, short: None },
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
+                OptionDef { name: "load-options <opts>", description: "Extra LoadOptions appended verbatim (e.g. --load-options \"-requireNotBlank '#productTitle' -nMaxRetry 3 -expires 1d\"): page quality gates, cache freshness and retry control", is_bool: false, short: None },
+                OptionDef { name: "batch-id <id>", description: "Batch id stamped on every task of this submission (generated when omitted). Track the submission later with `swarm list --batch <id>`", is_bool: false, short: None },
                 OptionDef { name: "wait", description: "Block until all submitted jobs complete", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Excluded,
@@ -3644,6 +3650,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(v) = get_opt_str(args, "deadline") { p["deadline"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
                 if let Some(b) = get_bool(args, "refresh") { p["refresh"] = json!(b); }
+                if let Some(v) = get_opt_str(args, "load-options") { p["loadOptions"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "batch-id") { p["batchId"] = json!(v); }
                 if let Some(b) = get_bool(args, "wait") { p["wait"] = json!(b); }
                 p
             },
@@ -3685,6 +3693,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[],
             options: &[
                 OptionDef { name: "clear", description: "Remove all tracked swarm tasks from the list", is_bool: true, short: None },
+                OptionDef { name: "batch <id>", description: "Show only the tasks of one batch submission (the id printed by `swarm submit`)", is_bool: false, short: None },
+                OptionDef { name: "status <state>", description: "Show only tasks in a lifecycle state: queued, processing, completed, failed, pending, or all (default: all)", is_bool: false, short: None },
+                OptionDef { name: "json", description: "Emit a machine-readable JSON envelope instead of the table (includes batch_id and duration_ms)", is_bool: true, short: None },
                 OptionDef { name: "limit <n>", description: "Show at most N tasks (default: all)", is_bool: false, short: None },
                 OptionDef { name: "offset <n>", description: "Skip the first N tasks (useful for pagination)", is_bool: false, short: None },
             ],
@@ -3693,6 +3704,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(b) = get_bool(args, "clear") { p["clear"] = json!(b); }
+                if let Some(v) = get_opt_str(args, "batch") { p["batch"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "status") { p["status"] = json!(v); }
+                if let Some(b) = get_bool(args, "json") { p["json"] = json!(b); }
                 if let Some(v) = get_str(args, "limit").and_then(|s| s.parse::<usize>().ok()) { p["limit"] = json!(v); }
                 if let Some(v) = get_str(args, "offset").and_then(|s| s.parse::<usize>().ok()) { p["offset"] = json!(v); }
                 p
@@ -6280,6 +6294,80 @@ mod tests {
         assert_eq!(params["refresh"], true);
         assert_eq!(params["parse"], true);
         assert_eq!(params["expires"], "1d");
+    }
+
+    #[test]
+    fn test_swarm_submit_passes_free_form_load_options() {
+        let map = commands_map();
+        let cmd = map.get("swarm-submit").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert(
+            "load-options".to_string(),
+            json!("-requireNotBlank '#productTitle' -nMaxRetry 3"),
+        );
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(
+            params["loadOptions"],
+            "-requireNotBlank '#productTitle' -nMaxRetry 3"
+        );
+    }
+
+    #[test]
+    fn test_swarm_query_passes_free_form_load_options() {
+        let map = commands_map();
+        let cmd = map.get("swarm-query").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("sql".to_string(), json!("select 1"));
+        args.insert("load-options".to_string(), json!("-expires 1d"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["loadOptions"], "-expires 1d");
+    }
+
+    #[test]
+    fn test_swarm_list_status_and_json_filter() {
+        let map = commands_map();
+        let cmd = map.get("swarm-list").unwrap();
+        let mut args = HashMap::new();
+        args.insert("status".to_string(), json!("failed"));
+        args.insert("json".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["status"], "failed");
+        assert_eq!(params["json"], true);
+    }
+
+    #[test]
+    fn test_swarm_submit_passes_batch_id() {
+        let map = commands_map();
+        let cmd = map.get("swarm-submit").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("batch-id".to_string(), json!("amazon0911-run3"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["batchId"], "amazon0911-run3");
+    }
+
+    #[test]
+    fn test_swarm_query_passes_batch_id() {
+        let map = commands_map();
+        let cmd = map.get("swarm-query").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("sql".to_string(), json!("select 1"));
+        args.insert("batch-id".to_string(), json!("b-1"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["batchId"], "b-1");
+    }
+
+    #[test]
+    fn test_swarm_list_batch_filter() {
+        let map = commands_map();
+        let cmd = map.get("swarm-list").unwrap();
+        let mut args = HashMap::new();
+        args.insert("batch".to_string(), json!("amazon0911-run3"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["batch"], "amazon0911-run3");
     }
 
     #[test]

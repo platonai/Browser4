@@ -117,6 +117,58 @@ Starting a new task?
 
 > **Note:** The automatic engine hook is **live** (since 2026-08-24): `RobustBrowserAgent` auto-deposits completed/failed tasks into the knowledge store (`MemoryConsolidator` → PEM fusion) and auto-injects recalled knowledge into the run-start `## Memory` section. Calling `experience_save` yourself is still supported for richer traces and diagnostics, but forgetting it no longer loses knowledge.
 
+### experience_save
+
+Persists a task execution trace to the knowledge store.
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `url` | Yes | The URL the task operated on |
+| `trace` | Yes | JSON-encoded ExecutionTrace (steps, selectors, extraction results) |
+| `outcome` | No | `"success"` (default) or `"failure"` |
+| `task_type` | No | Canonical task type (e.g., `extract_product_list`, `publish_post`) |
+| `intent` | No | Free-text description of what the task was trying to do |
+| `facts` | No | Retrospective knowledge patch (inline JSON, or `@file.json` through the CLI): `selectors` / `interaction_hints` / `known_blockers` / `anti_patterns` (camelCase and snake_case keys both accepted), merged into the `(domain, intent)` facts entry — the writer path for lessons learned. Refused when the entry is VERIFIED (immutable); the response then reports `facts_rejected` |
+
+**Success path:** Knowledge promoted with initial confidence 0.50. Subsequent verified successes raise confidence.
+**Failure path:** Negative evidence recorded (failure category classified from the trace). Failed selectors are **not** automatically turned into anti-patterns — record lessons explicitly with `facts` (e.g. `anti_patterns`) via `experience_save --facts` (or the `facts` argument), or let `experience_deep_learn` promote knowledge later.
+**Response:** the save result includes `facts_merged`, `facts_status`, `facts_rejected`, and `facts_message` when `facts` was supplied.
+
+**Recording a lesson with `facts`:** a lesson (a selector that broke, a blocker, an anti-pattern) can be recorded immediately after the task — no need to wait for `deep_learn`:
+
+```text
+# MCP tool form
+experience_save(url="<target-url>", trace="<execution trace JSON>", outcome="success",
+                intent="extract product details", task_type="extract_product_list",
+                facts='{"interaction_hints":["open the price popover before reading"],
+                        "anti_patterns":["clicking the thumbnail before the modal loads"]}')
+
+# CLI equivalent — trace is inline JSON; --facts accepts inline JSON or @file.json
+browser4-cli experience save "https://example.com/products" '<trace-json>' --facts @lessons.json
+```
+
+### experience_query
+
+Queries stored knowledge before starting a task.
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `url` | Yes | The target URL |
+| `intent` | No | Free-text intent description |
+
+**Returns:** JSON with `tier`, `confidence`, `primary_selectors`, `extraction_query`, `known_blockers`, `warnings`, `steps`.
+
+### experience_list
+
+Lists stored knowledge entries (diagnostic/debug tool).
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `filter` | No | Filter by domain (partial match) |
+| `intent_filter` | No | Filter by intent (partial match) |
+| `page` | No | Page number (default 1) |
+| `page_size` | No | Results per page (default 20, max 100) |
+
 > **Warning:** `experience_query` before `open_session` is supported — it operates on the file system, not the browser. Use it to plan your task before launching Chrome.
 
 > **Warning:** Knowledge stored for one URL pattern (e.g., `/dp/*`) is not automatically available for a different pattern (e.g., `/s?k=*`). The query matches by URL pattern specificity.
@@ -126,6 +178,16 @@ Starting a new task?
 ## 7. Quick Patterns
 
 ### Before a task — query prior knowledge
+
+The store is **file-level YAML per (domain, intent)** — no per-site blob files:
+
+```
+knowledge/                          ← root: relative to the backend process CWD
+├── traces/<domain>/                ← TraceRecords (immutable, 30-day TTL)
+├── experience/<domain>/            ← ExperienceStats (mutable; confidence source)
+└── facts/<domain>/                 ← KnowledgeFacts — one <intent>.yaml per (domain, intent)
+                                      (VERIFIED entries are immutable; merge is refused)
+```
 
 ```text
 experience_query(url="<target-url>", intent="extract product details")

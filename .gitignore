@@ -171,3 +171,6 @@ bin/maintenance/state/*.lock
 # CloakBrowser POC outputs (bin/setup-cloakbrowser.ps1)
 /cloakbrowser-poc/
 /.buildtmp/
+
+# Bulk run artifacts produced by agent sessions (HTML corpora, ML output)
+/test-sessions/

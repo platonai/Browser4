@@ -142,7 +142,13 @@ actually trigger and monitor.
 
 - Calls `trigger-release.ps1` to create and push the release tag (in `-Apply` mode
   you will be prompted for confirmations, just as with `trigger-release.ps1 -Apply` directly).
-- Captures the tag name and locates the triggered Release workflow run.
+- Captures the tag name and locates the triggered Release workflow run. The run is
+  identified as **the one this push created**: the workflow's existing run ids are
+  recorded before the tag is pushed, so older runs that share the tag (a re-pushed
+  or moved tag, a re-release) can never be mistaken for the new one — otherwise a
+  stale, already-completed run's conclusion would be reported as the result of the
+  new release, the post-release bump would be skipped, and a duplicate coworker
+  task would be filed.
 - Streams the workflow logs in real time.
 - Reports the final conclusion (success/failure) and exits with the same code.
 - On **success**, automatically bumps the version to the next patch

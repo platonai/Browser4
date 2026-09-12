@@ -175,6 +175,7 @@ browser4-cli htmlsnapshot get all text ".price"      # quick test: how many elem
 ## Reference Map
 
 - [SKILL.md §5](../SKILL.md#5-critical-warnings) — critical warnings (selectors go stale, shell quoting, stale snapshots)
+- [browser-modes.md](browser-modes.md) — which session / display mode / browser source to use
 - [htmlsnapshot.md](htmlsnapshot.md) — command reference for `get` / `query` / `grep` / `summary` / `inspect` / `export`
 - [x-sql.md](x-sql.md) — X-SQL function reference
 - [crawl.md](crawl.md) — bulk multi-page extraction

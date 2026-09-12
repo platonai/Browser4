@@ -174,6 +174,12 @@ cat > "$TEST_PAGE" <<'HTML'
 </body></html>
 HTML
 
+# Serve the fixture from $TEMP_DIR: without --directory, python http.server
+# serves the *current working directory* (the CI workspace / repo checkout),
+# so every run browsed Python's 404 "Error response" page instead of the
+# fixture.  Backends that tolerate type/click on a missing element let that
+# pass silently; the loud "no element found for selector [#input1]" failure
+# exposed the harness bug on all three platforms.
 python3 -m http.server "$TEST_PORT" --bind 127.0.0.1 --directory "$TEMP_DIR" > /dev/null 2>&1 &
 HTTP_PID=$!
 TEST_URL="http://127.0.0.1:$TEST_PORT/test.html"

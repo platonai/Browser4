@@ -13,6 +13,7 @@ import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_MAX_OPEN_TABS
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.config.VolatileConfig
+import ai.platon.pulsar.common.logging.ThrottlingLogger
 import ai.platon.pulsar.common.readable
 import ai.platon.pulsar.common.stringify
 import ai.platon.pulsar.api.Browser
@@ -43,10 +44,20 @@ class LoadingWebDriverPool constructor(
     companion object {
         var CLOSE_ALL_TIMEOUT = Duration.ofSeconds(60)
         var POLLING_TIMEOUT = Duration.ofSeconds(60)
+
+        /**
+         * The wait for a driver is done in slices of this duration, see [pollDriverInSlices].
+         *
+         * The slice has to be short enough to re-evaluate the resource guard while waiting - the guard
+         * can refuse to create a driver during a transient load spike - and long enough to avoid busy
+         * waiting. It also bounds how long the stateful driver pool is locked while waiting.
+         * */
+        var POLLING_SLICE = Duration.ofMillis(500)
         private val ID_SUPPLIER = AtomicInteger()
     }
 
     private val logger = LoggerFactory.getLogger(LoadingWebDriverPool::class.java)
+    private val throttlingLogger = ThrottlingLogger(logger, ttl = Duration.ofMinutes(1))
 
     val id = ID_SUPPLIER.incrementAndGet()
 
@@ -355,11 +366,48 @@ class LoadingWebDriverPool constructor(
         _numWaitingTasks.incrementAndGet()
 
         val driver = try {
-            resourceSafeCreateDriverIfNecessary(priority, conf)
-            statefulDriverPool.poll(timeout, unit)
+            pollDriverInSlices(priority, conf, unit.toMillis(timeout))
         } finally {
             _numWaitingTasks.decrementAndGet()
             lastActiveTime = Instant.now()
+        }
+
+        return driver
+    }
+
+    /**
+     * Wait for a driver for at most [timeoutMillis].
+     *
+     * A driver can be created only when the resource guard in [shouldCreateWebDriver] allows it, and the
+     * guard refuses while the system is over the critical load - a CPU spike caused by another browser
+     * launching is enough. Trying to create a driver only once and then blocking for the whole timeout
+     * turns such a transient refusal into a hard [WebDriverPoolExhaustedException] long after the load
+     * has settled, so the guard is re-evaluated in each slice of the wait.
+     *
+     * Waiting in slices also releases the stateful driver pool from time to time, so a driver returned
+     * by a task running in the same pool can be offered to this waiting thread.
+     * */
+    private fun pollDriverInSlices(priority: Int, conf: MutableConfig, timeoutMillis: Long): WebDriver? {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+        var driver: WebDriver? = null
+
+        while (driver == null) {
+            resourceSafeCreateDriverIfNecessary(priority, conf)
+
+            // The pool can not serve tasks anymore, e.g. it is retired or closed, do not wait for it
+            if (!isActive) {
+                break
+            }
+
+            val remainingNanos = deadline - System.nanoTime()
+            if (remainingNanos <= 0) {
+                break
+            }
+
+            val sliceMillis = TimeUnit.NANOSECONDS.toMillis(remainingNanos)
+                .coerceAtMost(POLLING_SLICE.toMillis())
+                .coerceAtLeast(1)
+            driver = statefulDriverPool.poll(sliceMillis, TimeUnit.MILLISECONDS)
         }
 
         return driver
@@ -421,6 +469,19 @@ class LoadingWebDriverPool constructor(
                 "Critical memory: {}, resource consuming drivers: {}/{}/{} (slots/pool/browser), will not create new driver",
                 AppSystemInfo.formatAvailableMemory(),
                 numDriverSlots, resourceConsumingDriversInPool, resourceConsumingDriversInBrowser
+            )
+        } else if (isCriticalResources) {
+            // The guard can refuse only transiently, the load can settle at any moment, so the waiters
+            // keep polling for a driver, see pollDriverInSlices. The message must stay exactly the same
+            // for the throttling to take effect, the varying details are logged at the debug level.
+            throttlingLogger.info(
+                "The system is over the critical load, will not create a new driver | {}",
+                browserId
+            )
+            logger.debug(
+                "The system is over the critical load, will not create a new driver | {}" +
+                        " | resource consuming drivers: {}/{}/{} (slots/pool/browser)",
+                browserId, numDriverSlots, resourceConsumingDriversInPool, resourceConsumingDriversInBrowser
             )
         }
 
