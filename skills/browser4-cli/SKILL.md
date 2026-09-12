@@ -207,35 +207,21 @@ Choosing how to extract or process data? The full decision trees, comparisons, a
 > |------|--------------|----------|
 > | `snapshot` (default) | Full AX tree with all element refs | General exploration, first look at a page |
 > | `snapshot -v 0` | Current visible screen (a single screen-height viewport chunk) | Long pages — read one chunk at a time to keep output small. Use `-v all` for the entire page |
-> | `snapshot -i` | **Interactive-oriented layout** — inner text is aggregated into the enclosing element's name so each ref line reads as a self-contained target. **Not** a strict interactive-only filter: addressable headings, paragraphs and generic containers remain | Quick orientation before acting via refs; form-heavy pages where most lines are controls anyway. To bound size use `-v 0` viewport pagination, `--selector`, or `htmlsnapshot` |
+> | `snapshot -i` | **Interactive-oriented layout** — inner text is aggregated into the enclosing element's name so each ref line reads as a self-contained target | Quick orientation before acting via refs; form-heavy pages. Pair with `-v 0` (`snapshot -i -v 0`) for one focused screenful |
 > | `htmlsnapshot` | Static HTML (CSS selectors) | Content extraction (text, attributes), when you need CSS selectors instead of AX refs |
 >
-> **`-i` does not shrink the tree:** the interactive pass aggregates text into element names; it does **not** strip non-interactive containers (addressable headings, `<div>` wrappers etc. remain). Pair `-i` with `-v 0` (`snapshot -i -v 0`) for one focused screenful, and use `htmlsnapshot` when you need CSS-selector extraction instead of refs.
->
-> **Example — reading one screenful:**
-> ```bash
-> # Default rendering: text sits under its own element lines in the tree.
-> browser4-cli snapshot -v 0 --stdout
->
-> # Interactive-oriented rendering: each ref line carries its inner text in
-> # the name. Controls, headings and containers that have refs all remain —
-> # `-i` changes the layout, it does not reduce the tree to buttons/links.
-> browser4-cli snapshot -i -v 0 --stdout
-> ```
+> **`-i` does not shrink the tree:** it aggregates text into element names — addressable headings, paragraphs and generic containers all remain. It changes the layout, it does not reduce the tree to buttons/links; use `htmlsnapshot` when you need CSS-selector extraction instead of refs.
 
 > **Warning:** `htmlsnapshot` captures the **current live DOM** at capture time. Re-capture (run `htmlsnapshot`) after any interaction or navigation to reflect JS updates — a previously captured snapshot is stale only if you do not re-capture. The auto-captured snapshot after `goto` is an earlier capture and does not include later interactions. For one-off live reads without a capture step, use `eval`. The `htmlsnapshot inspect` command reads the stored snapshot — re-capture first to inspect the updated DOM.
 
-> **Warning — backend startup fails in sandboxed/restricted environments:** The Browser4 backend (Spring Boot/JVM) writes its log files to a `logs/` directory inside the runtime bundle — `BROWSER4_RUNTIME_DIR` (default `%APPDATA%/browser4` on Windows, `~/.local/share/browser4` on Linux). In sandboxes that only allow writes to the workspace, this write is denied and the server never becomes ready: `goto`/`open` hang until the startup timeout with `FileNotFoundException … Access denied` (or `拒绝访问`) in the startup log.
+> **Warning — backend startup fails in sandboxed/restricted environments:** the backend writes its logs into the runtime bundle's `logs/` directory, under `BROWSER4_RUNTIME_DIR` (default `%APPDATA%/browser4` on Windows, `~/.local/share/browser4` on Linux). Where only the workspace is writable that write is denied and `goto`/`open` hang until the startup timeout with `FileNotFoundException … Access denied` (or `拒绝访问`).
 >
-> **Diagnose:** the failed command prints a startup-log path under `🧾 Details` — look for a `logs\*.log` (or `logs/*.log`) write failure there.
->
-> **Fix:** point the runtime and state at writable locations before the first launch:
+> **Fix:** the failed command prints the startup-log path under `🧾 Details` — look for a `logs\*.log` write failure there, then point the runtime and state at writable locations before the first launch:
 > ```bash
-> # PowerShell
-> $env:BROWSER4_RUNTIME_DIR  = "D:\workspace\browser4-runtime"  # JRE/JARs + logs (~200 MB)
-> $env:BROWSER4_CLI_STATE_DIR = "D:\workspace\.browser4-state"  # session state
+> $env:BROWSER4_RUNTIME_DIR   = "D:\workspace\browser4-runtime"  # JRE/JARs + logs (~200 MB)
+> $env:BROWSER4_CLI_STATE_DIR = "D:\workspace\.browser4-state"   # session state
 > ```
-> `BROWSER4_RUNTIME_DIR` relocates the runtime (re-downloads the bundle if not already present); `BROWSER4_CLI_STATE_DIR` already auto-falls back to `./.browser4-cli-state` when `~/.browser4` is unwritable.
+> `BROWSER4_RUNTIME_DIR` relocates the runtime (re-downloads the bundle if absent); `BROWSER4_CLI_STATE_DIR` already auto-falls back to `./.browser4-cli-state` when `~/.browser4` is unwritable.
 
 ## 6. Quick Patterns
 
@@ -254,10 +240,6 @@ Proven copy-paste recipes — full walkthroughs in **[quick-patterns.md](referen
 11. **Agent Memory** — run-start `## Memory` recall, `memory_note`, `memory_search`/`read`/`forget`, auto-deposit
 12. **Typing text (`type`)** — `type "text" <ref>`; add `--method auto|chars|exec` (requires a target ref): `auto` (default) types short text per-character and switches to a one-shot `execCommand('insertText')` bulk insert for long (>150 chars) or multi-line text on textarea/contenteditable; `chars` forces per-character typing; `exec` forces the bulk insert. `--verify` keeps its strict read-back semantics for tool callers.
 13. **File Upload** — `upload <ref> <file> [file...]` uploads one or more local files to a page file input (`<input type="file">` only); the paths must be readable by the browser process (remote backend: resolved on the backend host). Multi-file, absolute paths, `--no-snapshot` supported; see [upload.md](references/upload.md).
-
-> **Note — typing long or multi-line text (`type --method`):** `type "text" <ref> --method auto|chars|exec` (a target ref is required) — `auto` (default) types short text per-character and switches to a one-shot `execCommand('insertText')` bulk insert for long (>150 chars) or multi-line text on textarea/contenteditable; `chars` forces per-character typing; `exec` forces the bulk insert. `--verify` keeps its strict read-back semantics for tool callers.
-
-> **Note — file upload (`upload`):** `upload <ref> <file> [file...]` uploads one or more local files to a page file input (`<input type="file">` only); the paths must be readable by the browser process (remote backend: resolved on the backend host). Multi-file, absolute paths and `--no-snapshot` are supported; see [upload.md](references/upload.md).
 
 ## 7. Reference Map
 
@@ -290,8 +272,9 @@ Organized by task — follow the link that matches what you're trying to do:
 **Choose how the browser runs:**
 [browser-modes.md](references/browser-modes.md) — session (default / named / swarm) × display (headless / headed / SUPERVISED) × browser source (managed / `attach --cdp` / `attach --extension`), plus profile mode, interact level, contexts, and their failure modes
 
-**Manage skills and agent instructions:**
+**Manage skills & configuration:**
 [skills.md](references/skills.md) — bundled skill files, backend skill management
+[config.md](references/config.md) — `config` command family: CLI defaults and server-side runtime overrides
 
 **AI-powered extraction:** [agent.md](references/agent.md) — `extract`, `summarize`, `agent run|status|result`, LLM provider config
 
@@ -305,16 +288,10 @@ Organized by task — follow the link that matches what you're trying to do:
 
 **Troubleshoot:** [shell-quoting.md](references/shell-quoting.md) — avoid shell-quoting breakage for complex JS/X-SQL on Windows / Git Bash
 
-**Manage configuration:** [config.md](references/config.md) — `config` command family: CLI defaults and server-side runtime overrides
-
 ## 8. Installation
 
 ```bash
-# When Node.js available:
-npm install -g browser4-cli
-browser4-cli install
-# Or on Windows:
-irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
-# Or on Linux/macOS:
-curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
+npm install -g browser4-cli && browser4-cli install     # Node.js available
+irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex   # Windows
+curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash  # Linux/macOS
 ```
