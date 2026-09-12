@@ -95,6 +95,10 @@ class McpHttpServerE2ETest {
             toolManager = toolManager,
             port = testPort,
             serverInfo = Implementation(name = "browser4-e2e-http-test", version = "1.0.0"),
+            // Isolate from the process-wide CustomToolRegistry: this test asserts
+            // the exact tool set discovered from the mocked AgentToolManager.
+            customExecutors = { emptyList() },
+            frontendAliases = emptyList(),
         )
         mcpHttpServer.start()
 
@@ -274,6 +278,8 @@ class McpHttpServerE2ETest {
                 port = busyPort,
                 host = "127.0.0.1",
                 serverInfo = Implementation(name = "browser4-e2e-http-test", version = "1.0.0"),
+                customExecutors = { emptyList() },
+                frontendAliases = emptyList(),
             )
             try {
                 fallbackServer.start()

@@ -214,6 +214,77 @@ fun runBrowser4MCPServer(args: Array<String> = emptyArray()) {
     }
 }
 
+/**
+ * The app selected on the command line (`--app <name>`), with the option removed
+ * from [args] so the selected app only sees its own options.
+ */
+internal class AppInvocation(val app: String, val args: Array<String>)
+
+/**
+ * Extract the `--app <name>` / `--app=<name>` option from the command line.
+ *
+ * @return the parsed invocation, or `null` when no (well-formed) `--app` was given
+ */
+internal fun parseAppOption(args: Array<String>): AppInvocation? {
+    var app: String? = null
+    val remaining = mutableListOf<String>()
+
+    var i = 0
+    while (i < args.size) {
+        val arg = args[i]
+        when {
+            arg == "--app" -> {
+                val value = args.getOrNull(i + 1) ?: return null
+                app = value.lowercase()
+                i += 2
+                continue
+            }
+            arg.startsWith("--app=") -> {
+                app = arg.substringAfter('=').lowercase()
+            }
+            else -> remaining += arg
+        }
+        i++
+    }
+
+    return app?.let { AppInvocation(it, remaining.toTypedArray()) }
+}
+
+/**
+ * Run the standalone MCP server when the command line asks for it.
+ *
+ * This is what makes the documented entry point real:
+ *
+ * ```bash
+ * java -jar Browser4.jar --app mcp                        # STDIO
+ * java -jar Browser4.jar --app mcp --transport http       # HTTP/SSE
+ * ```
+ *
+ * The launcher dispatches **before** Spring starts, because the standalone MCP
+ * server manages its own agentic context and must not boot the web application.
+ *
+ * @return `true` when the MCP server handled the invocation — the caller must
+ *   then *not* start Spring; `false` for any other app, so the caller keeps its
+ *   normal behaviour unchanged.
+ */
+fun runMcpAppIfRequested(args: Array<String>): Boolean {
+    val invocation = parseAppOption(args) ?: return false
+
+    if (invocation.app != MCP_APP_NAME) {
+        getLogger("Browser4MCPServerRunner").info(
+            "Unknown app '{}' — available apps: '{}'. Starting the default application.",
+            invocation.app, MCP_APP_NAME
+        )
+        return false
+    }
+
+    runBrowser4MCPServer(invocation.args)
+    return true
+}
+
+/** The `--app` name of the standalone MCP server. */
+const val MCP_APP_NAME = "mcp"
+
 // ---------------------------------------------------------------------------
 // Transport implementations
 // ---------------------------------------------------------------------------

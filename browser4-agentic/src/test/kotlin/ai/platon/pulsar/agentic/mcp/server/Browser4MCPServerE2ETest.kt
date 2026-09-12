@@ -96,7 +96,11 @@ class Browser4MCPServerE2ETest {
 
         mcpServer = Browser4MCPServer(
             toolManager = toolManager,
-            serverInfo = Implementation(name = "browser4-e2e-test", version = "1.0.0")
+            serverInfo = Implementation(name = "browser4-e2e-test", version = "1.0.0"),
+            // Isolate from the process-wide CustomToolRegistry: this test asserts
+            // the exact tool set discovered from the mocked AgentToolManager.
+            customExecutors = { emptyList() },
+            frontendAliases = emptyList(),
         )
 
         // ---- in-process bidirectional pipe ----

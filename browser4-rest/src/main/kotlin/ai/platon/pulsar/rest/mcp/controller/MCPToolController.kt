@@ -1,11 +1,12 @@
 package ai.platon.pulsar.rest.mcp.controller
 
-import ai.platon.pulsar.agentic.ExtractResult
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
+import ai.platon.pulsar.agentic.mcp.McpToolNames
 import ai.platon.pulsar.agentic.model.TcException
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
+import ai.platon.pulsar.agentic.tools.ToolResultTextRenderer
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.CodingToolExecutor
 import ai.platon.pulsar.coding.CodingAgentShell
@@ -105,7 +106,15 @@ class MCPToolController(
     private val sessionManager: PulsarSessionManager,
 ) {
     companion object {
-        private val FRONTEND_TOOL_NAME_ALIASES: Map<String, String> = mapOf(
+        /**
+         * Playwright-MCP style frontend tool name aliases: the names an agent
+         * reaches for first, mapped to the internal tool they stand for.
+         *
+         * The key set is kept in sync with [McpToolNames.frontendAliases] and
+         * asserted by `McpToolAliasParityTest`; visibility is internal so that
+         * test can read it.
+         */
+        internal val FRONTEND_TOOL_NAME_ALIASES: Map<String, String> = mapOf(
             "browser_navigate" to "navigate",
             "browser_snapshot" to "aria_snapshot",
             "browser_navigate_back" to "go_back",
@@ -878,18 +887,7 @@ class MCPToolController(
             if (exception != null) {
                 ResponseEntity.ok(errorResponse(buildErrorMessage(toolName, exception)))
             } else {
-                val text = when (val v = evaluate.value) {
-                    null -> if (evaluate.className == "null") "null" else ""
-                    is String -> v
-                    is Number, is Boolean -> v.toString()
-                    is Map<*, *>, is Collection<*>, is Array<*> -> pulsarObjectMapper().writeValueAsString(v)
-                    else -> pulsarObjectMapper().writeValueAsString(
-                        mapOf(
-                            "type" to (evaluate.className ?: v::class.qualifiedName),
-                            "description" to v.toString()
-                        )
-                    )
-                }
+                val text = ToolResultTextRenderer.render(evaluate)
 
                 val requestArgs = request.arguments ?: emptyMap()
                 val (paginatedText, pagination) = paginateIfRequested(text, requestArgs)
@@ -1007,18 +1005,7 @@ class MCPToolController(
             if (exception != null) {
                 ResponseEntity.ok(errorResponse(buildErrorMessage(toolName, exception)))
             } else {
-                val text = when (val v = evaluate.value) {
-                    null -> if (evaluate.className == "null") "null" else ""
-                    is String -> v
-                    is Number, is Boolean -> v.toString()
-                    is Map<*, *>, is Collection<*>, is Array<*> -> pulsarObjectMapper().writeValueAsString(v)
-                    else -> pulsarObjectMapper().writeValueAsString(
-                        mapOf(
-                            "type" to (evaluate.className ?: v::class.qualifiedName),
-                            "description" to v.toString()
-                        )
-                    )
-                }
+                val text = ToolResultTextRenderer.render(evaluate)
 
                 val requestArgs = request.arguments ?: emptyMap()
                 val (paginatedText, pagination) = paginateIfRequested(text, requestArgs)
@@ -1073,14 +1060,9 @@ class MCPToolController(
             }
             throw IllegalArgumentException(errorMsg)
         }
-        // Distinguish JS null (className == "null") from JS undefined (className == "undefined")
-        // and Kotlin Unit (no meaningful return value).
-        // All three arrive as evaluate.value == null, but only JS null should produce visible output.
-        return evaluate.value?.toString() ?: when (evaluate.className) {
-            "null" -> "null"
-            "undefined" -> "undefined"
-            else -> ""
-        }
+        // JS null renders as the literal "null"; JS undefined and Kotlin Unit
+        // render as an empty string (shared with the standard MCP server).
+        return ToolResultTextRenderer.render(evaluate)
     }
 
     private fun Any?.toAnyMap(): Map<String, Any?>? {
@@ -1125,33 +1107,9 @@ class MCPToolController(
             if (exception != null) {
                 ResponseEntity.ok(errorResponse(buildErrorMessage(request.tool, exception)))
             } else {
-                // Distinguish JS null (className == "null") from JS undefined (className == "undefined")
-                // and Kotlin Unit (no meaningful return value).
-                // All three arrive as evaluate.value == null, but only JS null should produce visible output.
-                val text = when (val v = evaluate.value) {
-                    null -> if (evaluate.className == "null") "null" else ""
-                    is String -> v
-                    is Number, is Boolean -> v.toString()
-                    // Maps, Lists, arrays etc. — serialize as valid JSON
-                    is Map<*, *>, is Collection<*>, is Array<*> -> pulsarObjectMapper().writeValueAsString(v)
-                    // ExtractResult — serialize clean JSON with success, message, and data fields
-                    is ExtractResult -> pulsarObjectMapper().writeValueAsString(
-                        mapOf(
-                            "success" to v.success,
-                            "message" to v.message,
-                            "data" to v.data
-                        )
-                    )
-                    // Non-serializable domain objects (WebDriver, Browser, etc.) —
-                    // wrap in a description object so internal object graphs are never
-                    // exposed to the client
-                    else -> pulsarObjectMapper().writeValueAsString(
-                        mapOf(
-                            "type" to (evaluate.className ?: v::class.qualifiedName),
-                            "description" to v.toString()
-                        )
-                    )
-                }
+                // Rendered by the shared renderer so the standard MCP server (8088)
+                // and this dispatcher return identical text for the same tool call.
+                val text = ToolResultTextRenderer.render(evaluate)
 
                 // Server-side pagination: when page/page-size are present, paginate
                 // the result text to reduce network traffic for large snapshots.
@@ -1297,15 +1255,12 @@ class MCPToolController(
 
     /**
      * Convert domain+method to snake_case MCP tool name.
-     * Must match logic in Browser4MCPServer.
+     *
+     * Delegates to [McpToolNames] so the private dispatcher and the standard MCP
+     * server cannot drift apart on spelling.
      */
-    internal fun toMcpToolName(domain: String, method: String): String {
-        val snake = method.replace(Regex("([A-Z])")) { "_${it.groupValues[1].lowercase()}" }
-        return when (domain) {
-            "tab", "system" -> snake
-            else -> "${domain}_$snake"
-        }
-    }
+    internal fun toMcpToolName(domain: String, method: String): String =
+        McpToolNames.toMcpToolName(domain, method)
 
     /**
      * Convert snake_case back to camelCase.

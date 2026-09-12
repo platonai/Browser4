@@ -1,6 +1,10 @@
 package ai.platon.pulsar.agentic.mcp.server
 
+import ai.platon.pulsar.agentic.mcp.McpToolAlias
+import ai.platon.pulsar.agentic.mcp.McpToolNames
 import ai.platon.pulsar.agentic.tools.AgentToolManager
+import ai.platon.pulsar.agentic.tools.CustomToolRegistry
+import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.common.getLogger
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.install
@@ -55,12 +59,17 @@ import java.util.concurrent.ConcurrentHashMap
  * @param port The port to listen on (default 8088).
  * @param host The hostname to bind to (default "0.0.0.0").
  * @param serverInfo MCP server identification for the initialize handshake.
+ * @param toolManagerResolver Resolves which session a tool call runs against.
+ *   Defaults to the single [toolManager] this server was started with.
  */
 class McpHttpServer(
     private val toolManager: AgentToolManager,
     private val port: Int = DEFAULT_MCP_HTTP_PORT,
     private val host: String = "0.0.0.0",
     serverInfo: Implementation = Implementation(name = "browser4-mcp-server", version = "1.0.0"),
+    toolManagerResolver: ToolManagerResolver = ToolManagerResolver.single(toolManager),
+    customExecutors: () -> List<ToolExecutor> = { CustomToolRegistry.instance.getAllExecutors() },
+    frontendAliases: List<McpToolAlias> = McpToolNames.frontendAliases,
 ) {
     companion object {
         /** Default port for the MCP HTTP server. */
@@ -70,7 +79,13 @@ class McpHttpServer(
     private val logger = getLogger(this)
 
     /** The shared Browser4 MCP server — one instance handles all client sessions. */
-    private val mcpServer = Browser4MCPServer(toolManager, serverInfo)
+    private val mcpServer = Browser4MCPServer(
+        toolManager = toolManager,
+        serverInfo = serverInfo,
+        customExecutors = customExecutors,
+        toolManagerResolver = toolManagerResolver,
+        frontendAliases = frontendAliases,
+    )
 
     /** Tracks active SSE transports by session ID so POST requests can be routed. */
     private val transports = ConcurrentHashMap<String, SseServerTransport>()

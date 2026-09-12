@@ -3,9 +3,13 @@ package ai.platon.pulsar.rest.config
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.agentic.mcp.server.McpHttpServer
+import ai.platon.pulsar.agentic.mcp.server.ToolManagerResolver
+import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.api.model.DisplayMode
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.skeleton.PulsarSettings
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.boot.context.event.ApplicationReadyEvent
 import org.springframework.context.annotation.Bean
@@ -78,6 +82,13 @@ class McpHttpServerConfiguration(
      * default) and the session never pops up an unexpected headed window.
      */
     private val agenticContext: AgenticContext,
+    /**
+     * Provider for the REST-layer session registry, used to route a tool call
+     * that carries an explicit `sessionId` to that session's agent. Resolved
+     * lazily so this configuration does not depend on the manager's own
+     * initialisation order.
+     */
+    private val sessionManagerProvider: ObjectProvider<PulsarSessionManager>,
 ) {
     private val logger = getLogger(this)
 
@@ -110,8 +121,38 @@ class McpHttpServerConfiguration(
             toolManager = agent.agentToolManager,
             port = port,
             host = host,
+            toolManagerResolver = sessionResolver(agent),
         )
     }
+
+    /**
+     * Session resolution for MCP-over-HTTP.
+     *
+     * Without a `sessionId` argument a tool call drives this server's own session
+     * (the pre-existing behaviour). With one, the call is routed to the matching
+     * `PulsarSessionManager` session — so an MCP client can drive the very browser
+     * the CLI opened (`browser4-cli open`, `attach`, named sessions) instead of
+     * silently reaching a second, unrelated browser.
+     *
+     * The provider is resolved lazily: [PulsarSessionManager] must not be pulled
+     * in while this configuration is being created.
+     */
+    private fun sessionResolver(defaultAgent: BasicBrowserAgent): ToolManagerResolver = ToolManagerResolver.of(
+        defaultToolManager = { defaultAgent.agentToolManager },
+        lookup = { sessionId ->
+            val sessionManager = sessionManagerProvider.ifAvailable
+            if (sessionManager == null) {
+                logger.warn("MCP session lookup failed: PulsarSessionManager is not available")
+                null
+            } else {
+                runCatching { sessionManager.getOrRecoverSession(sessionId) }
+                    .onFailure { logger.warn("MCP session lookup failed | sessionId={} | {}", sessionId, it.message) }
+                    .getOrNull()
+                    ?.agenticSession
+                    ?.companionAgent as? BasicBrowserAgent
+            }?.agentToolManager
+        },
+    )
 
     /**
      * Start the MCP HTTP server once the application is fully initialized.

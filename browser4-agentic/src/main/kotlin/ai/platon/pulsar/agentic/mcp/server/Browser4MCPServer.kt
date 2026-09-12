@@ -1,8 +1,13 @@
 package ai.platon.pulsar.agentic.mcp.server
 
+import ai.platon.pulsar.agentic.mcp.McpToolAlias
+import ai.platon.pulsar.agentic.mcp.McpToolNames
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolManager
+import ai.platon.pulsar.agentic.tools.CustomToolRegistry
+import ai.platon.pulsar.agentic.tools.ToolResultTextRenderer
+import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.common.getLogger
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
@@ -16,16 +21,35 @@ import kotlinx.serialization.json.JsonPrimitive
  * This server allows external MCP clients (Claude Desktop, Cursor, Windsurf, etc.)
  * to drive a real browser through the Model Context Protocol.
  *
- * Tools are discovered dynamically from the [AgentToolManager]'s registered executors and their
- * [ai.platon.pulsar.agentic.model.ToolSpec] metadata, keeping registration in sync with the
- * internal agent tool-call infrastructure.
+ * Tools are discovered dynamically from two disjoint sources, so the standard
+ * server exposes the same capability surface as the private dispatcher:
+ *
+ * - the [AgentToolManager]'s registered executors — the built-in domains
+ *   (`tab`, `browser`, `agent`, `coding`, `b4`, `system`, `skill`)
+ * - [CustomToolRegistry] — the plugin and business domains registered through
+ *   `ToolMount` (`command`, `crawl`, `swarm`, `webdb`, `html_snapshot`,
+ *   `experience`, `memory`, markdown/images/media/pptx/seo/...)
+ *
+ * Every tool handler routes its call through [AgentToolManager.execute], matching
+ * the internal agent execution path, and renders its result through
+ * [ToolResultTextRenderer] so both MCP channels return identical text.
  *
  * @param toolManager The [AgentToolManager] to use for tool discovery and execution.
  * @param serverInfo MCP server identification (name and version).
+ * @param customExecutors Supplies the plugin/business executors to merge in.
+ *   Overridable so tests are not affected by the process-wide registry.
+ * @param toolManagerResolver Decides which session a tool call runs against; see
+ *   [ToolManagerResolver] for the single-session vs multi-session semantics.
+ * @param frontendAliases The extra `browser_*` spellings to advertise alongside
+ *   the canonical tools. Pass an empty list for a minimal, canonical-only tool
+ *   list.
  */
 class Browser4MCPServer(
     private val toolManager: AgentToolManager,
     serverInfo: Implementation = Implementation(name = "browser4-mcp-server", version = "1.0.0"),
+    private val customExecutors: () -> List<ToolExecutor> = { CustomToolRegistry.instance.getAllExecutors() },
+    private val toolManagerResolver: ToolManagerResolver = ToolManagerResolver.single(toolManager),
+    private val frontendAliases: List<McpToolAlias> = McpToolNames.frontendAliases,
 ) {
     private val logger = getLogger(this)
 
@@ -36,13 +60,31 @@ class Browser4MCPServer(
                 tools = ServerCapabilities.Tools(listChanged = false)
             )
         ),
-        instructions = """
-            Browser4 MCP Server gives you full control over a real Chrome browser.
-            Use the tools in order: navigate first, then interact, then read content.
-            Always call wait_for_selector after actions that trigger page loads or dynamic updates.
-        """.trimIndent()
+        instructions = serverInstructions(),
     ) {
         registerToolsFromManager(toolManager)
+    }
+
+    private fun serverInstructions(): String = buildString {
+        appendLine("Browser4 MCP Server gives you full control over a real Chrome browser.")
+        appendLine("Use the tools in order: navigate first, then interact, then read content.")
+        append("Always call wait_for_selector after actions that trigger page loads or dynamic updates.")
+        if (toolManagerResolver.multiSession) {
+            appendLine()
+            appendLine()
+            append(
+                "This server can drive several browser sessions. Every tool accepts an optional " +
+                    "'$SESSION_ID_PARAM' argument; pass a session id (e.g. one created by browser4-cli) " +
+                    "to act on that session, or omit it to use the server's own session."
+            )
+        } else {
+            appendLine()
+            appendLine()
+            append(
+                "This server drives a single browser session shared by all connected clients, " +
+                    "so there is no session handle to pass."
+            )
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -77,6 +119,10 @@ class Browser4MCPServer(
     private fun arg(arguments: JsonObject?, key: String): String? =
         arguments?.get(key)?.toString()?.trim('"')
 
+    /** Reads the optional session handle a client may pass to any tool. */
+    private fun sessionIdArg(arguments: JsonObject?): String? =
+        arg(arguments, SESSION_ID_PARAM)?.takeIf { it.isNotBlank() }
+
     // -------------------------------------------------------------------------
     // Result helpers
     // -------------------------------------------------------------------------
@@ -90,87 +136,177 @@ class Browser4MCPServer(
     }
 
     // -------------------------------------------------------------------------
-    // AgentToolManager-based dynamic tool registration
+    // Tool registration
     // -------------------------------------------------------------------------
 
+    /** One advertised tool: the canonical domain/method plus the spec it was built from. */
+    private data class ToolRegistration(
+        val domain: String,
+        val method: String,
+        val spec: ToolSpec,
+        val source: String,
+    )
+
     /**
-     * Register all MCP tools by discovering executors and their [ToolSpec] metadata
-     * from [toolManager]. Every tool handler routes its call through
-     * [AgentToolManager.execute], matching the internal agent execution path.
+     * Register every MCP tool by discovering executors and their [ToolSpec]
+     * metadata from [toolManager] and from [customExecutors].
+     *
+     * Built-in executors are collected first and win name conflicts, which are
+     * logged rather than silently overwritten: both `skill` executors expose
+     * `list`/`install`/`uninstall`, and the built-in
+     * [ai.platon.pulsar.agentic.skills.tools.SkillToolExecutor] is the
+     * agent-facing one. Deduplicating here also keeps the registration safe on
+     * newer MCP SDK releases, which reject duplicate tool names outright.
      */
     private fun Server.registerToolsFromManager(toolManager: AgentToolManager) {
-        val toolExecutors = toolManager.registeredExecutors.values
-        for (executor in toolExecutors) {
-            val specs = executor.getToolSpecs()
-            if (specs.isEmpty()) continue
-            for ((method, spec) in specs) {
-                val mcpName = toMcpToolName(executor.domain, method)
-                val description = spec.description?.trim()?.ifBlank { null }
-                    ?: "${executor.domain}.$method"
-                val inputSchema = buildSchemaFromSpec(spec)
+        val registrations = linkedMapOf<String, ToolRegistration>()
+        var builtInCount = 0
+        var customCount = 0
+        var conflicts = 0
 
-                addTool(name = mcpName, description = description, inputSchema = inputSchema) { request ->
-                    val args = buildArgsMap(request.params.arguments, spec)
-                    val tc = ToolCall(
-                        domain = executor.domain,
-                        method = method,
-                        arguments = args.toMutableMap(),
+        fun collect(executor: ToolExecutor, source: String) {
+            for ((method, spec) in executor.getToolSpecs()) {
+                val name = McpToolNames.toMcpToolName(executor.domain, method)
+                val existing = registrations[name]
+                if (existing != null) {
+                    conflicts++
+                    logger.info(
+                        "MCP tool name conflict: '{}' ({}.{}) is shadowed by {}.{} — keeping the built-in executor",
+                        name, executor.domain, method, existing.domain, existing.method
                     )
-                    runCatching { toolManager.execute(tc) }
-                        .fold(
-                            onSuccess = { result ->
-                                val evaluate = result.evaluate
-                                val exc = evaluate.exception
-                                if (exc != null) {
-                                    errorResult("$mcpName failed: ${exc.cause?.message ?: exc.expression}")
-                                } else {
-                                    textResult(evaluate.value?.toString() ?: "")
-                                }
-                            },
-                            onFailure = { errorResult("$mcpName failed: ${it.message}") }
-                        )
+                    continue
                 }
+                registrations[name] = ToolRegistration(executor.domain, method, spec, source)
+                if (source == SOURCE_BUILT_IN) builtInCount++ else customCount++
             }
         }
 
-        logger.info("Registered {} MCP tools from AgentToolManager", toolExecutors.sumOf { it.getToolSpecs().size })
+        toolManager.registeredExecutors.values.forEach { collect(it, SOURCE_BUILT_IN) }
+        customExecutors().forEach { collect(it, SOURCE_CUSTOM) }
+
+        for ((name, registration) in registrations) {
+            addTool(
+                name = name,
+                description = registration.spec.description?.trim()?.ifBlank { null }
+                    ?: "${registration.domain}.${registration.method}",
+                inputSchema = buildSchemaFromSpec(registration.spec),
+            ) { request ->
+                callTool(name, registration, request.params.arguments)
+            }
+        }
+
+        val aliasCount = registerFrontendAliases(registrations)
+
+        logger.info(
+            "Registered {} MCP tools ({} built-in, {} custom/plugin, {} frontend aliases, {} name conflicts skipped)",
+            registrations.size + aliasCount, builtInCount, customCount, aliasCount, conflicts
+        )
     }
 
     /**
-     * Convert a domain + camelCase method name to a snake_case MCP tool name.
+     * Advertise the Playwright-MCP style `browser_*` names as additional
+     * spellings of the canonical tools they map to.
      *
-     * Tab and system domains use just the snake_case method name (no prefix).
-     * All other domains prepend `{domain}_` to disambiguate.
+     * Agents trained on other browser MCP servers reach for `browser_click` /
+     * `browser_type` first; without these aliases they get "unknown tool" even
+     * though the capability exists. An alias whose canonical tool is not
+     * registered is skipped, never registered as a dead entry.
      *
-     * Examples:
-     * - tab.goBack     -> go_back
-     * - browser.switchTab -> browser_switch_tab
-     * - fs.writeString    -> fs_write_string
-     * - agent.extract     -> agent_extract
-     * - system.help       -> help
+     * @return the number of aliases registered
      */
-    private fun toMcpToolName(domain: String, method: String): String {
-        val snake = method.replace(Regex("([A-Z])")) { "_${it.groupValues[1].lowercase()}" }
-        return when (domain) {
-            "tab", "system" -> snake
-            else -> "${domain}_$snake"
+    private fun Server.registerFrontendAliases(canonical: Map<String, ToolRegistration>): Int {
+        var registered = 0
+        for (alias in frontendAliases) {
+            val target = canonical[alias.canonicalName]
+            if (target == null) {
+                logger.debug(
+                    "MCP alias '{}' skipped: canonical tool '{}' is not registered",
+                    alias.frontendName, alias.canonicalName
+                )
+                continue
+            }
+            val base = target.spec.description?.trim()?.ifBlank { null }
+                ?: "${target.domain}.${target.method}"
+            addTool(
+                name = alias.frontendName,
+                description = "$base (Alias of '${alias.canonicalName}'.)",
+                inputSchema = buildSchemaFromSpec(target.spec),
+            ) { request ->
+                callTool(alias.frontendName, target, request.params.arguments)
+            }
+            registered++
         }
+        return registered
+    }
+
+    /**
+     * Execute one advertised tool.
+     *
+     * The tool manager is resolved per call so a multi-session server honors the
+     * client's optional session handle; a single-session server returns its one
+     * bound manager. An unknown handle is reported as a tool error instead of
+     * silently acting on the wrong browser.
+     */
+    private suspend fun callTool(
+        toolName: String,
+        registration: ToolRegistration,
+        arguments: JsonObject?,
+    ): CallToolResult {
+        val sessionId = sessionIdArg(arguments)
+        val resolvedManager = toolManagerResolver.resolve(sessionId)
+            ?: return errorResult("Session not found: $sessionId")
+
+        val args = buildArgsMap(arguments, registration.spec)
+        val toolCall = ToolCall(
+            domain = registration.domain,
+            method = registration.method,
+            arguments = args.toMutableMap(),
+        )
+
+        return runCatching { resolvedManager.execute(toolCall) }
+            .fold(
+                onSuccess = { result ->
+                    val evaluate = result.evaluate
+                    val exception = evaluate.exception
+                    if (exception != null) {
+                        errorResult("$toolName failed: ${exception.cause?.message ?: exception.expression}")
+                    } else {
+                        textResult(ToolResultTextRenderer.render(evaluate))
+                    }
+                },
+                onFailure = { errorResult("$toolName failed: ${it.message}") }
+            )
     }
 
     /**
      * Build a [ToolSchema] from a [ToolSpec], mapping Kotlin type names to JSON Schema types.
+     *
+     * Every tool also accepts the optional [SESSION_ID_PARAM] handle; it is read
+     * separately from the spec arguments and is never required.
      */
     private fun buildSchemaFromSpec(spec: ToolSpec): ToolSchema {
-        val props = spec.arguments.associate { arg ->
-            arg.name to typeToJsonProp(arg.type, arg.name)
+        val props = linkedMapOf<String, JsonObject>()
+        for (arg in spec.arguments) {
+            props[arg.name] = typeToJsonProp(arg.type, arg.name)
         }
+        props[SESSION_ID_PARAM] = stringProp(sessionIdDescription())
+
         val required = spec.arguments
             .filter { it.defaultValue == null }
             .map { it.name }
+
         return ToolSchema(
-            properties = if (props.isEmpty()) null else JsonObject(props),
+            properties = JsonObject(props),
             required = required.ifEmpty { null },
         )
+    }
+
+    /** How the injected `sessionId` argument documents itself for this server. */
+    private fun sessionIdDescription(): String = if (toolManagerResolver.multiSession) {
+        "Session handle to run this tool against, e.g. a session id created by browser4-cli. " +
+            "Omit it to use the server's own session."
+    } else {
+        "Ignored: this server drives a single browser session shared by all clients."
     }
 
     /**
@@ -191,6 +327,9 @@ class Browser4MCPServer(
     /**
      * Extract all argument values from the MCP request's JSON arguments object into
      * a plain [Map] suitable for [ToolCall.arguments].
+     *
+     * Only declared spec arguments are forwarded: the session handle was already
+     * consumed by [callTool] and must not leak into the tool implementation.
      */
     private fun buildArgsMap(arguments: JsonObject?, spec: ToolSpec): Map<String, Any?> {
         if (arguments == null) return emptyMap()
@@ -205,5 +344,13 @@ class Browser4MCPServer(
             }
             argSpec.name to value
         }.toMap()
+    }
+
+    private companion object {
+        /** Optional per-call session handle injected into every tool schema. */
+        const val SESSION_ID_PARAM = "sessionId"
+
+        const val SOURCE_BUILT_IN = "built-in"
+        const val SOURCE_CUSTOM = "custom"
     }
 }
