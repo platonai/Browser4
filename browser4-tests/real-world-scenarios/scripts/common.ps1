@@ -648,12 +648,13 @@ if ($env:BROWSER4_TEST_SESSION_DIR) {
         $candidate = Join-Path $script:RepoRoot $candidate
     }
     $script:TestSessionDir = [System.IO.Path]::GetFullPath($candidate)
-}
-if (-not $script:TestSessionDir) {
+} else {
     $runId = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffffffZ')
     $script:TestSessionDir = Join-Path (Join-Path $script:RepoRoot '.test-sessions') $runId
-    $env:BROWSER4_TEST_SESSION_DIR = $script:TestSessionDir
 }
+# Normalise for every descendant: exactly one canonical absolute path, so a
+# child resolving it again against a different cwd cannot diverge.
+$env:BROWSER4_TEST_SESSION_DIR = $script:TestSessionDir
 
 # Relative + absolute aliases for prompt interpolation.  Issue reports should
 # quote the relative form so they stay machine-independent.

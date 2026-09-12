@@ -120,8 +120,10 @@ function New-Browser4EvalPrompt {
         } else {
             $runId = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffffffZ')
             $testSessionDir = Join-Path (Join-Path $wsRoot '.test-sessions') $runId
-            $env:BROWSER4_TEST_SESSION_DIR = $testSessionDir
         }
+        # Normalise for every descendant: exactly one canonical absolute path,
+        # so a child resolving it again against a different cwd cannot diverge.
+        $env:BROWSER4_TEST_SESSION_DIR = $testSessionDir
         # Materialise it: the prompt promises a directory that already exists,
         # and bin/test.ps1 defers creation to whoever needs it first.
         if (-not (Test-Path -LiteralPath $testSessionDir -PathType Container)) {
