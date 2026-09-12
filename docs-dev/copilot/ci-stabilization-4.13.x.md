@@ -96,10 +96,9 @@ org.opentest4j.AssertionFailedError: http://127.0.0.1:32769/json
 * **分类：环境敏感 / flaky（非回归）**。依据：ci.3、ci.4 同一用例通过，本地全量也通过
   （`Tests run: 3, Failures: 0, Errors: 0, Skipped: 1`，14.50 s），而 ci.5 与 ci.4 的
   代码差异只有工作流注释和文档，不可能影响该测试。
-* 处置：`monitor-ci.ps1` 已自动落 coworker 任务
-  `coworker/tasks/main/2working/fix-ci-yml-tag-failure.md`（提取到的失败类
-  `FAILED_LIST="ai.platon.pulsar.browser.TestLoadResources"` 明确），修复由该任务跟进；
-  本轮报告记录证据与分类，修复落地后再补一轮 CI 验证。
+* 处置：`monitor-ci.ps1` 自动落了 coworker 任务 `fix-ci-yml-tag-failure.md`（提取到的失败类
+  `FAILED_LIST="ai.platon.pulsar.browser.TestLoadResources"` 明确），已由提交 `2671e1574d` 修复
+  ——机制反推与对照实验见 §9；本轮对修复做了**独立复核**（见 §7 末行），再用 ci.6 做端到端验证。
 * 顺带发现：`monitor-ci.ps1` 的错误提取抓的是 `Check Test Status`（汇报步骤）而不是真正的
   `[ERROR] ... FAILURE` 行，生成的任务正文里前 3 个 block 都是汇报脚本；建议后续改为优先提取
   `FAILED_LIST=` / `[ERROR] Tests run: ... Failures: [1-9]` / `<<< FAILURE!` 行（见 §8.5）。
@@ -250,9 +249,10 @@ root `pom.xml` 的默认值是"排除所有非 Fast"：
 | `docs/TESTING.md` | 新增「本地复现 CI 测试范围（一次跑全）」小节：Windows/Linux 命令、`-Dsurefire.excludedGroups=` 替换语义、复跑单模块/单类（含 group 过滤）的完整命令 | 单类命令实测跑出 4 个用例并通过（见 §5） |
 | `docs-dev/copilot/ci-stabilization-4.13.x.md` | 本报告 | — |
 | platonai/Browser4#592 | 抓取页静默丢失 + 任务终态后仍在后台工作 | issue |
+| coworker `2671e1574d`（见 §9） | `LoadingWebDriverPool.pollDriverInSlices`：等待按 500 ms 分片、每片重新评估资源守卫；池 retire/close 时立即返回；过载拒绝补节流日志；新增 `LoadingWebDriverPoolTest` | **本轮独立复核**：`-pl browser4-core/browser4-protocol,browser4-core/browser4-browser,browser4-rest -am`（13 模块 / 2132 用例 / 0 失败）——protocol 80→**82**（新增 2 用例，4.0 s 通过）、agentic 957、skeleton 393、browser 266、rest 331 全部 0 失败 |
 
-> 未改动任何产品代码：本轮的 CI 红点来自测试侧缺陷（已由 coworker 修复）与负载敏感的既有测试，
-> 产品侧问题按流程开 issue 跟踪。
+> 产品代码改动只有 coworker 任务带来的 `2671e1574d`（驱动池分片轮询，见 §9），本轮已独立复核；
+> 其余改动都集中在 CI 判定逻辑、测试文档与本报告。
 
 ## 8. 遗留风险与后续动作
 
@@ -263,6 +263,13 @@ root `pom.xml` 的默认值是"排除所有非 Fast"：
 3. `CrawlFixtureMetadataTest` 在 CI 上仍需 171–215 s，是主 CI 里最慢的单类之一；若后续把它移出主 CI，
    请同步 `AGENTS.md` 与本报告的排除清单。
 4. 本地全量自检约 23 分钟，建议在改动跨模块/序列化/Spring 装配时作为 tag 前的预检（见 `docs/TESTING.md`）。
+5. `bin/ci/monitor-ci.ps1` 的失败提取（§3.1）：Pass 1 只识别 Rust/Go 形态的失败行，Maven/surefire 的
+   `<<< FAILURE! -- in <class>`、`[ERROR] <class>.<method> -- Time elapsed: ... <<< FAILURE!`、
+   `FAILED_LIST="..."` 都不识别，于是自动任务里没有 `## Failing Tests` 段、正文被汇报步骤淹没。
+   建议给 Pass 1 补这三条模式（`bin/ci/tests/monitor-ci.tests.ps1` 可直接加用例；`bin/release/monitor-release.ps1`
+   有同名函数的副本，需同步）。本轮**只记录不改**，以免在最终验证轮引入脚本改动。
+6. `TestLoadResources.testLoadResource`（§3.1/§9）修复后仍需观察：它依赖 `/json` 这类非 HTML 资源的
+   抓取，若 ci.6 再红，优先看 `Driver pool is exhausted` 与 `over the critical load` 两条日志。
 
 ---
 
