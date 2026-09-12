@@ -163,9 +163,7 @@ class Browser4MCPServerToolManagerTest {
     fun navigateToolRoutesCallThroughManager() = runBlocking {
         coEvery { toolManager.execute(any()) } returns toolCallResult(value = null)
 
-        val tool = mcpServer.server.tools["navigate"]!!
-        val request = buildRequest("navigate", mapOf("url" to "https://example.com"))
-        val result = tool.handler(request)
+        val result = mcpServer.invokeTool("navigate", mcpArgs("url" to "https://example.com"))
 
         assertFalse(result.isError == true, "Expected success result")
         coVerify(exactly = 1) {
@@ -181,9 +179,10 @@ class Browser4MCPServerToolManagerTest {
     fun fsWriteStringToolRoutesCallThroughManager() = runBlocking {
         coEvery { toolManager.execute(any()) } returns toolCallResult(value = "OK")
 
-        val tool = mcpServer.server.tools["fs_write_string"]!!
-        val request = buildRequest("fs_write_string", mapOf("filename" to "out.txt", "content" to "hello"))
-        val result = tool.handler(request)
+        val result = mcpServer.invokeTool(
+            "fs_write_string",
+            mcpArgs("filename" to "out.txt", "content" to "hello"),
+        )
 
         assertFalse(result.isError == true)
         coVerify(exactly = 1) {
@@ -199,8 +198,7 @@ class Browser4MCPServerToolManagerTest {
     fun toolHandlerReturnsResultFromManager() = runBlocking {
         coEvery { toolManager.execute(any()) } returns toolCallResult(value = "navigated")
 
-        val tool = mcpServer.server.tools["navigate"]!!
-        val result = tool.handler(buildRequest("navigate", mapOf("url" to "https://example.com")))
+        val result = mcpServer.invokeTool("navigate", mcpArgs("url" to "https://example.com"))
 
         assertFalse(result.isError == true)
         val text = (result.content.firstOrNull() as? TextContent)?.text
@@ -212,8 +210,7 @@ class Browser4MCPServerToolManagerTest {
     fun toolHandlerReturnsErrorOnManagerException() = runBlocking {
         coEvery { toolManager.execute(any()) } throws RuntimeException("driver crashed")
 
-        val tool = mcpServer.server.tools["navigate"]!!
-        val result = tool.handler(buildRequest("navigate", mapOf("url" to "https://example.com")))
+        val result = mcpServer.invokeTool("navigate", mcpArgs("url" to "https://example.com"))
 
         assertTrue(result.isError == true, "Expected error result when manager throws")
         val text = (result.content.firstOrNull() as? TextContent)?.text
@@ -229,8 +226,7 @@ class Browser4MCPServerToolManagerTest {
         )
         coEvery { toolManager.execute(any()) } returns toolCallResult(evaluate = evaluate)
 
-        val tool = mcpServer.server.tools["navigate"]!!
-        val result = tool.handler(buildRequest("navigate", mapOf("url" to "https://bad.url")))
+        val result = mcpServer.invokeTool("navigate", mcpArgs("url" to "https://bad.url"))
 
         assertTrue(result.isError == true, "Expected error result when TcEvaluate has exception")
     }

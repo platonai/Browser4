@@ -70,8 +70,9 @@ class Browser4MCPServerAliasesTest {
         )
         coEvery { toolManager.execute(any()) } returns mcpToolCallResult(value = "navigated")
 
-        val result = server.server.tools["browser_navigate"]!!.handler(
-            mcpToolRequest("browser_navigate", mapOf("url" to "https://example.com"))
+        val result = server.invokeTool(
+            "browser_navigate",
+            mcpArgs("url" to "https://example.com"),
         )
 
         assertEquals("navigated", toolResultText(result))

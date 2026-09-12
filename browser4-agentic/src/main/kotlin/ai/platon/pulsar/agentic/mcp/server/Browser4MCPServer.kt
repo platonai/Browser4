@@ -53,6 +53,9 @@ class Browser4MCPServer(
 ) {
     private val logger = getLogger(this)
 
+    /** Advertised tools by MCP name; kept so calls can be routed after registration. */
+    private val registrations = linkedMapOf<String, ToolRegistration>()
+
     val server: Server = Server(
         serverInfo = serverInfo,
         options = ServerOptions(
@@ -159,7 +162,6 @@ class Browser4MCPServer(
      * newer MCP SDK releases, which reject duplicate tool names outright.
      */
     private fun Server.registerToolsFromManager(toolManager: AgentToolManager) {
-        val registrations = linkedMapOf<String, ToolRegistration>()
         var builtInCount = 0
         var customCount = 0
         var conflicts = 0
@@ -191,7 +193,7 @@ class Browser4MCPServer(
                     ?: "${registration.domain}.${registration.method}",
                 inputSchema = buildSchemaFromSpec(registration.spec),
             ) { request ->
-                callTool(name, registration, request.params.arguments)
+                invokeTool(name, request.params.arguments)
             }
         }
 
@@ -199,7 +201,7 @@ class Browser4MCPServer(
 
         logger.info(
             "Registered {} MCP tools ({} built-in, {} custom/plugin, {} frontend aliases, {} name conflicts skipped)",
-            registrations.size + aliasCount, builtInCount, customCount, aliasCount, conflicts
+            registrations.size, builtInCount, customCount, aliasCount, conflicts
         )
     }
 
@@ -225,6 +227,16 @@ class Browser4MCPServer(
                 )
                 continue
             }
+            if (registrations.containsKey(alias.frontendName)) {
+                logger.info(
+                    "MCP alias '{}' skipped: the name is already taken by a canonical tool",
+                    alias.frontendName
+                )
+                continue
+            }
+            // Registered under its own name so a call routed by name (the SDK
+            // handler and `invokeTool`) resolves to the same canonical tool.
+            registrations[alias.frontendName] = target
             val base = target.spec.description?.trim()?.ifBlank { null }
                 ?: "${target.domain}.${target.method}"
             addTool(
@@ -232,11 +244,27 @@ class Browser4MCPServer(
                 description = "$base (Alias of '${alias.canonicalName}'.)",
                 inputSchema = buildSchemaFromSpec(target.spec),
             ) { request ->
-                callTool(alias.frontendName, target, request.params.arguments)
+                invokeTool(alias.frontendName, request.params.arguments)
             }
             registered++
         }
         return registered
+    }
+
+    /**
+     * Execute an advertised tool by name, exactly as the MCP layer would.
+     *
+     * The registered SDK handler delegates here. In-process callers (and tests)
+     * use it directly, which keeps them independent of the SDK's handler
+     * signature and avoids fabricating a [io.modelcontextprotocol.kotlin.sdk.server.ClientConnection].
+     *
+     * @param toolName the advertised name (`navigate`, `browser_navigate`, `webdb_export`, …)
+     * @param arguments the raw JSON arguments, including the optional `sessionId` handle
+     */
+    internal suspend fun invokeTool(toolName: String, arguments: JsonObject? = null): CallToolResult {
+        val registration = registrations[toolName]
+            ?: return errorResult("Unknown tool: $toolName")
+        return callTool(toolName, registration, arguments)
     }
 
     /**

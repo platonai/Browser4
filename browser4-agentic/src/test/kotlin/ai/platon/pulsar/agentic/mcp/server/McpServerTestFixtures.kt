@@ -41,6 +41,10 @@ internal class FakeToolExecutor(
     ): Any? = "$domain.$functionName"
 }
 
+/** Build JSON tool arguments from plain strings. */
+internal fun mcpArgs(vararg pairs: Pair<String, String>): JsonObject =
+    JsonObject(pairs.associate { (k, v) -> k to JsonPrimitive(v) })
+
 /** Build a `tools/call` request from plain string arguments. */
 internal fun mcpToolRequest(
     toolName: String,

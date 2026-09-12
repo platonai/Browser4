@@ -115,7 +115,7 @@ class Browser4MCPServerE2ETest {
             outputStream = s2cOut.asSink().buffered()
         )
         serverJob = scope.launch {
-            mcpServer.server.connect(serverTransport)
+            mcpServer.server.createSession(serverTransport)
         }
 
         // Connect the MCP client

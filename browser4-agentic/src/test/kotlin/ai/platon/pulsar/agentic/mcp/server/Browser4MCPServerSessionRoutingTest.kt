@@ -60,9 +60,7 @@ class Browser4MCPServerSessionRoutingTest {
         val server = server(multiSession = true)
         coEvery { defaultManager.execute(any()) } returns mcpToolCallResult(value = "own")
 
-        val result = server.server.tools["navigate"]!!.handler(
-            mcpToolRequest("navigate", mapOf("url" to "https://example.com"))
-        )
+        val result = server.invokeTool("navigate", mcpArgs("url" to "https://example.com"))
 
         assertEquals("own", toolResultText(result))
         coVerify(exactly = 1) { defaultManager.execute(any()) }
@@ -75,8 +73,9 @@ class Browser4MCPServerSessionRoutingTest {
         val server = server(multiSession = true)
         coEvery { otherManager.execute(any()) } returns mcpToolCallResult(value = "other")
 
-        val result = server.server.tools["navigate"]!!.handler(
-            mcpToolRequest("navigate", mapOf("url" to "https://example.com", "sessionId" to "session-2"))
+        val result = server.invokeTool(
+            "navigate",
+            mcpArgs("url" to "https://example.com", "sessionId" to "session-2"),
         )
 
         assertEquals("other", toolResultText(result))
@@ -89,8 +88,9 @@ class Browser4MCPServerSessionRoutingTest {
     fun unknownHandleFailsLoudly() = runBlocking {
         val server = server(multiSession = true)
 
-        val result = server.server.tools["navigate"]!!.handler(
-            mcpToolRequest("navigate", mapOf("url" to "https://example.com", "sessionId" to "missing"))
+        val result = server.invokeTool(
+            "navigate",
+            mcpArgs("url" to "https://example.com", "sessionId" to "missing"),
         )
 
         assertTrue(result.isError == true, "Expected an error result")
@@ -108,8 +108,9 @@ class Browser4MCPServerSessionRoutingTest {
         val server = server(multiSession = true)
         coEvery { otherManager.execute(any()) } returns mcpToolCallResult(value = "other")
 
-        server.server.tools["navigate"]!!.handler(
-            mcpToolRequest("navigate", mapOf("url" to "https://example.com", "sessionId" to "session-2"))
+        server.invokeTool(
+            "navigate",
+            mcpArgs("url" to "https://example.com", "sessionId" to "session-2"),
         )
 
         coVerify(exactly = 1) {

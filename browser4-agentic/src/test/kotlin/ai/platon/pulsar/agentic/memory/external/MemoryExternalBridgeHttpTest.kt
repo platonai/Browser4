@@ -1,14 +1,19 @@
 package ai.platon.pulsar.agentic.memory.external
 
-import ai.platon.pulsar.agentic.mcp.server.McpHttpServer
+import ai.platon.pulsar.agentic.mcp.server.Browser4MCPServer
 import ai.platon.pulsar.agentic.model.TcEvaluate
 import ai.platon.pulsar.agentic.model.ToolCallResult
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.EmbeddedServer
+import io.ktor.server.engine.embeddedServer
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import io.modelcontextprotocol.kotlin.sdk.server.mcp
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -23,16 +28,23 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * M4 http transport: the bridge connects to a REAL in-process MCP SSE server
- * ([McpHttpServer] over Ktor) and discovers/calls its tools over the wire —
- * full protocol: initialize → tools/list → tools/call.
+ * M4 http transport: the bridge connects to a REAL in-process MCP **SSE** server
+ * and discovers/calls its tools over the wire — full protocol:
+ * initialize → tools/list → tools/call.
+ *
+ * The fixture is the SDK's own SSE endpoint, not [ai.platon.pulsar.agentic.mcp.server.McpHttpServer]:
+ * production HTTP serving moved to the stateless Streamable HTTP transport
+ * (`POST /mcp`), while the external-memory bridge still talks to third-party
+ * servers over the legacy SSE transport, so the fixture must serve SSE.
  */
 @DisplayName("MemoryExternalBridge http transport (M4)")
 class MemoryExternalBridgeHttpTest {
 
-    private lateinit var memoryServer: McpHttpServer
+    private lateinit var mcpServer: Browser4MCPServer
+    private lateinit var sseEngine: EmbeddedServer<*, *>
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var bridge: MemoryExternalBridge? = null
+    private var port: Int = 0
 
     private val stored = mutableMapOf<String, String>()
 
@@ -73,15 +85,22 @@ class MemoryExternalBridgeHttpTest {
             ToolCallResult(evaluate = TcEvaluate(value = text), message = null)
         }
 
-        val port = ServerSocket(0).use { it.localPort }
-        memoryServer = McpHttpServer(toolManager, port = port, host = "127.0.0.1")
-        memoryServer.start()
+        port = ServerSocket(0).use { it.localPort }
+        mcpServer = Browser4MCPServer(
+            toolManager = toolManager,
+            serverInfo = Implementation(name = "memory-fixture", version = "1.0.0"),
+        )
+        // SSE fixture: Application.mcp installs the SSE plugin and routes the
+        // GET stream / POST message pair at the root path.
+        sseEngine = embeddedServer(CIO, port = port, host = "127.0.0.1") {
+            mcp { mcpServer.server }
+        }.start(wait = false)
     }
 
     @AfterEach
     fun tearDown() {
         runCatching { bridge?.close() }
-        runCatching { memoryServer.stop() }
+        runCatching { sseEngine.stop(1_000, 2_000) }
         scope.cancel()
     }
 
@@ -94,7 +113,7 @@ class MemoryExternalBridgeHttpTest {
         return b
     }
 
-    private fun endpoint(): String = "http://127.0.0.1:${memoryServer.actualPort}/mcp/sse"
+    private fun endpoint(): String = "http://127.0.0.1:$port/"
 
     @Test
     @DisplayName("connects over SSE, discovers tools, and routes calls over the wire")

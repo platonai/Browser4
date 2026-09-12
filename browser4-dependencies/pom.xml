@@ -493,9 +493,10 @@
         <!-- TODO: This artifact was moved to: jakarta.servlet » jakarta.servlet-api -->
         <javax.servlet-api.version>4.0.1</javax.servlet-api.version>
 
-        <io.modelcontextprotocol.version>0.8.1</io.modelcontextprotocol.version>
-        <!-- keep consistent with io.modelcontextprotocol:kotlin-sdk-core-jvm:jar:0.8.1 -->
-        <ktor.version>3.2.3</ktor.version>
+        <io.modelcontextprotocol.version>0.15.0</io.modelcontextprotocol.version>
+        <!-- keep consistent with io.modelcontextprotocol:kotlin-sdk-core-jvm:jar:0.15.0,
+             which is built against Ktor 3.5.1 -->
+        <ktor.version>3.5.1</ktor.version>
         <!-- required by pulsar-browser -->
         <websocket.api.version>1.1</websocket.api.version>
 
@@ -539,12 +540,12 @@
         <mockito-junit-jupiter.version>5.20.0</mockito-junit-jupiter.version>
 
         <kotlin-statistics.version>1.2.1</kotlin-statistics.version>
-        <mcp-sdk.version>0.8.1</mcp-sdk.version>
+        <mcp-sdk.version>0.15.0</mcp-sdk.version>
 
         <!--  Language  -->
         <javaVersion>25</javaVersion>
         <kotlinVersion>2.3.21</kotlinVersion>
-        <kotlin.coroutine.version>1.10.2</kotlin.coroutine.version>
+        <kotlin.coroutine.version>1.11.0</kotlin.coroutine.version>
 
         <!--  Kotlin  -->
         <kotlin.version>${kotlinVersion}</kotlin.version>

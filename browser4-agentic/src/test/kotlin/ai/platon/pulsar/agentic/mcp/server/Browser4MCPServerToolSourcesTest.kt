@@ -62,7 +62,7 @@ class Browser4MCPServerToolSourcesTest {
         )
         coEvery { toolManager.execute(any()) } returns mcpToolCallResult(value = "exported")
 
-        val result = server.server.tools["webdb_export"]!!.handler(mcpToolRequest("webdb_export"))
+        val result = server.invokeTool("webdb_export")
 
         assertEquals("exported", toolResultText(result))
         coVerify(exactly = 1) {

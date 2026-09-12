@@ -22,7 +22,7 @@ import org.springframework.context.event.EventListener
  *
  * When `mcp.http.enabled` is `true` (the default), this configuration
  * starts an embedded Ktor HTTP server that exposes Browser4's browser
- * automation tools via the standard MCP Streamable HTTP (SSE) protocol.
+ * automation tools via the standard MCP **stateless Streamable HTTP** protocol.
  *
  * ## How it works
  *
@@ -30,7 +30,8 @@ import org.springframework.context.event.EventListener
  *    is acquired (reusing an existing one if available, or creating one).
  * 2. The agent's [AgentToolManager] is wrapped in a [McpHttpServer].
  * 3. The server starts on the configured port (default 8088) and accepts
- *    MCP client connections at `/mcp/sse`.
+ *    MCP client requests at `POST /mcp` (one JSON-RPC message per request;
+ *    GET/DELETE answer `405`).
  *
  * ## Configuration
  *
@@ -42,7 +43,15 @@ import org.springframework.context.event.EventListener
  * -Dmcp.http.port=8088           # listen port (default: 8088)
  * -Dmcp.http.host=0.0.0.0        # bind host (default: 0.0.0.0)
  * -Dmcp.http.headless=false      # run Chrome in headless mode (default: false)
+ * -Dmcp.http.allowedHosts=a,b    # Host header allow-list (default: loopback)
+ * -Dmcp.http.dnsRebindingProtection=true   # Host header validation (default: true)
  * ```
+ *
+ * `dnsRebindingProtection` rejects requests whose `Host` header is neither
+ * loopback nor listed in `allowedHosts`. Binding to a concrete interface
+ * (`mcp.http.host=192.168.1.5`) trusts that host automatically; a wildcard bind
+ * keeps the loopback-only default, so a client reaching the server by any other
+ * name must be listed explicitly.
  *
  * ## Session acquisition
  *
@@ -58,7 +67,7 @@ import org.springframework.context.event.EventListener
  *
  * Any MCP-compatible client can connect:
  * - Claude Desktop: configure `mcpServers` with a `url` pointing to
- *   `http://host:8088/mcp/sse` (streamable-http transport)
+ *   `http://host:8088/mcp` (streamable-http transport)
  * - Cursor / Windsurf: same URL in their MCP server configuration
  * - Custom clients: use the MCP SDK's `StreamableHttpClientTransport`
  * ## AOT training mode
@@ -104,6 +113,15 @@ class McpHttpServerConfiguration(
         val port = System.getProperty("mcp.http.port")?.toIntOrNull() ?: McpHttpServer.DEFAULT_MCP_HTTP_PORT
         val host = System.getProperty("mcp.http.host", "0.0.0.0")
         val headless = System.getProperty("mcp.http.headless", "false").toBoolean()
+        val allowedHosts = System.getProperty("mcp.http.allowedHosts")
+            ?.split(',')
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.takeIf { it.isNotEmpty() }
+        val dnsRebindingProtection = System.getProperty(
+            "mcp.http.dnsRebindingProtection",
+            McpHttpServer.DEFAULT_DNS_REBINDING_PROTECTION.toString(),
+        ).toBoolean()
 
         logger.info("Creating MCP HTTP server session (headless={})", headless)
 
@@ -122,6 +140,8 @@ class McpHttpServerConfiguration(
             port = port,
             host = host,
             toolManagerResolver = sessionResolver(agent),
+            dnsRebindingProtection = dnsRebindingProtection,
+            allowedHosts = allowedHosts,
         )
     }
 
