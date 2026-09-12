@@ -129,4 +129,13 @@ class Browser4MCPServerRunnerTest {
         assertFalse(runMcpAppIfRequested(arrayOf("--app", "web")))
         assertFalse(runMcpAppIfRequested(arrayOf("--server.port=8182")))
     }
+
+    @Test
+    @DisplayName("--app mcp reaches the MCP runner")
+    fun mcpAppIsDispatchedToTheRunner() {
+        // `--help` makes the runner print its usage and return before any session
+        // (and therefore any browser) is created, so this proves the launcher
+        // dispatch path end-to-end without starting Chrome.
+        assertTrue(runMcpAppIfRequested(arrayOf("--app", "mcp", "--help")))
+    }
 }
