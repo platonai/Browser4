@@ -333,6 +333,11 @@ jobs:
         shell: bash
         run: bash cli/scripts/tests/install-browser4-cli.tests.sh
 
+      - name: Run wait-for-npm-version.tests.sh
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash cli/scripts/tests/wait-for-npm-version.tests.sh
+
       - name: Run install-browser4-cli.tests.ps1
         if: runner.os == 'Windows'
         shell: pwsh
@@ -1310,26 +1315,11 @@ jobs:
         if: steps.cli_publish_check.outputs.should_publish == 'true'
         shell: bash
         run: |
-          set -euo pipefail
-
-          PACKAGE_NAME='${{ steps.cli_publish_check.outputs.package_name }}'
-          CLI_VERSION='${{ steps.cli_publish_check.outputs.cli_version }}'
-
-          for attempt in 1 2 3 4 5; do
-            PUBLISHED_VERSION=$(npm view "$PACKAGE_NAME@$CLI_VERSION" version 2>/dev/null || true)
-            if [ "$PUBLISHED_VERSION" = "$CLI_VERSION" ]; then
-              echo "Verified $PACKAGE_NAME@$CLI_VERSION on npm"
-              exit 0
-            fi
-
-            if [ "$attempt" -lt 5 ]; then
-              echo "npm registry has not reported $PACKAGE_NAME@$CLI_VERSION yet (attempt $attempt/5); retrying in 10s..."
-              sleep 10
-            fi
-          done
-
-          echo "Unable to verify $PACKAGE_NAME@$CLI_VERSION on npm after publish"
-          exit 1
+          # The registry processes publishes asynchronously ("may take a few
+          # minutes to become available"), so wait minutes, not seconds.
+          bash cli/scripts/wait-for-npm-version.sh \
+            "${{ steps.cli_publish_check.outputs.package_name }}" \
+            "${{ steps.cli_publish_check.outputs.cli_version }}"
 
       - name: npm publish summary
         if: always()

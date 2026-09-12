@@ -78,12 +78,13 @@ Runs a full CLI smoke test suitable for CI and local development:
 ./smoke-test-runtime-bundle.sh <cli-binary> <bundle-archive> [test-port] [timeout-secs]
 ```
 
-### Install script tests
+### Script tests
 
 | File | Purpose |
 |------|---------|
 | `tests/install-browser4-cli.tests.sh` | Unit tests for the Unix install script |
 | `tests/install-browser4-cli.tests.ps1` | Unit tests for the Windows install script (Pester) |
+| `tests/wait-for-npm-version.tests.sh` | Unit tests for `wait-for-npm-version.sh` (stubbed `npm`, no network) |
 
 ## Publish (npm)
 
@@ -94,6 +95,7 @@ Runs a full CLI smoke test suitable for CI and local development:
 | `publish-if-needed.js` | Publishes to npm only when the local version differs from the registry. Uses `--tag next` for prerelease versions (containing `-`). |
 | `sync-readme.mjs` | Temporarily copies the repository root `README.md` to `cli/README.md` for npm pack/publish, then restores the original CLI README in `postpack`. |
 | `postinstall.js` | npm `postinstall` hook: downloads the platform native binary after `npm install` |
+| `wait-for-npm-version.sh` | Waits until a published version is actually visible on npm; called by the release workflows after `npm publish` |
 
 ### Version check
 
@@ -112,6 +114,23 @@ node scripts/publish-if-needed.js --dry-run   # print what would happen
 ```
 
 Optional env: `BROWSER4_CLI_NPM_REMOTE_VERSION` to override the remote version for testing.
+
+### Verifying a publish landed
+
+`npm publish` exiting 0 only means the registry accepted the upload — npm processes
+publishes asynchronously and answers with *"Your package is being processed and may take a
+few minutes to become available"*, after which the version can stay invisible to
+`npm view` for a while. `wait-for-npm-version.sh` polls until the exact version is
+visible (10 minutes by default) and only then lets the release proceed:
+
+```shell
+bash scripts/wait-for-npm-version.sh browser4-cli 4.13.18            # 10 min budget, 15 s interval
+bash scripts/wait-for-npm-version.sh browser4-cli 4.13.18 120 5      # 2 min budget, 5 s interval
+```
+
+Exit code 0 = version visible; 1 = still not visible when the budget expired (the message
+includes the last registry answer and manual re-check commands). Both `release.yml` and
+`release-cli.yml` call it in their `Verify npm package was published` step.
 
 ### README sync for npm package
 

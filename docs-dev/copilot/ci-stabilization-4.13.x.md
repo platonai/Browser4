@@ -348,3 +348,97 @@ CI 同款开关：`-Dsurefire.excludes=**integration**` + 同款 `excludedGroups
 `Browser4 Protocol` 由 80 增至 82，其余模块计数与修复前完全一致（无副作用）；新增的诊断日志
 `The system is over the critical load, will not create a new driver` 在日志中可见。
 端到端由 ci.6（tag `v4.13.18-ci.6`，提交 `f3c1a6202c`）验证。
+
+---
+
+## 10. v4.13.18 发布流水线的唯一红点：npm 发布后"可见性验证"窗口太短（已修）
+
+`release.yml`（run 34706653079，tag `v4.13.18`）整轮只有一个失败 job：
+`Publish browser4-cli to npm`，失败步骤是 **`Verify npm package was published`**：
+
+```
+17:17:19 npm notice Your package is being processed and may take a few minutes to become available.
+17:17:19 + browser4-cli@4.13.18
+17:17:19 npm registry has not reported browser4-cli@4.13.18 yet (attempt 1/5); retrying in 10s...
+17:17:50 npm registry has not reported browser4-cli@4.13.18 yet (attempt 4/5); retrying in 10s...
+17:18:00 Unable to verify browser4-cli@4.13.18 on npm after publish
+```
+
+**定性：registry 侧的异步发布处理 + CI 验证窗口过短（基础设施/时序问题），不是回归，
+也不是测试断言变化。** 决定性证据是**发布本身成功了**：`npm publish --provenance`
+返回 0 并打印 `+ browser4-cli@4.13.18`；事后查询 registry 也确认版本真实存在
+（`npm view browser4-cli@4.13.18 version` → `4.13.18`，`dist-tags.latest = 4.13.18`）。
+失败的只是发布之后的可见性确认。
+
+### 10.1 根因
+
+* 该步骤只等 `5 × 10 s ≈ 50 s`（4 次 sleep + 5 次查询），而这次 registry 在 41 s 之后
+  仍未把新版本暴露给 `npm view`；
+* 同一次发布里 npm 打印了官方解释：
+  `Your package is being processed and may take a few minutes to become available.`
+  —— registry 已改为**异步发布处理**。该 notice 在 v4.13.14 / v4.13.15 / v4.13.16
+  三次绿色 run 的发布步骤日志里**一次都没出现过**（逐 run grep 计数为 0），
+  说明这是 registry 侧行为变化，不是本分支改动引入的；
+* 历史窗口本来就贴着临界值：v4.13.15 的验证步骤耗时 21 s（重试过 1 次），
+  v4.13.14 / v4.13.16 是 11 s / 10 s（首次即成功）；
+* 代价不对称：这一步失败会让整个 job 失败，而 `publish-github-release` 的 `needs` 要求
+  `publish-cli-npm.result == 'success'` —— 于是一次**已经成功**的 npm 发布把
+  v4.13.18 的 GitHub Release 也一起挡掉了。
+
+### 10.2 修复（单一实现，两个 workflow 共用）
+
+| 文件 | 改动 |
+|---|---|
+| `cli/scripts/wait-for-npm-version.sh`（新） | 轮询 registry 直到**精确版本**可见：默认 600 s 预算 / 15 s 间隔；404（"还没发布"）安静重试，其它错误（网络/registry 抖动）记 WARN 后照样重试；单次 sleep 不超过剩余预算；超时后打印最后一次 registry 答复与手工复查命令，退出码 0/1 |
+| `.github/workflows/release.yml` | `Verify npm package was published` 由内联 `5 × 10 s` 循环改为调用该脚本；`test-install-scripts` job 增加一步（Linux）跑它的单测 |
+| `.github/workflows/release-cli.yml` | 同一段内联循环（逐字重复，只差 `steps.check` 前缀与 emoji）同样改为调用脚本 |
+| `cli/scripts/README.md` | 记录脚本、单测，新增 "Verifying a publish landed" 一节 |
+
+* 判定语义**没有放宽**：预算用尽仍然 `exit 1`；
+* 只是把"registry 需要多久"从 50 s 提到 10 min（npm 自己说 "a few minutes"），
+  并把以前被 `2>/dev/null` 丢掉的 npm 报错带进日志；
+* 两个 workflow 之前是逐字重复的实现，这次收敛到同一个脚本，避免以后只修一边。
+
+### 10.3 验证
+
+* 新增 `cli/scripts/tests/wait-for-npm-version.tests.sh`（11 个用例，stub `npm`，不联网）
+  → `All 11 tests passed`（约 20 s）；
+* **对照实验**：把脚本改回"最多 5 次尝试"后重跑同一套用例 →
+  只有 `keeps polling past the old 5-attempt window` 失败（`1 of 11 tests failed`），
+  即该用例确实能区分新旧行为（改动已还原）；
+* 用例不依赖可执行位：仓库里这些脚本一律以 `100644` 记录（Windows 上 checkout，
+  git 不跟踪执行位，与 `install-browser4-cli.tests.sh` 相同），workflow 一律用
+  `bash <路径>` 调用 —— 早期草稿里的 "is executable" 断言在 Linux runner 上必然失败，
+  已删除（本地试跑验证）。
+* **真 registry 端到端**：`bash cli/scripts/wait-for-npm-version.sh browser4-cli 4.13.18`
+  → `Verified browser4-cli@4.13.18 on npm after 2s (attempt 1)`，退出码 0；
+  用一个不存在的版本号 + 6 s 预算 → 退出码 1，输出含最后一次答复
+  （`npm error code E404`）与 `https://www.npmjs.com/package/browser4-cli/v/9.9.9` 复查链接；
+* YAML：两个 workflow 经 PyYAML 解析通过（9 / 5 个 job）；改动过的 3 个 `run:` 块
+  `bash -n` 通过。
+
+### 10.4 顺带发现（本轮只记录不改）
+
+`cli/scripts/tests/install-browser4-cli.tests.sh` 的 `test()` 只把第 2 个参数当函数名调用
+（`local fn="$2"; if "$fn"`），于是所有 `test "<名字>" bash -c "..."` 形式的断言**丢掉了
+`-c "..."`，实际执行的是裸 `bash`** —— 无参数、stdin 为 /dev/null 时立即返回 0，
+这些用例**恒为 PASS**（`file exists`、`starts with shebang`、`bash syntax check`、
+`no non-ASCII bytes` 等）。把 `test()` 改成 `local name="$1"; shift; if "$@"` 后重跑：
+`Results: 56 / 57 passed`，暴露 1 个真实失败
+`double dash in --version handled (no operator parsing)` —— 它的断言其实是
+`bash install-browser4-cli.sh --locate | grep -q version`，而 `--locate` 的输出里没有
+"version" 一词，测试名与断言内容也对不上。本轮不动它：一是会让 release 的
+`test-install-scripts` job 立刻变红，二是"正确的断言该是什么"需要单独判断；
+建议另开一轮修 `test()` 并重写这条断言。新写的 `wait-for-npm-version.tests.sh`
+已使用 `shift` + `"$@"` 形式，不受影响。
+
+### 10.5 待观察与已知边界
+
+* 下次发版若该步骤再次超时，先看日志里 `Waiting for ... appear on npm` 的行数与最后一次
+  registry 答复：可能是 registry 处理超过 10 min，也可能是发布真的没落地；
+* 该脚本从 **tag 的 checkout** 里执行，与本仓库其它 release 期脚本
+  （`smoke-test-runtime-bundle.sh`、`install-browser4-cli.tests.sh`）一致。
+  若用 workflow_dispatch 从分支重发一个**早于本提交**的 tag，且该版本还没发布到 npm，
+  checkout 出来的树里没有这个脚本，该步骤会以 "No such file or directory" 失败；
+  安全做法是用该 tag 自己的 workflow 版本（`gh workflow run release.yml --ref <tag> -f tag=<tag>`）。
+  当前 tag `v4.13.18` 不受影响：版本已在 npm 上 → `should_publish=false` → 该步骤被跳过。
