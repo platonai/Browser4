@@ -4,6 +4,7 @@
   "arguments" : [ {
     "name" : "url",
     "type" : "String",
+    "description" : "The URL to which the web driver should navigate. Must be a valid URL string.",
     "expression" : "url: String",
     "cliOptions" : "--url=<String>"
   } ],
@@ -11,13 +12,19 @@
   "description" : "Opens the specified URL in the web driver.",
   "help" : "Opens the specified URL in the web driver.\n\nThis function navigates the web driver to the provided URL and waits for the navigation to complete. It is a suspend function, meaning it can be used within coroutines for asynchronous execution.\n\nExample usage: ```kotlin driver.open(\"https://www.example.com\") ```",
   "expression" : "tab.open(url: String)",
-  "cli" : "browser4-cli tab open --url=<String>"
+  "cli" : "browser4-cli tab open --url=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.open(\"https://www.example.com\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "navigate",
   "arguments" : [ {
     "name" : "userTypedUrl",
     "type" : "String",
+    "description" : "URL to navigate page to.",
     "expression" : "userTypedUrl: String",
     "cliOptions" : "--userTypedUrl=<String>"
   } ],
@@ -25,13 +32,19 @@
   "description" : "Navigates current page to the given URL.",
   "help" : "Navigates current page to the given URL.\n\n```kotlin driver.navigate(\"https://www.example.com\") driver.waitForNavigation() ```",
   "expression" : "tab.navigate(userTypedUrl: String)",
-  "cli" : "browser4-cli tab navigate --userTypedUrl=<String>"
+  "cli" : "browser4-cli tab navigate --userTypedUrl=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.navigate(\"https://www.example.com\")\n     * driver.waitForNavigation()\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "navigate",
   "arguments" : [ {
     "name" : "entry",
     "type" : "NavigateEntry",
+    "description" : "NavigateEntry to navigate page to.",
     "expression" : "entry: NavigateEntry",
     "cliOptions" : "--entry=<NavigateEntry>"
   } ],
@@ -39,7 +52,12 @@
   "description" : "Navigates current page to the given URL.",
   "help" : "Navigates current page to the given URL.\n\n```kotlin val entry = NavigateEntry(\"https://www.example.com?timestamp=11712067353\", pageUrl = \"https://www.example.com\") driver.navigate(entry) driver.waitForNavigation() ```",
   "expression" : "tab.navigate(entry: NavigateEntry)",
-  "cli" : "browser4-cli tab navigate --entry=<NavigateEntry>"
+  "cli" : "browser4-cli tab navigate --entry=<NavigateEntry>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val entry = NavigateEntry(\"https://www.example.com?timestamp=11712067353\", pageUrl = \"https://www.example.com\")\n     * driver.navigate(entry)\n     * driver.waitForNavigation()\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "reload",
@@ -111,7 +129,12 @@
   "description" : "Returns the source of the last loaded page.",
   "help" : "Returns the source of the last loaded page.\n\nIf the page has been modified after loading (for example, by JavaScript) there is no guarantee that the returned text is that of the modified page.\n\nPageSource and outerHTML:\n\n- pageSource: returns document HTML markup, will support non-HTML document - outerHTML: returns document HTML markup, for HTML document only\n\n```kotlin val pageSource = driver.pageSource() ```",
   "expression" : "tab.pageSource()",
-  "cli" : "browser4-cli tab pageSource "
+  "cli" : "browser4-cli tab pageSource ",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val pageSource = driver.pageSource()\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "title",
@@ -135,31 +158,40 @@
   "description" : "Returns the cookies of the current page.",
   "help" : "Returns the cookies of the current page.\n\n```kotlin val cookies = driver.getCookies() ```",
   "expression" : "tab.getCookies()",
-  "cli" : "browser4-cli tab getCookies "
+  "cli" : "browser4-cli tab getCookies ",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val cookies = driver.getCookies()\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "deleteCookies",
   "arguments" : [ {
     "name" : "name",
     "type" : "String",
+    "description" : "Name of the cookies to remove.",
     "expression" : "name: String",
     "cliOptions" : "--name=<String>"
   }, {
     "name" : "url",
     "type" : "String?",
     "defaultValue" : "null",
+    "description" : "If specified, deletes all the cookies with the given name where domain and path match provided URL.",
     "expression" : "url: String? = null",
     "cliOptions" : "--url=<String?>, default=null"
   }, {
     "name" : "domain",
     "type" : "String?",
     "defaultValue" : "null",
+    "description" : "If specified, deletes only cookies with the exact domain.",
     "expression" : "domain: String? = null",
     "cliOptions" : "--domain=<String?>, default=null"
   }, {
     "name" : "path",
     "type" : "String?",
     "defaultValue" : "null",
+    "description" : "If specified, deletes only cookies with the exact path.",
     "expression" : "path: String? = null",
     "cliOptions" : "--path=<String?>, default=null"
   } ],
@@ -167,7 +199,12 @@
   "description" : "Deletes browser cookies with matching name and url or domain/path pair.",
   "help" : "Deletes browser cookies with matching name and url or domain/path pair.\n\n```kotlin driver.deleteCookies(\"name\", \"https://www.example.com\") ```\n\n> NOTE: At least one of the url and domain needs to be specified\n\nmatch provided URL.",
   "expression" : "tab.deleteCookies(name: String, url: String? = null, domain: String? = null, path: String? = null)",
-  "cli" : "browser4-cli tab deleteCookies --name=<String> --url=<String?>, default=null --domain=<String?>, default=null --path=<String?>, default=null"
+  "cli" : "browser4-cli tab deleteCookies --name=<String> --url=<String?>, default=null --domain=<String?>, default=null --path=<String?>, default=null",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.deleteCookies(\"name\", \"https://www.example.com\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "clearBrowserCookies",
@@ -175,7 +212,12 @@
   "description" : "Clears browser cookies.",
   "help" : "Clears browser cookies.\n\n```kotlin driver.clearBrowserCookies() ```",
   "expression" : "tab.clearBrowserCookies()",
-  "cli" : "browser4-cli tab clearBrowserCookies "
+  "cli" : "browser4-cli tab clearBrowserCookies ",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.clearBrowserCookies()\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "saveStorageState",
@@ -190,6 +232,7 @@
   "arguments" : [ {
     "name" : "state",
     "type" : "String",
+    "description" : "A JSON string produced by [saveStorageState].",
     "expression" : "state: String",
     "cliOptions" : "--state=<String>"
   } ],
@@ -204,6 +247,7 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. The element is waited for until it becomes present.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   } ],
@@ -211,18 +255,25 @@
   "description" : "Wait until the element identified by the selector becomes present in the DOM or timeout.",
   "help" : "Wait until the element identified by the selector becomes present in the DOM or timeout.\n\n```kotlin val remainingTime = driver.waitForSelector(\"h2.title\") ```",
   "expression" : "tab.waitForSelector(selector: String)",
-  "cli" : "browser4-cli tab waitForSelector --selector=<String>"
+  "cli" : "browser4-cli tab waitForSelector --selector=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val remainingTime = driver.waitForSelector(\"h2.title\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "waitForSelector",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. The element is waited for until it becomes present.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "timeoutMillis",
     "type" : "Long",
+    "description" : "The maximum time to wait for the element to become present.",
     "expression" : "timeoutMillis: Long",
     "cliOptions" : "--timeoutMillis=<Long>"
   } ],
@@ -230,18 +281,25 @@
   "description" : "Wait until the element identified by the selector becomes present in the DOM or timeout.",
   "help" : "Wait until the element identified by the selector becomes present in the DOM or timeout.\n\n```kotlin val remainingTime = driver.waitForSelector(\"h2.title\", 30000) ```",
   "expression" : "tab.waitForSelector(selector: String, timeoutMillis: Long)",
-  "cli" : "browser4-cli tab waitForSelector --selector=<String> --timeoutMillis=<Long>"
+  "cli" : "browser4-cli tab waitForSelector --selector=<String> --timeoutMillis=<Long>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val remainingTime = driver.waitForSelector(\"h2.title\", 30000)\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "waitForSelector",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. The element is waited for until it becomes present.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "timeout",
     "type" : "Duration",
+    "description" : "The maximum time to wait for the element to become present.",
     "expression" : "timeout: Duration",
     "cliOptions" : "--timeout=<Duration>"
   } ],
@@ -249,18 +307,25 @@
   "description" : "Wait for the element identified by the selector to become present in the DOM, or until timeout.",
   "help" : "Wait for the element identified by the selector to become present in the DOM, or until timeout.\n\n```kotlin val remainingTime = driver.waitForSelector(\"h2.title\", Duration.ofSeconds(30)) ```",
   "expression" : "tab.waitForSelector(selector: String, timeout: Duration)",
-  "cli" : "browser4-cli tab waitForSelector --selector=<String> --timeout=<Duration>"
+  "cli" : "browser4-cli tab waitForSelector --selector=<String> --timeout=<Duration>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val remainingTime = driver.waitForSelector(\"h2.title\", Duration.ofSeconds(30))\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "waitForSelector",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. The element is waited for until it becomes present.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "action",
     "type" : "suspend (",
+    "description" : "The action to execute when the element is not found.",
     "expression" : "action: suspend (",
     "cliOptions" : "--action=<suspend (>"
   } ],
@@ -268,23 +333,31 @@
   "description" : "Wait for the element identified by the selector to become present in the DOM, or until timeout.",
   "help" : "Wait for the element identified by the selector to become present in the DOM, or until timeout.\n\nThis method periodically checks for the existence of the element. If the element is not found during a check, the action will be executed, such as scrolling the page down.\n\n```kotlin val remainingTime = driver.waitForSelector(\"h2.title\") { driver.scrollDown() } ```",
   "expression" : "tab.waitForSelector(selector: String, action: suspend ()",
-  "cli" : "browser4-cli tab waitForSelector --selector=<String> --action=<suspend (>"
+  "cli" : "browser4-cli tab waitForSelector --selector=<String> --action=<suspend (>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val remainingTime = driver.waitForSelector(\"h2.title\") {\n     *  driver.scrollDown()\n     * }\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "waitForSelector",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. The element is waited for until it becomes present.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "timeoutMillis",
     "type" : "Long",
+    "description" : "The maximum time to wait for the element to become present.",
     "expression" : "timeoutMillis: Long",
     "cliOptions" : "--timeoutMillis=<Long>"
   }, {
     "name" : "action",
     "type" : "suspend (",
+    "description" : "The action to execute when the element is not found.",
     "expression" : "action: suspend (",
     "cliOptions" : "--action=<suspend (>"
   } ],
@@ -292,23 +365,31 @@
   "description" : "Wait for the element identified by the selector to become present in the DOM, or until timeout.",
   "help" : "Wait for the element identified by the selector to become present in the DOM, or until timeout.\n\nThis method periodically checks for the existence of the element. If the element is not found during a check, the action will be executed, such as scrolling the page down.\n\n```kotlin val remainingTime = driver.waitForSelector(\"h2.title\", 30000) { driver.scrollDown() } ```",
   "expression" : "tab.waitForSelector(selector: String, timeoutMillis: Long, action: suspend ()",
-  "cli" : "browser4-cli tab waitForSelector --selector=<String> --timeoutMillis=<Long> --action=<suspend (>"
+  "cli" : "browser4-cli tab waitForSelector --selector=<String> --timeoutMillis=<Long> --action=<suspend (>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val remainingTime = driver.waitForSelector(\"h2.title\", 30000) {\n     *  driver.scrollDown()\n     * }\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "waitForSelector",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. The element is waited for until it becomes present.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "timeout",
     "type" : "Duration",
+    "description" : "The maximum time to wait for the element to become present.",
     "expression" : "timeout: Duration",
     "cliOptions" : "--timeout=<Duration>"
   }, {
     "name" : "action",
     "type" : "suspend (",
+    "description" : "The action to execute when the element is not found.",
     "expression" : "action: suspend (",
     "cliOptions" : "--action=<suspend (>"
   } ],
@@ -316,7 +397,12 @@
   "description" : "Wait for the element identified by the selector to become present in the DOM, or until timeout.",
   "help" : "Wait for the element identified by the selector to become present in the DOM, or until timeout.\n\nThis method periodically checks for the existence of the element. If the element is not found during a check, the action will be executed, such as scrolling the page down.\n\n```kotlin val remainingTime = driver.waitForSelector(\"h2.title\", Duration.ofSeconds(30)) { driver.scrollDown() } ```",
   "expression" : "tab.waitForSelector(selector: String, timeout: Duration, action: suspend ()",
-  "cli" : "browser4-cli tab waitForSelector --selector=<String> --timeout=<Duration> --action=<suspend (>"
+  "cli" : "browser4-cli tab waitForSelector --selector=<String> --timeout=<Duration> --action=<suspend (>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val remainingTime = driver.waitForSelector(\"h2.title\", Duration.ofSeconds(30)) {\n     *  driver.scrollDown()\n     * }\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "waitForNavigation",
@@ -330,7 +416,12 @@
   "description" : "Wait until the current url changes or timeout.",
   "help" : "Wait until the current url changes or timeout.\n\n```kotlin val url = \"https://www.example.com\" driver.navigate(url) var remainingTime = driver.waitForNavigation() if (remainingTime > 0) { driver.click(\"a[href='/next']\") remainingTime = driver.waitForNavigation(url) } ```",
   "expression" : "tab.waitForNavigation(oldUrl: String)",
-  "cli" : "browser4-cli tab waitForNavigation --oldUrl=<String>"
+  "cli" : "browser4-cli tab waitForNavigation --oldUrl=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val url = \"https://www.example.com\"\n     * driver.navigate(url)\n     * var remainingTime = driver.waitForNavigation()\n     * if (remainingTime > 0) {\n     *   driver.click(\"a[href='/next']\")\n     *   remainingTime = driver.waitForNavigation(url)\n     * }\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "waitForNavigation",
@@ -342,6 +433,7 @@
   }, {
     "name" : "timeoutMillis",
     "type" : "Long",
+    "description" : "The maximum time to wait for the url to change.",
     "expression" : "timeoutMillis: Long",
     "cliOptions" : "--timeoutMillis=<Long>"
   } ],
@@ -349,7 +441,12 @@
   "description" : "Wait until the current url changes or timeout.",
   "help" : "Wait until the current url changes or timeout.\n\n```kotlin val url = \"https://www.example.com\" driver.navigate(url) var remainingTime = driver.waitForNavigation(1000) if (remainingTime > 0) { driver.click(\"a[href='/next']\") remainingTime = driver.waitForNavigation(url, 1000) } ```",
   "expression" : "tab.waitForNavigation(oldUrl: String, timeoutMillis: Long)",
-  "cli" : "browser4-cli tab waitForNavigation --oldUrl=<String> --timeoutMillis=<Long>"
+  "cli" : "browser4-cli tab waitForNavigation --oldUrl=<String> --timeoutMillis=<Long>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val url = \"https://www.example.com\"\n     * driver.navigate(url)\n     * var remainingTime = driver.waitForNavigation(1000)\n     * if (remainingTime > 0) {\n     *   driver.click(\"a[href='/next']\")\n     *   remainingTime = driver.waitForNavigation(url, 1000)\n     * }\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "waitForNavigation",
@@ -361,6 +458,7 @@
   }, {
     "name" : "timeout",
     "type" : "Duration",
+    "description" : "The maximum time to wait for the url to change.",
     "expression" : "timeout: Duration",
     "cliOptions" : "--timeout=<Duration>"
   } ],
@@ -368,13 +466,19 @@
   "description" : "Wait until the current url changes or timeout.",
   "help" : "Wait until the current url changes or timeout.\n\n```kotlin val timeout = Duration.ofSeconds(30) val url = \"https://www.example.com\" driver.navigate(url) var remainingTime = driver.waitForNavigation(timeout) if (remainingTime > 0) { driver.click(\"a[href='/next']\") remainingTime = driver.waitForNavigation(url, timeout) } ```",
   "expression" : "tab.waitForNavigation(oldUrl: String, timeout: Duration)",
-  "cli" : "browser4-cli tab waitForNavigation --oldUrl=<String> --timeout=<Duration>"
+  "cli" : "browser4-cli tab waitForNavigation --oldUrl=<String> --timeout=<Duration>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val timeout = Duration.ofSeconds(30)\n     * val url = \"https://www.example.com\"\n     * driver.navigate(url)\n     * var remainingTime = driver.waitForNavigation(timeout)\n     * if (remainingTime > 0) {\n     *   driver.click(\"a[href='/next']\")\n     *   remainingTime = driver.waitForNavigation(url, timeout)\n     * }\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "waitForPage",
   "arguments" : [ {
     "name" : "url",
     "type" : "String",
+    "description" : "The URL to navigate to.",
     "expression" : "url: String",
     "cliOptions" : "--url=<String>"
   }, {
@@ -387,13 +491,19 @@
   "description" : "Await navigation to the specified URL page or timeout if necessary.",
   "help" : "Await navigation to the specified URL page or timeout if necessary.\n\n```kotlin val newDriver = driver.waitForPage(\"https://www.example.com\", Duration.ofSeconds(30)) ```\n\nTODO: check if waitForPage and waitForNavigation can be merged into one method.",
   "expression" : "tab.waitForPage(url: String, timeout: Duration)",
-  "cli" : "browser4-cli tab waitForPage --url=<String> --timeout=<Duration>"
+  "cli" : "browser4-cli tab waitForPage --url=<String> --timeout=<Duration>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val newDriver = driver.waitForPage(\"https://www.example.com\", Duration.ofSeconds(30))\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "waitForFunction",
   "arguments" : [ {
     "name" : "pageFunction",
     "type" : "String",
+    "description" : "A JavaScript function to be evaluated in the page context.",
     "expression" : "pageFunction: String",
     "cliOptions" : "--pageFunction=<String>"
   }, {
@@ -413,6 +523,7 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. The element is checked for existence.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   } ],
@@ -420,13 +531,19 @@
   "description" : "Returns whether the element exists.",
   "help" : "Returns whether the element exists.\n\n```kotlin driver.exists(\"h2.title\") ```",
   "expression" : "tab.exists(selector: String)",
-  "cli" : "browser4-cli tab exists --selector=<String>"
+  "cli" : "browser4-cli tab exists --selector=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.exists(\"h2.title\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "isHidden",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. The element is checked for visibility state.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   } ],
@@ -434,13 +551,19 @@
   "description" : "Returns whether the element is hidden.",
   "help" : "Returns whether the element is hidden.\n\n```kotlin driver.isHidden(\"input[name='q']\") ```",
   "expression" : "tab.isHidden(selector: String)",
-  "cli" : "browser4-cli tab isHidden --selector=<String>"
+  "cli" : "browser4-cli tab isHidden --selector=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.isHidden(\"input[name='q']\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "isVisible",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. The element is checked for visibility state.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   } ],
@@ -448,13 +571,19 @@
   "description" : "Returns whether the element is visible.",
   "help" : "Returns whether the element is visible.\n\n```kotlin driver.isVisible(\"input[name='q']\") ```",
   "expression" : "tab.isVisible(selector: String)",
-  "cli" : "browser4-cli tab isVisible --selector=<String>"
+  "cli" : "browser4-cli tab isVisible --selector=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.isVisible(\"input[name='q']\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "isChecked",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. The element is checked for checked state.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   } ],
@@ -462,7 +591,12 @@
   "description" : "Returns whether the element is checked.",
   "help" : "Returns whether the element is checked.\n\n```kotlin driver.isChecked(\"input[name='agree']\") ```",
   "expression" : "tab.isChecked(selector: String)",
-  "cli" : "browser4-cli tab isChecked --selector=<String>"
+  "cli" : "browser4-cli tab isChecked --selector=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.isChecked(\"input[name='agree']\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "bringToFront",
@@ -470,13 +604,19 @@
   "description" : "Brings the browser window to the front.",
   "help" : "Brings the browser window to the front.\n\n```kotlin driver.bringToFront() ```",
   "expression" : "tab.bringToFront()",
-  "cli" : "browser4-cli tab bringToFront "
+  "cli" : "browser4-cli tab bringToFront ",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.bringToFront()\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "hover",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   } ],
@@ -484,13 +624,19 @@
   "description" : "This method hovers over the element.",
   "help" : "This method hovers over the element.\n\n1. Scroll the element into view if needed. 2. Move mouse to hover over a random position near the center of the element.\n\n```kotlin driver.hover(\"h1\") ```",
   "expression" : "tab.hover(selector: String)",
-  "cli" : "browser4-cli tab hover --selector=<String>"
+  "cli" : "browser4-cli tab hover --selector=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.hover(\"h1\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "focus",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. If there are multiple matching elements, the first will be focused.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   } ],
@@ -498,19 +644,26 @@
   "description" : "This method fetches an element with `selector` and focuses it.",
   "help" : "This method fetches an element with `selector` and focuses it.\n\nIf there's no element matching `selector`, nothing to do.\n\n```kotlin driver.focus(\"input[name='q']\") ```\n\nelements, the first will be focused.",
   "expression" : "tab.focus(selector: String)",
-  "cli" : "browser4-cli tab focus --selector=<String>"
+  "cli" : "browser4-cli tab focus --selector=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.focus(\"input[name='q']\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "type",
   "arguments" : [ {
     "name" : "text",
     "type" : "String",
+    "description" : "The text to insert.",
     "expression" : "text: String",
     "cliOptions" : "--text=<String>"
   }, {
     "name" : "selector",
     "type" : "String?",
     "defaultValue" : "null",
+    "description" : "The selector of the element, multiple formats supported. Optional. If provided, the matching element is focused before typing. If there are multiple matching elements, the first is used.",
     "expression" : "selector: String? = null",
     "cliOptions" : "--selector=<String?>, default=null"
   } ],
@@ -518,19 +671,26 @@
   "description" : "This method emulates inserting text that doesn't come from a key press.",
   "help" : "This method emulates inserting text that doesn't come from a key press.\n\n```kotlin driver.type(\"Hello, World!\") driver.type(\"Hello, World!\", \"input[name='q']\") ```\n\nWhen [selector] is omitted, text is typed into the currently focused element. When [selector] is provided, the matching element is focused first and then receives the text.\n\nelement is focused before typing. If there are multiple matching elements, the first is used.",
   "expression" : "tab.type(text: String, selector: String? = null)",
-  "cli" : "browser4-cli tab type --text=<String> --selector=<String?>, default=null"
+  "cli" : "browser4-cli tab type --text=<String> --selector=<String?>, default=null",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.type(\"Hello, World!\")\n     * driver.type(\"Hello, World!\", \"input[name='q']\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "press",
   "arguments" : [ {
     "name" : "key",
     "type" : "String",
+    "description" : "A key to press. The key can be a single character, a key name, or a combination of both. See [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)",
     "expression" : "key: String",
     "cliOptions" : "--key=<String>"
   }, {
     "name" : "selector",
     "type" : "String?",
     "defaultValue" : "null",
+    "description" : "The selector of the element, multiple formats supported. Optional. If provided, the matching element is focused before pressing the key. If there are multiple matching elements, the first is used.",
     "expression" : "selector: String? = null",
     "cliOptions" : "--selector=<String?>, default=null"
   } ],
@@ -538,18 +698,25 @@
   "description" : "Shortcut for keyboard down and keyboard up.",
   "help" : "Shortcut for keyboard down and keyboard up.\n\nThe key is specified as a string, which can be a single character, a key name, or a combination of both. For example, 'a', 'A', 'KeyA', 'Enter', 'Shift+A', and 'Control+Shift+Tab' are all valid keys.\n\n```kotlin driver.press(\"Enter\") driver.press(\"Enter\", \"input[name='q']\") ```\n\nWhen [selector] is omitted, the key is pressed on the currently focused element. When [selector] is provided, the matching element is focused first and then receives the key press.\n\nSee [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values) element is focused before pressing the key. If there are multiple matching elements, the first is used.",
   "expression" : "tab.press(key: String, selector: String? = null)",
-  "cli" : "browser4-cli tab press --key=<String> --selector=<String?>, default=null"
+  "cli" : "browser4-cli tab press --key=<String> --selector=<String?>, default=null",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.press(\"Enter\")\n     * driver.press(\"Enter\", \"input[name='q']\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "fill",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. The matching element is focused and then filled with text. If there are multiple matching elements, the first will be focused.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "text",
     "type" : "String",
+    "description" : "The text to fill.",
     "expression" : "text: String",
     "cliOptions" : "--text=<String>"
   } ],
@@ -557,13 +724,19 @@
   "description" : "This method emulates inserting text that doesn't come from a key press.",
   "help" : "This method emulates inserting text that doesn't come from a key press.\n\nUnlike [type], this method clears the existing value before typing.\n\n```kotlin driver.fill(\"input[name='q']\", \"Hello, World!\") ```\n\nthen filled with text. If there are multiple matching elements, the first will be focused.",
   "expression" : "tab.fill(selector: String, text: String)",
-  "cli" : "browser4-cli tab fill --selector=<String> --text=<String>"
+  "cli" : "browser4-cli tab fill --selector=<String> --text=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.fill(\"input[name='q']\", \"Hello, World!\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "keyDown",
   "arguments" : [ {
     "name" : "key",
     "type" : "String",
+    "description" : "A key to press and hold. The key can be a single character, a key name, or a combination of both. See [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)",
     "expression" : "key: String",
     "cliOptions" : "--key=<String>"
   } ],
@@ -571,13 +744,19 @@
   "description" : "Presses and holds a keyboard key on the currently focused element.",
   "help" : "Presses and holds a keyboard key on the currently focused element.\n\n```kotlin driver.keyDown(\"Shift\") driver.keyDown(\"Control\") ```\n\nSee [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)",
   "expression" : "tab.keyDown(key: String)",
-  "cli" : "browser4-cli tab keyDown --key=<String>"
+  "cli" : "browser4-cli tab keyDown --key=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.keyDown(\"Shift\")\n     * driver.keyDown(\"Control\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "keyUp",
   "arguments" : [ {
     "name" : "key",
     "type" : "String",
+    "description" : "A key to release. The key can be a single character, a key name, or a combination of both. See [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)",
     "expression" : "key: String",
     "cliOptions" : "--key=<String>"
   } ],
@@ -585,19 +764,26 @@
   "description" : "Releases a previously pressed keyboard key on the currently focused element.",
   "help" : "Releases a previously pressed keyboard key on the currently focused element.\n\n```kotlin driver.keyUp(\"Shift\") driver.keyUp(\"Control\") ```\n\nSee [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)",
   "expression" : "tab.keyUp(key: String)",
-  "cli" : "browser4-cli tab keyUp --key=<String>"
+  "cli" : "browser4-cli tab keyUp --key=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.keyUp(\"Shift\")\n     * driver.keyUp(\"Control\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "click",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. If there are multiple matching elements, the first will be focused.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "count",
     "type" : "Int",
     "defaultValue" : "1",
+    "description" : "The number of times to click.",
     "expression" : "count: Int = 1",
     "cliOptions" : "--count=<Int>, default=1"
   } ],
@@ -605,18 +791,25 @@
   "description" : "Focus on an element with [selector] and click it.",
   "help" : "Focus on an element with [selector] and click it.\n\nIf there's no element matching `selector`, nothing to do.\n\n```kotlin driver.click(\"button[type='submit']\") ```\n\nelements, the first will be focused.",
   "expression" : "tab.click(selector: String, count: Int = 1)",
-  "cli" : "browser4-cli tab click --selector=<String> --count=<Int>, default=1"
+  "cli" : "browser4-cli tab click --selector=<String> --count=<Int>, default=1",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.click(\"button[type='submit']\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "click",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. The matching element is clicked.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "modifier",
     "type" : "String",
+    "description" : "The keyboard modifier to press while clicking (e.g., \"Shift\", \"Control\", \"Alt\").",
     "expression" : "modifier: String",
     "cliOptions" : "--modifier=<String>"
   } ],
@@ -631,6 +824,7 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. The matching element is double-clicked.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   } ],
@@ -645,11 +839,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. The matching element is double-clicked.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "modifier",
     "type" : "String",
+    "description" : "The keyboard modifier to press while double-clicking.",
     "expression" : "modifier: String",
     "cliOptions" : "--modifier=<String>"
   } ],
@@ -706,17 +902,20 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. If there are multiple matching elements, the first will be focused.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "pattern",
     "type" : "String",
+    "description" : "The pattern to match the text content.",
     "expression" : "pattern: String",
     "cliOptions" : "--pattern=<String>"
   }, {
     "name" : "count",
     "type" : "Int",
     "defaultValue" : "1",
+    "description" : "The number of times to click.",
     "expression" : "count: Int = 1",
     "cliOptions" : "--count=<Int>, default=1"
   } ],
@@ -724,29 +923,38 @@
   "description" : "This method clicks an element with [selector] whose text content matches [pattern], and then focuses it.",
   "help" : "This method clicks an element with [selector] whose text content matches [pattern], and then focuses it.\n\nIf there's no element matching [selector], or the element's text content doesn't match [pattern], nothing to do.\n\n```kotlin driver.clickTextMatches(\"button\", \"submit\") ```\n\nTODO: use playwright style selector which supports text matching, for example: `button:has-text(\"submit\")`\n\nelements, the first will be focused.",
   "expression" : "tab.clickTextMatches(selector: String, pattern: String, count: Int = 1)",
-  "cli" : "browser4-cli tab clickTextMatches --selector=<String> --pattern=<String> --count=<Int>, default=1"
+  "cli" : "browser4-cli tab clickTextMatches --selector=<String> --pattern=<String> --count=<Int>, default=1",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.clickTextMatches(\"button\", \"submit\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "clickMatches",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. If there are multiple matching elements, the first will be focused.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "attrName",
     "type" : "String",
+    "description" : "The attribute name to match.",
     "expression" : "attrName: String",
     "cliOptions" : "--attrName=<String>"
   }, {
     "name" : "pattern",
     "type" : "String",
+    "description" : "The pattern to match the attribute value.",
     "expression" : "pattern: String",
     "cliOptions" : "--pattern=<String>"
   }, {
     "name" : "count",
     "type" : "Int",
     "defaultValue" : "1",
+    "description" : "The number of times to click.",
     "expression" : "count: Int = 1",
     "cliOptions" : "--count=<Int>, default=1"
   } ],
@@ -754,18 +962,25 @@
   "description" : "This method clicks an element with [selector] whose attribute name is [attrName] and value matches [pattern], and then focuses it.",
   "help" : "This method clicks an element with [selector] whose attribute name is [attrName] and value matches [pattern], and then focuses it.\n\nIf there's no element matching [selector], or the element has no attribute [attrName], or the element's attribute value doesn't match [pattern], nothing to do.\n\n```kotlin driver.clickMatches(\"button\", \"type\", \"submit\") ```\n\nelements, the first will be focused.",
   "expression" : "tab.clickMatches(selector: String, attrName: String, pattern: String, count: Int = 1)",
-  "cli" : "browser4-cli tab clickMatches --selector=<String> --attrName=<String> --pattern=<String> --count=<Int>, default=1"
+  "cli" : "browser4-cli tab clickMatches --selector=<String> --attrName=<String> --pattern=<String> --count=<Int>, default=1",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.clickMatches(\"button\", \"type\", \"submit\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "selectOption",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "values",
     "type" : "List<String>",
+    "description" : "The values or labels of the options to select",
     "expression" : "values: List<String>",
     "cliOptions" : "--values=<List<String>>"
   } ],
@@ -780,11 +995,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "value",
     "type" : "String",
+    "description" : "The value or label of the option to select",
     "expression" : "value: String",
     "cliOptions" : "--value=<String>"
   } ],
@@ -799,6 +1016,7 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. If there are multiple matching elements, the first will be checked.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   } ],
@@ -813,6 +1031,7 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. If there are multiple matching elements, the first will be unchecked.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   } ],
@@ -827,6 +1046,7 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. If there are multiple matching elements, the first will be scrolled into view.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   } ],
@@ -834,7 +1054,12 @@
   "description" : "This method fetches an element with [selector], scrolls it into view if needed.",
   "help" : "This method fetches an element with [selector], scrolls it into view if needed.\n\nIf there's no element matching [selector], the method does nothing.\n\n```kotlin driver.scrollTo(\"h2.title\") ```\n\nelements, the first will be scrolled into view.",
   "expression" : "tab.scrollTo(selector: String)",
-  "cli" : "browser4-cli tab scrollTo --selector=<String>"
+  "cli" : "browser4-cli tab scrollTo --selector=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.scrollTo(\"h2.title\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "scrollDown",
@@ -842,6 +1067,7 @@
     "name" : "count",
     "type" : "Int",
     "defaultValue" : "1",
+    "description" : "The times to scroll down.",
     "expression" : "count: Int = 1",
     "cliOptions" : "--count=<Int>, default=1"
   } ],
@@ -849,7 +1075,12 @@
   "description" : "The current page frame scrolls down for [count] times.",
   "help" : "The current page frame scrolls down for [count] times.\n\n```kotlin driver.scrollDown(3) ```\n\nNOTE: This uses JS scrollBy for fast, direct scroll control. For realistic user-like scrolling that triggers all event handlers, use [mouseWheelDown].",
   "expression" : "tab.scrollDown(count: Int = 1)",
-  "cli" : "browser4-cli tab scrollDown --count=<Int>, default=1"
+  "cli" : "browser4-cli tab scrollDown --count=<Int>, default=1",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.scrollDown(3)\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "scrollUp",
@@ -857,6 +1088,7 @@
     "name" : "count",
     "type" : "Int",
     "defaultValue" : "1",
+    "description" : "The times to scroll up.",
     "expression" : "count: Int = 1",
     "cliOptions" : "--count=<Int>, default=1"
   } ],
@@ -864,7 +1096,12 @@
   "description" : "The current page frame scrolls up for [count] times.",
   "help" : "The current page frame scrolls up for [count] times.\n\n```kotlin driver.scrollUp(3) ```\n\nNOTE: This uses JS scrollBy for fast, direct scroll control. For realistic user-like scrolling that triggers all event handlers, use [mouseWheelUp].",
   "expression" : "tab.scrollUp(count: Int = 1)",
-  "cli" : "browser4-cli tab scrollUp --count=<Int>, default=1"
+  "cli" : "browser4-cli tab scrollUp --count=<Int>, default=1",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.scrollUp(3)\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "scrollBy",
@@ -872,12 +1109,14 @@
     "name" : "pixels",
     "type" : "Double",
     "defaultValue" : "200.0",
+    "description" : "The delta in pixels to scroll; positive scrolls down, negative scrolls up. Default 200.0.",
     "expression" : "pixels: Double = 200.0",
     "cliOptions" : "--pixels=<Double>, default=200.0"
   }, {
     "name" : "smooth",
     "type" : "Boolean",
     "defaultValue" : "true",
+    "description" : "Whether to perform a deterministic smooth scrolling sequence. If false a single `window.scrollTo()` is executed.",
     "expression" : "smooth: Boolean = true",
     "cliOptions" : "--smooth=<Boolean>, default=true"
   } ],
@@ -885,7 +1124,12 @@
   "description" : "Scrolls the current page frame vertically by the given number of pixels.",
   "help" : "Scrolls the current page frame vertically by the given number of pixels.\n\nPositive values scroll down, negative values scroll up. The target position is clamped to the scrollable range [0, scrollHeight - viewportHeight].\n\nWhen [smooth] is true a deterministic, step‑wise scrolling algorithm is used (instead of relying on the browser's native smooth scrolling) for higher stability: it issues incremental `window.scrollTo()` calls and waits for the viewport to settle after each step. This reduces race conditions with lazy‑loaded content or async layout changes and yields more predictable final positions.\n\nTypical usage: ```kotlin // Scroll down 200px smoothly (default) driver.scrollBy() // Scroll up 500px immediately driver.scrollBy(-500.0, smooth = false) // Scroll down one viewport height, smooth val y = driver.scrollBy(driver.viewportHeight(), smooth = true) ```\n\n`window.scrollTo()` is executed.",
   "expression" : "tab.scrollBy(pixels: Double = 200.0, smooth: Boolean = true)",
-  "cli" : "browser4-cli tab scrollBy --pixels=<Double>, default=200.0 --smooth=<Boolean>, default=true"
+  "cli" : "browser4-cli tab scrollBy --pixels=<Double>, default=200.0 --smooth=<Boolean>, default=true",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* // Scroll down 200px smoothly (default)\n     * driver.scrollBy()\n     * // Scroll up 500px immediately\n     * driver.scrollBy(-500.0, smooth = false)\n     * // Scroll down one viewport height, smooth\n     * val y = driver.scrollBy(driver.viewportHeight(), smooth = true)\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "scrollToTop",
@@ -893,7 +1137,12 @@
   "description" : "The current page frame scrolls to the top.",
   "help" : "The current page frame scrolls to the top.\n\n```kotlin driver.scrollToTop() ```",
   "expression" : "tab.scrollToTop()",
-  "cli" : "browser4-cli tab scrollToTop "
+  "cli" : "browser4-cli tab scrollToTop ",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.scrollToTop()\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "scrollToBottom",
@@ -901,13 +1150,19 @@
   "description" : "The current page frame scrolls to the bottom.",
   "help" : "The current page frame scrolls to the bottom.\n\n```kotlin driver.scrollToBottom() ```",
   "expression" : "tab.scrollToBottom()",
-  "cli" : "browser4-cli tab scrollToBottom "
+  "cli" : "browser4-cli tab scrollToBottom ",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.scrollToBottom()\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "scrollToMiddle",
   "arguments" : [ {
     "name" : "ratio",
     "type" : "Double",
+    "description" : "The ratio of the page to scroll to, 0.0 means the top, 1.0 means the bottom.",
     "expression" : "ratio: Double",
     "cliOptions" : "--ratio=<Double>"
   } ],
@@ -915,13 +1170,19 @@
   "description" : "The current page frame scrolls to the middle.",
   "help" : "The current page frame scrolls to the middle.\n\n```kotlin driver.scrollToMiddle(0.2) driver.scrollToMiddle(0.5) driver.scrollToMiddle(0.8) ```",
   "expression" : "tab.scrollToMiddle(ratio: Double)",
-  "cli" : "browser4-cli tab scrollToMiddle --ratio=<Double>"
+  "cli" : "browser4-cli tab scrollToMiddle --ratio=<Double>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.scrollToMiddle(0.2)\n     * driver.scrollToMiddle(0.5)\n     * driver.scrollToMiddle(0.8)\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "scrollToViewport",
   "arguments" : [ {
     "name" : "n",
     "type" : "Double",
+    "description" : "The viewport number of the page to scroll to (0-based). 0.00 means at the top of the first screen, 1.50 means halfway through the second screen.",
     "expression" : "n: Double",
     "cliOptions" : "--n=<Double>"
   }, {
@@ -935,7 +1196,12 @@
   "description" : "Scroll to the given 0-based viewport position.",
   "help" : "Scroll to the given 0-based viewport position.\n\n```kotlin driver.scrollToViewport(0.0) driver.scrollToViewport(0.5) driver.scrollToViewport(1.5) driver.scrollToViewport(2.0) ```\n\n0.00 means at the top of the first screen, 1.50 means halfway through the second screen.",
   "expression" : "tab.scrollToViewport(n: Double, smooth: Boolean = true)",
-  "cli" : "browser4-cli tab scrollToViewport --n=<Double> --smooth=<Boolean>, default=true"
+  "cli" : "browser4-cli tab scrollToViewport --n=<Double> --smooth=<Boolean>, default=true",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.scrollToViewport(0.0)\n     * driver.scrollToViewport(0.5)\n     * driver.scrollToViewport(1.5)\n     * driver.scrollToViewport(2.0)\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "mouseWheelDown",
@@ -943,24 +1209,28 @@
     "name" : "count",
     "type" : "Int",
     "defaultValue" : "1",
+    "description" : "The times to wheel down.",
     "expression" : "count: Int = 1",
     "cliOptions" : "--count=<Int>, default=1"
   }, {
     "name" : "deltaX",
     "type" : "Double",
     "defaultValue" : "0.0",
+    "description" : "The distance to wheel horizontally.",
     "expression" : "deltaX: Double = 0.0",
     "cliOptions" : "--deltaX=<Double>, default=0.0"
   }, {
     "name" : "deltaY",
     "type" : "Double",
     "defaultValue" : "150.0",
+    "description" : "The distance to wheel vertically.",
     "expression" : "deltaY: Double = 150.0",
     "cliOptions" : "--deltaY=<Double>, default=150.0"
   }, {
     "name" : "delayMillis",
     "type" : "Long",
     "defaultValue" : "-1",
+    "description" : "The delay time in milliseconds between ticks. Use 0 for no delay, -1 (default) for the policy-based random delay, or a positive value for a fixed delay.",
     "expression" : "delayMillis: Long = -1",
     "cliOptions" : "--delayMillis=<Long>, default=-1"
   } ],
@@ -968,7 +1238,12 @@
   "description" : "The mouse wheels down for [count] times.",
   "help" : "The mouse wheels down for [count] times.\n\n```kotlin driver.mouseWheelDown(3) ```\n\nUse 0 for no delay, -1 (default) for the policy-based random delay, or a positive value for a fixed delay.",
   "expression" : "tab.mouseWheelDown(count: Int = 1, deltaX: Double = 0.0, deltaY: Double = 150.0, delayMillis: Long = -1)",
-  "cli" : "browser4-cli tab mouseWheelDown --count=<Int>, default=1 --deltaX=<Double>, default=0.0 --deltaY=<Double>, default=150.0 --delayMillis=<Long>, default=-1"
+  "cli" : "browser4-cli tab mouseWheelDown --count=<Int>, default=1 --deltaX=<Double>, default=0.0 --deltaY=<Double>, default=150.0 --delayMillis=<Long>, default=-1",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.mouseWheelDown(3)\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "mouseWheelUp",
@@ -976,24 +1251,28 @@
     "name" : "count",
     "type" : "Int",
     "defaultValue" : "1",
+    "description" : "The times to wheel up.",
     "expression" : "count: Int = 1",
     "cliOptions" : "--count=<Int>, default=1"
   }, {
     "name" : "deltaX",
     "type" : "Double",
     "defaultValue" : "0.0",
+    "description" : "The distance to wheel horizontally.",
     "expression" : "deltaX: Double = 0.0",
     "cliOptions" : "--deltaX=<Double>, default=0.0"
   }, {
     "name" : "deltaY",
     "type" : "Double",
     "defaultValue" : "-150.0",
+    "description" : "The distance to wheel vertically.",
     "expression" : "deltaY: Double = -150.0",
     "cliOptions" : "--deltaY=<Double>, default=-150.0"
   }, {
     "name" : "delayMillis",
     "type" : "Long",
     "defaultValue" : "-1",
+    "description" : "The delay time in milliseconds between ticks. Use 0 for no delay, -1 (default) for the policy-based random delay, or a positive value for a fixed delay.",
     "expression" : "delayMillis: Long = -1",
     "cliOptions" : "--delayMillis=<Long>, default=-1"
   } ],
@@ -1001,7 +1280,12 @@
   "description" : "The mouse wheels up for [count] times.",
   "help" : "The mouse wheels up for [count] times.\n\n```kotlin driver.mouseWheelUp(3) ```\n\nUse 0 for no delay, -1 (default) for the policy-based random delay, or a positive value for a fixed delay.",
   "expression" : "tab.mouseWheelUp(count: Int = 1, deltaX: Double = 0.0, deltaY: Double = -150.0, delayMillis: Long = -1)",
-  "cli" : "browser4-cli tab mouseWheelUp --count=<Int>, default=1 --deltaX=<Double>, default=0.0 --deltaY=<Double>, default=-150.0 --delayMillis=<Long>, default=-1"
+  "cli" : "browser4-cli tab mouseWheelUp --count=<Int>, default=1 --deltaX=<Double>, default=0.0 --deltaY=<Double>, default=-150.0 --delayMillis=<Long>, default=-1",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.mouseWheelUp(3)\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "mouseWheel",
@@ -1009,12 +1293,14 @@
     "name" : "deltaX",
     "type" : "Double",
     "defaultValue" : "0.0",
+    "description" : "The distance to wheel horizontally.",
     "expression" : "deltaX: Double = 0.0",
     "cliOptions" : "--deltaX=<Double>, default=0.0"
   }, {
     "name" : "deltaY",
     "type" : "Double",
     "defaultValue" : "150.0",
+    "description" : "The distance to wheel vertically.",
     "expression" : "deltaY: Double = 150.0",
     "cliOptions" : "--deltaY=<Double>, default=150.0"
   } ],
@@ -1022,25 +1308,33 @@
   "description" : "Scrolls the mouse wheel by the provided deltas.",
   "help" : "Scrolls the mouse wheel by the provided deltas.\n\nPositive [deltaY] scrolls down and negative [deltaY] scrolls up.\n\n```kotlin driver.mouseWheel(0.0, 150.0) driver.mouseWheel(0.0, -150.0) ```",
   "expression" : "tab.mouseWheel(deltaX: Double = 0.0, deltaY: Double = 150.0)",
-  "cli" : "browser4-cli tab mouseWheel --deltaX=<Double>, default=0.0 --deltaY=<Double>, default=150.0"
+  "cli" : "browser4-cli tab mouseWheel --deltaX=<Double>, default=0.0 --deltaY=<Double>, default=150.0",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.mouseWheel(0.0, 150.0)\n     * driver.mouseWheel(0.0, -150.0)\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "mouseWheel",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element to wheel on.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "deltaX",
     "type" : "Double",
     "defaultValue" : "0.0",
+    "description" : "The distance to wheel horizontally.",
     "expression" : "deltaX: Double = 0.0",
     "cliOptions" : "--deltaX=<Double>, default=0.0"
   }, {
     "name" : "deltaY",
     "type" : "Double",
     "defaultValue" : "150.0",
+    "description" : "The distance to wheel vertically.",
     "expression" : "deltaY: Double = 150.0",
     "cliOptions" : "--deltaY=<Double>, default=150.0"
   } ],
@@ -1048,18 +1342,25 @@
   "description" : "Scrolls the mouse wheel on a specific element identified by [selector].",
   "help" : "Scrolls the mouse wheel on a specific element identified by [selector].\n\nThe element is scrolled into view if needed, the mouse is moved to a random position near the element's center, and then the wheel event is dispatched.\n\n```kotlin driver.mouseWheel(\".scrollable-panel\", 0.0, 200.0) ```",
   "expression" : "tab.mouseWheel(selector: String, deltaX: Double = 0.0, deltaY: Double = 150.0)",
-  "cli" : "browser4-cli tab mouseWheel --selector=<String> --deltaX=<Double>, default=0.0 --deltaY=<Double>, default=150.0"
+  "cli" : "browser4-cli tab mouseWheel --selector=<String> --deltaX=<Double>, default=0.0 --deltaY=<Double>, default=150.0",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.mouseWheel(\".scrollable-panel\", 0.0, 200.0)\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "mouseMove",
   "arguments" : [ {
     "name" : "x",
     "type" : "Double",
+    "description" : "The x coordinate to move to.",
     "expression" : "x: Double",
     "cliOptions" : "--x=<Double>"
   }, {
     "name" : "y",
     "type" : "Double",
+    "description" : "The y coordinate to move to.",
     "expression" : "y: Double",
     "cliOptions" : "--y=<Double>"
   } ],
@@ -1067,7 +1368,12 @@
   "description" : "Moves the mouse to the position specified by [x] and [y].",
   "help" : "Moves the mouse to the position specified by [x] and [y].\n\n```kotlin driver.mouseMove(100.0, 200.0) ```",
   "expression" : "tab.mouseMove(x: Double, y: Double)",
-  "cli" : "browser4-cli tab mouseMove --x=<Double> --y=<Double>"
+  "cli" : "browser4-cli tab mouseMove --x=<Double> --y=<Double>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.mouseMove(100.0, 200.0)\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "mouseDown",
@@ -1075,12 +1381,14 @@
     "name" : "button",
     "type" : "String",
     "defaultValue" : "left",
+    "description" : "The mouse button to press. Supported values are `left`, `middle`, and `right`.",
     "expression" : "button: String = left",
     "cliOptions" : "--button=<String>, default=left"
   }, {
     "name" : "clickCount",
     "type" : "Int",
     "defaultValue" : "1",
+    "description" : "The click count associated with the press event.",
     "expression" : "clickCount: Int = 1",
     "cliOptions" : "--clickCount=<Int>, default=1"
   } ],
@@ -1088,7 +1396,12 @@
   "description" : "Presses a mouse button at the current mouse position.",
   "help" : "Presses a mouse button at the current mouse position.\n\n```kotlin driver.mouseDown() driver.mouseDown(\"right\") ```",
   "expression" : "tab.mouseDown(button: String = left, clickCount: Int = 1)",
-  "cli" : "browser4-cli tab mouseDown --button=<String>, default=left --clickCount=<Int>, default=1"
+  "cli" : "browser4-cli tab mouseDown --button=<String>, default=left --clickCount=<Int>, default=1",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.mouseDown()\n     * driver.mouseDown(\"right\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "mouseUp",
@@ -1096,12 +1409,14 @@
     "name" : "button",
     "type" : "String",
     "defaultValue" : "left",
+    "description" : "The mouse button to release. Supported values are `left`, `middle`, and `right`.",
     "expression" : "button: String = left",
     "cliOptions" : "--button=<String>, default=left"
   }, {
     "name" : "clickCount",
     "type" : "Int",
     "defaultValue" : "1",
+    "description" : "The click count associated with the release event.",
     "expression" : "clickCount: Int = 1",
     "cliOptions" : "--clickCount=<Int>, default=1"
   } ],
@@ -1109,24 +1424,32 @@
   "description" : "Releases a mouse button at the current mouse position.",
   "help" : "Releases a mouse button at the current mouse position.\n\n```kotlin driver.mouseUp() driver.mouseUp(\"right\") ```",
   "expression" : "tab.mouseUp(button: String = left, clickCount: Int = 1)",
-  "cli" : "browser4-cli tab mouseUp --button=<String>, default=left --clickCount=<Int>, default=1"
+  "cli" : "browser4-cli tab mouseUp --button=<String>, default=left --clickCount=<Int>, default=1",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.mouseUp()\n     * driver.mouseUp(\"right\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "moveMouseTo",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "deltaX",
     "type" : "Int",
+    "description" : "The distance to the left of the element.",
     "expression" : "deltaX: Int",
     "cliOptions" : "--deltaX=<Int>"
   }, {
     "name" : "deltaY",
     "type" : "Int",
     "defaultValue" : "0",
+    "description" : "The distance to the top of the element.",
     "expression" : "deltaY: Int = 0",
     "cliOptions" : "--deltaY=<Int>, default=0"
   } ],
@@ -1134,24 +1457,32 @@
   "description" : "The mouse moves to the element with [selector].",
   "help" : "The mouse moves to the element with [selector].\n\n```kotlin driver.moveMouseTo(\"h2.title\") ```",
   "expression" : "tab.moveMouseTo(selector: String, deltaX: Int, deltaY: Int = 0)",
-  "cli" : "browser4-cli tab moveMouseTo --selector=<String> --deltaX=<Int> --deltaY=<Int>, default=0"
+  "cli" : "browser4-cli tab moveMouseTo --selector=<String> --deltaX=<Int> --deltaY=<Int>, default=0",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.moveMouseTo(\"h2.title\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "dragAndDrop",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. The matching element is dragged from.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "deltaX",
     "type" : "Int",
+    "description" : "The distance to drag horizontally.",
     "expression" : "deltaX: Int",
     "cliOptions" : "--deltaX=<Int>"
   }, {
     "name" : "deltaY",
     "type" : "Int",
     "defaultValue" : "0",
+    "description" : "The distance to drag vertically.",
     "expression" : "deltaY: Int = 0",
     "cliOptions" : "--deltaY=<Int>, default=0"
   } ],
@@ -1166,11 +1497,13 @@
   "arguments" : [ {
     "name" : "sourceSelector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. Identifies the drag source.",
     "expression" : "sourceSelector: String",
     "cliOptions" : "--sourceSelector=<String>"
   }, {
     "name" : "targetSelector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. Identifies the drop target.",
     "expression" : "targetSelector: String",
     "cliOptions" : "--targetSelector=<String>"
   } ],
@@ -1186,13 +1519,19 @@
   "description" : "Returns the document's HTML markup.",
   "help" : "Returns the document's HTML markup.\n\n```kotlin val html = driver.outerHTML() ```\n\nIf the document does not exist, returns null.",
   "expression" : "tab.outerHTML()",
-  "cli" : "browser4-cli tab outerHTML "
+  "cli" : "browser4-cli tab outerHTML ",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val html = driver.outerHTML()\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "outerHTML",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   } ],
@@ -1200,7 +1539,12 @@
   "description" : "Returns the node's HTML markup, the node is located by [selector].",
   "help" : "Returns the node's HTML markup, the node is located by [selector].\n\nIf the node does not exist, returns null.\n\n```kotlin val html = driver.outerHTML(\"h2.title\") ```",
   "expression" : "tab.outerHTML(selector: String)",
-  "cli" : "browser4-cli tab outerHTML --selector=<String>"
+  "cli" : "browser4-cli tab outerHTML --selector=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val html = driver.outerHTML(\"h2.title\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "textContent",
@@ -1208,6 +1552,7 @@
     "name" : "selector",
     "type" : "String?",
     "defaultValue" : "null",
+    "description" : "The selector of the element, multiple formats supported. If null, targets the document body.",
     "expression" : "selector: String? = null",
     "cliOptions" : "--selector=<String?>, default=null"
   } ],
@@ -1215,13 +1560,19 @@
   "description" : "Returns the text content of the document or a specific element.",
   "help" : "Returns the text content of the document or a specific element.\n\nIf [selector] is null, returns the text content of the entire document (usually `document.body.innerText`). If [selector] is provided, returns the text content of the first matching element.\n\nIf the document or element does not exist, returns null.\n\n```kotlin val bodyText = driver.textContent() val titleText = driver.textContent(\"h1.title\") ```",
   "expression" : "tab.textContent(selector: String? = null)",
-  "cli" : "browser4-cli tab textContent --selector=<String?>, default=null"
+  "cli" : "browser4-cli tab textContent --selector=<String?>, default=null",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val bodyText = driver.textContent()\n     * val titleText = driver.textContent(\"h1.title\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "selectFirstTextOrNull",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   } ],
@@ -1229,13 +1580,19 @@
   "description" : "Returns the node's text content, the node is located by [selector].",
   "help" : "Returns the node's text content, the node is located by [selector].\n\nIf the node does not exist, returns null.\n\n```kotlin val text = driver.selectFirstTextOrNull(\"h2.title\") ```",
   "expression" : "tab.selectFirstTextOrNull(selector: String)",
-  "cli" : "browser4-cli tab selectFirstTextOrNull --selector=<String>"
+  "cli" : "browser4-cli tab selectFirstTextOrNull --selector=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val text = driver.selectFirstTextOrNull(\"h2.title\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "selectTextAll",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   } ],
@@ -1243,18 +1600,25 @@
   "description" : "Returns a list of text contents of all the elements matching the specified selector within the page.",
   "help" : "Returns a list of text contents of all the elements matching the specified selector within the page.\n\nIf no elements match the selector, returns an empty list.\n\n```kotlin val texts = driver.selectTextAll(\"h2\") ```",
   "expression" : "tab.selectTextAll(selector: String)",
-  "cli" : "browser4-cli tab selectTextAll --selector=<String>"
+  "cli" : "browser4-cli tab selectTextAll --selector=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val texts = driver.selectTextAll(\"h2\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "selectFirstAttributeOrNull",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "attrName",
     "type" : "String",
+    "description" : "The attribute name to retrieve.",
     "expression" : "attrName: String",
     "cliOptions" : "--attrName=<String>"
   } ],
@@ -1262,13 +1626,19 @@
   "description" : "Returns the node's attribute value, the node is located by [selector], the attribute is [attrName].",
   "help" : "Returns the node's attribute value, the node is located by [selector], the attribute is [attrName].\n\nIf the node does not exist, or the attribute does not exist, returns null.\n\n```kotlin val classes = driver.selectFirstAttributeOrNull(\"h2.title\", \"class\") ```",
   "expression" : "tab.selectFirstAttributeOrNull(selector: String, attrName: String)",
-  "cli" : "browser4-cli tab selectFirstAttributeOrNull --selector=<String> --attrName=<String>"
+  "cli" : "browser4-cli tab selectFirstAttributeOrNull --selector=<String> --attrName=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val classes = driver.selectFirstAttributeOrNull(\"h2.title\", \"class\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "selectAttributes",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   } ],
@@ -1276,30 +1646,39 @@
   "description" : "Returns the node's attribute values, the node is located by [selector].",
   "help" : "Returns the node's attribute values, the node is located by [selector].\n\nIf the node do not exist, or the attribute does not exist, returns an empty list.\n\n```kotlin val classes = driver.selectAttributes(\"h2.title\", \"class\") ```",
   "expression" : "tab.selectAttributes(selector: String)",
-  "cli" : "browser4-cli tab selectAttributes --selector=<String>"
+  "cli" : "browser4-cli tab selectAttributes --selector=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val classes = driver.selectAttributes(\"h2.title\", \"class\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "selectAttributeAll",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "attrName",
     "type" : "String",
+    "description" : "The attribute name to retrieve.",
     "expression" : "attrName: String",
     "cliOptions" : "--attrName=<String>"
   }, {
     "name" : "start",
     "type" : "Int",
     "defaultValue" : "0",
+    "description" : "The offset of the first node to select.",
     "expression" : "start: Int = 0",
     "cliOptions" : "--start=<Int>, default=0"
   }, {
     "name" : "limit",
     "type" : "Int",
     "defaultValue" : "10000",
+    "description" : "The maximum number of nodes to select.",
     "expression" : "limit: Int = 10000",
     "cliOptions" : "--limit=<Int>, default=10000"
   } ],
@@ -1307,23 +1686,31 @@
   "description" : "Returns the nodes' attribute values, the nodes are located by [selector], the attribute is [attrName].",
   "help" : "Returns the nodes' attribute values, the nodes are located by [selector], the attribute is [attrName].\n\nIf the nodes do not exist, or the attribute does not exist, returns an empty list.\n\n```kotlin val classes = driver.selectAttributeAll(\"h2.title\", \"class\") ```",
   "expression" : "tab.selectAttributeAll(selector: String, attrName: String, start: Int = 0, limit: Int = 10000)",
-  "cli" : "browser4-cli tab selectAttributeAll --selector=<String> --attrName=<String> --start=<Int>, default=0 --limit=<Int>, default=10000"
+  "cli" : "browser4-cli tab selectAttributeAll --selector=<String> --attrName=<String> --start=<Int>, default=0 --limit=<Int>, default=10000",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val classes = driver.selectAttributeAll(\"h2.title\", \"class\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "setAttribute",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "attrName",
     "type" : "String",
+    "description" : "The attribute name to set.",
     "expression" : "attrName: String",
     "cliOptions" : "--attrName=<String>"
   }, {
     "name" : "attrValue",
     "type" : "String",
+    "description" : "The attribute value to set.",
     "expression" : "attrValue: String",
     "cliOptions" : "--attrValue=<String>"
   } ],
@@ -1331,23 +1718,31 @@
   "description" : "Set the attribute of an element located by [selector].",
   "help" : "Set the attribute of an element located by [selector].\n\n```kotlin driver.setAttribute(\"h2.title\", \"class\", \"header\") ```",
   "expression" : "tab.setAttribute(selector: String, attrName: String, attrValue: String)",
-  "cli" : "browser4-cli tab setAttribute --selector=<String> --attrName=<String> --attrValue=<String>"
+  "cli" : "browser4-cli tab setAttribute --selector=<String> --attrName=<String> --attrValue=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.setAttribute(\"h2.title\", \"class\", \"header\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "setAttributeAll",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "attrName",
     "type" : "String",
+    "description" : "The attribute name to set.",
     "expression" : "attrName: String",
     "cliOptions" : "--attrName=<String>"
   }, {
     "name" : "attrValue",
     "type" : "String",
+    "description" : "The attribute value to set.",
     "expression" : "attrValue: String",
     "cliOptions" : "--attrValue=<String>"
   } ],
@@ -1355,18 +1750,25 @@
   "description" : "Set the attribute of all elements matching [selector].",
   "help" : "Set the attribute of all elements matching [selector].\n\n```kotlin driver.setAttributeAll(\"h2.title\", \"class\", \"header\") ```",
   "expression" : "tab.setAttributeAll(selector: String, attrName: String, attrValue: String)",
-  "cli" : "browser4-cli tab setAttributeAll --selector=<String> --attrName=<String> --attrValue=<String>"
+  "cli" : "browser4-cli tab setAttributeAll --selector=<String> --attrName=<String> --attrValue=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.setAttributeAll(\"h2.title\", \"class\", \"header\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "selectFirstPropertyValueOrNull",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "propName",
     "type" : "String",
+    "description" : "The property name to retrieve.",
     "expression" : "propName: String",
     "cliOptions" : "--propName=<String>"
   } ],
@@ -1381,23 +1783,27 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "propName",
     "type" : "String",
+    "description" : "The property name to retrieve.",
     "expression" : "propName: String",
     "cliOptions" : "--propName=<String>"
   }, {
     "name" : "start",
     "type" : "Int",
     "defaultValue" : "0",
+    "description" : "The offset of the first node to select.",
     "expression" : "start: Int = 0",
     "cliOptions" : "--start=<Int>, default=0"
   }, {
     "name" : "limit",
     "type" : "Int",
     "defaultValue" : "10000",
+    "description" : "The maximum number of nodes to select.",
     "expression" : "limit: Int = 10000",
     "cliOptions" : "--limit=<Int>, default=10000"
   } ],
@@ -1412,16 +1818,19 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "propName",
     "type" : "String",
+    "description" : "The property name to set.",
     "expression" : "propName: String",
     "cliOptions" : "--propName=<String>"
   }, {
     "name" : "propValue",
     "type" : "String",
+    "description" : "The property value to set.",
     "expression" : "propValue: String",
     "cliOptions" : "--propValue=<String>"
   } ],
@@ -1429,23 +1838,31 @@
   "description" : "Set the property of an element located by [selector].",
   "help" : "Set the property of an element located by [selector].\n\n```kotlin driver.setProperty(\"input#input\", \"value\") ```",
   "expression" : "tab.setProperty(selector: String, propName: String, propValue: String)",
-  "cli" : "browser4-cli tab setProperty --selector=<String> --propName=<String> --propValue=<String>"
+  "cli" : "browser4-cli tab setProperty --selector=<String> --propName=<String> --propValue=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.setProperty(\"input#input\", \"value\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "setPropertyAll",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "propName",
     "type" : "String",
+    "description" : "The property name to set.",
     "expression" : "propName: String",
     "cliOptions" : "--propName=<String>"
   }, {
     "name" : "propValue",
     "type" : "String",
+    "description" : "The property value to set.",
     "expression" : "propValue: String",
     "cliOptions" : "--propValue=<String>"
   } ],
@@ -1453,13 +1870,19 @@
   "description" : "Set the property of all elements matching [selector].",
   "help" : "Set the property of all elements matching [selector].\n\n```kotlin driver.setPropertyAll(\"input#input\", \"value\") ```",
   "expression" : "tab.setPropertyAll(selector: String, propName: String, propValue: String)",
-  "cli" : "browser4-cli tab setPropertyAll --selector=<String> --propName=<String> --propValue=<String>"
+  "cli" : "browser4-cli tab setPropertyAll --selector=<String> --propName=<String> --propValue=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.setPropertyAll(\"input#input\", \"value\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "evaluate",
   "arguments" : [ {
     "name" : "expression",
     "type" : "String",
+    "description" : "JavaScript expression to evaluate",
     "expression" : "expression: String",
     "cliOptions" : "--expression=<String>"
   } ],
@@ -1467,13 +1890,23 @@
   "description" : "Executes JavaScript in the context of the currently selected frame or window.",
   "help" : "Executes JavaScript in the context of the currently selected frame or window.\n\nIf the result is not JavaScript object, it is not returned.\n\nIf you want to execute a function, convert it to IIFE (Immediately Invoked Function Expression).\n\n```kotlin val title = driver.evaluate(\"document.title\") ```\n\nMulti-line JavaScript code:\n\n```kotlin val code = \"\"\" () => { const a = 10; const b = 20; return a * b; } \"\"\".trimIndent()\n\nval result = driver.evaluate(code) ```\n\n### 🔍 Notes: * **Wrap the code in an IIFE (Immediately Invoked Function Expression)** to return a value. * **Escape line breaks** with `\\n`.",
   "expression" : "tab.evaluate(expression: String)",
-  "cli" : "browser4-cli tab evaluate --expression=<String>"
+  "cli" : "browser4-cli tab evaluate --expression=<String>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val title = driver.evaluate(\"document.title\")\n     *",
+    "expectsError" : false
+  }, {
+    "title" : "Example usage",
+    "code" : "* val code = \"\"\"\n     * () => {\n     *   const a = 10;\n     *   const b = 20;\n     *   return a * b;\n     * }\n     * \"\"\".trimIndent()\n     *\n     * val result = driver.evaluate(code)\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "evaluateDetail",
   "arguments" : [ {
     "name" : "expression",
     "type" : "String",
+    "description" : "The JavaScript expression to evaluate.",
     "expression" : "expression: String",
     "cliOptions" : "--expression=<String>"
   } ],
@@ -1488,6 +1921,7 @@
   "arguments" : [ {
     "name" : "expression",
     "type" : "String",
+    "description" : "The JavaScript expression to evaluate.",
     "expression" : "expression: String",
     "cliOptions" : "--expression=<String>"
   } ],
@@ -1502,6 +1936,7 @@
   "arguments" : [ {
     "name" : "expression",
     "type" : "String",
+    "description" : "The JavaScript expression to evaluate.",
     "expression" : "expression: String",
     "cliOptions" : "--expression=<String>"
   } ],
@@ -1516,11 +1951,13 @@
   "arguments" : [ {
     "name" : "expression",
     "type" : "String",
+    "description" : "The JavaScript expression to evaluate.",
     "expression" : "expression: String",
     "cliOptions" : "--expression=<String>"
   }, {
     "name" : "awaitPromise",
     "type" : "Boolean",
+    "description" : "Whether to wait for the evaluated expression's Promise to resolve.",
     "expression" : "awaitPromise: Boolean",
     "cliOptions" : "--awaitPromise=<Boolean>"
   } ],
@@ -1535,11 +1972,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "functionDeclaration",
     "type" : "String",
+    "description" : "The JavaScript function declaration to execute against the matched element.",
     "expression" : "functionDeclaration: String",
     "cliOptions" : "--functionDeclaration=<String>"
   } ],
@@ -1554,11 +1993,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "functionDeclaration",
     "type" : "String",
+    "description" : "The JavaScript function declaration to execute against the matched element.",
     "expression" : "functionDeclaration: String",
     "cliOptions" : "--functionDeclaration=<String>"
   } ],
@@ -1573,12 +2014,14 @@
   "arguments" : [ {
     "name" : "method",
     "type" : "String",
+    "description" : "The full CDP method name (e.g. \"Page.captureScreenshot\").",
     "expression" : "method: String",
     "cliOptions" : "--method=<String>"
   }, {
     "name" : "params",
     "type" : "Map<String, Any?>?",
     "defaultValue" : "null",
+    "description" : "Optional parameters for the CDP command.",
     "expression" : "params: Map<String, Any?>? = null",
     "cliOptions" : "--params=<Map<String, Any?>?>, default=null"
   } ],
@@ -1586,7 +2029,12 @@
   "description" : "Execute a Chrome DevTools Protocol (CDP) command and return the deserialized result.",
   "help" : "Execute a Chrome DevTools Protocol (CDP) command and return the deserialized result.\n\nThis is an extension point for advanced scenarios that are not yet covered by the high-level WebDriver API. Use it to issue arbitrary CDP commands directly against the current page target.\n\nThe return value is the deserialized CDP response (Map, List, String, Number, Boolean, or null).\n\nExample: ```kotlin // Screenshot the page as JPEG val result = driver.executeCdpCommand(\"Page.captureScreenshot\", mapOf(\"format\" to \"jpeg\", \"quality\" to 80))\n\n// Get all cookies val cookies = driver.executeCdpCommand(\"Network.getCookies\") ```",
   "expression" : "tab.executeCdpCommand(method: String, params: Map<String, Any?>? = null)",
-  "cli" : "browser4-cli tab executeCdpCommand --method=<String> --params=<Map<String, Any?>?>, default=null"
+  "cli" : "browser4-cli tab executeCdpCommand --method=<String> --params=<Map<String, Any?>?>, default=null",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* // Screenshot the page as JPEG\n     * val result = driver.executeCdpCommand(\"Page.captureScreenshot\", mapOf(\"format\" to \"jpeg\", \"quality\" to 80))\n     *\n     * // Get all cookies\n     * val cookies = driver.executeCdpCommand(\"Network.getCookies\")\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "frameList",
@@ -1601,6 +2049,7 @@
   "arguments" : [ {
     "name" : "frame",
     "type" : "String",
+    "description" : "The target frame: CSS selector, frame id, frame name, or url substring.",
     "expression" : "frame: String",
     "cliOptions" : "--frame=<String>"
   } ],
@@ -1623,6 +2072,7 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "CSS selector or element reference (e5, backend:15).",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   } ],
@@ -1645,13 +2095,19 @@
   "description" : "Capture a screenshot of the current viewport (or primary browsing context) after ensuring any pending layout.",
   "help" : "Capture a screenshot of the current viewport (or primary browsing context) after ensuring any pending layout.\n\nIf the backend supports element-centric capture this may represent the full page; implementation specific.\n\nThe target element (if any) is scrolled into view before capture.\n\n```kotlin val base64 = driver.screenshot() val bytes = Base64.getDecoder().decode(base64) ```",
   "expression" : "tab.screenshot(fullPage: Boolean = false)",
-  "cli" : "browser4-cli tab screenshot --fullPage=<Boolean>, default=false"
+  "cli" : "browser4-cli tab screenshot --fullPage=<Boolean>, default=false",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* val base64 = driver.screenshot()\n     * val bytes = Base64.getDecoder().decode(base64)\n     *",
+    "expectsError" : false
+  } ]
 }, {
   "domain" : "tab",
   "method" : "screenshot",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   } ],
@@ -1702,12 +2158,14 @@
   "arguments" : [ {
     "name" : "viewports",
     "type" : "String",
+    "description" : "A viewport specification string (e.g., `\"2\"`, `\"0,2,4\"`, `\"1-3\"`, `\"all\"`).",
     "expression" : "viewports: String",
     "cliOptions" : "--viewports=<String>"
   }, {
     "name" : "boxes",
     "type" : "Boolean",
     "defaultValue" : "false",
+    "description" : "When true, includes each element's bounding box as [box=x,y,width,height].",
     "expression" : "boxes: Boolean = false",
     "cliOptions" : "--boxes=<Boolean>, default=false"
   } ],
@@ -1722,6 +2180,7 @@
   "arguments" : [ {
     "name" : "options",
     "type" : "AriaSnapshotOptions",
+    "description" : "The filtering and rendering options.",
     "expression" : "options: AriaSnapshotOptions",
     "cliOptions" : "--options=<AriaSnapshotOptions>"
   } ],
@@ -1736,6 +2195,7 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. Used to calculate the clickable point.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   } ],
@@ -1750,6 +2210,7 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. Used to calculate the bounding box.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   } ],
@@ -1772,6 +2233,7 @@
   "arguments" : [ {
     "name" : "url",
     "type" : "String",
+    "description" : "The URL to load.",
     "expression" : "url: String",
     "cliOptions" : "--url=<String>"
   } ],
@@ -1786,6 +2248,7 @@
   "arguments" : [ {
     "name" : "url",
     "type" : "String",
+    "description" : "The URL to load.",
     "expression" : "url: String",
     "cliOptions" : "--url=<String>"
   } ],
@@ -1801,6 +2264,7 @@
     "name" : "millis",
     "type" : "Long",
     "defaultValue" : "1000",
+    "description" : "The amount of time to delay, in milliseconds.",
     "expression" : "millis: Long = 1000",
     "cliOptions" : "--millis=<Long>, default=1000"
   } ],
@@ -1815,6 +2279,7 @@
   "arguments" : [ {
     "name" : "duration",
     "type" : "Duration",
+    "description" : "The amount of time to delay.",
     "expression" : "duration: Duration",
     "cliOptions" : "--duration=<Duration>"
   } ],
@@ -1829,6 +2294,7 @@
   "arguments" : [ {
     "name" : "duration",
     "type" : "kotlin.time.Duration",
+    "description" : "The amount of time to delay.",
     "expression" : "duration: kotlin.time.Duration",
     "cliOptions" : "--duration=<kotlin.time.Duration>"
   } ],
@@ -1843,11 +2309,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
+    "description" : "The selector of the element, multiple formats supported. It should resolve to the file input element.",
     "expression" : "selector: String",
     "cliOptions" : "--selector=<String>"
   }, {
     "name" : "paths",
     "type" : "List<String>",
+    "description" : "The list of file paths to upload.",
     "expression" : "paths: List<String>",
     "cliOptions" : "--paths=<List<String>>"
   } ],

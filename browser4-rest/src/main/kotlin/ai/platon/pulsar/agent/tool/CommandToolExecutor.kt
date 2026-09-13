@@ -2,6 +2,7 @@ package ai.platon.pulsar.agent.tool
 
 import ai.platon.pulsar.agentic.agents.RunEngine
 import ai.platon.pulsar.common.B4Constants.DEFAULT_SESSION_ID
+import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -41,10 +42,24 @@ class CommandToolExecutor(
             domain = domain,
             method = "run",
             arguments = listOf(
-                ToolSpec.Arg("command", "String", null),
-                ToolSpec.Arg("async", "Boolean", "true"),
-                ToolSpec.Arg("noopLimit", "Int", null),
-                ToolSpec.Arg("engine", "String", null),
+                ToolSpec.Arg(
+                    "command", "String", null,
+                    "What to run: a URL to load, a natural-language instruction, or an agent task. " +
+                        "Required.",
+                ),
+                ToolSpec.Arg(
+                    "async", "Boolean", "true",
+                    "`true` (default) returns a task id immediately; `false` blocks until the command " +
+                        "finishes and returns the CommandStatus JSON.",
+                ),
+                ToolSpec.Arg(
+                    "noopLimit", "Int", null,
+                    "Consecutive no-op abort threshold for agent tasks; omit to use the server default.",
+                ),
+                ToolSpec.Arg(
+                    "engine", "String", null,
+                    "Agent engine: `cli` (default) for the tool-loop engine, `observe-act` is deprecated.",
+                ),
             ),
             returnType = "String",
             description = "Execute a plain command (URL, instruction, or agent task). " +
@@ -52,27 +67,50 @@ class CommandToolExecutor(
                     "When async=false, blocks until done and returns the CommandStatus as JSON. " +
                     "noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. " +
                     "engine optionally selects the agent execution engine: 'cli' (default) for the CLI tool-loop engine; " +
-                    "'observe-act' is the DEPRECATED legacy engine."
+                    "'observe-act' is the DEPRECATED legacy engine.",
+            examples = listOf(
+                ToolExample(
+                    title = "Load a page asynchronously",
+                    args = mapOf("command" to "https://example.com"),
+                    notes = "Returns a task id; poll it with command.status",
+                ),
+                ToolExample(
+                    title = "Run an agent task and wait",
+                    args = mapOf("command" to "collect the page title", "async" to "false"),
+                ),
+            ),
         )
 
         toolSpec["status"] = ToolSpec(
             domain = domain,
             method = "status",
             arguments = listOf(
-                ToolSpec.Arg("id", "String", null),
+                ToolSpec.Arg("id", "String", null, "Task id returned by `command.run`. Required."),
             ),
             returnType = "CommandStatus",
-            description = "Get the status of a previously submitted command task by its task ID."
+            description = "Get the status of a previously submitted command task by its task ID.",
+            examples = listOf(
+                ToolExample(
+                    title = "Poll a running command",
+                    args = mapOf("id" to "5c3a1f2e-9b47-4d21-8f0a-1e6b7c8d9a01"),
+                ),
+            ),
         )
 
         toolSpec["result"] = ToolSpec(
             domain = domain,
             method = "result",
             arguments = listOf(
-                ToolSpec.Arg("id", "String", null),
+                ToolSpec.Arg("id", "String", null, "Task id returned by `command.run`. Required."),
             ),
             returnType = "CommandResult",
-            description = "Get the result of a completed command task by its task ID."
+            description = "Get the result of a completed command task by its task ID.",
+            examples = listOf(
+                ToolExample(
+                    title = "Read the finished command's output",
+                    args = mapOf("id" to "5c3a1f2e-9b47-4d21-8f0a-1e6b7c8d9a01"),
+                ),
+            ),
         )
     }
 

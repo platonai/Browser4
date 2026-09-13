@@ -33,7 +33,12 @@ class ToolSpecLintTest {
 
         // Visibility into the documentation work that is still open (Phase 1).
         val warnings = ToolSpecLint.warnings(issues)
+        val withExamples = specs.count { spec -> spec.examples.any { it.executable } }
         println("ToolSpec lint: ${specs.size} generated specs, ${warnings.size} documentation warnings")
+        println("  - executable examples: $withExamples/${specs.size}")
+        warnings.groupingBy { it.message.substringBefore(':') }.eachCount()
+            .entries.sortedByDescending { it.value }
+            .forEach { (rule, count) -> println("  - $rule: $count") }
     }
 
     @Test

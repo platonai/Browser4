@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agent.tool
 
+import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.rest.session.PulsarSessionManager
@@ -29,24 +30,40 @@ class WebDbToolExecutor(
             domain = domain,
             method = "export",
             arguments = listOf(
-                ToolSpec.Arg("sessionId", "String", null),
-                ToolSpec.Arg("urls", "String", null),
-                ToolSpec.Arg("outputDir", "String", null),
+                ToolSpec.Arg("sessionId", "String", null, "Session whose web database is exported. Required."),
+                ToolSpec.Arg(
+                    "urls", "String", null,
+                    "Comma-separated URL list to export; omit to export everything the session stored.",
+                ),
+                ToolSpec.Arg("outputDir", "String", null, "Target directory; omit for the server default."),
             ),
             returnType = "String",
             description = "Export pages from the web database to a local directory. " +
-                "Provide a comma-separated list of URLs."
+                "Provide a comma-separated list of URLs.",
+            examples = listOf(
+                ToolExample(
+                    title = "Export two pages",
+                    args = mapOf("sessionId" to "<session-id>", "urls" to "https://example.com,https://example.org"),
+                ),
+            ),
         )
         toolSpec["normalize"] = ToolSpec(
             domain = domain,
             method = "normalize",
             arguments = listOf(
-                ToolSpec.Arg("sessionId", "String", null),
-                ToolSpec.Arg("url", "String", null),
+                ToolSpec.Arg("sessionId", "String", null, "Session used to resolve redirects. Required."),
+                ToolSpec.Arg("url", "String", null, "URL to normalize. Required."),
             ),
             returnType = "String",
             description = "Normalize a URL for use as a web database key. " +
-                "Resolves redirects, normalizes paths, and validates the URL."
+                "Resolves redirects, normalizes paths, and validates the URL.",
+            examples = listOf(
+                ToolExample(
+                    title = "Normalize a URL with query parameters",
+                    args = mapOf("sessionId" to "<session-id>", "url" to "https://example.com/a?b=1"),
+                    notes = "Returns the canonical key, e.g. https://example.com/a?b=1",
+                ),
+            ),
         )
     }
 

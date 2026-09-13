@@ -435,11 +435,9 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
     override fun help(method: String): String {
         val spec = toolSpec[method] ?: return "No help available for unknown method: $method"
-
-        return spec.help ?: """
-            ${spec.expression}
-            ${spec.description}
-        """.trimIndent()
+        // Keep the authored KDoc prose, but render signature/arguments/examples the
+        // same way every other executor does.
+        return renderHelp(spec)
     }
 
     private fun normalizeEvaluateValueArgs(args: Map<String, Any?>): Map<String, Any?> {

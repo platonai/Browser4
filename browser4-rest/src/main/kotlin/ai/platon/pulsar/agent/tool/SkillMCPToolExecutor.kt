@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agent.tool
 
 import ai.platon.pulsar.boot.skill.SkillService
+import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import java.nio.file.Files
@@ -36,48 +37,69 @@ class SkillMCPToolExecutor(
             method = "list",
             arguments = emptyList(),
             returnType = "List<SkillSummary>",
-            description = "List all registered skills with lightweight summaries."
+            description = "List all registered skills with lightweight summaries.",
+            examples = listOf(
+                ToolExample(title = "List the installed skills", args = emptyMap()),
+            ),
         )
 
         toolSpec["info"] = ToolSpec(
             domain = domain,
             method = "info",
             arguments = listOf(
-                ToolSpec.Arg("id", "String", null),
+                ToolSpec.Arg("id", "String", null, "Skill id as reported by `skill.list`. Required."),
             ),
             returnType = "SkillDetail",
-            description = "Get detailed information about a skill by ID."
+            description = "Get detailed information about a skill by ID.",
+            examples = listOf(
+                ToolExample(title = "Inspect a bundled skill", args = mapOf("id" to "browser4-cli")),
+            ),
         )
 
         toolSpec["install"] = ToolSpec(
             domain = domain,
             method = "install",
             arguments = listOf(
-                ToolSpec.Arg("path", "String", null),
-                ToolSpec.Arg("overwrite", "Boolean", "false"),
+                ToolSpec.Arg(
+                    "path", "String", null,
+                    "Server-side directory containing SKILL.md. Required; the path resolves on the server.",
+                ),
+                ToolSpec.Arg("overwrite", "Boolean", "false", "Replace an existing skill with the same id."),
             ),
             returnType = "InstallResult",
-            description = "Install a skill from a server-side directory path containing SKILL.md."
+            description = "Install a skill from a server-side directory path containing SKILL.md.",
+            examples = listOf(
+                ToolExample(
+                    title = "Install a skill from a server directory",
+                    args = mapOf("path" to "/opt/skills/my-skill"),
+                ),
+            ),
         )
 
         toolSpec["uninstall"] = ToolSpec(
             domain = domain,
             method = "uninstall",
             arguments = listOf(
-                ToolSpec.Arg("id", "String", null),
+                ToolSpec.Arg("id", "String", null, "Skill id to remove. Required."),
             ),
             returnType = "InstallResult",
-            description = "Uninstall a skill by ID."
+            description = "Uninstall a skill by ID.",
+            examples = listOf(
+                ToolExample(title = "Remove a skill", args = mapOf("id" to "my-skill")),
+            ),
         )
 
         toolSpec["reload"] = ToolSpec(
             domain = domain,
             method = "reload",
             arguments = listOf(
-                ToolSpec.Arg("id", "String", null),
+                ToolSpec.Arg("id", "String", null, "Skill id to reload from its source directory. Required."),
             ),
             returnType = "Map",
-            description = "Reload a skill from its source directory."
+            description = "Reload a skill from its source directory.",
+            examples = listOf(
+                ToolExample(title = "Reload after editing SKILL.md", args = mapOf("id" to "browser4-cli")),
+            ),
         )
     }
 

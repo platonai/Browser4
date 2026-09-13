@@ -4,6 +4,7 @@
   "arguments" : [ {
     "name" : "task",
     "type" : "String",
+    "description" : "The user goal or instruction to fulfill.",
     "expression" : "task: String",
     "cliOptions" : "--task=<String>"
   } ],
@@ -18,6 +19,7 @@
   "arguments" : [ {
     "name" : "instruction",
     "type" : "String",
+    "description" : "The observation instruction from the user.",
     "expression" : "instruction: String",
     "cliOptions" : "--instruction=<String>"
   } ],
@@ -33,12 +35,14 @@
     "name" : "instruction",
     "type" : "String?",
     "defaultValue" : "null",
+    "description" : "Optional guidance for how the summary should be written.",
     "expression" : "instruction: String? = null",
     "cliOptions" : "--instruction=<String?>, default=null"
   }, {
     "name" : "selector",
     "type" : "String?",
     "defaultValue" : "null",
+    "description" : "Optional locator limiting which element's text is summarized.",
     "expression" : "selector: String? = null",
     "cliOptions" : "--selector=<String?>, default=null"
   } ],
@@ -53,6 +57,7 @@
   "arguments" : [ {
     "name" : "action",
     "type" : "String",
+    "description" : "The action to execute.",
     "expression" : "action: String",
     "cliOptions" : "--action=<String>"
   } ],
@@ -67,6 +72,7 @@
   "arguments" : [ {
     "name" : "instruction",
     "type" : "String",
+    "description" : "The extraction instruction from the user.",
     "expression" : "instruction: String",
     "cliOptions" : "--instruction=<String>"
   } ],
@@ -81,11 +87,13 @@
   "arguments" : [ {
     "name" : "instruction",
     "type" : "String",
+    "description" : "The extraction instruction from the user.",
     "expression" : "instruction: String",
     "cliOptions" : "--instruction=<String>"
   }, {
     "name" : "schema",
     "type" : "ExtractionSchema",
+    "description" : "The JSON schema used to constrain the returned data structure.",
     "expression" : "schema: ExtractionSchema",
     "cliOptions" : "--schema=<ExtractionSchema>"
   } ],

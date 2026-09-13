@@ -78,7 +78,13 @@ class Browser4MCPServer(
     private fun serverInstructions(): String = buildString {
         appendLine("Browser4 MCP Server gives you full control over a real Chrome browser.")
         appendLine("Use the tools in order: navigate first, then interact, then read content.")
-        append("Always call wait_for_selector after actions that trigger page loads or dynamic updates.")
+        appendLine("Always call wait_for_selector after actions that trigger page loads or dynamic updates.")
+        appendLine("Every tool documents its arguments, defaults and examples in its input schema.")
+        append(
+            "When a tool's usage is unclear, call `help` with {domain, method} for the exact " +
+                "signature and examples, or `skill_doc` with {name} (e.g. crawl.md, htmlsnapshot.md) " +
+                "to read a bundled reference — prefer those over guessing."
+        )
         if (toolManagerResolver.multiSession) {
             appendLine()
             appendLine()
@@ -212,7 +218,7 @@ class Browser4MCPServer(
             registrations[name] = ToolRegistration(executor.domain, method, spec, source)
             addTool(
                 name = name,
-                description = spec.description?.trim()?.ifBlank { null } ?: "${executor.domain}.$method",
+                description = describe(spec, "${executor.domain}.$method"),
                 inputSchema = buildSchemaFromSpec(spec),
             ) { request ->
                 invokeTool(name, request.params.arguments)
@@ -220,6 +226,21 @@ class Browser4MCPServer(
             added++
         }
         return added
+    }
+
+    /**
+     * The description a client sees: the tool's one-liner plus its first
+     * executable example.
+     *
+     * MCP has no dedicated examples field and the SDK's `ToolSchema` exposes only
+     * `properties`/`required`, so the description is the one place a usage sample
+     * can travel in `tools/list` — which is what an agent actually reads.
+     */
+    private fun describe(spec: ToolSpec, fallback: String): String {
+        val base = spec.description?.trim()?.ifBlank { null } ?: fallback
+        val example = spec.examples.firstOrNull { it.executable } ?: return base
+        val json = example.args.entries.joinToString(", ") { "\"${it.key}\": \"${it.value}\"" }
+        return "$base Example: {$json}"
     }
 
     /**
@@ -287,11 +308,10 @@ class Browser4MCPServer(
             // Registered under its own name so a call routed by name (the SDK
             // handler and `invokeTool`) resolves to the same canonical tool.
             registrations[alias.frontendName] = target
-            val base = target.spec.description?.trim()?.ifBlank { null }
-                ?: "${target.domain}.${target.method}"
             addTool(
                 name = alias.frontendName,
-                description = "$base (Alias of '${alias.canonicalName}'.)",
+                description = describe(target.spec, "${target.domain}.${target.method}") +
+                    " (Alias of '${alias.canonicalName}'.)",
                 inputSchema = buildSchemaFromSpec(target.spec),
             ) { request ->
                 invokeTool(alias.frontendName, request.params.arguments)

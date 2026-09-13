@@ -67,6 +67,13 @@ data class ToolSpec constructor(
      * `plugin <domain> <method>` path.
      */
     val cliName: String? = null,
+    /**
+     * Usage examples: the fastest way for a client to learn a tool without
+     * guessing argument semantics. Examples with [ToolExample.args] are
+     * executable and double as contract-test inputs; [ToolExample.code] carries
+     * documentation-only snippets harvested from the source KDoc.
+     */
+    val examples: List<ToolExample> = emptyList(),
 ) {
     data class Arg(
         val name: String,
@@ -122,6 +129,28 @@ data class ToolSpec constructor(
             val args = arguments.joinToString(" ") { it.cliOptions }
             return "$ROOT_COMMAND $domain $method $args"
         }
+}
+
+/**
+ * One usage example for a [ToolSpec].
+ *
+ * @property title short label (`"navigate to a URL"`)
+ * @property args ready-to-send tool arguments, e.g. `mapOf("url" to "https://example.com")`.
+ *   Non-empty args make the example **executable**, so contract tests can drive
+ *   the tool with it and the documentation cannot drift from reality.
+ * @property code documentation-only snippet (typically harvested from KDoc)
+ * @property notes caveats worth knowing before running the call
+ * @property expectsError `true` for an example that demonstrates a failure mode
+ */
+data class ToolExample(
+    val title: String? = null,
+    val args: Map<String, String> = emptyMap(),
+    val code: String? = null,
+    val notes: String? = null,
+    val expectsError: Boolean = false,
+) {
+    /** Whether this example carries arguments a client (or a test) can send. */
+    val executable: Boolean get() = args.isNotEmpty()
 }
 
 /**
