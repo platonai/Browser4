@@ -3954,6 +3954,88 @@ pub(super) fn test_crawl_foreground_no_links_discovered(ctx: &mut E2ECtx) {
     );
 }
 
+pub(super) fn test_crawl_foreground_reports_lost_pages(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = start_mock_crawl_session(ctx);
+
+    // A crawl that reported OK but lost pages (issue #592): the backend now
+    // guarantees pagesFound + failedPages.size == pagesExpected, and the CLI
+    // must say so instead of printing a smaller "Crawl completed. 8 pages
+    // found." as if nothing happened.
+    let body = serde_json::json!({
+        "taskId": "crawl-job-42",
+        "statusCode": 200,
+        "isDone": true,
+        "status": "OK",
+        "pagesFound": 8,
+        "pagesExpected": 10,
+        "linksDiscovered": 9,
+        "failedPages": [
+            {
+                "url": "https://example.com/product/2.html",
+                "depth": 1,
+                "protocolStatus": 1601,
+                "reason": "the page fetch failed and its retry budget was exhausted",
+            },
+            {
+                "url": "https://example.com/product/7.html",
+                "depth": 2,
+                "protocolStatus": 0,
+                "reason": "the crawl finished before this page produced a document",
+            }
+        ],
+        "pages": [
+            {
+                "url": "https://example.com/index.html",
+                "title": "Crawl Test Hub",
+                "depth": 0,
+            }
+        ],
+        "error": null,
+    })
+    .to_string();
+    mock_server.set_crawl_result("crawl-job-42", &body);
+
+    let result = run_command(
+        ctx,
+        &[
+            "crawl",
+            "https://example.com/index.html",
+            "--depth=2",
+            "--out-link-selector",
+            "a.product",
+        ],
+    );
+
+    let stdout = &result.stdout;
+    assert_eq!(result.exit_code, 0, "Expected exit 0, got:\n{}", result.stdout);
+    assert!(
+        stdout.contains("⚠ 2 of 10 submitted page(s) were never delivered"),
+        "Expected the lost-pages warning in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("this crawl is incomplete, not just small"),
+        "Expected the warning to say the crawl is incomplete in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("depth=1 | https://example.com/product/2.html | status=1601"),
+        "Expected the first lost URL with its depth and status in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("the page fetch failed and its retry budget was exhausted"),
+        "Expected the first lost page's reason in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("depth=2 | https://example.com/product/7.html | the crawl finished"),
+        "Expected a lost URL with no protocol status to omit the status part in:\n{}",
+        stdout
+    );
+}
+
 pub(super) fn test_crawl_foreground_with_discovered_links(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     let mock_server = start_mock_crawl_session(ctx);

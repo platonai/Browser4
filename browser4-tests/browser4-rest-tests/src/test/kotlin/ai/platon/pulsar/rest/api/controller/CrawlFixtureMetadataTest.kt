@@ -73,6 +73,7 @@ class CrawlFixtureMetadataTest : RestAPITestBase() {
 
         assertTrue(response.status == "OK" || response.status == "SC_OK",
             "crawl should complete OK, got: ${response.status} error=${response.error}")
+        assertNoLostPages(response)
         val pages = requireNotNull(response.pages)
 
         // 1 hub + 3 depth-1 + 6 depth-2 = 10 rows; no page appears twice.
@@ -105,6 +106,7 @@ class CrawlFixtureMetadataTest : RestAPITestBase() {
 
         assertTrue(response.status == "OK" || response.status == "SC_OK",
             "crawl should complete OK, got: ${response.status} error=${response.error}")
+        assertNoLostPages(response)
         val pages = requireNotNull(response.pages)
         assertEquals(10, pages.size, "expected 10 pages, got ${pages.size}")
 
@@ -136,6 +138,7 @@ class CrawlFixtureMetadataTest : RestAPITestBase() {
 
         assertTrue(response.status == "OK" || response.status == "SC_OK",
             "crawl should complete OK, got: ${response.status} error=${response.error}")
+        assertNoLostPages(response)
         val pages = requireNotNull(response.pages)
         val note = requireNotNull(response.readonlyNote) { "readonly crawl must produce a readonlyNote" }
 
@@ -162,11 +165,61 @@ class CrawlFixtureMetadataTest : RestAPITestBase() {
         }
     }
 
+    @Test
+    @DisplayName("two crawls submitted back to back both finish cleanly, with no lost pages")
+    fun testBackToBackCrawlsLoseNoPages() {
+        // Issue #592: a crawl that kept working after it reported completion raced
+        // with the next crawl over the shared browser session, and pages were
+        // silently dropped.  Submitting the second crawl while the first is still
+        // running makes that interference part of the test instead of an accident
+        // of CI scheduling.
+        val firstTask = submitCrawl(depth = 2, args = "-refresh")
+        val secondTask = submitCrawl(depth = 2, args = "-refresh")
+        check(firstTask != secondTask) { "expected two distinct crawl tasks" }
+
+        for ((label, taskId) in listOf("first" to firstTask, "second" to secondTask)) {
+            val response = waitForTerminal(taskId)
+            assertTrue(response.status == "OK" || response.status == "SC_OK",
+                "$label crawl should complete OK, got: ${response.status} error=${response.error}")
+            assertNoLostPages(response)
+            val pages = requireNotNull(response.pages) { "$label crawl returned no pages" }
+            assertEquals(10, pages.size,
+                "$label crawl: expected 10 pages (hub + 9 products), got ${pages.size}")
+            for (page in pages) {
+                assertEquals(fixtureTitles()[page.url], page.title,
+                    "$label crawl: title for ${page.url} does not match the page at that URL")
+            }
+        }
+    }
+
     // -----------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------
 
-    private fun runCrawl(depth: Int, args: String): CrawlResponse {
+    /**
+     * Issue #592 conservation: every page a crawl submitted is either a record
+     * or a reported loss, so `pagesFound + failedPages.size == pagesExpected`.
+     *
+     * Asserting it here means a truncated crawl can no longer pass as a
+     * complete one — and when it fails, it names the pages it lost instead of
+     * only reporting a smaller page count.
+     */
+    private fun assertNoLostPages(response: CrawlResponse) {
+        val failed = response.failedPages ?: emptyList()
+        val pages = response.pages ?: emptyList()
+        assertTrue(failed.isEmpty(),
+            "crawl lost ${failed.size} page(s) of ${response.pagesExpected}: " +
+                failed.joinToString("; ") {
+                    "${it.url} (depth=${it.depth}, status=${it.protocolStatus}, reason=${it.reason})"
+                })
+        assertEquals(response.pagesExpected, pages.size,
+            "pagesFound + failedPages must equal pagesExpected " +
+                "(${pages.size} + ${failed.size} != ${response.pagesExpected})")
+    }
+
+    private fun runCrawl(depth: Int, args: String): CrawlResponse = waitForTerminal(submitCrawl(depth, args))
+
+    private fun submitCrawl(depth: Int, args: String): String {
         val body = """
             {"url": "${TestUrls.MOCK_CRAWL_HUB_URL}",
              "args": "-outLink \"a.product\" -outLinkPattern \"product/\" $args",
@@ -183,7 +236,7 @@ class CrawlFixtureMetadataTest : RestAPITestBase() {
         val taskId = rawTaskId?.trim()?.removeSurrounding("\"")
         check(!taskId.isNullOrBlank()) { "Expected non-blank crawl task id but got: $rawTaskId" }
 
-        return waitForTerminal(taskId)
+        return taskId
     }
 
     private fun waitForTerminal(taskId: String): CrawlResponse {

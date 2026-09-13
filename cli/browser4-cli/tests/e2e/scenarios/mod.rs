@@ -948,6 +948,16 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         level: ScenarioLevel::Basic,
     },
     ScenarioDef {
+        name: "test_e2e_crawl_foreground_reports_lost_pages",
+        short_name: "test_crawl_reports_lost_pages",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_crawl_foreground_reports_lost_pages,
+        group: Some("crawl"),
+        level: ScenarioLevel::Basic,
+    },
+    ScenarioDef {
         name: "test_e2e_crawl_foreground_with_discovered_links",
         short_name: "test_crawl_with_discovered_links",
         requires_browser4: false,

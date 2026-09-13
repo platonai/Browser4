@@ -75,6 +75,55 @@ data class CrawlResponse(
      * verified that every page was fetched fresh from the live site.
      */
     val readonlyNote: String? = null,
+    /**
+     * URLs this crawl handed to the browser and never got a page back for —
+     * a fetch refused by the snapshot-origin guard until its retry budget ran
+     * out, a dropped/evicted task, a terminal 4xx/5xx, or a page that was
+     * parsed but never queued by this crawl.
+     *
+     * When this list is non-empty the crawl is *incomplete*, not merely small:
+     * `pagesFound + failedPages.size == pagesExpected` always holds, so a
+     * consumer can tell "the site does not have this page" from "this crawl
+     * lost it".  Without it a truncated crawl is indistinguishable from a
+     * complete one, because `status` stays `OK` (the CLI's poller treats
+     * `OK`/`SC_OK` as the only successful terminal state, so a new status text
+     * here would make every poll hang).
+     */
+    val failedPages: List<CrawlFailedPage>? = null,
+    /** URLs this crawl submitted, seeds included.  Equals `pagesFound + failedPages.size`. */
+    val pagesExpected: Int = 0,
+)
+
+/**
+ * A page a crawl lost: submitted to the browser, never delivered.
+ *
+ * @property url the URL as this crawl submitted it.
+ * @property depth the discovery depth it was queued at, or -1 when unknown.
+ * @property protocolStatus protocol status code when the browser reported one (0 otherwise).
+ * @property reason human-readable cause, so a loss is never just a missing row.
+ */
+data class CrawlFailedPage(
+    val url: String,
+    val depth: Int = 0,
+    val protocolStatus: Int = 0,
+    val reason: String? = null,
+)
+
+/**
+ * The outcome of one seed URL's crawl round: the pages it recorded, the pages
+ * it lost, and whether it ended on its own or hit the round timeout.
+ *
+ * Carrying the losses out of the round is what makes them reportable: the
+ * round is the only place that knows which URLs were submitted and which of
+ * them never came back.
+ */
+data class CrawlRound(
+    val pages: List<CrawlPageResult>,
+    val failedPages: List<CrawlFailedPage> = emptyList(),
+    val pagesExpected: Int = pages.size,
+    /** True when the round hit its timeout — its losses include the outstanding URLs. */
+    val timedOut: Boolean = false,
+    val timeoutError: String? = null,
 )
 
 data class CrawlPageResult(
@@ -230,6 +279,10 @@ class CrawlService(
                 // crawl that only records seed page(s) (0 discovered links) is
                 // distinguishable from one that followed links.
                 val linksDiscovered = AtomicInteger()
+                // Per-seed round outcomes, kept so the terminal response can
+                // report the pages that were submitted and never delivered.
+                // Written only by the (sequential) seed loop below.
+                val rounds = mutableListOf<CrawlRound>()
                 val result = withTimeout(CRAWL_TASK_TIMEOUT_MS.milliseconds) {
                     withContext(Dispatchers.IO) {
                     val results = mutableListOf<CrawlPageResult>()
@@ -256,22 +309,35 @@ class CrawlService(
                                 taskId, index + 1, totalSeeds, seedUrl
                             )
                             val seedRequest = request.copy(url = seedUrl, urls = null)
-                            val pages = try {
+                            val round = try {
                                 val fetched = when {
-                                    seedRequest.depth == 0 -> crawlDepth0(taskId, seedRequest, sharedDepth0Session)
+                                    // Depth=0 is bulk fetch: one URL, no link
+                                    // discovery, so its pages are its whole round.
+                                    seedRequest.depth == 0 -> CrawlRound(
+                                        pages = crawlDepth0(taskId, seedRequest, sharedDepth0Session)
+                                    )
                                     seedRequest.depth <= 1 -> crawlDepth1(taskId, seedRequest, linksDiscovered)
                                     else -> crawlDepthN(taskId, seedRequest, linksDiscovered)
                                 }
                                 logger.info(
-                                    "Crawl {}: seed URL {}/{} completed: {} → {} page(s)",
-                                    taskId, index + 1, totalSeeds, seedUrl, fetched.size
+                                    "Crawl {}: seed URL {}/{} completed: {} → {} page(s), {} lost",
+                                    taskId, index + 1, totalSeeds, seedUrl,
+                                    fetched.pages.size, fetched.failedPages.size
                                 )
                                 seedStatuses.add(CrawlSeedStatus(
                                     url = seedUrl,
                                     status = "fetched",
-                                    pagesReturned = fetched.size
+                                    pagesReturned = fetched.pages.size
                                 ))
                                 fetched
+                            } catch (e: CancellationException) {
+                                // The task-wide timeout cancelled this crawl: let it
+                                // propagate so the outer handler can write the
+                                // TIMEOUT record.  Swallowing it here marked the seed
+                                // "error", continued with the next seed and then let
+                                // the terminal write report OK — a cancelled crawl
+                                // that looked successful.
+                                throw e
                             } catch (e: Exception) {
                                 logger.error(
                                     "Crawl {}: seed URL {}/{} failed: {} — {}",
@@ -283,16 +349,26 @@ class CrawlService(
                                     pagesReturned = 0,
                                     error = e.message
                                 ))
-                                listOf(
-                                    CrawlPageResult(
-                                        url = seedUrl,
-                                        title = null,
-                                        contentLength = null,
-                                        depth = 0
-                                    )
+                                // The seed failure is carried by seedStatuses (the
+                                // synthetic row keeps the URL visible in `pages`),
+                                // so it is not also a lost page: the
+                                // `pages + failedPages == pagesExpected` invariant
+                                // must stay exact.
+                                CrawlRound(
+                                    pages = listOf(
+                                        CrawlPageResult(
+                                            url = seedUrl,
+                                            title = null,
+                                            contentLength = null,
+                                            depth = 0
+                                        )
+                                    ),
+                                    failedPages = emptyList(),
+                                    pagesExpected = 1
                                 )
                             }
-                            results.addAll(pages)
+                            rounds.add(round)
+                            results.addAll(round.pages)
 
                             // Publish incremental progress to the in-memory task
                             // store so the CLI polling loop can show per-seed
@@ -309,7 +385,11 @@ class CrawlService(
                                 pages = results.toList(),
                                 diagnostic = currentResult?.diagnostic,
                                 startedTime = currentResult?.startedTime ?: java.time.Instant.now(),
-                                seedStatuses = seedStatuses.toList()
+                                seedStatuses = seedStatuses.toList(),
+                                // Losses are visible while the crawl still runs,
+                                // not only in the terminal response.
+                                failedPages = rounds.flatMap { it.failedPages },
+                                pagesExpected = rounds.sumOf { it.pagesExpected }
                             )
                             taskStore.put(taskId, incrementalResponse)
 
@@ -338,21 +418,42 @@ class CrawlService(
                     it == "-readonly" || it.startsWith("-readonly=")
                 }
                 val readonlyNote = if (readonlyRequested) buildReadonlyNote(allPages) else null
+                val failedPages = rounds.flatMap { it.failedPages }
+                val pagesExpected = rounds.sumOf { it.pagesExpected }
+                // A round that hit its own timeout already wrote a TIMEOUT record;
+                // this terminal write used to overwrite it with OK, so a truncated
+                // crawl reported success.  Keep the timeout status and say how
+                // much of the work never completed.
+                val timedOut = rounds.firstOrNull { it.timedOut }
+                val lossNote = buildLossNote(allPages.size, pagesExpected, failedPages)
                 val completed = CrawlResponse(
                     taskId = taskId,
-                    status = ResourceStatus.getStatusText(ResourceStatus.SC_OK),
+                    status = if (timedOut != null) {
+                        ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT)
+                    } else {
+                        ResourceStatus.getStatusText(ResourceStatus.SC_OK)
+                    },
                     pagesFound = allPages.size,
                     linksDiscovered = linksDiscovered.get(),
                     pages = allPages,
-                    diagnostic = existingDiagnostic,
+                    // The loss note is appended, never substituted: a diagnostic
+                    // that explained "no out-links" must not hide dropped pages.
+                    diagnostic = listOfNotNull(existingDiagnostic, lossNote).joinToString(" | ")
+                        .takeIf { it.isNotBlank() },
+                    error = timedOut?.timeoutError,
                     startedTime = previous?.startedTime ?: now,
                     finishTime = now,
                     seedStatuses = seedStatuses,
-                    readonlyNote = readonlyNote
+                    readonlyNote = readonlyNote,
+                    failedPages = failedPages.takeIf { it.isNotEmpty() },
+                    pagesExpected = pagesExpected
                 )
                 taskStore.put(taskId, completed)
                 onStatusChanged(completed)
-                logger.info("Crawl task {} completed: {} pages", taskId, allPages.size)
+                logger.info(
+                    "Crawl task {} completed: {} pages, {} lost, status {}",
+                    taskId, allPages.size, failedPages.size, completed.status
+                )
             } catch (e: CancellationException) {
                 val existing = taskStore.getIfPresent(taskId)
                 val now = java.time.Instant.now()
@@ -623,9 +724,15 @@ class CrawlService(
     // Depth=1: extract out-links from the portal page and load each one
     // ------------------------------------------------------------------
 
-    private suspend fun crawlDepth1(taskId: String, request: CrawlRequest, linksDiscovered: AtomicInteger): List<CrawlPageResult> {
+    private suspend fun crawlDepth1(taskId: String, request: CrawlRequest, linksDiscovered: AtomicInteger): CrawlRound {
         val session = sessionManager.agenticContext.createSession()
         val results = Collections.synchronizedList(mutableListOf<CrawlPageResult>())
+        // Per-crawl settle bookkeeping: a round is complete only when every
+        // submitted URL produced a page or a reported failure, and no parse
+        // handler is still running.  A bare `pendingCount == 0` comparison
+        // cannot see a fetch that failed (issue #592), and lets a handler
+        // that is still discovering links be overtaken by the others.
+        val ledger = CrawlLedger(taskId)
         try {
             // Always add -refresh so the portal page is loaded with fresh content.
             // Without this, cached empty/malformed pages cause link discovery to
@@ -644,10 +751,10 @@ class CrawlService(
                         taskId
                     )
                     runCatching { session.close() }
-                    return crawlDepth0(taskId, request)
+                    return CrawlRound(pages = crawlDepth0(taskId, request))
                 }
                 logger.warn("Crawl {}: no outLinkSelector provided, returning empty result", taskId)
-                return emptyList()
+                return CrawlRound(pages = emptyList(), pagesExpected = 0)
             }
             val outLinks = extractOutLinks(session, request.url, options)
 
@@ -671,22 +778,21 @@ class CrawlService(
                     pagesFound = 0,
                     diagnostic = diagnostic
                 ))
-                return emptyList()
+                return CrawlRound(pages = emptyList(), pagesExpected = 0)
             }
 
             logger.info("Crawl {}: found {} out-links, submitting...", taskId, outLinks.size)
             linksDiscovered.addAndGet(outLinks.size)
 
-            // Per-crawl completion tracking: use a CompletableDeferred signaled by
-            // an AtomicInteger counter instead of AgenticContexts.await(), which
-            // relies on the global activeContext and can deadlock when multiple
-            // crawls run concurrently or stale contexts persist in PulsarContexts.
-            val pendingCount = AtomicInteger(outLinks.size)
-            val allCompleted = CompletableDeferred<Unit>()
+            // Per-crawl settle bookkeeping: a round is complete only when every
+            // submitted URL produced a page or a reported failure, and no parse
+            // handler is still running.  A bare `pendingCount == 0` comparison
+            // cannot see a fetch that failed (issue #592), and lets a handler
+            // that is still discovering links be overtaken by the others.
             // onHTMLDocumentParsed can fire more than once for a single page
             // (re-parse after refresh, shared-session reloads).  Only the first
-            // event may add the result or tick the completion counter — otherwise
-            // one page can appear twice in the listing and the crawl can complete
+            // event may add the result or settle the URL — otherwise one page
+            // can appear twice in the listing and the crawl can complete
             // before every page has been collected.
             val recorded = ConcurrentHashMap.newKeySet<String>()
 
@@ -697,71 +803,99 @@ class CrawlService(
                 // -readonly is forwarded so depth-1 page loads honor it too (no
                 // store writes) instead of silently ignoring the flag.
                 val readonlySuffix = if (options.readonly) " -readonly" else ""
-                val hyperlink = ParsableHyperlink("$linkUrl -parse -refresh$readonlySuffix") { _page: WebPage, _document: FeaturedDocument ->
-                    // Only the first parse event for a URL records the result and
-                    // ticks the completion counter; duplicates are dropped.
-                    if (recorded.add(normalizeForVisit(linkUrl))) {
-                        val extractionResult = if (request.sql != null) {
-                            executeSqlQuery(session, linkUrl, request.sql)
-                        } else Pair(null, null)
-                        val (servedFromStore, storeAgeSeconds) = storeServeMarkers(_page)
-                        synchronized(results) {
-                            results.add(
-                                CrawlPageResult(
-                                    url = linkUrl,
-                                    title = _document.title.takeIf { !it.isNullOrBlank() }
-                                        ?: extractTitleFromHtml(_document.html),
-                                    contentLength = _page.contentLength,
-                                    depth = 1,
-                                    extracted = extractionResult.first,
-                                    extractionError = extractionResult.second,
-                                    servedFromStore = servedFromStore,
-                                    storeAgeSeconds = storeAgeSeconds
-                                )
-                            )
-                            // Publish in-memory progress so the CLI poll loop sees
-                            // pages as they arrive instead of 'waiting for first
-                            // page' for the whole seed round.
-                            publishIncremental(taskId, results.toList(), linksDiscovered.get())
-                        }
-                        // Signal completion when the last out-link finishes processing
-                        if (pendingCount.decrementAndGet() == 0) {
-                            allCompleted.complete(Unit)
-                        }
-                    } else {
-                        logger.debug("Crawl {}: duplicate parse event for {}; already recorded", taskId, linkUrl)
+                val onParse = parse@{ _page: WebPage, _document: FeaturedDocument ->
+                    if (!ledger.enter()) {
+                        logger.debug(
+                            "Crawl {}: ignoring a late parse event for '{}' — the round is already complete",
+                            taskId, linkUrl
+                        )
+                        return@parse null
                     }
+                    try {
+                        // Only the first parse event for a URL records the result
+                        // and settles the URL; duplicates are dropped.
+                        if (recorded.add(normalizeForVisit(linkUrl))) {
+                            val extractionResult = if (request.sql != null) {
+                                executeSqlQuery(session, linkUrl, request.sql)
+                            } else Pair(null, null)
+                            val (servedFromStore, storeAgeSeconds) = storeServeMarkers(_page)
+                            synchronized(results) {
+                                results.add(
+                                    CrawlPageResult(
+                                        url = linkUrl,
+                                        title = _document.title.takeIf { !it.isNullOrBlank() }
+                                            ?: extractTitleFromHtml(_document.html),
+                                        contentLength = _page.contentLength,
+                                        depth = 1,
+                                        extracted = extractionResult.first,
+                                        extractionError = extractionResult.second,
+                                        servedFromStore = servedFromStore,
+                                        storeAgeSeconds = storeAgeSeconds
+                                    )
+                                )
+                                // Publish in-memory progress so the CLI poll loop sees
+                                // pages as they arrive instead of 'waiting for first
+                                // page' for the whole seed round.
+                                publishIncremental(taskId, results.toList(), linksDiscovered.get())
+                            }
+                            ledger.recordSuccess(linkUrl)
+                        } else {
+                            logger.debug("Crawl {}: duplicate parse event for {}; already recorded", taskId, linkUrl)
+                        }
+                    } catch (t: Throwable) {
+                        // A page whose parse handler died is a lost page, not a
+                        // page that is still coming: report it, then keep the
+                        // original propagation semantics.
+                        ledger.recordFailure(
+                            linkUrl, 1, _page.protocolStatus.minorCode,
+                            "the parse handler failed for this page: ${t.message}"
+                        )
+                        throw t
+                    } finally {
+                        ledger.leave()
+                    }
+                    null
                 }
+                val hyperlink = ParsableHyperlink("$linkUrl -parse -refresh$readonlySuffix", onParse)
+                // A fetch that never fires a parse event (retry budget exhausted,
+                // dropped task, terminal 4xx/5xx) is settled here instead of
+                // vanishing from the result.
+                hyperlink.eventHandlers.crawlEventHandlers.onLoaded.addLast { _, loaded ->
+                    settleFromLoaded(ledger, linkUrl, 1, loaded)
+                    null
+                }
+                ledger.submit(linkUrl, 1)
                 session.submit(hyperlink)
             }
 
-            // Wait until all submitted out-pages are processed (per-crawl, not global)
+            // Wait until every submitted out-page settled (per-crawl, not global)
             withTimeout(300_000L) { // 5 minute timeout for depth=1
-                allCompleted.await()
+                ledger.awaitAllSettled()
             }
 
             // Deterministic ordering: identical runs over an unchanged site
             // produce identical listings.
-            return results.toList().sortedBy { it.url }
-        } catch (e: TimeoutCancellationException) {
-            logger.warn("Crawl {}: depth=1 timed out after collecting {} pages; saving partial results", taskId, results.size)
-            // Save partial results BEFORE re-throwing — the outer launch catch
-            // guards against overwriting already-saved partial results
-            val previous = taskStore.getIfPresent(taskId)
-            val timeout = CrawlResponse(
-                taskId = taskId,
-                status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
-                pagesFound = results.size,
-                linksDiscovered = linksDiscovered.get(),
+            return CrawlRound(
                 pages = results.toList().sortedBy { it.url },
-                error = "Crawl timed out after collecting ${results.size} pages (partial results saved)",
-                startedTime = previous?.startedTime ?: java.time.Instant.now(),
-                finishTime = java.time.Instant.now()
+                failedPages = ledger.failedPages(),
+                pagesExpected = ledger.pagesExpected
             )
-            taskStore.put(taskId, timeout)
-            onStatusChanged(timeout)
-            throw e
+        } catch (e: TimeoutCancellationException) {
+            // The round ran out of time.  Report it as a timed-out round with its
+            // outstanding URLs instead of re-throwing: the throw used to be
+            // swallowed by the per-seed catch, which then let the terminal write
+            // replace the TIMEOUT record with OK — a truncated crawl that looked
+            // successful.
+            logger.warn("Crawl {}: depth=1 timed out after collecting {} pages; saving partial results", taskId, results.size)
+            return CrawlRound(
+                pages = results.toList().sortedBy { it.url },
+                failedPages = ledger.failedPages() + ledger.outstanding(),
+                pagesExpected = ledger.pagesExpected,
+                timedOut = true,
+                timeoutError = "Crawl timed out after collecting ${results.size} pages (partial results saved)"
+            )
         } finally {
+            ledger.close()
             runCatching { session.close() }
         }
     }
@@ -770,12 +904,19 @@ class CrawlService(
     // Depth>1: BFS continuous crawl using ParsableHyperlink parse handlers
     // ------------------------------------------------------------------
 
-    private suspend fun crawlDepthN(taskId: String, request: CrawlRequest, linksDiscovered: AtomicInteger): List<CrawlPageResult> {
+    private suspend fun crawlDepthN(taskId: String, request: CrawlRequest, linksDiscovered: AtomicInteger): CrawlRound {
         // Use sequential browsers for continuous crawling (same as _5_ContinuousCrawler.kt)
         try { PulsarSettings.withSequentialBrowsers().maxOpenTabs(8) } catch (e: Exception) { /* optional config */ }
 
         val session = sessionManager.agenticContext.createSession()
         val results = Collections.synchronizedList(mutableListOf<CrawlPageResult>())
+        // Per-round settle bookkeeping.  The round can only complete when every
+        // URL it submitted produced a page or a reported failure *and* no parse
+        // handler is still running: the old `completed == submitted` counter let
+        // handler A's children be submitted after the counters of the other
+        // handlers had already caught up, and could not see a fetch that failed
+        // at all (issue #592: "expected 10 pages, got 8", status=OK).
+        val ledger = CrawlLedger(taskId)
         try {
             val effectiveArgs = buildEffectiveArgs(request.args)
             val options = parseOptions(session, effectiveArgs)
@@ -800,19 +941,23 @@ class CrawlService(
             // submit it twice.
             val discoveryLock = Any()
 
-            // Per-crawl completion tracking: submitted count increments when new
-            // links are submitted, completed count increments when a page's first
-            // parse event finishes processing.  When they match the pool is drained.
-            val submittedCount = AtomicInteger(1) // seed URL counts as submitted
-            val completedCount = AtomicInteger(0)
-            val allCompleted = CompletableDeferred<Unit>()
-
             // Use lateinit to allow recursive reference within the parse handler
             lateinit var parseHandler: (WebPage, FeaturedDocument) -> Any?
 
             parseHandler = crawlParse@{ page: WebPage, document: FeaturedDocument ->
                 val pageUrl = document.baseURI ?: page.url
                 val key = normalizeForVisit(pageUrl)
+                // Refuse everything once the round is terminal: a duplicate parse
+                // event arriving minutes later used to keep submitting links for a
+                // task the caller had already been told was finished (issue #592).
+                if (!ledger.enter()) {
+                    logger.debug(
+                        "Crawl {}: ignoring a late parse event for '{}' — the round is already complete",
+                        taskId, pageUrl
+                    )
+                    return@crawlParse null
+                }
+                try {
                 // Depth resolution is queue-time bookkeeping, never a guess:
                 // every URL this crawl submits is registered in `depths` before
                 // submission (seed = 0, each link = discovering page's depth + 1),
@@ -820,10 +965,9 @@ class CrawlService(
                 // the same queue-time value from the '-depth N' marker embedded in
                 // page.configuredUrl and covers parse events whose final URL
                 // differs from the submitted URL (redirects).  A page with neither
-                // record was not queued by this crawl — fail loudly instead of
-                // silently labeling it depth=1 (the old `?: 1` fallback), and tick
-                // the completion counter exactly once so the pool drain cannot
-                // hang on the unqueued event.
+                // record was not queued by this crawl — say so instead of silently
+                // labeling it depth=1 (the old `?: 1` fallback), and settle it so
+                // the round cannot wait for a page this crawl never submitted.
                 val currentDepth = depths[key] ?: extractDepth(page)
                 if (currentDepth == null) {
                     logger.error(
@@ -832,9 +976,7 @@ class CrawlService(
                         "dropping it from the result listing instead of silently reporting depth=1",
                         taskId, pageUrl, page.configuredUrl
                     )
-                    if (recorded.add(key) && completedCount.incrementAndGet() == submittedCount.get()) {
-                        allCompleted.complete(Unit)
-                    }
+                    ledger.recordFailure(key, -1, page.protocolStatus.minorCode, CrawlLedger.REASON_NOT_QUEUED)
                     return@crawlParse null
                 }
 
@@ -870,6 +1012,7 @@ class CrawlService(
                         // finishes.
                         publishIncremental(taskId, results.toList(), linksDiscovered.get())
                     }
+                    ledger.recordSuccess(key)
                     logger.debug("Crawl {}: depth={} page={}", taskId, currentDepth, pageUrl)
                 } else {
                     logger.debug(
@@ -905,21 +1048,31 @@ class CrawlService(
                         }
 
                         if (newLinks.isNotEmpty()) {
-                            submittedCount.addAndGet(newLinks.size)
                             linksDiscovered.addAndGet(newLinks.size)
-                            val args = buildArgsForDepth(options, currentDepth + 1)
+                            val childDepth = currentDepth + 1
+                            val args = buildArgsForDepth(options, childDepth)
                             newLinks.forEach { link ->
-                                depths[normalizeForVisit(link)] = currentDepth + 1
+                                depths[normalizeForVisit(link)] = childDepth
                                 val hyperlink = ParsableHyperlink("$link $args", parseHandler)
+                                // A fetch that never fires a parse event (retry
+                                // budget exhausted, dropped task, terminal
+                                // 4xx/5xx) is settled here instead of vanishing.
+                                hyperlink.eventHandlers.crawlEventHandlers.onLoaded.addLast { _, loaded ->
+                                    settleFromLoaded(ledger, link, childDepth, loaded)
+                                    null
+                                }
+                                // Register before submitting: a page that settles
+                                // faster than it is counted would end the round.
+                                ledger.submit(link, childDepth)
                                 session.submit(hyperlink)
                             }
                             logger.debug(
                                 "Crawl {}: submitted {} links at depth {}",
                                 taskId,
                                 newLinks.size,
-                                currentDepth + 1
+                                childDepth
                             )
-                        } else if (currentDepth == 0 && submittedCount.get() == 1) {
+                        } else if (currentDepth == 0 && ledger.pagesExpected == 1) {
                             // The seed page's round produced no followable
                             // out-links (nothing but the seed has been submitted),
                             // so this crawl will only report the seed page.
@@ -943,11 +1096,20 @@ class CrawlService(
                     }
                 }
 
-                // Signal completion when all submitted pages have been processed.
-                // Duplicate parse events are not counted, so each submitted page
-                // contributes exactly one tick.
-                if (firstEvent && completedCount.incrementAndGet() == submittedCount.get()) {
-                    allCompleted.complete(Unit)
+                } catch (t: Throwable) {
+                    // A page whose parse handler died is a lost page, not a page
+                    // that is still coming: report it, then keep the original
+                    // propagation semantics.
+                    ledger.recordFailure(
+                        key, depths[key] ?: -1, page.protocolStatus.minorCode,
+                        "the parse handler failed for this page: ${t.message}"
+                    )
+                    throw t
+                } finally {
+                    // The round may only complete once no handler is in flight:
+                    // this is what stops handler A's children from being lost
+                    // after the other handlers have already settled everything.
+                    ledger.leave()
                 }
             } // parseHandler defined
 
@@ -957,34 +1119,42 @@ class CrawlService(
             depths[seedKey] = 0
             val seedArgs = buildArgsForDepth(options, 0)
             val seedHyperlink = ParsableHyperlink("${request.url} $seedArgs", parseHandler)
+            seedHyperlink.eventHandlers.crawlEventHandlers.onLoaded.addLast { _, loaded ->
+                settleFromLoaded(ledger, request.url, 0, loaded)
+                null
+            }
+            ledger.submit(request.url, 0)
             session.submit(seedHyperlink)
 
-            // Wait until the URL pool is drained (per-crawl completion, not global)
+            // Wait until every submitted URL settled (per-crawl completion, not global)
             val timeoutMs = (maxDepth * 300_000L).coerceAtMost(1_800_000L) // max 30 min
             withTimeout(timeoutMs) {
-                allCompleted.await()
+                ledger.awaitAllSettled()
             }
 
             // Deterministic ordering: identical runs over an unchanged site
             // produce identical listings.
-            return results.toList().sortedWith(compareBy({ it.depth }, { it.url }))
-        } catch (e: TimeoutCancellationException) {
-            logger.warn("Crawl {}: depth>1 timed out after collecting {} pages; saving partial results", taskId, results.size)
-            val previous = taskStore.getIfPresent(taskId)
-            val timeout = CrawlResponse(
-                taskId = taskId,
-                status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
-                pagesFound = results.size,
-                linksDiscovered = linksDiscovered.get(),
+            return CrawlRound(
                 pages = results.toList().sortedWith(compareBy({ it.depth }, { it.url })),
-                error = "Crawl timed out after collecting ${results.size} pages (partial results saved)",
-                startedTime = previous?.startedTime ?: java.time.Instant.now(),
-                finishTime = java.time.Instant.now()
+                failedPages = ledger.failedPages(),
+                pagesExpected = ledger.pagesExpected
             )
-            taskStore.put(taskId, timeout)
-            onStatusChanged(timeout)
-            throw e
+        } catch (e: TimeoutCancellationException) {
+            // The round ran out of time.  Report it as a timed-out round with its
+            // outstanding URLs instead of re-throwing: the throw used to be
+            // swallowed by the per-seed catch, which then let the terminal write
+            // replace the TIMEOUT record with OK — a truncated crawl that looked
+            // successful.
+            logger.warn("Crawl {}: depth>1 timed out after collecting {} pages; saving partial results", taskId, results.size)
+            return CrawlRound(
+                pages = results.toList().sortedWith(compareBy({ it.depth }, { it.url })),
+                failedPages = ledger.failedPages() + ledger.outstanding(),
+                pagesExpected = ledger.pagesExpected,
+                timedOut = true,
+                timeoutError = "Crawl timed out after collecting ${results.size} pages (partial results saved)"
+            )
         } finally {
+            ledger.close()
             runCatching { session.close() }
         }
     }
@@ -1295,6 +1465,13 @@ class CrawlService(
         /** Maximum time (ms) a crawl task may run before being cancelled. */
         private const val CRAWL_TASK_TIMEOUT_MS = 600_000L // 10 minutes
 
+        /**
+         * How many lost URLs the diagnostic spells out.  The full list is in
+         * [CrawlResponse.failedPages]; the note only has to prove the loss is
+         * real and name the first few.
+         */
+        private const val MAX_REPORTED_FAILED_PAGES = 5
+
         fun crawlPersistencePath(): Path = Path.of(
             System.getProperty("browser4.data.dir", System.getProperty("user.home")),
             ".browser4", "data", "crawl", "crawl-tasks.jsonl"
@@ -1373,15 +1550,81 @@ class CrawlService(
         }
     }
 
-    private fun normalizeForVisit(url: String): String {
-        // Strip empty or fragment-only suffixes ('#', '#section') too: resolving
-        // a fragment-only href against the portal URL appends '#' to it, and the
-        // canonicalized form must dedupe against the fragment-less URL instead of
-        // surfacing a spurious trailing-'#' page (or counting it as a new link).
-        return url.trim().lowercase()
-            .removeSuffix("/")
-            .substringBefore('#')
-            .substringBefore('?')  // strip query for dedup
+    /**
+     * Settle a submitted URL from the crawl `onLoaded` event, which fires for
+     * every load attempt — including the ones that no parse event ever follows.
+     *
+     * Without this, a fetch that fails is invisible to the crawl: the parse
+     * event never fires, so the completion wait can never learn that the page
+     * is not coming, and the URL simply disappears from the result (issue
+     * #592).  Classification mirrors `XSQLHyperlink.CrawlEventHandlers`, which
+     * is the established reading of these states in this codebase:
+     *
+     *  * a retry/canceled status means the page is still in flight — settle
+     *    nothing, so the round keeps waiting for the attempt that finally lands;
+     *  * `!isFetched` alone is NOT a failure: a page served from the page store
+     *    (`-readonly` without `-refresh`) legitimately completes with content
+     *    while `isFetched` stays false.
+     */
+    private fun settleFromLoaded(ledger: CrawlLedger, submittedUrl: String, depth: Int, page: WebPage?) {
+        if (ledger.isTerminal) return
+        if (page == null) {
+            ledger.recordFailure(submittedUrl, depth, 0, CrawlLedger.REASON_NEVER_FETCHED)
+            return
+        }
+        val status = page.protocolStatus
+        when {
+            page.isCanceled || status.isRetry -> Unit
+
+            page.isNil -> ledger.recordFailure(
+                submittedUrl, depth, status.minorCode, CrawlLedger.REASON_NEVER_FETCHED
+            )
+
+            status.isFailed -> ledger.recordFailure(
+                submittedUrl, depth, status.minorCode,
+                status.reason?.toString() ?: CrawlLedger.REASON_FETCH_FAILED
+            )
+
+            !page.isFetched && !status.isSuccess -> ledger.recordFailure(
+                submittedUrl, depth, status.minorCode, CrawlLedger.REASON_NEVER_FETCHED
+            )
+
+            // A successful load is settled by the parse event that records its
+            // row, and `onLoaded` fires *after* that event.  A success no row was
+            // recorded for will never produce one, so report it instead of
+            // letting the round wait out its whole timeout.
+            !ledger.isRecordedSuccess(submittedUrl) && !ledger.isRecordedSuccess(page.url) ->
+                ledger.recordFailure(submittedUrl, depth, status.minorCode, CrawlLedger.REASON_NOT_PARSED)
+
+            else -> Unit
+        }
+    }
+
+    /**
+     * The terminal note that makes a loss visible.  A crawl that dropped pages
+     * must say so — with the URLs and the reason — instead of reporting a page
+     * count smaller than the number of pages it set out to fetch.
+     */
+    private fun buildLossNote(
+        pagesFound: Int,
+        pagesExpected: Int,
+        failedPages: List<CrawlFailedPage>
+    ): String? {
+        if (failedPages.isEmpty()) return null
+        val shown = failedPages.take(MAX_REPORTED_FAILED_PAGES).joinToString("; ") { f ->
+            buildString {
+                append(f.url)
+                append(" (depth=").append(f.depth)
+                if (f.protocolStatus != 0) append(", status=").append(f.protocolStatus)
+                f.reason?.let { append(", ").append(it) }
+                append(")")
+            }
+        }
+        val more = if (failedPages.size > MAX_REPORTED_FAILED_PAGES) {
+            " (+${failedPages.size - MAX_REPORTED_FAILED_PAGES} more)"
+        } else ""
+        return "${failedPages.size} of $pagesExpected page(s) were submitted but never delivered " +
+            "(${pagesFound} recorded): $shown$more"
     }
 
     private fun extractDepth(page: WebPage): Int? {
@@ -1408,4 +1651,24 @@ class CrawlService(
         if (options.readonly) parts.add("-readonly")
         return parts.joinToString(" ")
     }
+}
+
+/**
+ * Canonical form used to dedupe URLs inside a crawl round.
+ *
+ * Fragment-only suffixes are stripped too: resolving a fragment-only href
+ * against the portal URL appends '#' to it, and the canonicalized form must
+ * dedupe against the fragment-less URL instead of surfacing a spurious
+ * trailing-'#' page (or counting it as a new link).
+ *
+ * Note the deliberate asymmetry: this key is used to *dedupe submissions* and
+ * to report losses, never to decide that a page arrived.  A page's final URL
+ * can differ from the URL it was submitted under (redirects,
+ * `document.baseURI`), so settlement is counted per page, not matched by URL.
+ */
+internal fun normalizeForVisit(url: String): String {
+    return url.trim().lowercase()
+        .removeSuffix("/")
+        .substringBefore('#')
+        .substringBefore('?')  // strip query for dedup
 }

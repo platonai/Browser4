@@ -620,3 +620,98 @@ Linux 那半边会第一次真正执行这些断言**——如果某条依赖 ru
 约 30 s，fetch 现在会**在调用方窗口内快速失败**（测试 1 会改在 `statusCode` 断言上失败，
 而不是死在 deadline 上）。同一份日志显示争用是瞬时的（同一批页面在 `19:14:18` 以 200
 成功、绿 run 也有 74 次同类拒绝），所以这一轮把"调用方必然先放弃"变成"重试能在窗口内跑完"。
+
+## 14. #592 的另一半：丢页必须报账，"完成"必须等于静止（已修）
+
+§13 修的是**节拍**，并明确把"两个 fetch 共用一个 tab"记为不在本仓可改范围。本节修的是
+#592 剩下那一半——**丢页不可见**与**终态不等于没活干**，同样不碰驱动复用。
+
+### 14.1 五个缺口（对照改动前的代码）
+
+1. **完成判据只数数**：`crawlDepthN` 用 `submittedCount == completedCount` 判定结束。
+2. **计数相等不等于静止**：一个 handler 的顺序是"记账 → 发现并 submit 子链接 → 自己 +1"，
+   而多个 handler 并发跑。B..E 的 +1 完全可以在 A 做完发现之前把计数追平 ⇒ 轮次被判完成，
+   **A 的子链接永远没被 fetch**。这就是 10 页变 8 页。
+3. **失败没有任何渠道进入判定**：`ParsableHyperlink` 只注册了 `onHTMLDocumentParsed`
+   （`browser4-core/.../ParsableHyperlink.kt:35`）——**只有解析成功才回调**。fetch 失败
+   （守卫耗尽重试预算、任务被丢弃、408/417）时 crawl 一无所知，计数器只会永远差一个。
+4. **终态后仍在提交**：`crawlDepthN` 返回后 `finally { session.close() }` 关不掉已经进入解析
+   管线的 fetch，而发现逻辑不受 `firstEvent` 保护，于是出现 `+2m31s: submitted 2 links at
+   depth 2`（issue 症状 3）。
+5. **顺带发现**：轮次内部超时后写的 TIMEOUT 记录，会被 seed 循环之后的终态写入覆盖成 OK——
+   因为 seed 循环的 `catch (e: Exception)` 把 `TimeoutCancellationException` 一起吞了。
+   即"**超时的爬取报 OK**"，与 #592 同一类静默。
+
+### 14.2 修复
+
+* 新增 `CrawlLedger`（`browser4-rest/.../service/CrawlLedger.kt`，纯 Kotlin 状态机，
+  不依赖 session/browser 因而可单测）：
+  * `enter()/leave()`：**有 handler 在飞就不可能完成**（缺口 2）；
+  * `recordFailure()`：给失败 URL 一个终态（缺口 3），按 URL 幂等（`onLoaded` 每次重试都会触发）；
+  * `submit()`：按 URL 去重（重复外链不会让轮次空等）；
+  * `close()`：**终态即闭闸**，晚到的 parse 事件不再提交任何东西（缺口 4）；
+  * `outstanding()`：轮次被放弃（超时/取消）时列出没交代的 URL，而不是让 partial 结果冒充完整。
+* 计数**故意不按 URL 匹配**：页面最终 URL 可能与提交时的 URL 不同（重定向、`document.baseURI`），
+  所以"到了"是**按页计数**，URL 只用于去重与报账。
+* `CrawlService`：两个 crawl 循环（`crawlDepthN`、`crawlDepth1`）都接 ledger；每个提交的 URL
+  挂 `crawlEventHandlers.onLoaded` 结算，判定照抄 `XSQLHyperlink.CrawlEventHandlers`
+  （本仓既有的权威读法：retry/canceled 不结算；`!isFetched` **不等于**失败，页库命中时它也
+  是 false）；`currentDepth == null` 的"记账式丢页"改为记失败。
+* 数据模型：`CrawlResponse.failedPages` / `pagesExpected` + 新 `CrawlFailedPage`、`CrawlRound`。
+  **不变式**：`pagesFound + failedPages.size == pagesExpected` 恒成立。
+  `status` 取值集合**故意不动**（CLI 轮询只认 OK/SC_OK/TIMEOUT/ERROR，新增取值会把轮询挂死），
+  损失用 `failedPages` + `diagnostic` 表达。
+* 终态：`timedOut` 的轮次不再被 OK 覆盖；loss note 是**追加**而不是替换既有 diagnostic；
+  seed 循环显式重抛 `CancellationException`。
+* CLI（`main.rs`）：`failedPages` 非空时打印 `⚠ N of M submitted page(s) were never
+  delivered` 并列出前 5 个 URL（含 depth/status/reason），`json_field` 暴露
+  `failed_pages` / `pages_expected`。
+
+### 14.3 验证
+
+| 层 | 命令 | 结果 |
+|---|---|---|
+| 单元 | `-pl browser4-rest -am test -Dtest=CrawlLedgerTest,CrawlResponseTest` | 30 / 0 / 0（ledger 13、response 17） |
+| 单元（全模块） | `-pl browser4-rest -am test` | 348 / 0 / 0，BUILD SUCCESS |
+| Rust | `cargo test --bin browser4-cli` | 1195 passed / 0 failed |
+| Rust e2e（新增场景） | `cargo test --test e2e -- --scenario=test_e2e_crawl_foreground_reports_lost_pages` | 1 passed / 0 failed |
+| 集成 | `-Pall-test-modules -pl browser4-tests/browser4-rest-tests -am -DrunITs=true -Dtest=CrawlFixtureMetadataTest` | **5 / 0 / 0**，294.9 s |
+
+新增的 CLI 场景 `test_e2e_crawl_foreground_reports_lost_pages` 用 mock 响应喂一份
+`pagesFound=8 / pagesExpected=10 / failedPages=[2 条]` 的 OK 结果，断言 CLI 打印
+`⚠ 2 of 10 submitted page(s) were never delivered` 并逐条列出 URL（含 depth/status/reason，
+status=0 时省略 status 段）——**"报 OK 但少页"从此有 UI 级回归**。
+
+> 已知无关红点：`cargo test --test e2e -- --group=crawl` 里
+> `test_e2e_crawl_foreground_with_sql` 失败。**该失败在本轮改动前的基线上逐字复现**
+> （`git stash push -- cli/browser4-cli/src/main.rs` 后重跑同样失败），原因是 `--sql` 爬取时
+> `crawl_structured_stdout_active()` 为真，`crawl_status_println!` 把
+> `Crawl task submitted: ...` 写到了 **stderr**，而该场景断言在 stdout 上找它。
+> 属既有的"结构化 stdout 模式"遗留问题，不在 #592 范围内。
+
+`CrawlLedgerTest` 里两条用例就是缺口的回归：**"有 handler 在飞时轮次不得放行"**（10 页变
+8 页那种交错）、**"失败必须核销，否则轮次空等"**。
+
+集成 run 的实测日志（20 核 Windows，正是 issue 里失败的那台机器的形态）：
+
+```
+2026-09-13 13:43:54.771 INFO [@crawl#627] CrawlService - Crawl task 298f4eb7-... completed: 10 pages, 0 lost, status OK
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 294.9 s
+```
+
+同一 run 里仍有大量 `Retry(1601) rs: TabOriginMismatchException`（守卫拒绝本身照旧发生），
+但轮次等到了每一个提交的 URL，**10/10 页、0 丢失**。这正是本次修复要达到的状态：
+**拒绝还在，但它不再变成"少两页且报 OK"。**
+
+集成测试同时加了：
+* `assertNoLostPages()`——断言守恒式，失败时**点名**丢了哪些 URL（不再是 `expected 10, got 8`）；
+* `testBackToBackCrawlsLoseNoPages()`——同时提交两个 crawl（复现 issue 里"上一个还没停就发
+  下一个"的干扰条件），两者都必须终态且零丢失。
+
+### 14.4 仍未修（与 §13.4 同一处边界）
+
+根因"两个 fetch 共用一个 tab"仍在：守卫拒绝的次数不会因此减少，一次**持续**的争用仍可能让
+某个 URL 耗尽重试预算。区别是现在它会出现在 `failedPages` 里、伴随 `⚠` 警告和可读的 reason，
+而不再是一句 `status=OK` 加一个更小的页数。真要消除争用，得动 `browser4-core/browser4-browser`
+的驱动池语义（例如"拒绝即换新 tab"），属于另一个 PR。
+

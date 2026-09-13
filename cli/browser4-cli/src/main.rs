@@ -14215,6 +14215,43 @@ async fn handle_crawl(
                             error_count, page_count
                         ));
                     }
+                    // Lost pages: a crawl that dropped pages must not report a page
+                    // count smaller than the number of pages it set out to fetch.
+                    // The backend guarantees pagesFound + failedPages.size ==
+                    // pagesExpected, so this is the accounting that makes "the site
+                    // does not have it" distinguishable from "the crawl lost it".
+                    if let Some(failed) = parsed["failedPages"].as_array() {
+                        if !failed.is_empty() {
+                            let pages_expected = parsed["pagesExpected"].as_i64().unwrap_or(0);
+                            page_lines.push(format!(
+                                "\n⚠ {} of {} submitted page(s) were never delivered — \
+                                 this crawl is incomplete, not just small:",
+                                failed.len(),
+                                pages_expected
+                            ));
+                            const MAX_SHOWN: usize = 5;
+                            for f in failed.iter().take(MAX_SHOWN) {
+                                let url = f["url"].as_str().unwrap_or("");
+                                let depth = f["depth"].as_i64().unwrap_or(-1);
+                                let protocol_status = f["protocolStatus"].as_i64().unwrap_or(0);
+                                let reason = f["reason"].as_str().unwrap_or("no reason reported");
+                                let status_part = if protocol_status == 0 {
+                                    String::new()
+                                } else {
+                                    format!("status={} ", protocol_status)
+                                };
+                                page_lines.push(format!(
+                                    "    depth={} | {} | {}{}",
+                                    depth, url, status_part, reason
+                                ));
+                            }
+                            if failed.len() > MAX_SHOWN {
+                                page_lines.push(format!("    (+{} more)", failed.len() - MAX_SHOWN));
+                            }
+                            json_field("failed_pages", json!(failed.clone()));
+                            json_field("pages_expected", json!(pages_expected));
+                        }
+                    }
                     // Readonly-mode note: what --readonly did (served from the
                     // store with age, or verified every page fetched fresh).
                     if let Some(note) = parsed["readonlyNote"].as_str() {
