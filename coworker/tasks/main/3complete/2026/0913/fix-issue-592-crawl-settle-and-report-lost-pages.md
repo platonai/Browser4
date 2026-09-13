@@ -69,7 +69,38 @@ The integration run on the same 20-core host that produced the 8/10 result now l
 
 ## Scope note
 
-The root cause named in §13.4 of the CI-stabilization notes — concurrent fetches sharing one tab,
-i.e. driver/tab reuse in `browser4-core/browser4-browser` — is **not** fixed here. A sustained
-contention can still exhaust a URL's retry budget; the difference is that it now appears in
-`failedPages` with a readable reason instead of a smaller page count behind `status=OK`.
+The root cause named in §13.4 of the CI-stabilization notes — concurrent fetches sharing one tab —
+was left open in the first commit and fixed in the second one, see below.
+
+## Second commit: the root cause (a session-bound driver had no lease)
+
+**Mechanism (confirmed, not inferred).** `PrivacyManagedBrowserFetcher.fetchDeferred` first asks for a
+"specified" web driver (`page.getBeanOrNull(WebDriver)` → `page.conf.getBeanOrNull(WebDriver)`, which
+inherits from the session config, i.e. `session.bindDriver(driver)`). When one is found the fetch uses
+it directly and **bypasses the driver pool's poll/put lease entirely** — only the "no specified driver"
+branch goes through `privacyManager.run { … }`. A crawl's session has one bound driver, so every fetch
+of that crawl drove the same tab concurrently.
+
+**Evidence.** A temporary probe in `ConcurrentStatefulDriverPool.poll/offer` produced *zero* output in a
+whole integration run → the crawl never touched the pool. The guard lines in the same run named one
+driver id (`driver #2`) 234+ times, from several worker threads within 2 ms of each other.
+
+**Fix.** New `DriverLeaseRegistry` (per-driver `Mutex`); `fetchDeferred` takes the lease before driving
+a specified driver and releases it afterwards, and when the lease cannot be taken within 60 s it leases
+an independent driver from the pool instead of sharing the tab (logged).
+
+**Verification** (same 20-core Windows host, same fixture test):
+
+| Metric | Before | After |
+|---|---|---|
+| `Tab origin mismatch` | 282 | **0** |
+| `will be retired` | 141 | **0** |
+| `CrawlFixtureMetadataTest` | 5/0/0, 294.9 s / 327.9 s | **5/0/0, 234.9 s** |
+| `browser4-protocol` suite | — | 91/0/0 (2 skipped) |
+| New `DriverLeaseRegistryTest` | — | 5/0/0 |
+
+**Remaining throughput note.** Refusals dropping to zero means fetches on one session tab are now
+serialized. A crawl that wants parallelism should stop binding a session driver and lease tabs from
+the pool instead — `crawlDepthN` already asks for `maxOpenTabs(8)`, but the pool reads that at
+construction, so the setting often arrives too late. That is a throughput follow-up, not a correctness
+one.

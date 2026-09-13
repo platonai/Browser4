@@ -715,3 +715,59 @@ status=0 时省略 status 段）——**"报 OK 但少页"从此有 UI 级回归
 而不再是一句 `status=OK` 加一个更小的页数。真要消除争用，得动 `browser4-core/browser4-browser`
 的驱动池语义（例如"拒绝即换新 tab"），属于另一个 PR。
 
+## 15. #592 的根因：会话绑定的驱动没有租约，整个 crawl 共用一个 tab（已修）
+
+§13 修的是重试节拍，§14 修的是丢页可见性；两次都把"两个 fetch 共用一个 tab"记成
+**不在本仓可改范围**。本轮把它定位到**本仓的 fetch 层**并修掉了。
+
+### 15.1 定位过程（可复现）
+
+1. 在 `ConcurrentStatefulDriverPool.poll/offer` 放临时探针（WARN/ERROR 级，绕过日志级别过滤），
+   跑 `CrawlFixtureMetadataTest`：**整场 0 条探针输出** ⇒ crawl 的 fetch 根本没走驱动池。
+2. 统计守卫拒绝：一场 run 里 `Tab origin mismatch` 234+ 条、`will be retired` 117 条，
+   **全部指向同一个 `driver #2`**，且多个 worker 线程在 2 ms 内同时报它 ⇒ 一个 tab 被并发复用。
+3. 读 fetch 入口 `PrivacyManagedBrowserFetcher.fetchDeferred`：`getWebDriver(page)` 先看页面/会话上
+   有没有"指定驱动"（`page.getBeanOrNull(WebDriver)` / `page.conf.getBeanOrNull(WebDriver)`，
+   后者继承自 `sessionConfig`，也就是 `session.bindDriver(driver)`）；命中就**直接 fetch，
+   完全绕过驱动池的 poll/put 租约**，只有"没有指定驱动"时才走 `privacyManager.run { … }`（那条路才有租约）。
+   ⇒ 会话绑定的那一个 tab 被该会话的**所有** fetch 共用，而 crawl 是并发提交的。
+
+这一步同时解释了 issue 的全部现象：为什么只有一个 driver id、为什么高核机器更糟（并发窗口更大）、
+为什么 4 核 CI 上偶发绿、为什么 title 会串页 / 会丢页。
+
+### 15.2 修复
+
+* 新增 `DriverLeaseRegistry`（`browser4-protocol`，纯 Kotlin + coroutines，可单测）：
+  按 driver id 的 `Mutex`，`tryAcquire(id, timeout)` / `release(id)`。
+* `PrivacyManagedBrowserFetcher.fetchDeferred` 在用"指定驱动"前先取租约、用完释放：
+  同一个 tab 同一时刻只有一个 fetch 在驱动它。
+* 取不到租约（默认 60 s，远大于正常一次抓取）时**不再共用 tab**，改为走 `privacyManager.run`
+  租一个独立驱动，并打 WARN —— 既不永久阻塞调用方，也不做已知会损坏抓取的事。
+
+### 15.3 验证（同一台 20 核 Windows，同一个 fixture 测试）
+
+| 指标 | 修复前 | 修复后 |
+|---|---|---|
+| `Tab origin mismatch` | 282 | **0** |
+| `will be retired` | 141 | **0** |
+| `TabOriginMismatchException` | 282 | **0** |
+| `CrawlFixtureMetadataTest` | 5/0/0，294.9 s / 327.9 s | **5/0/0，234.9 s** |
+| crawl 任务日志 | `completed: 10 pages, 0 lost` | `completed: 10 pages, 0 lost` |
+
+新增单测 `DriverLeaseRegistryTest`（5 条，纯单元无浏览器）：同 driver 互斥、不同 driver 互不阻塞、
+等待者在释放后接管、**8 个并发 fetch 的 maxConcurrent 必须为 1**、租约可复用。
+
+**注意**：拒绝从 282 掉到 0 说明链路已按 tab 串行化——代价是同一会话的抓取不再并行。
+crawl 想并行需要**不绑定会话驱动**、改为按 tab 从驱动池租用（`crawlDepthN` 虽然设了
+`maxOpenTabs(8)`，但驱动池的 capacity 在池创建时读取配置，这个设置常常赶不上）。
+这属于下一步的吞吐优化，不是正确性问题。
+
+### 15.4 教训
+
+"不在本仓可改范围"这个判断是从**驱动内部**（`pulsar-browser` 4.11.16 artifact）推出来的，
+但**缺陷本身在 fetch 层**：谁把驱动交给谁用、有没有租约，都是本仓的代码。
+
+定位这类 heisenbug，最便宜的一步是**先在怀疑路径上放一个不会被日志级别吞掉的探针**——
+"探针 0 输出"直接把结论从"池租约有竞态"翻转成"根本没走池"，省掉几小时的源码阅读。
+
+
