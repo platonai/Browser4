@@ -167,6 +167,10 @@ class McpHttpServer(
                 allowedHosts = resolvedAllowedHosts,
             ) {
                 requestCount.incrementAndGet()
+                // Plugin/business executors may have registered after this server
+                // was built (the Spring plugin scan runs later than the bean), so
+                // refresh before serving — otherwise `tools/list` under-reports.
+                mcpServer.refreshTools()
                 // The endpoint creates one protocol session per request and closes
                 // it afterwards, so handing back the shared server is safe and keeps
                 // tool registration off the request path.

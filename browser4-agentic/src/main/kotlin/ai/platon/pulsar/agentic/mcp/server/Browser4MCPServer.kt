@@ -162,47 +162,83 @@ class Browser4MCPServer(
      * newer MCP SDK releases, which reject duplicate tool names outright.
      */
     private fun Server.registerToolsFromManager(toolManager: AgentToolManager) {
-        var builtInCount = 0
-        var customCount = 0
-        var conflicts = 0
-
-        fun collect(executor: ToolExecutor, source: String) {
-            for ((method, spec) in executor.getToolSpecs()) {
-                val name = McpToolNames.toMcpToolName(executor.domain, method)
-                val existing = registrations[name]
-                if (existing != null) {
-                    conflicts++
-                    logger.info(
-                        "MCP tool name conflict: '{}' ({}.{}) is shadowed by {}.{} — keeping the built-in executor",
-                        name, executor.domain, method, existing.domain, existing.method
-                    )
-                    continue
-                }
-                registrations[name] = ToolRegistration(executor.domain, method, spec, source)
-                if (source == SOURCE_BUILT_IN) builtInCount++ else customCount++
-            }
-        }
-
-        toolManager.registeredExecutors.values.forEach { collect(it, SOURCE_BUILT_IN) }
-        customExecutors().forEach { collect(it, SOURCE_CUSTOM) }
-
-        for ((name, registration) in registrations) {
-            addTool(
-                name = name,
-                description = registration.spec.description?.trim()?.ifBlank { null }
-                    ?: "${registration.domain}.${registration.method}",
-                inputSchema = buildSchemaFromSpec(registration.spec),
-            ) { request ->
-                invokeTool(name, request.params.arguments)
-            }
-        }
+        val builtInCount = toolManager.registeredExecutors.values.sumOf { mergeExecutor(it, SOURCE_BUILT_IN) }
+        val customCount = customExecutors().sumOf { mergeExecutor(it, SOURCE_CUSTOM) }
 
         val aliasCount = registerFrontendAliases(registrations)
 
         logger.info(
-            "Registered {} MCP tools ({} built-in, {} custom/plugin, {} frontend aliases, {} name conflicts skipped)",
-            registrations.size, builtInCount, customCount, aliasCount, conflicts
+            "Registered {} MCP tools ({} built-in, {} custom/plugin, {} frontend aliases)",
+            registrations.size, builtInCount, customCount, aliasCount
         )
+    }
+
+    /**
+     * Merge the tools of [executor] into the advertised set, skipping names that
+     * are already taken.
+     *
+     * Built-in executors are merged first and win name conflicts, which are
+     * logged rather than silently overwritten: both `skill` executors expose
+     * `list`/`install`/`uninstall`, and the built-in
+     * [ai.platon.pulsar.agentic.skills.tools.SkillToolExecutor] is the
+     * agent-facing one. Deduplicating here also keeps registration safe on newer
+     * MCP SDK releases, which reject duplicate tool names outright.
+     *
+     * @return the number of tools added
+     */
+    private fun Server.mergeExecutor(executor: ToolExecutor, source: String): Int {
+        var added = 0
+        for ((method, spec) in executor.getToolSpecs()) {
+            val name = McpToolNames.toMcpToolName(executor.domain, method)
+            val existing = registrations[name]
+            if (existing != null) {
+                // Re-scanning the same executor is normal (see [refreshTools]);
+                // only a genuine clash between two different tools is worth a log.
+                if (existing.domain != executor.domain || existing.method != method) {
+                    logger.info(
+                        "MCP tool name conflict: '{}' ({}.{}) is shadowed by {}.{} — keeping the earlier registration",
+                        name, executor.domain, method, existing.domain, existing.method
+                    )
+                }
+                continue
+            }
+            registrations[name] = ToolRegistration(executor.domain, method, spec, source)
+            addTool(
+                name = name,
+                description = spec.description?.trim()?.ifBlank { null } ?: "${executor.domain}.$method",
+                inputSchema = buildSchemaFromSpec(spec),
+            ) { request ->
+                invokeTool(name, request.params.arguments)
+            }
+            added++
+        }
+        return added
+    }
+
+    /**
+     * Advertise tools from executors that appeared after this server was built.
+     *
+     * Plugin and business executors register through `ToolMount` during context
+     * refresh, which in the Spring-hosted deployment happens **after** the MCP
+     * server bean is constructed — without a refresh those domains would be
+     * silently missing from `tools/list` (observed: the server logged
+     * "0 custom/plugin" while `CustomToolRegistry` was populated four seconds
+     * later). Calling this before serving a request also picks up executors
+     * registered at runtime.
+     *
+     * Idempotent and cheap: known executors are skipped by name.
+     *
+     * @return the number of tools added by this call
+     */
+    fun refreshTools(): Int = synchronized(registrations) {
+        val before = registrations.size
+        customExecutors().forEach { server.mergeExecutor(it, SOURCE_CUSTOM) }
+        server.registerFrontendAliases(registrations)
+        val added = registrations.size - before
+        if (added > 0) {
+            logger.info("MCP tool list refreshed: +{} tools, {} total", added, registrations.size)
+        }
+        added
     }
 
     /**
@@ -227,11 +263,18 @@ class Browser4MCPServer(
                 )
                 continue
             }
-            if (registrations.containsKey(alias.frontendName)) {
-                logger.info(
-                    "MCP alias '{}' skipped: the name is already taken by a canonical tool",
-                    alias.frontendName
-                )
+            val existing = registrations[alias.frontendName]
+            if (existing != null) {
+                // Re-running this after a refresh is normal: the alias maps to the
+                // very registration it points at (same instance). Only a real
+                // clash — a canonical tool already owning the alias name — is worth
+                // reporting, otherwise every served request would log 40+ lines.
+                if (existing !== target) {
+                    logger.info(
+                        "MCP alias '{}' skipped: the name is already taken by {}.{}",
+                        alias.frontendName, existing.domain, existing.method
+                    )
+                }
                 continue
             }
             // Registered under its own name so a call routed by name (the SDK
