@@ -72,10 +72,26 @@ data class ToolSpec constructor(
         val name: String,
         val type: String,
         val defaultValue: String? = null,
+        /**
+         * Human-readable meaning of the argument, surfaced as the JSON Schema
+         * `description` of the property and in the generated tool docs.
+         *
+         * When absent, renderers fall back to [expression] (`url: String`,
+         * `depth: Int = 1`) — never to the bare argument name, which told a
+         * client nothing about the parameter.
+         */
+        val description: String? = null,
     ) {
         val expression: String
             get() {
-                return if (defaultValue != null) "$name: $type = $defaultValue" else "$name: $type"
+                // An intentional empty-string default must render as `""`; rendering
+                // it bare (`args: String = `) reads like a missing value.
+                val rendered = when {
+                    defaultValue == null -> null
+                    defaultValue.isEmpty() && type.trimEnd('?').equals("String", ignoreCase = true) -> "\"\""
+                    else -> defaultValue
+                }
+                return if (rendered == null) "$name: $type" else "$name: $type = $rendered"
             }
 
         val cliOptions: String
@@ -87,9 +103,17 @@ data class ToolSpec constructor(
             }
     }
 
+    /**
+     * The callable signature, e.g. `crawl.submit(url: String, depth: Int = 1)`.
+     *
+     * Rendered from each argument's [Arg.expression]: joining the `Arg` objects
+     * themselves produced the JVM data-class form
+     * `Arg(name=url, type=String, defaultValue=null)`, which leaked into `help`
+     * output and into the committed tool-call-specs JSON under `code-mirror`.
+     */
     val expression: String
         get() {
-            val args = arguments.joinToString(prefix = "(", postfix = ")")
+            val args = arguments.joinToString(prefix = "(", postfix = ")") { it.expression }
             return "$domain.$method$args"
         }
 

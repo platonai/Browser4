@@ -192,12 +192,17 @@ object ToolSpecGenerator {
         for (m in methods) {
             val arguments = mutableListOf<ToolSpec.Arg>()
             for (p in m.params) {
+                // An absent default must stay absent: rendering it as an empty
+                // string marked every generated argument as optional, so the
+                // JSON Schema advertised no `required` arguments at all (a client
+                // could call `tab.navigate` with no URL and only learn it was
+                // needed from the failure).
                 val defaultValue = when {
                     p.defaultValue != null && p.type.equals("String", ignoreCase = true) -> unquote(p.defaultValue)
                     p.defaultValue != null -> p.defaultValue
-                    else -> ""
+                    else -> null
                 }
-                val arg = ToolSpec.Arg(p.name, p.type, defaultValue)
+                val arg = ToolSpec.Arg(p.name, p.type, defaultValue?.takeIf { it.isNotBlank() })
                 arguments.add(arg)
             }
 

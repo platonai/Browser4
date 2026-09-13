@@ -352,13 +352,19 @@ class Browser4MCPServer(
     /**
      * Build a [ToolSchema] from a [ToolSpec], mapping Kotlin type names to JSON Schema types.
      *
+     * Each property carries the argument's documented meaning (falling back to its
+     * callable form, `depth: Int = 1`) and its declared default — a client that
+     * only reads `tools/list` can therefore call the tool without guessing.
+     * Naming the property instead of describing it (`"url": {"description": "url"}`)
+     * was the old behaviour and told an agent nothing.
+     *
      * Every tool also accepts the optional [SESSION_ID_PARAM] handle; it is read
      * separately from the spec arguments and is never required.
      */
     private fun buildSchemaFromSpec(spec: ToolSpec): ToolSchema {
         val props = linkedMapOf<String, JsonObject>()
-        for (arg in spec.arguments) {
-            props[arg.name] = typeToJsonProp(arg.type, arg.name)
+        for (argSpec in spec.arguments) {
+            props[argSpec.name] = typeToJsonProp(argSpec)
         }
         props[SESSION_ID_PARAM] = stringProp(sessionIdDescription())
 
@@ -381,17 +387,42 @@ class Browser4MCPServer(
     }
 
     /**
+     * Map one declared argument to a JSON Schema property descriptor.
+     */
+    private fun typeToJsonProp(argSpec: ToolSpec.Arg): JsonObject {
+        val name = argSpec.name
+        val description = argSpec.description?.takeIf { it.isNotBlank() } ?: argSpec.expression
+        val typed = typeToJsonProp(argSpec.type, description)
+        val default = argSpec.defaultValue?.let { defaultValueProp(it, argSpec.type) }
+        return if (default == null) typed else JsonObject(typed + ("default" to default))
+    }
+
+    /**
+     * Render a declared default with the JSON type its argument declares, so
+     * `depth: Int = 1` becomes `"default": 1` and not the string `"1"`.
+     */
+    private fun defaultValueProp(raw: String, type: String): JsonPrimitive {
+        val normalised = type.trimEnd('?').trim().lowercase()
+        return when (normalised) {
+            "int", "integer", "long", "short" -> raw.toLongOrNull()?.let { JsonPrimitive(it) } ?: JsonPrimitive(raw)
+            "double", "float", "number" -> raw.toDoubleOrNull()?.let { JsonPrimitive(it) } ?: JsonPrimitive(raw)
+            "boolean", "bool" -> raw.toBooleanStrictOrNull()?.let { JsonPrimitive(it) } ?: JsonPrimitive(raw)
+            else -> JsonPrimitive(raw)
+        }
+    }
+
+    /**
      * Map a Kotlin type string to a JSON Schema property descriptor.
      */
-    private fun typeToJsonProp(type: String, name: String): JsonObject {
+    private fun typeToJsonProp(type: String, description: String): JsonObject {
         val normalised = type.trimEnd('?').trim()
         return when {
-            normalised.startsWith("List<") || normalised.startsWith("Array<") -> arrayProp(name)
-            normalised.lowercase() in setOf("string") -> stringProp(name)
-            normalised.lowercase() in setOf("int", "integer", "long", "short") -> intProp(name)
-            normalised.lowercase() in setOf("double", "float", "number") -> numberProp(name)
-            normalised.lowercase() in setOf("boolean", "bool") -> boolProp(name)
-            else -> stringProp(name)
+            normalised.startsWith("List<") || normalised.startsWith("Array<") -> arrayProp(description)
+            normalised.lowercase() in setOf("string") -> stringProp(description)
+            normalised.lowercase() in setOf("int", "integer", "long", "short") -> intProp(description)
+            normalised.lowercase() in setOf("double", "float", "number") -> numberProp(description)
+            normalised.lowercase() in setOf("boolean", "bool") -> boolProp(description)
+            else -> stringProp(description)
         }
     }
 
