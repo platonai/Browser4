@@ -8,6 +8,15 @@
 
 ## 1. 现状与既有结论（实测）
 
+> **Phase 0 已完成（2026-09-13，提交 `f6692f123c` + 本阶段后续提交）**：
+> - `0.1` schema 参数描述改为 `Arg.description ?: Arg.expression`，并输出按类型渲染的 `default`；`crawl_submit` 现在给出 `required: ["url"]`、`depth: {description: "depth: Int = 1", default: 1}`。
+> - `0.2` `ToolSpec.expression` 不再打印 `Arg(name=…)`；`help{crawl,submit}` → `crawl.submit(url: String, depth: Int = 1, args: String = "")`。顺带修掉更严重的既有缺陷：`extractInterface` 把「无默认值」写成空串，导致**所有源码生成的参数都被标成可选**（`required` 恒空）。新增 `ToolSpecSnapshotRegenerator`（`-DregenerateSpecSnapshots=true`）重生成 `code-mirror` 快照。
+> - `0.3` 新增 `ToolTargetResolver`（agentic）+ `CustomToolTargets`（rest，控制器与标准 server 共用）；`ToolExecutor.requiresReceiver` 区分「服务自持」执行器；`command` 域改为经 `CustomToolRegistry` 直接派发。实测：`memory_search`/`experience_list`/`crawl_status`/`command_status`/`webdb_normalize`/`experience_query`/`html_snapshot_summary`/`skill_list` 均可执行（此前只有 `skill_*`）。
+> - `0.4`（验证中发现的阻断项）标准 server 此前**只透传已声明参数**，而 `tab.navigate` 声明的是 `userTypedUrl` → 客户端发 `{"url": …}` 被丢弃，最基本的导航在 A 上不可用。现改为「声明参数按类型转换 + 其余原样透传」，与 B 对齐；实测 `navigate{"url"}` → `title` → `html_snapshot_summary` 全链路通过。
+> - `0.6` `ToolSpecLint` + `ToolSpecLintTest` 进测试：错误级（空描述、签名泄漏、重复签名、kebab `cliName`）必须为零；当前报告 **117 个生成 spec / 175 条文档告警**，即 Phase 1 的量化待办。
+
+仍在的缺口，构成本计划后续阶段的前置项：
+
 已修复（本分支）：`2cc9936865`（插件域晚注册导致 A 少 26 个工具）、`2e191e8e59`（stateless 传输）、`913e3cf82d`（工具面/命名/结果/会话对齐）。
 
 仍在的缺口，构成本计划的前置项：
@@ -68,16 +77,16 @@ data class Arg(
 
 ## 3. 阶段与需求映射
 
-### Phase 0 · 前置止血（1 周，阻塞后续所有阶段）
+### Phase 0 · 前置止血（已完成，见 §1 摘要）
 
-| 任务 | 对应缺口 | 改动点 | 验收 |
-|---|---|---|---|
-| 0.1 修 schema 参数描述与默认值 | G1 | `Browser4MCPServer.buildSchemaFromSpec/typeToJsonProp`：property `description` 用 `Arg.description ?: Arg.expression`，输出 `default`，`enum` | 无任何 property 的 description 等于其 name；`crawl_submit` 显示 `depth: Int = 1` |
-| 0.2 修 `ToolSpec.expression` | G2 | `Models.kt:96-100` 改 `joinToString { it.expression }`；重生成 `code-mirror/*-tool-call-specs.json`；复核 `SourceCodeToToolCallTest` | `help{crawl,submit}` 输出 `crawl.submit(url: String, depth: Int = 1, args: String = "")` |
-| 0.3 `ToolTargetResolver`（让公布的工具真能跑） | G3 | agentic 新增解析器接口（仿 `ToolManagerResolver`）+ `browser4-rest` 侧复用 `dispatchToCustomExecutor` 的 receiver 解析；无 target 时**不公告**该工具或公告但标注 `unavailable` | 26 个插件域工具中可执行数从 11 → 26（或未绑定时明确不公告） |
-| 0.4 统一未知参数策略 | G4 | 抽 `ToolSpecValidator` 雏形；声明 `allowAdditionalArgs`；`crawl.sql/urls` 补进 spec | A/B 对同一非法输入给同一错误 |
-| 0.5 修 B 的工具列表缓存 | G5 | 只缓存静态段，`CustomToolRegistry` 与活跃会话每次重扫 | `open_session` 后 `/mcp/tools` 增长；晚注册域不再丢失 |
-| 0.6 spec lint（新增测试门禁） | G1/G2/G6 | `ToolSpecLintTest`：每个工具必须有 description、help、每个 Arg 有 description、示例可解析 | CI 失败条件，覆盖 A 全部 248 工具 |
+| 任务 | 对应缺口 | 状态 |
+|---|---|---|
+| 0.1 修 schema 参数描述与默认值 | G1 | ✅ |
+| 0.2 修 `ToolSpec.expression` + 重生成快照（含 `extractInterface` 空默认值） | G2 | ✅ |
+| 0.3 `ToolTargetResolver` + `requiresReceiver` + command 派发 | G3 | ✅ |
+| 0.4 未知参数策略（A 与 B 对齐：声明参数转换 + 其余透传） | G4 | ✅（严格校验/未知参数报错留给 Phase 2 的 `mcp.strictArgs`） |
+| 0.5 修 B 的工具列表缓存 | G5 | ⏳ 未做（Phase 4 缓存项一并处理） |
+| 0.6 spec lint | G1/G2/G6 | ✅ |
 
 ### Phase 1 · 文档与示例（需求 1、2；1.5 周）
 

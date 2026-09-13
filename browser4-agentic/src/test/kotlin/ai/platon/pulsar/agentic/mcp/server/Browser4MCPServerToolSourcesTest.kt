@@ -1,11 +1,13 @@
 package ai.platon.pulsar.agentic.mcp.server
 
+import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -14,10 +16,11 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 
 /**
- * P0: the standard MCP server must expose the plugin/business tool domains that
- * live in [ai.platon.pulsar.agentic.tools.CustomToolRegistry], not only the
- * built-in executors of the [AgentToolManager] — otherwise an external MCP client
- * sees a fraction of what the private dispatcher offers.
+ * The standard MCP server must expose the plugin/business tool domains that live
+ * in [ai.platon.pulsar.agentic.tools.CustomToolRegistry], not only the built-in
+ * executors of the [AgentToolManager] — otherwise an external MCP client sees a
+ * fraction of what the private dispatcher offers — and it must also be able to
+ * *execute* them (receiver binding via [ToolTargetResolver]).
  */
 @DisplayName("Browser4MCPServer tool discovery sources")
 class Browser4MCPServerToolSourcesTest {
@@ -128,6 +131,90 @@ class Browser4MCPServerToolSourcesTest {
         assertEquals("exported", toolResultText(server.invokeTool("webdb_export")))
         coVerify(exactly = 1) {
             toolManager.execute(match { it.domain == "webdb" && it.method == "export" })
+        }
+    }
+
+    @Test
+    @DisplayName("a custom-domain call binds the receiver the target resolver supplies")
+    fun customDomainCallBindsResolvedTarget() = runBlocking {
+        val executor = FakeToolExecutor("html_snapshot", listOf("readability"))
+        val resolvedTarget = Any()
+        toolManager = mockk(relaxed = true)
+        every { toolManager.registeredExecutors } returns
+                mapOf("tab" to FakeToolExecutor("tab", listOf("navigate")))
+        val server = Browser4MCPServer(
+            toolManager = toolManager,
+            serverInfo = Implementation(name = "browser4-test", version = "0.0.0"),
+            customExecutors = { listOf(executor) },
+            frontendAliases = emptyList(),
+            toolTargetResolver = ToolTargetResolver { resolved, sessionId ->
+                if (resolved === executor && sessionId == "s1") resolvedTarget else null
+            },
+        )
+        coEvery { toolManager.execute(any()) } returns mcpToolCallResult(value = "ok")
+
+        server.invokeTool("html_snapshot_readability", mcpArgs("sessionId" to "s1"))
+
+        verify(exactly = 1) { toolManager.registerCustomTarget("html_snapshot", resolvedTarget) }
+    }
+
+    @Test
+    @DisplayName("a resolver that yields nothing leaves the dispatcher's own error intact")
+    fun resolverWithoutTargetKeepsExistingBehaviour() = runBlocking {
+        val executor = FakeToolExecutor("html_snapshot", listOf("readability"))
+        toolManager = mockk(relaxed = true)
+        every { toolManager.registeredExecutors } returns
+                mapOf("tab" to FakeToolExecutor("tab", listOf("navigate")))
+        val server = Browser4MCPServer(
+            toolManager = toolManager,
+            serverInfo = Implementation(name = "browser4-test", version = "0.0.0"),
+            customExecutors = { listOf(executor) },
+            frontendAliases = emptyList(),
+            toolTargetResolver = ToolTargetResolver { _, _ -> null },
+        )
+        coEvery { toolManager.execute(any()) } returns mcpToolCallResult(value = "ok")
+
+        server.invokeTool("html_snapshot_readability")
+
+        verify(exactly = 0) { toolManager.registerCustomTarget(any(), any()) }
+    }
+
+    @Test
+    @DisplayName("arguments the spec does not declare are forwarded, not dropped")
+    fun undeclaredArgumentsAreForwarded() = runBlocking {
+        // `tab.navigate` declares `userTypedUrl`, but clients (and the driver) use
+        // `url`; silently discarding it made the most basic tool unusable. Declared
+        // arguments keep their spec type, undeclared ones travel unchanged.
+        toolManager = mockk(relaxed = true)
+        every { toolManager.registeredExecutors } returns
+                mapOf(
+                    "tab" to FakeToolExecutor(
+                        "tab",
+                        listOf("navigate"),
+                        listOf(ToolSpec.Arg("depth", "Int", "1")),
+                    )
+                )
+        val server = Browser4MCPServer(
+            toolManager = toolManager,
+            serverInfo = Implementation(name = "browser4-test", version = "0.0.0"),
+            customExecutors = { emptyList() },
+            frontendAliases = emptyList(),
+        )
+        coEvery { toolManager.execute(any()) } returns mcpToolCallResult(value = "ok")
+
+        server.invokeTool(
+            "navigate",
+            mcpArgs("url" to "https://example.com", "depth" to "2", "sessionId" to "s1"),
+        )
+
+        coVerify(exactly = 1) {
+            toolManager.execute(
+                match { tc ->
+                    tc.arguments["url"] == "https://example.com" &&
+                            tc.arguments["depth"] == 2 &&
+                            !tc.arguments.containsKey("sessionId")
+                }
+            )
         }
     }
 }

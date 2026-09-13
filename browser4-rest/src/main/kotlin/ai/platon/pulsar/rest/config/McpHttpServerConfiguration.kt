@@ -4,13 +4,16 @@ import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.agentic.mcp.server.McpHttpServer
 import ai.platon.pulsar.agentic.mcp.server.ToolManagerResolver
+import ai.platon.pulsar.agentic.mcp.server.ToolTargetResolver
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.api.model.DisplayMode
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.rest.mcp.controller.CustomToolTargets
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.skeleton.PulsarSettings
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
+import org.springframework.context.ApplicationContext
 import org.springframework.boot.context.event.ApplicationReadyEvent
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -98,6 +101,11 @@ class McpHttpServerConfiguration(
      * initialisation order.
      */
     private val sessionManagerProvider: ObjectProvider<PulsarSessionManager>,
+    /**
+     * Used to resolve the collaborating bean an executor declares as its
+     * `receiverClass` (e.g. `UserCommandExecutor` for the `command` domain).
+     */
+    private val applicationContext: ApplicationContext,
 ) {
     private val logger = getLogger(this)
 
@@ -140,6 +148,7 @@ class McpHttpServerConfiguration(
             port = port,
             host = host,
             toolManagerResolver = sessionResolver(agent),
+            toolTargetResolver = customToolTargetResolver(),
             dnsRebindingProtection = dnsRebindingProtection,
             allowedHosts = allowedHosts,
         )
@@ -173,6 +182,28 @@ class McpHttpServerConfiguration(
             }?.agentToolManager
         },
     )
+
+    /**
+     * Resolve the receiver a custom-domain tool needs.
+     *
+     * Without this the standard MCP server advertised the plugin/business domains
+     * but could only execute the ones whose receiver the agent happened to bind —
+     * `memory_*`, `experience_*`, `html_snapshot_*`, `webdb_*`, `crawl_*` and
+     * `command_*` all failed with "no target object is available". The mapping is
+     * shared with the private dispatcher ([CustomToolTargets]) so both channels
+     * resolve a tool the same way.
+     */
+    private fun customToolTargetResolver(): ToolTargetResolver = ToolTargetResolver { executor, sessionId ->
+        val sessionManager = sessionManagerProvider.ifAvailable
+        if (sessionManager == null) {
+            logger.warn("MCP tool target resolution skipped: PulsarSessionManager is not available")
+            null
+        } else {
+            CustomToolTargets(sessionManager) { type ->
+                runCatching { applicationContext.getBean(type) }.getOrNull()
+            }.resolve(executor, sessionId)
+        }
+    }
 
     /**
      * Start the MCP HTTP server once the application is fully initialized.

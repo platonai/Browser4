@@ -15,6 +15,19 @@ interface ToolExecutor {
     val domain: String
     val receiverClass: KClass<*>
 
+    /**
+     * Whether [callFunctionOn] consumes the receiver.
+     *
+     * Executors that hold their collaborators as fields (crawl → `CrawlService`,
+     * memory → a fallback backend, experience → a `KnowledgeStore`) don't need
+     * one, and the dispatcher must not refuse to run them merely because no
+     * target object was bound for their domain — that made every business-domain
+     * tool advertised by the standard MCP server fail with "no target object is
+     * available". Keep `true` (the default) for executors that cast the receiver
+     * (page-bound tools, `html_snapshot` → `ManagedSession`, `command`).
+     */
+    val requiresReceiver: Boolean get() = true
+
     suspend fun callFunctionOn(tc: ToolCall, receiver: Any = Any()): TcEvaluate
 
     fun help(): String

@@ -72,6 +72,7 @@ class McpHttpServer(
     toolManagerResolver: ToolManagerResolver = ToolManagerResolver.single(toolManager),
     customExecutors: () -> List<ToolExecutor> = { CustomToolRegistry.instance.getAllExecutors() },
     frontendAliases: List<McpToolAlias> = McpToolNames.frontendAliases,
+    toolTargetResolver: ToolTargetResolver = ToolTargetResolver.NONE,
     private val dnsRebindingProtection: Boolean = DEFAULT_DNS_REBINDING_PROTECTION,
     private val allowedHosts: List<String>? = null,
 ) {
@@ -104,6 +105,7 @@ class McpHttpServer(
         customExecutors = customExecutors,
         toolManagerResolver = toolManagerResolver,
         frontendAliases = frontendAliases,
+        toolTargetResolver = toolTargetResolver,
     )
 
     private var engine: EmbeddedServer<*, *>? = null

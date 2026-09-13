@@ -29,6 +29,9 @@ class MemoryToolExecutor(
     override val domain = "memory"
     override val receiverClass: KClass<*> = MemoryToolTarget::class
 
+    /** Falls back to [fallbackMemory] when no [MemoryToolTarget] receiver is bound. */
+    override val requiresReceiver: Boolean = false
+
     private val mapper = pulsarObjectMapper()
 
     /**

@@ -14,7 +14,9 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
+import org.springframework.beans.factory.NoSuchBeanDefinitionException
 import org.springframework.beans.factory.ObjectProvider
+import org.springframework.context.ApplicationContext
 
 /**
  * The MCP HTTP server must acquire its session from the Spring-wired
@@ -51,6 +53,16 @@ class McpHttpServerConfigurationTest {
         return provider
     }
 
+    /**
+     * An application context that resolves no beans: the tests only assert how the
+     * MCP server's own session is created, not tool-target routing.
+     */
+    private fun stubApplicationContext(): ApplicationContext {
+        val context = mock<ApplicationContext>()
+        whenever(context.getBean(any<Class<*>>())).thenThrow(NoSuchBeanDefinitionException("stub"))
+        return context
+    }
+
     @Test
     @DisplayName("mcp.http.headless=true forces HEADLESS display mode on the session")
     fun mcpHttpServerForcesHeadlessWhenRequested() {
@@ -58,7 +70,7 @@ class McpHttpServerConfigurationTest {
         val agenticContext = mock<AgenticContext>()
         stubSession(agenticContext)
 
-        McpHttpServerConfiguration(agenticContext, stubSessionManagerProvider()).mcpHttpServer()
+        McpHttpServerConfiguration(agenticContext, stubSessionManagerProvider(), stubApplicationContext()).mcpHttpServer()
 
         verify(agenticContext).getOrCreateSession(PulsarSettings(spa = true, displayMode = DisplayMode.HEADLESS))
     }
@@ -69,7 +81,7 @@ class McpHttpServerConfigurationTest {
         val agenticContext = mock<AgenticContext>()
         stubSession(agenticContext)
 
-        McpHttpServerConfiguration(agenticContext, stubSessionManagerProvider()).mcpHttpServer()
+        McpHttpServerConfiguration(agenticContext, stubSessionManagerProvider(), stubApplicationContext()).mcpHttpServer()
 
         verify(agenticContext).getOrCreateSession(PulsarSettings(spa = true, displayMode = null))
     }
@@ -81,7 +93,7 @@ class McpHttpServerConfigurationTest {
         val agenticContext = mock<AgenticContext>()
         stubSession(agenticContext)
 
-        McpHttpServerConfiguration(agenticContext, stubSessionManagerProvider()).mcpHttpServer()
+        McpHttpServerConfiguration(agenticContext, stubSessionManagerProvider(), stubApplicationContext()).mcpHttpServer()
 
         verify(agenticContext).getOrCreateSession(PulsarSettings(spa = true, displayMode = null))
     }

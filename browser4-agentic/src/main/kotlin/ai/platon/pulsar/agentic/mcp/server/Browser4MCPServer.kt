@@ -12,8 +12,12 @@ import ai.platon.pulsar.common.getLogger
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
 import io.modelcontextprotocol.kotlin.sdk.types.*
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.longOrNull
 
 /**
  * Browser4 MCP Server — exposes browser automation capabilities as MCP tools.
@@ -43,6 +47,8 @@ import kotlinx.serialization.json.JsonPrimitive
  * @param frontendAliases The extra `browser_*` spellings to advertise alongside
  *   the canonical tools. Pass an empty list for a minimal, canonical-only tool
  *   list.
+ * @param toolTargetResolver Supplies the receiver for custom-domain tools so an
+ *   advertised tool is also an executable one; see [ToolTargetResolver].
  */
 class Browser4MCPServer(
     private val toolManager: AgentToolManager,
@@ -50,6 +56,7 @@ class Browser4MCPServer(
     private val customExecutors: () -> List<ToolExecutor> = { CustomToolRegistry.instance.getAllExecutors() },
     private val toolManagerResolver: ToolManagerResolver = ToolManagerResolver.single(toolManager),
     private val frontendAliases: List<McpToolAlias> = McpToolNames.frontendAliases,
+    private val toolTargetResolver: ToolTargetResolver = ToolTargetResolver.NONE,
 ) {
     private val logger = getLogger(this)
 
@@ -317,6 +324,9 @@ class Browser4MCPServer(
      * client's optional session handle; a single-session server returns its one
      * bound manager. An unknown handle is reported as a tool error instead of
      * silently acting on the wrong browser.
+     *
+     * Custom-domain tools additionally need a receiver; the configured
+     * [ToolTargetResolver] binds it so an advertised tool is an executable one.
      */
     private suspend fun callTool(
         toolName: String,
@@ -326,6 +336,8 @@ class Browser4MCPServer(
         val sessionId = sessionIdArg(arguments)
         val resolvedManager = toolManagerResolver.resolve(sessionId)
             ?: return errorResult("Session not found: $sessionId")
+
+        bindCustomDomainTarget(registration, sessionId, resolvedManager)
 
         val args = buildArgsMap(arguments, registration.spec)
         val toolCall = ToolCall(
@@ -347,6 +359,35 @@ class Browser4MCPServer(
                 },
                 onFailure = { errorResult("$toolName failed: ${it.message}") }
             )
+    }
+
+    /**
+     * Bind the receiver a custom-domain tool needs, when the deployment can
+     * supply one.
+     *
+     * Built-in domains resolve their own receiver inside [AgentToolManager]
+     * (`tab` → driver, `fs`, `coding`, …); only registry-sourced domains consult
+     * the custom-target map. Nothing happens when no resolver is configured.
+     */
+    private fun bindCustomDomainTarget(
+        registration: ToolRegistration,
+        sessionId: String?,
+        manager: AgentToolManager,
+    ) {
+        if (registration.source != SOURCE_CUSTOM) return
+        if (toolTargetResolver === ToolTargetResolver.NONE) return
+
+        val executor = customExecutors().firstOrNull { it.domain == registration.domain } ?: return
+        val target = runCatching { toolTargetResolver.resolve(executor, sessionId) }
+            .onFailure {
+                logger.warn(
+                    "Tool target resolution failed | domain={} | {}",
+                    registration.domain, it.message
+                )
+            }
+            .getOrNull()
+            ?: return
+        manager.registerCustomTarget(registration.domain, target)
     }
 
     /**
@@ -427,25 +468,59 @@ class Browser4MCPServer(
     }
 
     /**
-     * Extract all argument values from the MCP request's JSON arguments object into
+     * Extract the argument values from the MCP request's JSON arguments object into
      * a plain [Map] suitable for [ToolCall.arguments].
      *
-     * Only declared spec arguments are forwarded: the session handle was already
-     * consumed by [callTool] and must not leak into the tool implementation.
+     * Declared spec arguments are type-coerced, **and everything else the client
+     * sent is forwarded unchanged** (except the session handle, which [callTool]
+     * already consumed). Dropping undeclared arguments silently broke the most
+     * basic calls: `tab.navigate` declares `userTypedUrl`/`entry`, so a client
+     * sending the natural `{"url": …}` (which the driver accepts, and which the
+     * private dispatcher forwards) had its URL discarded and got
+     * "navigate requires 'url' or ('rawUrl','pageUrl')". Both channels now behave
+     * the same; an executor that rejects extra arguments says so explicitly.
      */
     private fun buildArgsMap(arguments: JsonObject?, spec: ToolSpec): Map<String, Any?> {
         if (arguments == null) return emptyMap()
-        return spec.arguments.mapNotNull { argSpec ->
-            val raw = arg(arguments, argSpec.name) ?: return@mapNotNull null
-            val value: Any? = when {
-                argSpec.type.trimEnd('?').lowercase() in setOf("int", "integer") -> raw.toIntOrNull() ?: raw
-                argSpec.type.trimEnd('?').lowercase() == "long" -> raw.toLongOrNull() ?: raw
-                argSpec.type.trimEnd('?').lowercase() in setOf("double", "float") -> raw.toDoubleOrNull() ?: raw
-                argSpec.type.trimEnd('?').lowercase() in setOf("boolean", "bool") -> raw.toBooleanStrictOrNull() ?: raw
-                else -> raw
-            }
-            argSpec.name to value
-        }.toMap()
+        val declared = spec.arguments.associateBy { it.name }
+
+        val mapped = linkedMapOf<String, Any?>()
+        for ((key, element) in arguments) {
+            if (key == SESSION_ID_PARAM) continue
+            mapped[key] = coerceArgument(element, declared[key])
+        }
+        return mapped
+    }
+
+    /**
+     * Convert one JSON argument: a declared argument follows its spec type, an
+     * undeclared one keeps its natural JSON value (objects/arrays are passed as
+     * their JSON text, which is what the executors parse).
+     */
+    private fun coerceArgument(element: JsonElement, argSpec: ToolSpec.Arg?): Any? {
+        val raw = element.toString().trim('"')
+        if (argSpec == null) return naturalValue(element)
+
+        return when (argSpec.type.trimEnd('?').lowercase()) {
+            "int", "integer" -> raw.toIntOrNull() ?: raw
+            "long" -> raw.toLongOrNull() ?: raw
+            "double", "float" -> raw.toDoubleOrNull() ?: raw
+            "boolean", "bool" -> raw.toBooleanStrictOrNull() ?: raw
+            else -> naturalValue(element)
+        }
+    }
+
+    private fun naturalValue(element: JsonElement): Any? = when (element) {
+        is JsonPrimitive -> when {
+            element.isString -> element.content
+            element.booleanOrNull != null -> element.booleanOrNull
+            element.longOrNull != null -> element.longOrNull
+            element.doubleOrNull != null -> element.doubleOrNull
+            else -> element.content
+        }
+        // Objects/arrays travel as JSON text: executors that declare a structured
+        // parameter either parse the string or accept the raw value.
+        else -> element.toString()
     }
 
     private companion object {

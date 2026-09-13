@@ -41,6 +41,9 @@ class ExperienceToolExecutor(
     override val domain = "experience"
     override val receiverClass: KClass<*> = KnowledgeStore::class
 
+    /** The knowledge store is injected; the receiver is not consumed. */
+    override val requiresReceiver: Boolean = false
+
     private val mapper = pulsarObjectMapper()
 
     init {

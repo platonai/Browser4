@@ -12,7 +12,6 @@ import ai.platon.pulsar.agentic.tools.builtin.CodingToolExecutor
 import ai.platon.pulsar.coding.CodingAgentShell
 import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingWorkspace
-import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -26,7 +25,9 @@ import com.fasterxml.jackson.annotation.Nulls
 import com.fasterxml.jackson.databind.node.ArrayNode
 import jakarta.servlet.http.HttpServletResponse
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
+import org.springframework.context.ApplicationContext
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
@@ -104,7 +105,24 @@ data class PaginationMeta(
 @ConditionalOnBean(PulsarSessionManager::class)
 class MCPToolController(
     private val sessionManager: PulsarSessionManager,
+    /**
+     * Used only to look up the collaborating bean an executor declares as its
+     * `receiverClass` (e.g. `UserCommandExecutor`). Optional so unit tests and
+     * non-Spring embeddings keep working — the lookup then falls back to a
+     * placeholder receiver, which is what those executors expect anyway.
+     */
+    private val applicationContext: ApplicationContext? = null,
 ) {
+    /**
+     * Shared receiver resolution — the very same helper backs the standard MCP
+     * server, so a custom-domain tool cannot behave differently per channel.
+     */
+    private val customToolTargets: CustomToolTargets by lazy {
+        CustomToolTargets(sessionManager) { type ->
+            applicationContext?.let { ctx -> runCatching { ctx.getBean(type) }.getOrNull() }
+        }
+    }
+
     companion object {
         /**
          * Playwright-MCP style frontend tool name aliases: the names an agent
@@ -960,43 +978,13 @@ class MCPToolController(
             toMcpToolName(domain, specMethod) == toolName
         } ?: rawMethod
 
-        // Resolve the receiver: for executors that require a WebDriver (e.g., pptx),
-        // extract the session ID and get the session's driver.
-        // For executors whose receiverClass is PulsarSessionManager (e.g.
-        // HTMLSnapshotToolExecutor), look up the ManagedSession using the
-        // controller's sessionManager and pass it as the receiver.  This
-        // avoids the JVM-global CustomToolRegistry singleton holding a stale
-        // executor whose injected sessionManager belongs to a different Spring
-        // context (e.g. the mock EC server's context).
-        val receiver: Any = if (executor.receiverClass == WebDriver::class) {
-            val sessionId = args["sessionId"]?.toString()
-                ?: request.arguments?.get("sessionId")?.toString()
-            if (sessionId != null) {
-                val managed = sessionManager.getOrRecoverSession(sessionId)
-                if (managed != null) {
-                    try {
-                        managed.driver
-                    } catch (e: Exception) {
-                        logger.warn("Failed to get driver for session {}: {}", sessionId, e.message)
-                        Any()
-                    }
-                } else {
-                    Any()
-                }
-            } else {
-                Any()
-            }
-        } else if (executor.receiverClass == PulsarSessionManager::class) {
-            val sessionId = args["sessionId"]?.toString()
-                ?: request.arguments?.get("sessionId")?.toString()
-            if (sessionId != null) {
-                sessionManager.getOrRecoverSession(sessionId) ?: Any()
-            } else {
-                Any()
-            }
-        } else {
-            Any()
-        }
+        // Resolve the receiver through the same helper the standard MCP server
+        // uses (see CustomToolTargets): page-bound executors get the addressed
+        // session's driver, html_snapshot/webdb get the ManagedSession, and
+        // service-backed executors get the collaborating Spring bean.
+        val sessionId = args["sessionId"]?.toString()
+            ?: request.arguments?.get("sessionId")?.toString()
+        val receiver: Any = customToolTargets.resolve(executor, sessionId) ?: Any()
 
         return try {
             val result = executor.callFunctionOn(ToolCall(domain, method, args.toMutableMap()), receiver)
