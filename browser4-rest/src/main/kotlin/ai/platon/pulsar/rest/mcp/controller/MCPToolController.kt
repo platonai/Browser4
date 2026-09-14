@@ -6,7 +6,10 @@ import ai.platon.pulsar.agentic.model.TcException
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
+import ai.platon.pulsar.agentic.tools.ToolErrorMapper
 import ai.platon.pulsar.agentic.tools.ToolResultTextRenderer
+import ai.platon.pulsar.agentic.tools.specs.ToolSpecValidator
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.CodingToolExecutor
 import ai.platon.pulsar.coding.CodingAgentShell
@@ -58,6 +61,14 @@ data class MCPToolCallResponse(
     @param:JsonSetter(nulls = Nulls.SKIP)
     @param:JsonProperty("isError")
     val isError: Boolean = false,
+    /**
+     * Stable failure code (see `ToolErrorCode`); absent on success. Clients that
+     * predate it simply ignore the field.
+     */
+    @get:JsonProperty("errorCode")
+    @param:JsonSetter(nulls = Nulls.SKIP)
+    @param:JsonProperty("errorCode")
+    val errorCode: String? = null,
     @get:JsonProperty("_pagination")
     @param:JsonProperty("_pagination")
     val pagination: PaginationMeta? = null
@@ -122,6 +133,9 @@ class MCPToolController(
             applicationContext?.let { ctx -> runCatching { ctx.getBean(type) }.getOrNull() }
         }
     }
+
+    /** Same validation rules as the standard MCP server (see ToolSpecValidator). */
+    private val validator = ToolSpecValidator.fromSystemProperties()
 
     companion object {
         /**
@@ -842,6 +856,11 @@ class MCPToolController(
         // Extract domain from tool name and try CustomToolRegistry
         val domain = extractDomain(toolName)
         val customExecutor = CustomToolRegistry.instance.get(domain)
+
+        // Reject malformed calls before any dispatch, with the same rules (and
+        // codes) the standard MCP server applies.
+        validateArguments(toolName, domain, customExecutor, args)?.let { return it }
+
         if (customExecutor != null) {
             // Restore sessionId stripped by normalizeToolArguments — custom executors
             // (e.g. webdb_export) may need it.
@@ -948,6 +967,48 @@ class MCPToolController(
         // 2) Fall back to legacy first-underscore splitting.
         val underscoreIndex = toolName.indexOf('_')
         return if (underscoreIndex > 0) toolName.substring(0, underscoreIndex) else toolName
+    }
+
+    /**
+     * Reject a call that violates its own published schema.
+     *
+     * The rules and the resulting codes are the ones the standard MCP server
+     * applies ([ToolSpecValidator]), so `/mcp/call-tool` and `POST /mcp` answer
+     * the same way for the same bad input. `sessionId` is a transport-level
+     * argument here and is never treated as unknown.
+     *
+     * @return the error response to return, or `null` when the call is valid
+     */
+    private fun validateArguments(
+        toolName: String,
+        domain: String,
+        customExecutor: ToolExecutor?,
+        args: Map<String, Any?>,
+    ): ResponseEntity<MCPToolCallResponse>? {
+        if (!ToolSpecValidator.validationEnabled()) return null
+
+        val spec = customExecutor?.getToolSpecs()?.get(methodNameOf(toolName, domain, customExecutor))
+            ?: return null
+
+        val violations = validator.validate(spec, args)
+        if (violations.isEmpty()) return null
+        return ResponseEntity.ok(
+            errorResponse(violations.joinToString("; ") { it.message }, violations.first().code)
+        )
+    }
+
+    /** The executor's native method name for an advertised tool name. */
+    private fun methodNameOf(
+        toolName: String,
+        domain: String,
+        executor: ToolExecutor,
+    ): String {
+        executor.getToolSpecs().keys.firstOrNull { toMcpToolName(domain, it) == toolName }?.let { return it }
+        return when {
+            toolName.startsWith("${domain}_") -> toolName.substring(domain.length + 1)
+            toolName.startsWith("${domain}.") -> toolName.substring(domain.length + 1)
+            else -> toolName
+        }
     }
 
     /**
@@ -1331,8 +1392,22 @@ class MCPToolController(
     private fun textResponse(text: String, pagination: PaginationMeta?): MCPToolCallResponse =
         MCPToolCallResponse(content = listOf(MCPContent(text = text)), pagination = pagination)
 
-    private fun errorResponse(message: String): MCPToolCallResponse =
-        MCPToolCallResponse(content = listOf(MCPContent(text = "ERROR: $message")), isError = true)
+    /**
+     * Build an error response carrying a stable code.
+     *
+     * The code is derived from the message (see [ToolErrorMapper]) so every
+     * existing failure path gains one without being rewritten, appears in the
+     * text after the `ERROR:` prefix for backward compatibility, and travels in
+     * the `errorCode` field for clients that branch on it.
+     */
+    private fun errorResponse(
+        message: String,
+        code: ToolErrorCode = ToolErrorMapper.classifyMessage(message),
+    ): MCPToolCallResponse = MCPToolCallResponse(
+        content = listOf(MCPContent(text = "ERROR: [${code.wire}] $message")),
+        isError = true,
+        errorCode = code.wire,
+    )
 
     /**
      * Build an error message for a tool call failure, enriching it with

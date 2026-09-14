@@ -5,6 +5,25 @@
 
 137 tools across 9 domains.
 
+## Error codes
+
+| Code | Retryable | HTTP | Meaning / what to do |
+|---|---|---|---|
+| `INVALID_ARGUMENT` | no | 400 | Check the value against the tool's input schema. |
+| `MISSING_REQUIRED_ARG` | no | 400 | Provide the required argument (call `help {domain, method}` for the exact signature). |
+| `UNKNOWN_ARGUMENT` | no | 400 | Remove the argument or check the tool's input schema. |
+| `UNKNOWN_TOOL` | no | 404 | List the tools (`tools/list`) and call one of those names. |
+| `SESSION_NOT_FOUND` | no | 404 | Open a session first or pass an existing sessionId. |
+| `SESSION_UNHEALTHY` | yes | 409 | Re-open the session; the browser may have exited. |
+| `TARGET_UNAVAILABLE` | no | 503 | The domain is registered but has no bound receiver in this deployment. |
+| `RATE_LIMITED` | yes | 429 | Wait for the reported retry-after and retry. |
+| `TIMEOUT` | yes | 504 | Retry with a longer timeout, or poll the task status. |
+| `CDP_ERROR` | yes | 502 | The browser refused the command; retrying may help. |
+| `UPSTREAM_ERROR` | yes | 502 | An upstream service failed; retrying may help. |
+| `CONFLICT` | yes | 409 | Re-read the resource and retry. |
+| `CANCELLED` | no | 499 | The task was cancelled; submit a new one if still needed. |
+| `INTERNAL` | no | 500 | Unexpected failure; check the server log for the request id. |
+
 ## Domain `browser`
 
 ### `browser_close_tab`

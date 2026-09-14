@@ -6,7 +6,10 @@ import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
+import ai.platon.pulsar.agentic.tools.ToolErrorMapper
 import ai.platon.pulsar.agentic.tools.ToolResultTextRenderer
+import ai.platon.pulsar.agentic.tools.specs.ToolSpecValidator
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.common.getLogger
 import io.modelcontextprotocol.kotlin.sdk.server.Server
@@ -59,6 +62,9 @@ class Browser4MCPServer(
     private val toolTargetResolver: ToolTargetResolver = ToolTargetResolver.NONE,
 ) {
     private val logger = getLogger(this)
+
+    /** Shared with the private dispatcher so both channels reject the same calls. */
+    private val validator = ToolSpecValidator.fromSystemProperties()
 
     /** Advertised tools by MCP name; kept so calls can be routed after registration. */
     private val registrations = linkedMapOf<String, ToolRegistration>()
@@ -146,9 +152,29 @@ class Browser4MCPServer(
     private fun textResult(text: String): CallToolResult =
         CallToolResult(content = listOf(TextContent(text = text)))
 
-    private fun errorResult(message: String): CallToolResult {
-        logger.warn("MCP tool error: {}", message)
-        return CallToolResult(content = listOf(TextContent(text = "ERROR: $message")), isError = true)
+    /**
+     * Build an error result carrying a stable [ToolErrorCode].
+     *
+     * The code appears in the text (after the `ERROR:` prefix, so existing
+     * matchers keep working) and in `_meta`, together with `retryable` and a
+     * `hint` — a client can therefore branch on the code instead of the prose.
+     */
+    private fun errorResult(
+        message: String,
+        code: ToolErrorCode = ToolErrorMapper.classifyMessage(message),
+    ): CallToolResult {
+        logger.warn("MCP tool error [{}]: {}", code.wire, message)
+        return CallToolResult(
+            content = listOf(TextContent(text = "ERROR: [${code.wire}] $message")),
+            isError = true,
+            meta = JsonObject(
+                mapOf(
+                    "errorCode" to JsonPrimitive(code.wire),
+                    "retryable" to JsonPrimitive(code.retryable),
+                    "hint" to JsonPrimitive(code.hint),
+                )
+            ),
+        )
     }
 
     // -------------------------------------------------------------------------
@@ -333,7 +359,7 @@ class Browser4MCPServer(
      */
     internal suspend fun invokeTool(toolName: String, arguments: JsonObject? = null): CallToolResult {
         val registration = registrations[toolName]
-            ?: return errorResult("Unknown tool: $toolName")
+            ?: return errorResult("Unknown tool: $toolName", ToolErrorCode.UNKNOWN_TOOL)
         return callTool(toolName, registration, arguments)
     }
 
@@ -355,11 +381,13 @@ class Browser4MCPServer(
     ): CallToolResult {
         val sessionId = sessionIdArg(arguments)
         val resolvedManager = toolManagerResolver.resolve(sessionId)
-            ?: return errorResult("Session not found: $sessionId")
+            ?: return errorResult("Session not found: $sessionId", ToolErrorCode.SESSION_NOT_FOUND)
 
         bindCustomDomainTarget(registration, sessionId, resolvedManager)
 
         val args = buildArgsMap(arguments, registration.spec)
+        validateArguments(registration.spec, args)?.let { return it }
+
         val toolCall = ToolCall(
             domain = registration.domain,
             method = registration.method,
@@ -372,13 +400,33 @@ class Browser4MCPServer(
                     val evaluate = result.evaluate
                     val exception = evaluate.exception
                     if (exception != null) {
-                        errorResult("$toolName failed: ${exception.cause?.message ?: exception.expression}")
+                        errorResult(
+                            "$toolName failed: ${exception.cause?.message ?: exception.expression}",
+                            ToolErrorMapper.classify(exception.cause),
+                        )
                     } else {
                         textResult(ToolResultTextRenderer.render(evaluate))
                     }
                 },
-                onFailure = { errorResult("$toolName failed: ${it.message}") }
+                onFailure = { errorResult("$toolName failed: ${it.message}", ToolErrorMapper.classify(it)) }
             )
+    }
+
+    /**
+     * Reject a malformed call before it reaches the executor.
+     *
+     * Nothing is dispatched on the browser when the request violates its own
+     * published schema, which keeps retries idempotent and gives the client an
+     * actionable code (`MISSING_REQUIRED_ARG` / `INVALID_ARGUMENT`) plus the
+     * signature it should have used.
+     *
+     * @return the error result to return, or `null` when the call is valid
+     */
+    private fun validateArguments(spec: ToolSpec, args: Map<String, Any?>): CallToolResult? {
+        if (!ToolSpecValidator.validationEnabled()) return null
+        val violations = validator.validate(spec, args)
+        if (violations.isEmpty()) return null
+        return errorResult(violations.joinToString("; ") { it.message }, violations.first().code)
     }
 
     /**

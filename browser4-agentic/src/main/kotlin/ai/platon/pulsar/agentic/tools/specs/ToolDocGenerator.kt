@@ -2,6 +2,7 @@ package ai.platon.pulsar.agentic.tools.specs
 
 import ai.platon.pulsar.agentic.mcp.McpToolNames
 import ai.platon.pulsar.agentic.model.ToolSpec
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
 
 /**
@@ -83,6 +84,7 @@ object ToolDocGenerator {
         appendLine()
         appendLine("${docs.size} tools across ${docs.map { it["domain"] }.distinct().size} domains.")
         appendLine()
+        appendErrorCodes(this)
 
         val byDomain = docs.groupBy { it["domain"] as String }
         for ((domain, tools) in byDomain.entries.sortedBy { it.key }) {
@@ -92,6 +94,25 @@ object ToolDocGenerator {
                 appendTool(this, tool)
             }
         }
+    }
+
+    /**
+     * The shared failure vocabulary.
+     *
+     * Every tool reports failures with these codes — in the result text
+     * (`ERROR: [CODE] …`), in the MCP result `_meta.errorCode`, and in the
+     * private dispatcher's `errorCode` field — so a client can branch on the
+     * code instead of matching prose.
+     */
+    private fun appendErrorCodes(out: StringBuilder) {
+        out.appendLine("## Error codes")
+        out.appendLine()
+        out.appendLine("| Code | Retryable | HTTP | Meaning / what to do |")
+        out.appendLine("|---|---|---|---|")
+        for (code in ToolErrorCode.entries) {
+            out.appendLine("| `${code.wire}` | ${if (code.retryable) "yes" else "no"} | ${code.httpStatus} | ${code.hint} |")
+        }
+        out.appendLine()
     }
 
     private fun appendTool(out: StringBuilder, tool: Map<String, Any?>) {
