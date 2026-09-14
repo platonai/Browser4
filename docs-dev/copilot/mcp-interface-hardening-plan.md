@@ -118,7 +118,17 @@ data class Arg(
 - 2.3 CLI：`browser4-cli crawl submit --help --examples`（`help.rs`/`tips.rs` 同步）。
 - **验收**：示例**可执行**——Phase 6 的契约测试直接以示例作为 happy-path 入参（文档漂移即测试失败）。
 
-### Phase 2 · 校验与错误码（需求 4、5、6；1.5 周）
+### Phase 2 · 校验与错误码（需求 4、5、6；4/5 已完成 2026-09-13，提交 `547f5c7e1e`；6 未做）
+
+**已落地**
+- `ToolErrorCode`：14 个稳定码，每个带 `retryable` / `httpStatus` / `hint`；`ToolErrorMapper` 按异常类型 + 消息（含 cause 链）分类，且匹配执行器既有措辞 → 老失败路径无需改写即获得错误码。
+- 呈现：A 在结果 `_meta` 给 `{errorCode, retryable, hint}`，文本为 `ERROR: [CODE] …`；B 在响应里加 `errorCode` 字段，文本前缀一致；`docs/mcp-tools.md` 生成错误码表。向后兼容（额外字段 + 相同前缀）。
+- `ToolSpecValidator`：两通道分发**前**统一校验——缺必填（`MISSING_REQUIRED_ARG`，消息回显 Phase 1 的精确签名）、类型错（`INVALID_ARGUMENT`）、未声明参数（仅 `-Dmcp.strictArgs=true` 时报 `UNKNOWN_ARGUMENT`）。默认放行未声明参数是刻意的：执行器确实读取未声明的合法参数（crawl 的 `sql`/`urls`）。`-Dmcp.validateArgs=false` 可整体关闭。校验不通过不进入执行器，重试保持幂等。
+- 实测：两通道对同一非法输入返回同码同文案；A 的 `_meta` 实测为 `{"errorCode":"MISSING_REQUIRED_ARG","retryable":false,"hint":"…"}`。
+
+**未做（需求 6，返回值校验）**
+- `ToolSpec.outputSchema` + MCP `Tool.outputSchema` / `structuredContent`、`ToolResultValidator`（dev fail / prod warn + 指标）、任务类工具统一信封 `{taskId,status,pollAfterMs,statusTool}`。
+- 需要先定：JSON Schema 校验用哪个库（避免为一个校验函数引入重依赖，可先做「信封 + 必填字段」级别的浅校验）。
 
 **需求 4 — 完善接口错误码**
 - 4.1 `ToolErrorCode` 枚举（稳定字符串）：`INVALID_ARGUMENT`、`MISSING_REQUIRED_ARG`、`UNKNOWN_TOOL`、`UNKNOWN_ARGUMENT`、`SESSION_NOT_FOUND`、`SESSION_UNHEALTHY`、`TARGET_UNAVAILABLE`（G3 场景）、`RATE_LIMITED`（9）、`TIMEOUT`、`CDP_ERROR`、`UPSTREAM_ERROR`、`CONFLICT`、`CANCELLED`（11）、`INTERNAL`；每码带 `retryable`、`httpStatus`、`hint`。
