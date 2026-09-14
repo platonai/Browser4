@@ -1392,6 +1392,35 @@ class MCPToolControllerTest {
     }
 
     // =========================================================================
+    // /mcp/tools — static + session segments
+    // =========================================================================
+
+    @Test
+    fun `the tool list grows when a session appears`() {
+        // No session yet: the CLI's readiness probe must still see the static set.
+        `when`(sessionManager.getAllSessions()).thenReturn(emptyList())
+        val before = listedTools()
+
+        assertTrue(before.contains("open_session"), "the static segment is always advertised")
+        assertTrue(before.contains("browser_navigate"), "aliases are advertised before a session exists")
+        assertFalse(before.contains("navigate"), "session tools cannot be enumerated without a session")
+
+        // A session appears: the very next probe must add its tools. Freezing the
+        // first enumeration is what made the browser tools invisible forever (G5).
+        mockLiveNavigateSpec()
+        val after = listedTools()
+
+        assertTrue(after.contains("navigate"), "the session's tools must appear, saw ${after.size} tools")
+        assertTrue(after.containsAll(before), "the static segment must survive the merge")
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun listedTools(): List<String> {
+        val body = controller.listTools(response).body as Map<String, Any?>
+        return (body["tools"] as List<*>).filterIsInstance<String>()
+    }
+
+    // =========================================================================
     // Rate limiting (requirement 9)
     // =========================================================================
 

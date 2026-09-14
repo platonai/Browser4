@@ -435,10 +435,17 @@ class MCPToolController(
     /**
      * List available MCP tools.
      *
-     * Tool specs are static (they come from executor class definitions, not session state),
-     * so we cache the result after the first successful enumeration. This avoids creating
-     * and destroying a throwaway session on every probe — which previously caused a
-     * create→launch-browser→close cycle every time the CLI polled this endpoint.
+     * Two segments, cached differently (finding G5):
+     *
+     * - the **static** segment (session lifecycle, frontend aliases, plugin domains)
+     *   comes from executor class definitions, so it is enumerated once and cached —
+     *   that avoided a create-session/launch-browser/close cycle on every CLI probe;
+     * - the **session** segment (the per-agent tab/system tools) depends on a live
+     *   session, so it is merged per request.
+     *
+     * Caching the two together meant the first probe — typically made before any
+     * session existed — froze the list at the static set, and the browser tools
+     * never appeared afterwards.
      */
     @GetMapping("/tools")
     fun listTools(
@@ -446,64 +453,67 @@ class MCPToolController(
     ): ResponseEntity<Any> {
         addRequestId(response)
 
-        // Fast path: return cached tool names if already computed
-        cachedToolNames?.let {
-            return ResponseEntity.ok(mapOf("tools" to it))
+        val tools = linkedSetOf<String>()
+        tools.addAll(staticToolNames())
+        tools.addAll(sessionToolNames())
+        return ResponseEntity.ok(mapOf("tools" to tools.toList()))
+    }
+
+    /** The session-independent tool names, enumerated once. */
+    private fun staticToolNames(): List<String> =
+        cachedToolNames ?: synchronized(this) {
+            cachedToolNames ?: buildStaticToolNames().also { cachedToolNames = it }
         }
 
-        // Slow path: compute tool names under a lock so only one request
-        // initialises the cache.
-        synchronized(this) {
-            cachedToolNames?.let {
-                return ResponseEntity.ok(mapOf("tools" to it))
-            }
+    private fun buildStaticToolNames(): List<String> {
+        val tools = linkedSetOf(
+            // Session management
+            "open_session", "close_session", "list_sessions",
+            "close_all_sessions", "kill_all_sessions", "delete_session_data",
+            "attach_browser", "check_session_ready",
+        )
 
-            val tools = linkedSetOf(
-                // Session management
-                "open_session", "close_session", "list_sessions",
-                "close_all_sessions", "kill_all_sessions", "delete_session_data",
-                "attach_browser", "check_session_ready",
+        // Include every frontend tool alias so the CLI readiness probe
+        // (which checks for "open_session" + "browser_navigate") passes
+        // without creating a throwaway session that would launch Chrome.
+        tools.addAll(FRONTEND_TOOL_NAME_ALIASES.keys)
+
+        // Composite / convenience tools that map to underlying domain tools.
+        // These should always be advertised, even when no session is active.
+        tools.addAll(
+            listOf(
+                "browser_click",
+                "browser_handle_dialog",
+                "browser_tabs",
             )
+        )
 
-            // Include every frontend tool alias so the CLI readiness probe
-            // (which checks for "open_session" + "browser_navigate") passes
-            // without creating a throwaway session that would launch Chrome.
-            tools.addAll(FRONTEND_TOOL_NAME_ALIASES.keys)
-
-            // Composite / convenience tools that map to underlying domain tools.
-            // These should always be advertised, even when no session is active.
-            tools.addAll(
-                listOf(
-                    "browser_click",
-                    "browser_handle_dialog",
-                    "browser_tabs",
-                )
-            )
-
-            // Enumerate tools from plugin-registered executors in CustomToolRegistry.
-            // These include command, crawl, swarm, skill management, and DOM snapshot tools.
-            CustomToolRegistry.instance.getAllExecutors().forEach { executor ->
-                executor.getToolSpecs().keys.forEach { method ->
-                    tools.add(toMcpToolName(executor.domain, method))
-                }
+        // Enumerate tools from plugin-registered executors in CustomToolRegistry.
+        // These include command, crawl, swarm, skill management, and DOM snapshot tools.
+        CustomToolRegistry.instance.getAllExecutors().forEach { executor ->
+            executor.getToolSpecs().keys.forEach { method ->
+                tools.add(toMcpToolName(executor.domain, method))
             }
+        }
+        return tools.toList()
+    }
 
-            val activeSession = sessionManager.getAllSessions().firstOrNull()
-            if (activeSession != null) {
-                // A real session already exists — enrich with per-agent tools.
-                try {
-                    val agent = activeSession.agenticSession.companionAgent as? BasicBrowserAgent
-                    if (agent != null) {
-                        tools.addAll(collectAdvertisedToolNames(agent.agentToolManager.getAllToolSpecs()))
-                    }
-                } catch (_: Exception) {
-                    // Session may be mid-initialisation; the static set is sufficient.
-                }
-            }
-
-            val result = tools.toList()
-            cachedToolNames = result
-            return ResponseEntity.ok(mapOf("tools" to result))
+    /**
+     * The tools a live session adds.
+     *
+     * Read-only: [PulsarSessionManager.getAllSessions] never creates a session, so a
+     * probe on an idle server costs nothing and still returns a complete answer once
+     * the CLI has opened one.
+     */
+    private fun sessionToolNames(): List<String> {
+        val activeSession = sessionManager.getAllSessions().firstOrNull() ?: return emptyList()
+        return try {
+            val agent = activeSession.agenticSession.companionAgent as? BasicBrowserAgent
+                ?: return emptyList()
+            collectAdvertisedToolNames(agent.agentToolManager.getAllToolSpecs()).toList()
+        } catch (_: Exception) {
+            // Session may be mid-initialisation; the static set is sufficient.
+            emptyList()
         }
     }
 
