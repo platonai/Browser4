@@ -171,7 +171,7 @@ data class Arg(
   - `MetricsConfig.scrape()/close()` 改为容错：`micrometer-registry-prometheus` 是可选的，缺类时 `is PrometheusMeterRegistry` 会抛 `NoClassDefFoundError`，现以 `runCatching` 兜底，`scrapeOf(registry)` / `isPrometheus(registry)` 供 stats 端点判断。
 - **测试**：`ToolInvocationLoggerTest`（脱敏/截断/集合摘要/id 唯一）、`observability/ToolMetricsTest`（按名计数、错误码维度、成功调用不写错误码、per-tool 延迟表、gauge 注册）、`McpStatsControllerTest`（真实数据、错误码归因、字段齐全、top 边界）、`McpToolMetricsConfigurationTest`（有/无 Spring 注册表两条路径）。
 
-**实跑验收中发现并修复的 P0（需求 5 校验引入的回归）**
+**实跑验收中发现并修复的 P0（需求 5 校验引入的回归，提交 `9e4b4cbeb3`）**
 - 现象：A 通道 `navigate {"url": "https://example.com"}` 返回 `ERROR: [MISSING_REQUIRED_ARG] missing required argument 'entry' for tab.navigate(entry: NavigateEntry)` —— 最基础的导航在标准 server 上不可用；B 通道同样调用却通过（B 的字段名前缀归一化后未命中该校验）。
 - 根因：`ToolSpecGenerator` 镜像上游 `WebDriver.kt` 时，**同名重载取最后一个**。`tab.navigate` 的最后一个重载是 `navigate(entry: NavigateEntry)`，于是 schema 对外声明了一个 MCP 客户端**根本无法构造**的对象参数；而 `BrowserTabToolExecutor.callFunctionOn` 真正读的是 `url`（或 `rawUrl`+`pageUrl`）。Phase 0.4 的「未声明参数原样透传」让这个错配一直隐形，Phase 2 的必填校验把它变成硬失败。
 - 影响面（实测 117 个生成 spec 中 10 个方法）：`navigate(NavigateEntry)`、`screenshot(RectD)`、`ariaSnapshot(AriaSnapshotOptions)`、`delay(Duration)`、`waitForPage/waitForFunction/waitForNavigation/waitForSelector(timeout: Duration, action: suspend ())`。
