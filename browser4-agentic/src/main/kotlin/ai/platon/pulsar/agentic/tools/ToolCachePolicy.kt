@@ -76,4 +76,18 @@ object ToolCachePolicy {
 
     /** The methods cached by default — reported by `/api/mcp/cache/stats`. */
     fun defaultCacheableTools(): List<String> = DEFAULT_TTL_MS.keys.sorted()
+
+    /**
+     * Tools that decide their own caching (`batch.run`).
+     *
+     * A batch's cacheability depends on its steps, not on the tool: the same
+     * `batch_run` is a pure replay of cached reads when every step is a read, and a
+     * state change when one step drives the page. The channel therefore leaves the
+     * cache alone for these tools — neither storing nor invalidating — and the tool
+     * does per-step lookups with the same keys (see `BatchToolExecutor`).
+     */
+    private val SELF_MANAGED_TOOLS = setOf("batch.run")
+
+    /** Whether [spec] manages its own cache entries. */
+    fun selfManaged(spec: ToolSpec): Boolean = "${spec.domain}.${spec.method}" in SELF_MANAGED_TOOLS
 }

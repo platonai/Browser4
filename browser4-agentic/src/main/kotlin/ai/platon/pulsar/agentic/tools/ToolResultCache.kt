@@ -59,7 +59,10 @@ class ToolResultCache(
      *   spellings
      */
     fun get(spec: ToolSpec, sessionId: String?, args: Map<String, Any?>, bypass: Boolean = false): Cached? {
-        if (bypass || !enabled || !ToolCachePolicy.cacheable(spec, ttlMultiplierProvider())) return null
+        if (bypass || !enabled) return null
+        // A self-managed tool (batch.run) does its own per-step lookups.
+        if (ToolCachePolicy.selfManaged(spec)) return null
+        if (!ToolCachePolicy.cacheable(spec, ttlMultiplierProvider())) return null
 
         val key = key(spec, sessionId, args) ?: return null
         val entry = entries[key] ?: run { misses.incrementAndGet(); return null }
@@ -97,6 +100,10 @@ class ToolResultCache(
         bypass: Boolean = false,
     ) {
         if (!enabled) return
+
+        // A self-managed tool (batch.run) judges cacheability per step: invalidating
+        // here would wipe the reads its own read-only steps just refreshed.
+        if (ToolCachePolicy.selfManaged(spec)) return
 
         // Invalidate first, and regardless of the outcome: a click that failed
         // halfway may still have changed the page.

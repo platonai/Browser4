@@ -1,5 +1,7 @@
 package ai.platon.pulsar.rest.mcp.controller
 
+import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
+import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.rest.session.ManagedSession
@@ -29,6 +31,12 @@ import ai.platon.pulsar.common.getLogger
 class CustomToolTargets(
     private val sessionManager: PulsarSessionManager,
     private val beanResolver: (Class<*>) -> Any? = { null },
+    /**
+     * Fallback for executors that need an `AgentToolManager` (`batch.run`) when the
+     * addressed session cannot be resolved — e.g. the standard server's own session,
+     * which lives outside the REST session registry.
+     */
+    private val defaultAgentToolManager: () -> AgentToolManager? = { null },
 ) {
     private val logger = getLogger(this)
 
@@ -40,8 +48,27 @@ class CustomToolTargets(
         return when {
             receiverClass == WebDriver::class -> managed?.let { driverOf(it) } ?: PLACEHOLDER
             receiverClass == PulsarSessionManager::class -> managed ?: PLACEHOLDER
+            receiverClass == AgentToolManager::class -> agentToolManager(managed) ?: PLACEHOLDER
             else -> beanResolver(receiverClass.java) ?: PLACEHOLDER
         }
+    }
+
+    /**
+     * The agent tool manager a batch must dispatch through.
+     *
+     * Order: the addressed session, then any live session, then the channel's own
+     * default session. A batch has to run through the *same* executor chain the
+     * calls it replaces would use, so guessing is not an option — but a channel
+     * always has a session by the time a tool call arrives.
+     */
+    private fun agentToolManager(managed: ManagedSession?): AgentToolManager? =
+        managerOf(managed)
+            ?: sessionManager.getAllSessions().firstNotNullOfOrNull { managerOf(it) }
+            ?: runCatching { defaultAgentToolManager() }.getOrNull()
+
+    private fun managerOf(managed: ManagedSession?): AgentToolManager? {
+        val agent = managed?.agenticSession?.companionAgent as? BasicBrowserAgent ?: return null
+        return agent.agentToolManager
     }
 
     private fun resolveSession(sessionId: String?): ManagedSession? {

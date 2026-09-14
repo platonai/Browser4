@@ -2,6 +2,7 @@ package ai.platon.pulsar.rest.mcp.controller
 
 import ai.platon.pulsar.agentic.mcp.McpToolNames
 import ai.platon.pulsar.agentic.model.ToolSpec
+import ai.platon.pulsar.agentic.tools.BatchToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.BrowserTabToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.BrowserToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
@@ -51,6 +52,8 @@ class ToolDocGeneratorTest {
         WebDbToolExecutor(mock<PulsarSessionManager>()),
         HTMLSnapshotToolExecutor(mock<PulsarSessionManager>()),
         SkillMCPToolExecutor(mock<SkillService>()),
+        // The batch primitive both channels advertise (requirement 12).
+        BatchToolExecutor(),
     )
 
     private fun specs(): List<ToolSpec> {

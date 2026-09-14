@@ -6,10 +6,13 @@ import ai.platon.pulsar.agentic.model.TcException
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.observability.ToolMetrics
+import ai.platon.pulsar.agentic.tools.BatchExecutor
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
+import ai.platon.pulsar.agentic.tools.ToolCachePolicy
 import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import ai.platon.pulsar.agentic.tools.ToolErrorMapper
 import ai.platon.pulsar.agentic.tools.ToolInvocationLogger
+import ai.platon.pulsar.agentic.tools.ToolRateLimitPolicy
 import ai.platon.pulsar.agentic.tools.ToolRateLimiter
 import ai.platon.pulsar.agentic.tools.ToolResultCache
 import ai.platon.pulsar.agentic.tools.ToolResultTextRenderer
@@ -175,9 +178,12 @@ class MCPToolController(
      * server, so a custom-domain tool cannot behave differently per channel.
      */
     private val customToolTargets: CustomToolTargets by lazy {
-        CustomToolTargets(sessionManager) { type ->
-            applicationContext?.let { ctx -> runCatching { ctx.getBean(type) }.getOrNull() }
-        }
+        CustomToolTargets(
+            sessionManager,
+            beanResolver = { type ->
+                applicationContext?.let { ctx -> runCatching { ctx.getBean(type) }.getOrNull() }
+            },
+        )
     }
 
     /** Same validation rules as the standard MCP server (see ToolSpecValidator). */
@@ -360,6 +366,13 @@ class MCPToolController(
         val y: Double,
     )
 
+    /**
+     * One step of a `command_batch` response.
+     *
+     * The first block of fields is what the Rust CLI has always parsed; the second
+     * block is the shared per-step envelope (`batch_run` uses exactly these). Both
+     * are present so legacy and new clients read the same payload.
+     */
     private data class BatchExecutionResult(
         val index: Int,
         val ok: Boolean,
@@ -372,6 +385,11 @@ class MCPToolController(
         val snapshot: String? = null,
         val screenshot: String? = null,
         val pdf: String? = null,
+        // Shared envelope additions (requirement 12.2).
+        val id: String? = null,
+        val tool: String? = null,
+        val errorCode: String? = null,
+        val cached: Boolean? = null,
     )
 
     private data class BatchExecutionResponse(
@@ -379,6 +397,10 @@ class MCPToolController(
         val failureCount: Int,
         val stoppedOnError: Boolean,
         val results: List<BatchExecutionResult>,
+        /** `true` only when every executed step was served from the result cache. */
+        val cached: Boolean = false,
+        val cachedSteps: Int = 0,
+        val durationMs: Long = 0,
     )
 
     // =========================================================================
@@ -754,6 +776,16 @@ class MCPToolController(
     // Batch command handler
     // =========================================================================
 
+    /**
+     * `command_batch` — the CLI's batch endpoint, now on the shared [BatchExecutor].
+     *
+     * The execution policy, the per-step envelope and the observability are the ones
+     * `batch_run` uses, so a batch behaves identically whichever channel it came
+     * through. The **response keeps the legacy fields** (`index`, `ok`,
+     * `durationMillis`, `text`/`snapshot`/`screenshot`/`pdf`, `error`, plus
+     * `failureCount`/`stoppedOnError`) and adds the shared ones (`id`, `tool`,
+     * `durationMs`, `errorCode`, `cached`), because the Rust CLI parses this payload.
+     */
     private suspend fun handleCommandBatch(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
         val args = request.arguments ?: emptyMap()
         val stepMaps = (args["steps"] as? List<*>)?.mapIndexed { index, step ->
@@ -764,39 +796,63 @@ class MCPToolController(
 
         val bail = args["bail"].toBooleanValue() ?: false
         val currentSessionId = args["sessionId"]?.toString()?.takeIf { it.isNotBlank() }
-        val results = mutableListOf<BatchExecutionResult>()
-        var stoppedOnError = false
+        val concurrency = (args["concurrency"] as? Number)?.toInt() ?: 1
 
-        for ((index, step) in stepMaps) {
-            val startedAt = System.nanoTime()
-            val result = try {
-                executeBatchStep(index, step, currentSessionId)
-            } catch (e: Exception) {
-                BatchExecutionResult(index = index, ok = false, error = e.message ?: "Unknown batch execution error")
-            }
-            val durationMillis = (System.nanoTime() - startedAt) / 1_000_000
+        val steps = stepMaps.map { (index, step) ->
+            val tool = step[MCPConstants.KEY_TOOL]?.toString()?.takeIf { it.isNotBlank() } ?: "unknown"
+            BatchExecutor.BatchStep(index = index, id = tool, tool = tool, args = step)
+        }
 
-            results += result.copy(durationMillis = durationMillis)
-            if (!result.ok && bail) {
-                stoppedOnError = true
-                break
-            }
+        val executor = BatchExecutor(
+            stepRunner = { step -> executeBatchStep(step.index, step.args, currentSessionId) },
+            readOnly = { tool -> isReadOnlyBatchTool(tool) },
+        )
+        val outcome = executor.run(steps, bail, concurrency)
+
+        val results = outcome.steps.map { step ->
+            BatchExecutionResult(
+                index = step.index,
+                ok = step.ok,
+                durationMillis = step.durationMs,
+                text = step.text,
+                error = step.error,
+                id = step.id,
+                tool = step.tool,
+                errorCode = step.errorCode,
+                cached = step.cached.takeIf { it },
+                pageUrl = step.extras["pageUrl"] as? String,
+                pageTitle = step.extras["pageTitle"] as? String,
+                snapshot = step.extras["snapshot"] as? String,
+                screenshot = step.extras["screenshot"] as? String,
+                pdf = step.extras["pdf"] as? String,
+            )
         }
 
         val body = BatchExecutionResponse(
             sessionId = currentSessionId,
-            failureCount = results.count { !it.ok },
-            stoppedOnError = stoppedOnError,
+            failureCount = outcome.failureCount,
+            stoppedOnError = outcome.stoppedOnError,
             results = results,
+            cached = outcome.cached,
+            cachedSteps = outcome.cachedSteps,
+            durationMs = outcome.durationMs,
         )
         return ResponseEntity.ok(textResponse(pulsarObjectMapper().writeValueAsString(body)))
+    }
+
+    /** Whether a legacy batch step may run in parallel with its siblings. */
+    private fun isReadOnlyBatchTool(tool: String): Boolean {
+        val domain = extractDomain(tool)
+        val spec = CustomToolRegistry.instance.get(domain)?.getToolSpecs()?.get(tool.removePrefix("${domain}_"))
+        val method = spec?.method ?: tool
+        return ToolRateLimitPolicy.isReadOnly(method) && spec != null && ToolCachePolicy.ttlMs(spec) != null
     }
 
     private suspend fun executeBatchStep(
         index: Int,
         step: Map<String, Any?>,
         currentSessionId: String?,
-    ): BatchExecutionResult {
+    ): BatchExecutor.BatchStepResult {
         val op = step[MCPConstants.KEY_OP]?.toString()
             ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_OP)
 
@@ -819,7 +875,7 @@ class MCPToolController(
         index: Int,
         step: Map<String, Any?>,
         currentSessionId: String?
-    ): BatchExecutionResult {
+    ): BatchExecutor.BatchStepResult {
         val sessionId = requireSessionId(currentSessionId)
 
         step[MCPConstants.KEY_PRE_FOCUS_SELECTOR]?.toString()?.takeIf { it.isNotBlank() }?.let {
@@ -838,14 +894,14 @@ class MCPToolController(
 
         val text = executeAgentToolText(tool, arguments)
 
-        return BatchExecutionResult(index = index, ok = true, text = text.ifBlank { null })
+        return BatchExecutor.BatchStepResult(ok = true, text = text.ifBlank { null })
     }
 
     private suspend fun handleBatchSnapshot(
         index: Int,
         step: Map<String, Any?>,
         currentSessionId: String?
-    ): BatchExecutionResult {
+    ): BatchExecutor.BatchStepResult {
         val sessionId = requireSessionId(currentSessionId)
         val tool = step[MCPConstants.KEY_TOOL]?.toString()
             ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
@@ -857,12 +913,9 @@ class MCPToolController(
             executeAgentToolText(MCPConstants.TOOL_PAGE_TITLE, mapOf(MCPConstants.KEY_SESSION_ID to sessionId))
         val snapshot = executeAgentToolText(tool, arguments)
 
-        return BatchExecutionResult(
-            index = index,
+        return BatchExecutor.BatchStepResult(
             ok = true,
-            pageUrl = pageUrl,
-            pageTitle = pageTitle,
-            snapshot = snapshot,
+            extras = mapOf("pageUrl" to pageUrl, "pageTitle" to pageTitle, "snapshot" to snapshot),
         )
     }
 
@@ -870,7 +923,7 @@ class MCPToolController(
         index: Int,
         step: Map<String, Any?>,
         currentSessionId: String?
-    ): BatchExecutionResult {
+    ): BatchExecutor.BatchStepResult {
         val sessionId = requireSessionId(currentSessionId)
         val tool = step[MCPConstants.KEY_TOOL]?.toString()
             ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
@@ -878,14 +931,14 @@ class MCPToolController(
             step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
         val screenshot = executeAgentToolText(tool, arguments)
 
-        return BatchExecutionResult(index = index, ok = true, screenshot = screenshot)
+        return BatchExecutor.BatchStepResult(ok = true, extras = mapOf("screenshot" to screenshot))
     }
 
     private suspend fun handleBatchPdf(
         index: Int,
         step: Map<String, Any?>,
         currentSessionId: String?
-    ): BatchExecutionResult {
+    ): BatchExecutor.BatchStepResult {
         val sessionId = requireSessionId(currentSessionId)
         val tool = step[MCPConstants.KEY_TOOL]?.toString()
             ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
@@ -893,7 +946,7 @@ class MCPToolController(
             step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
         val pdf = executeAgentToolText(tool, arguments)
 
-        return BatchExecutionResult(index = index, ok = true, pdf = pdf)
+        return BatchExecutor.BatchStepResult(ok = true, extras = mapOf("pdf" to pdf))
     }
 
     // =========================================================================

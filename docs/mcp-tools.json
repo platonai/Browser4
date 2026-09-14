@@ -1,5 +1,52 @@
 {
   "tools" : [ {
+    "domain" : "batch",
+    "method" : "run",
+    "mcpNames" : [ "batch_run" ],
+    "signature" : "batch.run(steps: List<Map<String, Any>>, bail: Boolean = false, concurrency: Int = 1, sessionId: String? = null)",
+    "description" : "Run several tool calls as one batch and return a per-step result envelope.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "steps",
+      "type" : "List<Map<String, Any>>",
+      "required" : true,
+      "description" : "Steps to run in order: `[{id?, tool, args}]`. `tool` is any advertised tool name (e.g. `navigate`, `browser_click`, `crawl_submit`). A JSON string is accepted too."
+    }, {
+      "name" : "bail",
+      "type" : "Boolean",
+      "required" : false,
+      "default" : "false",
+      "description" : "Stop at the first failing step instead of running the rest."
+    }, {
+      "name" : "concurrency",
+      "type" : "Int",
+      "required" : false,
+      "default" : "1",
+      "description" : "Run steps in parallel. Only allowed when every step is a read-only tool (max 4); browser work stays serial."
+    }, {
+      "name" : "sessionId",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Session the steps act on; both channels fill this in when the request carries one."
+    } ],
+    "examples" : [ {
+      "title" : "Drive a form and read the result in one call",
+      "args" : {
+        "steps" : "[{\"tool\":\"navigate\",\"args\":{\"url\":\"https://example.com\"}},{\"tool\":\"click\",\"args\":{\"selector\":\"#submit\"}},{\"tool\":\"title\",\"args\":{}}]"
+      },
+      "expectsError" : false
+    }, {
+      "title" : "Read four things in parallel",
+      "args" : {
+        "steps" : "[{\"tool\":\"title\",\"args\":{}},{\"tool\":\"current_url\",\"args\":{}}]",
+        "concurrency" : "2"
+      },
+      "notes" : "Allowed because every step is read-only",
+      "expectsError" : false
+    } ],
+    "help" : "batch.run(steps: List<Map<String, Any>>, bail: Boolean = false, concurrency: Int = 1)\n\nSteps run serially by default, because browser work is stateful: a\nbatch that clicks and then reads must observe the click. Set\nconcurrency>1 only for batches made entirely of read-only tools, or\nthe call is refused instead of silently reordering your steps.\n\nEach step in the answer carries {index, id, tool, ok, durationMs,\ntext, errorCode?, cached?}; the batch carries failureCount,\nstoppedOnError, cached, cachedSteps and durationMs. A batch whose\nsteps are all cacheable reads is replayed from the result cache the\nsecond time it is sent (`cached=true` on the batch and on each step)."
+  }, {
     "domain" : "browser",
     "method" : "closeTab",
     "mcpNames" : [ "browser_close_tab" ],

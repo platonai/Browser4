@@ -148,7 +148,7 @@ class McpHttpServerConfiguration(
             port = port,
             host = host,
             toolManagerResolver = sessionResolver(agent),
-            toolTargetResolver = customToolTargetResolver(),
+            toolTargetResolver = customToolTargetResolver(agent),
             dnsRebindingProtection = dnsRebindingProtection,
             allowedHosts = allowedHosts,
         )
@@ -193,17 +193,22 @@ class McpHttpServerConfiguration(
      * shared with the private dispatcher ([CustomToolTargets]) so both channels
      * resolve a tool the same way.
      */
-    private fun customToolTargetResolver(): ToolTargetResolver = ToolTargetResolver { executor, sessionId ->
-        val sessionManager = sessionManagerProvider.ifAvailable
-        if (sessionManager == null) {
-            logger.warn("MCP tool target resolution skipped: PulsarSessionManager is not available")
-            null
-        } else {
-            CustomToolTargets(sessionManager) { type ->
-                runCatching { applicationContext.getBean(type) }.getOrNull()
-            }.resolve(executor, sessionId)
+    private fun customToolTargetResolver(defaultAgent: BasicBrowserAgent): ToolTargetResolver =
+        ToolTargetResolver { executor, sessionId ->
+            val sessionManager = sessionManagerProvider.ifAvailable
+            if (sessionManager == null) {
+                logger.warn("MCP tool target resolution skipped: PulsarSessionManager is not available")
+                null
+            } else {
+                CustomToolTargets(
+                    sessionManager,
+                    { type -> runCatching { applicationContext.getBean(type) }.getOrNull() },
+                    // The server's own session is not in the REST registry, so a tool that
+                    // needs the agent tool manager (`batch.run`) is served by this agent.
+                    { defaultAgent.agentToolManager },
+                ).resolve(executor, sessionId)
+            }
         }
-    }
 
     /**
      * Start the MCP HTTP server once the application is fully initialized.

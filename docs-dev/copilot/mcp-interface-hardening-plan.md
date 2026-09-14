@@ -315,7 +315,39 @@ data class Arg(
 - 11.3 超时与租约：任务 TTL、取消传播（取消 → 断 CDP/停爬取）、僵尸任务回收（复用 `AsyncTaskCache` + 定时清理）。
 - **验收**：e2e 提交 → 轮询 → 取消 全绿；取消后资源释放可观测；进度字段单调。
 
-### Phase 5 · 批处理（需求 12、13、14；1.5 周）
+### Phase 5 · 批处理（需求 12、13、14 均已完成 2026-09-14）
+
+**需求 12 — 批量处理（已完成）**
+- `BatchExecutor`（agentic）是**通道无关**的批处理内核：解析步骤、执行策略、每步信封、日志与指标都在这里，通道只提供 `stepRunner`（怎么真正跑一步）与 `readOnly`（哪些工具是只读的）。
+- 步骤形状统一为 `[{id?, tool, args}]`，同时接受 CLI 的旧形状（`op`/`tool`/`arguments`）与 A 通道传结构化参数的约定（数组以 **JSON 文本** 形式送达 → `stepsArg()` 两种都解析）。
+- **顺序保证**：默认**串行**（浏览器有状态，先点后读必须看到点击结果）；`concurrency>1` 仅在**全部步骤都是只读工具**时允许，否则显式拒绝并指出第一个会改状态的步骤（绝不静默重排）。
+- 每步信封：`{index, id, tool, ok, durationMs, text?, errorCode?, cached?}`；批次信封：`{steps, failureCount, stoppedOnError, cached, cachedSteps, durationMs}`。被抛出的异常在步骤内被分类（`ToolErrorMapper`），与单次调用同一个错误码。
+- A 新增 **`batch_run`**（MCP 无批量原语，必须以工具暴露）：`BatchToolExecutor` 通过 `ToolMount` 注册进 `CustomToolRegistry`，A（合并注册表）与 B（自定义域派发）都公告它；receiver 是会话的 `AgentToolManager`，`CustomToolTargets` 新增该分支并带「指定会话 → 任意活跃会话 → 通道默认会话」三级回退（A 自己的会话不在 REST 注册表里）。
+- B 的 `command_batch` **保留兼容**：改走同一个 `BatchExecutor`，响应仍带 CLI 一直解析的字段（`sessionId`/`failureCount`/`stoppedOnError`/`results[].index|ok|durationMillis|text`），并**追加**共享字段（`id`/`tool`/`errorCode`/`cached`/`cachedSteps`/`durationMs`）。
+
+**需求 13 — 批量缓存（已完成）**
+- 只读批次第二次调用即命中缓存：实测 `cached=true, cachedSteps=2`，耗时 43ms → 5ms。
+- 关键实现点：通道的缓存层在**派发器之上**，批处理步骤若直接走 `AgentToolManager` 就永远命不中。`BatchToolExecutor` 因此用**同一份缓存、同一套键与策略**做每步 get/put；而 `ToolCachePolicy` 新增 `selfManaged`（`batch.run`）概念——通道对这类工具**既不写也不失效**，否则批次结束后的一次失效会把刚刷新的读缓存全清掉。
+- 含状态变更步骤的批次**永不缓存**，且该步骤本身会清空会话读缓存（实测：同样批次在 `click` 之后不再命中）。
+
+**需求 14 — 批量监控（已完成）**
+- 指标：`batch.calls` / `batch.calls.by.outcome{outcome}` / `batch.calls.bailed`、`batch.steps` / `batch.steps.by.kind{kind=requested|executed|failed|cached}`、`batch.duration` 计时器；每步自己的 `tool.*` 指标照常记录。
+- 日志：`batch.run start steps=… bail=… concurrency=…`、`batch.step index=… id=… tool=… ok=… cached=… durationMs=…`、`batch.run done steps=… executed=… failures=… stoppedOnError=… cachedSteps=… durationMs=…`（`stepIndex` 落在批处理命名空间里，与通道的 `tool.call` 行通过 requestId/时间对应）。
+- `GET /api/mcp/stats` 新增 `batch{calls,succeeded,failed,bailed,stepsRequested,stepsExecuted,stepsFailed,stepsCached}`。
+
+**实跑证据**（`b4-backend27/28/30/31.log`）
+- B 通道 `batch_run`（navigate+title+current_url）→ 逐字段信封；只读批次第二次 `cached=true cachedSteps=2`（39ms → 5ms）；`click` 之后同一批次不再命中；`concurrency=2` 混入 `click` → `ERROR: [INTERNAL] batch_run failed: concurrency=2 is only allowed for read-only batches; 1 step(s) can change state (e.g. 'click')`；未知工具 + `bail` → 单步 `errorCode=UNKNOWN_TOOL`、`stoppedOnError=true`。
+- A 通道同一批次 → **完全相同的信封**，第二次同样 `cached=true cachedSteps=2`（43ms → 5ms）→ 需求 12 的「两通道逐字段一致」成立。
+- 旧 `command_batch` → 兼容字段与新字段并存。
+- `/api/mcp/stats` → `batch{calls:2, succeeded:2, stepsRequested:2, stepsExecuted:2, stepsCached:1}`。
+
+**本轮顺带修掉的真问题**
+1. `batch.calls`/`batch.steps` 既有无标签注册、又带标签注册 → Prometheus 直接拒绝该指标名（"requires that all meters with the same name have the same set of tag keys"）。已拆成「总数」与「`.by.*` 分组」两类固定标签的指标。
+2. A 通道把结构化参数以 **JSON 文本** 下发（其既有约定），`batch_run` 只接受数组 → A 上批量完全不可用。`stepsArg()` 现在两种都解析（并补测试）。
+3. A 通道自己的会话不在 REST 会话注册表里，`batch.run` 需要的 `AgentToolManager` 解析不到 → `CustomToolTargets` 增加三级回退，`McpHttpServerConfiguration` 把默认 agent 的 tool manager 传进去。
+4. `ToolResultCacheTest` 里 `spec("batch","run")` 的断言写错（把 entries 减一当期望值），改为断言读缓存存活、批次不进缓存。
+
+**Phase 5 遗留**：`tool.call` 行本身未带 `stepIndex`（批处理命名空间里有）；CLI 侧尚无 `batch` 子命令（服务端已可用）。
 
 **需求 12 — 增加接口批量处理**
 - 12.1 把 B 的 `handleCommandBatch` 逻辑抽成共享 `BatchExecutor`（agentic），B 保留 `command_batch` 兼容名，A 新增 `batch_run` 工具（MCP 无批量原语，必须以工具暴露）。

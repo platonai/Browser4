@@ -95,14 +95,35 @@ class McpStatsControllerTest {
     }
 
     @Test
-    @DisplayName("the stats document carries the cache section")
+    @DisplayName("the stats document carries the cache and batch sections")
     fun statsDocumentIncludesCache() {
         val body = requireNotNull(controller.stats(3).body) as Map<*, *>
         val cache = body["cache"] as Map<*, *>
+        val batch = body["batch"] as Map<*, *>
 
         assertNotNull(cache["enabled"])
         assertNotNull(cache["hits"])
         assertNotNull(cache["hitRate"])
+
+        assertNotNull(batch["calls"])
+        assertNotNull(batch["stepsExecuted"])
+        assertNotNull(batch["stepsCached"])
+    }
+
+    @Test
+    @DisplayName("batch counters are attributed by outcome")
+    fun batchCountersAreAttributed() {
+        ToolMetrics.recordBatch(requested = 3, executed = 3, failures = 0, cached = 2, durationMs = 12)
+        ToolMetrics.recordBatch(requested = 3, executed = 1, failures = 1, cached = 0, durationMs = 7)
+
+        val body = requireNotNull(controller.stats(3).body) as Map<*, *>
+        val batch = body["batch"] as Map<*, *>
+
+        assertTrue((batch["calls"] as Long) >= 2L)
+        assertTrue((batch["succeeded"] as Long) >= 1L, "an outcome-tagged counter must not read as zero")
+        assertTrue((batch["failed"] as Long) >= 1L)
+        assertTrue((batch["bailed"] as Long) >= 1L, "a batch that stopped early is counted as bailed")
+        assertTrue((batch["stepsCached"] as Long) >= 2L)
     }
 
     @Test

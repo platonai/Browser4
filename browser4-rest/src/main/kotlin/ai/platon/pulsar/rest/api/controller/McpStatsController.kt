@@ -72,6 +72,7 @@ class McpStatsController {
                 "prometheus" to MetricsConfig.isPrometheus(registry),
                 "rateLimit" to rateLimitStats(),
                 "cache" to cacheStats(),
+                "batch" to batchStats(),
                 "slowest" to byTool.sortedByDescending { it["p95Ms"] as? Double ?: -1.0 }.take(limit),
                 "tools" to byTool.sortedByDescending { it["calls"] as? Long ?: 0L },
             )
@@ -149,6 +150,22 @@ class McpStatsController {
         )
     }
 
+    /**
+     * Batch posture (requirement 14): how many batches ran, how their steps ended,
+     * and how often a batch was replayed from the cache.
+     */
+    private fun batchStats(): Map<String, Any?> = linkedMapOf(
+        "calls" to counterSum("batch.calls"),
+        // `batch.calls.by.outcome` is tagged `outcome`; the step breakdown is tagged `kind`.
+        "succeeded" to counterSum("batch.calls.by.outcome", outcome = "succeeded"),
+        "failed" to counterSum("batch.calls.by.outcome", outcome = "failed"),
+        "bailed" to counterSum("batch.calls.bailed"),
+        "stepsRequested" to counterSum("batch.steps.by.kind", kind = "requested"),
+        "stepsExecuted" to counterSum("batch.steps.by.kind", kind = "executed"),
+        "stepsFailed" to counterSum("batch.steps.by.kind", kind = "failed"),
+        "stepsCached" to counterSum("batch.steps.by.kind", kind = "cached"),
+    )
+
     /** `error_code` → count, for one tool or for every tool. */
     private fun errorCodeTotals(toolName: String? = null): Map<String, Long> {
         val search = registry.find("tool.errors.by.code")
@@ -160,15 +177,22 @@ class McpStatsController {
     }
 
     /**
-     * Sums every counter registered under [name], optionally for one tool.
+     * Sums every counter registered under [name], optionally filtered by one tag.
      *
-     * @param kind value of the `kind` tag (`rejected`/`shadow`), when the meter
-     *   distinguishes enforced findings from observed ones
+     * @param toolName value of the `tool_name` tag, when the meter is per-tool
+     * @param kind value of the `kind` tag (`rejected`/`shadow`, or a step breakdown)
+     * @param outcome value of the `outcome` tag (batch results)
      */
-    private fun counterSum(name: String, toolName: String? = null, kind: String? = null): Long {
+    private fun counterSum(
+        name: String,
+        toolName: String? = null,
+        kind: String? = null,
+        outcome: String? = null,
+    ): Long {
         val search = registry.find(name)
         if (toolName != null) search.tag("tool_name", toolName)
         if (kind != null) search.tag("kind", kind)
+        if (outcome != null) search.tag("outcome", outcome)
         return search.counters().sumOf { it.count().toLong() }
     }
 

@@ -57,9 +57,10 @@ class CustomToolTargetsTest {
     fun serviceReceiverGetsBean() {
         val sessionManager = mock<PulsarSessionManager>()
         val service = Any()
-        val targets = CustomToolTargets(sessionManager) { type ->
-            if (type == Any::class.java) service else null
-        }
+        val targets = CustomToolTargets(
+            sessionManager,
+            beanResolver = { type -> if (type == Any::class.java) service else null },
+        )
 
         assertSame(service, targets.resolve(executor(Any::class), null))
     }

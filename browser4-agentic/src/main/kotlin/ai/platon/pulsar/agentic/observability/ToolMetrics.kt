@@ -28,6 +28,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * | `tool.rate.limits.by.scope` | counter | `scope_type`(session/global), `kind` | which bucket bound |
  * | `tool.cache.access` | counter | `tool_name`, `result`(hit/miss) | result-cache lookups |
  * | `tool.cache.invalidations` / `tool.cache.evictions` | counter | — | entries dropped (state change / size bound) |
+ * | `batch.calls` / `batch.calls.by.outcome` / `batch.calls.bailed` | counter | `outcome`(succeeded/failed) | batch requests |
+ * | `batch.steps` / `batch.steps.by.kind` | counter | `kind`(requested/executed/failed/cached) | per-step accounting |
+ * | `batch.duration` | timer | — | end-to-end batch latency |
  *
  * Cardinality is bounded on purpose: `tool_name` is a closed set (the specs
  * registered at startup) and `error_code` is a 14-value enum — never a raw
@@ -186,6 +189,39 @@ object ToolMetrics {
     /** Record the entries dropped to keep the cache bounded. */
     fun recordCacheEviction(entries: Long) {
         registry.counter("tool.cache.evictions").increment(entries.toDouble())
+    }
+
+    /**
+     * Record a batch request (requirement 14).
+     *
+     * Counters are batched-oriented and deliberately separate from the per-tool
+     * ones: a batch is one client request, and its steps also record their own
+     * `tool.*` metrics as usual.
+     *
+     * @param requested steps the client asked for
+     * @param executed steps actually run (fewer when `bail` stopped the batch)
+     * @param failures steps that failed
+     * @param cached steps served from the result cache
+     */
+    fun recordBatch(requested: Int, executed: Int, failures: Int, cached: Int, durationMs: Long) {
+        // Every meter keeps a fixed set of tag keys: Prometheus rejects a name whose
+        // tag keys vary between registrations, so totals and breakdowns are separate
+        // meters rather than one meter with an optional tag.
+        registry.counter("batch.calls").increment()
+        registry.counter("batch.calls.by.outcome", "outcome", if (failures > 0) "failed" else "succeeded").increment()
+        if (executed < requested) registry.counter("batch.calls.bailed").increment()
+
+        registry.counter("batch.steps").increment(requested.toDouble())
+        registry.counter("batch.steps.by.kind", "kind", "requested").increment(requested.toDouble())
+        registry.counter("batch.steps.by.kind", "kind", "executed").increment(executed.toDouble())
+        if (failures > 0) {
+            registry.counter("batch.steps.by.kind", "kind", "failed").increment(failures.toDouble())
+        }
+        if (cached > 0) {
+            registry.counter("batch.steps.by.kind", "kind", "cached").increment(cached.toDouble())
+        }
+
+        registry.timer("batch.duration").record(java.time.Duration.ofMillis(durationMs))
     }
 
     /**

@@ -227,6 +227,23 @@ class ToolResultCacheTest {
     }
 
     @Test
+    @DisplayName("a self-managed tool neither stores nor invalidates")
+    fun selfManagedToolsAreLeftAlone() {
+        val cache = cache()
+        val title = spec("tab", "title")
+        cache.store(title, text = "before")
+
+        // batch.run decides per step: invalidating here would wipe the reads its own
+        // read-only steps just refreshed.
+        val batch = spec("batch", "run")
+        assertNull(cache.get(batch, SESSION, emptyMap()), "the batch does its own lookups")
+        cache.put(batch, SESSION, emptyMap(), "batch result", success = true)
+
+        assertEquals("before", cache.get(title, SESSION, emptyMap())?.text, "the session's reads survive")
+        assertEquals(0, cache.stats().entries.let { it - 1 }, "only the read is cached")
+    }
+
+    @Test
     @DisplayName("the cache stays bounded and reports evictions")
     fun cacheIsBounded() {
         val cache = cache(maxEntries = 3)
