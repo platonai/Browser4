@@ -3,6 +3,8 @@ package ai.platon.pulsar.agentic.tools.builtin
 import ai.platon.pulsar.api.model.FrameInfo
 import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.agentic.model.ToolCall
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
+import ai.platon.pulsar.agentic.tools.ToolErrorMapper
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.chrome.protocol.DialogEvent
@@ -766,6 +768,9 @@ class BrowserTabToolExecutorTest {
         assertEquals("payframe", value["name"])
         assertEquals(true, value["active"])
         Mockito.verify(driver).frameSwitch("#pay-frame")
+        // `verify` returns the mock, so without this the method would have a return
+        // value and JUnit 5 would silently skip the test.
+        Unit
     }
 
     @Test
@@ -800,6 +805,7 @@ class BrowserTabToolExecutorTest {
         val frames = result.value as List<*>
         assertEquals(2, frames.size)
         Mockito.verify(driver).frameList()
+        Unit
     }
 
     @Test
@@ -812,8 +818,21 @@ class BrowserTabToolExecutorTest {
         )
 
         assertTrue(!result.success)
-        assertTrue(result.exception?.cause?.message?.contains("frameSwitch requires 'frame'") == true)
+        val cause = result.exception?.cause
+        assertTrue(
+            cause?.message?.contains("frame") == true,
+            "the failure must name the missing argument, was: ${cause?.message}",
+        )
+        assertEquals(
+            ToolErrorCode.MISSING_REQUIRED_ARG,
+            ToolErrorMapper.classify(cause),
+            "a missing argument must carry the stable code, not INTERNAL",
+        )
         Mockito.verify(driver, Mockito.never()).frameSwitch(Mockito.anyString())
+        // `verify` returns the mock: without this the method would have a return
+        // value and JUnit 5 would silently skip the test (which is how this
+        // assertion could sit stale for so long).
+        Unit
     }
 
     // ── eval element-scope resolution: unresolvable targets must fail loudly ──

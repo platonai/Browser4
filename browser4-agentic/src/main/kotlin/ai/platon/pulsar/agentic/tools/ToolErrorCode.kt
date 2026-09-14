@@ -143,6 +143,11 @@ object ToolErrorMapper {
             "cancelled" in text || "canceled" in text -> ToolErrorCode.CANCELLED
 
             "cdp" in text || "devtools" in text || "browserprotocol" in text -> ToolErrorCode.CDP_ERROR
+            // A DOM node id can go stale between resolution and use (a concurrent
+            // click, a re-render, a frame swap). The node is gone, not the request:
+            // tell the client to retry rather than reporting INTERNAL.
+            "no node with given id" in text -> ToolErrorCode.CDP_ERROR
+            "node is detached" in text || "element is not attached" in text -> ToolErrorCode.CDP_ERROR
             "connection refused" in text || "connection reset" in text -> ToolErrorCode.UPSTREAM_ERROR
             "conflict" in text || "already exists" in text -> ToolErrorCode.CONFLICT
 

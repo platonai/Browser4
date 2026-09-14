@@ -1,9 +1,11 @@
 package ai.platon.pulsar.agentic.mcp.server
 
+import ai.platon.pulsar.agentic.model.RateLimit
 import ai.platon.pulsar.agentic.model.TcEvaluate
 import ai.platon.pulsar.agentic.model.ToolCallResult
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolManager
+import ai.platon.pulsar.agentic.tools.ToolRateLimiter
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -170,6 +172,59 @@ class Browser4MCPServerTest {
                 tc.domain == "tab" && tc.method == "navigate" &&
                         tc.arguments["url"] == "https://example.com"
             })
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Rate limiting (requirement 9)
+    // -------------------------------------------------------------------------
+
+    /**
+     * A server whose limiter rejects after [burst] calls, with a frozen clock so
+     * the bucket cannot refill during the test.
+     */
+    private fun serverWithSpentBucket(burst: Int = 1): Browser4MCPServer = Browser4MCPServer(
+        toolManager = toolManager,
+        serverInfo = Implementation(name = "browser4-test", version = "0.0.0"),
+        customExecutors = { emptyList() },
+        frontendAliases = emptyList(),
+        toolRateLimiter = ToolRateLimiter(
+            modeProvider = { ToolRateLimiter.Mode.ERROR },
+            overrideProvider = { mapOf("click" to RateLimit(0.001, burst), "fs_read_string" to RateLimit(0.001, burst)) },
+            clock = { 0L },
+        ),
+    )
+
+    @Test
+    @DisplayName("a throttled call is rejected with RATE_LIMITED and retryAfterMs, and never dispatched")
+    fun throttledCallIsRejected() = runBlocking {
+        coEvery { toolManager.execute(any()) } returns toolCallResult(value = "clicked")
+        val server = serverWithSpentBucket(burst = 1)
+
+        val first = server.invokeTool("click", mcpArgs("selector" to "#a"))
+        assertFalse(first.isError == true, "the burst call passes")
+
+        val second = server.invokeTool("click", mcpArgs("selector" to "#a"))
+
+        assertTrue(second.isError == true, "the second call must be throttled")
+        assertTrue(
+            second.content.first().toString().contains("RATE_LIMITED"),
+            "the text must carry the code: ${second.content}",
+        )
+        assertEquals("RATE_LIMITED", second.meta?.get("errorCode")?.toString()?.trim('"'))
+        assertNotNull(second.meta?.get("retryAfterMs"), "a client needs to know how long to wait")
+        coVerify(exactly = 1) { toolManager.execute(any()) }
+    }
+
+    @Test
+    @DisplayName("read-only tools are never throttled")
+    fun readOnlyToolsAreNotThrottled() = runBlocking {
+        coEvery { toolManager.execute(any()) } returns toolCallResult(value = "top")
+        val server = serverWithSpentBucket(burst = 1)
+
+        repeat(5) {
+            val result = server.invokeTool("scroll_to_top", mcpArgs())
+            assertFalse(result.isError == true, "scroll_to_top is read-only and unlimited")
         }
     }
 

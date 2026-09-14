@@ -58,6 +58,11 @@ class ToolErrorCodeTest {
             ToolErrorCode.MISSING_REQUIRED_ARG,
             ToolErrorMapper.classifyMessage("click requires 'selector' plus optionally 'count', 'modifier', or 'button'")
         )
+        assertEquals(
+            ToolErrorCode.CDP_ERROR,
+            ToolErrorMapper.classifyMessage("browser_click failed: No node with given id found"),
+            "a stale DOM node reference is retryable, not an internal error",
+        )
     }
 
     @Test

@@ -236,7 +236,27 @@ data class Arg(
 - 8.4 告警阈值文档化：p95 > 3s、错误率 > 5%、`TARGET_UNAVAILABLE` > 0（G3 未修完时的哨兵）。
 - **验收**：契约测试断言计数器递增；stats 端点返回真实数据；SLO 文档入库。
 
-### Phase 4 · 保护与性能（需求 9、10、11；2 周）
+### Phase 4 · 保护与性能（需求 9、10、11；需求 9 已完成 2026-09-14）
+
+**需求 9 — 限流（已完成，提交见本节末）**
+- `ToolRateLimiter`（`agentic/tools/`）：令牌桶，**两个作用域**——
+  - `session:<sessionId|->:<domain>`：单会话速率 = 工具限额；
+  - `global:<domain>`：聚合速率 = 工具限额 × `-Dmcp.rateLimit.globalMultiplier`（默认 4），防止多会话并发把后端打满。
+  单会话先撞自己的桶，多会话则撞全局桶（实测 `scope=session:a:tab` / `scope=global:tab` 分别命中）。
+- `ToolRateLimitPolicy`：限额**从域/方法推导**，不写进 137 份 spec——浏览器动作 10/s（burst 20）、任务提交类（`submit`/`run`/`start`…）0.2/s（burst 2）、本地工作（`coding`/`fs`/`system`）5/s（burst 10）、只读方法（`status`/`result`/`list`/`get`/`title`/`current…`）不限。`ToolSpec.rateLimit` 与 `-Dmcp.rateLimit.overrides="click=5/10;crawl=0.5/3;webdb=off"` 可覆盖（按工具名或域）。
+- 灰度：`-Dmcp.rateLimit.mode=shadow|error|off`，默认 **shadow**（与校验一致：先观测、后拒绝；风险表里「限流默认值误伤批处理」的对策）。
+- 语义：**校验之后、分发之前**取令牌——非法调用不花令牌，被限流的调用在浏览器上什么都没发生（重试幂等）。被拒绝时返回 `RATE_LIMITED` + `retryAfterMs`（A 在 `_meta.retryAfterMs`，B 在响应体 `retryAfterMs` 字段），文案由 `Decision.rejectionMessage()` 统一生成。
+- 指标：`tool.rate.limits{tool_name,kind=rejected|shadow}`、`tool.rate.limits.by.scope{scope_type,kind}`；`/api/mcp/stats` 新增 `rateLimit{mode,rejected,shadowed}` 与每工具 `rateLimited`/`rateLimitShadowed`——「影子计数」与「真实拒绝」分开，避免把放行调用算成拒绝。
+- 内存安全：桶按需创建，超过 512 个且空闲 10 分钟即回收；会话关闭可 `forgetSession`。实测 600 个会话后仍保持有界。
+- 测试：`ToolRateLimiterTest`（12 项：限额推导/覆盖解析/burst→补充/被拒调用不花令牌/会话隔离与全局上限/三种模式/桶回收/线名），A 通道 `Browser4MCPServerTest`（拒绝+`_meta.retryAfterMs`+未分发；只读工具不限流），B 通道 `MCPToolControllerTest`（拒绝+`retryAfterMs`+未分发；shadow 不拒绝且计数）。
+- 实跑证据（`-Dmcp.rateLimit.mode=error`）：
+  - 默认档 40 并发 `browser_click` → 放行 16 / 拒绝 24，`ERROR: [RATE_LIMITED] rate limit exceeded for click (limit 10.0/s burst 20); retry after 45 ms`；日志 `tool.rate.limit tool=click scope=session:1b239abf…:tab outcome=REJECTED`。
+  - `-Dmcp.rateLimit.overrides=click=0.5/2` → 第 1、2 次通过，第 3~5 次拒绝（`retryAfterMs` 407/356/332 递减），`/api/mcp/stats` 显示 `rateLimit{mode=error,rejected=3}` 且 `browser_click{rateLimited=3}` 与调用计数同名列（B 用客户端发来的工具名上报，别名不再各记一行）。
+- 顺带修的既有问题：并发点击时 CDP 报 `No node with given id found`（DOM 节点 id 失效）原被归类 `INTERNAL`，现归 `CDP_ERROR`（retryable），客户端据此重试而不是当成服务端 bug。
+
+**需求 9 遗留**：CLI 侧针对 `RATE_LIMITED` 的提示语（`help.rs`/`tips.rs`）未做；服务端已给出 `retryAfterMs` 与 `hint`。
+
+**顺带发现的测试基础设施缺陷（已修）**：JUnit 5 会**静默跳过**返回非 `Unit` 的 `@Test` 方法。`= runBlocking { … }` 若最后一句是 `Mockito.verify(…)`（返回 mock）就会命中——全量跑出的告警显示 3 个 `BrowserTabToolExecutorTest` 的 frame 用例从未执行过，其中一个断言早已过时（期望 `frameSwitch requires 'frame'`，实际消息是 `Missing required parameter 'frame' for frameSwitch`）。已补齐 `Unit` 并顺手把断言改成校验稳定错误码（`MISSING_REQUIRED_ARG`），3 个用例恢复执行且全绿。**新增测试时务必确认方法返回 `Unit`**。
 
 **需求 9 — 增加接口限流**
 - 9.1 `ToolRateLimiter`：令牌桶，维度 `(sessionId, domain)` + 全局上限；策略来自 spec `rateLimit`，默认分档：浏览器动作 10/s（burst 20）、`crawl/swarm/command` 提交 0.2/s、`coding/fs` 5/s、只读状态类不限。

@@ -24,6 +24,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * | `tool.active.calls` | gauge | `component` | in-flight calls |
  * | `tool.validation.failures[.by.type]` | counter | `tool_name`, `validation_type` | argument rejected before dispatch |
  * | `tool.validation.shadow.violations` | counter | `tool_name`, `validation_type` | argument violation seen but **not** enforced (built-in spec in shadow mode) |
+ * | `tool.rate.limits` | counter | `tool_name`, `kind`(rejected/shadow) | throttled calls |
+ * | `tool.rate.limits.by.scope` | counter | `scope_type`(session/global), `kind` | which bucket bound |
  *
  * Cardinality is bounded on purpose: `tool_name` is a closed set (the specs
  * registered at startup) and `error_code` is a 14-value enum — never a raw
@@ -162,6 +164,27 @@ object ToolMetrics {
             activeToolCallsCount.decrementAndGet()
             recordToolCall(toolName, success, System.currentTimeMillis() - startTime)
         }
+    }
+
+    /**
+     * Record a throttled call.
+     *
+     * @param toolName The advertised tool name
+     * @param scope Which bucket bound: `session:<id>:<domain>` or `global:<domain>`
+     * @param enforced `true` when the call was rejected, `false` when the limiter
+     *   only observed it (shadow mode). Kept apart for the same reason as
+     *   [recordShadowViolation]: a dispatched call is not a failure.
+     */
+    fun recordRateLimited(toolName: String, scope: String, enforced: Boolean) {
+        val kind = if (enforced) "rejected" else "shadow"
+        registry.counter("tool.rate.limits",
+            "tool_name", toolName,
+            "kind", kind
+        ).increment()
+        registry.counter("tool.rate.limits.by.scope",
+            "scope_type", scope.substringBefore(':'),
+            "kind", kind
+        ).increment()
     }
 
     /**

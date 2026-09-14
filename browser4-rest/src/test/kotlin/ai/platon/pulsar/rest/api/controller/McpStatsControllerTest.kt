@@ -77,6 +77,25 @@ class McpStatsControllerTest {
     }
 
     @Test
+    @DisplayName("the rate-limit posture and its counters are reported")
+    fun rateLimitPostureIsReported() {
+        ToolMetrics.recordRateLimited(tool, "global:tab", enforced = false)
+        ToolMetrics.recordRateLimited(tool, "session:s1:tab", enforced = true)
+        ToolMetrics.recordToolCall(tool, success = false, durationMs = 2, errorCode = ToolErrorCode.RATE_LIMITED.wire)
+
+        val body = requireNotNull(controller.stats(5).body) as Map<*, *>
+        val posture = body["rateLimit"] as Map<*, *>
+        val entry = (body["tools"] as List<*>).filterIsInstance<Map<*, *>>().first { it["tool"] == tool }
+
+        assertEquals("shadow", posture["mode"], "the default rollout observes instead of enforcing")
+        assertTrue((posture["shadowed"] as Long) >= 1L)
+        assertTrue((posture["rejected"] as Long) >= 1L)
+        assertEquals(1L, entry["rateLimited"], "rejections are attributed to the tool")
+        assertEquals(1L, entry["rateLimitShadowed"])
+        assertEquals(ToolErrorCode.RATE_LIMITED.wire, (entry["errorCodes"] as Map<*, *>).keys.first())
+    }
+
+    @Test
     @DisplayName("top=0 asks for no per-tool latency list and is bounded above")
     fun topIsClamped() {
         ToolMetrics.recordToolCall(tool, success = true, durationMs = 4)

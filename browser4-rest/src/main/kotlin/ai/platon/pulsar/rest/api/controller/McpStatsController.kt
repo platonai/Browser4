@@ -2,6 +2,7 @@ package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.agentic.observability.MetricsConfig
 import ai.platon.pulsar.agentic.observability.ToolMetrics
+import ai.platon.pulsar.agentic.tools.ToolRateLimiter
 import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
 import io.micrometer.core.instrument.MeterRegistry
 import org.springframework.http.ResponseEntity
@@ -66,6 +67,7 @@ class McpStatsController {
                 "errorCodes" to errorCodeTotals(),
                 "registry" to registry.javaClass.simpleName,
                 "prometheus" to MetricsConfig.isPrometheus(registry),
+                "rateLimit" to rateLimitStats(),
                 "slowest" to byTool.sortedByDescending { it["p95Ms"] as? Double ?: -1.0 }.take(limit),
                 "tools" to byTool.sortedByDescending { it["calls"] as? Long ?: 0L },
             )
@@ -106,9 +108,25 @@ class McpStatsController {
                 "errorCodes" to errorCodeTotals(name),
                 // Spec/executor mismatches seen but not enforced (built-in domains).
                 "validationShadowViolations" to counterSum("tool.validation.shadow.violations", name),
+                // Throttled calls for this tool (rejected or merely observed).
+                "rateLimited" to counterSum("tool.rate.limits", name, "rejected"),
+                "rateLimitShadowed" to counterSum("tool.rate.limits", name, "shadow"),
             )
         }
     }
+
+    /**
+     * Rate-limit posture (requirement 9): the active mode plus what it has seen.
+     *
+     * `mode` is what tells an operator whether the limit is enforced (`error`),
+     * merely observed (`shadow`), or off — a rejection that never happened must not
+     * be mistaken for "the workload is under the limit".
+     */
+    private fun rateLimitStats(): Map<String, Any?> = linkedMapOf(
+        "mode" to ToolRateLimiter.Mode.fromSystemProperties().name.lowercase(),
+        "rejected" to counterSum("tool.rate.limits", kind = "rejected"),
+        "shadowed" to counterSum("tool.rate.limits", kind = "shadow"),
+    )
 
     /** `error_code` → count, for one tool or for every tool. */
     private fun errorCodeTotals(toolName: String? = null): Map<String, Long> {
@@ -120,10 +138,16 @@ class McpStatsController {
             .toSortedMap()
     }
 
-    /** Sums every counter registered under [name], optionally for one tool. */
-    private fun counterSum(name: String, toolName: String? = null): Long {
+    /**
+     * Sums every counter registered under [name], optionally for one tool.
+     *
+     * @param kind value of the `kind` tag (`rejected`/`shadow`), when the meter
+     *   distinguishes enforced findings from observed ones
+     */
+    private fun counterSum(name: String, toolName: String? = null, kind: String? = null): Long {
         val search = registry.find(name)
         if (toolName != null) search.tag("tool_name", toolName)
+        if (kind != null) search.tag("kind", kind)
         return search.counters().sumOf { it.count().toLong() }
     }
 

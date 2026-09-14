@@ -10,6 +10,7 @@ import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import ai.platon.pulsar.agentic.tools.ToolErrorMapper
 import ai.platon.pulsar.agentic.tools.ToolInvocationLogger
+import ai.platon.pulsar.agentic.tools.ToolRateLimiter
 import ai.platon.pulsar.agentic.tools.ToolResultTextRenderer
 import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecValidator
@@ -81,6 +82,14 @@ data class MCPToolCallResponse(
     @param:JsonSetter(nulls = Nulls.SKIP)
     @param:JsonProperty("structuredContent")
     val structuredContent: Map<String, Any?>? = null,
+    /**
+     * Milliseconds until the call may be retried; set only on a `RATE_LIMITED`
+     * rejection, and mirrors the `_meta.retryAfterMs` of the standard server.
+     */
+    @get:JsonProperty("retryAfterMs")
+    @param:JsonSetter(nulls = Nulls.SKIP)
+    @param:JsonProperty("retryAfterMs")
+    val retryAfterMs: Long? = null,
     @get:JsonProperty("_pagination")
     @param:JsonProperty("_pagination")
     val pagination: PaginationMeta? = null
@@ -135,6 +144,12 @@ class MCPToolController(
      * placeholder receiver, which is what those executors expect anyway.
      */
     private val applicationContext: ApplicationContext? = null,
+    /**
+     * Shared with the standard MCP server so both channels spend the same tokens
+     * for the same session — a client cannot bypass the limit by switching
+     * channel. Injectable for tests.
+     */
+    private val toolRateLimiter: ToolRateLimiter = ToolRateLimiter.shared,
 ) {
     /**
      * Shared receiver resolution — the very same helper backs the standard MCP
@@ -912,6 +927,16 @@ class MCPToolController(
         // codes) the standard MCP server applies.
         validateArguments(toolName, domain, customExecutor, args)?.let { return it }
 
+        // Then spend a token: a malformed call costs nothing, and a throttled call
+        // must not reach the browser (that is what makes a retry safe).
+        rateLimit(
+            toolName = toolName,
+            clientToolName = request.tool,
+            domain = domain,
+            customExecutor = customExecutor,
+            sessionId = normalizedRequest.arguments["sessionId"]?.toString(),
+        )?.let { return it }
+
         if (customExecutor != null) {
             // Restore sessionId stripped by normalizeToolArguments — custom executors
             // (e.g. webdb_export) may need it.
@@ -1021,6 +1046,53 @@ class MCPToolController(
     }
 
     /**
+     * The spec a call is judged against, when one can be resolved.
+     *
+     * A registered (plugin/business) executor wins; otherwise the spec of a live
+     * session is used. Never opens a session: validating a request must not have
+     * side effects.
+     */
+    private fun contractSpec(toolName: String, domain: String, customExecutor: ToolExecutor?): ToolSpec? =
+        customExecutor?.getToolSpecs()?.get(methodNameOf(toolName, domain, customExecutor))
+            ?: liveSpecOf(toolName)
+
+    /**
+     * The rate-limit verdict for one call, or `null` when it may proceed.
+     *
+     * Unlike validation this never skips: when no spec can be resolved (no session
+     * yet), the tool name still determines the domain and method, so a stampede is
+     * throttled from the very first call. In `shadow` mode the limiter only
+     * reports; `error` rejects with `RATE_LIMITED` and `retryAfterMs`.
+     *
+     * @param toolName canonical tool name, used to find the limit
+     * @param clientToolName the name the client sent (`browser_click`), used for
+     *   logs and metrics so this channel's counters join with its call counters
+     */
+    private fun rateLimit(
+        toolName: String,
+        clientToolName: String,
+        domain: String,
+        customExecutor: ToolExecutor?,
+        sessionId: String?,
+    ): ResponseEntity<MCPToolCallResponse>? {
+        val spec = contractSpec(toolName, domain, customExecutor) ?: ToolSpec(
+            domain = domain,
+            method = toolName.removePrefix("${domain}_").removePrefix("$domain."),
+        )
+
+        val decision = toolRateLimiter.acquire(spec, sessionId)
+        if (!decision.throttled) return null
+
+        toolRateLimiter.report(clientToolName, decision)
+        if (!decision.enforced) return null
+
+        return ResponseEntity.ok(
+            errorResponse(decision.rejectionMessage(clientToolName), ToolErrorCode.RATE_LIMITED)
+                .copy(retryAfterMs = decision.retryAfterMs)
+        )
+    }
+
+    /**
      * Reject a call that violates its own published schema.
      *
      * The rules and the resulting codes are the ones the standard MCP server
@@ -1055,7 +1127,6 @@ class MCPToolController(
             null
         }
         val spec = customSpec ?: builtInSpec ?: return null
-
         val violations = validator.validate(spec, args)
         if (violations.isEmpty()) return null
 

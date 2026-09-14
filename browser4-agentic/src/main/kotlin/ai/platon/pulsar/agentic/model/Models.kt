@@ -95,6 +95,16 @@ data class ToolSpec constructor(
      * instead of guessing the domain's status tool.
      */
     val task: TaskPolicy? = null,
+    /**
+     * Declared rate limit of this tool, when it differs from the policy derived
+     * from its domain/method (see
+     * [ai.platon.pulsar.agentic.tools.ToolRateLimitPolicy]).
+     *
+     * Left `null` on almost every tool on purpose: the derived policy is a few
+     * lines of code in one place, while a per-spec limit would have to be kept in
+     * sync across 137 generated specs.
+     */
+    val rateLimit: RateLimit? = null,
 ) {
     data class Arg(
         val name: String,
@@ -187,6 +197,33 @@ data class ToolExample(
 ) {
     /** Whether this example carries arguments a client (or a test) can send. */
     val executable: Boolean get() = args.isNotEmpty()
+}
+
+/**
+ * How often a tool may be called, per session and per domain.
+ *
+ * A token bucket: [permitsPerSecond] tokens are added continuously, [burst] is the
+ * bucket size, so a caller may spend [burst] calls at once and then is held to the
+ * sustained rate. `null` on a [ToolSpec] means "no declared limit"; the default
+ * policy is derived from the tool's domain and method
+ * ([ai.platon.pulsar.agentic.tools.ToolRateLimitPolicy]).
+ *
+ * @property permitsPerSecond sustained rate; `0.0` disables limiting for this tool
+ * @property burst maximum tokens available at once (at least 1)
+ */
+data class RateLimit(
+    val permitsPerSecond: Double,
+    val burst: Int = 1,
+) {
+    init {
+        require(!permitsPerSecond.isNaN() && permitsPerSecond >= 0.0) {
+            "permitsPerSecond must be >= 0, was $permitsPerSecond"
+        }
+    }
+
+    val unlimited: Boolean get() = permitsPerSecond <= 0.0
+
+    override fun toString(): String = if (unlimited) "unlimited" else "$permitsPerSecond/s burst $burst"
 }
 
 /**

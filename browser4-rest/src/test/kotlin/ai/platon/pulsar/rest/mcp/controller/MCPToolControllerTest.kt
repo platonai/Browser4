@@ -4,9 +4,11 @@ import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.model.*
+import ai.platon.pulsar.agentic.model.RateLimit
 import ai.platon.pulsar.agentic.observability.ToolMetrics
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
+import ai.platon.pulsar.agentic.tools.ToolRateLimiter
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner
@@ -1368,6 +1370,9 @@ class MCPToolControllerTest {
         assertTrue(result.body!!.isError, "error policy must reject the malformed call")
         assertEquals("MISSING_REQUIRED_ARG", result.body!!.errorCode)
         Mockito.verify(agentToolManager, Mockito.never()).execute(any())
+        // `verify` returns the mock: without this the expression body would make the
+        // method return a value, and JUnit would silently skip the test.
+        Unit
     }
 
     @Test
@@ -1384,6 +1389,72 @@ class MCPToolControllerTest {
         assertEquals(false, result.body!!.isError)
         Mockito.verify(agentToolManager).execute(any())
         assertEquals(before, shadowViolations("navigate"), "off means no validation at all")
+    }
+
+    // =========================================================================
+    // Rate limiting (requirement 9)
+    // =========================================================================
+
+    /** A controller whose limiter rejects after [burst] calls, with a frozen clock. */
+    private fun rateLimitedController(burst: Int = 1): MCPToolController = MCPToolController(
+        sessionManager,
+        null,
+        ToolRateLimiter(
+            modeProvider = { ToolRateLimiter.Mode.ERROR },
+            overrideProvider = { mapOf("navigate" to RateLimit(0.001, burst)) },
+            clock = { 0L },
+        ),
+    )
+
+    @Test
+    fun `a throttled call is rejected with RATE_LIMITED and a retry hint`() = runBlocking {
+        mockTool("tab", "navigate")
+        val limited = rateLimitedController(burst = 1)
+        val request = MCPToolCallRequest(
+            tool = "navigate",
+            arguments = mapOf("sessionId" to sessionId, "url" to "https://example.com"),
+        )
+
+        val first = limited.callTool(request, response)
+        assertEquals(false, first.body!!.isError, "the burst call passes")
+
+        val second = limited.callTool(request, response)
+
+        assertEquals(true, second.body!!.isError, "the second call must be throttled")
+        assertEquals("RATE_LIMITED", second.body!!.errorCode)
+        assertNotNull(second.body!!.retryAfterMs, "the body must tell the client how long to wait")
+        assertTrue(second.body!!.content[0].text.contains("RATE_LIMITED"), second.body!!.content[0].text)
+        Mockito.verify(agentToolManager, Mockito.times(1)).execute(any())
+        // `verify` returns the mock: see the note above on JUnit skipping such tests.
+        Unit
+    }
+
+    @Test
+    fun `shadow mode counts the throttled call but lets it through`() = runBlocking {
+        mockTool("tab", "navigate")
+        val shadow = MCPToolController(
+            sessionManager,
+            null,
+            ToolRateLimiter(
+                modeProvider = { ToolRateLimiter.Mode.SHADOW },
+                overrideProvider = { mapOf("navigate" to RateLimit(0.001, 1)) },
+                clock = { 0L },
+            ),
+        )
+        val request = MCPToolCallRequest(
+            tool = "navigate",
+            arguments = mapOf("sessionId" to sessionId, "url" to "https://example.com"),
+        )
+
+        repeat(3) {
+            val result = shadow.callTool(request, response)
+            assertEquals(false, result.body!!.isError, "shadow mode must never reject")
+        }
+        Mockito.verify(agentToolManager, Mockito.times(3)).execute(any())
+
+        val shadowCount = ToolMetrics.currentRegistry()
+            .find("tool.rate.limits").tag("kind", "shadow").counters().sumOf { it.count() }
+        assertTrue(shadowCount > 0.0, "the finding must be counted so enforcement can be justified later")
     }
 
     // =========================================================================

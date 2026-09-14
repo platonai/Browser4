@@ -10,6 +10,8 @@ import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import ai.platon.pulsar.agentic.tools.ToolErrorMapper
 import ai.platon.pulsar.agentic.tools.ToolInvocationLogger
+import ai.platon.pulsar.agentic.tools.ToolRateLimiter
+import ai.platon.pulsar.agentic.tools.mcpToolName
 import ai.platon.pulsar.agentic.tools.ToolResultTextRenderer
 import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecValidator
@@ -65,6 +67,8 @@ class Browser4MCPServer(
     private val toolManagerResolver: ToolManagerResolver = ToolManagerResolver.single(toolManager),
     private val frontendAliases: List<McpToolAlias> = McpToolNames.frontendAliases,
     private val toolTargetResolver: ToolTargetResolver = ToolTargetResolver.NONE,
+    /** Shared with the private dispatcher so both channels spend the same tokens. */
+    private val toolRateLimiter: ToolRateLimiter = ToolRateLimiter.shared,
 ) {
     private val logger = getLogger(this)
 
@@ -95,6 +99,13 @@ class Browser4MCPServer(
             "When a tool's usage is unclear, call `help` with {domain, method} for the exact " +
                 "signature and examples, or `skill_doc` with {name} (e.g. crawl.md, htmlsnapshot.md) " +
                 "to read a bundled reference — prefer those over guessing."
+        )
+        appendLine()
+        appendLine()
+        append(
+            "Calls are rate limited per session and per domain (browser actions 10/s, task " +
+                "submissions 0.2/s, read-only tools unlimited). A throttled call answers " +
+                "`RATE_LIMITED` with `retryAfterMs`; wait that long instead of retrying in a loop."
         )
         if (toolManagerResolver.multiSession) {
             appendLine()
@@ -175,10 +186,14 @@ class Browser4MCPServer(
      * The code appears in the text (after the `ERROR:` prefix, so existing
      * matchers keep working) and in `_meta`, together with `retryable` and a
      * `hint` — a client can therefore branch on the code instead of the prose.
+     *
+     * @param extraMeta additional contract fields, e.g. `retryAfterMs` for a
+     *   throttled call, so a client can wait exactly as long as it must
      */
     private fun errorResult(
         message: String,
         code: ToolErrorCode = ToolErrorMapper.classifyMessage(message),
+        extraMeta: Map<String, JsonPrimitive> = emptyMap(),
     ): CallToolResult {
         logger.warn("MCP tool error [{}]: {}", code.wire, message)
         return CallToolResult(
@@ -189,7 +204,7 @@ class Browser4MCPServer(
                     "errorCode" to JsonPrimitive(code.wire),
                     "retryable" to JsonPrimitive(code.retryable),
                     "hint" to JsonPrimitive(code.hint),
-                )
+                ) + extraMeta
             ),
         )
     }
@@ -456,6 +471,27 @@ class Browser4MCPServer(
         return result.withRequestId(requestId)
     }
 
+    /**
+     * The rate-limit verdict for one call, or `null` when the call may proceed.
+     *
+     * Runs after argument validation (a malformed call should not spend a token)
+     * and before dispatch, so a throttled call changes nothing on the browser and
+     * can be retried safely. In `shadow` mode the limiter only reports.
+     */
+    private fun rateLimit(registration: ToolRegistration, sessionId: String?): CallToolResult? {
+        val decision = toolRateLimiter.acquire(registration.spec, sessionId)
+        if (!decision.throttled) return null
+
+        toolRateLimiter.report(registration.spec.mcpToolName(), decision)
+        if (!decision.enforced) return null
+
+        return errorResult(
+            decision.rejectionMessage(registration.spec.mcpToolName()),
+            ToolErrorCode.RATE_LIMITED,
+            mapOf("retryAfterMs" to JsonPrimitive(decision.retryAfterMs)),
+        )
+    }
+
     /** The call itself, without the logging/metrics envelope. */
     private suspend fun dispatchToolCall(
         toolName: String,
@@ -470,6 +506,8 @@ class Browser4MCPServer(
         bindCustomDomainTarget(registration, sessionId, resolvedManager)
 
         validateArguments(registration.spec, args)?.let { return it }
+
+        rateLimit(registration, sessionId)?.let { return it }
 
         val toolCall = ToolCall(
             domain = registration.domain,

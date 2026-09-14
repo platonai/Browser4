@@ -154,6 +154,12 @@ object ToolDocGenerator {
         tool["returnType"]?.let { out.appendLine("Returns: `$it`") }
 
         @Suppress("UNCHECKED_CAST")
+        (tool["rateLimit"] as? Map<String, Any?>)?.let { limit ->
+            out.appendLine()
+            out.appendLine("Rate limit: ${limit["permitsPerSecond"]}/s, burst ${limit["burst"]}.")
+        }
+
+        @Suppress("UNCHECKED_CAST")
         (tool["task"] as? Map<String, Any?>)?.let { task ->
             out.appendLine()
             out.appendLine(
