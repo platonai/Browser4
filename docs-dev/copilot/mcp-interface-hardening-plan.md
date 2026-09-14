@@ -236,9 +236,19 @@ data class Arg(
 - 8.4 告警阈值文档化：p95 > 3s、错误率 > 5%、`TARGET_UNAVAILABLE` > 0（G3 未修完时的哨兵）。
 - **验收**：契约测试断言计数器递增；stats 端点返回真实数据；SLO 文档入库。
 
-### Phase 4 · 保护与性能（需求 9 已完成 2026-09-14；需求 10 进行中，10.3/G5 已完成）
+### Phase 4 · 保护与性能（需求 9 完成 2026-09-14；需求 10 完成 2026-09-14；需求 11 未做）
 
-**需求 10 进展（10.3 = G5 已修，提交 `ceaa98a691`）**
+**需求 10 — 缓存（已完成）**
+- `ToolCachePolicy`：**白名单**推导可缓存方法（缓存错东西就是正确性 bug，所以不做黑名单）——页面读 `tab.title/currentUrl/url/ariaSnapshot/exists/isVisible/isEnabled/isChecked/getText/getAttribute/dialogStatus/frameList` TTL 1s；任务状态 `crawl|command|swarm.status|result` TTL 500ms；**明确不缓存**：一切改页面的动作、大载荷（`html_snapshot_*`/`screenshot`/`pdf`，避免「带额外步骤的内存泄漏」）、以及带 `clear` 语义的 `consoleMessages`/`networkRequests`。`ToolSpec.cacheable`（三态：null=按策略/false=禁用/true=未知工具也能缓存）与 `cacheTtlMs`（0=禁用）可覆盖。
+- `ToolResultCache`：键 `(sessionId, tool, canonicalArgs, specVersion)`——参数做**规范化**（排序、递归展开嵌套结构、剔除传输参数）后取 sha256 前 12 位，键长与载荷无关；`specVersion` 取 `expression|returnType|outputSchema` 的指纹，**改契约即失效**。
+- **失效以状态变更为准，TTL 只是兜底**：任何不被策略视为幂等读的调用（点击/导航/输入/提交…）都会清空该会话的全部条目，**失败也清**（半途失败的点击同样可能动了页面）；会话关闭清该会话，`close_all_sessions`/`kill_all_sessions` 清全表。
+- 逃生门（按调用者会想到的顺序）：单次调用 `cache:false`、部署级 `-Dmcp.cache.enabled=false`、工具级 `ToolSpec.cacheable`、运维级 `DELETE /api/mcp/cache`。
+- 纯审计/观测：`tool.cache.access{tool_name,result}`、`tool.cache.invalidations`、`tool.cache.evictions`；`GET /api/mcp/cache/stats`（enabled/entries/hits/misses/hitRate/**defaultCacheableTools**）与 `DELETE /api/mcp/cache`；日志新增 `tool.cache hit tool=… ageMs=…`；`_meta.cached/ageMs`（B 为响应体 `cached`/`cacheAgeMs` 字段）。
+- **实跑证据**（`b4-backend22.log`）：`title` 两次 → 第二次 `cached=True ageMs=45`；`cache:false` → 不走缓存且**调用成功**；随后的 `title` 得到刚刷新的值（`ageMs=111`）；`click` 之后的 `title` 不再命中；`/api/mcp/cache/stats` → `entries=1 hits=2 misses=2 hitRate=0.5`，默认可缓存工具 18 个；`DELETE /api/mcp/cache` → `cleared=true entries=0`。
+- 测试：`ToolResultCacheTest`（13 项：白名单/覆盖/命中与年龄/TTL 过期/键含会话+工具+参数/参数规范化/失败不缓存/状态变更失效（含失败）/按会话隔离/`cache:false`/全局关闭/容量上限），A 通道 3 项、B 通道 3 项、stats 端点 2 项。
+- **顺带修的真问题**：`cache:false` 原本会被**转发给执行器**，而执行器自带的 `validateArgs` 把它当 `Extraneous parameter` 拒绝——逃生门反而把要刷新的调用搞挂了。现在 `cache` 与 `sessionId` 一样属于**传输层参数**，在校验前剥离（A 的 `CONTROL_ARGS`、B 的 `normalizeToolArguments`），任何执行器都不会看到它。
+
+**需求 10.3（G5）已完成**（提交 `ceaa98a691`）
 - `/mcp/tools` 拆成两段：**静态段**（会话生命周期工具 + 前端别名 + 插件域）枚举一次即缓存；**会话段**（会话 agent 的 tab/system 工具）**每次请求合并**。读取会话段是只读的（`getAllSessions()` 不会创建会话），所以当初加缓存要避免的「探活 → 建会话 → 启动浏览器 → 关闭」循环不会回来。
 - 实测：`open_session` 之前 `83` 个工具，之后 `275` 个（新增 `navigate`/`click`/`reload`/`title`/`current_url`… 共 192 个）。
 - 回归测试：`MCPToolControllerTest.the tool list grows when a session appears`（同一控制器实例，先无会话后有会话，断言静态段保留 + 会话工具出现）。

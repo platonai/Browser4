@@ -76,11 +76,12 @@ object ToolInvocationLogger {
         durationMs: Long,
         errorCode: ToolErrorCode?,
         resultChars: Int,
+        cached: Boolean = false,
     ) {
         if (errorCode == null) {
             logger.info(
-                "tool.call done   requestId={} channel={} tool={} durationMs={} outcome=OK resultChars={}",
-                requestId, channel, tool, durationMs, resultChars,
+                "tool.call done   requestId={} channel={} tool={} durationMs={} outcome=OK cached={} resultChars={}",
+                requestId, channel, tool, durationMs, cached, resultChars,
             )
         } else {
             logger.warn(
@@ -88,6 +89,16 @@ object ToolInvocationLogger {
                 requestId, channel, tool, durationMs, errorCode.wire, errorCode.retryable, resultChars,
             )
         }
+    }
+
+    /**
+     * Records that a read was answered from the result cache instead of the browser.
+     *
+     * A one-line marker (no second `tool.call done` line) so a cache hit is visible
+     * in the same log stream without pretending the tool ran.
+     */
+    fun logCacheHit(tool: String, ageMs: Long) {
+        logger.info("tool.cache hit    tool={} ageMs={}", tool, ageMs)
     }
 
     /** Runs [block] with the request id in the MDC, so nested logs carry it. */

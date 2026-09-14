@@ -105,6 +105,20 @@ data class ToolSpec constructor(
      * sync across 137 generated specs.
      */
     val rateLimit: RateLimit? = null,
+    /**
+     * Whether a successful result may be reused, overriding
+     * [ai.platon.pulsar.agentic.tools.ToolCachePolicy]'s derived default.
+     *
+     * Tri-state on purpose: `null` (the default) lets the policy decide from the
+     * domain and method, `false` forbids caching outright, and `true` caches a tool
+     * the policy does not know about.
+     */
+    val cacheable: Boolean? = null,
+    /**
+     * How long a cached result stays valid, in milliseconds. `0` disables caching
+     * for this tool; `null` (the default) uses the policy's TTL.
+     */
+    val cacheTtlMs: Long? = null,
 ) {
     data class Arg(
         val name: String,

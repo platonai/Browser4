@@ -6,6 +6,7 @@ import ai.platon.pulsar.agentic.model.ToolCallResult
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.ToolRateLimiter
+import ai.platon.pulsar.agentic.tools.ToolResultCache
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -226,6 +227,77 @@ class Browser4MCPServerTest {
             val result = server.invokeTool("scroll_to_top", mcpArgs())
             assertFalse(result.isError == true, "scroll_to_top is read-only and unlimited")
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Result cache (requirement 10)
+    // -------------------------------------------------------------------------
+
+    /** A server with its own cache and a frozen clock, so TTLs cannot interfere. */
+    private fun serverWithCache(): Browser4MCPServer = Browser4MCPServer(
+        toolManager = toolManager,
+        serverInfo = Implementation(name = "browser4-test", version = "0.0.0"),
+        customExecutors = { emptyList() },
+        frontendAliases = emptyList(),
+        toolResultCache = ToolResultCache(
+            enabledProvider = { true },
+            ttlMultiplierProvider = { 1.0 },
+            maxEntriesProvider = { 100 },
+            clock = { 0L },
+        ),
+    )
+
+    @Test
+    @DisplayName("a repeated read is served from the cache and the tool runs once")
+    fun repeatedReadIsCached() = runBlocking {
+        coEvery { toolManager.execute(any()) } returns toolCallResult(value = "Current URL")
+        val server = serverWithCache()
+
+        val first = server.invokeTool("get_text", mcpArgs("selector" to "#a"))
+        assertFalse(first.isError == true)
+        assertNull(first.meta?.get("cached"), "the first answer was not cached")
+
+        val second = server.invokeTool("get_text", mcpArgs("selector" to "#a"))
+
+        assertFalse(second.isError == true)
+        assertEquals("true", second.meta?.get("cached")?.toString(), "the second answer must be marked cached")
+        assertNotNull(second.meta?.get("ageMs"))
+        assertEquals(
+            second.content.first().toString(), first.content.first().toString(),
+            "a cached answer is the same answer",
+        )
+        coVerify(exactly = 1) { toolManager.execute(any()) }
+    }
+
+    @Test
+    @DisplayName("a page action invalidates the cached reads of that session")
+    fun pageActionInvalidatesTheCache() = runBlocking {
+        coEvery { toolManager.execute(any()) } returns toolCallResult(value = "text")
+        val server = serverWithCache()
+
+        server.invokeTool("get_text", mcpArgs("selector" to "#a"))
+        val cached = server.invokeTool("get_text", mcpArgs("selector" to "#a"))
+        assertEquals("true", cached.meta?.get("cached")?.toString())
+
+        // A click may have changed the page.
+        server.invokeTool("click", mcpArgs("selector" to "#a"))
+
+        val afterAction = server.invokeTool("get_text", mcpArgs("selector" to "#a"))
+        assertNull(afterAction.meta?.get("cached"), "the read must run again after a state change")
+        coVerify(exactly = 3) { toolManager.execute(any()) }
+    }
+
+    @Test
+    @DisplayName("cache:false bypasses the cache for one call")
+    fun cacheFalseBypassesTheCache() = runBlocking {
+        coEvery { toolManager.execute(any()) } returns toolCallResult(value = "text")
+        val server = serverWithCache()
+
+        server.invokeTool("get_text", mcpArgs("selector" to "#a"))
+        val fresh = server.invokeTool("get_text", mcpArgs("selector" to "#a", "cache" to "false"))
+
+        assertNull(fresh.meta?.get("cached"), "the caller asked for the real thing")
+        coVerify(exactly = 2) { toolManager.execute(any()) }
     }
 
     @Test

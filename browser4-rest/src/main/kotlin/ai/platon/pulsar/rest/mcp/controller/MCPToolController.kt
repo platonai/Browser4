@@ -11,6 +11,7 @@ import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import ai.platon.pulsar.agentic.tools.ToolErrorMapper
 import ai.platon.pulsar.agentic.tools.ToolInvocationLogger
 import ai.platon.pulsar.agentic.tools.ToolRateLimiter
+import ai.platon.pulsar.agentic.tools.ToolResultCache
 import ai.platon.pulsar.agentic.tools.ToolResultTextRenderer
 import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecValidator
@@ -90,6 +91,19 @@ data class MCPToolCallResponse(
     @param:JsonSetter(nulls = Nulls.SKIP)
     @param:JsonProperty("retryAfterMs")
     val retryAfterMs: Long? = null,
+    /**
+     * `true` when the result was served from the result cache, mirroring
+     * `_meta.cached` on the standard server.
+     */
+    @get:JsonProperty("cached")
+    @param:JsonSetter(nulls = Nulls.SKIP)
+    @param:JsonProperty("cached")
+    val cached: Boolean? = null,
+    /** Age of a cached result, in milliseconds. */
+    @get:JsonProperty("cacheAgeMs")
+    @param:JsonSetter(nulls = Nulls.SKIP)
+    @param:JsonProperty("cacheAgeMs")
+    val cacheAgeMs: Long? = null,
     @get:JsonProperty("_pagination")
     @param:JsonProperty("_pagination")
     val pagination: PaginationMeta? = null
@@ -150,6 +164,11 @@ class MCPToolController(
      * channel. Injectable for tests.
      */
     private val toolRateLimiter: ToolRateLimiter = ToolRateLimiter.shared,
+    /**
+     * Shared with the standard MCP server, so a read cached by one channel is not
+     * recomputed by the other. Injectable for tests.
+     */
+    private val toolResultCache: ToolResultCache = ToolResultCache.shared,
 ) {
     /**
      * Shared receiver resolution — the very same helper backs the standard MCP
@@ -167,6 +186,16 @@ class MCPToolController(
     companion object {
         /** Log/metrics channel label for the private dispatcher. */
         internal const val CHANNEL = "B"
+
+        /**
+         * Arguments addressed to the transport rather than to the tool: they are
+         * consumed here (`sessionId` routes the call, `cache` bypasses the result
+         * cache) and must never reach an executor's argument validation.
+         */
+        internal val CONTROL_ARGS: Set<String> = setOf("cache")
+
+        /** The client-supplied flag that bypasses the result cache for one call. */
+        internal const val CACHE_FLAG = "cache"
 
         /**
          * Playwright-MCP style frontend tool name aliases: the names an agent
@@ -556,6 +585,8 @@ class MCPToolController(
         val sessionId = requireSessionId(request)
         val deleted = sessionManager.deleteSession(sessionId)
         return if (deleted) {
+            // Whatever that session's reads returned is gone with its page.
+            toolResultCache.invalidateSession(sessionId)
             ResponseEntity.ok(textResponse("Session closed"))
         } else {
             ResponseEntity.ok(errorResponse("Session not found: $sessionId"))
@@ -596,11 +627,13 @@ class MCPToolController(
 
     private fun handleCloseAllSessions(): ResponseEntity<MCPToolCallResponse> {
         val count = sessionManager.deleteAllSessions()
+        toolResultCache.clear()
         return ResponseEntity.ok(textResponse("Closed $count session(s)"))
     }
 
     private fun handleKillAllSessions(): ResponseEntity<MCPToolCallResponse> {
         val count = sessionManager.deleteAllSessions()
+        toolResultCache.clear()
         return ResponseEntity.ok(textResponse("Killed $count session(s)"))
     }
 
@@ -947,33 +980,98 @@ class MCPToolController(
             sessionId = normalizedRequest.arguments["sessionId"]?.toString(),
         )?.let { return it }
 
-        if (customExecutor != null) {
-            // Restore sessionId stripped by normalizeToolArguments — custom executors
-            // (e.g. webdb_export) may need it.
-            val sessionId = normalizedRequest.arguments["sessionId"]
-            val execArgs = if (sessionId != null) {
-                args.toMutableMap().also { it["sessionId"] = sessionId }
-            } else {
-                args
+        // A read answered from the cache skips the executor entirely (requirement 10).
+        cachedResponse(toolName, domain, customExecutor, args, normalizedRequest)?.let { return it }
+
+        val response = when {
+            customExecutor != null -> {
+                // Restore sessionId stripped by normalizeToolArguments — custom executors
+                // (e.g. webdb_export) may need it.
+                val sessionId = normalizedRequest.arguments["sessionId"]
+                val execArgs = if (sessionId != null) {
+                    args.toMutableMap().also { it["sessionId"] = sessionId }
+                } else {
+                    args
+                }
+                dispatchToCustomExecutor(toolName, domain, execArgs, customExecutor, request)
             }
-            return dispatchToCustomExecutor(toolName, domain, execArgs, customExecutor, request)
+
+            // Session-independent coding dispatch: when a coding_* tool is called
+            // without a sessionId, use the standalone CodingToolExecutor instead
+            // of requiring a browser session. This supports the `browser4 code`
+            // CLI commands for self-development, plugin/skill scaffolding, and
+            // browser JS script writing.
+            domain == "coding" && normalizedRequest.arguments["sessionId"]?.toString().isNullOrEmpty() ->
+                dispatchToStandaloneCodingTool(toolName, args, request)
+
+            // Fall back to per-session agent tool dispatch
+            else -> dispatchToAgentToolExecutor(request)
         }
 
-        // Session-independent coding dispatch: when a coding_* tool is called
-        // without a sessionId, use the standalone CodingToolExecutor instead
-        // of requiring a browser session. This supports the `browser4 code`
-        // CLI commands for self-development, plugin/skill scaffolding, and
-        // browser JS script writing.
-        if (domain == "coding") {
-            val sessionId = normalizedRequest.arguments["sessionId"]?.toString()
-            if (sessionId.isNullOrEmpty()) {
-                return dispatchToStandaloneCodingTool(toolName, args, request)
-            }
-        }
-
-        // Fall back to per-session agent tool dispatch
-        return dispatchToAgentToolExecutor(request)
+        cacheResult(toolName, domain, customExecutor, args, normalizedRequest, response)
+        return response
     }
+
+    /**
+     * Serve a cached read when one is available (requirement 10).
+     *
+     * Only the tools `ToolCachePolicy` considers idempotent reads are ever cached,
+     * so this cannot return a stale answer for a state-changing call.
+     */
+    private fun cachedResponse(
+        toolName: String,
+        domain: String,
+        customExecutor: ToolExecutor?,
+        args: Map<String, Any?>,
+        request: NormalizedToolCall,
+    ): ResponseEntity<MCPToolCallResponse>? {
+        val spec = contractSpec(toolName, domain, customExecutor) ?: return null
+        val sessionId = request.arguments["sessionId"]?.toString()
+        val cached = toolResultCache.get(spec, sessionId, args, cacheBypassRequested(request)) ?: return null
+
+        ToolInvocationLogger.logCacheHit(request.tool, cached.ageMs)
+        return ResponseEntity.ok(
+            textResponse(cached.text).copy(cached = true, cacheAgeMs = cached.ageMs)
+        )
+    }
+
+    /**
+     * Feed the result cache, and invalidate it when the call may have changed state.
+     *
+     * Called for every dispatched call, successful or not: the cache itself decides
+     * whether the call was a reusable read or a state change.
+     */
+    private fun cacheResult(
+        toolName: String,
+        domain: String,
+        customExecutor: ToolExecutor?,
+        args: Map<String, Any?>,
+        request: NormalizedToolCall,
+        response: ResponseEntity<MCPToolCallResponse>,
+    ) {
+        if (!toolResultCache.enabled) return
+        val spec = contractSpec(toolName, domain, customExecutor) ?: return
+
+        val body = response.body
+        val success = body?.isError != true
+        val text = body?.content?.firstOrNull()?.text.orEmpty()
+        val sessionId = request.arguments["sessionId"]?.toString()
+
+        toolResultCache.put(spec, sessionId, args, text, success, cacheBypassRequested(request))
+    }
+
+    /**
+     * Whether the client asked this call to skip the result cache (`cache: false`).
+     *
+     * Read from the raw arguments: the flag is stripped by
+     * [normalizeToolArguments] before dispatch, so an executor never sees it.
+     */
+    private fun cacheBypassRequested(request: NormalizedToolCall): Boolean =
+        when (val flag = request.arguments[CACHE_FLAG]) {
+            null -> false
+            is Boolean -> !flag
+            else -> flag.toString().equals("false", ignoreCase = true)
+        }
 
     /**
      * Dispatch a coding_* tool call through the standalone [CodingToolExecutor]
@@ -1640,9 +1738,16 @@ class MCPToolController(
         )
     }
 
-    private fun normalizeToolArguments(toolName: String, args: Map<String, Any?>): Map<String, Any?> {
-        return ArgumentNormalizerFactory.normalize(toolName, args)
-    }
+    /**
+     * Normalise the arguments of a call and drop the ones the transport owns.
+     *
+     * `cache` is a client→server control flag (like `sessionId`), not a tool
+     * argument: leaving it in made executors with a strict `validateArgs` reject the
+     * call as an "extraneous parameter", so the documented escape hatch broke the
+     * very call it was meant to refresh.
+     */
+    private fun normalizeToolArguments(toolName: String, args: Map<String, Any?>): Map<String, Any?> =
+        ArgumentNormalizerFactory.normalize(toolName, args).filterKeys { it !in CONTROL_ARGS }
 
     // =========================================================================
     // Helpers

@@ -2,6 +2,7 @@ package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.agentic.observability.ToolMetrics
 import ai.platon.pulsar.agentic.tools.ToolErrorCode
+import ai.platon.pulsar.agentic.tools.ToolResultCache
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -74,6 +75,34 @@ class McpStatsControllerTest {
 
         assertEquals(1L, entry["validationShadowViolations"])
         assertTrue((body["validationShadowViolations"] as Long) >= 1L)
+    }
+
+    @Test
+    @DisplayName("the result-cache posture can be inspected and cleared")
+    fun cachePostureIsInspectable() {
+        ToolResultCache.shared.clear()
+
+        val before = requireNotNull(controller.cacheStatsEndpoint().body) as Map<*, *>
+        assertTrue(before["enabled"] as Boolean, "the cache is on by default")
+        assertEquals(0, before["entries"])
+        assertTrue(
+            (before["defaultCacheableTools"] as List<*>).contains("tab.title"),
+            "the endpoint must say what is cacheable, not just how many entries exist",
+        )
+
+        val cleared = requireNotNull(controller.clearCache().body) as Map<*, *>
+        assertEquals(true, cleared["cleared"])
+    }
+
+    @Test
+    @DisplayName("the stats document carries the cache section")
+    fun statsDocumentIncludesCache() {
+        val body = requireNotNull(controller.stats(3).body) as Map<*, *>
+        val cache = body["cache"] as Map<*, *>
+
+        assertNotNull(cache["enabled"])
+        assertNotNull(cache["hits"])
+        assertNotNull(cache["hitRate"])
     }
 
     @Test

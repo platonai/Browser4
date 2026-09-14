@@ -26,6 +26,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * | `tool.validation.shadow.violations` | counter | `tool_name`, `validation_type` | argument violation seen but **not** enforced (built-in spec in shadow mode) |
  * | `tool.rate.limits` | counter | `tool_name`, `kind`(rejected/shadow) | throttled calls |
  * | `tool.rate.limits.by.scope` | counter | `scope_type`(session/global), `kind` | which bucket bound |
+ * | `tool.cache.access` | counter | `tool_name`, `result`(hit/miss) | result-cache lookups |
+ * | `tool.cache.invalidations` / `tool.cache.evictions` | counter | — | entries dropped (state change / size bound) |
  *
  * Cardinality is bounded on purpose: `tool_name` is a closed set (the specs
  * registered at startup) and `error_code` is a 14-value enum — never a raw
@@ -164,6 +166,26 @@ object ToolMetrics {
             activeToolCallsCount.decrementAndGet()
             recordToolCall(toolName, success, System.currentTimeMillis() - startTime)
         }
+    }
+
+    /**
+     * Record a cache lookup outcome (requirement 10).
+     *
+     * @param toolName The advertised tool name
+     * @param hit `true` when the call was answered from the cache
+     */
+    fun recordCacheAccess(toolName: String, hit: Boolean) {
+        registry.counter("tool.cache.access", "tool_name", toolName, "result", if (hit) "hit" else "miss").increment()
+    }
+
+    /** Record the entries dropped because a call may have changed the session state. */
+    fun recordCacheInvalidation(entries: Int) {
+        registry.counter("tool.cache.invalidations").increment(entries.toDouble())
+    }
+
+    /** Record the entries dropped to keep the cache bounded. */
+    fun recordCacheEviction(entries: Long) {
+        registry.counter("tool.cache.evictions").increment(entries.toDouble())
     }
 
     /**

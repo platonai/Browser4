@@ -9,6 +9,7 @@ import ai.platon.pulsar.agentic.observability.ToolMetrics
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.ToolRateLimiter
+import ai.platon.pulsar.agentic.tools.ToolResultCache
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner
@@ -1418,6 +1419,119 @@ class MCPToolControllerTest {
     private fun listedTools(): List<String> {
         val body = controller.listTools(response).body as Map<String, Any?>
         return (body["tools"] as List<*>).filterIsInstance<String>()
+    }
+
+    // =========================================================================
+    // Result cache (requirement 10)
+    // =========================================================================
+
+    /** A controller with its own cache and a frozen clock. */
+    private fun cachedController(): MCPToolController = MCPToolController(
+        sessionManager,
+        null,
+        ToolRateLimiter.shared,
+        ToolResultCache(
+            enabledProvider = { true },
+            ttlMultiplierProvider = { 1.0 },
+            maxEntriesProvider = { 100 },
+            clock = { 0L },
+        ),
+    )
+
+    /**
+     * A live session advertising a cacheable read and a page action.
+     *
+     * Both are needed: the read is what gets cached, and the click is what must
+     * invalidate it. Without a resolvable spec the channel caches nothing at all
+     * (it fails open to "no cache"), which is the safe direction.
+     */
+    private fun mockCacheableSessionTools() {
+        `when`(sessionManager.getAllSessions()).thenReturn(listOf(managedSession))
+        `when`(agentToolManager.getAllToolSpecs()).thenReturn(
+            mapOf(
+                "tab" to mapOf(
+                    "getText" to ToolSpec(
+                        domain = "tab", method = "getText",
+                        arguments = listOf(ToolSpec.Arg("selector", "String", null)),
+                        returnType = "String", description = "Read the text of an element.",
+                    ),
+                    "click" to ToolSpec(
+                        domain = "tab", method = "click",
+                        arguments = listOf(ToolSpec.Arg("selector", "String", null)),
+                        returnType = "Unit", description = "Click an element.",
+                    ),
+                )
+            )
+        )
+        runBlocking { `when`(agentToolManager.execute(any())).thenReturn(toolCallResult("Cached text")) }
+    }
+
+    @Test
+    fun `a repeated read is served from the cache and the tool runs once`() = runBlocking {
+        mockCacheableSessionTools()
+        val cached = cachedController()
+        val request = MCPToolCallRequest(
+            tool = "get_text",
+            arguments = mapOf("sessionId" to sessionId, "selector" to "#a"),
+        )
+
+        val first = cached.callTool(request, response)
+        assertEquals(false, first.body!!.isError)
+        assertNull(first.body!!.cached, "the first answer was not cached")
+
+        val second = cached.callTool(request, response)
+
+        assertEquals(true, second.body!!.cached, "the second answer comes from the cache")
+        assertNotNull(second.body!!.cacheAgeMs)
+        assertEquals(first.body!!.content[0].text, second.body!!.content[0].text)
+        Mockito.verify(agentToolManager, Mockito.times(1)).execute(any())
+        Unit
+    }
+
+    @Test
+    fun `a page action invalidates the cached reads of that session`() = runBlocking {
+        mockCacheableSessionTools()
+        val cached = cachedController()
+        val read = MCPToolCallRequest(
+            tool = "get_text",
+            arguments = mapOf("sessionId" to sessionId, "selector" to "#a"),
+        )
+
+        cached.callTool(read, response)
+        assertEquals(true, cached.callTool(read, response).body!!.cached)
+
+        // A click may have changed the page.
+        cached.callTool(
+            MCPToolCallRequest("click", mapOf("sessionId" to sessionId, "selector" to "#a")),
+            response,
+        )
+
+        val afterAction = cached.callTool(read, response)
+        assertNull(afterAction.body!!.cached, "the read must run again after a state change")
+        Mockito.verify(agentToolManager, Mockito.times(3)).execute(any())
+        Unit
+    }
+
+    @Test
+    fun `cache false bypasses the cache for one call`() = runBlocking {
+        mockCacheableSessionTools()
+        val cached = cachedController()
+
+        cached.callTool(
+            MCPToolCallRequest("get_text", mapOf("sessionId" to sessionId, "selector" to "#a")),
+            response,
+        )
+        val fresh = cached.callTool(
+            MCPToolCallRequest("get_text", mapOf("sessionId" to sessionId, "selector" to "#a", "cache" to false)),
+            response,
+        )
+
+        assertNull(fresh.body!!.cached, "the caller asked for fresh data")
+        // The control flag must not leak into the tool's arguments: an executor with
+        // a strict validateArgs would reject the call as an extraneous parameter.
+        assertFalse(fresh.body!!.isError, "cache:false must refresh, not fail: ${fresh.body!!.content[0].text}")
+        Mockito.verify(agentToolManager, Mockito.times(2)).execute(any())
+        Unit
     }
 
     // =========================================================================

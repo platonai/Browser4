@@ -11,6 +11,7 @@ import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import ai.platon.pulsar.agentic.tools.ToolErrorMapper
 import ai.platon.pulsar.agentic.tools.ToolInvocationLogger
 import ai.platon.pulsar.agentic.tools.ToolRateLimiter
+import ai.platon.pulsar.agentic.tools.ToolResultCache
 import ai.platon.pulsar.agentic.tools.mcpToolName
 import ai.platon.pulsar.agentic.tools.ToolResultTextRenderer
 import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
@@ -69,6 +70,8 @@ class Browser4MCPServer(
     private val toolTargetResolver: ToolTargetResolver = ToolTargetResolver.NONE,
     /** Shared with the private dispatcher so both channels spend the same tokens. */
     private val toolRateLimiter: ToolRateLimiter = ToolRateLimiter.shared,
+    /** Shared with the private dispatcher so a cached read never reaches the browser. */
+    private val toolResultCache: ToolResultCache = ToolResultCache.shared,
 ) {
     private val logger = getLogger(this)
 
@@ -437,6 +440,11 @@ class Browser4MCPServer(
     ): CallToolResult {
         val sessionId = sessionIdArg(arguments)
         val args = buildArgsMap(arguments, registration.spec)
+            // `cache` is addressed to the transport (it bypasses the result cache),
+            // not to the tool: forwarding it made executors with a strict
+            // `validateArgs` reject the call as an extraneous parameter.
+            .filterKeys { it !in CONTROL_ARGS }
+        val cacheBypass = cacheBypassRequested(arguments)
 
         // One id per call: it appears in both log lines, in the metrics labels and
         // in the result `_meta`, so a client can quote it in a bug report.
@@ -509,6 +517,12 @@ class Browser4MCPServer(
 
         rateLimit(registration, sessionId)?.let { return it }
 
+        // A read answered from the cache skips the browser entirely (requirement 10).
+        val cacheBypass = cacheBypassRequested(arguments)
+        toolResultCache.get(registration.spec, sessionId, args, cacheBypass)?.let { cached ->
+            return cachedResult(registration, cached.text, cached.ageMs)
+        }
+
         val toolCall = ToolCall(
             domain = registration.domain,
             method = registration.method,
@@ -521,16 +535,51 @@ class Browser4MCPServer(
                     val evaluate = result.evaluate
                     val exception = evaluate.exception
                     if (exception != null) {
+                        toolResultCache.put(registration.spec, sessionId, args, "", false, cacheBypass)
                         errorResult(
                             "$toolName failed: ${exception.cause?.message ?: exception.expression}",
                             ToolErrorMapper.classify(exception.cause),
                         )
                     } else {
-                        successResult(registration, ToolResultTextRenderer.render(evaluate))
+                        val text = ToolResultTextRenderer.render(evaluate)
+                        toolResultCache.put(registration.spec, sessionId, args, text, true, cacheBypass)
+                        successResult(registration, text)
                     }
                 },
                 onFailure = { errorResult("$toolName failed: ${it.message}", ToolErrorMapper.classify(it)) }
             )
+    }
+
+    /**
+     * Whether the client asked this call to skip the result cache (`cache: false`).
+     *
+     * The flag is read from the raw arguments — it is stripped before dispatch, so
+     * an executor never sees it.
+     */
+    private fun cacheBypassRequested(arguments: JsonObject?): Boolean {
+        val flag = arguments?.get(CACHE_FLAG) as? JsonPrimitive ?: return false
+        return flag.booleanOrNull == false || flag.content.equals("false", ignoreCase = true)
+    }
+
+    /**
+     * A result served from the cache.
+     *
+     * The text is what the original call produced, so a client sees the same
+     * answer; `_meta` marks it as cached together with its age, and the result is
+     * **not** re-validated against `outputSchema` (it already was when produced).
+     */
+    private fun cachedResult(registration: ToolRegistration, text: String, ageMs: Long): CallToolResult {
+        val structured = structuredResult(registration.spec, text)
+        return textResult(text, structured as? JsonObject)
+            .let { result ->
+                val merged = JsonObject(
+                    (result.meta ?: JsonObject(emptyMap())) + mapOf(
+                        CACHED_KEY to JsonPrimitive(true),
+                        CACHE_AGE_KEY to JsonPrimitive(ageMs),
+                    )
+                )
+                result.copy(meta = merged)
+            }
     }
 
     /**
@@ -762,6 +811,18 @@ class Browser4MCPServer(
 
         /** _meta key echoing the call id back to the client. */
         const val REQUEST_ID_KEY = "requestId"
+
+        /** _meta key marking a result served from the result cache. */
+        const val CACHED_KEY = "cached"
+
+        /** _meta key giving the age of a cached result. */
+        const val CACHE_AGE_KEY = "ageMs"
+
+        /** Arguments addressed to the transport rather than to the tool. */
+        val CONTROL_ARGS = setOf("cache")
+
+        /** The client-supplied flag that bypasses the result cache for one call. */
+        const val CACHE_FLAG = "cache"
 
         /** Optional per-call session handle injected into every tool schema. */
         const val SESSION_ID_PARAM = "sessionId"

@@ -2,11 +2,14 @@ package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.agentic.observability.MetricsConfig
 import ai.platon.pulsar.agentic.observability.ToolMetrics
+import ai.platon.pulsar.agentic.tools.ToolCachePolicy
 import ai.platon.pulsar.agentic.tools.ToolRateLimiter
+import ai.platon.pulsar.agentic.tools.ToolResultCache
 import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
 import io.micrometer.core.instrument.MeterRegistry
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.CrossOrigin
+import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
@@ -68,6 +71,7 @@ class McpStatsController {
                 "registry" to registry.javaClass.simpleName,
                 "prometheus" to MetricsConfig.isPrometheus(registry),
                 "rateLimit" to rateLimitStats(),
+                "cache" to cacheStats(),
                 "slowest" to byTool.sortedByDescending { it["p95Ms"] as? Double ?: -1.0 }.take(limit),
                 "tools" to byTool.sortedByDescending { it["calls"] as? Long ?: 0L },
             )
@@ -128,6 +132,23 @@ class McpStatsController {
         "shadowed" to counterSum("tool.rate.limits", kind = "shadow"),
     )
 
+    /**
+     * Result-cache posture (requirement 10): whether it is on, how big it is, and
+     * how well it is doing.
+     */
+    private fun cacheStats(): Map<String, Any?> {
+        val stats = ToolResultCache.shared.stats()
+        return linkedMapOf(
+            "enabled" to stats.enabled,
+            "entries" to stats.entries,
+            "hits" to stats.hits,
+            "misses" to stats.misses,
+            "hitRate" to stats.hitRate,
+            "ttlMultiplier" to stats.ttlMultiplier,
+            "defaultCacheableTools" to ToolCachePolicy.defaultCacheableTools(),
+        )
+    }
+
     /** `error_code` → count, for one tool or for every tool. */
     private fun errorCodeTotals(toolName: String? = null): Map<String, Long> {
         val search = registry.find("tool.errors.by.code")
@@ -155,4 +176,24 @@ class McpStatsController {
     private fun tagValues(name: String): List<String> = registry.find(name)
         .meters()
         .mapNotNull { it.id.getTag("tool_name") }
+
+    /**
+     * The result cache on its own endpoint (requirement 10.4) so an operator can
+     * inspect and clear it without reading the whole stats document.
+     */
+    @GetMapping("/cache/stats")
+    fun cacheStatsEndpoint(): ResponseEntity<Any> = ResponseEntity.ok(cacheStats())
+
+    /**
+     * Clear every cached result.
+     *
+     * Deliberately not a `DELETE /cache/{sessionId}`: a client that needs fresh
+     * data for one call passes `cache: false`, and a session's entries are dropped
+     * when it closes or performs an action.
+     */
+    @DeleteMapping("/cache")
+    fun clearCache(): ResponseEntity<Any> {
+        ToolResultCache.shared.clear()
+        return ResponseEntity.ok(mapOf("cleared" to true) + cacheStats())
+    }
 }
