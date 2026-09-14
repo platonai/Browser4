@@ -238,6 +238,13 @@ class ToolContractMatrixTest {
         println("  - tools with a declared result schema: ${specs.count { !it.outputSchema.isNullOrBlank() }}")
         println("  - task tools: ${specs.count { it.task != null }}")
         println("  - lint errors: $lintErrors")
+        // Which tools still lack an example, per domain: the number says how far the
+        // documentation work has come, the list says where to continue.
+        val withoutExamples = specs.filterNot { spec -> spec.examples.any { it.executable } }
+        withoutExamples.groupingBy { it.domain }.eachCount().entries
+            .sortedByDescending { it.value }
+            .forEach { (domain, count) -> println("  - no executable example: $domain ($count)") }
+        println("  - missing altogether: ${withoutExamples.size}")
 
         assertEquals(emptyList<String>(), uncovered.toList(), "every advertised tool must pass every case")
         assertTrue(specs.size >= 140, "the registry must be fully enumerated, saw ${specs.size}")

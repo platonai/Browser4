@@ -50,19 +50,28 @@
     "domain" : "browser",
     "method" : "closeTab",
     "mcpNames" : [ "browser_close_tab" ],
-    "signature" : "browser.closeTab(index: Int, tabId: String)",
+    "signature" : "browser.closeTab(index: Int? = null, tabId: String? = null)",
     "description" : "Close a tab by zero-based index or GUID, or the current tab when omitted",
     "returnType" : "Boolean",
     "arguments" : [ {
       "name" : "index",
-      "type" : "Int",
-      "required" : true,
-      "description" : "index: Int"
+      "type" : "Int?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Zero-based tab index."
     }, {
       "name" : "tabId",
-      "type" : "String",
-      "required" : true,
-      "description" : "tabId: String"
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Tab GUID; give either this or index."
+    } ],
+    "examples" : [ {
+      "title" : "Close the second tab",
+      "args" : {
+        "index" : "1"
+      },
+      "expectsError" : false
     } ]
   }, {
     "domain" : "browser",
@@ -70,7 +79,11 @@
     "mcpNames" : [ "browser_list_tabs" ],
     "signature" : "browser.listTabs()",
     "description" : "List all tabs with index, guid, title, and url",
-    "returnType" : "List<Map<String, String>>"
+    "returnType" : "List<Map<String, String>>",
+    "examples" : [ {
+      "title" : "List every tab",
+      "expectsError" : false
+    } ]
   }, {
     "domain" : "browser",
     "method" : "newTab",
@@ -84,24 +97,40 @@
       "required" : false,
       "default" : "about:blank",
       "description" : "url: String = about:blank"
+    } ],
+    "examples" : [ {
+      "title" : "Open a new tab on a page",
+      "args" : {
+        "url" : "https://example.com"
+      },
+      "expectsError" : false
     } ]
   }, {
     "domain" : "browser",
     "method" : "switchTab",
     "mcpNames" : [ "browser_switch_tab" ],
-    "signature" : "browser.switchTab(index: Int, tabId: String)",
+    "signature" : "browser.switchTab(index: Int? = null, tabId: String? = null)",
     "description" : "Switch to a specific browser tab by its zero-based index or GUID",
     "returnType" : "WebDriver",
     "arguments" : [ {
       "name" : "index",
-      "type" : "Int",
-      "required" : true,
-      "description" : "index: Int"
+      "type" : "Int?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Zero-based tab index."
     }, {
       "name" : "tabId",
-      "type" : "String",
-      "required" : true,
-      "description" : "tabId: String"
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Tab GUID; give either this or index."
+    } ],
+    "examples" : [ {
+      "title" : "Switch to the second tab",
+      "args" : {
+        "index" : "1"
+      },
+      "expectsError" : false
     } ]
   }, {
     "domain" : "command",
@@ -463,6 +492,13 @@
       "type" : "String",
       "required" : true,
       "description" : "sessionId: String"
+    } ],
+    "examples" : [ {
+      "title" : "Snapshot the page the session is on",
+      "args" : {
+        "sessionId" : "<session-id>"
+      },
+      "expectsError" : false
     } ]
   }, {
     "domain" : "html_snapshot",
@@ -482,6 +518,14 @@
       "required" : false,
       "default" : "false",
       "description" : "clean: Boolean = false"
+    } ],
+    "examples" : [ {
+      "title" : "Export the page HTML",
+      "args" : {
+        "sessionId" : "<session-id>",
+        "clean" : "true"
+      },
+      "expectsError" : false
     } ]
   }, {
     "domain" : "html_snapshot",
@@ -513,12 +557,21 @@
       "required" : false,
       "default" : "5",
       "description" : "depth: Int = 5"
+    } ],
+    "examples" : [ {
+      "title" : "Find selectors for repeated cards",
+      "args" : {
+        "sessionId" : "<session-id>",
+        "selector" : ".product",
+        "max" : "10"
+      },
+      "expectsError" : false
     } ]
   }, {
     "domain" : "html_snapshot",
     "method" : "query",
     "mcpNames" : [ "html_snapshot_query" ],
-    "signature" : "html_snapshot.query(sql: String, url: String, sessionId: String)",
+    "signature" : "html_snapshot.query(sql: String, url: String? = null, sessionId: String)",
     "description" : "Execute an X-SQL query against the current page or a specified URL.",
     "returnType" : "String",
     "arguments" : [ {
@@ -528,20 +581,29 @@
       "description" : "sql: String"
     }, {
       "name" : "url",
-      "type" : "String",
-      "required" : true,
-      "description" : "url: String"
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Page to query; defaults to the session's current page."
     }, {
       "name" : "sessionId",
       "type" : "String",
       "required" : true,
       "description" : "sessionId: String"
+    } ],
+    "examples" : [ {
+      "title" : "Run X-SQL against the current page",
+      "args" : {
+        "sessionId" : "<session-id>",
+        "sql" : "select dom_first_text(dom, 'h1') as title"
+      },
+      "expectsError" : false
     } ]
   }, {
     "domain" : "html_snapshot",
     "method" : "readability",
     "mcpNames" : [ "html_snapshot_readability" ],
-    "signature" : "html_snapshot.readability(sessionId: String, url: String)",
+    "signature" : "html_snapshot.readability(sessionId: String, url: String? = null)",
     "description" : "Extract the main article content (title, byline, site name, excerpt, cleaned HTML, plain text) from the stored HTML snapshot using a Readability-style heuristic. When url is given, the page is fetched independently; otherwise the current session page is used.",
     "returnType" : "String",
     "arguments" : [ {
@@ -551,15 +613,23 @@
       "description" : "sessionId: String"
     }, {
       "name" : "url",
-      "type" : "String",
-      "required" : true,
-      "description" : "url: String"
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Fetch this URL instead of using the current page."
+    } ],
+    "examples" : [ {
+      "title" : "Extract the article of the current page",
+      "args" : {
+        "sessionId" : "<session-id>"
+      },
+      "expectsError" : false
     } ]
   }, {
     "domain" : "html_snapshot",
     "method" : "scrape",
     "mcpNames" : [ "html_snapshot_scrape" ],
-    "signature" : "html_snapshot.scrape(sessionId: String, field: String, selector: String = :root, attrName: String)",
+    "signature" : "html_snapshot.scrape(sessionId: String, field: String, selector: String = :root, attrName: String? = null)",
     "description" : "Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector.",
     "returnType" : "String",
     "arguments" : [ {
@@ -580,15 +650,35 @@
       "description" : "selector: String = :root"
     }, {
       "name" : "attrName",
-      "type" : "String",
-      "required" : true,
-      "description" : "attrName: String"
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Attribute to read when field=attr."
+    } ],
+    "examples" : [ {
+      "title" : "Read one field",
+      "args" : {
+        "sessionId" : "<session-id>",
+        "field" : "title",
+        "selector" : "h1"
+      },
+      "expectsError" : false
+    }, {
+      "title" : "Read a link target",
+      "args" : {
+        "sessionId" : "<session-id>",
+        "field" : "attr",
+        "selector" : "a",
+        "attrName" : "href"
+      },
+      "notes" : "field=attr requires attrName",
+      "expectsError" : false
     } ]
   }, {
     "domain" : "html_snapshot",
     "method" : "scrape_all",
     "mcpNames" : [ "html_snapshot_scrape_all" ],
-    "signature" : "html_snapshot.scrape_all(sessionId: String, field: String, selector: String = :root, attrName: String, offset: Int = 0, limit: Int = -1)",
+    "signature" : "html_snapshot.scrape_all(sessionId: String, field: String, selector: String = :root, attrName: String? = null, offset: Int = 0, limit: Int = -1)",
     "description" : "Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector.",
     "returnType" : "String",
     "arguments" : [ {
@@ -609,9 +699,10 @@
       "description" : "selector: String = :root"
     }, {
       "name" : "attrName",
-      "type" : "String",
-      "required" : true,
-      "description" : "attrName: String"
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Attribute to read when field=attr."
     }, {
       "name" : "offset",
       "type" : "Int",
@@ -624,6 +715,16 @@
       "required" : false,
       "default" : "-1",
       "description" : "limit: Int = -1"
+    } ],
+    "examples" : [ {
+      "title" : "Read every product title",
+      "args" : {
+        "sessionId" : "<session-id>",
+        "field" : "text",
+        "selector" : ".product > h2",
+        "limit" : "20"
+      },
+      "expectsError" : false
     } ]
   }, {
     "domain" : "html_snapshot",
@@ -637,6 +738,13 @@
       "type" : "String",
       "required" : true,
       "description" : "sessionId: String"
+    } ],
+    "examples" : [ {
+      "title" : "Summarise the current page",
+      "args" : {
+        "sessionId" : "<session-id>"
+      },
+      "expectsError" : false
     } ]
   }, {
     "domain" : "memory",
@@ -650,12 +758,19 @@
       "type" : "String",
       "required" : true,
       "description" : "taskId: String"
+    } ],
+    "examples" : [ {
+      "title" : "Forget a task",
+      "args" : {
+        "taskId" : "<task-id>"
+      },
+      "expectsError" : false
     } ]
   }, {
     "domain" : "memory",
     "method" : "note",
     "mcpNames" : [ "memory_note" ],
-    "signature" : "memory.note(key: String, value: String, taskId: String)",
+    "signature" : "memory.note(key: String, value: String, taskId: String? = null)",
     "description" : "Write one working-memory note. Notes are re-injected into the conversation every round and survive context compression — use them for stable cross-step conclusions, confirmed assumptions, and pending todos.",
     "returnType" : "String",
     "arguments" : [ {
@@ -670,9 +785,18 @@
       "description" : "value: String"
     }, {
       "name" : "taskId",
-      "type" : "String",
-      "required" : true,
-      "description" : "taskId: String"
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Task the note belongs to; defaults to the current task."
+    } ],
+    "examples" : [ {
+      "title" : "Remember a conclusion",
+      "args" : {
+        "key" : "price",
+        "value" : "the product costs 19.99"
+      },
+      "expectsError" : false
     } ]
   }, {
     "domain" : "memory",
@@ -704,6 +828,13 @@
       "required" : false,
       "default" : "0",
       "description" : "Events to include after seq."
+    } ],
+    "examples" : [ {
+      "title" : "Read a task's events",
+      "args" : {
+        "taskId" : "<task-id>"
+      },
+      "expectsError" : false
     } ]
   }, {
     "domain" : "memory",
@@ -729,6 +860,13 @@
       "required" : false,
       "default" : "10",
       "description" : "Maximum number of hits (1-50)."
+    } ],
+    "examples" : [ {
+      "title" : "Find past work on a topic",
+      "args" : {
+        "query" : "amazon price"
+      },
+      "expectsError" : false
     } ]
   }, {
     "domain" : "skill",
@@ -905,6 +1043,13 @@
       "required" : true,
       "description" : "The selector of the element, multiple formats supported. Used to calculate the bounding box."
     } ],
+    "examples" : [ {
+      "title" : "Measure an element",
+      "args" : {
+        "selector" : "#hero"
+      },
+      "expectsError" : false
+    } ],
     "help" : "Return the bounding box of an element located by [selector].\n\nIf the element does not exist, returns null."
   }, {
     "domain" : "tab",
@@ -914,8 +1059,7 @@
     "description" : "Brings the browser window to the front.",
     "returnType" : "Unit",
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.bringToFront()\n     *",
+      "title" : "Focus the tab",
       "expectsError" : false
     } ],
     "help" : "Brings the browser window to the front.\n\n```kotlin driver.bringToFront() ```"
@@ -932,6 +1076,13 @@
       "required" : true,
       "description" : "The selector of the element, multiple formats supported. If there are multiple matching elements, the first will be checked."
     } ],
+    "examples" : [ {
+      "title" : "Tick a checkbox",
+      "args" : {
+        "selector" : "#terms"
+      },
+      "expectsError" : false
+    } ],
     "help" : "This method check an element with [selector]. If there's no element matching [selector], nothing to do.\n\nelements, the first will be checked."
   }, {
     "domain" : "tab",
@@ -941,8 +1092,7 @@
     "description" : "Clears browser cookies.",
     "returnType" : "Unit",
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.clearBrowserCookies()\n     *",
+      "title" : "Clear cookies",
       "expectsError" : false
     } ],
     "help" : "Clears browser cookies.\n\n```kotlin driver.clearBrowserCookies() ```"
@@ -1044,8 +1194,11 @@
       "description" : "The number of times to click."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.clickTextMatches(\"button\", \"submit\")\n     *",
+      "title" : "Click the first row whose text matches",
+      "args" : {
+        "selector" : "button",
+        "pattern" : "Buy now"
+      },
       "expectsError" : false
     } ],
     "help" : "This method clicks an element with [selector] whose text content matches [pattern], and then focuses it.\n\nIf there's no element matching [selector], or the element's text content doesn't match [pattern], nothing to do.\n\n```kotlin driver.clickTextMatches(\"button\", \"submit\") ```\n\nTODO: use playwright style selector which supports text matching, for example: `button:has-text(\"submit\")`\n\nelements, the first will be focused."
@@ -1061,6 +1214,13 @@
       "type" : "String",
       "required" : true,
       "description" : "The selector of the element, multiple formats supported. Used to calculate the clickable point."
+    } ],
+    "examples" : [ {
+      "title" : "Find the clickable point",
+      "args" : {
+        "selector" : "#submit"
+      },
+      "expectsError" : false
     } ],
     "help" : "Calculate the clickable point of an element located by [selector].\n\nIf the element does not exist, or is not clickable, returns null."
   }, {
@@ -1093,6 +1253,10 @@
     "signature" : "tab.currentUrl()",
     "description" : "Returns a string representing the current URL that the browser is looking at.",
     "returnType" : "String",
+    "examples" : [ {
+      "title" : "Current URL",
+      "expectsError" : false
+    } ],
     "help" : "Returns a string representing the current URL that the browser is looking at.\n\nThe current url is always the main frame's `document.documentURI` if the browser succeed to return it, and is displayed in the browser's address bar.\n\nIf the browser failed to return a proper url, returns the passed in url to navigate, just like a real user enter a url in the address bar but the browser failed to load the page.\n\nNOTE: the url can be non-standard, for example:\n\nabout:blank chrome://newtab chrome://settings\n\nsee [ai.platon.cdt.kt.protocol.types.page.NavigationEntry.userTypedURL]"
   }, {
     "domain" : "tab",
@@ -1185,6 +1349,10 @@
       "required" : false,
       "default" : "null",
       "description" : "promptText: String? = null"
+    } ],
+    "examples" : [ {
+      "title" : "Accept a pending dialog",
+      "expectsError" : false
     } ]
   }, {
     "domain" : "tab",
@@ -1192,7 +1360,11 @@
     "mcpNames" : [ "dialog_dismiss" ],
     "signature" : "tab.dialogDismiss()",
     "description" : "Dismisses the dialog.",
-    "returnType" : "Unit"
+    "returnType" : "Unit",
+    "examples" : [ {
+      "title" : "Dismiss a pending dialog",
+      "expectsError" : false
+    } ]
   }, {
     "domain" : "tab",
     "method" : "documentURI",
@@ -1200,6 +1372,10 @@
     "signature" : "tab.documentURI()",
     "description" : "Returns the document location as a string.",
     "returnType" : "String",
+    "examples" : [ {
+      "title" : "Read the document URI",
+      "expectsError" : false
+    } ],
     "help" : "Returns the document location as a string.\n\nThis property equals to javascript `document.documentURI`.\n\nThe `document.URL` property which returns the same value. The `document.documentURI` property can be used on any document types, while the `document.URL` property can only be used on HTML documents."
   }, {
     "domain" : "tab",
@@ -1218,6 +1394,14 @@
       "type" : "String",
       "required" : true,
       "description" : "The selector of the element, multiple formats supported. Identifies the drop target."
+    } ],
+    "examples" : [ {
+      "title" : "Drag one element onto another",
+      "args" : {
+        "sourceSelector" : "#card-1",
+        "targetSelector" : "#done"
+      },
+      "expectsError" : false
     } ],
     "help" : "Drags the element identified by [sourceSelector] onto the element identified by [targetSelector].\n\nThe implementation dispatches an HTML5 drag sequence between the source and target elements using a shared `DataTransfer` payload so selector-to-selector drag flows can be asserted reliably by automation clients."
   }, {
@@ -1377,8 +1561,10 @@
       "description" : "Optional parameters for the CDP command."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* // Screenshot the page as JPEG\n     * val result = driver.executeCdpCommand(\"Page.captureScreenshot\", mapOf(\"format\" to \"jpeg\", \"quality\" to 80))\n     *\n     * // Get all cookies\n     * val cookies = driver.executeCdpCommand(\"Network.getCookies\")\n     *",
+      "title" : "Ask Chrome for the document root",
+      "args" : {
+        "method" : "DOM.getDocument"
+      },
       "expectsError" : false
     } ],
     "help" : "Execute a Chrome DevTools Protocol (CDP) command and return the deserialized result.\n\nThis is an extension point for advanced scenarios that are not yet covered by the high-level WebDriver API. Use it to issue arbitrary CDP commands directly against the current page target.\n\nThe return value is the deserialized CDP response (Map, List, String, Number, Boolean, or null).\n\nExample: ```kotlin // Screenshot the page as JPEG val result = driver.executeCdpCommand(\"Page.captureScreenshot\", mapOf(\"format\" to \"jpeg\", \"quality\" to 80))\n\n// Get all cookies val cookies = driver.executeCdpCommand(\"Network.getCookies\") ```"
@@ -1396,8 +1582,10 @@
       "description" : "The selector of the element, multiple formats supported. The element is checked for existence."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.exists(\"h2.title\")\n     *",
+      "title" : "Check an element exists",
+      "args" : {
+        "selector" : "#cart"
+      },
       "expectsError" : false
     } ],
     "help" : "Returns whether the element exists.\n\n```kotlin driver.exists(\"h2.title\") ```"
@@ -1420,8 +1608,11 @@
       "description" : "The text to fill."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.fill(\"input[name='q']\", \"Hello, World!\")\n     *",
+      "title" : "Fill a search box",
+      "args" : {
+        "selector" : "#q",
+        "text" : "browser4"
+      },
       "expectsError" : false
     } ],
     "help" : "This method emulates inserting text that doesn't come from a key press.\n\nUnlike [type], this method clears the existing value before typing.\n\n```kotlin driver.fill(\"input[name='q']\", \"Hello, World!\") ```\n\nthen filled with text. If there are multiple matching elements, the first will be focused."
@@ -1439,8 +1630,10 @@
       "description" : "The selector of the element, multiple formats supported. If there are multiple matching elements, the first will be focused."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.focus(\"input[name='q']\")\n     *",
+      "title" : "Focus an input",
+      "args" : {
+        "selector" : "#email"
+      },
       "expectsError" : false
     } ],
     "help" : "This method fetches an element with `selector` and focuses it.\n\nIf there's no element matching `selector`, nothing to do.\n\n```kotlin driver.focus(\"input[name='q']\") ```\n\nelements, the first will be focused."
@@ -1487,6 +1680,13 @@
       "required" : true,
       "description" : "CSS selector or element reference (e5, backend:15)."
     } ],
+    "examples" : [ {
+      "title" : "Build a stable locator",
+      "args" : {
+        "selector" : "#submit"
+      },
+      "expectsError" : false
+    } ],
     "help" : "Generates a unique CSS selector path for the element located by [selector].\n\nWalks up the DOM from the target element, building a CSS selector segment for each ancestor using the best available strategy: `#id`, `tag.stable-classes`, or `tag:nth-of-type(n)`. The resulting path is joined with `>` separators, producing a concise, human-readable selector suitable for use in other commands."
   }, {
     "domain" : "tab",
@@ -1496,8 +1696,7 @@
     "description" : "Returns the cookies of the current page.",
     "returnType" : "List<Map<String, String>>",
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* val cookies = driver.getCookies()\n     *",
+      "title" : "List cookies",
       "expectsError" : false
     } ],
     "help" : "Returns the cookies of the current page.\n\n```kotlin val cookies = driver.getCookies() ```"
@@ -1508,6 +1707,10 @@
     "signature" : "tab.goBack()",
     "description" : "Navigates the browser to the previous page in the navigation history.",
     "returnType" : "Unit",
+    "examples" : [ {
+      "title" : "Go back",
+      "expectsError" : false
+    } ],
     "help" : "Navigates the browser to the previous page in the navigation history.\n\nThis method is expected to use the browser's navigation history to move back to the previous page. It should handle any exceptions that may occur during the navigation process."
   }, {
     "domain" : "tab",
@@ -1516,6 +1719,10 @@
     "signature" : "tab.goForward()",
     "description" : "Navigates the browser to the next page in the navigation history.",
     "returnType" : "Unit",
+    "examples" : [ {
+      "title" : "Go forward",
+      "expectsError" : false
+    } ],
     "help" : "Navigates the browser to the next page in the navigation history.\n\nThis method is expected to use the browser's navigation history to move forward to the next page. It should handle any exceptions that may occur during the navigation process."
   }, {
     "domain" : "tab",
@@ -1554,8 +1761,10 @@
       "description" : "The selector of the element, multiple formats supported."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.hover(\"h1\")\n     *",
+      "title" : "Hover a menu",
+      "args" : {
+        "selector" : "#menu"
+      },
       "expectsError" : false
     } ],
     "help" : "This method hovers over the element.\n\n1. Scroll the element into view if needed. 2. Move mouse to hover over a random position near the center of the element.\n\n```kotlin driver.hover(\"h1\") ```"
@@ -1611,8 +1820,10 @@
       "description" : "The selector of the element, multiple formats supported. The element is checked for visibility state."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.isVisible(\"input[name='q']\")\n     *",
+      "title" : "Check an element is visible",
+      "args" : {
+        "selector" : "#banner"
+      },
       "expectsError" : false
     } ],
     "help" : "Returns whether the element is visible.\n\n```kotlin driver.isVisible(\"input[name='q']\") ```"
@@ -1717,8 +1928,10 @@
       "description" : "The click count associated with the press event."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.mouseDown()\n     * driver.mouseDown(\"right\")\n     *",
+      "title" : "Press and hold the left button",
+      "args" : {
+        "button" : "left"
+      },
       "expectsError" : false
     } ],
     "help" : "Presses a mouse button at the current mouse position.\n\n```kotlin driver.mouseDown() driver.mouseDown(\"right\") ```"
@@ -1741,8 +1954,11 @@
       "description" : "The y coordinate to move to."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.mouseMove(100.0, 200.0)\n     *",
+      "title" : "Move the pointer",
+      "args" : {
+        "x" : "320",
+        "y" : "180"
+      },
       "expectsError" : false
     } ],
     "help" : "Moves the mouse to the position specified by [x] and [y].\n\n```kotlin driver.mouseMove(100.0, 200.0) ```"
@@ -1767,8 +1983,10 @@
       "description" : "The click count associated with the release event."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.mouseUp()\n     * driver.mouseUp(\"right\")\n     *",
+      "title" : "Release the left button",
+      "args" : {
+        "button" : "left"
+      },
       "expectsError" : false
     } ],
     "help" : "Releases a mouse button at the current mouse position.\n\n```kotlin driver.mouseUp() driver.mouseUp(\"right\") ```"
@@ -1798,8 +2016,11 @@
       "description" : "The distance to wheel vertically."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.mouseWheel(\".scrollable-panel\", 0.0, 200.0)\n     *",
+      "title" : "Wheel inside an element",
+      "args" : {
+        "selector" : "#list",
+        "deltaY" : "300"
+      },
       "expectsError" : false
     } ],
     "help" : "Scrolls the mouse wheel on a specific element identified by [selector].\n\nThe element is scrolled into view if needed, the mouse is moved to a random position near the element's center, and then the wheel event is dispatched.\n\n```kotlin driver.mouseWheel(\".scrollable-panel\", 0.0, 200.0) ```"
@@ -1916,6 +2137,10 @@
     "signature" : "tab.nanoDOMTree()",
     "description" : "Retrieves a lightweight version of the DOM tree (NanoDOMTree).",
     "returnType" : "NanoDOMTree?",
+    "examples" : [ {
+      "title" : "Dump the DOM as YAML",
+      "expectsError" : false
+    } ],
     "help" : "Retrieves a lightweight version of the DOM tree (NanoDOMTree).\n\nThe NanoDOMTree is based on the accessibility tree and enhanced with DOM and document snapshot information. It is designed to be a compact representation suitable for AI processing and analysis."
   }, {
     "domain" : "tab",
@@ -2070,8 +2295,10 @@
       "description" : "The URL to which the web driver should navigate. Must be a valid URL string."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.open(\"https://www.example.com\")\n     *",
+      "title" : "Open a page in a new tab",
+      "args" : {
+        "url" : "https://example.com"
+      },
       "expectsError" : false
     } ],
     "help" : "Opens the specified URL in the web driver.\n\nThis function navigates the web driver to the provided URL and waits for the navigation to complete. It is a suspend function, meaning it can be used within coroutines for asynchronous execution.\n\nExample usage: ```kotlin driver.open(\"https://www.example.com\") ```"
@@ -2089,8 +2316,10 @@
       "description" : "The selector of the element, multiple formats supported."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* val html = driver.outerHTML(\"h2.title\")\n     *",
+      "title" : "Read the outer HTML of a node",
+      "args" : {
+        "selector" : "#price"
+      },
       "expectsError" : false
     } ],
     "help" : "Returns the node's HTML markup, the node is located by [selector].\n\nIf the node does not exist, returns null.\n\n```kotlin val html = driver.outerHTML(\"h2.title\") ```"
@@ -2102,8 +2331,7 @@
     "description" : "Returns the source of the last loaded page.",
     "returnType" : "String?",
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* val pageSource = driver.pageSource()\n     *",
+      "title" : "Read the page HTML",
       "expectsError" : false
     } ],
     "help" : "Returns the source of the last loaded page.\n\nIf the page has been modified after loading (for example, by JavaScript) there is no guarantee that the returned text is that of the modified page.\n\nPageSource and outerHTML:\n\n- pageSource: returns document HTML markup, will support non-HTML document - outerHTML: returns document HTML markup, for HTML document only\n\n```kotlin val pageSource = driver.pageSource() ```"
@@ -2114,6 +2342,10 @@
     "signature" : "tab.pause()",
     "description" : "Force the page pauses all navigations and PENDING resource fetches.",
     "returnType" : "Unit",
+    "examples" : [ {
+      "title" : "Pause the driver",
+      "expectsError" : false
+    } ],
     "help" : "Force the page pauses all navigations and PENDING resource fetches.\n\nIf the page loading pauses, the user can still interact with the page, and therefore resources can continue to load."
   }, {
     "domain" : "tab",
@@ -2122,6 +2354,10 @@
     "signature" : "tab.pdf()",
     "description" : "Print the current page as PDF.",
     "returnType" : "String?",
+    "examples" : [ {
+      "title" : "Print the page to PDF",
+      "expectsError" : false
+    } ],
     "help" : "Print the current page as PDF.\n\nReturns a Base64 encoded PDF document generated via Chrome DevTools Protocol Page.printToPDF. Uses A4 paper size, portrait orientation, and prints background graphics by default."
   }, {
     "domain" : "tab",
@@ -2150,6 +2386,10 @@
     "signature" : "tab.referrer()",
     "description" : "The referrer property returns the URI of the page that linked to this page.",
     "returnType" : "String",
+    "examples" : [ {
+      "title" : "Read the referrer",
+      "expectsError" : false
+    } ],
     "help" : "The referrer property returns the URI of the page that linked to this page.\n\nThe value is an empty string if the user navigated to the page directly (not through a link, but, for example, by using a bookmark).\n\nInside an <iframe>, the referrer will initially be set to the same value as the href of the parent window's Window.location."
   }, {
     "domain" : "tab",
@@ -2158,6 +2398,10 @@
     "signature" : "tab.reload()",
     "description" : "Reloads the current page.",
     "returnType" : "Unit",
+    "examples" : [ {
+      "title" : "Reload the page",
+      "expectsError" : false
+    } ],
     "help" : "Reloads the current page.\n\nThis method should trigger a reload of the current page, similar to how a user would refresh the page in a browser."
   }, {
     "domain" : "tab",
@@ -2176,6 +2420,14 @@
       "type" : "Int",
       "required" : true,
       "description" : "height: Int"
+    } ],
+    "examples" : [ {
+      "title" : "Resize the viewport",
+      "args" : {
+        "width" : "1280",
+        "height" : "800"
+      },
+      "expectsError" : false
     } ]
   }, {
     "domain" : "tab",
@@ -2233,8 +2485,10 @@
       "description" : "Whether to perform a deterministic smooth scrolling sequence. If false a single `window.scrollTo()` is executed."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* // Scroll down 200px smoothly (default)\n     * driver.scrollBy()\n     * // Scroll up 500px immediately\n     * driver.scrollBy(-500.0, smooth = false)\n     * // Scroll down one viewport height, smooth\n     * val y = driver.scrollBy(driver.viewportHeight(), smooth = true)\n     *",
+      "title" : "Scroll down one viewport",
+      "args" : {
+        "pixels" : "800"
+      },
       "expectsError" : false
     } ],
     "help" : "Scrolls the current page frame vertically by the given number of pixels.\n\nPositive values scroll down, negative values scroll up. The target position is clamped to the scrollable range [0, scrollHeight - viewportHeight].\n\nWhen [smooth] is true a deterministic, step‑wise scrolling algorithm is used (instead of relying on the browser's native smooth scrolling) for higher stability: it issues incremental `window.scrollTo()` calls and waits for the viewport to settle after each step. This reduces race conditions with lazy‑loaded content or async layout changes and yields more predictable final positions.\n\nTypical usage: ```kotlin // Scroll down 200px smoothly (default) driver.scrollBy() // Scroll up 500px immediately driver.scrollBy(-500.0, smooth = false) // Scroll down one viewport height, smooth val y = driver.scrollBy(driver.viewportHeight(), smooth = true) ```\n\n`window.scrollTo()` is executed."
@@ -2272,8 +2526,10 @@
       "description" : "The selector of the element, multiple formats supported. If there are multiple matching elements, the first will be scrolled into view."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.scrollTo(\"h2.title\")\n     *",
+      "title" : "Scroll an element into view",
+      "args" : {
+        "selector" : "#footer"
+      },
       "expectsError" : false
     } ],
     "help" : "This method fetches an element with [selector], scrolls it into view if needed.\n\nIf there's no element matching [selector], the method does nothing.\n\n```kotlin driver.scrollTo(\"h2.title\") ```\n\nelements, the first will be scrolled into view."
@@ -2285,8 +2541,7 @@
     "description" : "The current page frame scrolls to the bottom.",
     "returnType" : "Double",
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.scrollToBottom()\n     *",
+      "title" : "Scroll to the bottom",
       "expectsError" : false
     } ],
     "help" : "The current page frame scrolls to the bottom.\n\n```kotlin driver.scrollToBottom() ```"
@@ -2317,8 +2572,7 @@
     "description" : "The current page frame scrolls to the top.",
     "returnType" : "Double",
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.scrollToTop()\n     *",
+      "title" : "Scroll to the top",
       "expectsError" : false
     } ],
     "help" : "The current page frame scrolls to the top.\n\n```kotlin driver.scrollToTop() ```"
@@ -2342,8 +2596,10 @@
       "description" : "smooth: Boolean = true"
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.scrollToViewport(0.0)\n     * driver.scrollToViewport(0.5)\n     * driver.scrollToViewport(1.5)\n     * driver.scrollToViewport(2.0)\n     *",
+      "title" : "Jump to the third viewport",
+      "args" : {
+        "n" : "3"
+      },
       "expectsError" : false
     } ],
     "help" : "Scroll to the given 0-based viewport position.\n\n```kotlin driver.scrollToViewport(0.0) driver.scrollToViewport(0.5) driver.scrollToViewport(1.5) driver.scrollToViewport(2.0) ```\n\n0.00 means at the top of the first screen, 1.50 means halfway through the second screen."
@@ -2501,6 +2757,14 @@
       "type" : "String",
       "required" : true,
       "description" : "The value or label of the option to select"
+    } ],
+    "examples" : [ {
+      "title" : "Pick a country",
+      "args" : {
+        "selector" : "#country",
+        "value" : "CN"
+      },
+      "expectsError" : false
     } ]
   }, {
     "domain" : "tab",
@@ -2576,8 +2840,12 @@
       "description" : "The attribute value to set."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.setAttribute(\"h2.title\", \"class\", \"header\")\n     *",
+      "title" : "Set an attribute before clicking",
+      "args" : {
+        "selector" : "#q",
+        "attrName" : "data-test",
+        "attrValue" : "1"
+      },
       "expectsError" : false
     } ],
     "help" : "Set the attribute of an element located by [selector].\n\n```kotlin driver.setAttribute(\"h2.title\", \"class\", \"header\") ```"
@@ -2675,6 +2943,10 @@
     "signature" : "tab.stop()",
     "description" : "Force the page stop all navigations and RELEASES all resources.",
     "returnType" : "Unit",
+    "examples" : [ {
+      "title" : "Stop the driver",
+      "expectsError" : false
+    } ],
     "help" : "Force the page stop all navigations and RELEASES all resources.\n\nInteraction with the stop page results in undefined behavior and the results should not be trusted.\n\nIf a web driver stops, it can later be used to visit other pages."
   }, {
     "domain" : "tab",
@@ -2691,8 +2963,10 @@
       "description" : "The selector of the element, multiple formats supported. If null, targets the document body."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* val bodyText = driver.textContent()\n     * val titleText = driver.textContent(\"h1.title\")\n     *",
+      "title" : "Read the text content of a node",
+      "args" : {
+        "selector" : "#price"
+      },
       "expectsError" : false
     } ],
     "help" : "Returns the text content of the document or a specific element.\n\nIf [selector] is null, returns the text content of the entire document (usually `document.body.innerText`). If [selector] is provided, returns the text content of the first matching element.\n\nIf the document or element does not exist, returns null.\n\n```kotlin val bodyText = driver.textContent() val titleText = driver.textContent(\"h1.title\") ```"
@@ -2702,7 +2976,11 @@
     "mcpNames" : [ "title" ],
     "signature" : "tab.title()",
     "description" : "Returns the title of the current page.",
-    "returnType" : "String"
+    "returnType" : "String",
+    "examples" : [ {
+      "title" : "Page title",
+      "expectsError" : false
+    } ]
   }, {
     "domain" : "tab",
     "method" : "type",
@@ -2748,6 +3026,13 @@
       "required" : true,
       "description" : "The selector of the element, multiple formats supported. If there are multiple matching elements, the first will be unchecked."
     } ],
+    "examples" : [ {
+      "title" : "Clear a checkbox",
+      "args" : {
+        "selector" : "#newsletter"
+      },
+      "expectsError" : false
+    } ],
     "help" : "This method uncheck an element with [selector]. If there's no element matching [selector], nothing to do.\n\nelements, the first will be unchecked."
   }, {
     "domain" : "tab",
@@ -2766,6 +3051,14 @@
       "type" : "List<String>",
       "required" : true,
       "description" : "The list of file paths to upload."
+    } ],
+    "examples" : [ {
+      "title" : "Attach a file",
+      "args" : {
+        "selector" : "#file",
+        "paths" : "/tmp/a.pdf"
+      },
+      "expectsError" : false
     } ]
   }, {
     "domain" : "tab",

@@ -71,17 +71,21 @@ second time it is sent (`cached=true` on the batch and on each step).
 ### `browser_close_tab`
 
 ```
-browser.closeTab(index: Int, tabId: String)
+browser.closeTab(index: Int? = null, tabId: String? = null)
 ```
 
 Close a tab by zero-based index or GUID, or the current tab when omitted
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `index` | Int | yes |  | index: Int |
-| `tabId` | String | yes |  | tabId: String |
+| `index` | Int? | no | null | Zero-based tab index. |
+| `tabId` | String? | no | null | Tab GUID; give either this or index. |
 
 Returns: `Boolean`
+
+Examples:
+
+- Close the second tab: `{"index": "1"}`
 
 ### `browser_list_tabs`
 
@@ -92,6 +96,9 @@ browser.listTabs()
 List all tabs with index, guid, title, and url
 
 Returns: `List<Map<String, String>>`
+
+Examples:
+
 
 ### `browser_new_tab`
 
@@ -107,20 +114,28 @@ Create a new tab. Returns guid and url
 
 Returns: `Map<String, String>`
 
+Examples:
+
+- Open a new tab on a page: `{"url": "https://example.com"}`
+
 ### `browser_switch_tab`
 
 ```
-browser.switchTab(index: Int, tabId: String)
+browser.switchTab(index: Int? = null, tabId: String? = null)
 ```
 
 Switch to a specific browser tab by its zero-based index or GUID
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `index` | Int | yes |  | index: Int |
-| `tabId` | String | yes |  | tabId: String |
+| `index` | Int? | no | null | Zero-based tab index. |
+| `tabId` | String? | no | null | Tab GUID; give either this or index. |
 
 Returns: `WebDriver`
+
+Examples:
+
+- Switch to the second tab: `{"index": "1"}`
 
 ## Domain `command`
 
@@ -631,6 +646,10 @@ Capture the current page as an HTML snapshot with metadata, interactive elements
 
 Returns: `String`
 
+Examples:
+
+- Snapshot the page the session is on: `{"sessionId": "<session-id>"}`
+
 ### `html_snapshot_export`
 
 ```
@@ -645,6 +664,10 @@ Export the full, pretty-printed HTML of the current page. Set clean=true to stri
 | `clean` | Boolean | no | false | clean: Boolean = false |
 
 Returns: `String`
+
+Examples:
+
+- Export the page HTML: `{"sessionId": "<session-id>", "clean": "true"}`
 
 ### `html_snapshot_inspect`
 
@@ -663,10 +686,14 @@ Inspect the HTML snapshot and suggest CSS selectors for recurring patterns.
 
 Returns: `String`
 
+Examples:
+
+- Find selectors for repeated cards: `{"sessionId": "<session-id>", "selector": ".product", "max": "10"}`
+
 ### `html_snapshot_query`
 
 ```
-html_snapshot.query(sql: String, url: String, sessionId: String)
+html_snapshot.query(sql: String, url: String? = null, sessionId: String)
 ```
 
 Execute an X-SQL query against the current page or a specified URL.
@@ -674,15 +701,19 @@ Execute an X-SQL query against the current page or a specified URL.
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
 | `sql` | String | yes |  | sql: String |
-| `url` | String | yes |  | url: String |
+| `url` | String? | no | null | Page to query; defaults to the session's current page. |
 | `sessionId` | String | yes |  | sessionId: String |
 
 Returns: `String`
 
+Examples:
+
+- Run X-SQL against the current page: `{"sessionId": "<session-id>", "sql": "select dom_first_text(dom, 'h1') as title"}`
+
 ### `html_snapshot_readability`
 
 ```
-html_snapshot.readability(sessionId: String, url: String)
+html_snapshot.readability(sessionId: String, url: String? = null)
 ```
 
 Extract the main article content (title, byline, site name, excerpt, cleaned HTML, plain text) from the stored HTML snapshot using a Readability-style heuristic. When url is given, the page is fetched independently; otherwise the current session page is used.
@@ -690,14 +721,18 @@ Extract the main article content (title, byline, site name, excerpt, cleaned HTM
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
 | `sessionId` | String | yes |  | sessionId: String |
-| `url` | String | yes |  | url: String |
+| `url` | String? | no | null | Fetch this URL instead of using the current page. |
 
 Returns: `String`
+
+Examples:
+
+- Extract the article of the current page: `{"sessionId": "<session-id>"}`
 
 ### `html_snapshot_scrape`
 
 ```
-html_snapshot.scrape(sessionId: String, field: String, selector: String = :root, attrName: String)
+html_snapshot.scrape(sessionId: String, field: String, selector: String = :root, attrName: String? = null)
 ```
 
 Extract text, textcontent, html, or an attribute value from a single element matching a CSS selector.
@@ -707,14 +742,20 @@ Extract text, textcontent, html, or an attribute value from a single element mat
 | `sessionId` | String | yes |  | sessionId: String |
 | `field` | String | yes |  | field: String |
 | `selector` | String | no | :root | selector: String = :root |
-| `attrName` | String | yes |  | attrName: String |
+| `attrName` | String? | no | null | Attribute to read when field=attr. |
 
 Returns: `String`
+
+Examples:
+
+- Read one field: `{"sessionId": "<session-id>", "field": "title", "selector": "h1"}`
+- Read a link target: `{"sessionId": "<session-id>", "field": "attr", "selector": "a", "attrName": "href"}`
+  - field=attr requires attrName
 
 ### `html_snapshot_scrape_all`
 
 ```
-html_snapshot.scrape_all(sessionId: String, field: String, selector: String = :root, attrName: String, offset: Int = 0, limit: Int = -1)
+html_snapshot.scrape_all(sessionId: String, field: String, selector: String = :root, attrName: String? = null, offset: Int = 0, limit: Int = -1)
 ```
 
 Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector.
@@ -724,11 +765,15 @@ Extract text, textcontent, html, or attribute values from ALL elements matching 
 | `sessionId` | String | yes |  | sessionId: String |
 | `field` | String | yes |  | field: String |
 | `selector` | String | no | :root | selector: String = :root |
-| `attrName` | String | yes |  | attrName: String |
+| `attrName` | String? | no | null | Attribute to read when field=attr. |
 | `offset` | Int | no | 0 | offset: Int = 0 |
 | `limit` | Int | no | -1 | limit: Int = -1 |
 
 Returns: `String`
+
+Examples:
+
+- Read every product title: `{"sessionId": "<session-id>", "field": "text", "selector": ".product > h2", "limit": "20"}`
 
 ### `html_snapshot_summary`
 
@@ -743,6 +788,10 @@ Generate a page summary including title, statistics, and detected link groups.
 | `sessionId` | String | yes |  | sessionId: String |
 
 Returns: `String`
+
+Examples:
+
+- Summarise the current page: `{"sessionId": "<session-id>"}`
 
 ## Domain `memory`
 
@@ -760,10 +809,14 @@ Explicitly forget one task from memory (privacy / correction). Removes its event
 
 Returns: `String`
 
+Examples:
+
+- Forget a task: `{"taskId": "<task-id>"}`
+
 ### `memory_note`
 
 ```
-memory.note(key: String, value: String, taskId: String)
+memory.note(key: String, value: String, taskId: String? = null)
 ```
 
 Write one working-memory note. Notes are re-injected into the conversation every round and survive context compression — use them for stable cross-step conclusions, confirmed assumptions, and pending todos.
@@ -772,9 +825,13 @@ Write one working-memory note. Notes are re-injected into the conversation every
 |---|---|---|---|---|
 | `key` | String | yes |  | key: String |
 | `value` | String | yes |  | value: String |
-| `taskId` | String | yes |  | taskId: String |
+| `taskId` | String? | no | null | Task the note belongs to; defaults to the current task. |
 
 Returns: `String`
+
+Examples:
+
+- Remember a conclusion: `{"key": "price", "value": "the product costs 19.99"}`
 
 ### `memory_read`
 
@@ -793,6 +850,10 @@ Read a bounded window of memory events of one task around the event seq (default
 
 Returns: `String`
 
+Examples:
+
+- Read a task's events: `{"taskId": "<task-id>"}`
+
 ### `memory_search`
 
 ```
@@ -808,6 +869,10 @@ Search agent memory (past tasks and tool executions) by keywords. Returns hits w
 | `limit` | Int | no | 10 | Maximum number of hits (1-50). |
 
 Returns: `String`
+
+Examples:
+
+- Find past work on a topic: `{"query": "amazon price"}`
 
 ## Domain `skill`
 
@@ -964,6 +1029,10 @@ Return the bounding box of an element located by [selector].
 
 Returns: `RectD?`
 
+Examples:
+
+- Measure an element: `{"selector": "#hero"}`
+
 <details><summary>Full documentation</summary>
 
 Return the bounding box of an element located by [selector].
@@ -984,12 +1053,6 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.bringToFront()
-       *
-  ```
 
 <details><summary>Full documentation</summary>
 
@@ -1013,6 +1076,10 @@ This method check an element with [selector]. If there's no element matching [se
 
 Returns: `Unit`
 
+Examples:
+
+- Tick a checkbox: `{"selector": "#terms"}`
+
 <details><summary>Full documentation</summary>
 
 This method check an element with [selector]. If there's no element matching [selector], nothing to do.
@@ -1033,12 +1100,6 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.clearBrowserCookies()
-       *
-  ```
 
 <details><summary>Full documentation</summary>
 
@@ -1135,12 +1196,7 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.clickTextMatches("button", "submit")
-       *
-  ```
+- Click the first row whose text matches: `{"selector": "button", "pattern": "Buy now"}`
 
 <details><summary>Full documentation</summary>
 
@@ -1169,6 +1225,10 @@ Calculate the clickable point of an element located by [selector].
 | `selector` | String | yes |  | The selector of the element, multiple formats supported. Used to calculate the clickable point. |
 
 Returns: `PointD?`
+
+Examples:
+
+- Find the clickable point: `{"selector": "#submit"}`
 
 <details><summary>Full documentation</summary>
 
@@ -1229,6 +1289,9 @@ tab.currentUrl()
 Returns a string representing the current URL that the browser is looking at.
 
 Returns: `String`
+
+Examples:
+
 
 <details><summary>Full documentation</summary>
 
@@ -1344,6 +1407,9 @@ Accepts the dialog.
 
 Returns: `Unit`
 
+Examples:
+
+
 ### `dialog_dismiss`
 
 ```
@@ -1354,6 +1420,9 @@ Dismisses the dialog.
 
 Returns: `Unit`
 
+Examples:
+
+
 ### `document_u_r_i`
 
 ```
@@ -1363,6 +1432,9 @@ tab.documentURI()
 Returns the document location as a string.
 
 Returns: `String`
+
+Examples:
+
 
 <details><summary>Full documentation</summary>
 
@@ -1388,6 +1460,10 @@ Drags the element identified by [sourceSelector] onto the element identified by 
 | `targetSelector` | String | yes |  | The selector of the element, multiple formats supported. Identifies the drop target. |
 
 Returns: `Unit`
+
+Examples:
+
+- Drag one element onto another: `{"sourceSelector": "#card-1", "targetSelector": "#done"}`
 
 <details><summary>Full documentation</summary>
 
@@ -1572,16 +1648,7 @@ Returns: `Any?`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * // Screenshot the page as JPEG
-       * val result = driver.executeCdpCommand("Page.captureScreenshot", mapOf("format" to "jpeg", "quality" to 80))
-       *
-       * // Get all cookies
-       * val cookies = driver.executeCdpCommand("Network.getCookies")
-       *
-  ```
+- Ask Chrome for the document root: `{"method": "DOM.getDocument"}`
 
 <details><summary>Full documentation</summary>
 
@@ -1613,12 +1680,7 @@ Returns: `Boolean`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.exists("h2.title")
-       *
-  ```
+- Check an element exists: `{"selector": "#cart"}`
 
 <details><summary>Full documentation</summary>
 
@@ -1645,12 +1707,7 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.fill("input[name='q']", "Hello, World!")
-       *
-  ```
+- Fill a search box: `{"selector": "#q", "text": "browser4"}`
 
 <details><summary>Full documentation</summary>
 
@@ -1680,12 +1737,7 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.focus("input[name='q']")
-       *
-  ```
+- Focus an input: `{"selector": "#email"}`
 
 <details><summary>Full documentation</summary>
 
@@ -1777,6 +1829,10 @@ Generates a unique CSS selector path for the element located by [selector].
 
 Returns: `String?`
 
+Examples:
+
+- Build a stable locator: `{"selector": "#submit"}`
+
 <details><summary>Full documentation</summary>
 
 Generates a unique CSS selector path for the element located by [selector].
@@ -1797,12 +1853,6 @@ Returns: `List<Map<String, String>>`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * val cookies = driver.getCookies()
-       *
-  ```
 
 <details><summary>Full documentation</summary>
 
@@ -1822,6 +1872,9 @@ Navigates the browser to the previous page in the navigation history.
 
 Returns: `Unit`
 
+Examples:
+
+
 <details><summary>Full documentation</summary>
 
 Navigates the browser to the previous page in the navigation history.
@@ -1839,6 +1892,9 @@ tab.goForward()
 Navigates the browser to the next page in the navigation history.
 
 Returns: `Unit`
+
+Examples:
+
 
 <details><summary>Full documentation</summary>
 
@@ -1907,12 +1963,7 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.hover("h1")
-       *
-  ```
+- Hover a menu: `{"selector": "#menu"}`
 
 <details><summary>Full documentation</summary>
 
@@ -2002,12 +2053,7 @@ Returns: `Boolean`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.isVisible("input[name='q']")
-       *
-  ```
+- Check an element is visible: `{"selector": "#banner"}`
 
 <details><summary>Full documentation</summary>
 
@@ -2168,13 +2214,7 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.mouseDown()
-       * driver.mouseDown("right")
-       *
-  ```
+- Press and hold the left button: `{"button": "left"}`
 
 <details><summary>Full documentation</summary>
 
@@ -2201,12 +2241,7 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.mouseMove(100.0, 200.0)
-       *
-  ```
+- Move the pointer: `{"x": "320", "y": "180"}`
 
 <details><summary>Full documentation</summary>
 
@@ -2233,13 +2268,7 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.mouseUp()
-       * driver.mouseUp("right")
-       *
-  ```
+- Release the left button: `{"button": "left"}`
 
 <details><summary>Full documentation</summary>
 
@@ -2267,12 +2296,7 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.mouseWheel(".scrollable-panel", 0.0, 200.0)
-       *
-  ```
+- Wheel inside an element: `{"selector": "#list", "deltaY": "300"}`
 
 <details><summary>Full documentation</summary>
 
@@ -2398,6 +2422,9 @@ tab.nanoDOMTree()
 Retrieves a lightweight version of the DOM tree (NanoDOMTree).
 
 Returns: `NanoDOMTree?`
+
+Examples:
+
 
 <details><summary>Full documentation</summary>
 
@@ -2570,12 +2597,7 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.open("https://www.example.com")
-       *
-  ```
+- Open a page in a new tab: `{"url": "https://example.com"}`
 
 <details><summary>Full documentation</summary>
 
@@ -2603,12 +2625,7 @@ Returns: `String?`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * val html = driver.outerHTML("h2.title")
-       *
-  ```
+- Read the outer HTML of a node: `{"selector": "#price"}`
 
 <details><summary>Full documentation</summary>
 
@@ -2632,12 +2649,6 @@ Returns: `String?`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * val pageSource = driver.pageSource()
-       *
-  ```
 
 <details><summary>Full documentation</summary>
 
@@ -2663,6 +2674,9 @@ Force the page pauses all navigations and PENDING resource fetches.
 
 Returns: `Unit`
 
+Examples:
+
+
 <details><summary>Full documentation</summary>
 
 Force the page pauses all navigations and PENDING resource fetches.
@@ -2680,6 +2694,9 @@ tab.pdf()
 Print the current page as PDF.
 
 Returns: `String?`
+
+Examples:
+
 
 <details><summary>Full documentation</summary>
 
@@ -2724,6 +2741,9 @@ The referrer property returns the URI of the page that linked to this page.
 
 Returns: `String`
 
+Examples:
+
+
 <details><summary>Full documentation</summary>
 
 The referrer property returns the URI of the page that linked to this page.
@@ -2743,6 +2763,9 @@ tab.reload()
 Reloads the current page.
 
 Returns: `Unit`
+
+Examples:
+
 
 <details><summary>Full documentation</summary>
 
@@ -2766,6 +2789,10 @@ Resizes the viewport to the specified width and height.
 | `height` | Int | yes |  | height: Int |
 
 Returns: `Unit`
+
+Examples:
+
+- Resize the viewport: `{"width": "1280", "height": "800"}`
 
 ### `save_storage_state`, `browser_save_storage_state`
 
@@ -2830,17 +2857,7 @@ Returns: `Double`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * // Scroll down 200px smoothly (default)
-       * driver.scrollBy()
-       * // Scroll up 500px immediately
-       * driver.scrollBy(-500.0, smooth = false)
-       * // Scroll down one viewport height, smooth
-       * val y = driver.scrollBy(driver.viewportHeight(), smooth = true)
-       *
-  ```
+- Scroll down one viewport: `{"pixels": "800"}`
 
 <details><summary>Full documentation</summary>
 
@@ -2905,12 +2922,7 @@ Returns: `Double`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.scrollTo("h2.title")
-       *
-  ```
+- Scroll an element into view: `{"selector": "#footer"}`
 
 <details><summary>Full documentation</summary>
 
@@ -2936,12 +2948,6 @@ Returns: `Double`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.scrollToBottom()
-       *
-  ```
 
 <details><summary>Full documentation</summary>
 
@@ -2996,12 +3002,6 @@ Returns: `Double`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.scrollToTop()
-       *
-  ```
 
 <details><summary>Full documentation</summary>
 
@@ -3028,15 +3028,7 @@ Returns: `Double`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.scrollToViewport(0.0)
-       * driver.scrollToViewport(0.5)
-       * driver.scrollToViewport(1.5)
-       * driver.scrollToViewport(2.0)
-       *
-  ```
+- Jump to the third viewport: `{"n": "3"}`
 
 <details><summary>Full documentation</summary>
 
@@ -3257,6 +3249,10 @@ Selects an option in a <select> element.
 
 Returns: `String?`
 
+Examples:
+
+- Pick a country: `{"selector": "#country", "value": "CN"}`
+
 ### `select_property_value_all`
 
 ```
@@ -3335,12 +3331,7 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.setAttribute("h2.title", "class", "header")
-       *
-  ```
+- Set an attribute before clicking: `{"selector": "#q", "attrName": "data-test", "attrValue": "1"}`
 
 <details><summary>Full documentation</summary>
 
@@ -3459,6 +3450,9 @@ Force the page stop all navigations and RELEASES all resources.
 
 Returns: `Unit`
 
+Examples:
+
+
 <details><summary>Full documentation</summary>
 
 Force the page stop all navigations and RELEASES all resources.
@@ -3485,13 +3479,7 @@ Returns: `String?`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * val bodyText = driver.textContent()
-       * val titleText = driver.textContent("h1.title")
-       *
-  ```
+- Read the text content of a node: `{"selector": "#price"}`
 
 <details><summary>Full documentation</summary>
 
@@ -3514,6 +3502,9 @@ tab.title()
 Returns the title of the current page.
 
 Returns: `String`
+
+Examples:
+
 
 ### `type`, `browser_press_sequentially`
 
@@ -3558,6 +3549,10 @@ This method uncheck an element with [selector]. If there's no element matching [
 
 Returns: `Unit`
 
+Examples:
+
+- Clear a checkbox: `{"selector": "#newsletter"}`
+
 <details><summary>Full documentation</summary>
 
 This method uncheck an element with [selector]. If there's no element matching [selector], nothing to do.
@@ -3580,6 +3575,10 @@ Upload files to the element located by [selector].
 | `paths` | List<String> | yes |  | The list of file paths to upload. |
 
 Returns: `Unit`
+
+Examples:
+
+- Attach a file: `{"selector": "#file", "paths": "/tmp/a.pdf"}`
 
 ### `url`
 

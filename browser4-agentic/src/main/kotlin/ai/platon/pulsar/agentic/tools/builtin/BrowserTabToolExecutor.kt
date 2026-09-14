@@ -180,6 +180,9 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             generateAllOnce()
             webDriverToolSpecs.associateByTo(toolSpec) { it.method }
         }
+        // The generated examples are KDoc snippets; replace them with callable ones
+        // (see TabToolExamples) so the published reference is test-input grade.
+        toolSpec.replaceExamples(TabToolExamples.EXECUTABLE)
         toolSpec["eval"] = ToolSpec(
             domain = domain,
             method = "eval",

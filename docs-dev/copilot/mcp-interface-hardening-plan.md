@@ -385,6 +385,21 @@ data class Arg(
 - 与既有资产的分工：**通道相关**的用例（真实 happy path、`SESSION_NOT_FOUND`、端到端限流、缓存回放、批量一致性）由 `Browser4MCPServerTest` / `MCPToolControllerTest` / `ToolRateLimiterTest` / `ToolResultCacheTest` / `BatchExecutorTest`+`BatchToolExecutorTest` 以及 e2e 承担；矩阵负责「公告出来的契约本身自洽且被同一个校验器执行」。
 - 复用：`ToolRegistryFixture`（rest 测试源）统一提供「全部执行器 / 全部 spec」，`ToolDocGeneratorTest` 与矩阵共用同一份注册表视图，避免两处枚举漂移。
 
+**需求 2 — 示例补齐（本轮进展 15/140 → 77/140）**
+- `TabToolExamples`（agentic，独立文件，避免改动 2400 行的 tab 执行器结构）：为 **40 个**高频 tab 方法提供**可调用**示例（`navigate`/`click`/`fill`/`type`/`press`/`waitForSelector`/`evaluateValue`/`screenshot`/`ariaSnapshot`/`drag`/`mouseWheel`/`networkRoute`… 以及 `title`/`currentUrl`/`reload`/`pageSource`/`getCookies` 等无参读），由 `toolSpec.replaceExamples(...)` 覆盖生成 spec 的 KDoc 片段式示例。
+- `ToolExample.runnable`（三态 `Boolean?`，默认 `null`，序列化时省略 → 快照零漂移）：无参工具的**空调用本身就是示例**，否则 `args = emptyMap()` 与「没写示例」无法区分。
+- 其余补齐：`html_snapshot`（8）、`browser`（4）、`memory`（4）；`webdb_export` 示例补全必填 `outputDir`。
+- **示例即契约测试**再次抓到 6 处「描述与校验相反」的真错配（矩阵报出、已修）：
+  | 工具 | 声明为必填 | 实现 | 处理 |
+  |---|---|---|---|
+  | `browser.switchTab` / `closeTab` | `index` **和** `tabId` | 二者其一即可（`takeIf`/`nullable`） | 均改为可选并补说明 |
+  | `memory.note` | `taskId` | `required = false` | 改可选 |
+  | `html_snapshot.scrape` / `scrape_all` | `attrName` | 仅 `field=attr` 需要 | 改可选 |
+  | `html_snapshot.query` | `url` | 「否则用当前页」 | 改可选 |
+  | `html_snapshot.readability` | `url` | `required = false` | 改可选 |
+- 矩阵新增**缺口清单**输出（按域统计缺示例的工具数），把「还要补多少」变成可读数字：当前 `tab 58 / experience 4 / skill 1`（tab 剩余为低频 setter/selector 家族）。
+- **未做**：experience（4）与 skill（1）示例；tab 剩余 58 个低频方法。
+
 **6.4 门禁（已完成）**
 - `bin/test.ps1 mcp-contract` 新增（`mcp` 保持原样）：模块 `browser4-agentic + browser4-rest`，模式包含矩阵、文档漂移、lint、校验器、错误码、限流、缓存、批处理、任务信封、日志与指标、别名一致性。
 - **实测：3 分 50 秒全绿**（agentic 98 项 + rest 12 项，含 `-am` 从源码构建 14 个模块），满足「PR 门禁 < 5 min」。
@@ -396,7 +411,7 @@ data class Arg(
 3. 矩阵自身两处期望写错（要求「必填工具 > 100」而实际 92；把 `sessionId` 当普通必填去删）——已修正为按传输参数语义断言。
 
 **仍存的缺口（诚实记录）**
-- **可执行示例只覆盖 15/140 工具**：没有示例的工具，矩阵只能按类型合成入参，因此「声明为必填、执行器实际可选」这一类错配（历史上 `experience_list`/`memory_search`/`command_run` 都犯过）只有在写了示例的工具上才会被自动抓到。补齐示例是 Phase 1 的 1.1/2.1 收口项，矩阵会成为它的验收器。
+- **可执行示例覆盖 77/140**（本轮从 15 提升）：没有示例的工具，矩阵只能按类型合成入参，因此「声明为必填、执行器实际可选」这类错配（`experience_list`/`memory_search`/`command_run`/`webdb_export`/`browser.switchTab`/`html_snapshot.query` 都犯过）只有在写了示例的工具上才会被自动抓到——**本轮新增示例后立刻又抓到 6 处**。剩余 `tab 58`（低频 setter/selector 家族）+ `experience 4` + `skill 1`，矩阵的缺口清单会持续报数。
 - 浏览器相关用例未进入 PR 门禁（按分层设计如此），依赖 CI 的 e2e 与实际浏览器。
 - 6.3 里提到的 CLI `mock_server.rs`/`scenarios/*` 与 `browser4-tests/browser4-rest-tests` 未在本轮改造中扩展。
 

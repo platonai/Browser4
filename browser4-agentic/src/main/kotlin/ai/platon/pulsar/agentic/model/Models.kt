@@ -201,6 +201,10 @@ data class TaskPolicy(
  * @property code documentation-only snippet (typically harvested from KDoc)
  * @property notes caveats worth knowing before running the call
  * @property expectsError `true` for an example that demonstrates a failure mode
+ * @property runnable marks an example with **no arguments** as executable
+ *   (`title()`, `reload()`): an empty argument list is a valid call, but it is
+ *   indistinguishable from "no example args were written". `null` (the default)
+ *   falls back to [executable]'s arg-based rule, so no serialized example changes.
  */
 data class ToolExample(
     val title: String? = null,
@@ -208,9 +212,10 @@ data class ToolExample(
     val code: String? = null,
     val notes: String? = null,
     val expectsError: Boolean = false,
+    val runnable: Boolean? = null,
 ) {
-    /** Whether this example carries arguments a client (or a test) can send. */
-    val executable: Boolean get() = args.isNotEmpty()
+    /** Whether this example is a call a client (or a test) can actually make. */
+    val executable: Boolean get() = runnable ?: args.isNotEmpty()
 }
 
 /**
