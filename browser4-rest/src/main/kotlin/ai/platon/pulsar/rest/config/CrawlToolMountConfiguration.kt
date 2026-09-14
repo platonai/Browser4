@@ -3,7 +3,7 @@ package ai.platon.pulsar.rest.config
 import ai.platon.pulsar.agent.tool.CrawlToolExecutor
 import ai.platon.pulsar.agentic.tools.ToolMount
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
-import ai.platon.pulsar.rest.api.service.CrawlService
+import ai.platon.pulsar.rest.api.service.crawl.CrawlService
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 

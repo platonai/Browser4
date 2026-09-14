@@ -1,4 +1,4 @@
-package ai.platon.pulsar.rest.api.service
+package ai.platon.pulsar.rest.api.service.crawl
 
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import org.junit.jupiter.api.Assertions.*

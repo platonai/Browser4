@@ -15,7 +15,7 @@ import kotlin.reflect.KClass
  *
  * Used by [ai.platon.pulsar.rest.api.service.SwarmService],
  * [ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner],
- * and [ai.platon.pulsar.rest.api.service.CrawlService] so that async task
+ * and [ai.platon.pulsar.rest.api.service.crawl.CrawlService] so that async task
  * statuses survive server restarts.
  */
 class JsonlPersistence<T : Any>(

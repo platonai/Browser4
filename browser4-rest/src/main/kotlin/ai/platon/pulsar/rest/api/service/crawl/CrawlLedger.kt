@@ -1,4 +1,4 @@
-package ai.platon.pulsar.rest.api.service
+package ai.platon.pulsar.rest.api.service.crawl
 
 import kotlinx.coroutines.CompletableDeferred
 import org.slf4j.LoggerFactory

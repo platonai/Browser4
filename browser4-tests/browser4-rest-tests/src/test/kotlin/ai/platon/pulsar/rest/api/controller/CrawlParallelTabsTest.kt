@@ -1,8 +1,8 @@
 package ai.platon.pulsar.rest.api.controller
 
-import ai.platon.pulsar.rest.api.service.CrawlRequest
-import ai.platon.pulsar.rest.api.service.CrawlResponse
-import ai.platon.pulsar.rest.api.service.CrawlService
+import ai.platon.pulsar.rest.api.service.crawl.CrawlRequest
+import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
+import ai.platon.pulsar.rest.api.service.crawl.CrawlService
 import ai.platon.pulsar.test.TestUrls
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
