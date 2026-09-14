@@ -249,6 +249,71 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         // spec here states what `callFunctionOn` really reads; keep them in
         // sync with the `when (functionName)` branches below.
         // ------------------------------------------------------------------
+        toolSpec["click"] = ToolSpec(
+            domain = domain,
+            method = "click",
+            arguments = listOf(
+                ToolSpec.Arg("selector", "String", null, "CSS or :expr(...) selector of the element to click."),
+                ToolSpec.Arg("count", "Int?", "null", "Click this many times (2 = double click)."),
+                ToolSpec.Arg("modifier", "String?", "null", "Modifier key held during the click (e.g. Control, Shift)."),
+                ToolSpec.Arg("button", "String?", "null", "Mouse button: left | right | middle."),
+                ToolSpec.Arg("autoDismissDialogs", "Boolean?", "false", "Accept any native dialog raised by the click."),
+            ),
+            returnType = "Unit",
+            description = "Click the element matched by selector, optionally with a repeat count, modifier or mouse button.",
+            help = """
+                tab.click(selector: String)
+                tab.click(selector: String, count: Int)
+                tab.click(selector: String, modifier: String)
+
+                count and modifier are mutually exclusive. The upstream WebDriver
+                overloads declare modifier as required; the executor does not, so the
+                advertised contract keeps it optional (a client that only has a
+                selector must not be rejected).
+            """.trimIndent()
+        )
+        toolSpec["dblclick"] = ToolSpec(
+            domain = domain,
+            method = "dblclick",
+            arguments = listOf(
+                ToolSpec.Arg("selector", "String", null, "CSS or :expr(...) selector of the element to double click."),
+                ToolSpec.Arg("modifier", "String?", "null", "Modifier key held during the double click."),
+                ToolSpec.Arg("autoDismissDialogs", "Boolean?", "false", "Accept any native dialog raised by the click."),
+            ),
+            returnType = "Unit",
+            description = "Double click the element matched by selector.",
+            help = """
+                tab.dblclick(selector: String)
+                tab.dblclick(selector: String, modifier: String)
+
+                The upstream overload declares modifier as required; the executor does
+                not, so a selector-only call is valid here.
+            """.trimIndent()
+        )
+        toolSpec["evaluateValue"] = ToolSpec(
+            domain = domain,
+            method = "evaluateValue",
+            arguments = listOf(
+                ToolSpec.Arg("expression", "String?", "null", "JavaScript expression, evaluated in the page."),
+                ToolSpec.Arg("selector", "String?", "null", "Scope the evaluation to this element."),
+                ToolSpec.Arg("functionDeclaration", "String?", "null", "Function body used with 'selector'."),
+                ToolSpec.Arg("awaitPromise", "Boolean?", "false", "Await a promise returned by the expression."),
+                ToolSpec.Arg("waitSelector", "String?", "null", "Wait for this selector before evaluating."),
+                ToolSpec.Arg("waitTimeout", "Long?", "null", "How long to wait for 'waitSelector' (default 30000)."),
+            ),
+            returnType = "Any?",
+            description = "Evaluate JavaScript in the page, or against the element matched by selector.",
+            help = """
+                tab.evaluateValue(expression: String)
+                tab.evaluateValue(selector: String, functionDeclaration: String)
+
+                `expression` is the page-scoped form the CLI and MCP clients use;
+                `selector` + `functionDeclaration` is the element-scoped overload the
+                executor resolves through the driver. The upstream declaration lists
+                the second overload last and without defaults, which would make both
+                of its arguments mandatory for every caller.
+            """.trimIndent()
+        )
         toolSpec["navigate"] = ToolSpec(
             domain = domain,
             method = "navigate",

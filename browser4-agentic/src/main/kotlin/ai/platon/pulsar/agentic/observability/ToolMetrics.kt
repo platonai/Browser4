@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * | `tool.execution.duration.by.name` | timer | `tool_name` | p50/p95/p99 per tool |
  * | `tool.active.calls` | gauge | `component` | in-flight calls |
  * | `tool.validation.failures[.by.type]` | counter | `tool_name`, `validation_type` | argument rejected before dispatch |
+ * | `tool.validation.shadow.violations` | counter | `tool_name`, `validation_type` | argument violation seen but **not** enforced (built-in spec in shadow mode) |
  *
  * Cardinality is bounded on purpose: `tool_name` is a closed set (the specs
  * registered at startup) and `error_code` is a 14-value enum — never a raw
@@ -172,6 +173,26 @@ object ToolMetrics {
     fun recordValidationFailure(toolName: String, validationType: String) {
         registry.counter("tool.validation.failures", "component", "tool").increment()
         registry.counter("tool.validation.failures.by.type",
+            "tool_name", toolName,
+            "validation_type", validationType
+        ).increment()
+    }
+
+    /**
+     * Record a contract violation that was **observed but not enforced** — a
+     * shadow-mode violation for a built-in tool whose spec mirrors the upstream
+     * `WebDriver` interface.
+     *
+     * Kept separate from [recordValidationFailure] on purpose: a shadow violation
+     * means the call was dispatched anyway, so folding it into the rejection
+     * counter would make `/api/mcp/stats` claim failures that never happened.
+     *
+     * @param toolName The advertised tool name
+     * @param validationType The stable [ai.platon.pulsar.agentic.tools.ToolErrorCode]
+     *   wire value the violation maps to
+     */
+    fun recordShadowViolation(toolName: String, validationType: String) {
+        registry.counter("tool.validation.shadow.violations",
             "tool_name", toolName,
             "validation_type", validationType
         ).increment()

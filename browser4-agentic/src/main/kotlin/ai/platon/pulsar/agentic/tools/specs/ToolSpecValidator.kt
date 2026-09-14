@@ -28,6 +28,28 @@ class ToolSpecValidator(
     data class Violation(val code: ToolErrorCode, val message: String)
 
     /**
+     * How a channel treats a contract violation when the violated spec comes
+     * from a built-in domain (`tab`, `system`, `fs`, …) rather than from an
+     * explicitly registered executor.
+     *
+     * Built-in specs mirror the upstream `WebDriver` interface, so they can
+     * disagree with what the executor actually reads (`tab.navigate` used to
+     * advertise `entry: NavigateEntry` while the executor reads `url`).
+     * Rejecting on such a spec would break working calls, so the rollout is
+     * staged: observe first, reject later.
+     */
+    enum class BuiltInPolicy {
+        /** No built-in validation at all. */
+        OFF,
+
+        /** Validate, log and count, then dispatch anyway — the default. */
+        SHADOW,
+
+        /** Reject like the standard MCP server does. */
+        ERROR,
+    }
+
+    /**
      * @param args the arguments about to be forwarded
      * @param contextArgs arguments the transport owns and the executor may read
      *   (e.g. `sessionId`) — never reported as unknown
@@ -100,6 +122,19 @@ class ToolSpecValidator(
         /** Whether `-Dmcp.strictArgs` (default off) rejects undeclared arguments. */
         fun strictModeEnabled(): Boolean =
             System.getProperty("mcp.strictArgs", "false").toBoolean()
+
+        /**
+         * `-Dmcp.validateBuiltinArgs` — `shadow` (default), `error`, or `off`.
+         *
+         * Flip to `error` once the shadow counters in `/api/mcp/stats` show no
+         * traffic hitting an undeclared-argument mismatch.
+         */
+        fun builtInPolicy(): BuiltInPolicy =
+            when (System.getProperty("mcp.validateBuiltinArgs", "shadow").trim().lowercase()) {
+                "off", "false", "none", "disabled" -> BuiltInPolicy.OFF
+                "error", "strict", "true", "enforce" -> BuiltInPolicy.ERROR
+                else -> BuiltInPolicy.SHADOW
+            }
 
         /** The validator a deployment asks for, honouring the system properties. */
         fun fromSystemProperties(): ToolSpecValidator =

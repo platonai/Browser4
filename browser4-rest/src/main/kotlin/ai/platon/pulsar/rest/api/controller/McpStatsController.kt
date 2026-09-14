@@ -61,6 +61,7 @@ class McpStatsController {
                 "failureRate" to if (totalCalls == 0L) 0.0 else totalFailures.toDouble() / totalCalls,
                 "distinctTools" to byTool.size,
                 "validationFailures" to counterSum("tool.validation.failures"),
+                "validationShadowViolations" to counterSum("tool.validation.shadow.violations"),
                 "resultSchemaViolations" to ToolResultValidator.totalViolations(),
                 "errorCodes" to errorCodeTotals(),
                 "registry" to registry.javaClass.simpleName,
@@ -78,6 +79,7 @@ class McpStatsController {
         names += tagValues("tool.calls.failure.by.name")
         names += tagValues("tool.execution.duration.by.name")
         names += tagValues("tool.errors.by.code")
+        names += tagValues("tool.validation.shadow.violations")
 
         return names.map { name ->
             val calls = counterSum("tool.calls.success.by.name", name) +
@@ -102,6 +104,8 @@ class McpStatsController {
                 "p99Ms" to percentiles[0.99],
                 "maxMs" to snapshot?.max(TimeUnit.MILLISECONDS),
                 "errorCodes" to errorCodeTotals(name),
+                // Spec/executor mismatches seen but not enforced (built-in domains).
+                "validationShadowViolations" to counterSum("tool.validation.shadow.violations", name),
             )
         }
     }

@@ -59,7 +59,21 @@ class McpStatsControllerTest {
         assertTrue((body["totalCalls"] as Long) >= 0L)
         assertTrue((body["inflight"] as Int) >= 0)
         assertNotNull(body["resultSchemaViolations"])
+        assertNotNull(body["validationShadowViolations"])
         assertTrue(body.containsKey("slowest") && body.containsKey("errorCodes"))
+    }
+
+    @Test
+    @DisplayName("shadow validation counts are attributed per tool")
+    fun shadowViolationsArePerTool() {
+        ToolMetrics.recordShadowViolation(tool, "MISSING_REQUIRED_ARG")
+        ToolMetrics.recordToolCall(tool, success = true, durationMs = 3)
+
+        val body = requireNotNull(controller.stats(5).body) as Map<*, *>
+        val entry = (body["tools"] as List<*>).filterIsInstance<Map<*, *>>().first { it["tool"] == tool }
+
+        assertEquals(1L, entry["validationShadowViolations"])
+        assertTrue((body["validationShadowViolations"] as Long) >= 1L)
     }
 
     @Test

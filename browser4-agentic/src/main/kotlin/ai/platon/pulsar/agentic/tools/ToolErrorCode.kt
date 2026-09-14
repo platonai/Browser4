@@ -128,7 +128,10 @@ object ToolErrorMapper {
             "missing required parameter" in text -> ToolErrorCode.MISSING_REQUIRED_ARG
             "missing parameter" in text -> ToolErrorCode.MISSING_REQUIRED_ARG
             "is required" in text -> ToolErrorCode.MISSING_REQUIRED_ARG
-            "requires 'url'" in text || "requires \"url\"" in text -> ToolErrorCode.MISSING_REQUIRED_ARG
+            // Executors phrase the alternative-arguments case as
+            // "eval requires 'expression' or ('expression','selector')"; matching
+            // the quoted argument name keeps every such message out of INTERNAL.
+            "requires '" in text || "requires \"" in text -> ToolErrorCode.MISSING_REQUIRED_ARG
 
             "unknown tool" in text -> ToolErrorCode.UNKNOWN_TOOL
             "unsupported domain" in text -> ToolErrorCode.UNKNOWN_TOOL

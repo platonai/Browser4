@@ -106,4 +106,26 @@ class ToolSpecValidatorTest {
         assertTrue(ToolSpecValidator.validationEnabled(), "default is on")
         assertNull(null as String?, "sanity")
     }
+
+    @Test
+    @DisplayName("built-in specs are observed first and enforced only on request")
+    fun builtInPolicyIsShadowByDefault() {
+        val policy = { ToolSpecValidator.builtInPolicy() }
+
+        try {
+            assertEquals(ToolSpecValidator.BuiltInPolicy.SHADOW, policy(), "observe-first is the default")
+
+            System.setProperty("mcp.validateBuiltinArgs", "error")
+            assertEquals(ToolSpecValidator.BuiltInPolicy.ERROR, policy())
+
+            System.setProperty("mcp.validateBuiltinArgs", "off")
+            assertEquals(ToolSpecValidator.BuiltInPolicy.OFF, policy())
+
+            // Anything unrecognised must fall back to the safe mode, never to enforcement.
+            System.setProperty("mcp.validateBuiltinArgs", "yes-please")
+            assertEquals(ToolSpecValidator.BuiltInPolicy.SHADOW, policy())
+        } finally {
+            System.clearProperty("mcp.validateBuiltinArgs")
+        }
+    }
 }

@@ -760,17 +760,33 @@ Clears browser cookies.
 ### `click`
 
 ```
-tab.click(selector: String, modifier: String)
+tab.click(selector: String, count: Int? = null, modifier: String? = null, button: String? = null, autoDismissDialogs: Boolean? = false)
 ```
 
-Focus on an element with [selector] and click it with [modifier] pressed.
+Click the element matched by selector, optionally with a repeat count, modifier or mouse button.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `selector` | String | yes |  | The selector of the element, multiple formats supported. The matching element is clicked. |
-| `modifier` | String | yes |  | The keyboard modifier to press while clicking (e.g., "Shift", "Control", "Alt"). |
+| `selector` | String | yes |  | CSS or :expr(...) selector of the element to click. |
+| `count` | Int? | no | null | Click this many times (2 = double click). |
+| `modifier` | String? | no | null | Modifier key held during the click (e.g. Control, Shift). |
+| `button` | String? | no | null | Mouse button: left \| right \| middle. |
+| `autoDismissDialogs` | Boolean? | no | false | Accept any native dialog raised by the click. |
 
 Returns: `Unit`
+
+<details><summary>Full documentation</summary>
+
+tab.click(selector: String)
+tab.click(selector: String, count: Int)
+tab.click(selector: String, modifier: String)
+
+count and modifier are mutually exclusive. The upstream WebDriver
+overloads declare modifier as required; the executor does not, so the
+advertised contract keeps it optional (a client that only has a
+selector must not be rejected).
+
+</details>
 
 ### `click_matches`
 
@@ -942,17 +958,28 @@ see [ai.platon.cdt.kt.protocol.types.page.NavigationEntry.userTypedURL]
 ### `dblclick`
 
 ```
-tab.dblclick(selector: String, modifier: String)
+tab.dblclick(selector: String, modifier: String? = null, autoDismissDialogs: Boolean? = false)
 ```
 
-Focus on an element with [selector] and double-click it with [modifier] pressed.
+Double click the element matched by selector.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `selector` | String | yes |  | The selector of the element, multiple formats supported. The matching element is double-clicked. |
-| `modifier` | String | yes |  | The keyboard modifier to press while double-clicking. |
+| `selector` | String | yes |  | CSS or :expr(...) selector of the element to double click. |
+| `modifier` | String? | no | null | Modifier key held during the double click. |
+| `autoDismissDialogs` | Boolean? | no | false | Accept any native dialog raised by the click. |
 
 Returns: `Unit`
+
+<details><summary>Full documentation</summary>
+
+tab.dblclick(selector: String)
+tab.dblclick(selector: String, modifier: String)
+
+The upstream overload declares modifier as required; the executor does
+not, so a selector-only call is valid here.
+
+</details>
 
 ### `delay`
 
@@ -1193,17 +1220,34 @@ Returns: `JsEvaluation?`
 ### `evaluate_value`, `browser_evaluate`
 
 ```
-tab.evaluateValue(selector: String, functionDeclaration: String)
+tab.evaluateValue(expression: String? = null, selector: String? = null, functionDeclaration: String? = null, awaitPromise: Boolean? = false, waitSelector: String? = null, waitTimeout: Long? = null)
 ```
 
-Executes JavaScript for the element located by [selector] and returns the result as a JSON-serializable value.
+Evaluate JavaScript in the page, or against the element matched by selector.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `selector` | String | yes |  | The selector of the element, multiple formats supported. |
-| `functionDeclaration` | String | yes |  | The JavaScript function declaration to execute against the matched element. |
+| `expression` | String? | no | null | JavaScript expression, evaluated in the page. |
+| `selector` | String? | no | null | Scope the evaluation to this element. |
+| `functionDeclaration` | String? | no | null | Function body used with 'selector'. |
+| `awaitPromise` | Boolean? | no | false | Await a promise returned by the expression. |
+| `waitSelector` | String? | no | null | Wait for this selector before evaluating. |
+| `waitTimeout` | Long? | no | null | How long to wait for 'waitSelector' (default 30000). |
 
 Returns: `Any?`
+
+<details><summary>Full documentation</summary>
+
+tab.evaluateValue(expression: String)
+tab.evaluateValue(selector: String, functionDeclaration: String)
+
+`expression` is the page-scoped form the CLI and MCP clients use;
+`selector` + `functionDeclaration` is the element-scoped overload the
+executor resolves through the driver. The upstream declaration lists
+the second overload last and without defaults, which would make both
+of its arguments mandatory for every caller.
+
+</details>
 
 ### `evaluate_value_detail`
 

@@ -4,6 +4,7 @@ import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.model.*
+import ai.platon.pulsar.agentic.observability.ToolMetrics
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
@@ -75,6 +76,8 @@ class MCPToolControllerTest {
 
     @AfterEach
     fun tearDown() {
+        System.clearProperty("mcp.validateBuiltinArgs")
+
         // Clean up any test executors leaked into the singleton registry.
         CustomToolRegistry.instance.getAllDomains().forEach {
             CustomToolRegistry.instance.unregister(it)
@@ -1294,6 +1297,93 @@ class MCPToolControllerTest {
             evaluate = resolvedEvaluate,
             message = resolvedEvaluate.exception?.message,
         )
+    }
+
+    // =========================================================================
+    // Built-in contract validation: shadow first, enforce later
+    // =========================================================================
+
+    /**
+     * A session that advertises `tab.navigate(url: String)`.
+     *
+     * Built-in domains are only validated through the sessions the server already
+     * has, so a violation cannot be observed without one.
+     */
+    private fun mockLiveNavigateSpec() {
+        `when`(sessionManager.getAllSessions()).thenReturn(listOf(managedSession))
+        `when`(agentToolManager.getAllToolSpecs()).thenReturn(
+            mapOf(
+                "tab" to mapOf(
+                    "navigate" to ToolSpec(
+                        domain = "tab",
+                        method = "navigate",
+                        arguments = listOf(ToolSpec.Arg("url", "String", null)),
+                        returnType = "Unit",
+                        description = "Navigate the current page to a URL.",
+                    )
+                )
+            )
+        )
+        runBlocking { `when`(agentToolManager.execute(any())).thenReturn(toolCallResult("ok")) }
+    }
+
+    /** How many shadow violations `navigate` has accumulated in this JVM. */
+    private fun shadowViolations(tool: String): Double =
+        ToolMetrics.currentRegistry()
+            .find("tool.validation.shadow.violations")
+            .tag("tool_name", tool)
+            .counter()
+            ?.count() ?: 0.0
+
+    @Test
+    fun `built-in contract violations are observed but not enforced by default`() = runBlocking {
+        mockLiveNavigateSpec()
+        val before = shadowViolations("navigate")
+
+        // 'url' is required by the spec and missing here: a contract violation.
+        val result = controller.callTool(
+            MCPToolCallRequest(tool = "navigate", arguments = mapOf("sessionId" to sessionId)),
+            response,
+        )
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertEquals(false, result.body!!.isError, "shadow mode must not turn a mismatch into a client error")
+        Mockito.verify(agentToolManager).execute(any())
+        assertTrue(
+            shadowViolations("navigate") > before,
+            "the mismatch must be counted so it can be fixed before enforcement is switched on",
+        )
+    }
+
+    @Test
+    fun `built-in contract violations are rejected once the policy says error`() = runBlocking {
+        System.setProperty("mcp.validateBuiltinArgs", "error")
+        mockLiveNavigateSpec()
+
+        val result = controller.callTool(
+            MCPToolCallRequest(tool = "navigate", arguments = mapOf("sessionId" to sessionId)),
+            response,
+        )
+
+        assertTrue(result.body!!.isError, "error policy must reject the malformed call")
+        assertEquals("MISSING_REQUIRED_ARG", result.body!!.errorCode)
+        Mockito.verify(agentToolManager, Mockito.never()).execute(any())
+    }
+
+    @Test
+    fun `built-in validation can be switched off entirely`() = runBlocking {
+        System.setProperty("mcp.validateBuiltinArgs", "off")
+        mockLiveNavigateSpec()
+        val before = shadowViolations("navigate")
+
+        val result = controller.callTool(
+            MCPToolCallRequest(tool = "navigate", arguments = mapOf("sessionId" to sessionId)),
+            response,
+        )
+
+        assertEquals(false, result.body!!.isError)
+        Mockito.verify(agentToolManager).execute(any())
+        assertEquals(before, shadowViolations("navigate"), "off means no validation at all")
     }
 
     // =========================================================================

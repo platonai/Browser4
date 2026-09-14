@@ -194,8 +194,23 @@ data class Arg(
 
 告警标签一律带 `tool_name` + `error_code`，**不要**用 `requestId`/`sessionId` 当标签（高基数）。
 
+**B 通道校验影子模式（2026-09-14，需求 3/5 的前置）**
+- 背景：B 此前只校验「自定义域」工具（`CustomToolRegistry` 里的 spec），`tab_*`/`browser_*` 等内置域完全不过校验——同一非法输入 A 拒绝、B 放行。
+- 做法：新增 `-Dmcp.validateBuiltinArgs=shadow|error|off`，默认 **shadow**。内置域的 spec 由**已存在的会话**解析（`liveSpecOf`，绝不为校验而开会话），命中违规时只记结构化 WARNING + 计数器，**不改调用结果**；插件/业务域（仓库内自著的 spec）照旧强制拒绝；`error` 才与 A 同码拒绝。
+- 为什么不是直接强制：内置 spec 镜像上游 `WebDriver` 接口，错配是**我们的**问题而不是客户端的问题（`navigate` 已经证明过一次）。先观测、后拒绝，与需求 9 的灰度策略一致。
+- 观测口径：日志 `mcp.validation.shadow channel=… tool=… spec=… codes=… args=… details=…`；指标 `tool.validation.shadow.violations{tool_name,validation_type}`（与「已拒绝」的 `tool.validation.failures` **分开计数**，避免把放行的调用算成失败）；`/api/mcp/stats` 新增 `validationShadowViolations`（总量 + 每工具）。
+- **上线 20 分钟就抓到 3 个真 P0**（A 通道当时正在硬拒绝）：
+  | 工具 | 曾公告的签名 | 执行器实际读取 | 影响 |
+  |---|---|---|---|
+  | `tab.click` | `click(selector, modifier)`，`modifier` 必填 | `selector` + 可选 `count`/`modifier`/`button`/`autoDismissDialogs` | 最常用的点击在 A 上不可用 |
+  | `tab.dblclick` | 同上 | `selector` + 可选 `modifier` | 同上 |
+  | `tab.evaluateValue`（别名 `browser_evaluate`，即 CLI `eval`） | `(selector, functionDeclaration)` 两者必填 | `expression`，或 `selector`+`functionDeclaration` | CLI 的 `eval` 在 A 上不可用 |
+  三者在 `BrowserTabToolExecutor` 补显式契约后，实测 A：`navigate`/`click`/`dblclick`/`eval`/`evaluate_value`/`aria_snapshot`/`screenshot` 全部成功返回。
+- 27 个高频 tab 工具重扫：**零**新增 shadow 违规；`/api/mcp/stats` 实测 `validationShadowViolations=5`（来自刻意的空参数探测）、`validationFailures=0`（未把放行调用算成失败）。
+- 收口条件：把 `-Dmcp.validateBuiltinArgs=error` 作为 A/B 同码的目标状态，前提是连续观察期内 shadow 计数为 0。
+
 **已知缺口（诚实记录）**
-- **B 通道只校验「自定义域」工具**：`MCPToolController.validateArguments` 取的是 `CustomToolRegistry` 执行器的 spec（`customExecutor?.getToolSpecs()?… ?: return null`），因此 `tab_*`/`browser_*` 等内置域在 B 上**完全不过参数校验**——同一非法输入 A 拒绝、B 放行，需求 3/5 的「两通道同码」尚未真正成立。不能直接打开：校验一旦覆盖内置域，会立刻暴露同类错配（例如 `evaluateValue` 的两个重载中最后一个是 `(selector, functionDeclaration)`，而 CLI 的 `browser_eval` 只发 `{expression}`）。正确顺序是先把 Phase 6 的契约矩阵（以 spec 的 `examples` 作为 happy-path 入参）跑通，再开校验——列为本阶段发现的下一项 P0。
+- **B 通道只校验「自定义域」工具**：`MCPToolController.validateArguments` 取的是 `CustomToolRegistry` 执行器的 spec，因此 `tab_*`/`browser_*` 等内置域在 B 上曾完全不过校验——同一非法输入 A 拒绝、B 放行，需求 3/5 的「两通道同码」尚未真正成立。**已通过影子模式解决观测问题（见上）**，但默认仍是「观测不拒绝」：把 `-Dmcp.validateBuiltinArgs=error` 打开才是 B 与 A 同码的完成态，需等 shadow 计数连续为 0。
 - 运行时包内**没有** `micrometer-registry-prometheus`（在 `browser4-agentic/pom.xml` 里是 `optional`）→ 线上 `/actuator/prometheus` 返回 404，本轮以 `/api/mcp/stats` + `/actuator/metrics`（实测 `tool.*` 10 个指标可见）作为查询面。需要 Prometheus 抓取时把该依赖以非 optional 引入运行时包即可，代码侧无需改动（`MetricsConfig.isPrometheus` 会自动转为 `true`）。
 - 需求 8.2 的 **OTel span**（`mcp.tool.call` → `agent.execute` → `cdp.*`）本轮未做；现有 `agentic` 侧 OTel 依赖仍是可选的，接入前先确认 bundle 是否携带 OTel SDK。
 - `session.active` / `async.queue.depth` 指标未加（依赖 Phase 4/5 的队列实现）。

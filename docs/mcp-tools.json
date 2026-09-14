@@ -842,20 +842,40 @@
     "domain" : "tab",
     "method" : "click",
     "mcpNames" : [ "click" ],
-    "signature" : "tab.click(selector: String, modifier: String)",
-    "description" : "Focus on an element with [selector] and click it with [modifier] pressed.",
+    "signature" : "tab.click(selector: String, count: Int? = null, modifier: String? = null, button: String? = null, autoDismissDialogs: Boolean? = false)",
+    "description" : "Click the element matched by selector, optionally with a repeat count, modifier or mouse button.",
     "returnType" : "Unit",
     "arguments" : [ {
       "name" : "selector",
       "type" : "String",
       "required" : true,
-      "description" : "The selector of the element, multiple formats supported. The matching element is clicked."
+      "description" : "CSS or :expr(...) selector of the element to click."
+    }, {
+      "name" : "count",
+      "type" : "Int?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Click this many times (2 = double click)."
     }, {
       "name" : "modifier",
-      "type" : "String",
-      "required" : true,
-      "description" : "The keyboard modifier to press while clicking (e.g., \"Shift\", \"Control\", \"Alt\")."
-    } ]
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Modifier key held during the click (e.g. Control, Shift)."
+    }, {
+      "name" : "button",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Mouse button: left | right | middle."
+    }, {
+      "name" : "autoDismissDialogs",
+      "type" : "Boolean?",
+      "required" : false,
+      "default" : "false",
+      "description" : "Accept any native dialog raised by the click."
+    } ],
+    "help" : "tab.click(selector: String)\ntab.click(selector: String, count: Int)\ntab.click(selector: String, modifier: String)\n\ncount and modifier are mutually exclusive. The upstream WebDriver\noverloads declare modifier as required; the executor does not, so the\nadvertised contract keeps it optional (a client that only has a\nselector must not be rejected)."
   }, {
     "domain" : "tab",
     "method" : "clickMatches",
@@ -970,20 +990,28 @@
     "domain" : "tab",
     "method" : "dblclick",
     "mcpNames" : [ "dblclick" ],
-    "signature" : "tab.dblclick(selector: String, modifier: String)",
-    "description" : "Focus on an element with [selector] and double-click it with [modifier] pressed.",
+    "signature" : "tab.dblclick(selector: String, modifier: String? = null, autoDismissDialogs: Boolean? = false)",
+    "description" : "Double click the element matched by selector.",
     "returnType" : "Unit",
     "arguments" : [ {
       "name" : "selector",
       "type" : "String",
       "required" : true,
-      "description" : "The selector of the element, multiple formats supported. The matching element is double-clicked."
+      "description" : "CSS or :expr(...) selector of the element to double click."
     }, {
       "name" : "modifier",
-      "type" : "String",
-      "required" : true,
-      "description" : "The keyboard modifier to press while double-clicking."
-    } ]
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Modifier key held during the double click."
+    }, {
+      "name" : "autoDismissDialogs",
+      "type" : "Boolean?",
+      "required" : false,
+      "default" : "false",
+      "description" : "Accept any native dialog raised by the click."
+    } ],
+    "help" : "tab.dblclick(selector: String)\ntab.dblclick(selector: String, modifier: String)\n\nThe upstream overload declares modifier as required; the executor does\nnot, so a selector-only call is valid here."
   }, {
     "domain" : "tab",
     "method" : "delay",
@@ -1162,20 +1190,47 @@
     "domain" : "tab",
     "method" : "evaluateValue",
     "mcpNames" : [ "evaluate_value", "browser_evaluate" ],
-    "signature" : "tab.evaluateValue(selector: String, functionDeclaration: String)",
-    "description" : "Executes JavaScript for the element located by [selector] and returns the result as a JSON-serializable value.",
+    "signature" : "tab.evaluateValue(expression: String? = null, selector: String? = null, functionDeclaration: String? = null, awaitPromise: Boolean? = false, waitSelector: String? = null, waitTimeout: Long? = null)",
+    "description" : "Evaluate JavaScript in the page, or against the element matched by selector.",
     "returnType" : "Any?",
     "arguments" : [ {
+      "name" : "expression",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "JavaScript expression, evaluated in the page."
+    }, {
       "name" : "selector",
-      "type" : "String",
-      "required" : true,
-      "description" : "The selector of the element, multiple formats supported."
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Scope the evaluation to this element."
     }, {
       "name" : "functionDeclaration",
-      "type" : "String",
-      "required" : true,
-      "description" : "The JavaScript function declaration to execute against the matched element."
-    } ]
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Function body used with 'selector'."
+    }, {
+      "name" : "awaitPromise",
+      "type" : "Boolean?",
+      "required" : false,
+      "default" : "false",
+      "description" : "Await a promise returned by the expression."
+    }, {
+      "name" : "waitSelector",
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Wait for this selector before evaluating."
+    }, {
+      "name" : "waitTimeout",
+      "type" : "Long?",
+      "required" : false,
+      "default" : "null",
+      "description" : "How long to wait for 'waitSelector' (default 30000)."
+    } ],
+    "help" : "tab.evaluateValue(expression: String)\ntab.evaluateValue(selector: String, functionDeclaration: String)\n\n`expression` is the page-scoped form the CLI and MCP clients use;\n`selector` + `functionDeclaration` is the element-scoped overload the\nexecutor resolves through the driver. The upstream declaration lists\nthe second overload last and without defaults, which would make both\nof its arguments mandatory for every caller."
   }, {
     "domain" : "tab",
     "method" : "evaluateValueDetail",

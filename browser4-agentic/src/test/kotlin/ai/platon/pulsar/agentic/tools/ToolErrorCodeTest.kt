@@ -49,6 +49,15 @@ class ToolErrorCodeTest {
             ToolErrorCode.MISSING_REQUIRED_ARG,
             ToolErrorMapper.classifyMessage("navigate requires 'url' or ('rawUrl','pageUrl')")
         )
+        assertEquals(
+            ToolErrorCode.MISSING_REQUIRED_ARG,
+            ToolErrorMapper.classifyMessage("eval requires 'expression' or ('expression','selector')"),
+            "a missing alternative argument must not fall through to INTERNAL"
+        )
+        assertEquals(
+            ToolErrorCode.MISSING_REQUIRED_ARG,
+            ToolErrorMapper.classifyMessage("click requires 'selector' plus optionally 'count', 'modifier', or 'button'")
+        )
     }
 
     @Test

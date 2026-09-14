@@ -1028,6 +1028,15 @@ class MCPToolController(
      * the same way for the same bad input. `sessionId` is a transport-level
      * argument here and is never treated as unknown.
      *
+     * Built-in domains (`tab`, `system`, …) are handled by
+     * [ToolSpecValidator.BuiltInPolicy], `shadow` by default: their specs mirror
+     * the upstream `WebDriver` interface, so a mismatch between the advertised
+     * signature and what the executor reads is a *finding*, not a client error —
+     * it is logged and counted, and the call still runs. Flip to `error` with
+     * `-Dmcp.validateBuiltinArgs=error` once the shadow counters stay at zero.
+     * Explicitly registered (plugin/business) executors are always enforced,
+     * because their specs are authored in this repository.
+     *
      * @return the error response to return, or `null` when the call is valid
      */
     private fun validateArguments(
@@ -1038,13 +1047,62 @@ class MCPToolController(
     ): ResponseEntity<MCPToolCallResponse>? {
         if (!ToolSpecValidator.validationEnabled()) return null
 
-        val spec = customExecutor?.getToolSpecs()?.get(methodNameOf(toolName, domain, customExecutor))
-            ?: return null
+        val customSpec = customExecutor?.getToolSpecs()?.get(methodNameOf(toolName, domain, customExecutor))
+        val policy = ToolSpecValidator.builtInPolicy()
+        val builtInSpec = if (customSpec == null && policy != ToolSpecValidator.BuiltInPolicy.OFF) {
+            liveSpecOf(toolName)
+        } else {
+            null
+        }
+        val spec = customSpec ?: builtInSpec ?: return null
 
         val violations = validator.validate(spec, args)
         if (violations.isEmpty()) return null
+
+        if (customSpec == null && policy == ToolSpecValidator.BuiltInPolicy.SHADOW) {
+            reportShadowViolations(toolName, spec, args, violations)
+            return null
+        }
         return ResponseEntity.ok(
             errorResponse(violations.joinToString("; ") { it.message }, violations.first().code)
+        )
+    }
+
+    /**
+     * The spec of a built-in tool, resolved from the sessions this server already
+     * has.
+     *
+     * Deliberately side-effect free: it never opens a session just to validate a
+     * request, so the first call of a session can only be validated when another
+     * live session already advertises the same tool (in practice the CLI opens a
+     * session before driving tools, so real traffic is covered).
+     */
+    private fun liveSpecOf(toolName: String): ToolSpec? {
+        sessionManager.getAllSessions().forEach { session ->
+            val agent = session.agenticSession.companionAgent as? BasicBrowserAgent ?: return@forEach
+            agent.agentToolManager.getAllToolSpecs().forEach { (specDomain, methods) ->
+                methods.forEach { (method, spec) ->
+                    if (toMcpToolName(specDomain, method) == toolName) return spec
+                }
+            }
+        }
+        return null
+    }
+
+    /** Log and count a shadow violation without changing the call's outcome. */
+    private fun reportShadowViolations(
+        toolName: String,
+        spec: ToolSpec,
+        args: Map<String, Any?>,
+        violations: List<ToolSpecValidator.Violation>,
+    ) {
+        violations.forEach { ToolMetrics.recordShadowViolation(toolName, it.code.wire) }
+        logger.warn(
+            "mcp.validation.shadow channel={} tool={} spec={} codes={} args={} details={}",
+            CHANNEL, toolName, spec.expression,
+            violations.joinToString(",") { it.code.wire },
+            ToolInvocationLogger.renderArgs(args),
+            violations.joinToString("; ") { it.message },
         )
     }
 
