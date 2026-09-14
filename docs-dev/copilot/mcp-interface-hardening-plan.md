@@ -27,7 +27,7 @@
 | G2 | `ToolSpec.expression` 用 `Arg.toString()` 拼签名 → `help` 输出 `Arg(name=url, type=String, defaultValue=null)`；并已污染提交的 `code-mirror/driver-tool-call-specs.json` | 实跑 `help{crawl,submit}`；`Models.kt:96-100` | 1, 2 |
 | G3 | A 公告 26 个插件域工具，**只有 `skill_*`（11）能执行**，其余报 `no target object is available` | 实跑 6 个域探测 | 4, 3 |
 | G4 | 同一工具两通道参数行为不一致：A 只透传**已声明**参数（`crawl.sql/urls` 传不进），B 全量透传 | `Browser4MCPServer.buildArgsMap` vs `MCPToolController.dispatchToCustomExecutor` | 5, 3 |
-| G5 | B 的 `/mcp/tools` **首探即缓存**：`open_session` 后仍返回 83，会话相关工具面永不出现 | 实跑对比 | 10 |
+| G5 | ✅ 已修（`ceaa98a691`）：B 的 `/mcp/tools` 曾「首探即缓存」整个列表，首探发生在会话创建前 → 工具面永远停在 83。现静态段缓存、会话段每次请求合并；实测 `open_session` 前 83 → 后 **275**（+192 个 `navigate`/`click`/`title`… ） | 实跑对比 | 10 |
 | G6 | 别名/命名/渲染曾有三份副本漂移（已建 `McpToolNames`/`ToolResultTextRenderer`，仍有 2 个别名因缺 canonical spec 注册不上） | `browser_is_enabled`/`browser_dialog_status` 缺席 | 1, 3 |
 | G7 | 错误是自由文本（`ERROR: xxx failed: ...`），无稳定错误码；HTTP 恒 200 | A/B 实测 | 4 |
 | G8 | 无参数校验层/无返回值校验（`ToolSpec.returnType` 是字符串，未用于校验） | 代码 | 5, 6 |
@@ -236,9 +236,15 @@ data class Arg(
 - 8.4 告警阈值文档化：p95 > 3s、错误率 > 5%、`TARGET_UNAVAILABLE` > 0（G3 未修完时的哨兵）。
 - **验收**：契约测试断言计数器递增；stats 端点返回真实数据；SLO 文档入库。
 
-### Phase 4 · 保护与性能（需求 9、10、11；需求 9 已完成 2026-09-14）
+### Phase 4 · 保护与性能（需求 9 已完成 2026-09-14；需求 10 进行中，10.3/G5 已完成）
 
-**需求 9 — 限流（已完成，提交见本节末）**
+**需求 10 进展（10.3 = G5 已修，提交 `ceaa98a691`）**
+- `/mcp/tools` 拆成两段：**静态段**（会话生命周期工具 + 前端别名 + 插件域）枚举一次即缓存；**会话段**（会话 agent 的 tab/system 工具）**每次请求合并**。读取会话段是只读的（`getAllSessions()` 不会创建会话），所以当初加缓存要避免的「探活 → 建会话 → 启动浏览器 → 关闭」循环不会回来。
+- 实测：`open_session` 之前 `83` 个工具，之后 `275` 个（新增 `navigate`/`click`/`reload`/`title`/`current_url`… 共 192 个）。
+- 回归测试：`MCPToolControllerTest.the tool list grows when a session appears`（同一控制器实例，先无会话后有会话，断言静态段保留 + 会话工具出现）。
+- **未做**：10.1 `ToolResultCache`（`(sessionId, tool, canonicalArgs, specVersion)` 键、TTL、`_meta.cached/ageMs`）、10.2 状态变更失效、10.4 逃生门与 `/api/mcp/cache/stats`。
+
+**需求 9 — 限流（已完成）**
 - `ToolRateLimiter`（`agentic/tools/`）：令牌桶，**两个作用域**——
   - `session:<sessionId|->:<domain>`：单会话速率 = 工具限额；
   - `global:<domain>`：聚合速率 = 工具限额 × `-Dmcp.rateLimit.globalMultiplier`（默认 4），防止多会话并发把后端打满。
