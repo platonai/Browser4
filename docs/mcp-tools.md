@@ -117,6 +117,28 @@ Execute a plain command (URL, instruction, or agent task). When async=true (defa
 
 Returns: `String`
 
+Long-running: the submit call returns the shared task envelope (`{taskId, status, pollAfterMs, statusTool}`); poll with `command_status` and read the payload with `command_result`.
+
+<details><summary>Result schema</summary>
+
+```json
+
+            {
+              "type": "object",
+              "required": ["taskId", "status", "statusTool"],
+              "properties": {
+                "taskId": {"type": "string"},
+                "status": {"type": "string", "enum": ["running", "done", "failed"]},
+                "pollAfterMs": {"type": "integer"},
+                "statusTool": {"type": "string"},
+                "resultTool": {"type": "string"}
+              }
+            }
+        
+```
+
+</details>
+
 Examples:
 
 - Load a page asynchronously: `{"command": "https://example.com"}`
@@ -195,6 +217,28 @@ Submit a crawl task. Returns a task ID for status polling.
 | `args` | String | no |  | Extra crawl arguments as a CLI-style string, e.g. `-outLinkSelector=a[href]` or an X-SQL query. |
 
 Returns: `String`
+
+Long-running: the submit call returns the shared task envelope (`{taskId, status, pollAfterMs, statusTool}`); poll with `crawl_status` and read the payload with `crawl_result`.
+
+<details><summary>Result schema</summary>
+
+```json
+
+            {
+              "type": "object",
+              "required": ["taskId", "status", "statusTool"],
+              "properties": {
+                "taskId": {"type": "string"},
+                "status": {"type": "string", "enum": ["running", "done", "failed"]},
+                "pollAfterMs": {"type": "integer"},
+                "statusTool": {"type": "string"},
+                "resultTool": {"type": "string"}
+              }
+            }
+        
+```
+
+</details>
 
 Examples:
 

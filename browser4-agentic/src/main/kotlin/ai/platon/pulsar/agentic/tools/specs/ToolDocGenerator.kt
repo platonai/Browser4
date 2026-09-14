@@ -50,6 +50,15 @@ object ToolDocGenerator {
                 "expectsError" to example.expectsError,
             )
         },
+        "task" to spec.task?.let { policy ->
+            linkedMapOf<String, Any?>(
+                "statusTool" to policy.statusTool,
+                "resultTool" to policy.resultTool,
+                "cancelTool" to policy.cancelTool,
+                "pollAfterMs" to policy.pollAfterMs,
+            )
+        },
+        "outputSchema" to spec.outputSchema,
         "help" to spec.help?.takeIf { it.isNotBlank() && it != spec.description },
     )
 
@@ -143,6 +152,27 @@ object ToolDocGenerator {
         }
 
         tool["returnType"]?.let { out.appendLine("Returns: `$it`") }
+
+        @Suppress("UNCHECKED_CAST")
+        (tool["task"] as? Map<String, Any?>)?.let { task ->
+            out.appendLine()
+            out.appendLine(
+                "Long-running: the submit call returns the shared task envelope " +
+                    "(`{taskId, status, pollAfterMs, statusTool}`); poll with " +
+                    "`${task["statusTool"]}` and read the payload with `${task["resultTool"]}`."
+            )
+        }
+
+        tool["outputSchema"]?.toString()?.takeIf { it.isNotBlank() }?.let { schema ->
+            out.appendLine()
+            out.appendLine("<details><summary>Result schema</summary>")
+            out.appendLine()
+            out.appendLine("```json")
+            schema.lines().forEach { out.appendLine(it) }
+            out.appendLine("```")
+            out.appendLine()
+            out.appendLine("</details>")
+        }
         out.appendLine()
 
         @Suppress("UNCHECKED_CAST")

@@ -9,6 +9,7 @@ import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import ai.platon.pulsar.agentic.tools.ToolErrorMapper
 import ai.platon.pulsar.agentic.tools.ToolResultTextRenderer
+import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecValidator
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.CodingToolExecutor
@@ -69,6 +70,15 @@ data class MCPToolCallResponse(
     @param:JsonSetter(nulls = Nulls.SKIP)
     @param:JsonProperty("errorCode")
     val errorCode: String? = null,
+    /**
+     * Typed form of a successful result — the shared task envelope for
+     * long-running tools, or the JSON the tool already returns. Mirrors the MCP
+     * `structuredContent` the standard server sends.
+     */
+    @get:JsonProperty("structuredContent")
+    @param:JsonSetter(nulls = Nulls.SKIP)
+    @param:JsonProperty("structuredContent")
+    val structuredContent: Map<String, Any?>? = null,
     @get:JsonProperty("_pagination")
     @param:JsonProperty("_pagination")
     val pagination: PaginationMeta? = null
@@ -928,7 +938,7 @@ class MCPToolController(
 
                 val requestArgs = request.arguments ?: emptyMap()
                 val (paginatedText, pagination) = paginateIfRequested(text, requestArgs)
-                ResponseEntity.ok(textResponse(paginatedText, pagination))
+                ResponseEntity.ok(agentResultResponse(request.tool, paginatedText, pagination))
             }
         } catch (e: Exception) {
             logger.warn("Standalone coding tool failed | tool={} | method={} | {}", toolName, method, e.message)
@@ -1058,7 +1068,7 @@ class MCPToolController(
 
                 val requestArgs = request.arguments ?: emptyMap()
                 val (paginatedText, pagination) = paginateIfRequested(text, requestArgs)
-                ResponseEntity.ok(textResponse(paginatedText, pagination))
+                ResponseEntity.ok(agentResultResponse(request.tool, paginatedText, pagination))
             }
         } catch (e: Exception) {
             logger.warn("Custom executor failed | tool={} | domain={} | {}", toolName, domain, e.message)
@@ -1121,6 +1131,88 @@ class MCPToolController(
         return this.entries.associate { (key, value) -> key.toString() to value }
     }
 
+    /**
+     * Resolve the spec of an advertised tool name and build its result response.
+     *
+     * Tool names are looked up in the plugin/business registry first (those are
+     * the task-submitting domains), then across the live sessions' agent specs.
+     */
+    private fun agentResultResponse(
+        toolName: String,
+        text: String,
+        pagination: PaginationMeta?,
+    ): MCPToolCallResponse = resultResponse(resolveSpec(toolName), text, pagination)
+
+    private fun resolveSpec(toolName: String): ToolSpec? {
+        val domain = extractDomain(toolName)
+        CustomToolRegistry.instance.get(domain)?.let { executor ->
+            val specs = executor.getToolSpecs()
+            specs.keys.firstOrNull { toMcpToolName(domain, it) == toolName }?.let { return specs[it] }
+        }
+
+        sessionManager.getAllSessions().forEach { session ->
+            val agent = session.agenticSession.companionAgent as? BasicBrowserAgent ?: return@forEach
+            agent.agentToolManager.getAllToolSpecs().forEach { (specDomain, methods) ->
+                methods.forEach { (method, spec) ->
+                    if (toMcpToolName(specDomain, method) == toolName) return spec
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * Successful result: the text plus, when the tool declares one, its typed form.
+     *
+     * The typed form is the shared task envelope for a submit tool (so a generic
+     * client learns which tool polls it) or the JSON the tool already returns —
+     * the same `structuredContent` the standard MCP server sends. When the spec
+     * declares an `outputSchema`, the result is validated against it: violations
+     * are logged and counted ([ToolResultValidator]) but never fail the call here,
+     * because the payload was already produced.
+     */
+    private fun resultResponse(
+        spec: ToolSpec?,
+        text: String,
+        pagination: PaginationMeta? = null,
+    ): MCPToolCallResponse {
+        if (spec != null) {
+            val node = when {
+                spec.task != null && ToolResultValidator.isBareTaskId(text) ->
+                    ToolResultValidator.taskEnvelope(text.trim(), spec.task!!)
+                else -> ToolResultValidator.parse(text)
+            }
+            if (node != null) {
+                ToolResultValidator.report(spec, ToolResultValidator.validate(spec, node))
+            }
+        }
+
+        return MCPToolCallResponse(
+            content = listOf(MCPContent(text = text)),
+            structuredContent = structuredContentOf(spec, text),
+            pagination = pagination,
+        )
+    }
+
+    /** Jackson-shaped view of the typed result, for the REST payload. */
+    private fun structuredContentOf(spec: ToolSpec?, text: String): Map<String, Any?>? {
+        spec?.task?.let { policy ->
+            if (ToolResultValidator.isBareTaskId(text)) {
+                return mapOf(
+                    "taskId" to text.trim(),
+                    "status" to "running",
+                    "pollAfterMs" to policy.pollAfterMs,
+                    "statusTool" to policy.statusTool,
+                    "resultTool" to policy.resultTool,
+                )
+            }
+        }
+        val node = ToolResultValidator.parse(text) ?: return null
+        return runCatching {
+            pulsarObjectMapper().readValue(node.toString(), Map::class.java) as Map<String, Any?>
+        }.getOrNull()
+    }
+
     private fun Any?.toBatchMousePosition(): BatchMousePosition? {
         val map = this.toAnyMap() ?: return null
         val x = (map["x"] as? Number)?.toDouble() ?: return null
@@ -1164,7 +1256,7 @@ class MCPToolController(
                 // the result text to reduce network traffic for large snapshots.
                 val requestArgs = request.arguments ?: emptyMap()
                 val (paginatedText, pagination) = paginateIfRequested(text, requestArgs)
-                ResponseEntity.ok(textResponse(paginatedText, pagination))
+                ResponseEntity.ok(agentResultResponse(request.tool, paginatedText, pagination))
             }
         } catch (e: Exception) {
             logger.warn(

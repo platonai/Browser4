@@ -9,12 +9,15 @@ import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import ai.platon.pulsar.agentic.tools.ToolErrorMapper
 import ai.platon.pulsar.agentic.tools.ToolResultTextRenderer
+import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecValidator
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.common.getLogger
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
 import io.modelcontextprotocol.kotlin.sdk.types.*
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -149,8 +152,8 @@ class Browser4MCPServer(
     // Result helpers
     // -------------------------------------------------------------------------
 
-    private fun textResult(text: String): CallToolResult =
-        CallToolResult(content = listOf(TextContent(text = text)))
+    private fun textResult(text: String, structured: JsonObject? = null): CallToolResult =
+        CallToolResult(content = listOf(TextContent(text = text)), structuredContent = structured)
 
     /**
      * Build an error result carrying a stable [ToolErrorCode].
@@ -246,12 +249,35 @@ class Browser4MCPServer(
                 name = name,
                 description = describe(spec, "${executor.domain}.$method"),
                 inputSchema = buildSchemaFromSpec(spec),
+                outputSchema = buildOutputSchema(spec),
             ) { request ->
                 invokeTool(name, request.params.arguments)
             }
             added++
         }
         return added
+    }
+
+    /**
+     * Translate a declared `outputSchema` (JSON text) into the SDK's simplified
+     * [ToolSchema] so `tools/list` advertises what a successful result looks like.
+     *
+     * Only the object shape the registry declares is mapped (`properties`,
+     * `required`); anything else is left to [ToolResultValidator], which
+     * understands the same subset.
+     */
+    private fun buildOutputSchema(spec: ToolSpec): ToolSchema? {
+        val text = spec.outputSchema?.takeIf { it.isNotBlank() } ?: return null
+        val node = runCatching { Json.parseToJsonElement(text) as? JsonObject }.getOrNull()
+        if (node == null) {
+            logger.warn("Tool '{}' declares an unparsable outputSchema", spec.expression)
+            return null
+        }
+        val properties = node["properties"] as? JsonObject ?: return null
+        val required = (node["required"] as? JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+            ?.ifEmpty { null }
+        return ToolSchema(properties = properties, required = required)
     }
 
     /**
@@ -339,6 +365,7 @@ class Browser4MCPServer(
                 description = describe(target.spec, "${target.domain}.${target.method}") +
                     " (Alias of '${alias.canonicalName}'.)",
                 inputSchema = buildSchemaFromSpec(target.spec),
+                outputSchema = buildOutputSchema(target.spec),
             ) { request ->
                 invokeTool(alias.frontendName, request.params.arguments)
             }
@@ -405,11 +432,52 @@ class Browser4MCPServer(
                             ToolErrorMapper.classify(exception.cause),
                         )
                     } else {
-                        textResult(ToolResultTextRenderer.render(evaluate))
+                        successResult(registration, ToolResultTextRenderer.render(evaluate))
                     }
                 },
                 onFailure = { errorResult("$toolName failed: ${it.message}", ToolErrorMapper.classify(it)) }
             )
+    }
+
+    /**
+     * Build a successful result: the rendered text plus, when the tool declares
+     * one, the structured form of that result.
+     *
+     * `structuredContent` is what carries types to a client that does not want to
+     * parse prose — the shared task envelope `{taskId, status, pollAfterMs,
+     * statusTool}` for long-running tools, or the JSON the tool already returns.
+     * The result is then validated against the tool's declared `outputSchema`
+     * (see [ToolResultValidator]); a violation is logged and counted, and fails
+     * the call only when `-Dmcp.validateResults=error`.
+     */
+    private fun successResult(registration: ToolRegistration, text: String): CallToolResult {
+        val structured = structuredResult(registration.spec, text)
+        if (structured != null) {
+            val issues = ToolResultValidator.validate(registration.spec, structured)
+            if (ToolResultValidator.report(registration.spec, issues) && issues.isNotEmpty()) {
+                return errorResult(
+                    "result of ${registration.spec.expression} violates its outputSchema: " +
+                        issues.joinToString("; ") { "${it.path} ${it.message}" },
+                    ToolErrorCode.INTERNAL,
+                )
+            }
+        }
+        return textResult(text, structured as? JsonObject)
+    }
+
+    /**
+     * The structured form of a result:
+     * - the task envelope for a task-submitting tool whose text is the task id;
+     * - the parsed JSON when the tool already returns JSON;
+     * - `null` for plain text.
+     */
+    private fun structuredResult(spec: ToolSpec, text: String): JsonElement? {
+        spec.task?.let { policy ->
+            if (ToolResultValidator.isBareTaskId(text)) {
+                return ToolResultValidator.taskEnvelope(text.trim(), policy)
+            }
+        }
+        return ToolResultValidator.parse(text)
     }
 
     /**

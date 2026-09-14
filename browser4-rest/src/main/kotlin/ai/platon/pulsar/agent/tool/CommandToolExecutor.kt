@@ -2,6 +2,7 @@ package ai.platon.pulsar.agent.tool
 
 import ai.platon.pulsar.agentic.agents.RunEngine
 import ai.platon.pulsar.common.B4Constants.DEFAULT_SESSION_ID
+import ai.platon.pulsar.agentic.model.TaskPolicy
 import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
@@ -79,6 +80,8 @@ class CommandToolExecutor(
                     args = mapOf("command" to "collect the page title", "async" to "false"),
                 ),
             ),
+            task = TaskPolicy(statusTool = "command_status", resultTool = "command_result"),
+            outputSchema = TASK_ENVELOPE_SCHEMA,
         )
 
         toolSpec["status"] = ToolSpec(
@@ -112,6 +115,27 @@ class CommandToolExecutor(
                 ),
             ),
         )
+    }
+
+    private companion object {
+        /**
+         * The shared task envelope every submit-style tool returns, exposed as MCP
+         * `structuredContent` so a generic client can poll without knowing the
+         * domain's status tool.
+         */
+        const val TASK_ENVELOPE_SCHEMA = """
+            {
+              "type": "object",
+              "required": ["taskId", "status", "statusTool"],
+              "properties": {
+                "taskId": {"type": "string"},
+                "status": {"type": "string", "enum": ["running", "done", "failed"]},
+                "pollAfterMs": {"type": "integer"},
+                "statusTool": {"type": "string"},
+                "resultTool": {"type": "string"}
+              }
+            }
+        """
     }
 
     @Suppress("UNUSED_PARAMETER")

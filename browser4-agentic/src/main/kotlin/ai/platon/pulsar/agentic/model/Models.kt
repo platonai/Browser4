@@ -74,6 +74,27 @@ data class ToolSpec constructor(
      * documentation-only snippets harvested from the source KDoc.
      */
     val examples: List<ToolExample> = emptyList(),
+    /**
+     * JSON Schema (as JSON text) of a **successful** result.
+     *
+     * Kept as text on purpose: the spec travels through Jackson (`GET
+     * /mcp/tools/specs`) and through the spec snapshots, while the MCP layer
+     * parses it with kotlinx-serialization for `Tool.outputSchema` — text keeps
+     * both worlds happy without coupling this model to either JSON library.
+     *
+     * The supported subset is intentionally small (see `ToolResultValidator`):
+     * `type`, `required`, `properties`, `items`, `enum`.
+     */
+    val outputSchema: String? = null,
+    /**
+     * Task-lifecycle metadata for long-running tools.
+     *
+     * A tool that declares it returns the shared task envelope
+     * `{taskId, status, pollAfterMs, statusTool}` (also exposed as MCP
+     * `structuredContent`), so a client can poll a submit call generically
+     * instead of guessing the domain's status tool.
+     */
+    val task: TaskPolicy? = null,
 ) {
     data class Arg(
         val name: String,
@@ -130,6 +151,21 @@ data class ToolSpec constructor(
             return "$ROOT_COMMAND $domain $method $args"
         }
 }
+
+/**
+ * Task-lifecycle contract of a long-running tool.
+ *
+ * @property statusTool MCP tool that reports progress (`crawl_status`)
+ * @property resultTool MCP tool that returns the payload (`crawl_result`)
+ * @property cancelTool MCP tool that cancels the task, when the domain has one
+ * @property pollAfterMs suggested delay before the first status poll
+ */
+data class TaskPolicy(
+    val statusTool: String,
+    val resultTool: String,
+    val cancelTool: String? = null,
+    val pollAfterMs: Long = 1_000,
+)
 
 /**
  * One usage example for a [ToolSpec].

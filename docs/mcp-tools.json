@@ -119,7 +119,13 @@
         "async" : "false"
       },
       "expectsError" : false
-    } ]
+    } ],
+    "task" : {
+      "statusTool" : "command_status",
+      "resultTool" : "command_result",
+      "pollAfterMs" : 1000
+    },
+    "outputSchema" : "\n            {\n              \"type\": \"object\",\n              \"required\": [\"taskId\", \"status\", \"statusTool\"],\n              \"properties\": {\n                \"taskId\": {\"type\": \"string\"},\n                \"status\": {\"type\": \"string\", \"enum\": [\"running\", \"done\", \"failed\"]},\n                \"pollAfterMs\": {\"type\": \"integer\"},\n                \"statusTool\": {\"type\": \"string\"},\n                \"resultTool\": {\"type\": \"string\"}\n              }\n            }\n        "
   }, {
     "domain" : "command",
     "method" : "status",
@@ -221,6 +227,12 @@
       "notes" : "Feed the returned task id to crawl.status",
       "expectsError" : false
     } ],
+    "task" : {
+      "statusTool" : "crawl_status",
+      "resultTool" : "crawl_result",
+      "pollAfterMs" : 1000
+    },
+    "outputSchema" : "\n            {\n              \"type\": \"object\",\n              \"required\": [\"taskId\", \"status\", \"statusTool\"],\n              \"properties\": {\n                \"taskId\": {\"type\": \"string\"},\n                \"status\": {\"type\": \"string\", \"enum\": [\"running\", \"done\", \"failed\"]},\n                \"pollAfterMs\": {\"type\": \"integer\"},\n                \"statusTool\": {\"type\": \"string\"},\n                \"resultTool\": {\"type\": \"string\"}\n              }\n            }\n        ",
     "help" : "Starts a recursive crawl in the background and returns the task id\nimmediately. Poll it with `crawl.status`, read the payload with\n`crawl.result`. Use `depth=0` for a single page, and prefer the\nswarm domain for high-throughput parallel extraction."
   }, {
     "domain" : "experience",

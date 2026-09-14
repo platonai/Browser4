@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agent.tool
 
+import ai.platon.pulsar.agentic.model.TaskPolicy
 import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
@@ -62,6 +63,8 @@ class CrawlToolExecutor(
                     notes = "Feed the returned task id to crawl.status",
                 ),
             ),
+            task = TaskPolicy(statusTool = "crawl_status", resultTool = "crawl_result"),
+            outputSchema = TASK_ENVELOPE_SCHEMA,
         )
 
         toolSpec["status"] = ToolSpec(
@@ -72,6 +75,10 @@ class CrawlToolExecutor(
             ),
             returnType = "CrawlResponse",
             description = "Get the status/result of a crawl task by its task ID.",
+            // No outputSchema yet: the result renderer wraps a CrawlResponse as
+            // {type, description} text, so there is no stable JSON shape to
+            // promise. Declaring one before the renderer emits JSON would fail
+            // result validation on every call.
             examples = listOf(
                 ToolExample(
                     title = "Poll a submitted task",
@@ -96,6 +103,23 @@ class CrawlToolExecutor(
                 ),
             ),
         )
+    }
+
+    private companion object {
+        /** The shared task envelope every submit tool returns. */
+        const val TASK_ENVELOPE_SCHEMA = """
+            {
+              "type": "object",
+              "required": ["taskId", "status", "statusTool"],
+              "properties": {
+                "taskId": {"type": "string"},
+                "status": {"type": "string", "enum": ["running", "done", "failed"]},
+                "pollAfterMs": {"type": "integer"},
+                "statusTool": {"type": "string"},
+                "resultTool": {"type": "string"}
+              }
+            }
+        """
     }
 
     override suspend fun callFunctionOn(
