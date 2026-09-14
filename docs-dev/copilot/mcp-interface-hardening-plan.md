@@ -367,7 +367,38 @@ data class Arg(
 - 14.4 告警：批次失败率 > 10% 或单步 p95 > 2s。
 - **验收**：一次 5 步批次在 trace 中可见 1 父 5 子；指标与日志字段齐全；告警规则文档化。
 
-### Phase 6 · 测试用例（需求 3；贯穿全程，最后 1 周收口）
+### Phase 6 · 测试用例（需求 3；契约矩阵已完成 2026-09-14）
+
+**6.1 契约矩阵（已完成）**
+- `ToolContractMatrixTest`（rest，`@Tag("Unit") @Tag("Fast")`）：对注册表里**每一个**公告工具跑 6 类通道无关用例，共 **140 工具 × 6 = 840** 项检查，外加 3 项全量断言：
+
+  | 用例 | 输入 | 断言 |
+  |---|---|---|
+  | happy | 该 spec **自己的可执行示例**（没有示例则按类型合成必填入参） | 无违规 —— 文档即契约测试入参 |
+  | 缺必填 | 去掉某个必填参数（跳过传输参数 `sessionId`/`cache`） | `MISSING_REQUIRED_ARG`，且消息**回显签名** |
+  | 类型错 | 给数值/布尔参数传 `"abc"` | `INVALID_ARGUMENT` |
+  | 未知参数 | 多传一个未声明字段 | 默认放行；strict 模式 `UNKNOWN_ARGUMENT` |
+  | 传输参数 | 附带 `sessionId` / `cache` | 永不报为未知 |
+  | 结果契约 | 声明的 `outputSchema` | 可解析为 JSON 对象且声明 `type=object` |
+  | 命名与生命周期 | 名称唯一、`cliName` 空格形式、`task` 引用的 status/result/cancel 工具确实存在、无 `Arg(...)` 泄漏 | 全量断言 |
+
+- 与既有资产的分工：**通道相关**的用例（真实 happy path、`SESSION_NOT_FOUND`、端到端限流、缓存回放、批量一致性）由 `Browser4MCPServerTest` / `MCPToolControllerTest` / `ToolRateLimiterTest` / `ToolResultCacheTest` / `BatchExecutorTest`+`BatchToolExecutorTest` 以及 e2e 承担；矩阵负责「公告出来的契约本身自洽且被同一个校验器执行」。
+- 复用：`ToolRegistryFixture`（rest 测试源）统一提供「全部执行器 / 全部 spec」，`ToolDocGeneratorTest` 与矩阵共用同一份注册表视图，避免两处枚举漂移。
+
+**6.4 门禁（已完成）**
+- `bin/test.ps1 mcp-contract` 新增（`mcp` 保持原样）：模块 `browser4-agentic + browser4-rest`，模式包含矩阵、文档漂移、lint、校验器、错误码、限流、缓存、批处理、任务信封、日志与指标、别名一致性。
+- **实测：3 分 50 秒全绿**（agentic 98 项 + rest 12 项，含 `-am` 从源码构建 14 个模块），满足「PR 门禁 < 5 min」。
+- 分层：本门禁全部是 `Unit/Fast`（无浏览器、无会话、无 LLM）；`RequiresBrowser/E2E` 仍由 CI 全量跑。
+
+**矩阵首跑即抓到的真问题（均已修）**
+1. `webdb_export` 的**已公布示例不可调用**（示例缺少必填的 `outputDir`）——「示例即契约」的第一次运行就命中。顺带修正其参数说明：执行器在缺失时是抛错的（`Missing required parameter 'urls'/'outputDir'`），原文却写着「omit 即导出全部 / 用服务端默认」，属**文档与实现相反**；现按实现改为「必填」并把示例补全。
+2. `cache` 未列入 `ToolSpecValidator.DEFAULT_CONTEXT_ARGS`：两个通道都在校验前剥离它，但 strict 模式下若有路径没剥离就会被误报为未知参数。现已作为传输参数与 `sessionId` 同级（纵深防御）。
+3. 矩阵自身两处期望写错（要求「必填工具 > 100」而实际 92；把 `sessionId` 当普通必填去删）——已修正为按传输参数语义断言。
+
+**仍存的缺口（诚实记录）**
+- **可执行示例只覆盖 15/140 工具**：没有示例的工具，矩阵只能按类型合成入参，因此「声明为必填、执行器实际可选」这一类错配（历史上 `experience_list`/`memory_search`/`command_run` 都犯过）只有在写了示例的工具上才会被自动抓到。补齐示例是 Phase 1 的 1.1/2.1 收口项，矩阵会成为它的验收器。
+- 浏览器相关用例未进入 PR 门禁（按分层设计如此），依赖 CI 的 e2e 与实际浏览器。
+- 6.3 里提到的 CLI `mock_server.rs`/`scenarios/*` 与 `browser4-tests/browser4-rest-tests` 未在本轮改造中扩展。
 
 - 6.1 **契约矩阵**（自动生成，覆盖 A 全部 248 + B 全部 83）：
   | 用例 | 输入 | 断言 |
@@ -421,8 +452,8 @@ data class Arg(
 ## 6. 完成定义（Definition of Done）
 
 - 需求 1：新客户端仅凭 `tools/list` + `help` 即可正确调用任一工具；`docs/mcp-tools.md` 生成无 diff；零 WebDriver 文档依赖（lint 兜底）。
-- 需求 2：每工具 ≥1 可执行示例，且示例即契约测试入参。
-- 需求 3：248(A)+83(B) 工具 × 8 类用例矩阵全绿，PR 门禁 <5 min。
+- 需求 2：每工具 ≥1 可执行示例，且示例即契约测试入参。（**现状 15/140**：矩阵已把「示例必须是可调用入参」变成断言，示例补齐后自动获得验收）
+- 需求 3：工具 × 6 类**通道无关**用例矩阵全绿（140 × 6），通道相关用例（会话/限流/缓存/批量）由各阶段测试与 e2e 承担；`bin/test.ps1 mcp-contract` PR 门禁实测 3 分 50 秒 < 5 min。
 - 需求 4：所有失败路径有稳定 `errorCode` + retryable 语义，A/B 一致。
 - 需求 5/6：同一非法输入两通道同码；全量契约跑完 `schema_violation == 0`。
 - 需求 7/8：日志结构化且脱敏；每工具指标 + trace 可见；`/api/mcp/stats` 有真实数据。（**代码 + 单测已完成**；OTel span 与运行时 Prometheus 抓取见 Phase 3「已知缺口」）

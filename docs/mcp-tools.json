@@ -2872,18 +2872,19 @@
       "name" : "urls",
       "type" : "String",
       "required" : true,
-      "description" : "Comma-separated URL list to export; omit to export everything the session stored."
+      "description" : "Comma-separated URL list to export. Required — the export fails without it."
     }, {
       "name" : "outputDir",
       "type" : "String",
       "required" : true,
-      "description" : "Target directory; omit for the server default."
+      "description" : "Target directory for the exported pages. Required; the directory is created when missing."
     } ],
     "examples" : [ {
       "title" : "Export two pages",
       "args" : {
         "sessionId" : "<session-id>",
-        "urls" : "https://example.com,https://example.org"
+        "urls" : "https://example.com,https://example.org",
+        "outputDir" : "/tmp/webdb-export"
       },
       "expectsError" : false
     } ]

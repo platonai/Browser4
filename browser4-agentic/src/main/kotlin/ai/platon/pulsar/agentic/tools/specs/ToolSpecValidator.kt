@@ -112,8 +112,14 @@ class ToolSpecValidator(
     }
 
     companion object {
-        /** Arguments the transport consumes or injects on the executor's behalf. */
-        val DEFAULT_CONTEXT_ARGS: Set<String> = setOf("sessionId")
+        /**
+         * Arguments the transport consumes or injects on the executor's behalf.
+         *
+         * `sessionId` routes the call and `cache` opts out of the result cache; both
+         * are stripped before dispatch, and neither is ever reported as an unknown
+         * tool argument.
+         */
+        val DEFAULT_CONTEXT_ARGS: Set<String> = setOf("sessionId", "cache")
 
         /** Whether `-Dmcp.validateArgs` (default on) enables validation. */
         fun validationEnabled(): Boolean =

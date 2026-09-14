@@ -2,28 +2,15 @@ package ai.platon.pulsar.rest.mcp.controller
 
 import ai.platon.pulsar.agentic.mcp.McpToolNames
 import ai.platon.pulsar.agentic.model.ToolSpec
-import ai.platon.pulsar.agentic.tools.BatchToolExecutor
-import ai.platon.pulsar.agentic.tools.builtin.BrowserTabToolExecutor
-import ai.platon.pulsar.agentic.tools.builtin.BrowserToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
-import ai.platon.pulsar.agentic.tools.experience.ExperienceToolExecutor
 import ai.platon.pulsar.agentic.tools.specs.ToolDocGenerator
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
-import ai.platon.pulsar.agent.tool.CommandToolExecutor
-import ai.platon.pulsar.agent.tool.CrawlToolExecutor
-import ai.platon.pulsar.agent.tool.HTMLSnapshotToolExecutor
-import ai.platon.pulsar.agent.tool.SkillMCPToolExecutor
-import ai.platon.pulsar.agent.tool.WebDbToolExecutor
-import ai.platon.pulsar.agentic.memory.MemoryToolExecutor
-import ai.platon.pulsar.boot.skill.SkillService
-import ai.platon.pulsar.rest.api.service.CrawlService
-import ai.platon.pulsar.rest.session.PulsarSessionManager
+import ai.platon.pulsar.rest.mcp.contract.ToolRegistryFixture
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
-import org.mockito.kotlin.mock
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.exists
@@ -42,19 +29,7 @@ import kotlin.io.path.exists
 @DisplayName("Generated tool reference")
 class ToolDocGeneratorTest {
 
-    private fun executors(): List<ToolExecutor> = listOf(
-        BrowserTabToolExecutor(),
-        BrowserToolExecutor(),
-        MemoryToolExecutor(),
-        ExperienceToolExecutor(),
-        CrawlToolExecutor(mock<CrawlService>()),
-        CommandToolExecutor(),
-        WebDbToolExecutor(mock<PulsarSessionManager>()),
-        HTMLSnapshotToolExecutor(mock<PulsarSessionManager>()),
-        SkillMCPToolExecutor(mock<SkillService>()),
-        // The batch primitive both channels advertise (requirement 12).
-        BatchToolExecutor(),
-    )
+    private fun executors(): List<ToolExecutor> = ToolRegistryFixture.executors()
 
     private fun specs(): List<ToolSpec> {
         ToolSpecGenerator.generateAllOnce()

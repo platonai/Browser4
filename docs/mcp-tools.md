@@ -3706,14 +3706,14 @@ Export pages from the web database to a local directory. Provide a comma-separat
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
 | `sessionId` | String | yes |  | Session whose web database is exported. Required. |
-| `urls` | String | yes |  | Comma-separated URL list to export; omit to export everything the session stored. |
-| `outputDir` | String | yes |  | Target directory; omit for the server default. |
+| `urls` | String | yes |  | Comma-separated URL list to export. Required — the export fails without it. |
+| `outputDir` | String | yes |  | Target directory for the exported pages. Required; the directory is created when missing. |
 
 Returns: `String`
 
 Examples:
 
-- Export two pages: `{"sessionId": "<session-id>", "urls": "https://example.com,https://example.org"}`
+- Export two pages: `{"sessionId": "<session-id>", "urls": "https://example.com,https://example.org", "outputDir": "/tmp/webdb-export"}`
 
 ### `webdb_normalize`
 

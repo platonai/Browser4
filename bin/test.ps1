@@ -305,6 +305,7 @@ function Print-Usage {
     Write-Host "  rest        Run REST module tests"
     Write-Host "  skills      Run skills-focused agentic tests"
     Write-Host "  mcp         Run MCP-focused agentic tests"
+    Write-Host "  mcp-contract  Contract gate: tool matrix, docs, lint, validators (agentic + rest)"
     Write-Host "  ps          Run all PowerShell *.tests.ps1 files in the project"
     Write-Host "  rws         Run real-world scenario tests (requires a mode)"
     Write-Host "              sc, scenarios <names...>  run named tasks via run-tests.ps1"
@@ -359,6 +360,7 @@ function Print-Usage {
     Write-Host "        retries once automatically; if it still fails, see the printed recovery guide."
     Write-Host "  test.ps1 skills                     # Run skills-focused agentic tests"
     Write-Host "  test.ps1 mcp                        # Run MCP-focused agentic tests"
+    Write-Host "  test.ps1 mcp-contract               # Contract gate: matrix + docs + lint + validators"
     Write-Host "  test.ps1 ps                         # Run all PowerShell *.tests.ps1 files"
     Write-Host "  test.ps1 ps -Quiet                  # Run PowerShell tests with -Quiet flag"
     Write-Host "  test.ps1 resume                     # Resume from the last failed module"
@@ -414,19 +416,44 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
     $hasRest = $testTypes -contains 'rest'
     $hasSkills = $testTypes -contains 'skills'
     $hasMcp = $testTypes -contains 'mcp'
+    $hasMcpContract = $testTypes -contains 'mcp-contract'
 
     if ($hasIT) { $mvnTestArgs += '-DrunITs=true' }
     if ($hasE2E) { $mvnTestArgs += '-DrunE2ETests=true' }
     if ($hasRest) { $mvnTestArgs += '-DrunRestTests=true' }
 
     $modules = @()
-    if ($hasSkills -or $hasMcp) {
+    if ($hasSkills -or $hasMcp -or $hasMcpContract) {
         $modules += 'browser4-agentic'
+
+        # The contract gate also inspects the plugin/business domains, whose specs
+        # live in browser4-rest (crawl, command, webdb, skill, memory, batch, ...).
+        if ($hasMcpContract) { $modules += 'browser4-rest' }
 
         if (-not ($hasFast -or $hasIT -or $hasE2E -or $hasRest)) {
             $patterns = @()
             if ($hasSkills) { $patterns += '*Skill*' }
             if ($hasMcp) { $patterns += '*MCP*' }
+            if ($hasMcpContract) {
+                # Quality gates and the generated reference travel with the contract:
+                # a tool whose docs, lint or schema drifted is not shippable either.
+                $patterns += @(
+                    'ToolContractMatrixTest',
+                    'ToolDocGeneratorTest',
+                    'ToolSpecLintTest',
+                    'ToolSpecValidatorTest',
+                    'ToolResultValidatorTest',
+                    'ToolErrorCodeTest',
+                    'ToolRateLimiterTest',
+                    'ToolResultCacheTest',
+                    'BatchExecutorTest',
+                    'BatchToolExecutorTest',
+                    'TaskEnvelopesTest',
+                    'ToolInvocationLoggerTest',
+                    'ToolMetricsTest',
+                    'McpToolAliasParityTest'
+                )
+            }
 
             if ($patterns.Count -gt 0) {
                 $mvnTestArgs += "-Dtest=$($patterns -join ',')"
@@ -3821,6 +3848,7 @@ $testTypeMap = @{
     'rest'          = 'maven'
     'skills'        = 'maven'
     'mcp'           = 'maven'
+    'mcp-contract'  = 'maven'
     'main'          = 'maven-expand'
     'cli'           = 'cli'
     'browser4-cli'  = 'cli'

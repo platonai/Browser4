@@ -33,9 +33,12 @@ class WebDbToolExecutor(
                 ToolSpec.Arg("sessionId", "String", null, "Session whose web database is exported. Required."),
                 ToolSpec.Arg(
                     "urls", "String", null,
-                    "Comma-separated URL list to export; omit to export everything the session stored.",
+                    "Comma-separated URL list to export. Required — the export fails without it.",
                 ),
-                ToolSpec.Arg("outputDir", "String", null, "Target directory; omit for the server default."),
+                ToolSpec.Arg(
+                    "outputDir", "String", null,
+                    "Target directory for the exported pages. Required; the directory is created when missing.",
+                ),
             ),
             returnType = "String",
             description = "Export pages from the web database to a local directory. " +
@@ -43,7 +46,11 @@ class WebDbToolExecutor(
             examples = listOf(
                 ToolExample(
                     title = "Export two pages",
-                    args = mapOf("sessionId" to "<session-id>", "urls" to "https://example.com,https://example.org"),
+                    args = mapOf(
+                        "sessionId" to "<session-id>",
+                        "urls" to "https://example.com,https://example.org",
+                        "outputDir" to "/tmp/webdb-export",
+                    ),
                 ),
             ),
         )
