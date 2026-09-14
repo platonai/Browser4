@@ -236,6 +236,156 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 When selector is provided, the executor focuses the matched element first and then presses the key.
             """.trimIndent()
         )
+        // ------------------------------------------------------------------
+        // Explicit contracts for methods whose upstream WebDriver signature is
+        // not expressible over JSON.
+        //
+        // `ToolSpecGenerator` mirrors the base library's `WebDriver.kt`, and for
+        // an overloaded method it keeps the *last* overload. For the methods
+        // below that last overload takes a domain object (`NavigateEntry`,
+        // `RectD`, `AriaSnapshotOptions`, `Duration`, a `suspend () -> …`
+        // action) that an MCP client cannot send — and the required-argument
+        // check then rejected calls that the executor actually handles. Each
+        // spec here states what `callFunctionOn` really reads; keep them in
+        // sync with the `when (functionName)` branches below.
+        // ------------------------------------------------------------------
+        toolSpec["navigate"] = ToolSpec(
+            domain = domain,
+            method = "navigate",
+            arguments = listOf(
+                ToolSpec.Arg("url", "String", null, "URL to navigate to; the executor waits for the page to load."),
+                ToolSpec.Arg("rawUrl", "String?", "null", "Low-level alternative to 'url' — must be paired with 'pageUrl'."),
+                ToolSpec.Arg("pageUrl", "String?", "null", "Page URL paired with 'rawUrl'."),
+            ),
+            returnType = "Unit",
+            description = "Navigate the current page to a URL and wait for the page to load.",
+            help = """
+                tab.navigate(url: String)
+
+                Navigates the current page to `url` and then polls document.readyState
+                until the page has loaded (covers SPA routes and same-URL navigations,
+                which waitForNavigation() cannot observe).
+                rawUrl/pageUrl are the low-level pair used by internal drivers; MCP
+                clients should pass `url`.
+            """.trimIndent()
+        )
+        toolSpec["waitForSelector"] = ToolSpec(
+            domain = domain,
+            method = "waitForSelector",
+            arguments = listOf(
+                ToolSpec.Arg("selector", "String", null, "CSS selector or :expr(...) selector to wait for."),
+                ToolSpec.Arg("timeoutMillis", "Long?", "null", "How long to wait before failing; driver default when omitted."),
+            ),
+            returnType = "Unit",
+            description = "Wait until an element matching the selector exists in the DOM.",
+            help = """
+                tab.waitForSelector(selector: String)
+                tab.waitForSelector(selector: String, timeoutMillis: Long)
+
+                Fails (TIMEOUT) instead of returning silently when the selector never appears.
+            """.trimIndent()
+        )
+        toolSpec["waitForNavigation"] = ToolSpec(
+            domain = domain,
+            method = "waitForNavigation",
+            arguments = listOf(
+                ToolSpec.Arg("oldUrl", "String?", "null", "URL to navigate away from; omit to just wait for the page to settle."),
+                ToolSpec.Arg("timeoutMillis", "Long?", "null", "How long to wait before failing."),
+            ),
+            returnType = "Unit",
+            description = "Wait for an in-flight navigation to finish.",
+            help = """
+                tab.waitForNavigation()
+                tab.waitForNavigation(oldUrl: String, timeoutMillis: Long?)
+
+                Polls document.readyState instead of the upstream `oldUrl != currentUrl()`
+                predicate, so same-URL navigations (SPA routes, fragment jumps) also
+                complete instead of timing out.
+            """.trimIndent()
+        )
+        toolSpec["waitForPage"] = ToolSpec(
+            domain = domain,
+            method = "waitForPage",
+            arguments = listOf(
+                ToolSpec.Arg("url", "String", null, "URL to wait for."),
+                ToolSpec.Arg("timeoutMillis", "Long?", "null", "How long to wait before failing; 30000 when omitted."),
+            ),
+            returnType = "Unit",
+            description = "Wait until the browser has a page at the given URL.",
+            help = """
+                tab.waitForPage(url: String)
+                tab.waitForPage(url: String, timeoutMillis: Long)
+            """.trimIndent()
+        )
+        toolSpec["waitForFunction"] = ToolSpec(
+            domain = domain,
+            method = "waitForFunction",
+            arguments = listOf(
+                ToolSpec.Arg("pageFunction", "String", null, "JavaScript expression returning a truthy value when done."),
+                ToolSpec.Arg("timeoutMillis", "Long?", "null", "How long to wait before failing; 30000 when omitted."),
+            ),
+            returnType = "Unit",
+            description = "Wait until a JavaScript expression evaluates to a truthy value.",
+            help = """
+                tab.waitForFunction(pageFunction: String)
+                tab.waitForFunction(pageFunction: String, timeoutMillis: Long)
+            """.trimIndent()
+        )
+        toolSpec["delay"] = ToolSpec(
+            domain = domain,
+            method = "delay",
+            arguments = listOf(
+                ToolSpec.Arg("millis", "Long", "1000", "How long to wait, in milliseconds."),
+            ),
+            returnType = "Unit",
+            description = "Wait unconditionally for the given number of milliseconds.",
+            help = """
+                tab.delay(millis: Long = 1000)
+            """.trimIndent()
+        )
+        toolSpec["screenshot"] = ToolSpec(
+            domain = domain,
+            method = "screenshot",
+            arguments = listOf(
+                ToolSpec.Arg("selector", "String?", "null", "Capture only the element matching this selector."),
+                ToolSpec.Arg("fullPage", "Boolean?", "null", "Capture the full scrollable page."),
+                ToolSpec.Arg("viewport", "Int?", "null", "Capture the Nth viewport (scroll-relative)."),
+            ),
+            returnType = "String",
+            description = "Capture a screenshot; pass no argument for the visible viewport, or exactly one of selector/fullPage/viewport.",
+            help = """
+                tab.screenshot()
+                tab.screenshot(selector: String)
+                tab.screenshot(fullPage: Boolean)
+                tab.screenshot(viewport: Int)
+
+                Exactly one of selector/fullPage/viewport may be given; anything else is
+                rejected rather than silently capturing the wrong region.
+            """.trimIndent()
+        )
+        toolSpec["ariaSnapshot"] = ToolSpec(
+            domain = domain,
+            method = "ariaSnapshot",
+            arguments = listOf(
+                ToolSpec.Arg("viewports", "String?", "null", "Viewport spec (e.g. \"0,1\") to capture."),
+                ToolSpec.Arg("interactive", "Boolean?", "false", "Keep only interactive nodes."),
+                ToolSpec.Arg("urls", "Boolean?", "false", "Include link URLs."),
+                ToolSpec.Arg("compact", "Boolean?", "true", "Drop empty structural nodes."),
+                ToolSpec.Arg("depth", "Int?", "-1", "Maximum tree depth; -1 for unlimited."),
+                ToolSpec.Arg("selector", "String?", "null", "Root the snapshot at this selector."),
+                ToolSpec.Arg("boxes", "Boolean?", "true", "Include element bounding boxes."),
+                ToolSpec.Arg("limit", "Int?", "-1", "Maximum number of nodes; -1 for unlimited."),
+            ),
+            returnType = "String",
+            description = "Build an ARIA accessibility snapshot of the current page.",
+            help = """
+                tab.ariaSnapshot()
+                tab.ariaSnapshot(selector: String, compact: Boolean, boxes: Boolean, …)
+
+                The upstream WebDriver method takes an AriaSnapshotOptions object; the
+                executor flattens it into these options, which is what MCP clients send.
+            """.trimIndent()
+        )
         toolSpec["saveStorageState"] = ToolSpec(
             domain = domain,
             method = "saveStorageState",

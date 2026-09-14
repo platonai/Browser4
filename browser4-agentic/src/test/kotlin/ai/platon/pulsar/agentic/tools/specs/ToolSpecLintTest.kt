@@ -55,6 +55,27 @@ class ToolSpecLintTest {
     }
 
     @Test
+    @DisplayName("no advertised tool demands an argument a JSON client cannot send")
+    fun advertisedSpecsAreCallable() {
+        // `tab.navigate` regressed exactly this way: the generated spec advertised
+        // `entry: NavigateEntry` (the upstream overload) while the executor reads
+        // `url`, so the required-argument check rejected the CLI's call. The
+        // advertised set is the executor's merged map — generated specs plus the
+        // explicit overrides in BrowserTabToolExecutor.
+        val offenders = BrowserTabToolExecutor().getToolSpecs().values
+            .flatMap { spec ->
+                spec.arguments
+                    .filter { it.defaultValue == null && !ToolSpecLint.isJsonRepresentable(it.type) }
+                    .map { "${spec.domain}.${spec.method}(${it.name}: ${it.type})" }
+            }
+
+        assertEquals(
+            emptyList<String>(), offenders,
+            "An MCP client can only send JSON primitives; these required arguments are unfulfillable"
+        )
+    }
+
+    @Test
     @DisplayName("a blank description is an error")
     fun blankDescriptionIsAnError() {
         val issues = ToolSpecLint.check(listOf(spec(description = " ")))

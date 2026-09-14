@@ -78,6 +78,20 @@ object ToolSpecLint {
                         "no argument description: the schema falls back to '${arg.expression}'"
                     )
                 }
+                if (arg.defaultValue == null && !isJsonRepresentable(arg.type)) {
+                    // WARNING here because this lint also runs over the *raw*
+                    // generator output, where upstream overloads
+                    // (`navigate(entry: NavigateEntry)`, `screenshot(rect: RectD)`)
+                    // are legitimately present. The gate with teeth is
+                    // `ToolSpecLintTest.advertisedSpecsAreCallable`, which asserts
+                    // this over the specs the product actually advertises.
+                    issues += Issue(
+                        Severity.WARNING, argRef,
+                        "required argument of type '${arg.type}' cannot be sent by an MCP client " +
+                            "(JSON has no such value) — declare the primitive form the executor reads, " +
+                            "or give it a default"
+                    )
+                }
             }
 
             spec.cliName?.let { cliName ->
@@ -122,4 +136,27 @@ object ToolSpecLint {
     fun report(issues: Collection<Issue>): String = issues
         .sortedWith(compareBy({ it.severity }, { it.tool }, { it.message }))
         .joinToString("\n") { "${it.severity} ${it.tool}: ${it.message}" }
+
+    /**
+     * Whether a client can produce a value of this declared type from JSON.
+     *
+     * A *required* argument of any other type is unfulfillable over MCP: the
+     * generated `tools/list` schema would demand a `NavigateEntry`/`RectD`/
+     * `Duration`/`AriaSnapshotOptions` object or a `suspend () -> …` action, and
+     * the required-argument check then rejects the call before it is dispatched.
+     * That is exactly how `tab.navigate` broke (`entry: NavigateEntry` was
+     * advertised while the executor reads `url`).
+     */
+    fun isJsonRepresentable(type: String): Boolean {
+        val base = type.trim().removeSuffix("?").substringBefore('<').trim()
+        if (base in JSON_PRIMITIVES) return true
+        // Collections of a representable element type are fine (List<String>, Array<Int>).
+        val element = type.substringAfter('<', "").substringBeforeLast('>', "").trim().removeSuffix("?")
+        return element.isNotEmpty() && element.substringBefore(',').trim() in JSON_PRIMITIVES
+    }
+
+    private val JSON_PRIMITIVES = setOf(
+        "String", "Int", "Long", "Double", "Float", "Boolean",
+        "Any", "Number", "List", "Array", "Map", "Set", "Collection", "JsonObject", "JsonElement",
+    )
 }

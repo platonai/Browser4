@@ -611,22 +611,31 @@ Examples:
 ### `aria_snapshot`, `browser_snapshot`
 
 ```
-tab.ariaSnapshot(options: AriaSnapshotOptions)
+tab.ariaSnapshot(viewports: String? = null, interactive: Boolean? = false, urls: Boolean? = false, compact: Boolean? = true, depth: Int? = -1, selector: String? = null, boxes: Boolean? = true, limit: Int? = -1)
 ```
 
-Return the ARIA snapshot (accessibility tree in YAML format) with filtering [options] applied.
+Build an ARIA accessibility snapshot of the current page.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `options` | AriaSnapshotOptions | yes |  | The filtering and rendering options. |
+| `viewports` | String? | no | null | Viewport spec (e.g. "0,1") to capture. |
+| `interactive` | Boolean? | no | false | Keep only interactive nodes. |
+| `urls` | Boolean? | no | false | Include link URLs. |
+| `compact` | Boolean? | no | true | Drop empty structural nodes. |
+| `depth` | Int? | no | -1 | Maximum tree depth; -1 for unlimited. |
+| `selector` | String? | no | null | Root the snapshot at this selector. |
+| `boxes` | Boolean? | no | true | Include element bounding boxes. |
+| `limit` | Int? | no | -1 | Maximum number of nodes; -1 for unlimited. |
 
 Returns: `String`
 
 <details><summary>Full documentation</summary>
 
-Return the ARIA snapshot (accessibility tree in YAML format) with filtering [options] applied.
+tab.ariaSnapshot()
+tab.ariaSnapshot(selector: String, compact: Boolean, boxes: Boolean, …)
 
-Supports interactive-only mode, URL inclusion, compact mode, depth limiting, CSS selector scoping, and viewport filtering. All options compose.
+The upstream WebDriver method takes an AriaSnapshotOptions object; the
+executor flattens it into these options, which is what MCP clients send.
 
 </details>
 
@@ -948,16 +957,22 @@ Returns: `Unit`
 ### `delay`
 
 ```
-tab.delay(duration: kotlin.time.Duration)
+tab.delay(millis: Long = 1000)
 ```
 
-Delay for a given amount of time.
+Wait unconditionally for the given number of milliseconds.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `duration` | kotlin.time.Duration | yes |  | The amount of time to delay. |
+| `millis` | Long | no | 1000 | How long to wait, in milliseconds. |
 
 Returns: `Unit`
+
+<details><summary>Full documentation</summary>
+
+tab.delay(millis: Long = 1000)
+
+</details>
 
 ### `delete_cookies`
 
@@ -2060,33 +2075,28 @@ The NanoDOMTree is based on the accessibility tree and enhanced with DOM and doc
 ### `navigate`, `browser_navigate`
 
 ```
-tab.navigate(entry: NavigateEntry)
+tab.navigate(url: String, rawUrl: String? = null, pageUrl: String? = null)
 ```
 
-Navigates current page to the given URL.
+Navigate the current page to a URL and wait for the page to load.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `entry` | NavigateEntry | yes |  | NavigateEntry to navigate page to. |
+| `url` | String | yes |  | URL to navigate to; the executor waits for the page to load. |
+| `rawUrl` | String? | no | null | Low-level alternative to 'url' — must be paired with 'pageUrl'. |
+| `pageUrl` | String? | no | null | Page URL paired with 'rawUrl'. |
 
 Returns: `Unit`
 
-Examples:
-
-- Example usage:
-
-  ```kotlin
-  * val entry = NavigateEntry("https://www.example.com?timestamp=11712067353", pageUrl = "https://www.example.com")
-       * driver.navigate(entry)
-       * driver.waitForNavigation()
-       *
-  ```
-
 <details><summary>Full documentation</summary>
 
-Navigates current page to the given URL.
+tab.navigate(url: String)
 
-```kotlin val entry = NavigateEntry("https://www.example.com?timestamp=11712067353", pageUrl = "https://www.example.com") driver.navigate(entry) driver.waitForNavigation() ```
+Navigates the current page to `url` and then polls document.readyState
+until the page has loaded (covers SPA routes and same-URL navigations,
+which waitForNavigation() cannot observe).
+rawUrl/pageUrl are the low-level pair used by internal drivers; MCP
+clients should pass `url`.
 
 </details>
 
@@ -2443,22 +2453,28 @@ Returns a JSON string containing the current browser cookies and the active orig
 ### `screenshot`, `browser_take_screenshot`
 
 ```
-tab.screenshot(rect: RectD)
+tab.screenshot(selector: String? = null, fullPage: Boolean? = null, viewport: Int? = null)
 ```
 
-Take a screenshot of the rectangle specified by [rect] in the current page coordinate space.
+Capture a screenshot; pass no argument for the visible viewport, or exactly one of selector/fullPage/viewport.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `rect` | RectD | yes |  | rect: RectD |
+| `selector` | String? | no | null | Capture only the element matching this selector. |
+| `fullPage` | Boolean? | no | null | Capture the full scrollable page. |
+| `viewport` | Int? | no | null | Capture the Nth viewport (scroll-relative). |
 
-Returns: `String?`
+Returns: `String`
 
 <details><summary>Full documentation</summary>
 
-Take a screenshot of the rectangle specified by [rect] in the current page coordinate space.
+tab.screenshot()
+tab.screenshot(selector: String)
+tab.screenshot(fullPage: Boolean)
+tab.screenshot(viewport: Int)
 
-Caller is responsible for ensuring the rectangle is visible or scrolled into view if the implementation requires it.
+Exactly one of selector/fullPage/viewport may be given; anything else is
+rejected rather than silently capturing the wrong region.
 
 </details>
 
@@ -3251,125 +3267,94 @@ This property equals to javascript `document.URL`. The `document.URL` property r
 ### `wait_for_function`
 
 ```
-tab.waitForFunction(pageFunction: String, timeout: Duration)
+tab.waitForFunction(pageFunction: String, timeoutMillis: Long? = null)
 ```
 
-Returns when the pageFunction returns a truthy value.
+Wait until a JavaScript expression evaluates to a truthy value.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `pageFunction` | String | yes |  | A JavaScript function to be evaluated in the page context. |
-| `timeout` | Duration | yes |  | timeout: Duration |
+| `pageFunction` | String | yes |  | JavaScript expression returning a truthy value when done. |
+| `timeoutMillis` | Long? | no | null | How long to wait before failing; 30000 when omitted. |
 
-Returns: `WebDriver?`
+Returns: `Unit`
+
+<details><summary>Full documentation</summary>
+
+tab.waitForFunction(pageFunction: String)
+tab.waitForFunction(pageFunction: String, timeoutMillis: Long)
+
+</details>
 
 ### `wait_for_navigation`
 
 ```
-tab.waitForNavigation(oldUrl: String, timeout: Duration)
+tab.waitForNavigation(oldUrl: String? = null, timeoutMillis: Long? = null)
 ```
 
-Wait until the current url changes or timeout.
+Wait for an in-flight navigation to finish.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `oldUrl` | String | yes |  | oldUrl: String |
-| `timeout` | Duration | yes |  | The maximum time to wait for the url to change. |
+| `oldUrl` | String? | no | null | URL to navigate away from; omit to just wait for the page to settle. |
+| `timeoutMillis` | Long? | no | null | How long to wait before failing. |
 
-Returns: `Duration`
-
-Examples:
-
-- Example usage:
-
-  ```kotlin
-  * val timeout = Duration.ofSeconds(30)
-       * val url = "https://www.example.com"
-       * driver.navigate(url)
-       * var remainingTime = driver.waitForNavigation(timeout)
-       * if (remainingTime > 0) {
-       *   driver.click("a[href='/next']")
-       *   remainingTime = driver.waitForNavigation(url, timeout)
-       * }
-       *
-  ```
+Returns: `Unit`
 
 <details><summary>Full documentation</summary>
 
-Wait until the current url changes or timeout.
+tab.waitForNavigation()
+tab.waitForNavigation(oldUrl: String, timeoutMillis: Long?)
 
-```kotlin val timeout = Duration.ofSeconds(30) val url = "https://www.example.com" driver.navigate(url) var remainingTime = driver.waitForNavigation(timeout) if (remainingTime > 0) { driver.click("a[href='/next']") remainingTime = driver.waitForNavigation(url, timeout) } ```
+Polls document.readyState instead of the upstream `oldUrl != currentUrl()`
+predicate, so same-URL navigations (SPA routes, fragment jumps) also
+complete instead of timing out.
 
 </details>
 
 ### `wait_for_page`
 
 ```
-tab.waitForPage(url: String, timeout: Duration)
+tab.waitForPage(url: String, timeoutMillis: Long? = null)
 ```
 
-Await navigation to the specified URL page or timeout if necessary.
+Wait until the browser has a page at the given URL.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `url` | String | yes |  | The URL to navigate to. |
-| `timeout` | Duration | yes |  | timeout: Duration |
+| `url` | String | yes |  | URL to wait for. |
+| `timeoutMillis` | Long? | no | null | How long to wait before failing; 30000 when omitted. |
 
-Returns: `WebDriver?`
-
-Examples:
-
-- Example usage:
-
-  ```kotlin
-  * val newDriver = driver.waitForPage("https://www.example.com", Duration.ofSeconds(30))
-       *
-  ```
+Returns: `Unit`
 
 <details><summary>Full documentation</summary>
 
-Await navigation to the specified URL page or timeout if necessary.
-
-```kotlin val newDriver = driver.waitForPage("https://www.example.com", Duration.ofSeconds(30)) ```
-
-TODO: check if waitForPage and waitForNavigation can be merged into one method.
+tab.waitForPage(url: String)
+tab.waitForPage(url: String, timeoutMillis: Long)
 
 </details>
 
 ### `wait_for_selector`
 
 ```
-tab.waitForSelector(selector: String, timeout: Duration, action: suspend ()
+tab.waitForSelector(selector: String, timeoutMillis: Long? = null)
 ```
 
-Wait for the element identified by the selector to become present in the DOM, or until timeout.
+Wait until an element matching the selector exists in the DOM.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `selector` | String | yes |  | The selector of the element, multiple formats supported. The element is waited for until it becomes present. |
-| `timeout` | Duration | yes |  | The maximum time to wait for the element to become present. |
-| `action` | suspend ( | yes |  | The action to execute when the element is not found. |
+| `selector` | String | yes |  | CSS selector or :expr(...) selector to wait for. |
+| `timeoutMillis` | Long? | no | null | How long to wait before failing; driver default when omitted. |
 
 Returns: `Unit`
 
-Examples:
-
-- Example usage:
-
-  ```kotlin
-  * val remainingTime = driver.waitForSelector("h2.title", Duration.ofSeconds(30)) {
-       *  driver.scrollDown()
-       * }
-       *
-  ```
-
 <details><summary>Full documentation</summary>
 
-Wait for the element identified by the selector to become present in the DOM, or until timeout.
+tab.waitForSelector(selector: String)
+tab.waitForSelector(selector: String, timeoutMillis: Long)
 
-This method periodically checks for the existence of the element. If the element is not found during a check, the action will be executed, such as scrolling the page down.
-
-```kotlin val remainingTime = driver.waitForSelector("h2.title", Duration.ofSeconds(30)) { driver.scrollDown() } ```
+Fails (TIMEOUT) instead of returning silently when the selector never appears.
 
 </details>
 
