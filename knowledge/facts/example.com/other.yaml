@@ -1,0 +1,13 @@
+intent: other
+domain: example.com
+url_pattern: /*
+status: hypothesis
+site_facts:
+  domain: example.com
+page_facts: {}
+promotion_history:
+- to: hypothesis
+  date: '2026-09-14T15:29:32.063689500Z'
+  reason: Initial deep learning pass
+created_at: '2026-09-14T15:29:32.063689500Z'
+updated_at: '2026-09-14T15:29:32.063689500Z'

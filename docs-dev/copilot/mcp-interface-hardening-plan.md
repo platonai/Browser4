@@ -236,7 +236,29 @@ data class Arg(
 - 8.4 告警阈值文档化：p95 > 3s、错误率 > 5%、`TARGET_UNAVAILABLE` > 0（G3 未修完时的哨兵）。
 - **验收**：契约测试断言计数器递增；stats 端点返回真实数据；SLO 文档入库。
 
-### Phase 4 · 保护与性能（需求 9 完成 2026-09-14；需求 10 完成 2026-09-14；需求 11 未做）
+### Phase 4 · 保护与性能（需求 9、10、11 均已完成 2026-09-14）
+
+**需求 11 — 异步处理（已完成）**
+- `TaskEnvelopes`（agentic）成为**唯一**信封与状态词表的来源：
+  - 词表 `queued|running|done|failed|cancelled`，`normalise()` 把各域的状态词（`CREATED`/`OK`/`TIMEOUT`/`in_progress`/`Cancelled`…）映射进来，**未知状态一律 `failed`**（新状态不能看起来像健康）；
+  - `SUBMIT_SCHEMA`（提交：`taskId/status/pollAfterMs/statusTool/resultTool/cancelTool`）与 `STATUS_SCHEMA`（轮询：再加 `progress/processed/total/elapsedMs/error`）；
+  - `of(...)` 只在**有值**时写入字段（`null` 省略），`progress=0` 是真实测量、予以保留；`progress` 夹在 `0..1`。
+- 三个域统一：
+  - `crawl.submit/status/result/cancel`：`status`/`result` 现在返回 **JSON 信封**（此前返回对象 → 渲染成 `{type, description}` 文本，Phase 2 因此无法声明 `outputSchema`，这个缺口现已关闭）；`processed` = 已收页面数，`elapsedMs` 由 start/finish 计算；`crawl.cancel` 调 `CrawlService.cancel`；未知 id 直接终结为 `failed`（不再停在 `CREATED` 让客户端空转）。
+  - `command.run/status/result/cancel`：`status`/`result` 包一层信封并保留域自身载荷（`result` 字段），`processed` = agent 已记录步数；`command.cancel` 调 `cancelAgentTask`，返回 `cancelled=true|false`（页面加载类任务无法中途打断，就如实报 false）。
+- 11.3 超时/租约/僵尸回收：复用既有设施——`CrawlService` 每 5 分钟 `purgeExpiredTasks()`（默认 TTL 1 天）+ 磁盘恢复时跳过过期终态；`StatefulAgentRunner`/`StatefulPageVisitor` 自带 TTL 缓存（agent 任务 120 分钟）；取消经协程取消传播到 CDP/爬取。
+- **实跑证据**（`b4-backend24/26.log`）：
+  - `crawl_submit` → 文本裸 task id + `structuredContent {taskId,status:"running",pollAfterMs:1000,statusTool,resultTool,cancelTool}`；
+  - `crawl_status` → `{"taskId":…,"status":"done","processed":0,"elapsedMs":39,"statusTool":"crawl_status","resultTool":"crawl_result","cancelTool":"crawl_cancel"}`；
+  - 未知 id → `{"taskId":"does-not-exist","status":"failed","error":"Task not found: …"}`；已完成任务再 cancel → `cancelled=false` + `status=done`（如实报告，不报错）；
+  - `command_run {command}`（不再要求 `noopLimit`/`engine`）→ task id + 信封；`command_status` → `running`；3 秒后 → `failed` 并带上真实原因（本机未配 LLM）；`command_cancel`/`command_result` 均返回同一信封。
+- 测试：`TaskEnvelopesTest`（8：词表映射/终态集合/`null` 省略与 `0` 保留/夹取与空错误/两个 schema 解析且能拒绝越界状态），`CrawlToolExecutorTest`（7）与 `CommandToolExecutorTest`（7）覆盖 JSON 信封、cancel 语义、未知 id 终结、`outputSchema` 与实际产出对齐、TaskPolicy 完整。
+- **本轮顺带修掉的真问题**
+  1. `TaskEnvelopes` 里 `enum` 用 `${…joinToString { … }}` 拼在 raw string 中，模板被**静默截断**，生成的 schema 不是合法 JSON → 结果校验被**整体跳过**（正是「静默失效」那一类）。改为独立属性 + 新增断言 schema 可解析且枚举完整的测试。
+  2. `command.run` 的 `noopLimit`/`engine` 被声明为必填而执行器按可选读取 → 校验层直接拒绝**任何** `command_run` 调用（实测复现 `MISSING_REQUIRED_ARG`）。已改为 `"Int?"/"String?"` + `"null"`。
+  3. `CommandToolExecutor` 读 `sessionId` 却在自身 `validateArgs` 里不允许它 → 客户端带上 `sessionId` 就报 `Extraneous parameter 'sessionId'`。四个方法统一放行传输参数。
+  4. B 通道**手写**了一份提交信封（漏了 `cancelTool`）→ 现改为复用 `ToolResultValidator.taskEnvelope`，并把 `cancelTool` 补进共享构建器；顺带修正 B 里 `pollAfterMs` 被转成字符串的问题（经 Jackson 往返，数字仍是数字）。
+  5. `command.run`/`status`/`result` 补 `help`（lint 的文档告警相应减少）。
 
 **需求 10 — 缓存（已完成）**
 - `ToolCachePolicy`：**白名单**推导可缓存方法（缓存错东西就是正确性 bug，所以不做黑名单）——页面读 `tab.title/currentUrl/url/ariaSnapshot/exists/isVisible/isEnabled/isChecked/getText/getAttribute/dialogStatus/frameList` TTL 1s；任务状态 `crawl|command|swarm.status|result` TTL 500ms；**明确不缓存**：一切改页面的动作、大载荷（`html_snapshot_*`/`screenshot`/`pdf`，避免「带额外步骤的内存泄漏」）、以及带 `clear` 语义的 `consoleMessages`/`networkRequests`。`ToolSpec.cacheable`（三态：null=按策略/false=禁用/true=未知工具也能缓存）与 `cacheTtlMs`（0=禁用）可覆盖。
@@ -252,7 +274,7 @@ data class Arg(
 - `/mcp/tools` 拆成两段：**静态段**（会话生命周期工具 + 前端别名 + 插件域）枚举一次即缓存；**会话段**（会话 agent 的 tab/system 工具）**每次请求合并**。读取会话段是只读的（`getAllSessions()` 不会创建会话），所以当初加缓存要避免的「探活 → 建会话 → 启动浏览器 → 关闭」循环不会回来。
 - 实测：`open_session` 之前 `83` 个工具，之后 `275` 个（新增 `navigate`/`click`/`reload`/`title`/`current_url`… 共 192 个）。
 - 回归测试：`MCPToolControllerTest.the tool list grows when a session appears`（同一控制器实例，先无会话后有会话，断言静态段保留 + 会话工具出现）。
-- **未做**：10.1 `ToolResultCache`（`(sessionId, tool, canonicalArgs, specVersion)` 键、TTL、`_meta.cached/ageMs`）、10.2 状态变更失效、10.4 逃生门与 `/api/mcp/cache/stats`。
+- 10.1/10.2/10.4 见上方「需求 10 — 缓存（已完成）」，本阶段的 G5 只是其 10.3 一项。
 
 **需求 9 — 限流（已完成）**
 - `ToolRateLimiter`（`agentic/tools/`）：令牌桶，**两个作用域**——

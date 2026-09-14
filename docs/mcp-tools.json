@@ -58,11 +58,33 @@
     } ]
   }, {
     "domain" : "command",
+    "method" : "cancel",
+    "mcpNames" : [ "command_cancel" ],
+    "signature" : "command.cancel(id: String)",
+    "description" : "Cancel a running agent command task.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "id",
+      "type" : "String",
+      "required" : true,
+      "description" : "Task id returned by `command.run`. Required."
+    } ],
+    "examples" : [ {
+      "title" : "Stop a running agent command",
+      "args" : {
+        "id" : "5c3a1f2e-9b47-4d21-8f0a-1e6b7c8d9a01"
+      },
+      "expectsError" : false
+    } ],
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "help" : "Stops the task's runner and reports the outcome as JSON\n(`cancelled=true|false`). A page-load command cannot be interrupted\nmid-navigation, so cancelling one after it finished reports\n`cancelled=false` instead of pretending otherwise."
+  }, {
+    "domain" : "command",
     "method" : "result",
     "mcpNames" : [ "command_result" ],
     "signature" : "command.result(id: String)",
-    "description" : "Get the result of a completed command task by its task ID.",
-    "returnType" : "CommandResult",
+    "description" : "Read a finished command task: its status envelope and payload.",
+    "returnType" : "String",
     "arguments" : [ {
       "name" : "id",
       "type" : "String",
@@ -75,12 +97,14 @@
         "id" : "5c3a1f2e-9b47-4d21-8f0a-1e6b7c8d9a01"
       },
       "expectsError" : false
-    } ]
+    } ],
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "help" : "command.result(id: String)\n\nThe status envelope plus a `result` field holding the command's own\npayload. Poll `command.status` until it is terminal before reading, or\ncall this directly and treat a non-terminal `status` as \"not ready\"."
   }, {
     "domain" : "command",
     "method" : "run",
     "mcpNames" : [ "command_run" ],
-    "signature" : "command.run(command: String, async: Boolean = true, noopLimit: Int, engine: String)",
+    "signature" : "command.run(command: String, async: Boolean = true, noopLimit: Int? = null, engine: String? = null)",
     "description" : "Execute a plain command (URL, instruction, or agent task). When async=true (default), returns a task ID immediately. When async=false, blocks until done and returns the CommandStatus as JSON. noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. engine optionally selects the agent execution engine: 'cli' (default) for the CLI tool-loop engine; 'observe-act' is the DEPRECATED legacy engine.",
     "returnType" : "String",
     "arguments" : [ {
@@ -96,13 +120,15 @@
       "description" : "`true` (default) returns a task id immediately; `false` blocks until the command finishes and returns the CommandStatus JSON."
     }, {
       "name" : "noopLimit",
-      "type" : "Int",
-      "required" : true,
+      "type" : "Int?",
+      "required" : false,
+      "default" : "null",
       "description" : "Consecutive no-op abort threshold for agent tasks; omit to use the server default."
     }, {
       "name" : "engine",
-      "type" : "String",
-      "required" : true,
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
       "description" : "Agent engine: `cli` (default) for the tool-loop engine, `observe-act` is deprecated."
     } ],
     "examples" : [ {
@@ -123,16 +149,18 @@
     "task" : {
       "statusTool" : "command_status",
       "resultTool" : "command_result",
+      "cancelTool" : "command_cancel",
       "pollAfterMs" : 1000
     },
-    "outputSchema" : "\n            {\n              \"type\": \"object\",\n              \"required\": [\"taskId\", \"status\", \"statusTool\"],\n              \"properties\": {\n                \"taskId\": {\"type\": \"string\"},\n                \"status\": {\"type\": \"string\", \"enum\": [\"running\", \"done\", \"failed\"]},\n                \"pollAfterMs\": {\"type\": \"integer\"},\n                \"statusTool\": {\"type\": \"string\"},\n                \"resultTool\": {\"type\": \"string\"}\n              }\n            }\n        "
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\", \"statusTool\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"pollAfterMs\": {\"type\": \"integer\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "help" : "command.run(command: String)\ncommand.run(command: String, async: Boolean = true, noopLimit: Int?, engine: String?)\n\n`command` is a URL to load, a natural-language instruction, or an agent\ntask. With async=true (the default) the call returns a task id and you\npoll it with `command.status` (JSON status envelope), read the payload\nwith `command.result`, and stop it with `command.cancel`. Pass\nasync=false when you would rather block for the finished status."
   }, {
     "domain" : "command",
     "method" : "status",
     "mcpNames" : [ "command_status" ],
     "signature" : "command.status(id: String)",
-    "description" : "Get the status of a previously submitted command task by its task ID.",
-    "returnType" : "CommandStatus",
+    "description" : "Poll a command task: the shared status envelope as JSON.",
+    "returnType" : "String",
     "arguments" : [ {
       "name" : "id",
       "type" : "String",
@@ -145,14 +173,38 @@
         "id" : "5c3a1f2e-9b47-4d21-8f0a-1e6b7c8d9a01"
       },
       "expectsError" : false
-    } ]
+    } ],
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "help" : "command.status(id: String)\n\nReturns the shared envelope — `taskId`, `status`\n(`queued|running|done|failed|cancelled`), `processed` when the agent\nhas recorded steps, and the tool names to poll, read and cancel with.\nAn unknown id reports `status=failed`, never a healthy-looking state."
+  }, {
+    "domain" : "crawl",
+    "method" : "cancel",
+    "mcpNames" : [ "crawl_cancel" ],
+    "signature" : "crawl.cancel(id: String)",
+    "description" : "Cancel a running crawl task; the task ends in status=cancelled.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "id",
+      "type" : "String",
+      "required" : true,
+      "description" : "Task id returned by `crawl.submit`."
+    } ],
+    "examples" : [ {
+      "title" : "Stop a running crawl",
+      "args" : {
+        "id" : "8f14e45f-ea0b-4c1e-9d3a-2f6d5c4b1a09"
+      },
+      "expectsError" : false
+    } ],
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "help" : "Cancels the task's coroutine and finalizes its record, so a client can\nstop polling immediately. Cancelling an unknown or already finished\ntask is reported (cancelled=false) rather than treated as an error:\nthe desired end state already holds."
   }, {
     "domain" : "crawl",
     "method" : "result",
     "mcpNames" : [ "crawl_result" ],
     "signature" : "crawl.result(id: String)",
-    "description" : "Get the result of a completed crawl task by its task ID.",
-    "returnType" : "CrawlResponse",
+    "description" : "Read a finished crawl task: the status envelope plus the pages it collected.",
+    "returnType" : "String",
     "arguments" : [ {
       "name" : "id",
       "type" : "String",
@@ -165,14 +217,16 @@
         "id" : "8f14e45f-ea0b-4c1e-9d3a-2f6d5c4b1a09"
       },
       "expectsError" : false
-    } ]
+    } ],
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "help" : "crawl.result(id: String)\n\nThe status envelope plus `pages` — one entry per crawled URL with its\ntitle, content length and any X-SQL extraction. Poll `crawl.status`\nuntil it is terminal before reading."
   }, {
     "domain" : "crawl",
     "method" : "status",
     "mcpNames" : [ "crawl_status" ],
     "signature" : "crawl.status(id: String)",
-    "description" : "Get the status/result of a crawl task by its task ID.",
-    "returnType" : "CrawlResponse",
+    "description" : "Poll a crawl task: the shared status envelope as JSON.",
+    "returnType" : "String",
     "arguments" : [ {
       "name" : "id",
       "type" : "String",
@@ -184,9 +238,11 @@
       "args" : {
         "id" : "8f14e45f-ea0b-4c1e-9d3a-2f6d5c4b1a09"
       },
-      "notes" : "An unknown id returns a 404-style CrawlResponse rather than an error",
+      "notes" : "An unknown id reports status=failed with an error rather than a 404",
       "expectsError" : false
-    } ]
+    } ],
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "help" : "crawl.status(id: String)\n\nReturns the shared envelope — `taskId`, `status`\n(`queued|running|done|failed|cancelled`), `processed` (pages collected\nso far), `elapsedMs` once the task finished, and the tool names to\npoll, read and cancel with. An unknown id reports `status=failed`."
   }, {
     "domain" : "crawl",
     "method" : "submit",
@@ -230,9 +286,10 @@
     "task" : {
       "statusTool" : "crawl_status",
       "resultTool" : "crawl_result",
+      "cancelTool" : "crawl_cancel",
       "pollAfterMs" : 1000
     },
-    "outputSchema" : "\n            {\n              \"type\": \"object\",\n              \"required\": [\"taskId\", \"status\", \"statusTool\"],\n              \"properties\": {\n                \"taskId\": {\"type\": \"string\"},\n                \"status\": {\"type\": \"string\", \"enum\": [\"running\", \"done\", \"failed\"]},\n                \"pollAfterMs\": {\"type\": \"integer\"},\n                \"statusTool\": {\"type\": \"string\"},\n                \"resultTool\": {\"type\": \"string\"}\n              }\n            }\n        ",
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\", \"statusTool\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"pollAfterMs\": {\"type\": \"integer\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "Starts a recursive crawl in the background and returns the task id\nimmediately. Poll it with `crawl.status`, read the payload with\n`crawl.result`. Use `depth=0` for a single page, and prefer the\nswarm domain for high-throughput parallel extraction."
   }, {
     "domain" : "experience",

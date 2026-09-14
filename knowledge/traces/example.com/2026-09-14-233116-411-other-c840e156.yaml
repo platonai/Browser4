@@ -1,0 +1,11 @@
+trace_id: c840e156-3946-4524-a179-31e9c58fbcad
+intent: other
+domain: example.com
+url: https://example.com
+url_pattern: /*
+outcome: failure
+failure_category: unknown
+final_state: {}
+timestamp: '2026-09-14T15:31:16.411201200Z'
+error_message: No LLM configured. AI features turned off. — see https://github.com/platonai/browser4base/blob/master/docs/config/llm/llm-config.md
+redacted: true

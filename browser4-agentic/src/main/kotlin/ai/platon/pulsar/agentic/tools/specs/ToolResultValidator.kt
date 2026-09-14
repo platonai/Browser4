@@ -58,16 +58,18 @@ object ToolResultValidator {
      * The shared task envelope for a submit tool whose result is the bare task id.
      *
      * Both channels build it here so a generic client sees the same structure
-     * whichever door it came through.
+     * whichever door it came through — including the `cancelTool` when the domain
+     * has one, which is how a client learns it can stop the work.
      */
     fun taskEnvelope(taskId: String, policy: TaskPolicy): JsonObject = JsonObject(
-        mapOf(
-            "taskId" to JsonPrimitive(taskId),
-            "status" to JsonPrimitive("running"),
-            "pollAfterMs" to JsonPrimitive(policy.pollAfterMs),
-            "statusTool" to JsonPrimitive(policy.statusTool),
-            "resultTool" to JsonPrimitive(policy.resultTool),
-        )
+        buildMap {
+            put("taskId", JsonPrimitive(taskId))
+            put("status", JsonPrimitive("running"))
+            put("pollAfterMs", JsonPrimitive(policy.pollAfterMs))
+            put("statusTool", JsonPrimitive(policy.statusTool))
+            put("resultTool", JsonPrimitive(policy.resultTool))
+            policy.cancelTool?.takeIf { it.isNotBlank() }?.let { put("cancelTool", JsonPrimitive(it)) }
+        }
     )
 
     /** Whether [text] is the bare task id a submit tool returns rather than JSON. */

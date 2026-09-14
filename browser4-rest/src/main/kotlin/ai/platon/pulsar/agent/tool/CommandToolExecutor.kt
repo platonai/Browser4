@@ -5,9 +5,11 @@ import ai.platon.pulsar.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.agentic.model.TaskPolicy
 import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
+import ai.platon.pulsar.agentic.tools.TaskEnvelopes
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.api.entities.CommandStatus
+import ai.platon.pulsar.common.ResourceStatus
 import kotlin.reflect.KClass
 
 /**
@@ -54,11 +56,11 @@ class CommandToolExecutor(
                         "finishes and returns the CommandStatus JSON.",
                 ),
                 ToolSpec.Arg(
-                    "noopLimit", "Int", null,
+                    "noopLimit", "Int?", "null",
                     "Consecutive no-op abort threshold for agent tasks; omit to use the server default.",
                 ),
                 ToolSpec.Arg(
-                    "engine", "String", null,
+                    "engine", "String?", "null",
                     "Agent engine: `cli` (default) for the tool-loop engine, `observe-act` is deprecated.",
                 ),
             ),
@@ -69,6 +71,16 @@ class CommandToolExecutor(
                     "noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. " +
                     "engine optionally selects the agent execution engine: 'cli' (default) for the CLI tool-loop engine; " +
                     "'observe-act' is the DEPRECATED legacy engine.",
+            help = """
+                command.run(command: String)
+                command.run(command: String, async: Boolean = true, noopLimit: Int?, engine: String?)
+
+                `command` is a URL to load, a natural-language instruction, or an agent
+                task. With async=true (the default) the call returns a task id and you
+                poll it with `command.status` (JSON status envelope), read the payload
+                with `command.result`, and stop it with `command.cancel`. Pass
+                async=false when you would rather block for the finished status.
+            """.trimIndent(),
             examples = listOf(
                 ToolExample(
                     title = "Load a page asynchronously",
@@ -80,8 +92,12 @@ class CommandToolExecutor(
                     args = mapOf("command" to "collect the page title", "async" to "false"),
                 ),
             ),
-            task = TaskPolicy(statusTool = "command_status", resultTool = "command_result"),
-            outputSchema = TASK_ENVELOPE_SCHEMA,
+            task = TaskPolicy(
+                statusTool = "command_status",
+                resultTool = "command_result",
+                cancelTool = "command_cancel",
+            ),
+            outputSchema = TaskEnvelopes.SUBMIT_SCHEMA,
         )
 
         toolSpec["status"] = ToolSpec(
@@ -90,8 +106,17 @@ class CommandToolExecutor(
             arguments = listOf(
                 ToolSpec.Arg("id", "String", null, "Task id returned by `command.run`. Required."),
             ),
-            returnType = "CommandStatus",
-            description = "Get the status of a previously submitted command task by its task ID.",
+            returnType = "String",
+            description = "Poll a command task: the shared status envelope as JSON.",
+            help = """
+                command.status(id: String)
+
+                Returns the shared envelope — `taskId`, `status`
+                (`queued|running|done|failed|cancelled`), `processed` when the agent
+                has recorded steps, and the tool names to poll, read and cancel with.
+                An unknown id reports `status=failed`, never a healthy-looking state.
+            """.trimIndent(),
+            outputSchema = TaskEnvelopes.STATUS_SCHEMA,
             examples = listOf(
                 ToolExample(
                     title = "Poll a running command",
@@ -106,8 +131,16 @@ class CommandToolExecutor(
             arguments = listOf(
                 ToolSpec.Arg("id", "String", null, "Task id returned by `command.run`. Required."),
             ),
-            returnType = "CommandResult",
-            description = "Get the result of a completed command task by its task ID.",
+            returnType = "String",
+            description = "Read a finished command task: its status envelope and payload.",
+            help = """
+                command.result(id: String)
+
+                The status envelope plus a `result` field holding the command's own
+                payload. Poll `command.status` until it is terminal before reading, or
+                call this directly and treat a non-terminal `status` as "not ready".
+            """.trimIndent(),
+            outputSchema = TaskEnvelopes.STATUS_SCHEMA,
             examples = listOf(
                 ToolExample(
                     title = "Read the finished command's output",
@@ -115,28 +148,38 @@ class CommandToolExecutor(
                 ),
             ),
         )
+
+        toolSpec["cancel"] = ToolSpec(
+            domain = domain,
+            method = "cancel",
+            arguments = listOf(
+                ToolSpec.Arg("id", "String", null, "Task id returned by `command.run`. Required."),
+            ),
+            returnType = "String",
+            description = "Cancel a running agent command task.",
+            help = """
+                Stops the task's runner and reports the outcome as JSON
+                (`cancelled=true|false`). A page-load command cannot be interrupted
+                mid-navigation, so cancelling one after it finished reports
+                `cancelled=false` instead of pretending otherwise.
+            """.trimIndent(),
+            outputSchema = TaskEnvelopes.STATUS_SCHEMA,
+            examples = listOf(
+                ToolExample(
+                    title = "Stop a running agent command",
+                    args = mapOf("id" to "5c3a1f2e-9b47-4d21-8f0a-1e6b7c8d9a01"),
+                ),
+            ),
+        )
     }
 
-    private companion object {
-        /**
-         * The shared task envelope every submit-style tool returns, exposed as MCP
-         * `structuredContent` so a generic client can poll without knowing the
-         * domain's status tool.
-         */
-        const val TASK_ENVELOPE_SCHEMA = """
-            {
-              "type": "object",
-              "required": ["taskId", "status", "statusTool"],
-              "properties": {
-                "taskId": {"type": "string"},
-                "status": {"type": "string", "enum": ["running", "done", "failed"]},
-                "pollAfterMs": {"type": "integer"},
-                "statusTool": {"type": "string"},
-                "resultTool": {"type": "string"}
-              }
-            }
-        """
-    }
+    /**
+     * The transport argument every method reads but none declares as a tool
+     * argument: it must be accepted by the executor's own `validateArgs`, or a
+     * client that sends `sessionId` — which both channels pass through — gets
+     * "Extraneous parameter 'sessionId'" instead of its answer.
+     */
+    private val SESSION_ARG = setOf("sessionId")
 
     @Suppress("UNUSED_PARAMETER")
     @Throws(IllegalArgumentException::class)
@@ -155,7 +198,7 @@ class CommandToolExecutor(
             "run" -> {
                 validateArgs(
                     args,
-                    allowed = setOf("command", "async", "noopLimit", "engine"),
+                    allowed = setOf("command", "async", "noopLimit", "engine") + SESSION_ARG,
                     required = setOf("command"),
                     functionName
                 )
@@ -178,26 +221,74 @@ class CommandToolExecutor(
 
             // command.status(id: String)
             "status" -> {
-                validateArgs(args, allowed = setOf("id"), required = setOf("id"), functionName)
+                validateArgs(args, allowed = setOf("id") + SESSION_ARG, required = setOf("id"), functionName)
                 val sessionId = paramString(args, "sessionId", functionName, default = DEFAULT_SESSION_ID)!!
                 val id = paramString(args, "id", functionName)!!
                 // Serializing a null status used to emit the literal "null" and
                 // the CLI then overwrote its cached terminal statuses with
                 // "queued" (P2.5) — return a structured notFound status instead.
                 val status = service.getStatus(sessionId, id) ?: CommandStatus.notFound(id)
-                pulsarObjectMapper().writeValueAsString(status)
+                pulsarObjectMapper().writeValueAsString(envelopeOf(status))
             }
 
             // command.result(id: String)
             "result" -> {
-                validateArgs(args, allowed = setOf("id"), required = setOf("id"), functionName)
+                validateArgs(args, allowed = setOf("id") + SESSION_ARG, required = setOf("id"), functionName)
                 val sessionId = paramString(args, "sessionId", functionName, default = DEFAULT_SESSION_ID)!!
                 val id = paramString(args, "id", functionName)!!
                 val result = service.getResult(sessionId, id)
-                pulsarObjectMapper().writeValueAsString(result)
+                pulsarObjectMapper().writeValueAsString(
+                    envelopeOf(service.getStatus(sessionId, id) ?: CommandStatus.notFound(id)) +
+                        mapOf("result" to result)
+                )
+            }
+
+            // command.cancel(id: String)
+            "cancel" -> {
+                validateArgs(args, allowed = setOf("id") + SESSION_ARG, required = setOf("id"), functionName)
+                val sessionId = paramString(args, "sessionId", functionName, default = DEFAULT_SESSION_ID)!!
+                val id = paramString(args, "id", functionName)!!
+                val cancelled = service.cancelAgentTask(id)
+                val status = service.getStatus(sessionId, id) ?: CommandStatus.notFound(id)
+                pulsarObjectMapper().writeValueAsString(
+                    envelopeOf(status, overrideStatus = if (cancelled) "cancelled" else null) +
+                        mapOf("cancelled" to cancelled)
+                )
             }
 
             else -> throw IllegalArgumentException("Unsupported command method: $functionName(${args.keys})")
         }
+    }
+
+    /**
+     * The shared status envelope of a command task.
+     *
+     * `command.result` and `command.run(async=false)` keep returning the domain's
+     * own payload alongside it, so existing clients read what they always read.
+     *
+     * @param overrideStatus the word to report instead of the task's own (a cancel
+     *   that just happened reports `cancelled` even though the runner has not
+     *   written its final state yet)
+     */
+    private fun envelopeOf(status: CommandStatus, overrideStatus: String? = null): Map<String, Any> {
+        val word = overrideStatus ?: statusWord(status)
+        return TaskEnvelopes.of(
+            taskId = status.id,
+            status = word,
+            // The agent's step count is the only monotonic progress signal the domain
+            // has; a page load does not report one, and `null` is honest about that.
+            processed = status.instructResults.size.takeIf { it > 0 },
+            error = if (word == "failed") status.message else null,
+            statusTool = "command_status",
+            resultTool = "command_result",
+            cancelTool = "command_cancel",
+        )
+    }
+
+    /** `CommandStatus` mapped onto the shared status vocabulary. */
+    private fun statusWord(status: CommandStatus): String = when {
+        status.isDone -> if (status.statusCode == ResourceStatus.SC_OK) "done" else "failed"
+        status.processState == "created" -> "queued"
+        else -> "running"
     }
 }

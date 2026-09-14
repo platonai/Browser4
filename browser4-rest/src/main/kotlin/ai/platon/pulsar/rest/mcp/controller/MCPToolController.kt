@@ -1472,17 +1472,23 @@ class MCPToolController(
         )
     }
 
-    /** Jackson-shaped view of the typed result, for the REST payload. */
+    /**
+     * Jackson-shaped view of the typed result, for the REST payload.
+     *
+     * The task envelope comes from [ToolResultValidator.taskEnvelope] — the same
+     * builder the standard server uses. Hand-rolling it here meant the two channels
+     * disagreed on what a submit call returns (this one omitted `cancelTool`), which
+     * is exactly the kind of drift the shared contract is supposed to prevent.
+     */
     private fun structuredContentOf(spec: ToolSpec?, text: String): Map<String, Any?>? {
         spec?.task?.let { policy ->
             if (ToolResultValidator.isBareTaskId(text)) {
-                return mapOf(
-                    "taskId" to text.trim(),
-                    "status" to "running",
-                    "pollAfterMs" to policy.pollAfterMs,
-                    "statusTool" to policy.statusTool,
-                    "resultTool" to policy.resultTool,
-                )
+                // Round-trip through Jackson so numbers stay numbers (`pollAfterMs`
+                // is an integer in the envelope schema, not the string "1000").
+                val envelope = ToolResultValidator.taskEnvelope(text.trim(), policy)
+                return runCatching {
+                    pulsarObjectMapper().readValue(envelope.toString(), Map::class.java) as Map<String, Any?>
+                }.getOrNull()
             }
         }
         val node = ToolResultValidator.parse(text) ?: return null
