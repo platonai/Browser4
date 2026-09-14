@@ -1,5 +1,7 @@
 package ai.platon.pulsar.agentic.tools.experience
 
+import ai.platon.pulsar.agentic.tools.specs.ToolSpecLint
+import ai.platon.pulsar.agentic.tools.specs.ToolSpecValidator
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
@@ -34,6 +36,23 @@ class ExperienceToolExecutorTest {
     @AfterEach
     fun tearDown() {
         try { tempDir.deleteRecursively() } catch (_: Exception) {}
+    }
+
+    @Test
+    @DisplayName("list filters are optional, so a plain list call validates")
+    fun listFiltersAreOptional() {
+        // The executor reads filter/intent_filter with `required = false`; declaring
+        // them as bare `null` defaults (the convention for *required*) made the
+        // validator reject `experience_list` with no filter at all.
+        val spec = executor.getToolSpecs().getValue("list")
+
+        assertEquals(
+            emptyList<ToolSpecValidator.Violation>(),
+            ToolSpecValidator().validate(spec, emptyMap()),
+            "experience.list must accept a call without filters: ${ToolSpecLint.report(
+                ToolSpecLint.check(listOf(spec))
+            )}",
+        )
     }
 
     @Nested

@@ -47,9 +47,13 @@ class MemoryToolExecutor(
         toolSpec["search"] = ToolSpec(
             domain = domain, method = "search",
             arguments = listOf(
-                ToolSpec.Arg("query", "String"),
-                ToolSpec.Arg("agent", "String", null),
-                ToolSpec.Arg("limit", "Int", "10"),
+                ToolSpec.Arg("query", "String", null, "Keywords to search past tasks and tool executions for."),
+                // Optional without a default: `"String?"` + `"null"` is the
+                // convention for that. A bare `null` default means *required*, and
+                // declaring `agent` that way made the validator reject a
+                // query-only search that the executor handles happily.
+                ToolSpec.Arg("agent", "String?", "null", "Restrict the search to one agent uuid."),
+                ToolSpec.Arg("limit", "Int", "10", "Maximum number of hits (1-50)."),
             ),
             returnType = "String",
             description = "Search agent memory (past tasks and tool executions) " +
@@ -60,10 +64,10 @@ class MemoryToolExecutor(
         toolSpec["read"] = ToolSpec(
             domain = domain, method = "read",
             arguments = listOf(
-                ToolSpec.Arg("taskId", "String"),
-                ToolSpec.Arg("seq", "Long", null),
-                ToolSpec.Arg("before", "Int", "0"),
-                ToolSpec.Arg("after", "Int", "0"),
+                ToolSpec.Arg("taskId", "String", null, "Task whose memory events to read."),
+                ToolSpec.Arg("seq", "Long?", "null", "Centre the window on this event seq."),
+                ToolSpec.Arg("before", "Int", "0", "Events to include before seq."),
+                ToolSpec.Arg("after", "Int", "0", "Events to include after seq."),
             ),
             returnType = "String",
             description = "Read a bounded window of memory events of one task " +

@@ -159,7 +159,12 @@ object ToolDocGenerator {
             out.appendLine(
                 "Long-running: the submit call returns the shared task envelope " +
                     "(`{taskId, status, pollAfterMs, statusTool}`); poll with " +
-                    "`${task["statusTool"]}` and read the payload with `${task["resultTool"]}`."
+                    "`${task["statusTool"]}` and read the payload with `${task["resultTool"]}`.\n" +
+                    "\n" +
+                    "Pass the envelope's `taskId` **value** to that tool under the argument " +
+                    "name its own signature declares (`id` for `crawl_status`/`command_status`, " +
+                    "`taskId` for the memory tools) — read the schema rather than copying the " +
+                    "envelope's field name."
             )
         }
 

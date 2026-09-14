@@ -262,31 +262,33 @@
     "domain" : "experience",
     "method" : "list",
     "mcpNames" : [ "experience_list" ],
-    "signature" : "experience.list(filter: String, intent_filter: String, page: Int = 1, page_size: Int = 20)",
+    "signature" : "experience.list(filter: String? = null, intent_filter: String? = null, page: Int = 1, page_size: Int = 20)",
     "description" : "List stored knowledge entries organized by domain + intent. Filter by domain (filter) or intent (intent_filter). Paginated.",
     "returnType" : "String",
     "arguments" : [ {
       "name" : "filter",
-      "type" : "String",
-      "required" : true,
-      "description" : "filter: String"
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Only entries whose domain matches this value."
     }, {
       "name" : "intent_filter",
-      "type" : "String",
-      "required" : true,
-      "description" : "intent_filter: String"
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Only entries whose intent matches this value."
     }, {
       "name" : "page",
       "type" : "Int",
       "required" : false,
       "default" : "1",
-      "description" : "page: Int = 1"
+      "description" : "Page number, starting at 1."
     }, {
       "name" : "page_size",
       "type" : "Int",
       "required" : false,
       "default" : "20",
-      "description" : "page_size: Int = 20"
+      "description" : "Entries per page."
     } ]
   }, {
     "domain" : "experience",
@@ -572,55 +574,57 @@
     "domain" : "memory",
     "method" : "read",
     "mcpNames" : [ "memory_read" ],
-    "signature" : "memory.read(taskId: String, seq: Long, before: Int = 0, after: Int = 0)",
+    "signature" : "memory.read(taskId: String, seq: Long? = null, before: Int = 0, after: Int = 0)",
     "description" : "Read a bounded window of memory events of one task around the event seq (defaults to the whole task, newest last). Bounded by the configured read window.",
     "returnType" : "String",
     "arguments" : [ {
       "name" : "taskId",
       "type" : "String",
       "required" : true,
-      "description" : "taskId: String"
+      "description" : "Task whose memory events to read."
     }, {
       "name" : "seq",
-      "type" : "Long",
-      "required" : true,
-      "description" : "seq: Long"
+      "type" : "Long?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Centre the window on this event seq."
     }, {
       "name" : "before",
       "type" : "Int",
       "required" : false,
       "default" : "0",
-      "description" : "before: Int = 0"
+      "description" : "Events to include before seq."
     }, {
       "name" : "after",
       "type" : "Int",
       "required" : false,
       "default" : "0",
-      "description" : "after: Int = 0"
+      "description" : "Events to include after seq."
     } ]
   }, {
     "domain" : "memory",
     "method" : "search",
     "mcpNames" : [ "memory_search" ],
-    "signature" : "memory.search(query: String, agent: String, limit: Int = 10)",
+    "signature" : "memory.search(query: String, agent: String? = null, limit: Int = 10)",
     "description" : "Search agent memory (past tasks and tool executions) by keywords. Returns hits with taskId, timestamp, tool and a snippet; use memory.read to fetch details. Optionally restrict to one agent uuid (agent).",
     "returnType" : "String",
     "arguments" : [ {
       "name" : "query",
       "type" : "String",
       "required" : true,
-      "description" : "query: String"
+      "description" : "Keywords to search past tasks and tool executions for."
     }, {
       "name" : "agent",
-      "type" : "String",
-      "required" : true,
-      "description" : "agent: String"
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Restrict the search to one agent uuid."
     }, {
       "name" : "limit",
       "type" : "Int",
       "required" : false,
       "default" : "10",
-      "description" : "limit: Int = 10"
+      "description" : "Maximum number of hits (1-50)."
     } ]
   }, {
     "domain" : "skill",

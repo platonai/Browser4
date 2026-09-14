@@ -83,10 +83,14 @@ class ExperienceToolExecutor(
         toolSpec["list"] = ToolSpec(
             domain = domain, method = "list",
             arguments = listOf(
-                ToolSpec.Arg("filter", "String", null),
-                ToolSpec.Arg("intent_filter", "String", null),
-                ToolSpec.Arg("page", "Int", "1"),
-                ToolSpec.Arg("page_size", "Int", "20"),
+                // Optional without a default — see ToolSpec.Arg: `"String?"` + `"null"`.
+                // A bare `null` default declares the argument *required*, which made
+                // the validator reject the plain `experience_list` call the executor
+                // handles with no filter at all.
+                ToolSpec.Arg("filter", "String?", "null", "Only entries whose domain matches this value."),
+                ToolSpec.Arg("intent_filter", "String?", "null", "Only entries whose intent matches this value."),
+                ToolSpec.Arg("page", "Int", "1", "Page number, starting at 1."),
+                ToolSpec.Arg("page_size", "Int", "20", "Entries per page."),
             ),
             returnType = "String",
             description = "List stored knowledge entries organized by domain + intent. " +

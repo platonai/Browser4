@@ -119,6 +119,8 @@ Returns: `String`
 
 Long-running: the submit call returns the shared task envelope (`{taskId, status, pollAfterMs, statusTool}`); poll with `command_status` and read the payload with `command_result`.
 
+Pass the envelope's `taskId` **value** to that tool under the argument name its own signature declares (`id` for `crawl_status`/`command_status`, `taskId` for the memory tools) — read the schema rather than copying the envelope's field name.
+
 <details><summary>Result schema</summary>
 
 ```json
@@ -220,6 +222,8 @@ Returns: `String`
 
 Long-running: the submit call returns the shared task envelope (`{taskId, status, pollAfterMs, statusTool}`); poll with `crawl_status` and read the payload with `crawl_result`.
 
+Pass the envelope's `taskId` **value** to that tool under the argument name its own signature declares (`id` for `crawl_status`/`command_status`, `taskId` for the memory tools) — read the schema rather than copying the envelope's field name.
+
 <details><summary>Result schema</summary>
 
 ```json
@@ -276,17 +280,17 @@ Returns: `String`
 ### `experience_list`
 
 ```
-experience.list(filter: String, intent_filter: String, page: Int = 1, page_size: Int = 20)
+experience.list(filter: String? = null, intent_filter: String? = null, page: Int = 1, page_size: Int = 20)
 ```
 
 List stored knowledge entries organized by domain + intent. Filter by domain (filter) or intent (intent_filter). Paginated.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `filter` | String | yes |  | filter: String |
-| `intent_filter` | String | yes |  | intent_filter: String |
-| `page` | Int | no | 1 | page: Int = 1 |
-| `page_size` | Int | no | 20 | page_size: Int = 20 |
+| `filter` | String? | no | null | Only entries whose domain matches this value. |
+| `intent_filter` | String? | no | null | Only entries whose intent matches this value. |
+| `page` | Int | no | 1 | Page number, starting at 1. |
+| `page_size` | Int | no | 20 | Entries per page. |
 
 Returns: `String`
 
@@ -488,33 +492,33 @@ Returns: `String`
 ### `memory_read`
 
 ```
-memory.read(taskId: String, seq: Long, before: Int = 0, after: Int = 0)
+memory.read(taskId: String, seq: Long? = null, before: Int = 0, after: Int = 0)
 ```
 
 Read a bounded window of memory events of one task around the event seq (defaults to the whole task, newest last). Bounded by the configured read window.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `taskId` | String | yes |  | taskId: String |
-| `seq` | Long | yes |  | seq: Long |
-| `before` | Int | no | 0 | before: Int = 0 |
-| `after` | Int | no | 0 | after: Int = 0 |
+| `taskId` | String | yes |  | Task whose memory events to read. |
+| `seq` | Long? | no | null | Centre the window on this event seq. |
+| `before` | Int | no | 0 | Events to include before seq. |
+| `after` | Int | no | 0 | Events to include after seq. |
 
 Returns: `String`
 
 ### `memory_search`
 
 ```
-memory.search(query: String, agent: String, limit: Int = 10)
+memory.search(query: String, agent: String? = null, limit: Int = 10)
 ```
 
 Search agent memory (past tasks and tool executions) by keywords. Returns hits with taskId, timestamp, tool and a snippet; use memory.read to fetch details. Optionally restrict to one agent uuid (agent).
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `query` | String | yes |  | query: String |
-| `agent` | String | yes |  | agent: String |
-| `limit` | Int | no | 10 | limit: Int = 10 |
+| `query` | String | yes |  | Keywords to search past tasks and tool executions for. |
+| `agent` | String? | no | null | Restrict the search to one agent uuid. |
+| `limit` | Int | no | 10 | Maximum number of hits (1-50). |
 
 Returns: `String`
 

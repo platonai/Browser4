@@ -209,6 +209,14 @@ data class Arg(
 - 27 个高频 tab 工具重扫：**零**新增 shadow 违规；`/api/mcp/stats` 实测 `validationShadowViolations=5`（来自刻意的空参数探测）、`validationFailures=0`（未把放行调用算成失败）。
 - 收口条件：把 `-Dmcp.validateBuiltinArgs=error` 作为 A/B 同码的目标状态，前提是连续观察期内 shadow 计数为 0。
 
+**同一轮影子扫描暴露的第二类问题：合法调用被「过严」的 spec 拒绝（已修）**
+- 机制：`ToolSpec.Arg(name, "String", null)` 里第三个参数是 `defaultValue`，**`null` 表示必填**（Phase 0 修好的语义）；「可选但无默认值」必须写成 `Arg(name, "String?", "null")`。部分手写 spec 用了前一种写法，而执行器读的是 `required = false`，于是校验层把执行器本来能处理的调用挡在门外——两个通道都挡（自定义域在 B 是强制校验的）。
+- 实跑证据（B/A 都返回 `MISSING_REQUIRED_ARG`）：`experience_list` 要求 `filter`+`intent_filter`（执行器 `handleList` 两个都是 `required = false`）；`memory_search` 要求 `agent`；`memory_read` 要求 `seq`。
+- 修复后实测（两通道）：`experience_list {}` → `{"total":0,…,"entries":[]}`、`memory_search {query}` → hits、`memory_read {taskId}` → `{"taskId":"t1"}`。
+- 回归护栏：`MemoryToolExecutorTest.optionalArgumentsAreNotRequired`、`ExperienceToolExecutorTest.listFiltersAreOptional` 直接对 spec 跑 `ToolSpecValidator`，把「最小参数调用必须合法」钉在测试里。
+- **检测手段的边界**：影子模式只覆盖内置域；自定义域的同类问题只能靠「最小参数扫一遍全部工具、把 `MISSING_REQUIRED_ARG` 逐条与执行器源码对照」发现。这正是 Phase 6 契约矩阵（以 `examples` 作 happy-path 入参）要自动化的事。
+- 顺带澄清一处易混：异步信封给的是 `taskId` **值**，而状态工具的**参数名**由各自 schema 决定（`crawl.status(id)` / `command.status(id)` 用 `id`，`memory.read(taskId)` 用 `taskId`）——客户端应读 schema 而不是照抄信封字段名。已写入 `docs/mcp-tools.md` 的说明段。
+
 **已知缺口（诚实记录）**
 - **B 通道只校验「自定义域」工具**：`MCPToolController.validateArguments` 取的是 `CustomToolRegistry` 执行器的 spec，因此 `tab_*`/`browser_*` 等内置域在 B 上曾完全不过校验——同一非法输入 A 拒绝、B 放行，需求 3/5 的「两通道同码」尚未真正成立。**已通过影子模式解决观测问题（见上）**，但默认仍是「观测不拒绝」：把 `-Dmcp.validateBuiltinArgs=error` 打开才是 B 与 A 同码的完成态，需等 shadow 计数连续为 0。
 - 运行时包内**没有** `micrometer-registry-prometheus`（在 `browser4-agentic/pom.xml` 里是 `optional`）→ 线上 `/actuator/prometheus` 返回 404，本轮以 `/api/mcp/stats` + `/actuator/metrics`（实测 `tool.*` 10 个指标可见）作为查询面。需要 Prometheus 抓取时把该依赖以非 optional 引入运行时包即可，代码侧无需改动（`MetricsConfig.isPrometheus` 会自动转为 `true`）。

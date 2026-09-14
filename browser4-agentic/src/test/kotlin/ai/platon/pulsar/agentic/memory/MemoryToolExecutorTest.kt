@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.memory
 
+import ai.platon.pulsar.agentic.tools.specs.ToolSpecValidator
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -48,6 +49,29 @@ class MemoryToolExecutorTest {
         ) as String
         assertTrue(result.contains("t1"))
         assertTrue(result.contains("L0"))
+    }
+
+    @Test
+    @DisplayName("optional arguments are advertised as optional, not required")
+    fun optionalArgumentsAreNotRequired() {
+        // `agent`/`seq` are read with `required = false`. Declaring them as bare
+        // `null` defaults (the convention for *required*) made the validator reject
+        // the query-only search and the whole-task read that the executor handles.
+        val validator = ToolSpecValidator()
+
+        val search = executor.getToolSpecs().getValue("search")
+        assertEquals(
+            emptyList<ToolSpecValidator.Violation>(),
+            validator.validate(search, mapOf("query" to "amazon")),
+            "a query-only search is a valid call",
+        )
+
+        val read = executor.getToolSpecs().getValue("read")
+        assertEquals(
+            emptyList<ToolSpecValidator.Violation>(),
+            validator.validate(read, mapOf("taskId" to "t1")),
+            "reading a whole task without coarse coordinates is a valid call",
+        )
     }
 
     @Test
