@@ -1,6 +1,6 @@
 # MCP 接口层加固开发计划（需求 1–14）
 
-> 日期：2026-09-13 · 分支基准：`feat/mcp-channel-parity`（已含 P0–P5 与 refreshTools 修复）
+> 日期：2026-09-13（Phase 3 更新 2026-09-14） · 分支基准：`feat/mcp-channel-parity`（已含 P0–P5 与 refreshTools 修复）
 > 范围：标准 MCP server（A，`browser4-agentic`，8088）+ 私有 dispatcher（B，`browser4-rest`，8888/18182）+ 其背后的 REST 端点
 > 依据：本计划全部条目来自**实跑观测**（见 §1），不是纸面推演
 
@@ -32,6 +32,8 @@
 | G7 | 错误是自由文本（`ERROR: xxx failed: ...`），无稳定错误码；HTTP 恒 200 | A/B 实测 | 4 |
 | G8 | 无参数校验层/无返回值校验（`ToolSpec.returnType` 是字符串，未用于校验） | 代码 | 5, 6 |
 | G9 | 无调用日志规范（B 把参数直接拼进 INFO）、无 per-tool 指标、无限流、无结果缓存、A 无批量 | 代码 + 实跑 | 7–14 |
+| G9a | ✅ 已修（Phase 3）：日志规范 + 脱敏 + `requestId` 贯通 + per-tool 指标 + `/api/mcp/stats` | `ToolInvocationLogger`、`ToolMetrics`、`McpStatsController` | 7, 8 |
+| G9b | 仍缺：限流、结果缓存、A 批量 | — | 9–14 |
 
 ---
 
@@ -153,10 +155,53 @@ data class Arg(
 - 6.3 统一结果信封：任务类工具固定 `{taskId, status, pollAfterMs, statusTool}`（与需求 11 对齐）。
 - **验收**：一次全量契约测试后 `schema_violation == 0`；任务类工具信封一致。
 
-### Phase 3 · 可观测（需求 7、8；1 周）
+### Phase 3 · 可观测（需求 7、8；代码完成 2026-09-14）
+
+**已落地**
+- **需求 7（日志）**
+  - `ToolInvocationLogger`（`browser4-agentic/.../agentic/tools/`）：一次调用恰好两条结构化日志——入口 `tool.call start requestId=… channel=A|B tool=… session=… args=[…]`，出口 `tool.call done|failed … durationMs=… outcome=… retryable=… resultChars=…`。A（标准 MCP server）与 B（`/mcp/call-tool`）调用**同一份**渲染器，字段顺序、措辞、脱敏规则完全一致。
+  - 脱敏：名字命中 `token/password/secret/apikey/authorization/cookie/credential/session/state/content/file/path/signature/private/key`（大小写无关、子串匹配）→ `***`；字符串超过 48 字符 → `len=N sha256=<前8位>`；集合 → `list(size=N)`，Map → `map(keys=…)`。**参数正文永不入 INFO 日志**。
+  - `requestId` 贯通：A 由服务端生成并回填 `result._meta.requestId`；B 生成并回 `X-Request-Id` 响应头。两边都写入 MDC（`requestId`），嵌套日志同 id。
+  - 异常路径也收口：两通道的调度都包了 `catch (Throwable)` 兜底，失败也写日志、记指标、复位 in-flight 计数，然后原样抛出。
+- **需求 8（监控）**
+  - 复用仓库既有的 `agentic/observability/ToolMetrics`（此前**从未被生产代码调用**）：`tool.calls.total`、`tool.calls.success|failure[.by.name]`、`tool.errors.by.code{tool_name,error_code}`、`tool.execution.duration[.by.name]{tool_name}`（`publishPercentiles(0.5,0.95,0.99)`）、`tool.active.calls` gauge、`tool.validation.failures[.by.type]`。标签基数有界：`tool_name` 是启动时注册的闭集，`error_code` 是 14 值枚举，绝不写入原始消息/会话号/参数值。
+  - 删除了重构期误建的第二套指标（`agentic/tools/ToolMetrics.kt` + `rest/config/McpMicrometerBridge.kt`），避免同名双注册；`ToolMetrics.recordToolCall` 增加 `errorCode` 维度。
+  - `ToolMetrics.bindTo(MeterRegistry)`：Spring 启动时（`rest/config/McpToolMetricsConfiguration`）把指标**重绑到应用自己的注册表**，否则 `/actuator/metrics` 只能看到 JVM 指标而看不到 `tool.*`。没有 `MeterRegistry` bean 的瘦部署自动退回独立注册表（`/api/mcp/stats` 依旧可用）。
+  - `GET /api/mcp/stats?top=N`（`rest/api/controller/McpStatsController`）：`totalCalls / totalFailures / failureRate / inflight / distinctTools / validationFailures / resultSchemaViolations / errorCodes / registry / prometheus / slowest / tools`；每个工具给 `calls / failures / successRate / p50Ms / p95Ms / p99Ms / maxMs / errorCodes`，未调用过的工具延迟为 `null` 而不是误导性的 `0`。用 Micrometer 非废弃 API（`takeSnapshot().percentileValues()`）。
+  - `MetricsConfig.scrape()/close()` 改为容错：`micrometer-registry-prometheus` 是可选的，缺类时 `is PrometheusMeterRegistry` 会抛 `NoClassDefFoundError`，现以 `runCatching` 兜底，`scrapeOf(registry)` / `isPrometheus(registry)` 供 stats 端点判断。
+- **测试**：`ToolInvocationLoggerTest`（脱敏/截断/集合摘要/id 唯一）、`observability/ToolMetricsTest`（按名计数、错误码维度、成功调用不写错误码、per-tool 延迟表、gauge 注册）、`McpStatsControllerTest`（真实数据、错误码归因、字段齐全、top 边界）、`McpToolMetricsConfigurationTest`（有/无 Spring 注册表两条路径）。
+
+**实跑验收中发现并修复的 P0（需求 5 校验引入的回归）**
+- 现象：A 通道 `navigate {"url": "https://example.com"}` 返回 `ERROR: [MISSING_REQUIRED_ARG] missing required argument 'entry' for tab.navigate(entry: NavigateEntry)` —— 最基础的导航在标准 server 上不可用；B 通道同样调用却通过（B 的字段名前缀归一化后未命中该校验）。
+- 根因：`ToolSpecGenerator` 镜像上游 `WebDriver.kt` 时，**同名重载取最后一个**。`tab.navigate` 的最后一个重载是 `navigate(entry: NavigateEntry)`，于是 schema 对外声明了一个 MCP 客户端**根本无法构造**的对象参数；而 `BrowserTabToolExecutor.callFunctionOn` 真正读的是 `url`（或 `rawUrl`+`pageUrl`）。Phase 0.4 的「未声明参数原样透传」让这个错配一直隐形，Phase 2 的必填校验把它变成硬失败。
+- 影响面（实测 117 个生成 spec 中 10 个方法）：`navigate(NavigateEntry)`、`screenshot(RectD)`、`ariaSnapshot(AriaSnapshotOptions)`、`delay(Duration)`、`waitForPage/waitForFunction/waitForNavigation/waitForSelector(timeout: Duration, action: suspend ())`。
+- 修复：在 `BrowserTabToolExecutor` 为这 8 个方法写**显式 spec**（与 `when (functionName)` 分支里的真实参数名一致：`url` / `selector`+`timeoutMillis` / `oldUrl` / `pageUrl` / `pageFunction` / `millis` / `selector|fullPage|viewport` / ariaSnapshot 的 8 个扁平选项），并补文档；`docs/mcp-tools.md` / `.json` 重新生成（137 工具）。
+- 防复发：`ToolSpecLint` 新增规则「必填参数类型必须是 JSON 可表达类型」，`ToolSpecLintTest.advertisedSpecsAreCallable` 对**实际公告的 spec 集合**做零容忍断言。原始生成 spec 里仍有 13 处（10 方法）非 JSON 参数，作为 WARNING 计数（`117 specs / 39 warnings`）——它们已被显式覆盖，但生成器层面的「重载择优选 JSON 友好签名」尚未做，属 Phase 1 的 1.1 收口项。
+- 实跑证据：修复后 A `navigate{"url"}` → `title` = `Example Domain`；日志 `tool.call start/done requestId=A-c3d2ab48-0001 tool=navigate durationMs=2456 outcome=OK`。
+
+**需求 8.4 — SLO 与告警阈值（文档化，Prometheus 规则可直接抄）**
+
+| 指标 | SLO | 告警阈值 | 处置 |
+|---|---|---|---|
+| `tool.execution.duration.by.name` p95 | 浏览器动作 < 3s；`crawl_*`/`swarm_*`/`command_*` 提交 < 1.5s | 持续 5 分钟 p95 > 3s | 看 `slowest` TopN；多半是 CDP 阻塞或页面重试 |
+| `tool.calls.failure / tool.calls.total` | < 1% | 5 分钟窗口 > 5% | 按 `tool.errors.by.code` 拆分 |
+| `tool.errors.by.code{error_code="TARGET_UNAVAILABLE"}` | = 0 | > 0 即告警 | 域已注册但无绑定 receiver（G3 哨兵） |
+| `tool.errors.by.code{error_code="INTERNAL"}` | = 0 | > 0 即告警 | 拿 `requestId` 去日志里 grep 两条 `tool.call` 行 |
+| `tool.errors.by.code{error_code="SESSION_UNHEALTHY"}` | < 0.5% | > 1% | 浏览器崩溃/被杀，检查会话回收 |
+| `tool.active.calls` | < 16 | 持续 5 分钟 > 32 | 长任务堆积，看 Phase 4 背压 |
+| `tool.validation.failures.by.type` | < 2% | 5 分钟 > 10% | 客户端契约漂移，回看 `docs/mcp-tools.md` 签名 |
+| 结果 schema 违规（`/api/mcp/stats` 的 `resultSchemaViolations`） | = 0 | > 0 即告警 | 工具返回值与 `outputSchema` 不一致（需求 6） |
+
+告警标签一律带 `tool_name` + `error_code`，**不要**用 `requestId`/`sessionId` 当标签（高基数）。
+
+**已知缺口（诚实记录）**
+- **B 通道只校验「自定义域」工具**：`MCPToolController.validateArguments` 取的是 `CustomToolRegistry` 执行器的 spec（`customExecutor?.getToolSpecs()?… ?: return null`），因此 `tab_*`/`browser_*` 等内置域在 B 上**完全不过参数校验**——同一非法输入 A 拒绝、B 放行，需求 3/5 的「两通道同码」尚未真正成立。不能直接打开：校验一旦覆盖内置域，会立刻暴露同类错配（例如 `evaluateValue` 的两个重载中最后一个是 `(selector, functionDeclaration)`，而 CLI 的 `browser_eval` 只发 `{expression}`）。正确顺序是先把 Phase 6 的契约矩阵（以 spec 的 `examples` 作为 happy-path 入参）跑通，再开校验——列为本阶段发现的下一项 P0。
+- 运行时包内**没有** `micrometer-registry-prometheus`（在 `browser4-agentic/pom.xml` 里是 `optional`）→ 线上 `/actuator/prometheus` 返回 404，本轮以 `/api/mcp/stats` + `/actuator/metrics`（实测 `tool.*` 10 个指标可见）作为查询面。需要 Prometheus 抓取时把该依赖以非 optional 引入运行时包即可，代码侧无需改动（`MetricsConfig.isPrometheus` 会自动转为 `true`）。
+- 需求 8.2 的 **OTel span**（`mcp.tool.call` → `agent.execute` → `cdp.*`）本轮未做；现有 `agentic` 侧 OTel 依赖仍是可选的，接入前先确认 bundle 是否携带 OTel SDK。
+- `session.active` / `async.queue.depth` 指标未加（依赖 Phase 4/5 的队列实现）。
 
 **需求 7 — 增加接口日志记录**
-- 7.1 `ToolInvocationLogger`：一进一出两条结构化日志，字段 `requestId / channel(A|B) / tool / domain.method / sessionId / durationMs / outcomeCode / cached / stepIndex`。
+- 7.1 `ToolInvocationLogger`：一进一出两条结构化日志，字段 `requestId / channel(A|B) / tool / domain.method / sessionId / durationMs / outcomeCode / cached / stepIndex`。（`cached`/`stepIndex` 待 Phase 4/5 引入后追加）
 - 7.2 脱敏与截断：`sensitiveArgs`（cookie/token/password/apiKey/storage-state/文件内容）→ `***`；大 payload 只记长度与 sha256 前 8 位。
 - 7.3 `requestId` 贯通：B 已有 `X-Request-Id`，A 从 `_meta`/`Mcp-Request-Id` 取或生成，写入 MDC 供排障关联。
 - **验收**：A/B 日志结构一致；脱敏单测；INFO 日志中不出现参数正文；同一 requestId 可从入口追到 CDP 调用。
@@ -267,7 +312,7 @@ data class Arg(
 - 需求 3：248(A)+83(B) 工具 × 8 类用例矩阵全绿，PR 门禁 <5 min。
 - 需求 4：所有失败路径有稳定 `errorCode` + retryable 语义，A/B 一致。
 - 需求 5/6：同一非法输入两通道同码；全量契约跑完 `schema_violation == 0`。
-- 需求 7/8：日志结构化且脱敏；每工具指标 + trace 可见；`/api/mcp/stats` 有真实数据。
+- 需求 7/8：日志结构化且脱敏；每工具指标 + trace 可见；`/api/mcp/stats` 有真实数据。（**代码 + 单测已完成**；OTel span 与运行时 Prometheus 抓取见 Phase 3「已知缺口」）
 - 需求 9/10/11：限流可复现拒绝、缓存命中与失效可验证、长任务可轮询可取消。
 - 需求 12/13/14：A/B 批量结果逐字段一致；幂等批次可缓存回放；批次指标/span/日志齐全。
 

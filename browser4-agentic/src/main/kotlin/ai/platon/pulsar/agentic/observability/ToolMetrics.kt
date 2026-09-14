@@ -1,21 +1,32 @@
 package ai.platon.pulsar.agentic.observability
 
-import io.micrometer.core.instrument.Counter
+import ai.platon.pulsar.common.getLogger
 import io.micrometer.core.instrument.Gauge
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Timer
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Business metrics collector for Tool call operations.
+ * Business metrics collector for MCP tool calls — the single source of the
+ * numbers reported by `GET /api/mcp/stats` and exported to Prometheus.
  *
- * Tracks key metrics related to tool execution:
- * - Tool call counts (by tool name, success/failure)
- * - Tool execution duration
- * - Active tool calls
- * - Tool validation metrics
+ * Both MCP channels feed these meters, so the numbers are comparable across
+ * channel A (standard MCP server) and channel B (private `/mcp/call-tool`):
  *
- * All metrics are prefixed with "tool." and include relevant tags.
+ * | Meter | Type | Tags | Meaning |
+ * |---|---|---|---|
+ * | `tool.calls.total` | counter | `component` | every dispatched call |
+ * | `tool.calls.success` / `tool.calls.failure` | counter | `component` | outcome split |
+ * | `tool.calls.success.by.name` / `tool.calls.failure.by.name` | counter | `tool_name` | outcome per tool |
+ * | `tool.errors.by.code` | counter | `tool_name`, `error_code` | stable `ToolErrorCode` |
+ * | `tool.execution.duration` | timer | `component` | global latency |
+ * | `tool.execution.duration.by.name` | timer | `tool_name` | p50/p95/p99 per tool |
+ * | `tool.active.calls` | gauge | `component` | in-flight calls |
+ * | `tool.validation.failures[.by.type]` | counter | `tool_name`, `validation_type` | argument rejected before dispatch |
+ *
+ * Cardinality is bounded on purpose: `tool_name` is a closed set (the specs
+ * registered at startup) and `error_code` is a 14-value enum — never a raw
+ * message, session id or argument value.
  *
  * Example usage:
  * ```kotlin
@@ -34,33 +45,54 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 object ToolMetrics {
 
-    private val registry: MeterRegistry = MetricsConfig.registry
+    private val logger = getLogger(ToolMetrics::class)
 
-    // Counters
-    private val toolCallCounter: Counter =
-        registry.counter("tool.calls.total", "component", "tool")
-
-    private val toolSuccessCounter: Counter =
-        registry.counter("tool.calls.success", "component", "tool")
-
-    private val toolFailureCounter: Counter =
-        registry.counter("tool.calls.failure", "component", "tool")
-
-    private val validationFailureCounter: Counter =
-        registry.counter("tool.validation.failures", "component", "tool")
-
-    // Timers
-    private val toolExecutionTimer: Timer =
-        registry.timer("tool.execution.duration", "component", "tool")
+    /**
+     * The backing registry. Rebindable at startup via [bindTo]: inside Spring the
+     * meters must live in the application's own registry, otherwise
+     * `/actuator/metrics` (and `/actuator/prometheus`, when the registry is on the
+     * classpath) would report every metric except the tool ones.
+     */
+    @Volatile
+    private var registry: MeterRegistry = MetricsConfig.registry
 
     // Gauges
     val activeToolCallsCount = AtomicInteger(0)
 
     init {
-        Gauge.builder("tool.active.calls", activeToolCallsCount, AtomicInteger::toDouble)
-            .tag("component", "tool")
-            .description("Number of currently executing tool calls")
-            .register(registry)
+        bindGauge(registry)
+    }
+
+    /**
+     * Rebinds every tool meter to [meterRegistry].
+     *
+     * Meters are looked up per call through the current binding, so a rebind
+     * takes effect immediately; counters already created on the previous
+     * registry simply stop receiving updates. Called once at startup by the
+     * REST layer when a Spring `MeterRegistry` bean exists.
+     *
+     * @return true when the binding changed
+     */
+    fun bindTo(meterRegistry: MeterRegistry): Boolean {
+        if (meterRegistry === registry) return false
+        registry = meterRegistry
+        bindGauge(meterRegistry)
+        logger.info("Tool metrics bound to {}", meterRegistry::class.simpleName)
+        return true
+    }
+
+    /** The registry the tool meters are currently written to. */
+    fun currentRegistry(): MeterRegistry = registry
+
+    private fun bindGauge(target: MeterRegistry) {
+        // Re-registering an existing Gauge id is a no-op that logs a warning, so
+        // check first — `bindTo` may be called more than once in tests.
+        if (target.find("tool.active.calls").gauge() == null) {
+            Gauge.builder("tool.active.calls", activeToolCallsCount, AtomicInteger::toDouble)
+                .tag("component", "tool")
+                .description("Number of currently executing tool calls")
+                .register(target)
+        }
     }
 
     /**
@@ -69,23 +101,46 @@ object ToolMetrics {
      * @param toolName The name of the tool (e.g., "browser.click", "system.execute")
      * @param success Whether the call succeeded
      * @param durationMs Duration in milliseconds
+     * @param errorCode Stable failure code (`ToolErrorCode.wire`), when the call
+     *   failed — exposed as the `tool.errors.by.code` counter so a dashboard can
+     *   tell a retryable failure from a client mistake.
      */
-    fun recordToolCall(toolName: String, success: Boolean, durationMs: Long) {
-        toolCallCounter.increment()
+    fun recordToolCall(toolName: String, success: Boolean, durationMs: Long, errorCode: String? = null) {
+        registry.counter("tool.calls.total", "component", "tool").increment()
 
         if (success) {
-            toolSuccessCounter.increment()
+            registry.counter("tool.calls.success", "component", "tool").increment()
             registry.counter("tool.calls.success.by.name", "tool_name", toolName).increment()
         } else {
-            toolFailureCounter.increment()
+            registry.counter("tool.calls.failure", "component", "tool").increment()
             registry.counter("tool.calls.failure.by.name", "tool_name", toolName).increment()
         }
+        errorCode?.takeIf { it.isNotBlank() }?.let { code ->
+            registry.counter(
+                "tool.errors.by.code",
+                "tool_name", toolName,
+                "error_code", code,
+            ).increment()
+        }
 
-        registry.timer("tool.execution.duration.by.name",
-            "tool_name", toolName,
-            "success", success.toString()
-        ).record(java.time.Duration.ofMillis(durationMs))
+        val duration = java.time.Duration.ofMillis(durationMs)
+        registry.timer("tool.execution.duration", "component", "tool").record(duration)
+        perToolTimer(toolName).record(duration)
     }
+
+    /**
+     * One latency meter per tool, deliberately **without** a `success` tag: a
+     * single meter per tool keeps the percentile series directly readable by
+     * `/api/mcp/stats` and bounds cardinality. The success/failure split lives
+     * in `tool.calls.success.by.name` / `tool.calls.failure.by.name`.
+     */
+    private fun perToolTimer(toolName: String): Timer =
+        Timer.builder("tool.execution.duration.by.name")
+            .tag("tool_name", toolName)
+            // Percentiles are what `/api/mcp/stats` and the dashboards read.
+            .publishPercentiles(0.5, 0.95, 0.99)
+            .publishPercentileHistogram()
+            .register(registry)
 
     /**
      * Record tool call execution using a timer.
@@ -94,37 +149,17 @@ object ToolMetrics {
      * @param block The tool execution to time
      * @return Result of the block
      */
-    internal inline fun <T> recordToolCallTimed(toolName: String, block: () -> T): T {
+    inline fun <T> recordToolCallTimed(toolName: String, block: () -> T): T {
         activeToolCallsCount.incrementAndGet()
-        toolCallCounter.increment()
 
         val startTime = System.currentTimeMillis()
         var success = false
 
         return try {
-            val result = block()
-            success = true
-            result
-        } catch (e: Exception) {
-            success = false
-            throw e
+            block().also { success = true }
         } finally {
             activeToolCallsCount.decrementAndGet()
-            val duration = System.currentTimeMillis() - startTime
-
-            if (success) {
-                toolSuccessCounter.increment()
-                registry.counter("tool.calls.success.by.name", "tool_name", toolName).increment()
-            } else {
-                toolFailureCounter.increment()
-                registry.counter("tool.calls.failure.by.name", "tool_name", toolName).increment()
-            }
-
-            toolExecutionTimer.record(java.time.Duration.ofMillis(duration))
-            registry.timer("tool.execution.duration.by.name",
-                "tool_name", toolName,
-                "success", success.toString()
-            ).record(java.time.Duration.ofMillis(duration))
+            recordToolCall(toolName, success, System.currentTimeMillis() - startTime)
         }
     }
 
@@ -135,7 +170,7 @@ object ToolMetrics {
      * @param validationType The type of validation that failed (e.g., "selector", "parameter")
      */
     fun recordValidationFailure(toolName: String, validationType: String) {
-        validationFailureCounter.increment()
+        registry.counter("tool.validation.failures", "component", "tool").increment()
         registry.counter("tool.validation.failures.by.type",
             "tool_name", toolName,
             "validation_type", validationType

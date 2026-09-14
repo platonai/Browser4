@@ -4,10 +4,12 @@ import ai.platon.pulsar.agentic.mcp.McpToolAlias
 import ai.platon.pulsar.agentic.mcp.McpToolNames
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
+import ai.platon.pulsar.agentic.observability.ToolMetrics
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import ai.platon.pulsar.agentic.tools.ToolErrorMapper
+import ai.platon.pulsar.agentic.tools.ToolInvocationLogger
 import ai.platon.pulsar.agentic.tools.ToolResultTextRenderer
 import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecValidator
@@ -151,6 +153,18 @@ class Browser4MCPServer(
     // -------------------------------------------------------------------------
     // Result helpers
     // -------------------------------------------------------------------------
+
+    /** The stable error code of a failed result, or `null` when it succeeded. */
+    private fun CallToolResult.errorCode(): ToolErrorCode? {
+        val wire = meta?.get(ERROR_CODE_KEY)?.let { (it as? JsonPrimitive)?.content } ?: return null
+        return runCatching { ToolErrorCode.valueOf(wire) }.getOrNull()
+    }
+
+    /** Echo the call id back so a client (and its bug report) can quote it. */
+    private fun CallToolResult.withRequestId(requestId: String): CallToolResult {
+        val merged = JsonObject((meta ?: JsonObject(emptyMap())) + (REQUEST_ID_KEY to JsonPrimitive(requestId)))
+        return copy(meta = merged)
+    }
 
     private fun textResult(text: String, structured: JsonObject? = null): CallToolResult =
         CallToolResult(content = listOf(TextContent(text = text)), structuredContent = structured)
@@ -407,12 +421,54 @@ class Browser4MCPServer(
         arguments: JsonObject?,
     ): CallToolResult {
         val sessionId = sessionIdArg(arguments)
+        val args = buildArgsMap(arguments, registration.spec)
+
+        // One id per call: it appears in both log lines, in the metrics labels and
+        // in the result `_meta`, so a client can quote it in a bug report.
+        val requestId = ToolInvocationLogger.newRequestId(CHANNEL)
+        ToolInvocationLogger.logStart(requestId, CHANNEL, toolName, sessionId, args)
+        ToolMetrics.activeToolCallsCount.incrementAndGet()
+
+        val startedAt = System.nanoTime()
+        val result = try {
+            ToolInvocationLogger.withRequestContext(requestId) {
+                dispatchToolCall(toolName, registration, arguments, sessionId, args)
+            }
+        } catch (e: Throwable) {
+            // An escaping failure must still settle the metrics and the log, or
+            // the in-flight gauge would climb for the rest of the process life.
+            val durationMs = (System.nanoTime() - startedAt) / 1_000_000
+            ToolMetrics.activeToolCallsCount.decrementAndGet()
+            ToolMetrics.recordToolCall(toolName, false, durationMs, ToolErrorCode.INTERNAL.wire)
+            ToolInvocationLogger.logFinished(requestId, CHANNEL, toolName, durationMs, ToolErrorCode.INTERNAL, 0)
+            throw e
+        }
+        val durationMs = (System.nanoTime() - startedAt) / 1_000_000
+        val errorCode = result.errorCode()
+
+        ToolMetrics.activeToolCallsCount.decrementAndGet()
+        ToolMetrics.recordToolCall(toolName, errorCode == null, durationMs, errorCode?.wire)
+        ToolInvocationLogger.logFinished(
+            requestId, CHANNEL, toolName, durationMs, errorCode,
+            result.content.sumOf { (it as? TextContent)?.text?.length ?: 0 },
+        )
+
+        return result.withRequestId(requestId)
+    }
+
+    /** The call itself, without the logging/metrics envelope. */
+    private suspend fun dispatchToolCall(
+        toolName: String,
+        registration: ToolRegistration,
+        arguments: JsonObject?,
+        sessionId: String?,
+        args: Map<String, Any?>,
+    ): CallToolResult {
         val resolvedManager = toolManagerResolver.resolve(sessionId)
             ?: return errorResult("Session not found: $sessionId", ToolErrorCode.SESSION_NOT_FOUND)
 
         bindCustomDomainTarget(registration, sessionId, resolvedManager)
 
-        val args = buildArgsMap(arguments, registration.spec)
         validateArguments(registration.spec, args)?.let { return it }
 
         val toolCall = ToolCall(
@@ -660,6 +716,15 @@ class Browser4MCPServer(
     }
 
     private companion object {
+        /** Log/metrics channel label for the standard MCP server. */
+        const val CHANNEL = "A"
+
+        /** _meta key carrying the stable failure code. */
+        const val ERROR_CODE_KEY = "errorCode"
+
+        /** _meta key echoing the call id back to the client. */
+        const val REQUEST_ID_KEY = "requestId"
+
         /** Optional per-call session handle injected into every tool schema. */
         const val SESSION_ID_PARAM = "sessionId"
 

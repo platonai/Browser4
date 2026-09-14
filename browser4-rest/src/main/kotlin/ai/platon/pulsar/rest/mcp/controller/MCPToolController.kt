@@ -5,9 +5,11 @@ import ai.platon.pulsar.agentic.mcp.McpToolNames
 import ai.platon.pulsar.agentic.model.TcException
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
+import ai.platon.pulsar.agentic.observability.ToolMetrics
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import ai.platon.pulsar.agentic.tools.ToolErrorMapper
+import ai.platon.pulsar.agentic.tools.ToolInvocationLogger
 import ai.platon.pulsar.agentic.tools.ToolResultTextRenderer
 import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecValidator
@@ -148,6 +150,9 @@ class MCPToolController(
     private val validator = ToolSpecValidator.fromSystemProperties()
 
     companion object {
+        /** Log/metrics channel label for the private dispatcher. */
+        internal const val CHANNEL = "B"
+
         /**
          * Playwright-MCP style frontend tool name aliases: the names an agent
          * reaches for first, mapped to the internal tool they stand for.
@@ -351,10 +356,46 @@ class MCPToolController(
         @RequestBody request: MCPToolCallRequest,
         response: HttpServletResponse
     ): ResponseEntity<MCPToolCallResponse> {
-        addRequestId(response)
+        val requestId = addRequestId(response)
+        val args = request.arguments ?: emptyMap()
+        val sessionId = args["sessionId"]?.toString()
 
-        logger.info("Calling tool: ${request.tool} " + request.arguments?.entries?.joinToString(" ") { "--" + it.key + "=" + it.value })
+        // Same structured logging and metrics as the standard MCP server, so a
+        // call can be followed across both channels by one request id.
+        ToolInvocationLogger.logStart(requestId, CHANNEL, request.tool, sessionId, args)
 
+        val startedAt = System.nanoTime()
+        ToolMetrics.activeToolCallsCount.incrementAndGet()
+        val entity = try {
+            ToolInvocationLogger.withRequestContext(requestId) { dispatchToolCall(request) }
+        } catch (e: Throwable) {
+            val durationMs = (System.nanoTime() - startedAt) / 1_000_000
+            ToolMetrics.activeToolCallsCount.decrementAndGet()
+            ToolMetrics.recordToolCall(request.tool, false, durationMs, ToolErrorCode.INTERNAL.wire)
+            ToolInvocationLogger.logFinished(
+                requestId, CHANNEL, request.tool, durationMs, ToolErrorCode.INTERNAL, 0,
+            )
+            throw e
+        }
+
+        val body = entity.body
+        val errorCode = body?.errorCode?.toErrorCode()
+        val durationMs = (System.nanoTime() - startedAt) / 1_000_000
+        ToolMetrics.activeToolCallsCount.decrementAndGet()
+        ToolMetrics.recordToolCall(request.tool, errorCode == null, durationMs, errorCode?.wire)
+        ToolInvocationLogger.logFinished(
+            requestId, CHANNEL, request.tool, durationMs, errorCode,
+            body?.content?.sumOf { it.text.length } ?: 0,
+        )
+        return entity
+    }
+
+    /** The wire code of a failed response, or `null` when it succeeded. */
+    private fun String.toErrorCode(): ToolErrorCode? =
+        takeIf { it.isNotBlank() }?.let { wire -> runCatching { ToolErrorCode.valueOf(wire) }.getOrNull() }
+
+    /** The dispatch table, without the logging/metrics envelope. */
+    private suspend fun dispatchToolCall(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
         return try {
             when (request.tool) {
                 // Session lifecycle tools — remain inline (no session required to call these)
@@ -1548,8 +1589,15 @@ class MCPToolController(
         return messages.joinToString(" ← ")
     }
 
-    private fun addRequestId(response: HttpServletResponse) {
-        response.addHeader("X-Request-Id", UUID.randomUUID().toString())
+    /**
+     * Stamp the call with an id, returned to the caller as `X-Request-Id` and used
+     * for both log lines and the metrics labels — the same id scheme as the
+     * standard MCP server, so one grep follows a call across channels.
+     */
+    private fun addRequestId(response: HttpServletResponse): String {
+        val requestId = ToolInvocationLogger.newRequestId(CHANNEL)
+        response.addHeader("X-Request-Id", requestId)
+        return requestId
     }
 }
 
