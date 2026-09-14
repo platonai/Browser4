@@ -215,6 +215,12 @@ const TIPS_CRAWL: &[Tip] = &[
     Tip {
         text: "Use `--depth 1` for single-level crawling — discover links from one page only",
     },
+    Tip {
+        text: "Use `--parallel 8` to collect up to 8 pages at once, each on its own browser tab; the crawl reports the peak overlap it actually achieved",
+    },
+    Tip {
+        text: "Use `--parallel 1` when a site rate-limits you — it restores the strictly sequential crawl",
+    },
 ];
 
 const TIPS_SWARM: &[Tip] = &[

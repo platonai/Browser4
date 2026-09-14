@@ -1664,12 +1664,30 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - --expires sets cache expiration (e.g. 1d, 1h, 30m), --priority sets queue priority (lower = higher priority)."
                 .to_string(),
         );
+        lines.push(
+            "  - --parallel sets how many units (one browser tab each) are collected at the same time"
+                .to_string(),
+        );
+        lines.push(
+            "    (default: 4; 1 = strictly sequential). Each unit needs its own tab, so the browser"
+                .to_string(),
+        );
+        lines.push(
+            "    driver pool is the hard ceiling. The completion report shows the budget used and the"
+                .to_string(),
+        );
+        lines.push(
+            "    peak number of units that actually overlapped."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli crawl https://example.com".to_string());
         lines.push("  browser4-cli crawl https://example.com -d 2 -ol \"a.product\" -olp \"/product/\"".to_string());
         lines.push("  browser4-cli crawl https://example.com --depth 3 --refresh -ol \"a[href]\"".to_string());
         lines.push("  browser4-cli crawl --seed-file urls.txt --depth 0 --refresh".to_string());
+        lines.push("  browser4-cli crawl --seed-file urls.txt --depth 0 --parallel 8 --refresh".to_string());
+        lines.push("  browser4-cli crawl --seed-file urls.txt --depth 0 --parallel 1 --refresh".to_string());
         // @file paths must be quoted on PowerShell, where an unquoted @ token
         // is parsed as the splatting operator (see SKILL.md quoting warning).
         lines.push("  browser4-cli crawl --seed-file urls.txt --sql \"@extract.sql\" --format csv -o results.csv".to_string());

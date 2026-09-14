@@ -333,6 +333,7 @@ Need to process multiple pages?
 │  → htmlsnapshot query with DOM_LOAD_AND_SELECT
 ├─ Multiple known URLs (list in a file)? → crawl --seed-file urls.txt --depth 0 --sql @query.sql
 ├─ Crawl from a start URL (follow links)? → crawl <url> --out-link-selector "..." --depth N
+├─ Need higher crawl throughput? → add --parallel 8 (crawl already collects on several tabs by default; each unit gets its own tab)
 ├─ Need parallel execution (high throughput)? → swarm create → swarm query --seed-file ...
 ├─ Repeated monitoring (check every hour)? → loop -i 3600 -- eval "..."
 └─ Just a few URLs in a shell script?
@@ -367,6 +368,7 @@ Have HTML files and want structured data — without tokens?
 └─ Need to acquire pages first?
    ├─ Single pages: browser4-cli open --headless → htmlsnapshot → htmlsnapshot export
    ├─ Bulk download: browser4-cli crawl --seed-file urls.txt --depth 0 --refresh
+   │  (add --parallel 8 for more overlap; each unit collects on its own tab)
    └─ High throughput: browser4-cli swarm create → swarm query --seed-file ...
        Then feed the HTML directory to WebMiner
 ```

@@ -8102,7 +8102,23 @@ mod tests {
         create_dir_all(&src).unwrap();
         let source_file = src.join("Fresh.kt");
         write(&source_file, "package fresh\n").unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        // Order the two timestamps explicitly instead of sleeping between the
+        // writes: the filesystem rounds mtimes to the system clock tick, so a
+        // 20ms sleep could still leave the source with the same timestamp as
+        // the jar — and staleness is decided by a strict `mtime > jar_mtime`,
+        // which made this assertion fail intermittently.
+        let jar_mtime = lib_dir
+            .join("browser4-rest-4.13.13-SNAPSHOT.jar")
+            .metadata()
+            .unwrap()
+            .modified()
+            .unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&source_file)
+            .unwrap()
+            .set_modified(jar_mtime + std::time::Duration::from_secs(60))
+            .unwrap();
         assert_eq!(
             detect_local_bundle_staleness(tmp.path(), &lib_dir),
             Some(LocalBundleStaleness::SourcesNewerThanBundle)

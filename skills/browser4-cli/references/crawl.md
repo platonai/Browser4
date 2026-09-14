@@ -153,6 +153,45 @@ browser4-cli crawl --seed-file urls.txt --depth 0 --sql "
 | `url` (positional) | | string | — | Starting URL. Omit when using `--seed-file` |
 | `--seed-file` | | string | — | File with URLs to crawl, one per line. Lines starting with `#` are comments |
 | `--depth` | `-d` | int | `1` | 0 = fetch only (no links); 1+ = follow links to that depth |
+| `--parallel` | | int | `4` | How many units (pages/tabs) to collect at the same time. `1` = strictly sequential |
+
+### Parallelism (`--parallel`)
+
+A crawl is a set of **independent units** — one per seed URL — so the units are
+collected at the same time by default, each one on its own browser tab leased
+from the driver pool. `--parallel <n>` bounds how many may be in flight at once.
+
+| Value | Behavior |
+|---|---|
+| *(omitted)* | Server default (4) |
+| `1` | Strictly sequential — the historical crawl, one unit at a time |
+| `2`–`32` | Up to `<n>` units collected concurrently |
+
+```bash
+# 12 seed URLs, at most 8 collected at a time
+browser4-cli crawl --seed-file urls.txt -d 0 --parallel 8 --refresh
+
+# The same crawl, strictly sequential (for a site that rate-limits)
+browser4-cli crawl --seed-file urls.txt -d 0 --parallel 1 --refresh
+```
+
+Notes:
+
+* **Each unit needs its own tab.** `--parallel` is a budget the crawl enforces on
+  itself; the browser driver pool (`browser.context.number` ×
+  `browser.max.active.tabs`, 2 × 8 by default) is the hard ceiling. Asking for
+  more than the pool can hand out yields a lower *observed* peak, which the
+  completion report shows.
+* **The reported peak is measured, not claimed.** The crawl reports the budget it
+  ran under and the peak number of units it actually had in flight. A peak of `1`
+  on a multi-unit crawl means the collection was serial — that is called out
+  explicitly instead of leaving you with a crawl that is merely slow.
+* **Values are validated before submitting.** `0` and non-numeric values exit
+  non-zero with a hint (`--parallel 1` for the sequential form); values above 32
+  are rejected by the server.
+* At `-d 1+` the budget bounds *seed rounds*, not pages: each round discovers its
+  links and the pages themselves are fetched from the shared tab pool. Two rounds
+  are therefore free to overlap even when a single round has few links.
 
 ### X-SQL extraction flags
 
@@ -388,8 +427,9 @@ prepended to the seed file list.
 | Timeout | Exits with message + task ID; increase `BROWSER4_CLI_CRAWL_TIMEOUT_SECS` |
 | Server error | Exits with "Crawl failed: ..." and server error details |
 | No links found (depth >= 1) | Exit 0 with a `⚠ Link discovery found no out-links` warning plus the backend diagnostic (it distinguishes "selector matched nothing" from "pattern filtered them all") and the effective `--out-link-pattern`. The seed page is always counted in depth ≥ 2 crawls, so an all-filtered crawl reports `Crawl completed. 1 pages found.` (depth-1 crawls list only discovered pages and report `0 pages found`). Inspect the warning text and verify `--out-link-selector` / `--out-link-pattern` — a shell-mangled pattern (Git Bash `/`-prefix conversion) is the usual cause |
-| Pages lost (any depth) | Exit 0 with a `⚠ N of M submitted page(s) were never delivered` warning naming each lost URL, its depth, its protocol status and the reason. The crawl is **incomplete**, not merely small: `pagesFound + failedPages.size == pagesExpected` always holds. Check `failedPages` in the JSON output. A page is lost when its fetch failed after the retry budget was exhausted, the task was dropped/evicted, or the parsed document was not queued by this crawl. Re-run, or lower `--depth` / reduce concurrency if it repeats — a repeated loss on a many-core host is contention over shared browser tabs, not a site problem |
+| Pages lost (any depth) | Exit 0 with a `⚠ N of M submitted page(s) were never delivered` warning naming each lost URL, its depth, its protocol status and the reason. The crawl is **incomplete**, not merely small: `pagesFound + failedPages.size == pagesExpected` always holds. Check `failedPages` in the JSON output. A page is lost when its fetch failed after the retry budget was exhausted, the task was dropped/evicted, or the parsed document was not queued by this crawl. Re-run, or lower `--depth` / reduce concurrency if it repeats — a repeated loss on a many-core host usually means the target site is refusing the parallel load, so try `--parallel 2` (or `--parallel 1` to rule parallelism out entirely) |
 | Invalid --format | Exits with "Invalid --format '...'. Expected: json, csv, or table" |
+| Invalid --parallel | Exits with "Invalid --parallel value '...'" — accepts a positive integer up to 32; `0` is rejected with the `--parallel 1` hint, and anything above 32 is refused by the server (HTTP 400) |
 | X-SQL failure on one page | Page logged with error; other pages continue normally |
 
 ## Rate Limiting & Polite Scraping

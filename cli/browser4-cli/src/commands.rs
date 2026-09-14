@@ -3035,6 +3035,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "ignore-url-query", description: "Remove query parameters from discovered out-link hrefs before loading (no effect on seed URLs in depth-0 bulk fetch)", is_bool: true, short: None },
                 OptionDef { name: "no-norm", description: "Disable URL normalization of discovered out-link hrefs (no effect on seed URLs in depth-0 bulk fetch)", is_bool: true, short: None },
                 OptionDef { name: "readonly", description: "Non-destructive mode (no page modifications)", is_bool: true, short: None },
+                OptionDef { name: "parallel <n>", description: "Collect up to <n> pages/tabs at the same time (default: 4, 1 = sequential). Each parallel unit needs its own browser tab", is_bool: false, short: None },
                 OptionDef { name: "background", description: "Submit crawl and return immediately; use 'crawl list' to track progress", is_bool: true, short: Some("bg") },
                 OptionDef { name: "verbose", description: "Show per-URL processing status in crawl results", is_bool: true, short: None },
             ],
@@ -3126,6 +3127,13 @@ pub fn all_commands() -> Vec<CommandDef> {
                     p["depth"] = json!(v.parse::<i32>().unwrap_or(1));
                 } else {
                     p["depth"] = json!(1);
+                }
+
+                // Parallelism budget: how many pages/tabs this crawl may collect
+                // at the same time.  Sent as-is; main.rs validates it and the
+                // backend reports the budget it actually applied.
+                if let Some(v) = get_opt_str(args, "parallel") {
+                    p["parallel"] = json!(v);
                 }
 
                 p
@@ -6214,6 +6222,44 @@ mod tests {
         let cmd = map.get("crawl").unwrap();
         let args = HashMap::new();
         assert_eq!((cmd.tool_name_fn)(&args), "crawl_submit");
+    }
+
+    #[test]
+    fn test_crawl_has_parallel_option() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let parallel = cmd
+            .options
+            .iter()
+            .find(|o| o.name == "parallel <n>")
+            .expect("crawl must expose a --parallel option");
+        assert!(!parallel.is_bool, "--parallel takes a tab count, not a flag");
+    }
+
+    #[test]
+    fn test_crawl_params_parallel_passthrough() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("parallel".to_string(), json!("6"));
+        let params = (cmd.tool_params_fn)(&args);
+        // Sent as the CLI spelling; main.rs translates it to the server's
+        // `parallelTabs` (see build_crawl_server_params).
+        assert_eq!(params["parallel"].as_str().unwrap(), "6");
+        assert_eq!(params["depth"].as_i64().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_crawl_params_parallel_absent_by_default() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        let params = (cmd.tool_params_fn)(&args);
+        // Absent means "server default": the backend must not be told to run
+        // with a budget the user never asked for.
+        assert!(params.get("parallel").is_none());
     }
 
     #[test]

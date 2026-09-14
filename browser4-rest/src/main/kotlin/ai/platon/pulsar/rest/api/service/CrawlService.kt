@@ -22,6 +22,8 @@ import jakarta.annotation.PreDestroy
 import org.springframework.boot.context.event.ApplicationReadyEvent
 import org.springframework.context.event.EventListener
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import java.nio.file.Path
@@ -37,7 +39,22 @@ data class CrawlRequest @JsonCreator constructor(
     @param:JsonProperty("args") val args: String = "",
     @param:JsonProperty("depth") val depth: Int = 1,
     @param:JsonProperty("urls") val urls: List<String>? = null,
-    @param:JsonProperty("sql") val sql: String? = null
+    @param:JsonProperty("sql") val sql: String? = null,
+    /**
+     * How many independent fetch units this crawl may drive at the same time,
+     * one browser tab each.
+     *
+     * A crawl is a set of independent seeds (and, at depth>=1, independent seed
+     * rounds), so the units are parallelizable in principle; the fetch layer only
+     * realizes it when each unit owns its own tab.  This value is the budget the
+     * crawl enforces on itself, and the browser driver pool
+     * (`browser.context.number` x `browser.max.active.tabs`) is the hard ceiling
+     * above it.
+     *
+     * `null` (the default) uses [CrawlService.DEFAULT_PARALLEL_TABS], and `1`
+     * means the historical strictly sequential crawl.
+     */
+    @param:JsonProperty("parallelTabs") val parallelTabs: Int? = null
 )
 
 data class CrawlSeedStatus(
@@ -92,6 +109,27 @@ data class CrawlResponse(
     val failedPages: List<CrawlFailedPage>? = null,
     /** URLs this crawl submitted, seeds included.  Equals `pagesFound + failedPages.size`. */
     val pagesExpected: Int = 0,
+    /**
+     * The parallelism budget this crawl ran under: how many independent fetch
+     * units (one browser tab each) it was allowed to drive at the same time.
+     *
+     * Reported so "the crawl was parallel" is inspectable instead of a claim:
+     * `1` means the historical sequential crawl, and the value is always the
+     * *effective* budget after clamping (see [CrawlService.resolveParallelTabs]),
+     * never the raw request.
+     */
+    val parallelTabs: Int = 0,
+    /**
+     * The peak number of fetch units this crawl actually had in flight at the
+     * same time — the observed counterpart of [parallelTabs].
+     *
+     * A value greater than 1 is proof that pages were collected in parallel.
+     * It is `0` for a task that never started, and it can stay below
+     * [parallelTabs] when there is simply not enough work (fewer seeds than the
+     * budget) or when the browser driver pool refused to hand out that many
+     * tabs.
+     */
+    val maxConcurrentFetches: Int = 0,
 )
 
 /**
@@ -206,6 +244,43 @@ class CrawlService(
     @Volatile
     var taskTtlMinutes: Int = 1440 // 1 day
 
+    /**
+     * Parallelism budget for a crawl that does not ask for one: how many
+     * independent fetch units (one browser tab each) it may drive at once.
+     *
+     * A crawl is a set of independent seeds — and at depth>=1, each seed's round
+     * is independent too — so the units are parallelizable in principle.  They
+     * only *are* parallel when each unit owns its own browser tab: a session
+     * bound to a driver pins every fetch of that session onto one tab, which is
+     * the serialization this budget exists to remove (see
+     * [ai.platon.pulsar.protocol.browser.emulator.impl.PrivacyManagedBrowserFetcher]).
+     *
+     * The hard ceiling is the browser driver pool
+     * (`browser.context.number` x `browser.max.active.tabs`, 2 x 8 by default);
+     * the value is kept small so a bulk download stays polite to the target site
+     * and to the rest of the server.  Set it (or `--parallel 1`) for the
+     * historical one-unit-at-a-time behavior.
+     */
+    @Volatile
+    var defaultParallelTabs: Int = DEFAULT_PARALLEL_TABS
+
+    /**
+     * Resolve the parallelism budget for one crawl from its request.
+     *
+     * The value is clamped rather than rejected: a caller asking for more tabs
+     * than the server is willing to hand out still gets a working crawl, and
+     * [CrawlResponse.parallelTabs] always reports the budget that was actually
+     * used, so the caller can see the clamp instead of guessing.  A non-positive
+     * request falls back to the server default — `parallelTabs` is a budget, not
+     * a switch, and treating `0` as "no parallelism at all" would silently turn
+     * every page into a serial fetch.
+     */
+    fun resolveParallelTabs(request: CrawlRequest): Int {
+        val requested = request.parallelTabs ?: defaultParallelTabs
+        val budget = if (requested > 0) requested else defaultParallelTabs
+        return budget.coerceIn(1, MAX_PARALLEL_TABS)
+    }
+
     init {
         // Periodically purge expired tasks so stale entries don't accumulate
         crawlScope.launch {
@@ -260,6 +335,17 @@ class CrawlService(
             return taskId
         }
 
+        // The parallelism budget is resolved once, before the worker starts, so
+        // every branch of the worker — including the terminal timeout/error
+        // records below — reports the same budget the crawl actually ran under.
+        val parallelTabs = resolveParallelTabs(request)
+        // How many fetch units are in flight right now, and the peak this crawl
+        // reached.  The peak is the observed counterpart of the budget: reporting
+        // it is what makes "the pages were collected in parallel" inspectable
+        // instead of asserted.
+        val inFlight = AtomicInteger()
+        val peakInFlight = AtomicInteger()
+
         val job = crawlScope.launch {
             try {
                 // Mark as "PROCESSING" as soon as the worker picks up the task.
@@ -281,13 +367,19 @@ class CrawlService(
                 val linksDiscovered = AtomicInteger()
                 // Per-seed round outcomes, kept so the terminal response can
                 // report the pages that were submitted and never delivered.
-                // Written only by the (sequential) seed loop below.
+                // Collected from the settled seed slots below, not written by the
+                // seed loop: the seeds settle concurrently and out of order, so
+                // the outcome of seed i arrives at index i.
                 val rounds = mutableListOf<CrawlRound>()
                 val result = withTimeout(CRAWL_TASK_TIMEOUT_MS.milliseconds) {
                     withContext(Dispatchers.IO) {
-                    val results = mutableListOf<CrawlPageResult>()
-                    val seedStatuses = mutableListOf<CrawlSeedStatus>()
                     val totalSeeds = seedUrls.size
+                    // Seed rounds and per-seed statuses are stored by seed index, so
+                    // the final response keeps the seed order even when the seeds
+                    // are fetched concurrently (see [mapCrawlSeedsConcurrently]).
+                    val seedRounds = arrayOfNulls<CrawlRound>(totalSeeds)
+                    val seedStatuses = arrayOfNulls<CrawlSeedStatus>(totalSeeds)
+                    val publishLock = Any()
 
                     // For depth=0 (bulk fetch mode), reuse a single session across
                     // all seed URLs.  Creating a new session per seed causes the HTTP
@@ -296,115 +388,172 @@ class CrawlService(
                     // for the page load — producing "Protocol not found" (status 1600)
                     // for every seed after the first.  A single session avoids the
                     // deregistration/re-registration cycle entirely.
+                    //
+                    // Sharing one *session* does not share one *tab*: this session
+                    // binds no driver, so each concurrent load leases its own tab
+                    // from the browser driver pool and the seeds really do run in
+                    // parallel.  Binding a driver here is what would serialize them.
                     val sharedDepth0Session = if (request.depth == 0) {
                         sessionManager.agenticContext.createSession()
                     } else {
                         null
                     }
 
-                    try {
-                        for ((index, seedUrl) in seedUrls.withIndex()) {
-                            logger.info(
-                                "Crawl {}: processing seed URL {}/{}: {}",
-                                taskId, index + 1, totalSeeds, seedUrl
-                            )
-                            val seedRequest = request.copy(url = seedUrl, urls = null)
-                            val round = try {
-                                val fetched = when {
-                                    // Depth=0 is bulk fetch: one URL, no link
-                                    // discovery, so its pages are its whole round.
-                                    seedRequest.depth == 0 -> CrawlRound(
-                                        pages = crawlDepth0(taskId, seedRequest, sharedDepth0Session)
-                                    )
-                                    seedRequest.depth <= 1 -> crawlDepth1(taskId, seedRequest, linksDiscovered)
-                                    else -> crawlDepthN(taskId, seedRequest, linksDiscovered)
-                                }
-                                logger.info(
-                                    "Crawl {}: seed URL {}/{} completed: {} → {} page(s), {} lost",
-                                    taskId, index + 1, totalSeeds, seedUrl,
-                                    fetched.pages.size, fetched.failedPages.size
+                    /**
+                     * Fetch one seed URL and classify its outcome.
+                     *
+                     * A failed seed never throws (except cancellation): it is reported
+                     * as an "error" seed status plus a synthetic row, so one bad seed
+                     * cannot take the other seeds down with it — which matters when the
+                     * seeds of a crawl are fetched concurrently.
+                     *
+                     * The in-flight counters are maintained here, around the whole
+                     * fetch, so the reported peak measures how much collection
+                     * actually overlapped.
+                     */
+                    suspend fun fetchSeed(index: Int, seedUrl: String): Pair<CrawlRound, CrawlSeedStatus> {
+                        logger.info(
+                            "Crawl {}: processing seed URL {}/{}: {}",
+                            taskId, index + 1, totalSeeds, seedUrl
+                        )
+                        val seedRequest = request.copy(url = seedUrl, urls = null)
+                        val concurrent = inFlight.incrementAndGet()
+                        peakInFlight.accumulateAndGet(concurrent) { a, b -> maxOf(a, b) }
+                        return try {
+                            val fetched = when {
+                                // Depth=0 is bulk fetch: one URL, no link
+                                // discovery, so its pages are its whole round.
+                                seedRequest.depth == 0 -> CrawlRound(
+                                    pages = crawlDepth0(taskId, seedRequest, sharedDepth0Session)
                                 )
-                                seedStatuses.add(CrawlSeedStatus(
-                                    url = seedUrl,
-                                    status = "fetched",
-                                    pagesReturned = fetched.pages.size
-                                ))
-                                fetched
-                            } catch (e: CancellationException) {
-                                // The task-wide timeout cancelled this crawl: let it
-                                // propagate so the outer handler can write the
-                                // TIMEOUT record.  Swallowing it here marked the seed
-                                // "error", continued with the next seed and then let
-                                // the terminal write report OK — a cancelled crawl
-                                // that looked successful.
-                                throw e
-                            } catch (e: Exception) {
-                                logger.error(
-                                    "Crawl {}: seed URL {}/{} failed: {} — {}",
-                                    taskId, index + 1, totalSeeds, seedUrl, e.message, e
-                                )
-                                seedStatuses.add(CrawlSeedStatus(
-                                    url = seedUrl,
-                                    status = "error",
-                                    pagesReturned = 0,
-                                    error = e.message
-                                ))
-                                // The seed failure is carried by seedStatuses (the
-                                // synthetic row keeps the URL visible in `pages`),
-                                // so it is not also a lost page: the
-                                // `pages + failedPages == pagesExpected` invariant
-                                // must stay exact.
-                                CrawlRound(
-                                    pages = listOf(
-                                        CrawlPageResult(
-                                            url = seedUrl,
-                                            title = null,
-                                            contentLength = null,
-                                            depth = 0
-                                        )
-                                    ),
-                                    failedPages = emptyList(),
-                                    pagesExpected = 1
-                                )
+                                seedRequest.depth <= 1 -> crawlDepth1(taskId, seedRequest, linksDiscovered)
+                                else -> crawlDepthN(taskId, seedRequest, linksDiscovered)
                             }
-                            rounds.add(round)
-                            results.addAll(round.pages)
+                            logger.info(
+                                "Crawl {}: seed URL {}/{} completed: {} → {} page(s), {} lost",
+                                taskId, index + 1, totalSeeds, seedUrl,
+                                fetched.pages.size, fetched.failedPages.size
+                            )
+                            fetched to CrawlSeedStatus(
+                                url = seedUrl,
+                                status = "fetched",
+                                pagesReturned = fetched.pages.size
+                            )
+                        } catch (e: CancellationException) {
+                            // The task-wide timeout cancelled this crawl: let it
+                            // propagate so the outer handler can write the
+                            // TIMEOUT record.  Swallowing it here marked the seed
+                            // "error", continued with the next seed and then let
+                            // the terminal write report OK — a cancelled crawl
+                            // that looked successful.
+                            throw e
+                        } catch (e: Exception) {
+                            logger.error(
+                                "Crawl {}: seed URL {}/{} failed: {} — {}",
+                                taskId, index + 1, totalSeeds, seedUrl, e.message, e
+                            )
+                            // The seed failure is carried by seedStatuses (the
+                            // synthetic row keeps the URL visible in `pages`),
+                            // so it is not also a lost page: the
+                            // `pages + failedPages == pagesExpected` invariant
+                            // must stay exact.
+                            CrawlRound(
+                                pages = listOf(
+                                    CrawlPageResult(
+                                        url = seedUrl,
+                                        title = null,
+                                        contentLength = null,
+                                        depth = 0
+                                    )
+                                ),
+                                failedPages = emptyList(),
+                                pagesExpected = 1
+                            ) to CrawlSeedStatus(
+                                url = seedUrl,
+                                status = "error",
+                                pagesReturned = 0,
+                                error = e.message
+                            )
+                        } finally {
+                            inFlight.decrementAndGet()
+                        }
+                    }
 
-                            // Publish incremental progress to the in-memory task
-                            // store so the CLI polling loop can show per-seed
-                            // extraction progress (e.g. "2/5 seeds done, 4 rows
-                            // extracted so far").  We only update the in-memory
-                            // store — persistence.append is deferred until the
-                            // crawl completes to avoid writing intermediate states.
+                    /**
+                     * Record a settled seed and publish incremental progress to the
+                     * in-memory task store so the CLI polling loop can show per-seed
+                     * extraction progress (e.g. "2/5 seeds done, 4 rows extracted so
+                     * far").  Only the in-memory store is updated — persistence.append
+                     * is deferred until the crawl completes to avoid writing
+                     * intermediate states.  Concurrent seeds publish under a lock so
+                     * a reader never sees a half-written record.
+                     */
+                    fun recordSeed(index: Int, round: CrawlRound, status: CrawlSeedStatus) {
+                        synchronized(publishLock) {
+                            seedRounds[index] = round
+                            seedStatuses[index] = status
+                            val settled = seedRounds.filterNotNull()
+                            val pages = settled.flatMap { it.pages }
                             val currentResult = taskStore.getIfPresent(taskId)
                             val incrementalResponse = CrawlResponse(
                                 taskId = taskId,
                                 status = "PROCESSING",
-                                pagesFound = results.size,
+                                pagesFound = pages.size,
                                 linksDiscovered = linksDiscovered.get(),
-                                pages = results.toList(),
+                                pages = pages,
                                 diagnostic = currentResult?.diagnostic,
                                 startedTime = currentResult?.startedTime ?: java.time.Instant.now(),
-                                seedStatuses = seedStatuses.toList(),
+                                seedStatuses = seedStatuses.filterNotNull(),
                                 // Losses are visible while the crawl still runs,
                                 // not only in the terminal response.
-                                failedPages = rounds.flatMap { it.failedPages },
-                                pagesExpected = rounds.sumOf { it.pagesExpected }
+                                failedPages = settled.flatMap { it.failedPages },
+                                pagesExpected = settled.sumOf { it.pagesExpected },
+                                // Parallelism is visible while the crawl runs too,
+                                // so a poller can tell a slow serial crawl from a
+                                // fast parallel one.
+                                parallelTabs = parallelTabs,
+                                maxConcurrentFetches = peakInFlight.get()
                             )
                             taskStore.put(taskId, incrementalResponse)
+                        }
+                    }
 
-                            // Small delay between seed URLs to allow the browser
-                            // time to settle between page loads.  When using a shared
-                            // session this is less critical (no protocol handler
-                            // re-registration), but still prevents resource contention.
-                            if (index < totalSeeds - 1) {
-                                delay(SEED_INTERVAL_MS.milliseconds)
+                    try {
+                        // Every seed is an independent fetch unit: at depth=0 the
+                        // unit is one page, at depth>=1 it is one link-discovery
+                        // round (whose own out-pages are then fetched from the
+                        // shared driver pool).  Either way the units have no
+                        // ordering dependency on each other, so they are driven
+                        // concurrently up to the budget instead of one after
+                        // another.  A budget of 1 keeps the historical strictly
+                        // sequential crawl, delay included.
+                        val budget = parallelTabs.coerceAtMost(totalSeeds)
+                        if (budget > 1) {
+                            mapCrawlSeedsConcurrently(seedUrls, budget) { index, seedUrl ->
+                                val (round, status) = fetchSeed(index, seedUrl)
+                                recordSeed(index, round, status)
+                            }
+                        } else {
+                            for ((index, seedUrl) in seedUrls.withIndex()) {
+                                val (round, status) = fetchSeed(index, seedUrl)
+                                recordSeed(index, round, status)
+                                if (index < totalSeeds - 1) {
+                                    // The delay lets the browser settle between
+                                    // seeds.  It only exists on the sequential
+                                    // path: when the seeds run in parallel, the
+                                    // next seed is already in flight and a delay
+                                    // would just serialize them again.
+                                    delay(SEED_INTERVAL_MS.milliseconds)
+                                }
                             }
                         }
                     } finally {
                         runCatching { sharedDepth0Session?.close() }
                     }
-                    Pair(results, seedStatuses)
+
+                    val settledRounds = seedRounds.filterNotNull()
+                    rounds.addAll(settledRounds)
+                    Pair(settledRounds.flatMap { it.pages }, seedStatuses.filterNotNull())
                 }
                 } // withTimeout
                 val (allPages, seedStatuses) = result
@@ -446,13 +595,16 @@ class CrawlService(
                     seedStatuses = seedStatuses,
                     readonlyNote = readonlyNote,
                     failedPages = failedPages.takeIf { it.isNotEmpty() },
-                    pagesExpected = pagesExpected
+                    pagesExpected = pagesExpected,
+                    parallelTabs = parallelTabs,
+                    maxConcurrentFetches = peakInFlight.get()
                 )
                 taskStore.put(taskId, completed)
                 onStatusChanged(completed)
                 logger.info(
-                    "Crawl task {} completed: {} pages, {} lost, status {}",
-                    taskId, allPages.size, failedPages.size, completed.status
+                    "Crawl task {} completed: {} pages, {} lost, status {}, parallel budget {} (peak {} in flight)",
+                    taskId, allPages.size, failedPages.size, completed.status,
+                    parallelTabs, peakInFlight.get()
                 )
             } catch (e: CancellationException) {
                 val existing = taskStore.getIfPresent(taskId)
@@ -483,6 +635,11 @@ class CrawlService(
                         pages = existing?.pages,
                         seedStatuses = existing?.seedStatuses,
                         diagnostic = existing?.diagnostic,
+                        // A timed-out crawl still reports the parallelism it was
+                        // running under and the overlap it achieved, so the
+                        // partial result says "how" as well as "how much".
+                        parallelTabs = existing?.parallelTabs ?: parallelTabs,
+                        maxConcurrentFetches = maxOf(existing?.maxConcurrentFetches ?: 0, peakInFlight.get()),
                         startedTime = existing?.startedTime ?: now,
                         finishTime = now
                     )
@@ -497,6 +654,8 @@ class CrawlService(
                     taskId = taskId,
                     status = ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
                     error = e.message ?: "Unknown error",
+                    parallelTabs = parallelTabs,
+                    maxConcurrentFetches = peakInFlight.get(),
                     startedTime = existing?.startedTime ?: now,
                     finishTime = now
                 )
@@ -510,7 +669,10 @@ class CrawlService(
 
         jobStore[taskId] = job
 
-        logger.info("Crawl task submitted: {} seeds={} depth={}", taskId, seedUrls.size, request.depth)
+        logger.info(
+            "Crawl task submitted: {} seeds={} depth={} parallelTabs={}",
+            taskId, seedUrls.size, request.depth, resolveParallelTabs(request)
+        )
         return taskId
     }
 
@@ -527,6 +689,8 @@ class CrawlService(
             taskId = taskId,
             status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
             error = "Cancelled by user",
+            parallelTabs = previous?.parallelTabs ?: 0,
+            maxConcurrentFetches = previous?.maxConcurrentFetches ?: 0,
             startedTime = previous?.startedTime ?: now,
             finishTime = now
         )
@@ -1462,6 +1626,27 @@ class CrawlService(
         /** Delay in ms between seed URL processing to allow session cleanup. */
         private const val SEED_INTERVAL_MS = 500L
 
+        /**
+         * Default parallelism budget for a crawl that does not ask for one, see
+         * [CrawlService.defaultParallelTabs].
+         *
+         * Kept well below the browser driver pool's ceiling
+         * (`browser.context.number` x `browser.max.active.tabs`, 2 x 8 by
+         * default) so one bulk crawl cannot monopolize every tab on the server.
+         * */
+        const val DEFAULT_PARALLEL_TABS = 4
+
+        /**
+         * Hard ceiling on a requested parallelism budget.
+         *
+         * The driver pool refuses to hand out more than
+         * `browser.context.number` x `browser.max.active.tabs` tabs (16 by
+         * default), and each open tab is a real browser target; the ceiling
+         * stops a typo in `--parallel` from asking the server to open hundreds
+         * of them.
+         * */
+        const val MAX_PARALLEL_TABS = 32
+
         /** Maximum time (ms) a crawl task may run before being cancelled. */
         private const val CRAWL_TASK_TIMEOUT_MS = 600_000L // 10 minutes
 
@@ -1671,4 +1856,33 @@ internal fun normalizeForVisit(url: String): String {
         .removeSuffix("/")
         .substringBefore('#')
         .substringBefore('?')  // strip query for dedup
+}
+
+/**
+ * Run [block] for every URL with at most [concurrency] URLs in flight, and
+ * return the results in input order.
+ *
+ * Used to drive the independent units of a crawl in parallel: the seed URLs of
+ * a depth=0 (bulk fetch) crawl, and the link-discovery rounds of a depth>=1
+ * crawl. Neither has an ordering dependency on its siblings, so running them one
+ * at a time only wasted the browser driver pool's capacity.
+ *
+ * [concurrency] is a *ceiling on units in flight*, not a promise that many tabs
+ * are busy: each unit leases its own tab from the browser driver pool, and the
+ * pool is what ultimately bounds real parallelism.  A [concurrency] larger than
+ * the number of URLs simply runs every URL concurrently; the results are still
+ * returned in input order, so the crawl listing stays deterministic.
+ *
+ * The block is expected to settle its own failures (see the per-seed handling
+ * in [CrawlService.submit]); a block that throws cancels the remaining URLs.
+ * */
+internal suspend fun <T> mapCrawlSeedsConcurrently(
+    urls: List<String>,
+    concurrency: Int,
+    block: suspend (index: Int, url: String) -> T,
+): List<T> = coroutineScope {
+    val permits = Semaphore(concurrency.coerceAtLeast(1))
+    urls.mapIndexed { index, url ->
+        async { permits.withPermit { block(index, url) } }
+    }.awaitAll()
 }
