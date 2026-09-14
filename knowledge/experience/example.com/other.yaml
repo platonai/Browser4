@@ -1,9 +1,0 @@
-intent: other
-domain: example.com
-url_pattern: ''
-total_attempts: 2
-successes: 0
-failures: 2
-failure_stats:
-  unknown: 2
-last_updated: '2026-09-14T15:31:16.417288900Z'
