@@ -919,6 +919,20 @@ round = clamp( min(depth × 5min, 30min),  剩余任务预算 − 30s 报告余�
 |---|---|
 | `mvn -o -pl browser4-rest -am "-Dtest=Crawl*Test" -DfailIfNoTests=false -D"surefire.failIfNoSpecifiedTests=false" test` | **Tests run: 90, Failures: 0, Errors: 0**（原 83 + 7：`CrawlSupportTest` 22 → 28，`CrawlServiceTest` 10 → 11） |
 | `mvn -o -pl browser4-rest -am "-DexcludedGroups=<PR gate 列表>" "-Dsurefire.excludes=**integration" test` | **Tests run: 393, Failures: 0, Errors: 0**，BUILD SUCCESS（拆分提交时的 376 + §16 的 10 + 本轮的 7，账对得上） |
+| `mvn -o -pl browser4-tests/browser4-rest-tests -am -DrunRestTests=true -Dtest=CrawlFixtureMetadataTest test`（真浏览器，本机 20 核 Windows） | 改动后 **5 / 1 / 0**；基线（把 7 个 crawl 文件 `git checkout HEAD~1 -- <files>`）**5 / 2 / 0**。两次都含同一个既有 flake，见下 |
+
+真浏览器这一轮的对照，用来说明"没有引入新的红"：
+
+* **改动后**：唯一失败是 `testReadonlyCrawlSurfacesServedOrFresh` —— `product/1.html` 的
+  `title` 为 `null`（`expected: <Widget Alpha — $10.00>`）。这正是本文件 §5 第 159 行记录的
+  同一条失败（同用例、同 URL、同断言），当时判定为"既有集成测试的负载敏感暴露面，非本轮回归"。
+* **基线（§16/§17 之前的 crawl 源码）**：**5 / 2 / 0** —— 除了同一个 title-null，还多挂
+  `testReadonlyRefreshCrawlVerifiesFreshness`（`expected 10 pages, got 4`，即 §16 修掉的"少页"症状）。
+  也就是说本轮改动**没有**引入 title-null，反而消掉了基线里的少页失败；剩下的 title-null 属于
+  store-serve（`-readonly` 不带 `-refresh`）路径的既有问题（存下来的文档没有可解析的 `<title>`），
+  与轮次预算/报账无关，留给下一轮。
+* 两次运行里 `assertNoLostPages(...)` 全部通过：真浏览器下 `pagesFound + failedPages.size ==
+  pagesExpected` 成立，没有丢页——本轮改的报账逻辑在真实 crawl 上没有回归。
 
 新增/改写的用例：
 
@@ -931,9 +945,15 @@ round = clamp( min(depth × 5min, 30min),  剩余任务预算 − 30s 报告余�
 
 ### 17.5 仍未做
 
-§16.4 的第 3、4、5 条不变（在途视图非聚合、发布缺 per-task 锁、发现链接未去重）。本轮新增一条：
+§16.4 的第 3、4、5 条不变（在途视图非聚合、发布缺 per-task 锁、发现链接未去重）。本轮新增两条：
 
 * `taskTimeoutMillis` 只有一个默认值 10 min（单测直接改这个 `@Volatile var`）。若要按请求或配置调，
   需要在 REST/DTO 层定契约（`CrawlRequest` 加字段 + 校验 + 文档），本轮没有做。
+* **store-serve 行的 `title` 为 null**（真浏览器 `testReadonlyCrawlSurfacesServedOrFresh`，改动前后都红）：
+  `-readonly` 不带 `-refresh` 时，行里的 `contentLength` 来自存下来的 page core（日志里是
+  `got 200 0 <- 5.88 KiB`），而 `title` 走的是这次 parse 事件里的 document —— 存储内容没有给出可解析的
+  `<title>` 时就是 `null`。这是 §5 早就记过的负载敏感面，与轮次预算/报账无关，值得单独一轮：
+  要么让 readonly 的 store serve 也把 title 从存储的 HTML 里解析出来，要么把这个断言改成
+  "served 行允许 title 为空，但 fresh 行必须匹配"。
 
 
