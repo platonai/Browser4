@@ -134,12 +134,20 @@ class CrawlFixtureMetadataTest : RestAPITestBase() {
         // earlier crawls), the load may serve stored content — readonly mode
         // must say so with the age of the content; otherwise it must verify
         // freshness.  Either way metadata integrity holds per row.
+        //
+        // Note: a crawl forces `-refresh` onto every load it issues (see
+        // `CrawlRoundRunner.buildEffectiveArgs`), so today this always takes the
+        // freshness branch; the stored-content branch has no coverage until that
+        // forcing is revisited (docs-dev/copilot/ci-stabilization-4.13.x.md §18).
         val response = runCrawl(depth = 2, args = "-readonly")
 
         assertTrue(response.status == "OK" || response.status == "SC_OK",
             "crawl should complete OK, got: ${response.status} error=${response.error}")
         assertNoLostPages(response)
         val pages = requireNotNull(response.pages)
+        // Without this the test passed vacuously whenever the crawl listed no
+        // rows at all: the per-row title loop below simply never ran.
+        assertEquals(10, pages.size, "expected 10 pages, got ${pages.size}")
         val note = requireNotNull(response.readonlyNote) { "readonly crawl must produce a readonlyNote" }
 
         val served = pages.filter { it.servedFromStore }

@@ -273,6 +273,27 @@ internal suspend fun <T> mapCrawlSeedsConcurrently(
 }
 
 /**
+ * Whether a load actually delivered a document for its URL.
+ *
+ * A crawl may only record a row for a page it *received*.  Two failures used to
+ * slip through as rows because the page object still looked usable:
+ *
+ *  * the engine substitutes the stored copy when a fetch fails — `-refresh`
+ *    implies `-ignoreFailure`, and the crawl forces `-refresh` — so the page
+ *    comes back carrying the store's content length while `isFetched` is false;
+ *  * a zero-byte fetch parses into an empty document, and the page keeps the
+ *    metadata of whatever it held before.
+ *
+ * Either way the row carried a URL, a content length and no title: a page the
+ * crawl never received, reported as one it had — which is exactly what the
+ * per-URL metadata guarantee exists to prevent.  The document is what the caller
+ * asked for, so its presence answers the question; the protocol status does not,
+ * because it stays 200 in both cases.
+ */
+internal fun isDocumentDelivered(fetched: Boolean, html: String?): Boolean =
+    fetched && !html.isNullOrBlank()
+
+/**
  * Extract the <title> text from raw HTML when [FeaturedDocument.title]
  * returns blank.  Handles the case where the parse pipeline skips title
  * extraction on cached content.  Returns null when no <title> tag is found.

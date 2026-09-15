@@ -260,6 +260,33 @@ class CrawlSupportTest {
     }
 
     // ------------------------------------------------------------------
+    // isDocumentDelivered
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a page is only a page when the load delivered a document for it")
+    fun testDocumentDelivery() {
+        assertTrue(
+            isDocumentDelivered(fetched = true, html = "<html><head><title>Widget</title></head></html>"),
+            "a fetched page with HTML is delivered"
+        )
+
+        // A failed fetch is papered over by -ignoreFailure (which the crawl's
+        // forced -refresh implies): the page keeps the store's content length and
+        // a 200 status, but nothing was fetched for it this round.
+        assertFalse(
+            isDocumentDelivered(fetched = false, html = "<html><head><title>stored</title></head></html>"),
+            "a stored copy substituted for a failed fetch is not a delivered page"
+        )
+
+        // A zero-byte fetch parses into an empty document.
+        assertFalse(isDocumentDelivered(fetched = true, html = ""))
+        assertFalse(isDocumentDelivered(fetched = true, html = "   "))
+        assertFalse(isDocumentDelivered(fetched = true, html = null))
+        assertFalse(isDocumentDelivered(fetched = false, html = null))
+    }
+
+    // ------------------------------------------------------------------
     // extractTitleFromHtml
     // ------------------------------------------------------------------
 

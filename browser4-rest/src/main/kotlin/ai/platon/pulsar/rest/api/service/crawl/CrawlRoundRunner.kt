@@ -283,6 +283,21 @@ internal class CrawlRoundRunner(
                         return@parse null
                     }
                     try {
+                        // A load that returned no document of its own is a lost
+                        // page, not a row — the depth>1 handler documents why (a
+                        // failed fetch is papered over by `-ignoreFailure`, which
+                        // the forced `-refresh` implies).
+                        if (!isDocumentDelivered(_page.isFetched, _document.html)) {
+                            logger.warn(
+                                "Crawl {}: the load of '{}' returned no document (fetched={}, status={}, " +
+                                "contentLength={}); reporting it as lost",
+                                taskId, linkUrl, _page.isFetched, _page.protocolStatus.minorCode, _page.contentLength
+                            )
+                            ledger.recordFailure(
+                                linkUrl, 1, _page.protocolStatus.minorCode, CrawlLedger.REASON_NOT_DELIVERED
+                            )
+                            return@parse null
+                        }
                         // Only the first parse event for a URL records the result
                         // and settles the URL; duplicates are dropped.
                         if (recorded.add(normalizeForVisit(linkUrl))) {
@@ -476,6 +491,29 @@ internal class CrawlRoundRunner(
                 // prevent.  It is not expanded either, because a depth that cannot
                 // be bounded is exactly how a crawl runs away.
                 val currentDepth = resolveQueueDepth(page.url, servedUrl, depths)
+
+                // Only a load that delivered a document of its own may become a
+                // row.  A fetch that failed here is not an error the caller sees:
+                // the crawl forces `-refresh`, `-refresh` implies `-ignoreFailure`,
+                // and the engine then hands back whatever the page store holds —
+                // a page object with a content length, an empty document and no
+                // title.  Recording that produced a listing row for a page the
+                // crawl never received, under the URL it was supposed to have.
+                // It is settled as a loss instead, so the crawl says "not
+                // delivered" rather than showing a hollow row.
+                if (!isDocumentDelivered(page.isFetched, document.html)) {
+                    logger.warn(
+                        "Crawl {}: the load of '{}' (submitted as '{}') returned no document " +
+                        "(fetched={}, status={}, contentLength={}); reporting it as lost",
+                        taskId, servedUrl, page.url, page.isFetched,
+                        page.protocolStatus.minorCode, page.contentLength
+                    )
+                    ledger.recordFailure(
+                        page.url, currentDepth ?: UNKNOWN_DEPTH, page.protocolStatus.minorCode,
+                        CrawlLedger.REASON_NOT_DELIVERED
+                    )
+                    return@crawlParse null
+                }
 
                 // First parse event for this URL owns the result entry and the
                 // completion tick.  Later events (re-parses of the same page) only

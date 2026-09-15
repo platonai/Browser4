@@ -57,6 +57,17 @@ class CrawlLedger(val taskId: String = "") {
         /** A successful load that never produced a result row. */
         const val REASON_NOT_PARSED = "the page loaded but produced no result row (no parse event fired)"
 
+        /**
+         * A load that produced no document of its own: a zero-byte fetch, or a
+         * stored copy substituted for a fetch that failed.
+         *
+         * Distinct from [REASON_NOT_PARSED] on purpose: a parse event *did* fire
+         * here, carrying an empty document — which is how a row used to end up
+         * with a URL, the page's previous content length, and no title.
+         */
+        const val REASON_NOT_DELIVERED =
+            "the load returned no document (a zero-byte fetch, or the page store substituted for a failed fetch)"
+
         /** The round ended (timeout/abort) before this page produced a document. */
         const val REASON_ROUND_ENDED = "the crawl finished before this page produced a document"
     }

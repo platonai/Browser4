@@ -50,6 +50,30 @@ class CrawlLedgerTest {
     }
 
     /**
+     * A load that returns no document of its own (a zero-byte fetch, or the page
+     * store substituted for a failed fetch) must be reported as lost rather than
+     * recorded as a hollow row.  The reason travels with it so the caller can
+     * tell it from a fetch that failed and from a page that never parsed.
+     */
+    @Test
+    @DisplayName("a load that delivered no document is reported as lost with its own reason")
+    fun notDeliveredLoadIsReportedAsLost() {
+        val ledger = CrawlLedger("t-not-delivered")
+
+        ledger.submit("https://example.com/hollow.html", 1)
+        ledger.recordFailure(
+            "https://example.com/hollow.html", 1, 200, CrawlLedger.REASON_NOT_DELIVERED
+        )
+
+        assertTrue(ledger.isComplete, "the URL is settled by the loss, not left outstanding")
+        val failed = ledger.failedPages().single()
+        assertEquals(CrawlLedger.REASON_NOT_DELIVERED, failed.reason)
+        assertEquals("https://example.com/hollow.html", failed.url)
+        assertEquals(1, failed.depth)
+        assertEquals(200, failed.protocolStatus, "the status stays 200 — that is why the row looked fine")
+    }
+
+    /**
      * The regression test for "expected 10 pages, got 8": the round must not
      * complete while a handler that has not submitted its children yet is in
      * flight, even though every page submitted so far has settled.

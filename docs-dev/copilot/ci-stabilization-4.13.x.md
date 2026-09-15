@@ -950,10 +950,80 @@ round = clamp( min(depth × 5min, 30min),  剩余任务预算 − 30s 报告余�
 * `taskTimeoutMillis` 只有一个默认值 10 min（单测直接改这个 `@Volatile var`）。若要按请求或配置调，
   需要在 REST/DTO 层定契约（`CrawlRequest` 加字段 + 校验 + 文档），本轮没有做。
 * **store-serve 行的 `title` 为 null**（真浏览器 `testReadonlyCrawlSurfacesServedOrFresh`，改动前后都红）：
-  `-readonly` 不带 `-refresh` 时，行里的 `contentLength` 来自存下来的 page core（日志里是
-  `got 200 0 <- 5.88 KiB`），而 `title` 走的是这次 parse 事件里的 document —— 存储内容没有给出可解析的
-  `<title>` 时就是 `null`。这是 §5 早就记过的负载敏感面，与轮次预算/报账无关，值得单独一轮：
-  要么让 readonly 的 store serve 也把 title 从存储的 HTML 里解析出来，要么把这个断言改成
-  "served 行允许 title 为空，但 fresh 行必须匹配"。
+  §17.5 当时把它归到"`-readonly` 不带 `-refresh` 的 store-serve 路径"——**这个判断是错的**，
+  下一轮（§18）用探针推翻并修掉了：真正发生的是"一次失败的抓取被 `-ignoreFailure` 兜住，
+  crawl 把没抓到的页面当成一行记了下来"。
+
+## 18. "标题为 null 的行"：一次没被真正抓到的页面被当成了页（4.13.x）
+
+§17.5 把那个红归到"`-readonly` 不带 `-refresh` 的 store-serve 路径"。**这个判断是错的**：
+本轮先用探针量，再改。
+
+### 18.1 探针（先量，再改）
+
+在 `crawlDepthN` 记录行的那一行加一条 WARN 级探针（绕过日志级别过滤），打印
+`isFetched / prevFetchTime / isCached / document.title / html.length / contentLength / status / configuredUrl`：
+
+* 两次带探针的健康运行（各 50 行）里，**每一行**都是 `fetched=true`、`prevFetchTime == fetchTime`、
+  `htmlLen ≥ 3765`、标题齐全 —— 健康路径上页面确实被抓到了，行与 URL 对得上；
+* 探针同时暴露了一个此前没人写下来的事实：**`crawl` 会给每个页面加载强制补 `-refresh`**
+  （`CrawlRoundRunner.buildEffectiveArgs`），而 `-refresh` 在 `LoadOptions` 里的定义是
+  `-ignoreFailure -i 0s` + `fetchRetries = 0`。于是：
+  * `-readonly`（不带 `-refresh`）**永远走不到 store-serve 分支**：那个分支只有测试注释、
+    `buildReadonlyNote` 的措辞和 `servedFromStore` 字段在描述它；
+  * 反过来，一旦实时抓取失败，`-ignoreFailure` 会让引擎**不把失败报出来**，而是把存储里的那份交回来：
+    页面带着存储的 `contentLength`、`status=200`、`isFetched=false`，以及一个**空文档**。
+* 失败 run 的日志正好是这个形状：`got 200 0 <- 5.8857422 KiB … last fetched 3m42s ago, fc:5`
+  （0 字节下载、内容来自存储、上次抓取在 3 分 42 秒前），同一 run 里还有
+  `Retry(1601) BrowserUnavailableException` 与 `Timeout to wait for document ready`。
+
+结论：那个红不是"store serve 没有 title"，而是**"一次失败的抓取被 `-ignoreFailure` 兜住之后，
+crawl 把一张没抓到的页面当成一行记录了下来"** —— 行里有 URL、有（存储的）contentLength、没有 title。
+健康时不出现（两次探针运行都绿），浏览器退化时出现（改动前后都能复现），与 §5 记的"负载敏感"一致。
+
+### 18.2 修正
+
+`crawl` 只允许"这一次加载确实交付了文档"的页面成为一行：
+
+```kotlin
+internal fun isDocumentDelivered(fetched: Boolean, html: String?): Boolean = fetched && !html.isNullOrBlank()
+```
+
+* `crawlDepthN` 与 `crawlDepth1` 的 parse handler 在**记录之前**判定；不满足就不记行，改走
+  `ledger.recordFailure(..., CrawlLedger.REASON_NOT_DELIVERED)`，并打一条 WARN 说明
+  `fetched / status / contentLength`。新原因与 `REASON_NOT_PARSED`（根本没触发 parse 事件）区分开：
+  这条路径**触发了** parse，只是文档是空的 —— 这正是它以前能悄悄变成一行空标题的原因。
+* 守恒式因此仍然成立：没交付的 URL 进 `failedPages`，不进 `pages`。用户看到的是
+  "N of M submitted page(s) were never delivered + 原因"，而不是一行空标题。
+* 判定放在 `recorded.add(key)` **之前**（不烧掉"首次事件"名额），位置在 `ledger.enter()` 之后的
+  try 块里，`leave()` 依旧走 finally。
+
+### 18.3 顺带修掉的测试假绿
+
+`CrawlFixtureMetadataTest#testReadonlyCrawlSurfacesServedOrFresh` 原先**不断言页数**：一次返回 0 行的
+crawl 会让它逐行的 title 断言循环根本不执行，于是"空跑通过"。现在它断言 10 行，并在注释里写明：
+crawl 强制 `-refresh`，所以这条用例今天只会走 "verified fresh" 分支；store-serve 分支在强制 refresh
+被重新审视之前没有覆盖。
+
+### 18.4 验证
+
+| 项 | 结果 |
+|---|---|
+| `mvn -o -pl browser4-rest -am "-Dtest=Crawl*Test" … test` | **Tests run: 92, Failures: 0, Errors: 0**（90 + 2：`CrawlLedgerTest` 13→14、`CrawlSupportTest` 28→29） |
+| 真浏览器 `CrawlFixtureMetadataTest` | **5 / 0 / 0**（653.6 s）；新增的 "returned no document" WARN 一次都没触发 —— 健康 run 不误伤，也不再有空标题的行 |
+| `browser4-rest` PR-gate 作用域 | **Tests run: 395, Failures: 0, Errors: 0**，BUILD SUCCESS（393 + 本轮新增的 2 条单测） |
+
+### 18.5 仍未做
+
+* **强制 `-refresh` 与"readonly 可从存储读"的契约冲突**（§18.1）：`crawl --readonly` 永远会重新抓取，
+  `buildReadonlyNote` 里 "served from the page store (age X)" 的措辞、`CrawlResponse.servedFromStore`
+  与 `CrawlFixtureMetadataTest` 的 store-serve 分支都是死代码。要让契约成立，得让
+  `buildEffectiveArgs`（以及 `crawlDepth0` 里同样的拼接）在用户明确要 `-readonly` 且没要 `-refresh` 时
+  不再补 `-refresh`。这会改变用户可见行为（readonly 会开始吐旧内容），需要单独决策 + e2e。
+* **失败抓取的重试**：本轮只把"没抓到"如实报成丢失，没有加重试。`crawlDepth0` 有 `MAX_FETCH_RETRIES`，
+  两个链接发现路径没有。"交付失败即重投一次"需要在 ledger 上开一个"尝试中、仍未结算"的口子
+  （现有的 `enter/leave` + `settle()` 恰好一次语义会被重复结算破坏），属于独立一轮。
+* 触发这次退化的**根因**（浏览器在持续 crawl 负载下变得不可用：`BrowserUnavailableException`、
+  `Timeout to wait for document ready`）在引擎/驱动池一侧，本轮没有动 —— 本轮只是让它不再伪装成一行。
 
 
