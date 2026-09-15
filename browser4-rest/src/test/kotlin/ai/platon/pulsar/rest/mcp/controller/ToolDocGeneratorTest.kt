@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.mcp.controller
 
 import ai.platon.pulsar.agentic.mcp.McpToolNames
+import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.agentic.tools.specs.ToolDocGenerator
@@ -67,6 +68,84 @@ class ToolDocGeneratorTest {
             Files.readString(jsonPath).replace("\r\n", "\n"),
             json.replace("\r\n", "\n"),
             "docs/$JSON_NAME is stale — regenerate with -DregenerateToolDocs=true"
+        )
+    }
+
+    @Test
+    @DisplayName("no example field is dropped on the way into the machine-readable reference")
+    fun exampleProjectionIsLossless() {
+        val specs = specs()
+        val docs = ToolDocGenerator.buildDocs(specs, advertisedNames())
+            .associateBy { "${it["domain"]}.${it["method"]}" }
+
+        var checked = 0
+        for (spec in specs) {
+            if (spec.examples.isEmpty()) continue
+            val doc = docs["${spec.domain}.${spec.method}"] ?: continue
+            @Suppress("UNCHECKED_CAST")
+            val documented = doc["examples"] as List<Map<String, Any?>>
+            assertEquals(
+                spec.examples.size, documented.size,
+                "${spec.domain}.${spec.method} lost examples on the way to the docs"
+            )
+            spec.examples.zip(documented).forEach { (specExample, docExample) ->
+                val where = "${spec.domain}.${spec.method}"
+                assertEquals(specExample.title, docExample["title"], "$where: title")
+                assertEquals(specExample.args, docExample["args"], "$where: args")
+                assertEquals(specExample.code, docExample["code"], "$where: code")
+                assertEquals(specExample.notes, docExample["notes"], "$where: notes")
+                assertEquals(specExample.expectsError, docExample["expectsError"], "$where: expectsError")
+                // Tri-state: set means set, unset must stay unset (not `false`).
+                if (specExample.runnable != null) {
+                    assertEquals(specExample.runnable, docExample["runnable"], "$where: runnable")
+                } else {
+                    assertTrue(!docExample.containsKey("runnable"), "$where: runnable must stay unset")
+                }
+                assertEquals(
+                    specExample.executable, docExample["executable"] ?: false,
+                    "$where: executable is the field a client counts coverage with"
+                )
+                checked++
+            }
+        }
+        assertTrue(checked > 0, "the registry must document at least one example")
+    }
+
+    @Test
+    @DisplayName("a no-argument call is documented as runnable, a snippet is not")
+    fun noArgumentExamplesAreRunnable() {
+        val callable = ToolSpec(
+            domain = "test", method = "noargs",
+            description = "A tool that takes no arguments.",
+            examples = listOf(ToolExample(title = "Just call it", runnable = true)),
+        )
+        val snippet = ToolSpec(
+            domain = "test", method = "snippet",
+            description = "A tool whose KDoc yielded a snippet only.",
+            examples = listOf(ToolExample(title = "How it is used", code = "driver.title()")),
+        )
+
+        val docs = ToolDocGenerator.buildDocs(listOf(callable, snippet))
+        val json = ToolDocGenerator.toJson(docs)
+
+        @Suppress("UNCHECKED_CAST")
+        val callableExample = (docs[0]["examples"] as List<Map<String, Any?>>).single()
+        assertEquals(true, callableExample["runnable"], "an empty argument list must be declared callable")
+        assertEquals(true, callableExample["executable"], "and it must count towards example coverage")
+
+        @Suppress("UNCHECKED_CAST")
+        val snippetExample = (docs[1]["examples"] as List<Map<String, Any?>>).single()
+        assertTrue(!snippetExample.containsKey("runnable"), "a snippet makes no claim about callability")
+        assertEquals(false, snippetExample["executable"] ?: false, "a snippet is not a call")
+
+        // The JSON a CLI/IDE/gateway reads must carry both facts, and the
+        // Markdown a human reads must not render an unusable bare bullet.
+        assertTrue(json.contains("\"runnable\" : true"), "the runnable flag must reach the JSON artifact")
+        assertTrue(json.contains("\"executable\" : true"), "the derived coverage flag must reach the JSON artifact")
+        val markdown = ToolDocGenerator.toMarkdown(docs)
+        assertTrue(
+            markdown.contains("- Just call it: no arguments"),
+            "a no-argument example must say so instead of rendering an empty bullet:\n$markdown"
         )
     }
 

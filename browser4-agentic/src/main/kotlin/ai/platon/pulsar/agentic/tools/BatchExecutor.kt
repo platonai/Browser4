@@ -221,6 +221,25 @@ class BatchExecutor(
         const val MAX_CONCURRENCY = 4
 
         /**
+         * Result contract of a batch, declared here because [BatchOutcome.toMap] is
+         * the shape it describes — a schema living anywhere else would drift from
+         * the serializer on the next field added.
+         *
+         * Only `BatchStepResult`'s optional fields are absent from `required`; every
+         * other key is always written by [StepOutcome.toMap]/[BatchOutcome.toMap].
+         */
+        const val RESULT_SCHEMA = """{"type":"object",""" +
+            """"required":["steps","failureCount","stoppedOnError","cached","cachedSteps","durationMs"],""" +
+            """"properties":{""" +
+            """"steps":{"type":"array","items":{"type":"object",""" +
+            """"required":["index","id","tool","ok","durationMs"],"properties":{""" +
+            """"index":{"type":"integer"},"id":{"type":"string"},"tool":{"type":"string"},""" +
+            """"ok":{"type":"boolean"},"durationMs":{"type":"integer"},"text":{"type":"string"},""" +
+            """"errorCode":{"type":"string"},"error":{"type":"string"},"cached":{"type":"boolean"}}}},""" +
+            """"failureCount":{"type":"integer"},"stoppedOnError":{"type":"boolean"},""" +
+            """"cached":{"type":"boolean"},"cachedSteps":{"type":"integer"},"durationMs":{"type":"integer"}}}"""
+
+        /**
          * Parse the `steps` array of a batch request.
          *
          * Accepted step shapes, so both the CLI (which sends `op`, `tool`,

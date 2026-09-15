@@ -890,7 +890,17 @@ class MCPToolController(
         val arguments =
             step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
 
-        logger.info("Calling batch tool step: $index $tool ${arguments.entries.joinToString(" ") { "--${it.key}=${it.value}" }}")
+        // `batch.step` (BatchExecutor) already logs index/tool/ok/cached/durationMs,
+        // so this line exists only for argument context — and it must therefore go
+        // through the redacting renderer. The previous `--key=value` interpolation
+        // wrote argument bodies into INFO logs, the exact leak requirement 7
+        // forbids (cookies, storage state, file paths).
+        if (logger.isDebugEnabled) {
+            logger.debug(
+                "batch.step args index={} tool={} args=[{}]",
+                index, tool, ToolInvocationLogger.renderArgs(arguments),
+            )
+        }
 
         val text = executeAgentToolText(tool, arguments)
 

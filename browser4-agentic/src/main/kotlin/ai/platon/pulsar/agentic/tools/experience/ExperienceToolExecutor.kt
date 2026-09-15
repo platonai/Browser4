@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.experience
 
+import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -53,9 +54,13 @@ class ExperienceToolExecutor(
                 ToolSpec.Arg("url", "String"),
                 ToolSpec.Arg("trace", "String"),
                 ToolSpec.Arg("outcome", "String", "success"),
-                ToolSpec.Arg("intent", "String", null),
-                ToolSpec.Arg("task_type", "String", null),
-                ToolSpec.Arg("facts", "String", null),
+                // Optional in the implementation (`required = false`, and `facts` is
+                // read straight off the map) — declaring them required made the
+                // validator reject every documented call, which is how the example
+                // written for this tool caught the mismatch.
+                ToolSpec.Arg("intent", "String?", "null", "Free-text intent of the task."),
+                ToolSpec.Arg("task_type", "String?", "null", "Task classification, when the caller knows it."),
+                ToolSpec.Arg("facts", "String?", "null", "Retrospective knowledge (JSON string or object)."),
             ),
             returnType = "String",
             description = "Fast Learning: save task trace and update experience stats. " +
@@ -65,19 +70,42 @@ class ExperienceToolExecutor(
                 "(selectors/interaction_hints/known_blockers/anti_patterns) into the " +
                 "(domain, intent) facts entry — the writer path for lessons learned on a task. " +
                 "Refused when the entry is VERIFIED (immutable).",
+            examples = listOf(
+                ToolExample(
+                    title = "Record what a finished task learned",
+                    args = mapOf(
+                        "url" to "https://example.com/product/1",
+                        "trace" to "{\"steps\":[{\"tool\":\"click\",\"selector\":\"#buy\"}],\"outcome\":\"success\"}",
+                        "intent" to "buy the product",
+                    ),
+                    notes = "`facts` is optional; pass it to merge selectors, blockers or anti-patterns.",
+                ),
+            ),
         )
 
         toolSpec["query"] = ToolSpec(
             domain = domain, method = "query",
             arguments = listOf(
                 ToolSpec.Arg("url", "String"),
-                ToolSpec.Arg("intent", "String", null),
+                // Optional: read with `required = false`, and the (domain, url) facts
+                // answer when the caller has no intent to state.
+                ToolSpec.Arg("intent", "String?", "null", "Free-text intent; omit to match on the URL alone."),
             ),
             returnType = "String",
             description = "Query stored knowledge with intent-based resolution. " +
                 "Classifies intent, then resolves: (domain,intent) → (domain,url) → " +
                 "(family,intent) → (category,intent) → (universal,intent) → cold start. " +
                 "Returns tier, confidence, selectors, blockers, warnings, and status.",
+            examples = listOf(
+                ToolExample(
+                    title = "Ask what is already known about a page",
+                    args = mapOf(
+                        "url" to "https://example.com/product/1",
+                        "intent" to "buy the product",
+                    ),
+                    notes = "Omit `intent` to let the stored (domain, url) facts answer.",
+                ),
+            ),
         )
 
         toolSpec["list"] = ToolSpec(
@@ -95,6 +123,13 @@ class ExperienceToolExecutor(
             returnType = "String",
             description = "List stored knowledge entries organized by domain + intent. " +
                 "Filter by domain (filter) or intent (intent_filter). Paginated.",
+            examples = listOf(
+                ToolExample(
+                    title = "List what is known about one domain",
+                    args = mapOf("filter" to "example.com", "page_size" to "50"),
+                    notes = "Every argument is optional — `experience_list` with no arguments lists everything.",
+                ),
+            ),
         )
 
         toolSpec["deep_learn"] = ToolSpec(
@@ -109,6 +144,16 @@ class ExperienceToolExecutor(
                 "to build or update KnowledgeFacts. Creates hypothesis on first run, " +
                 "promotes to verified when confidence threshold met. " +
                 "Use force=true to bypass sampling checks.",
+            examples = listOf(
+                ToolExample(
+                    title = "Analyse a page and promote what it teaches",
+                    args = mapOf(
+                        "url" to "https://example.com/product/1",
+                        "intent" to "buy the product",
+                    ),
+                    notes = "Runs analysis tools against the current page and takes seconds, not milliseconds.",
+                ),
+            ),
         )
     }
 

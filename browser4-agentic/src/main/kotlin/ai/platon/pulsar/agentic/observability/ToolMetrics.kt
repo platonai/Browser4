@@ -4,6 +4,7 @@ import ai.platon.pulsar.common.getLogger
 import io.micrometer.core.instrument.Gauge
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Timer
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -31,6 +32,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * | `batch.calls` / `batch.calls.by.outcome` / `batch.calls.bailed` | counter | `outcome`(succeeded/failed) | batch requests |
  * | `batch.steps` / `batch.steps.by.kind` | counter | `kind`(requested/executed/failed/cached) | per-step accounting |
  * | `batch.duration` | timer | — | end-to-end batch latency |
+ * | `session.active` | gauge | — | live browser sessions (supplier registered by the deployment) |
+ * | `async.queue.depth` | gauge | — | long-running tool tasks executing right now |
  *
  * Cardinality is bounded on purpose: `tool_name` is a closed set (the specs
  * registered at startup) and `error_code` is a 14-value enum — never a raw
@@ -67,6 +70,15 @@ object ToolMetrics {
     // Gauges
     val activeToolCallsCount = AtomicInteger(0)
 
+    /**
+     * Gauge suppliers registered by the deployment, keyed by meter name, so a
+     * [bindTo] can install them on the registry Spring actually scrapes.
+     */
+    private val supplierGauges = ConcurrentHashMap<String, () -> Number>()
+
+    /** Description per supplier gauge, replayed on rebinding. */
+    private val supplierGaugeDescriptions = ConcurrentHashMap<String, String>()
+
     init {
         bindGauge(registry)
     }
@@ -85,6 +97,12 @@ object ToolMetrics {
         if (meterRegistry === registry) return false
         registry = meterRegistry
         bindGauge(meterRegistry)
+        supplierGauges.forEach { (name, supplier) ->
+            registerSupplierGaugeOn(
+                meterRegistry, name,
+                supplierGaugeDescriptions[name] ?: name, supplier
+            )
+        }
         logger.info("Tool metrics bound to {}", meterRegistry::class.simpleName)
         return true
     }
@@ -298,4 +316,64 @@ object ToolMetrics {
      * @return Number of active tool calls
      */
     fun getActiveToolCallsCount(): Int = activeToolCallsCount.get()
+
+    // -------------------------------------------------------------------------
+    // Gauges whose value only the deployment can know
+    // -------------------------------------------------------------------------
+
+    /**
+     * Registers the **session gauge** (`session.active`).
+     *
+     * `browser4-agentic` cannot count browser sessions — that registry lives in the
+     * REST layer — so the deployment hands over a supplier instead of this module
+     * growing a dependency on it. Without a registered supplier the gauge is simply
+     * absent, which is honest: a metric nobody can measure must not report `0`.
+     *
+     * @param supplier current number of live sessions; must be cheap to call,
+     *   because a scrape calls it on every collection
+     */
+    fun registerSessionCountSupplier(supplier: () -> Number) {
+        registerSupplierGauge("session.active", "Live browser sessions", supplier)
+    }
+
+    /**
+     * Registers the **async back-pressure gauge** (`async.queue.depth`).
+     *
+     * The count is of long-running tool tasks currently executing (crawl/command
+     * submissions); it is the number a dashboard watches before the rate limiter
+     * starts rejecting traffic.
+     */
+    fun registerAsyncTaskCountSupplier(supplier: () -> Number) {
+        registerSupplierGauge(
+            "async.queue.depth",
+            "Long-running tool tasks currently executing",
+            supplier
+        )
+    }
+
+    /**
+     * Binds [supplier] to a gauge, on the current registry **and** on every
+     * registry a later [bindTo] switches to — otherwise the deployer's gauges
+     * would silently keep writing to the standalone registry after the Spring
+     * rebinding.
+     */
+    private fun registerSupplierGauge(name: String, description: String, supplier: () -> Number) {
+        supplierGauges[name] = supplier
+        supplierGaugeDescriptions[name] = description
+        registerSupplierGaugeOn(registry, name, description, supplier)
+    }
+
+    private fun registerSupplierGaugeOn(
+        target: MeterRegistry,
+        name: String,
+        description: String,
+        supplier: () -> Number,
+    ) {
+        // Re-registering an existing id is a no-op that logs a warning, so check
+        // first — `bindTo` may be called more than once in tests.
+        if (target.find(name).gauge() != null) return
+        Gauge.builder(name) { supplier().toDouble() }
+            .description(description)
+            .register(target)
+    }
 }

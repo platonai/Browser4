@@ -110,6 +110,14 @@ jobs:
           excluded_groups: 'ManualOnly,RequiresAI,E2E,E2ETest,Slow,Heavy,HeavyTest,Integration,IntegrationTest,RequiresServer,RequiresBrowser,RequiresDocker,TestInfraCheck'
           timeout_minutes: '25'
           # Keep the PR fast: skip the heavy Integration/E2E modules.
+          #
+          # NOTE: the MCP contract gate (`bin/test.ps1 mcp-contract`) needs no step
+          # of its own here. Its tests are the untagged/Unit+Fast classes of
+          # browser4-agentic and browser4-rest (ToolContractMatrixTest,
+          # ToolDocGeneratorTest, ToolSpecLintTest, the validator/limiter/cache/batch
+          # suites), so this run already executes them — including the
+          # `docs/mcp-tools.{md,json}` drift check. Adding the script as a second
+          # step would re-run the same classes for another ~4 minutes.
           run_pulsar_tests: 'false'
 
       - name: Check Test Status

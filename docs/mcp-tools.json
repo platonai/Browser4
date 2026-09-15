@@ -35,7 +35,8 @@
       "args" : {
         "steps" : "[{\"tool\":\"navigate\",\"args\":{\"url\":\"https://example.com\"}},{\"tool\":\"click\",\"args\":{\"selector\":\"#submit\"}},{\"tool\":\"title\",\"args\":{}}]"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     }, {
       "title" : "Read four things in parallel",
       "args" : {
@@ -43,8 +44,10 @@
         "concurrency" : "2"
       },
       "notes" : "Allowed because every step is read-only",
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"steps\",\"failureCount\",\"stoppedOnError\",\"cached\",\"cachedSteps\",\"durationMs\"],\"properties\":{\"steps\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"index\",\"id\",\"tool\",\"ok\",\"durationMs\"],\"properties\":{\"index\":{\"type\":\"integer\"},\"id\":{\"type\":\"string\"},\"tool\":{\"type\":\"string\"},\"ok\":{\"type\":\"boolean\"},\"durationMs\":{\"type\":\"integer\"},\"text\":{\"type\":\"string\"},\"errorCode\":{\"type\":\"string\"},\"error\":{\"type\":\"string\"},\"cached\":{\"type\":\"boolean\"}}}},\"failureCount\":{\"type\":\"integer\"},\"stoppedOnError\":{\"type\":\"boolean\"},\"cached\":{\"type\":\"boolean\"},\"cachedSteps\":{\"type\":\"integer\"},\"durationMs\":{\"type\":\"integer\"}}}",
     "help" : "batch.run(steps: List<Map<String, Any>>, bail: Boolean = false, concurrency: Int = 1)\n\nSteps run serially by default, because browser work is stateful: a\nbatch that clicks and then reads must observe the click. Set\nconcurrency>1 only for batches made entirely of read-only tools, or\nthe call is refused instead of silently reordering your steps.\n\nEach step in the answer carries {index, id, tool, ok, durationMs,\ntext, errorCode?, cached?}; the batch carries failureCount,\nstoppedOnError, cached, cachedSteps and durationMs. A batch whose\nsteps are all cacheable reads is replayed from the result cache the\nsecond time it is sent (`cached=true` on the batch and on each step)."
   }, {
     "domain" : "browser",
@@ -71,7 +74,8 @@
       "args" : {
         "index" : "1"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "browser",
@@ -82,7 +86,9 @@
     "returnType" : "List<Map<String, String>>",
     "examples" : [ {
       "title" : "List every tab",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ]
   }, {
     "domain" : "browser",
@@ -103,7 +109,8 @@
       "args" : {
         "url" : "https://example.com"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "browser",
@@ -130,7 +137,8 @@
       "args" : {
         "index" : "1"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "command",
@@ -150,7 +158,8 @@
       "args" : {
         "id" : "5c3a1f2e-9b47-4d21-8f0a-1e6b7c8d9a01"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "Stops the task's runner and reports the outcome as JSON\n(`cancelled=true|false`). A page-load command cannot be interrupted\nmid-navigation, so cancelling one after it finished reports\n`cancelled=false` instead of pretending otherwise."
@@ -172,7 +181,8 @@
       "args" : {
         "id" : "5c3a1f2e-9b47-4d21-8f0a-1e6b7c8d9a01"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "command.result(id: String)\n\nThe status envelope plus a `result` field holding the command's own\npayload. Poll `command.status` until it is terminal before reading, or\ncall this directly and treat a non-terminal `status` as \"not ready\"."
@@ -213,14 +223,16 @@
         "command" : "https://example.com"
       },
       "notes" : "Returns a task id; poll it with command.status",
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     }, {
       "title" : "Run an agent task and wait",
       "args" : {
         "command" : "collect the page title",
         "async" : "false"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "task" : {
       "statusTool" : "command_status",
@@ -248,7 +260,8 @@
       "args" : {
         "id" : "5c3a1f2e-9b47-4d21-8f0a-1e6b7c8d9a01"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "command.status(id: String)\n\nReturns the shared envelope — `taskId`, `status`\n(`queued|running|done|failed|cancelled`), `processed` when the agent\nhas recorded steps, and the tool names to poll, read and cancel with.\nAn unknown id reports `status=failed`, never a healthy-looking state."
@@ -270,7 +283,8 @@
       "args" : {
         "id" : "8f14e45f-ea0b-4c1e-9d3a-2f6d5c4b1a09"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "Cancels the task's coroutine and finalizes its record, so a client can\nstop polling immediately. Cancelling an unknown or already finished\ntask is reported (cancelled=false) rather than treated as an error:\nthe desired end state already holds."
@@ -292,7 +306,8 @@
       "args" : {
         "id" : "8f14e45f-ea0b-4c1e-9d3a-2f6d5c4b1a09"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "crawl.result(id: String)\n\nThe status envelope plus `pages` — one entry per crawled URL with its\ntitle, content length and any X-SQL extraction. Poll `crawl.status`\nuntil it is terminal before reading."
@@ -315,7 +330,8 @@
         "id" : "8f14e45f-ea0b-4c1e-9d3a-2f6d5c4b1a09"
       },
       "notes" : "An unknown id reports status=failed with an error rather than a 404",
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "crawl.status(id: String)\n\nReturns the shared envelope — `taskId`, `status`\n(`queued|running|done|failed|cancelled`), `processed` (pages collected\nso far), `elapsedMs` once the task finished, and the tool names to\npoll, read and cancel with. An unknown id reports `status=failed`."
@@ -349,7 +365,8 @@
         "url" : "https://example.com",
         "depth" : "1"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     }, {
       "title" : "Seed page only, then poll",
       "args" : {
@@ -357,7 +374,8 @@
         "depth" : "0"
       },
       "notes" : "Feed the returned task id to crawl.status",
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "task" : {
       "statusTool" : "crawl_status",
@@ -390,6 +408,16 @@
       "required" : false,
       "default" : "false",
       "description" : "force: Boolean = false"
+    } ],
+    "examples" : [ {
+      "title" : "Analyse a page and promote what it teaches",
+      "args" : {
+        "url" : "https://example.com/product/1",
+        "intent" : "buy the product"
+      },
+      "notes" : "Runs analysis tools against the current page and takes seconds, not milliseconds.",
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "experience",
@@ -422,12 +450,22 @@
       "required" : false,
       "default" : "20",
       "description" : "Entries per page."
+    } ],
+    "examples" : [ {
+      "title" : "List what is known about one domain",
+      "args" : {
+        "filter" : "example.com",
+        "page_size" : "50"
+      },
+      "notes" : "Every argument is optional — `experience_list` with no arguments lists everything.",
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "experience",
     "method" : "query",
     "mcpNames" : [ "experience_query" ],
-    "signature" : "experience.query(url: String, intent: String)",
+    "signature" : "experience.query(url: String, intent: String? = null)",
     "description" : "Query stored knowledge with intent-based resolution. Classifies intent, then resolves: (domain,intent) → (domain,url) → (family,intent) → (category,intent) → (universal,intent) → cold start. Returns tier, confidence, selectors, blockers, warnings, and status.",
     "returnType" : "String",
     "arguments" : [ {
@@ -437,15 +475,26 @@
       "description" : "url: String"
     }, {
       "name" : "intent",
-      "type" : "String",
-      "required" : true,
-      "description" : "intent: String"
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Free-text intent; omit to match on the URL alone."
+    } ],
+    "examples" : [ {
+      "title" : "Ask what is already known about a page",
+      "args" : {
+        "url" : "https://example.com/product/1",
+        "intent" : "buy the product"
+      },
+      "notes" : "Omit `intent` to let the stored (domain, url) facts answer.",
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "experience",
     "method" : "save",
     "mcpNames" : [ "experience_save" ],
-    "signature" : "experience.save(url: String, trace: String, outcome: String = success, intent: String, task_type: String, facts: String)",
+    "signature" : "experience.save(url: String, trace: String, outcome: String = success, intent: String? = null, task_type: String? = null, facts: String? = null)",
     "description" : "Fast Learning: save task trace and update experience stats. Runs in ~tens of ms. No analysis tools executed. Use experience_deep_learn for analysis and knowledge promotion. Optional `facts` (JSON string or object) merges retrospective knowledge (selectors/interaction_hints/known_blockers/anti_patterns) into the (domain, intent) facts entry — the writer path for lessons learned on a task. Refused when the entry is VERIFIED (immutable).",
     "returnType" : "String",
     "arguments" : [ {
@@ -466,19 +515,33 @@
       "description" : "outcome: String = success"
     }, {
       "name" : "intent",
-      "type" : "String",
-      "required" : true,
-      "description" : "intent: String"
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Free-text intent of the task."
     }, {
       "name" : "task_type",
-      "type" : "String",
-      "required" : true,
-      "description" : "task_type: String"
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Task classification, when the caller knows it."
     }, {
       "name" : "facts",
-      "type" : "String",
-      "required" : true,
-      "description" : "facts: String"
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Retrospective knowledge (JSON string or object)."
+    } ],
+    "examples" : [ {
+      "title" : "Record what a finished task learned",
+      "args" : {
+        "url" : "https://example.com/product/1",
+        "trace" : "{\"steps\":[{\"tool\":\"click\",\"selector\":\"#buy\"}],\"outcome\":\"success\"}",
+        "intent" : "buy the product"
+      },
+      "notes" : "`facts` is optional; pass it to merge selectors, blockers or anti-patterns.",
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "html_snapshot",
@@ -498,7 +561,8 @@
       "args" : {
         "sessionId" : "<session-id>"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "html_snapshot",
@@ -525,7 +589,8 @@
         "sessionId" : "<session-id>",
         "clean" : "true"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "html_snapshot",
@@ -565,7 +630,8 @@
         "selector" : ".product",
         "max" : "10"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "html_snapshot",
@@ -597,7 +663,8 @@
         "sessionId" : "<session-id>",
         "sql" : "select dom_first_text(dom, 'h1') as title"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "html_snapshot",
@@ -623,7 +690,8 @@
       "args" : {
         "sessionId" : "<session-id>"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "html_snapshot",
@@ -662,7 +730,8 @@
         "field" : "title",
         "selector" : "h1"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     }, {
       "title" : "Read a link target",
       "args" : {
@@ -672,7 +741,8 @@
         "attrName" : "href"
       },
       "notes" : "field=attr requires attrName",
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "html_snapshot",
@@ -724,7 +794,8 @@
         "selector" : ".product > h2",
         "limit" : "20"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "html_snapshot",
@@ -744,7 +815,8 @@
       "args" : {
         "sessionId" : "<session-id>"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "memory",
@@ -764,7 +836,8 @@
       "args" : {
         "taskId" : "<task-id>"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "memory",
@@ -796,7 +869,8 @@
         "key" : "price",
         "value" : "the product costs 19.99"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "memory",
@@ -834,7 +908,8 @@
       "args" : {
         "taskId" : "<task-id>"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "memory",
@@ -866,7 +941,8 @@
       "args" : {
         "query" : "amazon price"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "skill",
@@ -886,7 +962,8 @@
       "args" : {
         "id" : "browser4-cli"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "skill",
@@ -912,7 +989,8 @@
       "args" : {
         "path" : "/opt/skills/my-skill"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "skill",
@@ -923,7 +1001,9 @@
     "returnType" : "List<SkillSummary>",
     "examples" : [ {
       "title" : "List the installed skills",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ]
   }, {
     "domain" : "skill",
@@ -943,7 +1023,8 @@
       "args" : {
         "id" : "browser4-cli"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "skill",
@@ -963,7 +1044,8 @@
       "args" : {
         "id" : "my-skill"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "tab",
@@ -1021,6 +1103,14 @@
       "default" : "-1",
       "description" : "Maximum number of nodes; -1 for unlimited."
     } ],
+    "examples" : [ {
+      "title" : "Compact accessibility snapshot",
+      "args" : {
+        "compact" : "true"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
     "help" : "tab.ariaSnapshot()\ntab.ariaSnapshot(selector: String, compact: Boolean, boxes: Boolean, …)\n\nThe upstream WebDriver method takes an AriaSnapshotOptions object; the\nexecutor flattens it into these options, which is what MCP clients send."
   }, {
     "domain" : "tab",
@@ -1048,7 +1138,8 @@
       "args" : {
         "selector" : "#hero"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Return the bounding box of an element located by [selector].\n\nIf the element does not exist, returns null."
   }, {
@@ -1060,7 +1151,9 @@
     "returnType" : "Unit",
     "examples" : [ {
       "title" : "Focus the tab",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ],
     "help" : "Brings the browser window to the front.\n\n```kotlin driver.bringToFront() ```"
   }, {
@@ -1081,7 +1174,8 @@
       "args" : {
         "selector" : "#terms"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "This method check an element with [selector]. If there's no element matching [selector], nothing to do.\n\nelements, the first will be checked."
   }, {
@@ -1093,7 +1187,9 @@
     "returnType" : "Unit",
     "examples" : [ {
       "title" : "Clear cookies",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ],
     "help" : "Clears browser cookies.\n\n```kotlin driver.clearBrowserCookies() ```"
   }, {
@@ -1132,6 +1228,22 @@
       "required" : false,
       "default" : "false",
       "description" : "Accept any native dialog raised by the click."
+    } ],
+    "examples" : [ {
+      "title" : "Click a button",
+      "args" : {
+        "selector" : "#submit"
+      },
+      "expectsError" : false,
+      "executable" : true
+    }, {
+      "title" : "Click a row twice",
+      "args" : {
+        "selector" : "#row-1",
+        "count" : "2"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "tab.click(selector: String)\ntab.click(selector: String, count: Int)\ntab.click(selector: String, modifier: String)\n\ncount and modifier are mutually exclusive. The upstream WebDriver\noverloads declare modifier as required; the executor does not, so the\nadvertised contract keeps it optional (a client that only has a\nselector must not be rejected)."
   }, {
@@ -1199,7 +1311,8 @@
         "selector" : "button",
         "pattern" : "Buy now"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "This method clicks an element with [selector] whose text content matches [pattern], and then focuses it.\n\nIf there's no element matching [selector], or the element's text content doesn't match [pattern], nothing to do.\n\n```kotlin driver.clickTextMatches(\"button\", \"submit\") ```\n\nTODO: use playwright style selector which supports text matching, for example: `button:has-text(\"submit\")`\n\nelements, the first will be focused."
   }, {
@@ -1220,7 +1333,8 @@
       "args" : {
         "selector" : "#submit"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Calculate the clickable point of an element located by [selector].\n\nIf the element does not exist, or is not clickable, returns null."
   }, {
@@ -1230,6 +1344,12 @@
     "signature" : "tab.consoleClear()",
     "description" : "Clear the buffered console message list.",
     "returnType" : "String",
+    "examples" : [ {
+      "title" : "Clear the console buffer",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
     "help" : "tab.consoleClear()\n\nEmpties the in-browser console message buffer."
   }, {
     "domain" : "tab",
@@ -1245,6 +1365,12 @@
       "default" : "info",
       "description" : "level: String = info"
     } ],
+    "examples" : [ {
+      "title" : "Read console output",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
     "help" : "tab.consoleMessages()\ntab.consoleMessages(level: String = \"info\")\n\nReturns a JSON array of console messages filtered to the given minimum level.\nIntercepts console.log/warn/error/info/debug on first call and buffers subsequent messages."
   }, {
     "domain" : "tab",
@@ -1255,7 +1381,9 @@
     "returnType" : "String",
     "examples" : [ {
       "title" : "Current URL",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ],
     "help" : "Returns a string representing the current URL that the browser is looking at.\n\nThe current url is always the main frame's `document.documentURI` if the browser succeed to return it, and is displayed in the browser's address bar.\n\nIf the browser failed to return a proper url, returns the passed in url to navigate, just like a real user enter a url in the address bar but the browser failed to load the page.\n\nNOTE: the url can be non-standard, for example:\n\nabout:blank chrome://newtab chrome://settings\n\nsee [ai.platon.cdt.kt.protocol.types.page.NavigationEntry.userTypedURL]"
   }, {
@@ -1283,6 +1411,14 @@
       "default" : "false",
       "description" : "Accept any native dialog raised by the click."
     } ],
+    "examples" : [ {
+      "title" : "Double click a cell",
+      "args" : {
+        "selector" : "#cell-1"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
     "help" : "tab.dblclick(selector: String)\ntab.dblclick(selector: String, modifier: String)\n\nThe upstream overload declares modifier as required; the executor does\nnot, so a selector-only call is valid here."
   }, {
     "domain" : "tab",
@@ -1297,6 +1433,14 @@
       "required" : false,
       "default" : "1000",
       "description" : "How long to wait, in milliseconds."
+    } ],
+    "examples" : [ {
+      "title" : "Wait half a second",
+      "args" : {
+        "millis" : "500"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "tab.delay(millis: Long = 1000)"
   }, {
@@ -1352,7 +1496,9 @@
     } ],
     "examples" : [ {
       "title" : "Accept a pending dialog",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ]
   }, {
     "domain" : "tab",
@@ -1363,8 +1509,24 @@
     "returnType" : "Unit",
     "examples" : [ {
       "title" : "Dismiss a pending dialog",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ]
+  }, {
+    "domain" : "tab",
+    "method" : "dialogStatus",
+    "mcpNames" : [ "dialog_status", "browser_dialog_status" ],
+    "signature" : "tab.dialogStatus()",
+    "description" : "Report the pending JavaScript dialog, if any: `{pending, type, message}`. Read-only — it never dismisses the dialog.",
+    "returnType" : "Map",
+    "examples" : [ {
+      "title" : "Check for a pending dialog",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"pending\"],\"properties\":{\"pending\":{\"type\":\"boolean\"},\"type\":{\"type\":\"string\"},\"message\":{\"type\":\"string\"}}}"
   }, {
     "domain" : "tab",
     "method" : "documentURI",
@@ -1374,7 +1536,9 @@
     "returnType" : "String",
     "examples" : [ {
       "title" : "Read the document URI",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ],
     "help" : "Returns the document location as a string.\n\nThis property equals to javascript `document.documentURI`.\n\nThe `document.URL` property which returns the same value. The `document.documentURI` property can be used on any document types, while the `document.URL` property can only be used on HTML documents."
   }, {
@@ -1401,7 +1565,8 @@
         "sourceSelector" : "#card-1",
         "targetSelector" : "#done"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Drags the element identified by [sourceSelector] onto the element identified by [targetSelector].\n\nThe implementation dispatches an HTML5 drag sequence between the source and target elements using a shared `DataTransfer` payload so selector-to-selector drag flows can be asserted reliably by automation clients."
   }, {
@@ -1440,6 +1605,14 @@
       "type" : "String",
       "required" : true,
       "description" : "expression: String"
+    } ],
+    "examples" : [ {
+      "title" : "Evaluate an expression",
+      "args" : {
+        "expression" : "document.title"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "tab.eval(expression: String)\ntab.eval(expression: String, selector: String)\n\nAlias of tab.evaluateValue(...).\nWhen both selector and expression are provided, expression is forwarded as functionDeclaration."
   }, {
@@ -1522,6 +1695,14 @@
       "default" : "null",
       "description" : "How long to wait for 'waitSelector' (default 30000)."
     } ],
+    "examples" : [ {
+      "title" : "Read the page title in JS",
+      "args" : {
+        "expression" : "document.title"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
     "help" : "tab.evaluateValue(expression: String)\ntab.evaluateValue(selector: String, functionDeclaration: String)\n\n`expression` is the page-scoped form the CLI and MCP clients use;\n`selector` + `functionDeclaration` is the element-scoped overload the\nexecutor resolves through the driver. The upstream declaration lists\nthe second overload last and without defaults, which would make both\nof its arguments mandatory for every caller."
   }, {
     "domain" : "tab",
@@ -1565,7 +1746,8 @@
       "args" : {
         "method" : "DOM.getDocument"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Execute a Chrome DevTools Protocol (CDP) command and return the deserialized result.\n\nThis is an extension point for advanced scenarios that are not yet covered by the high-level WebDriver API. Use it to issue arbitrary CDP commands directly against the current page target.\n\nThe return value is the deserialized CDP response (Map, List, String, Number, Boolean, or null).\n\nExample: ```kotlin // Screenshot the page as JPEG val result = driver.executeCdpCommand(\"Page.captureScreenshot\", mapOf(\"format\" to \"jpeg\", \"quality\" to 80))\n\n// Get all cookies val cookies = driver.executeCdpCommand(\"Network.getCookies\") ```"
   }, {
@@ -1586,7 +1768,8 @@
       "args" : {
         "selector" : "#cart"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Returns whether the element exists.\n\n```kotlin driver.exists(\"h2.title\") ```"
   }, {
@@ -1613,7 +1796,8 @@
         "selector" : "#q",
         "text" : "browser4"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "This method emulates inserting text that doesn't come from a key press.\n\nUnlike [type], this method clears the existing value before typing.\n\n```kotlin driver.fill(\"input[name='q']\", \"Hello, World!\") ```\n\nthen filled with text. If there are multiple matching elements, the first will be focused."
   }, {
@@ -1634,7 +1818,8 @@
       "args" : {
         "selector" : "#email"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "This method fetches an element with `selector` and focuses it.\n\nIf there's no element matching `selector`, nothing to do.\n\n```kotlin driver.focus(\"input[name='q']\") ```\n\nelements, the first will be focused."
   }, {
@@ -1644,6 +1829,12 @@
     "signature" : "tab.frameList()",
     "description" : "List the frames of the current page (frame tree, depth-first, main frame first).",
     "returnType" : "List<FrameInfo>",
+    "examples" : [ {
+      "title" : "List frames",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
     "help" : "tab.frameList()\n\nReturns the page's frames with their id, name, url, parent frame id, and depth.\nThe frame that element operations are currently scoped to is marked active."
   }, {
     "domain" : "tab",
@@ -1652,6 +1843,12 @@
     "signature" : "tab.frameMain()",
     "description" : "Switch back to the main frame, undoing the scope set by frameSwitch.",
     "returnType" : "Unit",
+    "examples" : [ {
+      "title" : "Return to the main frame",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
     "help" : "tab.frameMain()\n\nAll subsequent element operations resolve against the main document again."
   }, {
     "domain" : "tab",
@@ -1665,6 +1862,14 @@
       "type" : "String",
       "required" : true,
       "description" : "frame: String"
+    } ],
+    "examples" : [ {
+      "title" : "Enter an iframe",
+      "args" : {
+        "frame" : "#pay-frame"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "tab.frameSwitch(frame: String)\n\nResolves the target in this order: a CSS selector matching an <iframe> in the\ncurrently scoped document (nested switching works), an exact frame id as printed\nby tab.frameList(), an exact frame name, or a case-insensitive url substring.\nAfter switching, click/fill/type/hover/focus/waitForSelector/isVisible and the\nelement-scoped reads resolve their CSS selectors inside the selected frame.\nReturn to the main frame with tab.frameMain(); the scope also resets on navigation."
   }, {
@@ -1685,7 +1890,8 @@
       "args" : {
         "selector" : "#submit"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Generates a unique CSS selector path for the element located by [selector].\n\nWalks up the DOM from the target element, building a CSS selector segment for each ancestor using the best available strategy: `#id`, `tag.stable-classes`, or `tag:nth-of-type(n)`. The resulting path is joined with `>` separators, producing a concise, human-readable selector suitable for use in other commands."
   }, {
@@ -1697,7 +1903,9 @@
     "returnType" : "List<Map<String, String>>",
     "examples" : [ {
       "title" : "List cookies",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ],
     "help" : "Returns the cookies of the current page.\n\n```kotlin val cookies = driver.getCookies() ```"
   }, {
@@ -1709,7 +1917,9 @@
     "returnType" : "Unit",
     "examples" : [ {
       "title" : "Go back",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ],
     "help" : "Navigates the browser to the previous page in the navigation history.\n\nThis method is expected to use the browser's navigation history to move back to the previous page. It should handle any exceptions that may occur during the navigation process."
   }, {
@@ -1721,7 +1931,9 @@
     "returnType" : "Unit",
     "examples" : [ {
       "title" : "Go forward",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ],
     "help" : "Navigates the browser to the next page in the navigation history.\n\nThis method is expected to use the browser's navigation history to move forward to the next page. It should handle any exceptions that may occur during the navigation process."
   }, {
@@ -1738,6 +1950,14 @@
       "default" : "none",
       "description" : "contentMode: String? = none"
     } ],
+    "examples" : [ {
+      "title" : "Start recording network traffic",
+      "args" : {
+        "contentMode" : "embed"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
     "help" : "tab.harStart(contentMode: String = \"none\")\n\nStarts recording network traffic into a HAR 1.2 document.\ncontentMode — which response bodies to embed: \"none\" (default), \"text\" (text-like MIME types), or \"all\" (binary base64).\nStop with tab.harStop() and write the returned \"har\" document to a .har file."
   }, {
     "domain" : "tab",
@@ -1746,6 +1966,12 @@
     "signature" : "tab.harStop()",
     "description" : "Stop the active HAR recording and return the complete HAR 1.2 document.",
     "returnType" : "Map<String, Any?>",
+    "examples" : [ {
+      "title" : "Stop HAR recording",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
     "help" : "tab.harStop()\n\nStops recording and returns { recording, contentMode, entries, har } where har is the\nHAR 1.2 document. Serialize it to JSON to get a .har file."
   }, {
     "domain" : "tab",
@@ -1765,7 +1991,8 @@
       "args" : {
         "selector" : "#menu"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "This method hovers over the element.\n\n1. Scroll the element into view if needed. 2. Move mouse to hover over a random position near the center of the element.\n\n```kotlin driver.hover(\"h1\") ```"
   }, {
@@ -1787,6 +2014,27 @@
       "expectsError" : false
     } ],
     "help" : "Returns whether the element is checked.\n\n```kotlin driver.isChecked(\"input[name='agree']\") ```"
+  }, {
+    "domain" : "tab",
+    "method" : "isEnabled",
+    "mcpNames" : [ "is_enabled", "browser_is_enabled" ],
+    "signature" : "tab.isEnabled(selector: String)",
+    "description" : "Whether the element matched by `selector` is enabled — not disabled and not read-only.",
+    "returnType" : "Boolean",
+    "arguments" : [ {
+      "name" : "selector",
+      "type" : "String",
+      "required" : true,
+      "description" : "Element to inspect."
+    } ],
+    "examples" : [ {
+      "title" : "Is the submit button enabled?",
+      "args" : {
+        "selector" : "#submit"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ]
   }, {
     "domain" : "tab",
     "method" : "isHidden",
@@ -1824,7 +2072,8 @@
       "args" : {
         "selector" : "#banner"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Returns whether the element is visible.\n\n```kotlin driver.isVisible(\"input[name='q']\") ```"
   }, {
@@ -1906,6 +2155,14 @@
       "required" : true,
       "description" : "state: String"
     } ],
+    "examples" : [ {
+      "title" : "Restore a saved session",
+      "args" : {
+        "state" : "{\"cookies\":[],\"origins\":[]}"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
     "help" : "tab.loadStorageState(state: String)\n\nRestores cookies plus localStorage from a JSON string previously returned by tab.saveStorageState()."
   }, {
     "domain" : "tab",
@@ -1932,7 +2189,8 @@
       "args" : {
         "button" : "left"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Presses a mouse button at the current mouse position.\n\n```kotlin driver.mouseDown() driver.mouseDown(\"right\") ```"
   }, {
@@ -1959,7 +2217,8 @@
         "x" : "320",
         "y" : "180"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Moves the mouse to the position specified by [x] and [y].\n\n```kotlin driver.mouseMove(100.0, 200.0) ```"
   }, {
@@ -1987,7 +2246,8 @@
       "args" : {
         "button" : "left"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Releases a mouse button at the current mouse position.\n\n```kotlin driver.mouseUp() driver.mouseUp(\"right\") ```"
   }, {
@@ -2021,7 +2281,8 @@
         "selector" : "#list",
         "deltaY" : "300"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Scrolls the mouse wheel on a specific element identified by [selector].\n\nThe element is scrolled into view if needed, the mouse is moved to a random position near the element's center, and then the wheel event is dispatched.\n\n```kotlin driver.mouseWheel(\".scrollable-panel\", 0.0, 200.0) ```"
   }, {
@@ -2139,7 +2400,9 @@
     "returnType" : "NanoDOMTree?",
     "examples" : [ {
       "title" : "Dump the DOM as YAML",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ],
     "help" : "Retrieves a lightweight version of the DOM tree (NanoDOMTree).\n\nThe NanoDOMTree is based on the accessibility tree and enhanced with DOM and document snapshot information. It is designed to be a compact representation suitable for AI processing and analysis."
   }, {
@@ -2166,6 +2429,14 @@
       "required" : false,
       "default" : "null",
       "description" : "Page URL paired with 'rawUrl'."
+    } ],
+    "examples" : [ {
+      "title" : "Open a page",
+      "args" : {
+        "url" : "https://example.com"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "tab.navigate(url: String)\n\nNavigates the current page to `url` and then polls document.readyState\nuntil the page has loaded (covers SPA routes and same-URL navigations,\nwhich waitForNavigation() cannot observe).\nrawUrl/pageUrl are the low-level pair used by internal drivers; MCP\nclients should pass `url`."
   }, {
@@ -2220,6 +2491,12 @@
       "default" : "false",
       "description" : "clear: Boolean = false"
     } ],
+    "examples" : [ {
+      "title" : "List network requests",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
     "help" : "tab.networkRequests()\ntab.networkRequests(filter: String? = null, type: String? = null, method: String? = null, status: String? = null, clear: Boolean = false)\n\nEnables Network tracking on first use, then returns the requests observed so far.\nfilter — only requests whose URL contains this text (case-insensitive).\ntype — comma-separated CDP resource types, e.g. \"xhr,fetch\".\nmethod — HTTP method, e.g. \"POST\".\nstatus — \"200\", \"2xx\", or a range like \"400-499\".\nclear — drop all tracked requests first."
   }, {
     "domain" : "tab",
@@ -2258,6 +2535,16 @@
       "default" : "null",
       "description" : "resourceType: String? = null"
     } ],
+    "examples" : [ {
+      "title" : "Stub an API response",
+      "args" : {
+        "urlPattern" : "**/api/ads",
+        "body" : "{}",
+        "contentType" : "application/json"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
     "help" : "tab.networkRoute(urlPattern: String, abort: Boolean = false, body: String? = null, contentType: String? = null, resourceType: String? = null)\n\nIntercepts requests whose URL matches urlPattern (\"*\" matches all; plain text matches\nURLs containing it; \"*\" globs like \"**/api/users\" are supported).\nabort — fail matching requests instead of sending them.\nbody/contentType — answer matching requests with this mock response.\nresourceType — only intercept these CDP resource types (comma-separated, e.g. \"xhr,fetch\").\nRemove routes with tab.networkUnroute()."
   }, {
     "domain" : "tab",
@@ -2272,6 +2559,14 @@
       "required" : false,
       "default" : "null",
       "description" : "urlPattern: String? = null"
+    } ],
+    "examples" : [ {
+      "title" : "Remove an API stub",
+      "args" : {
+        "urlPattern" : "**/api/ads"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "tab.networkUnroute(urlPattern: String? = null)\n\nRemoves the route registered with the exact urlPattern, or all routes (and disables\nFetch interception) when no pattern is given."
   }, {
@@ -2299,7 +2594,8 @@
       "args" : {
         "url" : "https://example.com"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Opens the specified URL in the web driver.\n\nThis function navigates the web driver to the provided URL and waits for the navigation to complete. It is a suspend function, meaning it can be used within coroutines for asynchronous execution.\n\nExample usage: ```kotlin driver.open(\"https://www.example.com\") ```"
   }, {
@@ -2320,7 +2616,8 @@
       "args" : {
         "selector" : "#price"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Returns the node's HTML markup, the node is located by [selector].\n\nIf the node does not exist, returns null.\n\n```kotlin val html = driver.outerHTML(\"h2.title\") ```"
   }, {
@@ -2332,7 +2629,9 @@
     "returnType" : "String?",
     "examples" : [ {
       "title" : "Read the page HTML",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ],
     "help" : "Returns the source of the last loaded page.\n\nIf the page has been modified after loading (for example, by JavaScript) there is no guarantee that the returned text is that of the modified page.\n\nPageSource and outerHTML:\n\n- pageSource: returns document HTML markup, will support non-HTML document - outerHTML: returns document HTML markup, for HTML document only\n\n```kotlin val pageSource = driver.pageSource() ```"
   }, {
@@ -2344,7 +2643,9 @@
     "returnType" : "Unit",
     "examples" : [ {
       "title" : "Pause the driver",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ],
     "help" : "Force the page pauses all navigations and PENDING resource fetches.\n\nIf the page loading pauses, the user can still interact with the page, and therefore resources can continue to load."
   }, {
@@ -2356,7 +2657,9 @@
     "returnType" : "String?",
     "examples" : [ {
       "title" : "Print the page to PDF",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ],
     "help" : "Print the current page as PDF.\n\nReturns a Base64 encoded PDF document generated via Chrome DevTools Protocol Page.printToPDF. Uses A4 paper size, portrait orientation, and prints background graphics by default."
   }, {
@@ -2378,6 +2681,15 @@
       "default" : "null",
       "description" : "selector: String? = null"
     } ],
+    "examples" : [ {
+      "title" : "Submit with Enter",
+      "args" : {
+        "key" : "Enter",
+        "selector" : "#q"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
     "help" : "tab.press(key: String)\ntab.press(key: String, selector: String?)\n\nPresses the key on the currently focused element when selector is omitted.\nWhen selector is provided, the executor focuses the matched element first and then presses the key."
   }, {
     "domain" : "tab",
@@ -2388,7 +2700,9 @@
     "returnType" : "String",
     "examples" : [ {
       "title" : "Read the referrer",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ],
     "help" : "The referrer property returns the URI of the page that linked to this page.\n\nThe value is an empty string if the user navigated to the page directly (not through a link, but, for example, by using a bookmark).\n\nInside an <iframe>, the referrer will initially be set to the same value as the href of the parent window's Window.location."
   }, {
@@ -2400,7 +2714,9 @@
     "returnType" : "Unit",
     "examples" : [ {
       "title" : "Reload the page",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ],
     "help" : "Reloads the current page.\n\nThis method should trigger a reload of the current page, similar to how a user would refresh the page in a browser."
   }, {
@@ -2427,7 +2743,8 @@
         "width" : "1280",
         "height" : "800"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "tab",
@@ -2436,6 +2753,12 @@
     "signature" : "tab.saveStorageState()",
     "description" : "Save cookies and the active origin's localStorage as a JSON storage-state payload.",
     "returnType" : "String",
+    "examples" : [ {
+      "title" : "Save cookies and localStorage",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
     "help" : "tab.saveStorageState()\n\nReturns a JSON string containing the current browser cookies and the active origin's localStorage entries."
   }, {
     "domain" : "tab",
@@ -2463,6 +2786,21 @@
       "default" : "null",
       "description" : "Capture the Nth viewport (scroll-relative)."
     } ],
+    "examples" : [ {
+      "title" : "Capture the full page",
+      "args" : {
+        "fullPage" : "true"
+      },
+      "expectsError" : false,
+      "executable" : true
+    }, {
+      "title" : "Capture one element",
+      "args" : {
+        "selector" : "#chart"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
     "help" : "tab.screenshot()\ntab.screenshot(selector: String)\ntab.screenshot(fullPage: Boolean)\ntab.screenshot(viewport: Int)\n\nExactly one of selector/fullPage/viewport may be given; anything else is\nrejected rather than silently capturing the wrong region."
   }, {
     "domain" : "tab",
@@ -2489,7 +2827,8 @@
       "args" : {
         "pixels" : "800"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Scrolls the current page frame vertically by the given number of pixels.\n\nPositive values scroll down, negative values scroll up. The target position is clamped to the scrollable range [0, scrollHeight - viewportHeight].\n\nWhen [smooth] is true a deterministic, step‑wise scrolling algorithm is used (instead of relying on the browser's native smooth scrolling) for higher stability: it issues incremental `window.scrollTo()` calls and waits for the viewport to settle after each step. This reduces race conditions with lazy‑loaded content or async layout changes and yields more predictable final positions.\n\nTypical usage: ```kotlin // Scroll down 200px smoothly (default) driver.scrollBy() // Scroll up 500px immediately driver.scrollBy(-500.0, smooth = false) // Scroll down one viewport height, smooth val y = driver.scrollBy(driver.viewportHeight(), smooth = true) ```\n\n`window.scrollTo()` is executed."
   }, {
@@ -2530,7 +2869,8 @@
       "args" : {
         "selector" : "#footer"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "This method fetches an element with [selector], scrolls it into view if needed.\n\nIf there's no element matching [selector], the method does nothing.\n\n```kotlin driver.scrollTo(\"h2.title\") ```\n\nelements, the first will be scrolled into view."
   }, {
@@ -2542,7 +2882,9 @@
     "returnType" : "Double",
     "examples" : [ {
       "title" : "Scroll to the bottom",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ],
     "help" : "The current page frame scrolls to the bottom.\n\n```kotlin driver.scrollToBottom() ```"
   }, {
@@ -2573,7 +2915,9 @@
     "returnType" : "Double",
     "examples" : [ {
       "title" : "Scroll to the top",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ],
     "help" : "The current page frame scrolls to the top.\n\n```kotlin driver.scrollToTop() ```"
   }, {
@@ -2600,7 +2944,8 @@
       "args" : {
         "n" : "3"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Scroll to the given 0-based viewport position.\n\n```kotlin driver.scrollToViewport(0.0) driver.scrollToViewport(0.5) driver.scrollToViewport(1.5) driver.scrollToViewport(2.0) ```\n\n0.00 means at the top of the first screen, 1.50 means halfway through the second screen."
   }, {
@@ -2764,7 +3109,8 @@
         "selector" : "#country",
         "value" : "CN"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "tab",
@@ -2846,7 +3192,8 @@
         "attrName" : "data-test",
         "attrValue" : "1"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Set the attribute of an element located by [selector].\n\n```kotlin driver.setAttribute(\"h2.title\", \"class\", \"header\") ```"
   }, {
@@ -2945,7 +3292,9 @@
     "returnType" : "Unit",
     "examples" : [ {
       "title" : "Stop the driver",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ],
     "help" : "Force the page stop all navigations and RELEASES all resources.\n\nInteraction with the stop page results in undefined behavior and the results should not be trusted.\n\nIf a web driver stops, it can later be used to visit other pages."
   }, {
@@ -2967,7 +3316,8 @@
       "args" : {
         "selector" : "#price"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Returns the text content of the document or a specific element.\n\nIf [selector] is null, returns the text content of the entire document (usually `document.body.innerText`). If [selector] is provided, returns the text content of the first matching element.\n\nIf the document or element does not exist, returns null.\n\n```kotlin val bodyText = driver.textContent() val titleText = driver.textContent(\"h1.title\") ```"
   }, {
@@ -2979,7 +3329,9 @@
     "returnType" : "String",
     "examples" : [ {
       "title" : "Page title",
-      "expectsError" : false
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
     } ]
   }, {
     "domain" : "tab",
@@ -3012,6 +3364,15 @@
       "default" : "false",
       "description" : "verify: Boolean = false"
     } ],
+    "examples" : [ {
+      "title" : "Type into a field",
+      "args" : {
+        "text" : "hello",
+        "selector" : "#comment"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
     "help" : "tab.type(text: String)\ntab.type(text: String, selector: String?)\ntab.type(text: String, selector: String, method: String?, verify: Boolean?)\n\nTypes text into the currently focused element when selector is omitted.\nWhen selector is provided, the executor focuses the matched element first and then types text.\nmethod: auto|chars|exec — see the tool description. method/verify require a selector."
   }, {
     "domain" : "tab",
@@ -3031,7 +3392,8 @@
       "args" : {
         "selector" : "#newsletter"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "This method uncheck an element with [selector]. If there's no element matching [selector], nothing to do.\n\nelements, the first will be unchecked."
   }, {
@@ -3058,7 +3420,8 @@
         "selector" : "#file",
         "paths" : "/tmp/a.pdf"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "tab",
@@ -3087,6 +3450,14 @@
       "default" : "null",
       "description" : "How long to wait before failing; 30000 when omitted."
     } ],
+    "examples" : [ {
+      "title" : "Wait for a client-side condition",
+      "args" : {
+        "pageFunction" : "document.querySelectorAll('.row').length > 10"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
     "help" : "tab.waitForFunction(pageFunction: String)\ntab.waitForFunction(pageFunction: String, timeoutMillis: Long)"
   }, {
     "domain" : "tab",
@@ -3108,6 +3479,15 @@
       "default" : "null",
       "description" : "How long to wait before failing."
     } ],
+    "examples" : [ {
+      "title" : "Wait for the page after leaving a URL",
+      "args" : {
+        "oldUrl" : "https://example.com/login",
+        "timeoutMillis" : "10000"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
     "help" : "tab.waitForNavigation()\ntab.waitForNavigation(oldUrl: String, timeoutMillis: Long?)\n\nPolls document.readyState instead of the upstream `oldUrl != currentUrl()`\npredicate, so same-URL navigations (SPA routes, fragment jumps) also\ncomplete instead of timing out."
   }, {
     "domain" : "tab",
@@ -3128,6 +3508,15 @@
       "default" : "null",
       "description" : "How long to wait before failing; 30000 when omitted."
     } ],
+    "examples" : [ {
+      "title" : "Wait for a URL to load",
+      "args" : {
+        "url" : "https://example.com/next",
+        "timeoutMillis" : "15000"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
     "help" : "tab.waitForPage(url: String)\ntab.waitForPage(url: String, timeoutMillis: Long)"
   }, {
     "domain" : "tab",
@@ -3147,6 +3536,15 @@
       "required" : false,
       "default" : "null",
       "description" : "How long to wait before failing; driver default when omitted."
+    } ],
+    "examples" : [ {
+      "title" : "Wait for results to render",
+      "args" : {
+        "selector" : "#results",
+        "timeoutMillis" : "5000"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "tab.waitForSelector(selector: String)\ntab.waitForSelector(selector: String, timeoutMillis: Long)\n\nFails (TIMEOUT) instead of returning silently when the selector never appears."
   }, {
@@ -3179,7 +3577,8 @@
         "urls" : "https://example.com,https://example.org",
         "outputDir" : "/tmp/webdb-export"
       },
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "webdb",
@@ -3206,7 +3605,8 @@
         "url" : "https://example.com/a?b=1"
       },
       "notes" : "Returns the canonical key, e.g. https://example.com/a?b=1",
-      "expectsError" : false
+      "expectsError" : false,
+      "executable" : true
     } ]
   } ]
 }

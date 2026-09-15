@@ -482,3 +482,47 @@ data class Arg(
 1. **Phase 0.1 + 0.2**（半天）：修参数描述与 `ToolSpec.expression`，重生成快照 —— 直接消灭 `help` 输出里的 `Arg(name=...)`，这是"接口文档"最刺眼的一处。
 2. **Phase 0.3**（2 天）：`ToolTargetResolver`，让已公告的 26 个插件域工具中 15 个不再"看得见调不动"。
 3. **Phase 0.6**（1 天）：`ToolSpecLintTest` 进 PR 门禁，防止后续 14 项改造中文档再次腐化。
+
+---
+
+## 8. 收尾轮记录（2026-09-15，接 `64576071be` 之后）
+
+本轮把上一节列出的「仍存的缺口」逐条核实并做掉，全部以矩阵/门禁的实测数字收口：**142 工具 × 6 用例全绿，可执行示例 110/142，声明结果契约 10 个，lint 错误 0**。
+
+### 8.1 修掉的真缺陷（本轮新增）
+
+| # | 缺陷 | 证据 / 修法 |
+|---|---|---|
+| 1 | **`TabToolExamples` 的示例被显式 spec 覆盖而静默丢失**：`replaceExamples` 在构造函数里跑得太早（第 185 行），其后的显式 spec（第 186–652 行）整条替换掉 `toolSpec[...]`，写好的示例再也回不来 | 实测 7 个工具（`consoleMessages`/`saveStorageState`/`frameList`/`networkRequests`/`frameMain`/`consoleClear`/`harStop`）在文档里只剩 KDoc 片段。现移至 init 末尾 + `BrowserTabToolExecutorTest.everyWrittenTabExampleReachesTheSpec` 钉死（含「示例写到不存在的工具上」也要失败） |
+| 2 | **两个「写了示例但没有工具」的死条目**：`getText`/`getAttribute` 从无 spec、也无别名，等价能力是 `selectFirstTextOrNull`/`selectFirstAttributeOrNull` | 由上一测试抓出，已删除条目而不是造两个新工具 |
+| 3 | **`browser_is_enabled` / `browser_dialog_status` 解析不到工具**（G6 残留）：执行器 `when` 分支里有 `isEnabled`/`dialogStatus`，但镜像的 `WebDriver` 接口没声明，生成器因此没有 spec | 在 `BrowserTabToolExecutor` 补两条显式 spec；`ToolContractMatrixTest.frontendAliasesResolve` 现断言**每一条**前端别名都能解析到已公告工具（43 别名 → 0 孤儿） |
+| 4 | **`experience` 域把可选参数声明成必填**（新一批示例抓到，属第 8 次同类）：`save` 的 `intent`/`task_type`/`facts`（执行器 `required = false`）、`query` 的 `intent` | 写 `experience_save` 示例后矩阵立刻报 `MISSING_REQUIRED_ARG`；按实现改为 `"String?"` + `"null"` |
+| 5 | **`docs/mcp-tools.json` 丢掉 `runnable`**（机器可读契约的歧义）：`ToolDocGenerator` 手写 map 只输出 5 个字段，「无参调用本身即示例」与「压根没写示例」在 JSON 里都是 `args: {}` | JSON 增 `runnable`（三态，仅非 null 时输出）与派生字段 `executable`；Markdown 里无参示例渲染为 `- Page title: no arguments` 而不是空 bullet。新增 `ToolDocGeneratorTest.exampleProjectionIsLossless`（逐字段无损投影）与 `noArgumentExamplesAreRunnable` 两道门禁 |
+| 6 | **B 通道批处理把参数正文写进 INFO 日志**（违反需求 7） | `MCPToolController.handleBatchTool` 原为 `logger.info("Calling batch tool step: $index $tool --k=v …")`；`batch.step`（结构化）已覆盖 index/tool/ok/耗时，故改为 DEBUG + `ToolInvocationLogger.renderArgs(...)`（脱敏/截断） |
+
+### 8.2 需求完成度更新
+
+- **需求 2（示例）**：**110/142**（本轮 77/140 → 110/142）。`experience`(4)、`skill`(1) 缺口清零；tab 剩余 **32** 个低频 setter/selector 家族。剩余缺口由矩阵按域持续报数。
+- **需求 6（返回值校验）**：声明 `outputSchema` 的工具 **10** 个 —— 新增 `tab.dialogStatus`（`{pending,type,message}`，`type`/`message` 故意非必填，因为无驱动回退只答 `{pending:false}`）与 `batch.run`（schema 直接写在 `BatchExecutor.RESULT_SCHEMA`，紧邻它描述的 `BatchOutcome.toMap()`，避免两处漂移）。
+- **需求 8（监控）**：`session.active`、`async.queue.depth` 两个 gauge **已落地**，取值由部署侧注入（`ToolMetrics.registerSessionCountSupplier` / `registerAsyncTaskCountSupplier`），并在 `bindTo` 时随 Spring 注册表重绑（否则 gauge 会继续写进没人抓取的独立注册表）。REST 侧 `McpToolMetricsConfiguration` 从 `PulsarSessionManager.getAllSessions().size` 与 `CrawlService.runningTaskCount()`（`jobStore` 只保留运行中的 job）取值；瘦部署缺 bean 时 gauge 不注册而不是谎报 0。
+- **需求 7（日志）**：见 8.1 第 6 条。
+- **需求 3/5（两通道同码）**：不变，B 侧内置域仍是 `shadow`，切 `error` 需等计数清零。
+
+### 8.3 计划中两处经核实不成立的说法（已更正，不做无效改造）
+
+- **「`tool.call` 行未带 `stepIndex`」**：两个通道的**批处理步骤根本不产生 `tool.call` 行** —— A 的步骤经 `BatchToolExecutor` 直接走 `AgentToolManager`，B 的步骤走 `executeAgentToolText`。可观测性由 `batch.step index/id/tool/ok/cached/durationMs` 承担，外层 `batch_run` 的 `tool.call` 带 `requestId`，两者已可对齐。因此不需要为 `tool.call` 增加 `stepIndex`（本轮改为修掉 B 的重复且未脱敏的 INFO 行）。
+- **「CLI 侧尚无 `batch` 子命令」**：CLI 有 `batch`（`commands.rs:861`），只是走兼容名 `command_batch`（`http.rs:1015`），服务端已复用同一个 `BatchExecutor`；缺的是消费 `batch_run` 的新信封字段（`id`/`cached`/`cachedSteps`），属增强而非缺失。
+
+### 8.4 门禁与 CI（核实结论）
+
+- `bin/test.ps1 mcp-contract` 的 14 个测试类**已经**在 PR 门禁里执行：它们大多是未打标签的类（未打标签即不被 `excluded_groups` 排除），`ToolContractMatrixTest` 自带 `Unit/Fast`。因此**没有**在 `pr.yml` 里再加一步重复跑（会多花约 4 分钟），而是在 `pr.yml` 就地写明这条不变量，避免后人重复添加。
+- 新增/强化的门禁：`exampleProjectionIsLossless`、`noArgumentExamplesAreRunnable`、`frontendAliasesResolve`、`everyWrittenTabExampleReachesTheSpec`、`dispatchedStateReadersAreAdvertised`、`supplierGaugesFollowTheSpringRegistry`。
+
+### 8.5 本轮之后仍欠的事
+
+1. tab 域 32 个低频方法的可执行示例（矩阵按域报数）。
+2. 需求 6 的覆盖面：132 个工具仍无结果契约；下一步优先 JSON 信封类（`experience_query/list`、`memory_search/read`、`skill_list/info`）。
+3. 需求 1.1 的「CI 比对显式覆盖集 == @MCP 扫描集」仍未做（现由 KDoc 提取 + 快照 + 文档漂移门禁 + lint 兜底）。
+4. 需求 8.2 的 OTel span（`mcp.tool.call`）仍未接；`TracingUtils`/`OpenTelemetryConfig` 已有但生产路径无人调用。
+5. `micrometer-registry-prometheus` 仍是 `optional`，`/actuator/prometheus` 需把它提为运行时依赖才可抓取（代码侧无需改动）。
+6. CLI 侧 `--help --examples` 与 `RATE_LIMITED` 提示语**已由本轮并行实现**：`<cmd> --help --examples` 从 `/mcp/tools/specs` 拉取示例（后端不可达时退化为一行提示并 exit 0；无参示例渲染为 `no arguments`，片段示例渲染为代码块），失败提示按错误码给出可执行建议（`RATE_LIMITED` 带 `retryAfterMs`，`SESSION_UNHEALTHY`/`SESSION_NOT_FOUND` 各一条，`INTERNAL` 刻意静默）。`cargo test --bin browser4-cli` 实测 **1340 passed / 0 failed / 2 ignored**，`cargo build` 无告警。

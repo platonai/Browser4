@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agentic.tools.specs
 
 import ai.platon.pulsar.agentic.mcp.McpToolNames
+import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
@@ -41,15 +42,7 @@ object ToolDocGenerator {
                 "description" to (arg.description ?: arg.expression),
             )
         },
-        "examples" to spec.examples.map { example ->
-            linkedMapOf<String, Any?>(
-                "title" to example.title,
-                "args" to example.args,
-                "code" to example.code,
-                "notes" to example.notes,
-                "expectsError" to example.expectsError,
-            )
-        },
+        "examples" to spec.examples.map { exampleDoc(it) },
         "task" to spec.task?.let { policy ->
             linkedMapOf<String, Any?>(
                 "statusTool" to policy.statusTool,
@@ -61,6 +54,28 @@ object ToolDocGenerator {
         "outputSchema" to spec.outputSchema,
         "help" to spec.help?.takeIf { it.isNotBlank() && it != spec.description },
     )
+
+    /**
+     * One example, projected **without losing the executability signal**.
+     *
+     * An example with arguments is callable by construction; one with an empty
+     * argument list is callable only because someone said so — [ToolExample.runnable].
+     * Dropping that flag made `args: {}` ambiguous for a machine consumer ("the
+     * call takes no arguments" vs "no runnable example was written"), which is
+     * the one thing the flag exists to tell apart. `runnable` is emitted **only
+     * when set** (tri-state), so previously documented examples keep their bytes.
+     */
+    private fun exampleDoc(example: ToolExample): Map<String, Any?> = linkedMapOf<String, Any?>(
+        "title" to example.title,
+        "args" to example.args,
+        "code" to example.code,
+        "notes" to example.notes,
+        "expectsError" to example.expectsError,
+    ).apply {
+        example.runnable?.let { put("runnable", it) }
+        // Derived, so a client never has to re-implement the executability rule.
+        if (example.executable) put("executable", true)
+    }
 
     /**
      * Build the documentation payload for [specs].
@@ -200,6 +215,9 @@ object ToolDocGenerator {
                         val json = args.entries.joinToString(", ") { "\"${it.key}\": \"${it.value}\"" }
                         out.appendLine("- $title: `{$json}`")
                     }
+                    // A no-argument call is a real call: say so instead of
+                    // rendering a bare bullet nobody can act on.
+                    example["runnable"] == true -> out.appendLine("- $title: no arguments")
                     example["code"] != null -> {
                         out.appendLine("- $title:")
                         out.appendLine()

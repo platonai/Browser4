@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito
 import org.mockito.Mockito.verify
@@ -1128,5 +1129,44 @@ class BrowserTabToolExecutorTest {
             val message = result.exception?.cause?.message ?: ""
             assertTrue(message.contains("Element not found for ref e1265"), message)
         }
+    }
+
+    @Test
+    @DisplayName("every written tab example reaches the advertised spec")
+    fun everyWrittenTabExampleReachesTheSpec() {
+        val specs = executor.getToolSpecs()
+
+        val dead = TabToolExamples.EXECUTABLE.filterKeys { it !in specs }
+        assertTrue(
+            dead.isEmpty(),
+            "these examples were written for methods the executor does not advertise, " +
+                "so no client can ever see them: ${dead.keys}"
+        )
+
+        val dropped = TabToolExamples.EXECUTABLE.filter { (method, examples) ->
+            specs[method]?.examples != examples
+        }
+        assertTrue(
+            dropped.isEmpty(),
+            "these examples never reached their spec — most likely a spec declared after " +
+                "the `replaceExamples` call in the constructor overwrote it: ${dropped.keys}"
+        )
+    }
+
+    @Test
+    @DisplayName("the state readers the executor dispatches are advertised with their contract")
+    fun dispatchedStateReadersAreAdvertised() {
+        val specs = executor.getToolSpecs()
+        for (method in listOf("isEnabled", "dialogStatus")) {
+            assertNotNull(specs[method], "tab.$method is dispatched but not advertised")
+        }
+
+        assertTrue(specs["dialogStatus"]!!.arguments.isEmpty(), "dialogStatus takes no arguments")
+        val schema = specs["dialogStatus"]!!.outputSchema
+        assertNotNull(schema, "dialogStatus returns JSON, so it must declare its result schema")
+        assertTrue(
+            schema!!.contains("\"pending\"") && schema.contains("\"type\":\"object\""),
+            "the declared result schema must describe the {pending, type, message} map, was: $schema"
+        )
     }
 }

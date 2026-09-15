@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.mcp.contract
 
+import ai.platon.pulsar.agentic.mcp.McpToolNames
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.ToolErrorCode
 import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
@@ -265,5 +266,20 @@ class ToolContractMatrixTest {
             specs.any { it.expression.contains("Arg(") },
             "no published signature may leak the data-class form",
         )
+    }
+
+    @Test
+    @DisplayName("every frontend alias resolves to an advertised tool")
+    fun frontendAliasesResolve() {
+        val advertised = specs.map { "${it.domain}.${it.method}" }.toSet()
+
+        val orphans = McpToolNames.frontendAliases
+            .filterNot { "${it.domain}.${it.method}" in advertised }
+            .map { "${it.frontendName} -> ${it.domain}.${it.method}" }
+
+        // An alias with no canonical spec is a name a client can discover and then
+        // never call: `browser_is_enabled` and `browser_dialog_status` sat in that
+        // state until the tab executor declared them.
+        assertEquals(emptyList<String>(), orphans, "these aliases resolve to no tool")
     }
 }

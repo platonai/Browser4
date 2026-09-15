@@ -51,10 +51,10 @@ internal object TabToolExamples {
         "selectOption" to listOf(
             ToolExample(title = "Pick a country", args = mapOf("selector" to "#country", "value" to "CN")),
         ),
-        "getText" to listOf(ToolExample(title = "Read a heading", args = mapOf("selector" to "h1"))),
-        "getAttribute" to listOf(
-            ToolExample(title = "Read a link target", args = mapOf("selector" to "a", "attrName" to "href")),
-        ),
+        // `getText`/`getAttribute` used to be listed here, but no spec and no alias
+        // ever advertised them — the equivalent reads are `selectFirstTextOrNull`
+        // and `selectFirstAttributeOrNull`. Writing examples for tools a client
+        // cannot call is documentation that lies, so they are gone.
         "exists" to listOf(ToolExample(title = "Check an element exists", args = mapOf("selector" to "#cart"))),
         "isVisible" to listOf(
             ToolExample(title = "Check an element is visible", args = mapOf("selector" to "#banner")),
@@ -174,6 +174,9 @@ internal object TabToolExamples {
         ),
         "networkUnroute" to listOf(
             ToolExample(title = "Remove an API stub", args = mapOf("urlPattern" to "**/api/ads")),
+        ),
+        "isEnabled" to listOf(
+            ToolExample(title = "Is the submit button enabled?", args = mapOf("selector" to "#submit")),
         ),
         // No-argument reads and utilities: the empty call *is* the example.
         "title" to listOf(ToolExample(title = "Page title", runnable = true)),

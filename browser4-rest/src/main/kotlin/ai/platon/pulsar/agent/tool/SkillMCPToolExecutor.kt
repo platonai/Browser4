@@ -39,7 +39,7 @@ class SkillMCPToolExecutor(
             returnType = "List<SkillSummary>",
             description = "List all registered skills with lightweight summaries.",
             examples = listOf(
-                ToolExample(title = "List the installed skills", args = emptyMap()),
+                ToolExample(title = "List the installed skills", args = emptyMap(), runnable = true),
             ),
         )
 

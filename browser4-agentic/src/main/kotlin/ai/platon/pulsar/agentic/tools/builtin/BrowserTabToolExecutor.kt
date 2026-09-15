@@ -24,6 +24,18 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         private const val READ_ACTIONS_WHITELIST_PROPERTY = "browser4.tab.read.actions.whitelist"
         private const val READ_ACTIONS_WHITELIST_ENV = "BROWSER4_TAB_READ_ACTIONS_WHITELIST"
         private val logger: Logger = Logger.getLogger(BrowserTabToolExecutor::class.java.name)
+
+        /**
+         * Result contract of `tab.dialogStatus`.
+         *
+         * `type`/`message` are optional on purpose: the driver-less fallback answers
+         * `{pending: false}` and nothing else, and a schema that demanded all three
+         * fields would reject that legitimate result.
+         */
+        private const val DIALOG_STATUS_SCHEMA =
+            """{"type":"object","required":["pending"],"properties":""" +
+                """{"pending":{"type":"boolean"},"type":{"type":"string"},"message":{"type":"string"}}}"""
+
         // Actions that read page state and can become flaky if executed too soon after mutations/navigation.
         private val DEFAULT_READ_PAGE_STATE_ACTIONS = setOf(
             "waitForSelector", "waitForNavigation", "waitForPage",
@@ -180,9 +192,6 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             generateAllOnce()
             webDriverToolSpecs.associateByTo(toolSpec) { it.method }
         }
-        // The generated examples are KDoc snippets; replace them with callable ones
-        // (see TabToolExamples) so the published reference is test-input grade.
-        toolSpec.replaceExamples(TabToolExamples.EXECUTABLE)
         toolSpec["eval"] = ToolSpec(
             domain = domain,
             method = "eval",
@@ -649,6 +658,34 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 All subsequent element operations resolve against the main document again.
             """.trimIndent()
         )
+
+        // Two methods the executor dispatches and the API advertises aliases for
+        // (`browser_is_enabled`, `browser_dialog_status`), but which the mirrored
+        // `WebDriver` interface does not declare — so no generated spec existed and
+        // the aliases resolved to nothing. Declared here, they become reachable.
+        toolSpec["isEnabled"] = ToolSpec(
+            domain = domain,
+            method = "isEnabled",
+            arguments = listOf(ToolSpec.Arg("selector", "String", null, "Element to inspect.")),
+            returnType = "Boolean",
+            description = "Whether the element matched by `selector` is enabled — " +
+                "not disabled and not read-only."
+        )
+        toolSpec["dialogStatus"] = ToolSpec(
+            domain = domain,
+            method = "dialogStatus",
+            arguments = emptyList(),
+            returnType = "Map",
+            description = "Report the pending JavaScript dialog, if any: " +
+                "`{pending, type, message}`. Read-only — it never dismisses the dialog.",
+            outputSchema = DIALOG_STATUS_SCHEMA
+        )
+
+        // Must stay last: the generated examples are KDoc snippets and the explicit
+        // specs above replace whole entries, so applying the callable examples
+        // (see TabToolExamples) earlier silently loses them for every method
+        // declared after this point. `TabToolExamplesTest` pins that.
+        toolSpec.replaceExamples(TabToolExamples.EXECUTABLE)
     }
 
     override fun help(method: String): String {

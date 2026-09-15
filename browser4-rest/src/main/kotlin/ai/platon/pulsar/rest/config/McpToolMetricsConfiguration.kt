@@ -2,6 +2,8 @@ package ai.platon.pulsar.rest.config
 
 import ai.platon.pulsar.agentic.observability.ToolMetrics
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.rest.api.service.CrawlService
+import ai.platon.pulsar.rest.session.PulsarSessionManager
 import io.micrometer.core.instrument.MeterRegistry
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.boot.context.event.ApplicationReadyEvent
@@ -36,11 +38,26 @@ class McpToolMetricsConfiguration(
      * this component, and a missing bean must not fail the context.
      */
     private val meterRegistryProvider: ObjectProvider<MeterRegistry>,
+    /** Session registry, for `session.active`; absent in a slim deployment. */
+    private val sessionManagerProvider: ObjectProvider<PulsarSessionManager>,
+    /** Long-running task registry, for `async.queue.depth`. */
+    private val crawlServiceProvider: ObjectProvider<CrawlService>,
 ) {
     private val logger = getLogger(this)
 
     @EventListener(ApplicationReadyEvent::class)
     fun bindToolMetrics() {
+        // Register the gauges only this layer can measure *before* binding, so the
+        // rebinding below installs them on Spring's registry as well.
+        sessionManagerProvider.ifAvailable?.let { sessions ->
+            ToolMetrics.registerSessionCountSupplier { sessions.getAllSessions().size }
+            logger.info("session.active gauge registered from {}", sessions.javaClass.simpleName)
+        }
+        crawlServiceProvider.ifAvailable?.let { crawls ->
+            ToolMetrics.registerAsyncTaskCountSupplier { crawls.runningTaskCount() }
+            logger.info("async.queue.depth gauge registered from {}", crawls.javaClass.simpleName)
+        }
+
         val meterRegistry = meterRegistryProvider.ifAvailable
         if (meterRegistry == null) {
             logger.info("No Spring MeterRegistry bean available; MCP tool metrics stay on the standalone registry")

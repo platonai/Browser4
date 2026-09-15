@@ -56,6 +56,7 @@ class BatchToolExecutor(
             ),
             returnType = "String",
             description = "Run several tool calls as one batch and return a per-step result envelope.",
+            outputSchema = BatchExecutor.RESULT_SCHEMA,
             help = """
                 batch.run(steps: List<Map<String, Any>>, bail: Boolean = false, concurrency: Int = 1)
 
