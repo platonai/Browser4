@@ -10,6 +10,8 @@ tier: catalog
 
 The `config` command family manages two kinds of settings: persistent CLI defaults in `~/.browser4/config.json` (honouring `BROWSER4_CLI_STATE_DIR`) and server-side runtime overrides routed to the running backend. Read this when you need to change a default server, timeout, proxy, session name, or an agent token limit.
 
+> **Development mode:** when the CLI runs from inside a Browser4 checkout, the state directory — and therefore `config.json` — is namespaced per checkout (`~/.browser4/workspaces/<checkout>-<hash>/config.json`) so parallel checkouts cannot overwrite each other's defaults; the backend's own `<app-data>/config` (the `conf-enabled` directory holding LLM keys) is linked to the user-global `~/.browser4/config`, so API keys stay shared. Set `BROWSER4_CLI_STATE_DIR` to share one CLI config across checkouts.
+
 ## Quick Index
 
 | Key | Type | Description |

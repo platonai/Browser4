@@ -69,8 +69,8 @@ use http::{
     submit_swarm_query, CallToolResult,
 };
 use managed_processes::{
-    read_managed_server_processes, stop_browser4_server_forcibly, ManagedServerProcess,
-    ShutdownResult,
+    read_managed_server_processes, stop_browser4_server_forcibly, stop_workspace_servers_forcibly,
+    ManagedServerProcess, ShutdownResult,
 };
 use snapshot::{resolve_output_path, save_binary, save_snapshot, timestamped_filename};
 use state::{
@@ -19592,12 +19592,34 @@ async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
     Ok(())
 }
 
-async fn handle_stop() -> Result<(), String> {
-    eprintln!("🛑 Stopping Browser4 server ...");
+/// Stop the Browser4 backend.
+///
+/// In development mode only the backends of *this* checkout are stopped: every
+/// workspace runs its own port from 8282 upward (`daemon::DEV_SERVER_PORT_START`),
+/// and killing a neighbouring workspace's server would defeat the point of
+/// running several checkouts side by side.  The workspace's managed-process
+/// registry — not the currently resolved URL — decides what "this workspace"
+/// means, so a one-off `--server` probe cannot make `stop` miss the local dev
+/// backend.  `kill-all` remains the global hammer.  Production installs keep
+/// the original stop-everything behaviour: there is only one backend to stop.
+async fn handle_stop(base_url: &str) -> Result<(), String> {
+    let workspace_scoped = daemon::is_dev_mode();
+    // Only a loopback URL can name a local backend; a remote `--server` must
+    // not add its port to the local kill sweep.
+    let local_port = daemon::local_backend_port(base_url);
+
+    if workspace_scoped {
+        eprintln!("🛑 Stopping the Browser4 server(s) of this workspace ...");
+    } else {
+        eprintln!("🛑 Stopping Browser4 server ...");
+    }
     eprintln!();
 
-    let result = stop_browser4_server_forcibly();
-    let shutdown_result = result.shutdown;
+    let shutdown_result = if workspace_scoped {
+        stop_workspace_servers_forcibly(local_port)
+    } else {
+        stop_browser4_server_forcibly().shutdown
+    };
     finalize_global_cleanup("Stopped", &shutdown_result);
 
     let server_was_running = !(shutdown_result.stopped_pids.is_empty()
@@ -19606,6 +19628,7 @@ async fn handle_stop() -> Result<(), String> {
         && shutdown_result.fallback_killed_server_pids.is_empty());
     json_field("server_was_running", json!(server_was_running));
     json_field("server_pids", json!(shutdown_result.stopped_pids));
+    json_field("server_port", json!(local_port));
 
     eprintln!();
 
@@ -19626,9 +19649,19 @@ async fn handle_stop() -> Result<(), String> {
         && shutdown_result.forced_pids.is_empty()
         && shutdown_result.fallback_killed_server_pids.is_empty()
     {
-        cli_println!("No Browser4 server was running.");
+        if workspace_scoped {
+            cli_println!("No Browser4 server was running for this workspace.");
+        } else {
+            cli_println!("No Browser4 server was running.");
+        }
     } else {
         cli_println!("Browser4 server stopped.");
+    }
+
+    if workspace_scoped {
+        cli_println!(
+            "Other workspaces keep their own backends; use 'browser4-cli kill-all' to stop every workspace."
+        );
     }
     Ok(())
 }
@@ -19659,6 +19692,17 @@ async fn handle_status(
         cli_println!("Installed bundle: not installed (run 'browser4-cli install')");
         json_field("installed_version", json!(null));
         json_field("installed_at", json!(null));
+    }
+
+    // Development mode: name the per-checkout backend state root (browser
+    // profiles, data, logs) so it is obvious which workspace this CLI — and
+    // therefore the browser it drives — belongs to.
+    if let Some(app_data) = daemon::workspace_app_data_path() {
+        cli_println!("Workspace app data: {}", app_data.display());
+        json_field(
+            "workspace_app_data",
+            json!(app_data.display().to_string()),
+        );
     }
 
     // Check server health and, if reachable, get the running backend's actual
@@ -23657,7 +23701,7 @@ async fn run(
             handle_upgrade(&tool_params).await?;
         }
         "stop" => {
-            handle_stop().await?;
+            handle_stop(&base_url).await?;
         }
         "status" => {
             handle_status(&client, &base_url, global.session_name.as_deref()).await?;
@@ -25983,6 +26027,7 @@ mod tests {
                     jar_path: "browser4.jar".to_string(),
                     started_at: "2026-04-17T00:00:00Z".to_string(),
                     version: None,
+                    workspace_root: None,
                 },
                 ManagedServerProcess {
                     pid: 2,
@@ -25991,6 +26036,7 @@ mod tests {
                     jar_path: "browser4.jar".to_string(),
                     started_at: "2026-04-17T00:00:01Z".to_string(),
                     version: Some("v4.13.5".to_string()),
+                    workspace_root: None,
                 },
             ],
         );

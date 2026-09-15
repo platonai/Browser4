@@ -4013,9 +4013,41 @@ fn wait_for_eval_text(
 // Per-test isolation helper
 // ---------------------------------------------------------------------------
 
+/// Name of the backend app data root a development-mode CLI creates inside the
+/// state dir (`-Dapp.data.dir=<state_dir>/app-data`).
+const STATE_DIR_APP_DATA_ENTRY: &str = "app-data";
+
+/// Reset the CLI's own artifacts in [state_dir], keeping the backend app data
+/// root.
+///
+/// Development mode launches the backend with its app data root inside the CLI
+/// state dir, and a *running* backend keeps H2 databases, browser profiles,
+/// agent memory and logs open in there.  Deleting the directory out from under
+/// it corrupts every later scenario: sessions reappear as "already open" (the
+/// `open` assertions expect a fresh session), wiped H2 loses the task state the
+/// agent/swarm assertions rely on, and `kill-all` finds backends the harness
+/// believed were stopped.  Same reasoning as the runtime-dir guard below —
+/// never delete a live process's storage.
+fn reset_state_dir_keeping_app_data(state_dir: &Path) {
+    let Ok(entries) = fs::read_dir(state_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name() == STATE_DIR_APP_DATA_ENTRY {
+            continue;
+        }
+        let path = entry.path();
+        let removed = match entry.file_type() {
+            Ok(file_type) if file_type.is_dir() => fs::remove_dir_all(&path),
+            _ => fs::remove_file(&path),
+        };
+        let _ = removed;
+    }
+}
+
 fn reset_cli_artifacts(ctx: &mut E2ECtx) {
     let started_at = Instant::now();
-    let _ = fs::remove_dir_all(&ctx.state_dir);
+    reset_state_dir_keeping_app_data(&ctx.state_dir);
     fs::create_dir_all(&ctx.state_dir).ok();
     let _ = fs::remove_dir_all(ctx.workspace_dir.join(".browser4-cli"));
     // Clean the runtime dir too so that tests that set up an installed

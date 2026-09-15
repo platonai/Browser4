@@ -112,16 +112,15 @@ browser4-cli goto https://other-page.com             # stays headless (or headed
 
 ### Sessions
 
-Named sessions isolate browser state (cookies, localStorage, tabs) in a **dedicated browser profile directory** keyed by the session id — reopening always restores the same profile. Use `-s <name>` to target a named session; `goto` auto-opens/reconnects. `list` shows a "Next open" column: **Reuse** (reconnects to the active window) or **Refresh** (opens fresh — session stale/missing). State lives in `~/.browser4` by default, falling back to `./.browser4-cli-state` when unwritable; override with `BROWSER4_CLI_STATE_DIR` / `BROWSER4_RUNTIME_DIR`.
+Named sessions isolate browser state (cookies, localStorage, tabs) in a **dedicated browser profile directory** keyed by the session id — reopening always restores the same profile. Use `-s <name>` to target a named session; `goto` auto-opens/reconnects. `list` shows a "Next open" column: **Reuse** (reconnects to the active window) or **Refresh** (opens fresh — session stale/missing). State lives in `~/.browser4` by default (per checkout in development mode — see **Development Mode** below), falling back to `./.browser4-cli-state` when unwritable; override with `BROWSER4_CLI_STATE_DIR` / `BROWSER4_RUNTIME_DIR`.
 
 ### Configuration
 
-CLI defaults (`config.json`) and server-side runtime overrides are managed by the `config` command family — see **[config.md](references/config.md)** for the full reference:
+CLI defaults (`config.json`: `server`, `timeout`, `proxy`, `session`) and server-side runtime overrides are managed by the `config` command family — `config list` prints every value, `config set server <url>` pins a backend; see **[config.md](references/config.md)** for the full key reference.
 
-```bash
-browser4-cli config                              # List all values + config file path
-browser4-cli config set server http://localhost:8182
-```
+### Development Mode (one backend per checkout)
+
+Running the CLI from inside a Browser4 checkout (a directory holding `ROOT.md` + `pom.xml`) enables **development mode**: each checkout owns a backend port (first free from **8282** upward), a state namespace (`~/.browser4/workspaces/<checkout>-<hash>/`) and a backend app data root, so parallel checkouts and git worktrees run side by side — `stop` then stops only this checkout's backends. Full matrix, shared paths and escape hatches: **[development-mode.md](references/development-mode.md)**.
 
 ### Tab Management
 
@@ -275,6 +274,7 @@ Organized by task — follow the link that matches what you're trying to do:
 **Manage skills & configuration:**
 [skills.md](references/skills.md) — bundled skill files, backend skill management
 [config.md](references/config.md) — `config` command family: CLI defaults and server-side runtime overrides
+[development-mode.md](references/development-mode.md) — one backend per checkout: development ports from 8282, per-checkout state and app data, workspace-scoped `stop`
 
 **AI-powered extraction:** [agent.md](references/agent.md) — `extract`, `summarize`, `agent run|status|result`, LLM provider config
 

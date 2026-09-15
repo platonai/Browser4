@@ -1045,10 +1045,15 @@ pub(super) fn test_stop_no_running_server(ctx: &mut E2ECtx) {
     // stop may report "No Browser4 server was running." when no server is
     // active, or it may report the actual server shutdown steps when a
     // real server (started by a previous live test) is still running.
+    // A CLI built inside a checkout runs in development mode, where `stop` is
+    // scoped to this workspace and says so.
     assert!(
         result.stdout.contains("No Browser4 server was running.")
+            || result
+                .stdout
+                .contains("No Browser4 server was running for this workspace.")
             || result.stdout.contains("Browser4 server stopped."),
-        "Expected either 'No Browser4 server was running.' or 'Browser4 server stopped.' in:\n{}",
+        "Expected 'No Browser4 server was running[ for this workspace].' or 'Browser4 server stopped.' in:\n{}",
         result.stdout
     );
 }
@@ -1112,15 +1117,22 @@ pub(super) fn test_kill_all_no_running_processes(ctx: &mut E2ECtx) {
         "expected kill-all to succeed when no processes"
     );
 
-    // kill-all with no tracked processes should report that nothing was found
-    // and succeed without error.
+    // This scenario owns kill-all's "nothing left to kill" path: the call above
+    // may still report a backend this workspace legitimately had running —
+    // development-mode `stop` is workspace-scoped, so the `stop` scenarios just
+    // before this one leave the harness's own backend alive, where production
+    // `stop` used to sweep every backend and stop it for them.  After that call
+    // the machine is clean, so the second call must report exactly that.
+    let second = run_command(ctx, &["kill-all"]);
+    assert_eq!(
+        second.exit_code, 0,
+        "expected kill-all to succeed when no processes"
+    );
     assert!(
-        result
-            .stdout
-            .contains("No tracked Browser4 processes found")
-            || result.stdout.contains("Already stopped"),
+        second.stdout.contains("No tracked Browser4 processes found")
+            || second.stdout.contains("Already stopped"),
         "Expected kill-all to report no tracked processes in:\n{}",
-        result.stdout
+        second.stdout
     );
 }
 

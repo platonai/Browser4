@@ -30,6 +30,12 @@ pub struct ManagedServerProcess {
     /// entries written by older CLI versions.
     #[serde(rename = "version", skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// Absolute path of the development checkout this backend was started
+    /// from (forward slashes).  Absent for production runs and for entries
+    /// written by older CLI versions.  Lets a workspace recognise its own
+    /// backend on a port another workspace may have taken over since.
+    #[serde(rename = "workspaceRoot", skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -77,7 +83,6 @@ pub fn register_managed_server_process(
 }
 
 /// Remove a managed server process from the registry by PID.
-#[allow(dead_code)]
 pub fn remove_managed_server_process(pid: u32, registry_path: Option<&Path>) {
     let path = registry_path
         .map(|p| p.to_path_buf())
@@ -99,6 +104,19 @@ pub fn recorded_server_version(port: u16, registry_path: Option<&Path>) -> Optio
         .rev()
         .find(|p| p.port == port)
         .and_then(|p| p.version)
+}
+
+/// True when a backend registered for [port] is still running.
+///
+/// The registry is per-state-dir, and in development mode that state dir is
+/// per checkout — so a live entry for a port means *this* checkout's backend
+/// holds it, which is what makes a recorded development port safe to reuse.
+pub fn managed_port_has_live_server(port: u16) -> bool {
+    read_managed_server_processes(None)
+        .into_iter()
+        .rev()
+        .find(|p| p.port == port)
+        .is_some_and(|p| is_process_running(p.pid))
 }
 
 /// Clear all managed server processes from the registry.
@@ -648,6 +666,12 @@ fn browser_marker_search_roots() -> Vec<PathBuf> {
         roots.push(home.join("browser4").join("browser").join("chrome"));
     }
 
+    // Development mode keeps each checkout's browser profiles under its own
+    // app data root (`-Dapp.data.dir`), so the workspace's browser directory
+    // has to be scanned too — otherwise the launcher markers of this
+    // checkout's browsers are invisible to `kill-all` / browser cleanup.
+    roots.extend(crate::daemon::workspace_browser_data_roots());
+
     let temp_dir = std::env::temp_dir();
     if let Ok(entries) = fs::read_dir(&temp_dir) {
         for entry in entries.flatten() {
@@ -820,15 +844,52 @@ fn find_browser4_server_processes() -> Vec<u32> {
 }
 
 fn force_kill_all_browser4_server_processes() -> ServerKillResult {
-    const WAIT_AFTER_KILL_MS: u64 = 500;
-    const WAIT_POLL_MS: u64 = 100;
-
     // Command-line pattern matching misses servers launched via @argfile or
     // with a bundle start script. Add a port-based sweep: any java process
     // still LISTENING on a managed port (or the default 8182) IS a Browser4
     // server for the purposes of `stop`.
     let mut pids = find_browser4_server_processes();
     pids.extend(find_java_pids_listening_on_ports(&managed_server_ports_for_sweep()));
+    force_stop_pids(pids)
+}
+
+/// Force-stop Browser4 backends LISTENING on [ports], without the global
+/// command-line scan.
+///
+/// Used by the development-mode `stop`, which must not touch backends owned by
+/// neighbouring workspaces (each checkout runs its own port, see
+/// `daemon::DEV_SERVER_PORT_START`).
+fn force_kill_browser4_server_processes_on_ports(ports: &[u16]) -> ServerKillResult {
+    force_stop_pids(jvm_pids_listening_on_ports(ports))
+}
+
+/// PIDs of *JVM* processes listening on [ports] — the only kill candidates a
+/// port sweep may use.
+///
+/// [`find_java_pids_listening_on_ports`] reports whatever owns the listening
+/// socket, and in development mode the swept ports come from the resolved
+/// `--server` URL — which may point at a service that has nothing to do with
+/// Browser4.  Killing those PIDs takes down an unrelated process: it took down
+/// the e2e harness, whose Rust mock backend listens on exactly such a port.
+///
+/// Java-ness is the strongest check that works here.  The stricter
+/// [`is_browser4_server_process`] cannot be used: a backend is launched as
+/// `java @<temp argfile>`, and that argfile is gone by the time `stop` runs, so
+/// the live backend's command line carries no Browser4 marker.
+fn jvm_pids_listening_on_ports(ports: &[u16]) -> Vec<u32> {
+    let mut pids: Vec<u32> = find_java_pids_listening_on_ports(ports)
+        .into_iter()
+        .filter(|&pid| is_java_process(pid))
+        .collect();
+    pids.sort_unstable();
+    pids.dedup();
+    pids
+}
+
+fn force_stop_pids(mut pids: Vec<u32>) -> ServerKillResult {
+    const WAIT_AFTER_KILL_MS: u64 = 500;
+    const WAIT_POLL_MS: u64 = 100;
+
     pids.sort_unstable();
     pids.dedup();
 
@@ -852,6 +913,76 @@ fn force_kill_all_browser4_server_processes() -> ServerKillResult {
     dedup_sort_u32(&mut result.killed_pids);
     dedup_sort_u32(&mut result.remaining_pids);
     result
+}
+
+/// Ports of every backend this workspace started, newest entry last.
+///
+/// The registry lives in the checkout's own state dir in development mode, so
+/// this list never contains a neighbouring workspace's backend.
+pub fn managed_server_ports(registry_path: Option<&Path>) -> Vec<u16> {
+    let mut ports: Vec<u16> = read_managed_server_processes(registry_path)
+        .iter()
+        .map(|p| p.port)
+        .filter(|&p| p > 0)
+        .collect();
+    ports.sort_unstable();
+    ports.dedup();
+    ports
+}
+
+/// Force-stop every backend this workspace started, wherever it landed.
+///
+/// Development mode uses this instead of the global `stop`: a workspace may own
+/// more than one port over time (an explicit `--server` URL, a re-allocation
+/// after another checkout stole the recorded port), and the registry — not the
+/// currently resolved URL — is the authoritative list.  [extra_port] covers a
+/// backend on the resolved URL that the registry does not know about (started
+/// by hand, or by an older CLI version).
+///
+/// Deliberately skips the global browser sweep: browsers belong to whichever
+/// workspace launched them, and `kill-all` remains the hammer for a full
+/// cross-workspace cleanup.
+pub fn stop_workspace_servers_forcibly(extra_port: Option<u16>) -> ShutdownResult {
+    let mut ports = managed_server_ports(None);
+    if let Some(port) = extra_port.filter(|port| *port > 0) {
+        if !ports.contains(&port) {
+            ports.push(port);
+        }
+    }
+    if ports.is_empty() {
+        return ShutdownResult::default();
+    }
+
+    let mut shutdown = ShutdownResult::default();
+    for port in &ports {
+        let one = shutdown_managed_server_processes_on_port(true, None, *port, 5_000, 250);
+        merge_shutdown_results(&mut shutdown, one);
+    }
+
+    let fallback = force_kill_browser4_server_processes_on_ports(&ports);
+    merge_shutdown_with_fallback_server_kill(&mut shutdown, &fallback);
+    shutdown.fallback_killed_server_pids = fallback.killed_pids.clone();
+    shutdown
+}
+
+/// Fold [other] into [target], de-duplicating the PID lists.
+fn merge_shutdown_results(target: &mut ShutdownResult, other: ShutdownResult) {
+    target.stopped_pids.extend(other.stopped_pids);
+    target.missing_pids.extend(other.missing_pids);
+    target.forced_pids.extend(other.forced_pids);
+    target.remaining_pids.extend(other.remaining_pids);
+    target
+        .fallback_killed_server_pids
+        .extend(other.fallback_killed_server_pids);
+
+    dedup_sort_u32(&mut target.stopped_pids);
+    dedup_sort_u32(&mut target.missing_pids);
+    dedup_sort_u32(&mut target.forced_pids);
+    dedup_sort_u32(&mut target.remaining_pids);
+    dedup_sort_u32(&mut target.fallback_killed_server_pids);
+    target
+        .remaining_pids
+        .retain(|pid| !target.stopped_pids.contains(pid));
 }
 
 /// Ports swept by the port-based server cleanup: every port recorded in the
@@ -941,7 +1072,7 @@ fn local_address_matches_any_port(local_address: Option<&str>, ports: &[u16]) ->
         .unwrap_or(false)
 }
 
-fn is_browser4_server_process(pid: u32) -> bool {
+fn is_java_process(pid: u32) -> bool {
     process_name(pid)
         .map(|name| {
             let normalized = normalize_process_text(&name);
@@ -951,6 +1082,10 @@ fn is_browser4_server_process(pid: u32) -> bool {
                 || normalized == "javaw.exe"
         })
         .unwrap_or(false)
+}
+
+fn is_browser4_server_process(pid: u32) -> bool {
+    is_java_process(pid)
         && process_command_line(pid)
             .map(|command_line| command_line_matches_browser4_server(&command_line))
             .unwrap_or(false)
@@ -1423,6 +1558,38 @@ mod tests {
         assert!(!expanded.contains("Browser4BundleApplicationKt"));
     }
 
+    /// The port sweep may only ever hand *JVM* processes to the killer.
+    ///
+    /// Development-mode `stop` sweeps the port of the resolved `--server` URL,
+    /// and that port can belong to any local service — it used to be the e2e
+    /// harness, whose Rust mock backend listens on exactly such a port, and
+    /// `stop` killed the test run instead of a server.
+    #[test]
+    fn test_port_sweep_skips_non_jvm_listeners() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // This test process owns the listening socket and is not a JVM, so the
+        // sweep must not produce a kill target for it.
+        let candidates = jvm_pids_listening_on_ports(&[port]);
+        assert!(
+            candidates.is_empty(),
+            "a non-JVM listener on port {port} must never be a kill target: {candidates:?}"
+        );
+        assert!(!is_java_process(std::process::id()));
+        assert!(!is_browser4_server_process(std::process::id()));
+
+        // And the guard is not vacuous: when the OS port scan is available it
+        // does see this listener, it is simply filtered out afterwards.
+        let unverified = find_java_pids_listening_on_ports(&[port]);
+        if !unverified.is_empty() {
+            assert!(
+                unverified.contains(&std::process::id()),
+                "the port scan should attribute port {port} to this process: {unverified:?}"
+            );
+        }
+    }
+
     #[test]
     fn test_register_and_remove() {
         let tmp = test_temp_dir();
@@ -1435,6 +1602,7 @@ mod tests {
             jar_path: "/path/to/Browser4.jar".to_string(),
             started_at: "2026-01-01T00:00:00Z".to_string(),
             version: Some("v4.13.5".to_string()),
+            workspace_root: None,
         };
 
         register_managed_server_process(proc.clone(), Some(&reg_path));
@@ -1473,6 +1641,7 @@ mod tests {
                     jar_path: "/j".to_string(),
                     started_at: "2026-01-01T00:00:00Z".to_string(),
                     version: Some(version.to_string()),
+                    workspace_root: None,
                 },
                 Some(&reg_path),
             );
@@ -1499,6 +1668,7 @@ mod tests {
                     jar_path: "/path/to/Browser4.jar".to_string(),
                     started_at: "2026-01-01T00:00:00Z".to_string(),
                     version: Some("local".to_string()),
+                    workspace_root: None,
                 },
                 Some(&reg_path),
             );
@@ -1540,6 +1710,7 @@ mod tests {
             jar_path: "/tmp/Browser4.jar".to_string(),
             started_at: "2026-01-01T00:00:00Z".to_string(),
             version: None,
+            workspace_root: None,
         };
         register_managed_server_process(proc, Some(&reg_path));
         assert!(reg_path.exists());
@@ -1654,6 +1825,7 @@ mod tests {
                 jar_path: "/path/to/Browser4.jar".to_string(),
                 started_at: "2026-01-01T00:00:00Z".to_string(),
                 version: None,
+                workspace_root: None,
             },
             Some(&reg_path),
         );

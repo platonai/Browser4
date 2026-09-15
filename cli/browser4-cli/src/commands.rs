@@ -3153,7 +3153,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef {
                     name: "server",
-                    description: "Server URL to check (defaults to saved or http://127.0.0.1:8182)",
+                    description: "Server URL to check (defaults to the saved server, or this checkout's dev port)",
                     is_bool: false,
                     short: None,
                 },
@@ -3190,7 +3190,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 },
                 OptionDef {
                     name: "server",
-                    description: "Server URL to check (defaults to saved or http://127.0.0.1:8182)",
+                    description: "Server URL to check (defaults to the saved server, or this checkout's dev port)",
                     is_bool: false,
                     short: None,
                 },

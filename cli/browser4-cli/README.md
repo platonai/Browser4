@@ -15,6 +15,41 @@ cd cli/browser4-cli && cargo run --quiet -- <command>
 
 The backend server starts automatically in dev mode. Build the CLI with `cargo build` (debug) or `cargo build --release` (optimized). Add `--quiet` to `cargo run` to suppress "Finished" / "Running" build-status lines.
 
+### Several checkouts at once (development mode)
+
+Running the CLI from inside a Browser4 checkout (a directory with `ROOT.md` +
+`pom.xml`) puts it in **development mode**, which keeps parallel checkouts —
+`Browser4-4.13`, `Browser4-4.14`, git worktrees — from fighting over one port
+and one state directory:
+
+| | Installed / production | Development (source checkout) |
+|---|---|---|
+| Backend port | `8182` | first free port from **`8282`** upward (8282, 8283, …) |
+| CLI state, sessions, config | `~/.browser4/` | `~/.browser4/workspaces/<checkout>-<hash>/` |
+| Backend app data | `~/.browser4` | `…/app-data/` — browser profiles (`--user-data-dir`), H2/WebDB data, agent memory |
+| Browser prototype | `~/.browser4/browser/chrome/prototype` | linked (junction/symlink) to the global prototype — shared seed state for `SEQUENTIAL`/`TEMPORARY` contexts |
+| LLM config (`config/conf-enabled`) | `~/.browser4/config` | linked (junction/symlink) into the workspace app data — still one source of truth |
+| AOT cache | shared | per checkout (no cross-checkout invalidation) |
+| `browser4-cli stop` | stops every managed backend | stops **only this checkout's** backends (`kill-all` stays global) |
+
+So with 4.13 already serving on 8282, a command in 4.14 picks 8283
+automatically; each checkout remembers its own port, and both can run and be
+tested side by side — including **two headed browsers at once**, because each
+backend owns its app data root and therefore its own Chrome profile directory
+(the default `browser.profile.mode=DEFAULT` profile is per workspace in
+development mode). Precedence for the server URL is unchanged:
+
+```
+--server / BROWSER4_CLI_SERVER  >  config set server  >  this checkout's dev port
+```
+
+Escape hatches: `--server <url>` (or `config set server <url>`) targets a
+specific backend, `BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1` disables development mode
+entirely (production ports and the flat `~/.browser4` state), and
+`BROWSER4_CLI_STATE_DIR=<dir>` pins one shared state directory. `browser4-cli
+status` prints the workspace app data root in use; the backend keeps using the
+shared `~/.browser4` if that root cannot be prepared (the CLI warns and says so).
+
 ## Commands
 
 ### Browser sessions

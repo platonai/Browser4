@@ -161,12 +161,49 @@ impl Default for CliState {
     }
 }
 
+/// Subdirectory of `~/.browser4` holding one state namespace per development
+/// checkout (see [`resolve_default_state_dir`]).
+pub const WORKSPACES_DIR_NAME: &str = "workspaces";
+
 /// Resolve the default state directory, honouring `BROWSER4_CLI_STATE_DIR`.
+///
+/// In development mode — the CLI was invoked from a Browser4 repository
+/// checkout — every checkout gets its own state namespace
+/// (`~/.browser4/workspaces/<checkout>-<hash>/`).  Two workspaces therefore
+/// keep separate server URLs, sessions, managed-process registries and AOT
+/// caches and can run their own backends side by side instead of overwriting
+/// each other's state.  Installed (production) runs keep the flat
+/// `~/.browser4` layout.
 pub fn resolve_default_state_dir() -> PathBuf {
     if let Some(override_dir) = user_state_dir_override() {
         return override_dir;
     }
+    if let Some(workspace_dir) = dev_workspace_state_dir() {
+        return workspace_dir;
+    }
     default_home_state_dir()
+}
+
+/// The user-global state directory, ignoring the per-checkout development
+/// namespace.
+///
+/// Used by the few lookups that must stay shared across every checkout — today
+/// the legacy `~/.browser4/lib` runtime migration, which predates per-checkout
+/// namespaces.
+pub fn resolve_global_state_dir() -> PathBuf {
+    user_state_dir_override().unwrap_or_else(default_home_state_dir)
+}
+
+/// Per-checkout state directory used in development mode, or `None` when the
+/// CLI is not running from a repository checkout (or the caller overrode the
+/// state dir with `BROWSER4_CLI_STATE_DIR`).
+fn dev_workspace_state_dir() -> Option<PathBuf> {
+    let root = crate::daemon::dev_workspace_root()?;
+    Some(
+        default_home_state_dir()
+            .join(WORKSPACES_DIR_NAME)
+            .join(crate::daemon::workspace_state_slug(&root)),
+    )
 }
 
 /// `Some(path)` when `BROWSER4_CLI_STATE_DIR` is set to an accepted value
@@ -321,6 +358,20 @@ pub fn read_state(state_dir: Option<&Path>, session_name: Option<&str>) -> CliSt
     }
 
     CliState::default()
+}
+
+/// True when a state file for [session_name] already exists on disk.
+///
+/// Development mode uses this to tell "this checkout never recorded a server,
+/// so it needs its own development port" from "a server URL was persisted
+/// (either by a previous run of this workspace or by `--server`), so honour
+/// it".  Mirrors [`read_state`]: the workspace-relative fallback directory is
+/// checked as well when the effective state dir is the implicit default.
+pub fn has_persisted_state(session_name: Option<&str>) -> bool {
+    if state_file(&resolve_default_state_dir(), session_name).is_file() {
+        return true;
+    }
+    is_implicit_default_dir(None) && state_file(&fallback_state_dir(), session_name).is_file()
 }
 
 /// Parse and migrate a raw state JSON string.
