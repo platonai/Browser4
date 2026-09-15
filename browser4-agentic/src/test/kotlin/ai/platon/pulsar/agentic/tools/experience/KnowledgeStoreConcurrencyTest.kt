@@ -3,7 +3,6 @@ package ai.platon.pulsar.agentic.tools.experience
 import kotlinx.coroutines.*
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
@@ -17,25 +16,26 @@ import kotlin.test.*
 /**
  * Tests for concurrent access to KnowledgeStore.
  *
- * Verifies that per-domain [Mutex] serialization in [KnowledgeStore.saveFacts]
- * prevents data corruption when multiple coroutines write to the same domain
- * simultaneously, while writes to different domains proceed concurrently.
+ * Verifies that concurrent writers do not corrupt or lose what they store: the
+ * per-domain [Mutex] serialization of fact writes, the file/YAML monitor around
+ * reads and publishes, and the atomic read-modify-write of experience stats.
  *
- * DISABLED, and no longer for the reason it used to be. The YAML/file races are
- * fixed (one monitor around the shared SnakeYAML instance, a unique temporary file
- * per write, and reads under the same monitor — see [KnowledgeStore] and the enabled
- * [KnowledgeStoreAtomicWriteTest], which fails without those fixes). What still fails
- * here is two assertions that need their own investigation and were never green:
+ * This suite was disabled for a long time with "flaky on Windows". It was not
+ * flaky, it was three real races that each had a deterministic failure mode:
  *
- * - `testConcurrentTraceSaves` expects 10 trace files for 10 concurrent saves but
- *   observes 2, even though every [TraceRecord] carries a distinct `traceId` in its
- *   file name — either a real trace-loss bug or a stale expectation;
- * - `testStressConcurrent` expects exact per-domain attempt counts, which the current
- *   retry behaviour does not guarantee (`expected 10 attempts, was 9`).
+ * 1. one shared SnakeYAML instance served `dump` and `load` with no
+ *    synchronisation → truncated documents ("expected '<document start>', but
+ *    found '<scalar>'");
+ * 2. the atomic write used a fixed `${name}.tmp` and deleted the target before
+ *    moving it, while Windows' `move(REPLACE_EXISTING)` itself falls back to
+ *    delete-then-rename → readers saw missing files and `NoSuchFileException`;
+ * 3. `updateStats` read the stats file, merged, and wrote it back with no lock
+ *    spanning the three steps → **lost updates**: ten concurrent trace saves left
+ *    `successes = 2`, silently under-counting the evidence behind confidence and
+ *    promotion.
  *
- * Re-enable per assertion once those two are understood.
+ * Re-enabled after all three were fixed in [KnowledgeStore]; it passes repeatedly.
  */
-@Disabled("Two expectations need investigation (trace-file count, exact attempt counts); the YAML/file races are fixed")
 @OptIn(ExperimentalPathApi::class)
 @DisplayName("KnowledgeStore — Concurrent Access")
 class KnowledgeStoreConcurrencyTest {

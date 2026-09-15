@@ -145,17 +145,23 @@ class KnowledgeStore(
     /**
      * Update [ExperienceStats] from a [TraceRecord].
      *
-     * Merges success or failure stats into the existing stats file.
+     * The read-modify-write runs **under the file lock**, and that is the whole point:
+     * load-then-save without it is a lost-update race. Ten concurrent trace saves
+     * used to leave `successes = 2` instead of 10 (each writer read a stale count and
+     * published its own `+1`), which silently under-counts the evidence that
+     * confidence and promotion decisions are made from.
      */
     fun updateStats(trace: TraceRecord) {
         val intentKey = Intent.classify(trace.intent).name.lowercase()
-        val existing = loadStats(trace.domain, intentKey)
-        val updated = if (trace.outcome == "success") {
-            existing.withSuccess(trace)
-        } else {
-            existing.withFailure(trace)
+        withFileLock {
+            val existing = loadStats(trace.domain, intentKey)
+            val updated = if (trace.outcome == "success") {
+                existing.withSuccess(trace)
+            } else {
+                existing.withFailure(trace)
+            }
+            saveStats(trace.domain, intentKey, updated)
         }
-        saveStats(trace.domain, intentKey, updated)
     }
 
     private fun saveStats(domain: String, intent: String, stats: ExperienceStats) {
