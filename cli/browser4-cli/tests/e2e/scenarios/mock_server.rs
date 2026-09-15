@@ -102,6 +102,29 @@ pub(super) fn test_profile_import_command(ctx: &mut E2ECtx) {
         plugin_commands.stdout
     );
 
+    // `--help --examples` on a plugin-declared command renders the spec's
+    // examples instead of calling the tool (declared commands forward every
+    // option, so `--examples` must not reach the backend).
+    let declared_examples = run_command(ctx, &["profile", "import", "--help", "--examples"]);
+    assert_eq!(
+        declared_examples.exit_code, 0,
+        "expected declared --examples to succeed:\n{}",
+        declared_examples.stdout
+    );
+    assert!(
+        declared_examples
+            .stdout
+            .contains("Examples for profile_import.import (profile_import_import):")
+            && declared_examples
+                .stdout
+                .contains("- Import Chrome bookmarks: `{\"source\": \"chrome\"}`")
+            && declared_examples
+                .stdout
+                .contains("- Feed the returned import dir to open --profile"),
+        "Expected rendered examples in:\n{}",
+        declared_examples.stdout
+    );
+
     // `help` badges plugin-declared commands with [plugin], so the origin of
     // every command is visible at a glance.
     let help_out = run_command(ctx, &["help"]);

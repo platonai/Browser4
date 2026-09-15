@@ -1181,7 +1181,7 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             &mut stream,
             "200 OK",
             "application/json",
-            r#"{"tools":[{"cliName":"profile import","domain":"profile_import","method":"import","description":"Import browser data","arguments":[{"name":"source","type":"String","defaultValue":null},{"name":"data","type":"String","defaultValue":null}]}]}"#,
+            r#"{"tools":[{"cliName":"profile import","domain":"profile_import","method":"import","description":"Import browser data","arguments":[{"name":"source","type":"String","defaultValue":null},{"name":"data","type":"String","defaultValue":null}],"examples":[{"title":"Import Chrome bookmarks","args":{"source":"chrome"},"expectsError":false},{"title":"Import with a task id","args":{"source":"chrome","data":"bookmarks"},"notes":"Feed the returned import dir to open --profile","expectsError":false}]}]}"#,
         ),
         ("POST", "/mcp/call-tool") => {
             let payload: serde_json::Value =

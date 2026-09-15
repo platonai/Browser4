@@ -289,6 +289,7 @@ Keys: `server` (default Browser4 URL), `timeout` (seconds, positive integer), `p
 | Option | Description |
 |---|---|
 | `--help [command]` | Print help (all commands, or detailed help for a specific command) |
+| `--help --examples` | Print the runnable tool examples for a command, fetched from the backend's tool specs (falls back to a one-line notice when the backend is unreachable) |
 | `--version` | Print version |
 | `--json` | Emit machine-parseable JSON to stdout |
 | `-q, --quiet` | Suppress normal output, only show errors |
