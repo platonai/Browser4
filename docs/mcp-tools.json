@@ -970,7 +970,8 @@
       },
       "expectsError" : false,
       "executable" : true
-    } ]
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"id\",\"name\",\"version\",\"description\",\"author\",\"tags\",\"dependencies\",\"skillMd\"],\"properties\":{\"id\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"version\":{\"type\":\"string\"},\"description\":{\"type\":\"string\"},\"author\":{\"type\":\"string\"},\"skillMd\":{\"type\":\"string\"},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"dependencies\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}}"
   }, {
     "domain" : "skill",
     "method" : "install",
@@ -1010,7 +1011,8 @@
       "expectsError" : false,
       "runnable" : true,
       "executable" : true
-    } ]
+    } ],
+    "outputSchema" : "{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"id\",\"name\",\"description\",\"version\",\"tags\"],\"properties\":{\"id\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"description\":{\"type\":\"string\"},\"version\":{\"type\":\"string\"},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}}}"
   }, {
     "domain" : "skill",
     "method" : "reload",
@@ -3746,7 +3748,8 @@
       },
       "expectsError" : false,
       "executable" : true
-    } ]
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"total\",\"succeeded\",\"failed\",\"results\"],\"properties\":{\"total\":{\"type\":\"integer\"},\"succeeded\":{\"type\":\"integer\"},\"failed\":{\"type\":\"integer\"},\"results\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"url\",\"status\"],\"properties\":{\"url\":{\"type\":\"string\"},\"status\":{\"type\":\"string\"},\"error\":{\"type\":\"string\"}}}}}}"
   }, {
     "domain" : "webdb",
     "method" : "normalize",

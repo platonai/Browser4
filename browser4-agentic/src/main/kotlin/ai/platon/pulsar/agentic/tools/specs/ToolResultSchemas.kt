@@ -71,8 +71,45 @@ object ToolResultSchemas {
         """"status_after":{"type":"string"},"promoted":{"type":"boolean"},"new_confidence":{"type":"number"},""" +
         """"message":{"type":"string"},"selectors_found":{"type":"integer"}}}"""
 
-    /** `memory.search` → [ai.platon.pulsar.agentic.memory.SearchPage]. */
-    const val MEMORY_SEARCH = """{"type":"object","required":["hits"],"properties":{""" +
+    /**
+     * `skill.list` → `List<SkillRegistry.SkillSummary>`.
+     *
+     * The one advertised tool whose result is a **top-level array**, which is why
+     * the contract matrix accepts `type: array` as well as `type: object` — a client
+     * that only understood object results could not have described this tool at all.
+     * `tags` is a set on the Kotlin side and a JSON array on the wire.
+     */
+    const val SKILL_LIST = """{"type":"array","items":{"type":"object",""" +
+        """"required":["id","name","description","version","tags"],"properties":{""" +
+        """"id":{"type":"string"},"name":{"type":"string"},"description":{"type":"string"},""" +
+        """"version":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}}}}}"""
+
+    /**
+     * `skill.info` → `SkillService.SkillDetail`.
+     *
+     * `scriptsPath`/`referencesPath`/`assetsPath`/`origin` are nullable Kotlin
+     * properties without `@JsonInclude(NON_NULL)`, so they are left undocumented
+     * rather than typed (see the class note on nullability).
+     */
+    const val SKILL_INFO = """{"type":"object",""" +
+        """"required":["id","name","version","description","author","tags","dependencies","skillMd"],""" +
+        """"properties":{"id":{"type":"string"},"name":{"type":"string"},"version":{"type":"string"},""" +
+        """"description":{"type":"string"},"author":{"type":"string"},"skillMd":{"type":"string"},""" +
+        """"tags":{"type":"array","items":{"type":"string"}},""" +
+        """"dependencies":{"type":"array","items":{"type":"string"}}}}"""
+
+    /**
+     * `webdb.export` → the per-URL summary built by the executor.
+     *
+     * `error` is only written for a failed entry, so it is not required.
+     */
+    const val WEBDB_EXPORT = """{"type":"object",""" +
+        """"required":["total","succeeded","failed","results"],"properties":{""" +
+        """"total":{"type":"integer"},"succeeded":{"type":"integer"},"failed":{"type":"integer"},""" +
+        """"results":{"type":"array","items":{"type":"object","required":["url","status"],"properties":{""" +
+        """"url":{"type":"string"},"status":{"type":"string"},"error":{"type":"string"}}}}}}"""
+
+    /** `memory.search` → [ai.platon.pulsar.agentic.memory.SearchPage]. */    const val MEMORY_SEARCH = """{"type":"object","required":["hits"],"properties":{""" +
         """"hits":{"type":"array","items":{"type":"object",""" +
         """"required":["taskId","ts","snippet","tier"],"properties":{""" +
         """"taskId":{"type":"string"},"ts":{"type":"integer"},"snippet":{"type":"string"},""" +

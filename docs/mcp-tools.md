@@ -967,6 +967,14 @@ Get detailed information about a skill by ID.
 
 Returns: `SkillDetail`
 
+<details><summary>Result schema</summary>
+
+```json
+{"type":"object","required":["id","name","version","description","author","tags","dependencies","skillMd"],"properties":{"id":{"type":"string"},"name":{"type":"string"},"version":{"type":"string"},"description":{"type":"string"},"author":{"type":"string"},"skillMd":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"dependencies":{"type":"array","items":{"type":"string"}}}}
+```
+
+</details>
+
 Examples:
 
 - Inspect a bundled skill: `{"id": "browser4-cli"}`
@@ -999,6 +1007,14 @@ skill.list()
 List all registered skills with lightweight summaries.
 
 Returns: `List<SkillSummary>`
+
+<details><summary>Result schema</summary>
+
+```json
+{"type":"array","items":{"type":"object","required":["id","name","description","version","tags"],"properties":{"id":{"type":"string"},"name":{"type":"string"},"description":{"type":"string"},"version":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}}}}}
+```
+
+</details>
 
 Examples:
 
@@ -3878,6 +3894,14 @@ Export pages from the web database to a local directory. Provide a comma-separat
 | `outputDir` | String | yes |  | Target directory for the exported pages. Required; the directory is created when missing. |
 
 Returns: `String`
+
+<details><summary>Result schema</summary>
+
+```json
+{"type":"object","required":["total","succeeded","failed","results"],"properties":{"total":{"type":"integer"},"succeeded":{"type":"integer"},"failed":{"type":"integer"},"results":{"type":"array","items":{"type":"object","required":["url","status"],"properties":{"url":{"type":"string"},"status":{"type":"string"},"error":{"type":"string"}}}}}}
+```
+
+</details>
 
 Examples:
 

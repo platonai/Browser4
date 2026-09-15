@@ -3,6 +3,7 @@ package ai.platon.pulsar.agent.tool
 import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
+import ai.platon.pulsar.agentic.tools.specs.ToolResultSchemas
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -41,6 +42,7 @@ class WebDbToolExecutor(
                 ),
             ),
             returnType = "String",
+            outputSchema = ToolResultSchemas.WEBDB_EXPORT,
             description = "Export pages from the web database to a local directory. " +
                 "Provide a comma-separated list of URLs.",
             examples = listOf(
@@ -129,15 +131,24 @@ class WebDbToolExecutor(
                 }
             }
 
-            val result = mapOf(
-                "total" to results.size,
-                "succeeded" to results.count { it["status"] == "ok" },
-                "failed" to results.count { it["status"] == "error" },
-                "results" to results,
-            )
-            pulsarObjectMapper().writeValueAsString(result)
+            pulsarObjectMapper().writeValueAsString(exportSummary(results))
         }
     }
+
+    /**
+     * The `webdb export` payload: one entry per requested URL plus the tallies.
+     *
+     * Extracted from the `withLock` block so it can be tested: the export itself
+     * needs a live session, while the shape the contract promises is a pure
+     * function of the per-URL results — [ToolResultSchemas.WEBDB_EXPORT] describes
+     * exactly this and `WebDbExportSchemaTest` validates it.
+     */
+    internal fun exportSummary(results: List<Map<String, Any?>>): Map<String, Any?> = mapOf(
+        "total" to results.size,
+        "succeeded" to results.count { it["status"] == "ok" },
+        "failed" to results.count { it["status"] == "error" },
+        "results" to results,
+    )
 
     // =========================================================================
     // Normalize

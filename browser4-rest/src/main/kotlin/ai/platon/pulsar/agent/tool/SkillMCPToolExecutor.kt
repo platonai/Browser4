@@ -4,6 +4,7 @@ import ai.platon.pulsar.boot.skill.SkillService
 import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
+import ai.platon.pulsar.agentic.tools.specs.ToolResultSchemas
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.reflect.KClass
@@ -37,6 +38,7 @@ class SkillMCPToolExecutor(
             method = "list",
             arguments = emptyList(),
             returnType = "List<SkillSummary>",
+            outputSchema = ToolResultSchemas.SKILL_LIST,
             description = "List all registered skills with lightweight summaries.",
             examples = listOf(
                 ToolExample(title = "List the installed skills", args = emptyMap(), runnable = true),
@@ -50,6 +52,7 @@ class SkillMCPToolExecutor(
                 ToolSpec.Arg("id", "String", null, "Skill id as reported by `skill.list`. Required."),
             ),
             returnType = "SkillDetail",
+            outputSchema = ToolResultSchemas.SKILL_INFO,
             description = "Get detailed information about a skill by ID.",
             examples = listOf(
                 ToolExample(title = "Inspect a bundled skill", args = mapOf("id" to "browser4-cli")),

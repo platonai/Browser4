@@ -31,7 +31,7 @@ import org.junit.jupiter.api.Test
  * | type | `"abc"` into a numeric/boolean argument | `INVALID_ARGUMENT` |
  * | unknown | one undeclared argument | allowed by default, `UNKNOWN_ARGUMENT` in strict mode |
  * | transport | `sessionId` / `cache` | never reported as unknown |
- * | result | the declared `outputSchema` | parses, is an object, declares `type` |
+ * | result | the declared `outputSchema` | parses, is an object, declares `type` (object or array) |
  *
  * Tagged `Fast`: it is pure inspection, so it belongs in the PR gate.
  */
@@ -184,9 +184,11 @@ class ToolContractMatrixTest {
         withSchema.forEach { spec ->
             val parsed = ToolResultValidator.parse(spec.outputSchema!!)
             assertTrue(parsed is JsonObject, "${ToolRegistryFixture.toolName(spec)}: outputSchema is not a JSON object")
+            val declaredType = (parsed as JsonObject)["type"]?.toString().orEmpty()
             assertTrue(
-                (parsed as JsonObject)["type"]?.toString()?.contains("object") == true,
-                "${ToolRegistryFixture.toolName(spec)}: outputSchema must declare type=object",
+                declaredType.contains("object") || declaredType.contains("array"),
+                "${ToolRegistryFixture.toolName(spec)}: outputSchema must declare type=object or type=array, " +
+                    "because those are the two shapes a tool result can take (saw $declaredType)",
             )
         }
     }
