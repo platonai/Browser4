@@ -21,10 +21,21 @@ import kotlin.test.*
  * prevents data corruption when multiple coroutines write to the same domain
  * simultaneously, while writes to different domains proceed concurrently.
  *
- * DISABLED: Flaky on Windows due to snakeyaml concurrency issues and
- * file-locking during atomic writes. See KnowledgeStore.writeAtomicYaml.
+ * DISABLED, and no longer for the reason it used to be. The YAML/file races are
+ * fixed (one monitor around the shared SnakeYAML instance, a unique temporary file
+ * per write, and reads under the same monitor — see [KnowledgeStore] and the enabled
+ * [KnowledgeStoreAtomicWriteTest], which fails without those fixes). What still fails
+ * here is two assertions that need their own investigation and were never green:
+ *
+ * - `testConcurrentTraceSaves` expects 10 trace files for 10 concurrent saves but
+ *   observes 2, even though every [TraceRecord] carries a distinct `traceId` in its
+ *   file name — either a real trace-loss bug or a stale expectation;
+ * - `testStressConcurrent` expects exact per-domain attempt counts, which the current
+ *   retry behaviour does not guarantee (`expected 10 attempts, was 9`).
+ *
+ * Re-enable per assertion once those two are understood.
  */
-@Disabled("Flaky on Windows due to snakeyaml concurrency and file-locking issues")
+@Disabled("Two expectations need investigation (trace-file count, exact attempt counts); the YAML/file races are fixed")
 @OptIn(ExperimentalPathApi::class)
 @DisplayName("KnowledgeStore — Concurrent Access")
 class KnowledgeStoreConcurrencyTest {
