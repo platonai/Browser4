@@ -503,7 +503,7 @@ data class Arg(
 ### 8.2 需求完成度更新
 
 - **需求 2（示例）**：**110/142**（本轮 77/140 → 110/142）。`experience`(4)、`skill`(1) 缺口清零；tab 剩余 **32** 个低频 setter/selector 家族。剩余缺口由矩阵按域持续报数。
-- **需求 6（返回值校验）**：声明 `outputSchema` 的工具 **10** 个 —— 新增 `tab.dialogStatus`（`{pending,type,message}`，`type`/`message` 故意非必填，因为无驱动回退只答 `{pending:false}`）与 `batch.run`（schema 直接写在 `BatchExecutor.RESULT_SCHEMA`，紧邻它描述的 `BatchOutcome.toMap()`，避免两处漂移）。
+- **需求 6（返回值校验）**：声明 `outputSchema` 的工具 **16** 个 —— 第二轮新增 `experience_query/list/save/deep_learn` 与 `memory_search/read`（此前只有 crawl/command 8 个 + `tab.dialogStatus` + `batch.run`）。契约集中在 `ToolResultSchemas`，两条规则保证不撒谎：**可空性决定字段是否出现**（Jackson 会写出 `null`，而校验器把显式 `null` 既当缺字段又当类型错误，所以只有类上标了 `@JsonInclude(NON_NULL)` 的可空字段才写进 `properties`，其余宁可不写）、**`required` 只列一定写出的字段**（Kotlin 默认值非空即必然出现）。`Instant` 字段（`last_verified`）刻意不声明类型：其线上形态取决于 mapper 的 JavaTime 配置，猜错不是拒绝合法结果就是写进一份假契约。两个域各有一个「跑真实 handler、拿真实载荷过 schema」的测试（`ExperienceToolExecutorTest.outputSchemaAcceptsProduction`、`MemoryToolExecutorTest.outputSchemaAcceptsProduction`），载荷变化超纲会直接失败而不是在生产里刷 `schema_violation`。
 - **需求 8（监控）**：`session.active`、`async.queue.depth` 两个 gauge **已落地**，取值由部署侧注入（`ToolMetrics.registerSessionCountSupplier` / `registerAsyncTaskCountSupplier`），并在 `bindTo` 时随 Spring 注册表重绑（否则 gauge 会继续写进没人抓取的独立注册表）。REST 侧 `McpToolMetricsConfiguration` 从 `PulsarSessionManager.getAllSessions().size` 与 `CrawlService.runningTaskCount()`（`jobStore` 只保留运行中的 job）取值；瘦部署缺 bean 时 gauge 不注册而不是谎报 0。
 - **需求 7（日志）**：见 8.1 第 6 条。
 - **需求 3/5（两通道同码）**：不变，B 侧内置域仍是 `shadow`，切 `error` 需等计数清零。
@@ -521,7 +521,7 @@ data class Arg(
 ### 8.5 本轮之后仍欠的事
 
 1. tab 域 32 个低频方法的可执行示例（矩阵按域报数）。
-2. 需求 6 的覆盖面：132 个工具仍无结果契约；下一步优先 JSON 信封类（`experience_query/list`、`memory_search/read`、`skill_list/info`）。
+2. 需求 6 的覆盖面：**126 个工具仍无结果契约**。下一批候选与各自的拦路石：`webdb.export`（形状清楚：`{total,succeeded,failed,results[]}`，但该执行器目前没有任何测试夹具，声明 schema 就等于无门禁的承诺，故先放着）、`skill.list`（返回**顶层数组**，而契约矩阵现在要求 `outputSchema` 声明 `type=object` —— 要么放宽矩阵规则到 object|array，要么改返回信封）、`html_snapshot.*`（`query`/`summary` 的载荷是分页结构，需先定稳定的信封字段）。
 3. 需求 1.1 的「CI 比对显式覆盖集 == @MCP 扫描集」仍未做（现由 KDoc 提取 + 快照 + 文档漂移门禁 + lint 兜底）。
 4. 需求 8.2 的 OTel span（`mcp.tool.call`）仍未接；`TracingUtils`/`OpenTelemetryConfig` 已有但生产路径无人调用。
 5. `micrometer-registry-prometheus` 仍是 `optional`，`/actuator/prometheus` 需把它提为运行时依赖才可抓取（代码侧无需改动）。

@@ -4,6 +4,7 @@ import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationProvider
+import ai.platon.pulsar.agentic.tools.specs.ToolResultSchemas
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import kotlin.reflect.KClass
 
@@ -57,6 +58,7 @@ class MemoryToolExecutor(
                 ToolSpec.Arg("limit", "Int", "10", "Maximum number of hits (1-50)."),
             ),
             returnType = "String",
+            outputSchema = ToolResultSchemas.MEMORY_SEARCH,
             description = "Search agent memory (past tasks and tool executions) " +
                 "by keywords. Returns hits with taskId, timestamp, tool and a " +
                 "snippet; use memory.read to fetch details. Optionally restrict " +
@@ -74,6 +76,7 @@ class MemoryToolExecutor(
                 ToolSpec.Arg("after", "Int", "0", "Events to include after seq."),
             ),
             returnType = "String",
+            outputSchema = ToolResultSchemas.MEMORY_READ,
             description = "Read a bounded window of memory events of one task " +
                 "around the event seq (defaults to the whole task, newest last). " +
                 "Bounded by the configured read window.",

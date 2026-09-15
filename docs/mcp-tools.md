@@ -588,6 +588,14 @@ Deep Learning: run analysis tools (htmlsnapshot summary, inspect) to build or up
 
 Returns: `String`
 
+<details><summary>Result schema</summary>
+
+```json
+{"type":"object","required":["completed","domain","intent","status_after","promoted","new_confidence","selectors_found"],"properties":{"completed":{"type":"boolean"},"domain":{"type":"string"},"intent":{"type":"string"},"status_after":{"type":"string"},"promoted":{"type":"boolean"},"new_confidence":{"type":"number"},"message":{"type":"string"},"selectors_found":{"type":"integer"}}}
+```
+
+</details>
+
 Examples:
 
 - Analyse a page and promote what it teaches: `{"url": "https://example.com/product/1", "intent": "buy the product"}`
@@ -610,6 +618,14 @@ List stored knowledge entries organized by domain + intent. Filter by domain (fi
 
 Returns: `String`
 
+<details><summary>Result schema</summary>
+
+```json
+{"type":"object","required":["total","page","page_size","total_pages","entries"],"properties":{"total":{"type":"integer"},"page":{"type":"integer"},"page_size":{"type":"integer"},"total_pages":{"type":"integer"},"entries":{"type":"array","items":{"type":"object","required":["domain"],"properties":{"domain":{"type":"string"},"intent":{"type":"string"},"status":{"type":"string"},"retrieval_tier":{"type":"string"},"confidence":{"type":"number"},"site_types":{"type":"array"},"page_patterns":{"type":"array"},"task_types":{"type":"array"},"success_count":{"type":"integer"},"failure_count":{"type":"integer"}}}}}}
+```
+
+</details>
+
 Examples:
 
 - List what is known about one domain: `{"filter": "example.com", "page_size": "50"}`
@@ -629,6 +645,14 @@ Query stored knowledge with intent-based resolution. Classifies intent, then res
 | `intent` | String? | no | null | Free-text intent; omit to match on the URL alone. |
 
 Returns: `String`
+
+<details><summary>Result schema</summary>
+
+```json
+{"type":"object","required":["tier","confidence"],"properties":{"tier":{"type":"string"},"confidence":{"type":"number"},"domain":{"type":"string"},"intent":{"type":"string"},"url_pattern":{"type":"string"},"page_type":{"type":"string"},"task_type":{"type":"string"},"summary":{"type":"string"},"extraction_query":{"type":"string"},"status":{"type":"string"},"primary_selectors":{"type":"object"},"warnings":{"type":"array","items":{"type":"string"}},"known_blockers":{"type":"array"},"steps":{"type":"array"}}}
+```
+
+</details>
 
 Examples:
 
@@ -653,6 +677,14 @@ Fast Learning: save task trace and update experience stats. Runs in ~tens of ms.
 | `facts` | String? | no | null | Retrospective knowledge (JSON string or object). |
 
 Returns: `String`
+
+<details><summary>Result schema</summary>
+
+```json
+{"type":"object","required":["saved","domain","outcome","confidence","retrieval_tier"],"properties":{"saved":{"type":"boolean"},"domain":{"type":"string"},"intent":{"type":"string"},"task_type":{"type":"string"},"outcome":{"type":"string"},"trace_path":{"type":"string"},"confidence":{"type":"number"},"retrieval_tier":{"type":"string"},"message":{"type":"string"},"facts_merged":{"type":"boolean"},"facts_status":{"type":"string"},"facts_rejected":{"type":"boolean"},"facts_message":{"type":"string"}}}
+```
+
+</details>
 
 Examples:
 
@@ -879,6 +911,14 @@ Read a bounded window of memory events of one task around the event seq (default
 
 Returns: `String`
 
+<details><summary>Result schema</summary>
+
+```json
+{"type":"object","required":["taskId","events"],"properties":{"taskId":{"type":"string"},"events":{"type":"array","items":{"type":"object","required":["seq","ts","agentUuid","taskId"],"properties":{"seq":{"type":"integer"},"ts":{"type":"integer"},"agentUuid":{"type":"string"},"taskId":{"type":"string"}}}}}}
+```
+
+</details>
+
 Examples:
 
 - Read a task's events: `{"taskId": "<task-id>"}`
@@ -898,6 +938,14 @@ Search agent memory (past tasks and tool executions) by keywords. Returns hits w
 | `limit` | Int | no | 10 | Maximum number of hits (1-50). |
 
 Returns: `String`
+
+<details><summary>Result schema</summary>
+
+```json
+{"type":"object","required":["hits"],"properties":{"hits":{"type":"array","items":{"type":"object","required":["taskId","ts","snippet","tier"],"properties":{"taskId":{"type":"string"},"ts":{"type":"integer"},"snippet":{"type":"string"},"tier":{"type":"string"}}}}}}
+```
+
+</details>
 
 Examples:
 

@@ -418,7 +418,8 @@
       "notes" : "Runs analysis tools against the current page and takes seconds, not milliseconds.",
       "expectsError" : false,
       "executable" : true
-    } ]
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"completed\",\"domain\",\"intent\",\"status_after\",\"promoted\",\"new_confidence\",\"selectors_found\"],\"properties\":{\"completed\":{\"type\":\"boolean\"},\"domain\":{\"type\":\"string\"},\"intent\":{\"type\":\"string\"},\"status_after\":{\"type\":\"string\"},\"promoted\":{\"type\":\"boolean\"},\"new_confidence\":{\"type\":\"number\"},\"message\":{\"type\":\"string\"},\"selectors_found\":{\"type\":\"integer\"}}}"
   }, {
     "domain" : "experience",
     "method" : "list",
@@ -460,7 +461,8 @@
       "notes" : "Every argument is optional — `experience_list` with no arguments lists everything.",
       "expectsError" : false,
       "executable" : true
-    } ]
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"total\",\"page\",\"page_size\",\"total_pages\",\"entries\"],\"properties\":{\"total\":{\"type\":\"integer\"},\"page\":{\"type\":\"integer\"},\"page_size\":{\"type\":\"integer\"},\"total_pages\":{\"type\":\"integer\"},\"entries\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"domain\"],\"properties\":{\"domain\":{\"type\":\"string\"},\"intent\":{\"type\":\"string\"},\"status\":{\"type\":\"string\"},\"retrieval_tier\":{\"type\":\"string\"},\"confidence\":{\"type\":\"number\"},\"site_types\":{\"type\":\"array\"},\"page_patterns\":{\"type\":\"array\"},\"task_types\":{\"type\":\"array\"},\"success_count\":{\"type\":\"integer\"},\"failure_count\":{\"type\":\"integer\"}}}}}}"
   }, {
     "domain" : "experience",
     "method" : "query",
@@ -489,7 +491,8 @@
       "notes" : "Omit `intent` to let the stored (domain, url) facts answer.",
       "expectsError" : false,
       "executable" : true
-    } ]
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"tier\",\"confidence\"],\"properties\":{\"tier\":{\"type\":\"string\"},\"confidence\":{\"type\":\"number\"},\"domain\":{\"type\":\"string\"},\"intent\":{\"type\":\"string\"},\"url_pattern\":{\"type\":\"string\"},\"page_type\":{\"type\":\"string\"},\"task_type\":{\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"extraction_query\":{\"type\":\"string\"},\"status\":{\"type\":\"string\"},\"primary_selectors\":{\"type\":\"object\"},\"warnings\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"known_blockers\":{\"type\":\"array\"},\"steps\":{\"type\":\"array\"}}}"
   }, {
     "domain" : "experience",
     "method" : "save",
@@ -542,7 +545,8 @@
       "notes" : "`facts` is optional; pass it to merge selectors, blockers or anti-patterns.",
       "expectsError" : false,
       "executable" : true
-    } ]
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"saved\",\"domain\",\"outcome\",\"confidence\",\"retrieval_tier\"],\"properties\":{\"saved\":{\"type\":\"boolean\"},\"domain\":{\"type\":\"string\"},\"intent\":{\"type\":\"string\"},\"task_type\":{\"type\":\"string\"},\"outcome\":{\"type\":\"string\"},\"trace_path\":{\"type\":\"string\"},\"confidence\":{\"type\":\"number\"},\"retrieval_tier\":{\"type\":\"string\"},\"message\":{\"type\":\"string\"},\"facts_merged\":{\"type\":\"boolean\"},\"facts_status\":{\"type\":\"string\"},\"facts_rejected\":{\"type\":\"boolean\"},\"facts_message\":{\"type\":\"string\"}}}"
   }, {
     "domain" : "html_snapshot",
     "method" : "capture",
@@ -910,7 +914,8 @@
       },
       "expectsError" : false,
       "executable" : true
-    } ]
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"taskId\",\"events\"],\"properties\":{\"taskId\":{\"type\":\"string\"},\"events\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"seq\",\"ts\",\"agentUuid\",\"taskId\"],\"properties\":{\"seq\":{\"type\":\"integer\"},\"ts\":{\"type\":\"integer\"},\"agentUuid\":{\"type\":\"string\"},\"taskId\":{\"type\":\"string\"}}}}}}"
   }, {
     "domain" : "memory",
     "method" : "search",
@@ -943,7 +948,8 @@
       },
       "expectsError" : false,
       "executable" : true
-    } ]
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"hits\"],\"properties\":{\"hits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"taskId\",\"ts\",\"snippet\",\"tier\"],\"properties\":{\"taskId\":{\"type\":\"string\"},\"ts\":{\"type\":\"integer\"},\"snippet\":{\"type\":\"string\"},\"tier\":{\"type\":\"string\"}}}}}}"
   }, {
     "domain" : "skill",
     "method" : "info",

@@ -3,6 +3,7 @@ package ai.platon.pulsar.agentic.tools.experience
 import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
+import ai.platon.pulsar.agentic.tools.specs.ToolResultSchemas
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import kotlin.reflect.KClass
 import java.time.Instant
@@ -63,6 +64,7 @@ class ExperienceToolExecutor(
                 ToolSpec.Arg("facts", "String?", "null", "Retrospective knowledge (JSON string or object)."),
             ),
             returnType = "String",
+            outputSchema = ToolResultSchemas.EXPERIENCE_SAVE,
             description = "Fast Learning: save task trace and update experience stats. " +
                 "Runs in ~tens of ms. No analysis tools executed. " +
                 "Use experience_deep_learn for analysis and knowledge promotion. " +
@@ -92,6 +94,7 @@ class ExperienceToolExecutor(
                 ToolSpec.Arg("intent", "String?", "null", "Free-text intent; omit to match on the URL alone."),
             ),
             returnType = "String",
+            outputSchema = ToolResultSchemas.EXPERIENCE_QUERY,
             description = "Query stored knowledge with intent-based resolution. " +
                 "Classifies intent, then resolves: (domain,intent) → (domain,url) → " +
                 "(family,intent) → (category,intent) → (universal,intent) → cold start. " +
@@ -121,6 +124,7 @@ class ExperienceToolExecutor(
                 ToolSpec.Arg("page_size", "Int", "20", "Entries per page."),
             ),
             returnType = "String",
+            outputSchema = ToolResultSchemas.EXPERIENCE_LIST,
             description = "List stored knowledge entries organized by domain + intent. " +
                 "Filter by domain (filter) or intent (intent_filter). Paginated.",
             examples = listOf(
@@ -140,6 +144,7 @@ class ExperienceToolExecutor(
                 ToolSpec.Arg("force", "Boolean", "false"),
             ),
             returnType = "String",
+            outputSchema = ToolResultSchemas.EXPERIENCE_DEEP_LEARN,
             description = "Deep Learning: run analysis tools (htmlsnapshot summary, inspect) " +
                 "to build or update KnowledgeFacts. Creates hypothesis on first run, " +
                 "promotes to verified when confidence threshold met. " +
