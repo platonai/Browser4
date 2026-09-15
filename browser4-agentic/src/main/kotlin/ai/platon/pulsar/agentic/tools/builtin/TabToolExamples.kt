@@ -178,6 +178,154 @@ internal object TabToolExamples {
         "isEnabled" to listOf(
             ToolExample(title = "Is the submit button enabled?", args = mapOf("selector" to "#submit")),
         ),
+        // The long tail: mouse and scroll commands, the typed element readers and
+        // the in-page JavaScript escape hatches. Written out so the published
+        // reference holds a callable example for *every* tool the tab domain
+        // advertises, not just the headline ones — the contract matrix drives each
+        // of these through the validator, so a wrong argument name fails the build.
+        "clickMatches" to listOf(
+            ToolExample(
+                title = "Click the first button whose class says buy",
+                args = mapOf("selector" to "button", "attrName" to "class", "pattern" to "buy"),
+            ),
+        ),
+        "dragAndDrop" to listOf(
+            ToolExample(
+                title = "Drag a slider 50px to the right",
+                args = mapOf("selector" to "#slider", "deltaX" to "50"),
+            ),
+        ),
+        "moveMouseTo" to listOf(
+            ToolExample(
+                title = "Hover 10px right of the avatar",
+                args = mapOf("selector" to "#avatar", "deltaX" to "10"),
+                notes = "Coordinates are relative to the element's top-left corner.",
+            ),
+        ),
+        "mouseWheelDown" to listOf(
+            ToolExample(title = "Scroll three wheel notches down", args = mapOf("count" to "3")),
+        ),
+        "mouseWheelUp" to listOf(
+            ToolExample(title = "Scroll three wheel notches up", args = mapOf("count" to "3")),
+        ),
+        "scrollDown" to listOf(
+            ToolExample(title = "Scroll down one viewport", args = mapOf("count" to "1")),
+        ),
+        "scrollUp" to listOf(
+            ToolExample(title = "Scroll up one viewport", args = mapOf("count" to "1")),
+        ),
+        "scrollToMiddle" to listOf(
+            ToolExample(title = "Scroll to the middle of the page", args = mapOf("ratio" to "0.5")),
+        ),
+        "evaluate" to listOf(
+            ToolExample(title = "Read the document title", args = mapOf("expression" to "document.title")),
+        ),
+        "evaluateDetail" to listOf(
+            ToolExample(
+                title = "Evaluate and keep the failure detail",
+                args = mapOf("expression" to "document.querySelectorAll('a').length"),
+            ),
+        ),
+        "evaluateValueDetail" to listOf(
+            ToolExample(
+                title = "Read an element's text with a function declaration",
+                args = mapOf(
+                    "selector" to "#price",
+                    "functionDeclaration" to "function() { return this.textContent; }",
+                ),
+            ),
+        ),
+        "keyDown" to listOf(
+            ToolExample(title = "Hold Shift down", args = mapOf("key" to "Shift")),
+        ),
+        "keyUp" to listOf(
+            ToolExample(title = "Release Shift", args = mapOf("key" to "Shift")),
+        ),
+        "isChecked" to listOf(
+            ToolExample(title = "Is the terms checkbox ticked?", args = mapOf("selector" to "#terms")),
+        ),
+        "isHidden" to listOf(
+            ToolExample(title = "Is the cookie banner hidden?", args = mapOf("selector" to "#cookie-banner")),
+        ),
+        "selectFirstTextOrNull" to listOf(
+            ToolExample(title = "Read the first heading's text", args = mapOf("selector" to "h1")),
+        ),
+        "selectTextAll" to listOf(
+            ToolExample(title = "Read every price on the page", args = mapOf("selector" to ".price")),
+        ),
+        "selectAttributes" to listOf(
+            ToolExample(
+                title = "Read the attributes of every link",
+                args = mapOf("selector" to "a"),
+                notes = "Without `attrName` the whole attribute map per element is returned.",
+            ),
+        ),
+        "selectAttributeAll" to listOf(
+            ToolExample(
+                title = "Collect every href on the page",
+                args = mapOf("selector" to "a", "attrName" to "href"),
+            ),
+        ),
+        "selectFirstAttributeOrNull" to listOf(
+            ToolExample(
+                title = "Read one link's target",
+                args = mapOf("selector" to "a", "attrName" to "href"),
+            ),
+        ),
+        "selectFirstPropertyValueOrNull" to listOf(
+            ToolExample(
+                title = "Read an input's current value",
+                args = mapOf("selector" to "#email", "propName" to "value"),
+            ),
+        ),
+        "selectPropertyValueAll" to listOf(
+            ToolExample(
+                title = "Read every row's id property",
+                args = mapOf("selector" to "tr", "propName" to "id"),
+            ),
+        ),
+        "setAttributeAll" to listOf(
+            ToolExample(
+                title = "Mark every card as audited",
+                args = mapOf("selector" to ".card", "attrName" to "data-audited", "attrValue" to "1"),
+            ),
+        ),
+        "setProperty" to listOf(
+            ToolExample(
+                title = "Set an input's value property",
+                args = mapOf("selector" to "#email", "propName" to "value", "propValue" to "a@b.c"),
+                notes = "Prefer `fill` for human-like typing; `setProperty` writes the DOM directly.",
+            ),
+        ),
+        "setPropertyAll" to listOf(
+            ToolExample(
+                title = "Clear every checkbox's checked property",
+                args = mapOf("selector" to "input[type=checkbox]", "propName" to "checked", "propValue" to "false"),
+            ),
+        ),
+        "deleteCookies" to listOf(
+            ToolExample(title = "Delete one cookie by name", args = mapOf("name" to "session_id")),
+        ),
+        "networkRequestDetail" to listOf(
+            ToolExample(
+                title = "Inspect a captured request",
+                args = mapOf("requestId" to "<request-id>"),
+                notes = "Take the id from `network_requests`; bodies are only kept when recording asked for them.",
+            ),
+        ),
+        "loadResource" to listOf(
+            ToolExample(
+                title = "Load a page with the browser's loader",
+                args = mapOf("url" to "https://example.com"),
+            ),
+        ),
+        "loadJsoupResource" to listOf(
+            ToolExample(
+                title = "Fetch a page without a browser",
+                args = mapOf("url" to "https://example.com"),
+                notes = "A plain HTTP fetch (Jsoup): no JavaScript runs, so SPAs return an empty shell.",
+            ),
+        ),
         // No-argument reads and utilities: the empty call *is* the example.
         "title" to listOf(ToolExample(title = "Page title", runnable = true)),
         "currentUrl" to listOf(ToolExample(title = "Current URL", runnable = true)),
@@ -193,6 +341,9 @@ internal object TabToolExamples {
         "networkRequests" to listOf(ToolExample(title = "List network requests", runnable = true)),
         "pageSource" to listOf(ToolExample(title = "Read the page HTML", runnable = true)),
         "referrer" to listOf(ToolExample(title = "Read the referrer", runnable = true)),
+        "baseURI" to listOf(ToolExample(title = "Read the document base URI", runnable = true)),
+        "url" to listOf(ToolExample(title = "Read the current URL (alias of current_url)", runnable = true)),
+        "newJsoupSession" to listOf(ToolExample(title = "Open a browser-less Jsoup session", runnable = true)),
         "documentURI" to listOf(ToolExample(title = "Read the document URI", runnable = true)),
         "nanoDOMTree" to listOf(ToolExample(title = "Dump the DOM as YAML", runnable = true)),
         "getCookies" to listOf(ToolExample(title = "List cookies", runnable = true)),

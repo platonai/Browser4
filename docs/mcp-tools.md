@@ -1087,6 +1087,10 @@ Returns the document's baseURI.
 
 Returns: `String`
 
+Examples:
+
+- Read the document base URI: no arguments
+
 <details><summary>Full documentation</summary>
 
 Returns the document's baseURI.
@@ -1248,12 +1252,7 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.clickMatches("button", "type", "submit")
-       *
-  ```
+- Click the first button whose class says buy: `{"selector": "button", "attrName": "class", "pattern": "buy"}`
 
 <details><summary>Full documentation</summary>
 
@@ -1480,12 +1479,7 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.deleteCookies("name", "https://www.example.com")
-       *
-  ```
+- Delete one cookie by name: `{"name": "session_id"}`
 
 <details><summary>Full documentation</summary>
 
@@ -1620,6 +1614,10 @@ Performs a drag, dragenter, dragover, and drop in sequence.
 
 Returns: `Unit`
 
+Examples:
+
+- Drag a slider 50px to the right: `{"selector": "#slider", "deltaX": "50"}`
+
 ### `eval`
 
 ```
@@ -1664,26 +1662,7 @@ Returns: `Any?`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * val title = driver.evaluate("document.title")
-       *
-  ```
-- Example usage:
-
-  ```kotlin
-  * val code = """
-       * () => {
-       *   const a = 10;
-       *   const b = 20;
-       *   return a * b;
-       * }
-       * """.trimIndent()
-       *
-       * val result = driver.evaluate(code)
-       *
-  ```
+- Read the document title: `{"expression": "document.title"}`
 
 <details><summary>Full documentation</summary>
 
@@ -1718,6 +1697,10 @@ returns detailed evaluation metadata (beta).
 | `expression` | String | yes |  | The JavaScript expression to evaluate. |
 
 Returns: `JsEvaluation?`
+
+Examples:
+
+- Evaluate and keep the failure detail: `{"expression": "document.querySelectorAll('a').length"}`
 
 ### `evaluate_value`, `browser_evaluate`
 
@@ -1769,6 +1752,10 @@ Returns detailed value evaluation metadata for the element located by [selector]
 | `functionDeclaration` | String | yes |  | The JavaScript function declaration to execute against the matched element. |
 
 Returns: `JsEvaluation?`
+
+Examples:
+
+- Read an element's text with a function declaration: `{"selector": "#price", "functionDeclaration": "function() { return this.textContent; }"}`
 
 ### `execute_cdp_command`
 
@@ -2153,12 +2140,7 @@ Returns: `Boolean`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.isChecked("input[name='agree']")
-       *
-  ```
+- Is the terms checkbox ticked?: `{"selector": "#terms"}`
 
 <details><summary>Full documentation</summary>
 
@@ -2202,12 +2184,7 @@ Returns: `Boolean`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.isHidden("input[name='q']")
-       *
-  ```
+- Is the cookie banner hidden?: `{"selector": "#cookie-banner"}`
 
 <details><summary>Full documentation</summary>
 
@@ -2259,13 +2236,7 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.keyDown("Shift")
-       * driver.keyDown("Control")
-       *
-  ```
+- Hold Shift down: `{"key": "Shift"}`
 
 <details><summary>Full documentation</summary>
 
@@ -2293,13 +2264,7 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.keyUp("Shift")
-       * driver.keyUp("Control")
-       *
-  ```
+- Release Shift: `{"key": "Shift"}`
 
 <details><summary>Full documentation</summary>
 
@@ -2325,6 +2290,11 @@ Load the url as a resource with Jsoup rather than browser rendering, with the la
 
 Returns: `Connection.Response`
 
+Examples:
+
+- Fetch a page without a browser: `{"url": "https://example.com"}`
+  - A plain HTTP fetch (Jsoup): no JavaScript runs, so SPAs return an empty shell.
+
 <details><summary>Full documentation</summary>
 
 Load the url as a resource with Jsoup rather than browser rendering, with the last page's context.
@@ -2346,6 +2316,10 @@ Load the url as a resource without browser rendering, with the last page's conte
 | `url` | String | yes |  | The URL to load. |
 
 Returns: `NetworkResourceResponse`
+
+Examples:
+
+- Load a page with the browser's loader: `{"url": "https://example.com"}`
 
 <details><summary>Full documentation</summary>
 
@@ -2511,12 +2485,7 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.mouseWheelDown(3)
-       *
-  ```
+- Scroll three wheel notches down: `{"count": "3"}`
 
 <details><summary>Full documentation</summary>
 
@@ -2547,12 +2516,7 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.mouseWheelUp(3)
-       *
-  ```
+- Scroll three wheel notches up: `{"count": "3"}`
 
 <details><summary>Full documentation</summary>
 
@@ -2582,12 +2546,8 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.moveMouseTo("h2.title")
-       *
-  ```
+- Hover 10px right of the avatar: `{"selector": "#avatar", "deltaX": "10"}`
+  - Coordinates are relative to the element's top-left corner.
 
 <details><summary>Full documentation</summary>
 
@@ -2664,6 +2624,11 @@ Fetch the full detail of one tracked network request, including headers, timing,
 | `requestId` | String | yes |  | requestId: String |
 
 Returns: `Map<String, Any?>`
+
+Examples:
+
+- Inspect a captured request: `{"requestId": "<request-id>"}`
+  - Take the id from `network_requests`; bodies are only kept when recording asked for them.
 
 <details><summary>Full documentation</summary>
 
@@ -2781,6 +2746,10 @@ tab.newJsoupSession()
 Create a new Jsoup session with the last page's context, which means, the same headers and cookies.
 
 Returns: `Connection`
+
+Examples:
+
+- Open a browser-less Jsoup session: no arguments
 
 ### `open`
 
@@ -3108,12 +3077,7 @@ Returns: `Double`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.scrollDown(3)
-       *
-  ```
+- Scroll down one viewport: `{"count": "1"}`
 
 <details><summary>Full documentation</summary>
 
@@ -3193,14 +3157,7 @@ Returns: `Double`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.scrollToMiddle(0.2)
-       * driver.scrollToMiddle(0.5)
-       * driver.scrollToMiddle(0.8)
-       *
-  ```
+- Scroll to the middle of the page: `{"ratio": "0.5"}`
 
 <details><summary>Full documentation</summary>
 
@@ -3277,12 +3234,7 @@ Returns: `Double`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.scrollUp(3)
-       *
-  ```
+- Scroll up one viewport: `{"count": "1"}`
 
 <details><summary>Full documentation</summary>
 
@@ -3313,12 +3265,7 @@ Returns: `List<String>`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * val classes = driver.selectAttributeAll("h2.title", "class")
-       *
-  ```
+- Collect every href on the page: `{"selector": "a", "attrName": "href"}`
 
 <details><summary>Full documentation</summary>
 
@@ -3346,12 +3293,8 @@ Returns: `Map<String, String>`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * val classes = driver.selectAttributes("h2.title", "class")
-       *
-  ```
+- Read the attributes of every link: `{"selector": "a"}`
+  - Without `attrName` the whole attribute map per element is returned.
 
 <details><summary>Full documentation</summary>
 
@@ -3380,12 +3323,7 @@ Returns: `String?`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * val classes = driver.selectFirstAttributeOrNull("h2.title", "class")
-       *
-  ```
+- Read one link's target: `{"selector": "a", "attrName": "href"}`
 
 <details><summary>Full documentation</summary>
 
@@ -3411,6 +3349,10 @@ Returns the node's property value, the node is located by [selector], the proper
 | `propName` | String | yes |  | The property name to retrieve. |
 
 Returns: `String?`
+
+Examples:
+
+- Read an input's current value: `{"selector": "#email", "propName": "value"}`
 
 <details><summary>Full documentation</summary>
 
@@ -3438,12 +3380,7 @@ Returns: `String?`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * val text = driver.selectFirstTextOrNull("h2.title")
-       *
-  ```
+- Read the first heading's text: `{"selector": "h1"}`
 
 <details><summary>Full documentation</summary>
 
@@ -3491,6 +3428,10 @@ Returns the nodes' property values, the nodes are located by [selector], the pro
 
 Returns: `List<String>`
 
+Examples:
+
+- Read every row's id property: `{"selector": "tr", "propName": "id"}`
+
 <details><summary>Full documentation</summary>
 
 Returns the nodes' property values, the nodes are located by [selector], the property is [propName].
@@ -3517,12 +3458,7 @@ Returns: `List<String>`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * val texts = driver.selectTextAll("h2")
-       *
-  ```
+- Read every price on the page: `{"selector": ".price"}`
 
 <details><summary>Full documentation</summary>
 
@@ -3580,12 +3516,7 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.setAttributeAll("h2.title", "class", "header")
-       *
-  ```
+- Mark every card as audited: `{"selector": ".card", "attrName": "data-audited", "attrValue": "1"}`
 
 <details><summary>Full documentation</summary>
 
@@ -3613,12 +3544,8 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.setProperty("input#input", "value")
-       *
-  ```
+- Set an input's value property: `{"selector": "#email", "propName": "value", "propValue": "a@b.c"}`
+  - Prefer `fill` for human-like typing; `setProperty` writes the DOM directly.
 
 <details><summary>Full documentation</summary>
 
@@ -3646,12 +3573,7 @@ Returns: `Unit`
 
 Examples:
 
-- Example usage:
-
-  ```kotlin
-  * driver.setPropertyAll("input#input", "value")
-       *
-  ```
+- Clear every checkbox's checked property: `{"selector": "input[type=checkbox]", "propName": "checked", "propValue": "false"}`
 
 <details><summary>Full documentation</summary>
 
@@ -3816,6 +3738,10 @@ tab.url()
 The URL read-only property of the Document interface returns the document location as a string.
 
 Returns: `String`
+
+Examples:
+
+- Read the current URL (alias of current_url): no arguments
 
 <details><summary>Full documentation</summary>
 

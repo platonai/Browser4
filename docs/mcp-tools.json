@@ -1125,6 +1125,12 @@
     "signature" : "tab.baseURI()",
     "description" : "Returns the document's baseURI.",
     "returnType" : "String",
+    "examples" : [ {
+      "title" : "Read the document base URI",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
     "help" : "Returns the document's baseURI.\n\nThe baseURI is a property of Node, it's the absolute base URL of the document containing the node. A baseURI is used to resolve relative URLs.\n\nThe base URL is determined as follows: 1. By default, the base URL is the location of the document (as determined by window.location). 2. If the document has an `<base>` element, its href attribute is used."
   }, {
     "domain" : "tab",
@@ -1282,9 +1288,14 @@
       "description" : "The number of times to click."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.clickMatches(\"button\", \"type\", \"submit\")\n     *",
-      "expectsError" : false
+      "title" : "Click the first button whose class says buy",
+      "args" : {
+        "selector" : "button",
+        "attrName" : "class",
+        "pattern" : "buy"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "This method clicks an element with [selector] whose attribute name is [attrName] and value matches [pattern], and then focuses it.\n\nIf there's no element matching [selector], or the element has no attribute [attrName], or the element's attribute value doesn't match [pattern], nothing to do.\n\n```kotlin driver.clickMatches(\"button\", \"type\", \"submit\") ```\n\nelements, the first will be focused."
   }, {
@@ -1481,9 +1492,12 @@
       "description" : "If specified, deletes only cookies with the exact path."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.deleteCookies(\"name\", \"https://www.example.com\")\n     *",
-      "expectsError" : false
+      "title" : "Delete one cookie by name",
+      "args" : {
+        "name" : "session_id"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Deletes browser cookies with matching name and url or domain/path pair.\n\n```kotlin driver.deleteCookies(\"name\", \"https://www.example.com\") ```\n\n> NOTE: At least one of the url and domain needs to be specified\n\nmatch provided URL."
   }, {
@@ -1598,6 +1612,15 @@
       "required" : false,
       "default" : "0",
       "description" : "The distance to drag vertically."
+    } ],
+    "examples" : [ {
+      "title" : "Drag a slider 50px to the right",
+      "args" : {
+        "selector" : "#slider",
+        "deltaX" : "50"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "tab",
@@ -1635,13 +1658,12 @@
       "description" : "JavaScript expression to evaluate"
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* val title = driver.evaluate(\"document.title\")\n     *",
-      "expectsError" : false
-    }, {
-      "title" : "Example usage",
-      "code" : "* val code = \"\"\"\n     * () => {\n     *   const a = 10;\n     *   const b = 20;\n     *   return a * b;\n     * }\n     * \"\"\".trimIndent()\n     *\n     * val result = driver.evaluate(code)\n     *",
-      "expectsError" : false
+      "title" : "Read the document title",
+      "args" : {
+        "expression" : "document.title"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Executes JavaScript in the context of the currently selected frame or window.\n\nIf the result is not JavaScript object, it is not returned.\n\nIf you want to execute a function, convert it to IIFE (Immediately Invoked Function Expression).\n\n```kotlin val title = driver.evaluate(\"document.title\") ```\n\nMulti-line JavaScript code:\n\n```kotlin val code = \"\"\" () => { const a = 10; const b = 20; return a * b; } \"\"\".trimIndent()\n\nval result = driver.evaluate(code) ```\n\n### 🔍 Notes: * **Wrap the code in an IIFE (Immediately Invoked Function Expression)** to return a value. * **Escape line breaks** with `\\n`."
   }, {
@@ -1656,6 +1678,14 @@
       "type" : "String",
       "required" : true,
       "description" : "The JavaScript expression to evaluate."
+    } ],
+    "examples" : [ {
+      "title" : "Evaluate and keep the failure detail",
+      "args" : {
+        "expression" : "document.querySelectorAll('a').length"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "tab",
@@ -1727,6 +1757,15 @@
       "type" : "String",
       "required" : true,
       "description" : "The JavaScript function declaration to execute against the matched element."
+    } ],
+    "examples" : [ {
+      "title" : "Read an element's text with a function declaration",
+      "args" : {
+        "selector" : "#price",
+        "functionDeclaration" : "function() { return this.textContent; }"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ]
   }, {
     "domain" : "tab",
@@ -2015,9 +2054,12 @@
       "description" : "The selector of the element, multiple formats supported. The element is checked for checked state."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.isChecked(\"input[name='agree']\")\n     *",
-      "expectsError" : false
+      "title" : "Is the terms checkbox ticked?",
+      "args" : {
+        "selector" : "#terms"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Returns whether the element is checked.\n\n```kotlin driver.isChecked(\"input[name='agree']\") ```"
   }, {
@@ -2055,9 +2097,12 @@
       "description" : "The selector of the element, multiple formats supported. The element is checked for visibility state."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.isHidden(\"input[name='q']\")\n     *",
-      "expectsError" : false
+      "title" : "Is the cookie banner hidden?",
+      "args" : {
+        "selector" : "#cookie-banner"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Returns whether the element is hidden.\n\n```kotlin driver.isHidden(\"input[name='q']\") ```"
   }, {
@@ -2096,9 +2141,12 @@
       "description" : "A key to press and hold. The key can be a single character, a key name, or a combination of both. See [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)"
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.keyDown(\"Shift\")\n     * driver.keyDown(\"Control\")\n     *",
-      "expectsError" : false
+      "title" : "Hold Shift down",
+      "args" : {
+        "key" : "Shift"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Presses and holds a keyboard key on the currently focused element.\n\n```kotlin driver.keyDown(\"Shift\") driver.keyDown(\"Control\") ```\n\nSee [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)"
   }, {
@@ -2115,9 +2163,12 @@
       "description" : "A key to release. The key can be a single character, a key name, or a combination of both. See [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)"
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.keyUp(\"Shift\")\n     * driver.keyUp(\"Control\")\n     *",
-      "expectsError" : false
+      "title" : "Release Shift",
+      "args" : {
+        "key" : "Shift"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Releases a previously pressed keyboard key on the currently focused element.\n\n```kotlin driver.keyUp(\"Shift\") driver.keyUp(\"Control\") ```\n\nSee [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)"
   }, {
@@ -2133,6 +2184,15 @@
       "required" : true,
       "description" : "The URL to load."
     } ],
+    "examples" : [ {
+      "title" : "Fetch a page without a browser",
+      "args" : {
+        "url" : "https://example.com"
+      },
+      "notes" : "A plain HTTP fetch (Jsoup): no JavaScript runs, so SPAs return an empty shell.",
+      "expectsError" : false,
+      "executable" : true
+    } ],
     "help" : "Load the url as a resource with Jsoup rather than browser rendering, with the last page's context.\n\nThis means, the same headers and cookies."
   }, {
     "domain" : "tab",
@@ -2146,6 +2206,14 @@
       "type" : "String",
       "required" : true,
       "description" : "The URL to load."
+    } ],
+    "examples" : [ {
+      "title" : "Load a page with the browser's loader",
+      "args" : {
+        "url" : "https://example.com"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Load the url as a resource without browser rendering, with the last page's context.\n\nThis means, the same headers and cookies."
   }, {
@@ -2324,9 +2392,12 @@
       "description" : "The delay time in milliseconds between ticks. Use 0 for no delay, -1 (default) for the policy-based random delay, or a positive value for a fixed delay."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.mouseWheelDown(3)\n     *",
-      "expectsError" : false
+      "title" : "Scroll three wheel notches down",
+      "args" : {
+        "count" : "3"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "The mouse wheels down for [count] times.\n\n```kotlin driver.mouseWheelDown(3) ```\n\nUse 0 for no delay, -1 (default) for the policy-based random delay, or a positive value for a fixed delay."
   }, {
@@ -2362,9 +2433,12 @@
       "description" : "The delay time in milliseconds between ticks. Use 0 for no delay, -1 (default) for the policy-based random delay, or a positive value for a fixed delay."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.mouseWheelUp(3)\n     *",
-      "expectsError" : false
+      "title" : "Scroll three wheel notches up",
+      "args" : {
+        "count" : "3"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "The mouse wheels up for [count] times.\n\n```kotlin driver.mouseWheelUp(3) ```\n\nUse 0 for no delay, -1 (default) for the policy-based random delay, or a positive value for a fixed delay."
   }, {
@@ -2392,9 +2466,14 @@
       "description" : "The distance to the top of the element."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.moveMouseTo(\"h2.title\")\n     *",
-      "expectsError" : false
+      "title" : "Hover 10px right of the avatar",
+      "args" : {
+        "selector" : "#avatar",
+        "deltaX" : "10"
+      },
+      "notes" : "Coordinates are relative to the element's top-left corner.",
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "The mouse moves to the element with [selector].\n\n```kotlin driver.moveMouseTo(\"h2.title\") ```"
   }, {
@@ -2457,6 +2536,15 @@
       "type" : "String",
       "required" : true,
       "description" : "requestId: String"
+    } ],
+    "examples" : [ {
+      "title" : "Inspect a captured request",
+      "args" : {
+        "requestId" : "<request-id>"
+      },
+      "notes" : "Take the id from `network_requests`; bodies are only kept when recording asked for them.",
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "tab.networkRequestDetail(requestId: String)\n\nReturns request/response metadata plus the response body (fetched on demand) for the\nrequest id shown by tab.networkRequests()."
   }, {
@@ -2581,7 +2669,13 @@
     "mcpNames" : [ "new_jsoup_session" ],
     "signature" : "tab.newJsoupSession()",
     "description" : "Create a new Jsoup session with the last page's context, which means, the same headers and cookies.",
-    "returnType" : "Connection"
+    "returnType" : "Connection",
+    "examples" : [ {
+      "title" : "Open a browser-less Jsoup session",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ]
   }, {
     "domain" : "tab",
     "method" : "open",
@@ -2852,9 +2946,12 @@
       "description" : "The times to scroll down."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.scrollDown(3)\n     *",
-      "expectsError" : false
+      "title" : "Scroll down one viewport",
+      "args" : {
+        "count" : "1"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "The current page frame scrolls down for [count] times.\n\n```kotlin driver.scrollDown(3) ```\n\nNOTE: This uses JS scrollBy for fast, direct scroll control. For realistic user-like scrolling that triggers all event handlers, use [mouseWheelDown]."
   }, {
@@ -2907,9 +3004,12 @@
       "description" : "The ratio of the page to scroll to, 0.0 means the top, 1.0 means the bottom."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.scrollToMiddle(0.2)\n     * driver.scrollToMiddle(0.5)\n     * driver.scrollToMiddle(0.8)\n     *",
-      "expectsError" : false
+      "title" : "Scroll to the middle of the page",
+      "args" : {
+        "ratio" : "0.5"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "The current page frame scrolls to the middle.\n\n```kotlin driver.scrollToMiddle(0.2) driver.scrollToMiddle(0.5) driver.scrollToMiddle(0.8) ```"
   }, {
@@ -2969,9 +3069,12 @@
       "description" : "The times to scroll up."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.scrollUp(3)\n     *",
-      "expectsError" : false
+      "title" : "Scroll up one viewport",
+      "args" : {
+        "count" : "1"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "The current page frame scrolls up for [count] times.\n\n```kotlin driver.scrollUp(3) ```\n\nNOTE: This uses JS scrollBy for fast, direct scroll control. For realistic user-like scrolling that triggers all event handlers, use [mouseWheelUp]."
   }, {
@@ -3005,9 +3108,13 @@
       "description" : "The maximum number of nodes to select."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* val classes = driver.selectAttributeAll(\"h2.title\", \"class\")\n     *",
-      "expectsError" : false
+      "title" : "Collect every href on the page",
+      "args" : {
+        "selector" : "a",
+        "attrName" : "href"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Returns the nodes' attribute values, the nodes are located by [selector], the attribute is [attrName].\n\nIf the nodes do not exist, or the attribute does not exist, returns an empty list.\n\n```kotlin val classes = driver.selectAttributeAll(\"h2.title\", \"class\") ```"
   }, {
@@ -3024,9 +3131,13 @@
       "description" : "The selector of the element, multiple formats supported."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* val classes = driver.selectAttributes(\"h2.title\", \"class\")\n     *",
-      "expectsError" : false
+      "title" : "Read the attributes of every link",
+      "args" : {
+        "selector" : "a"
+      },
+      "notes" : "Without `attrName` the whole attribute map per element is returned.",
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Returns the node's attribute values, the node is located by [selector].\n\nIf the node do not exist, or the attribute does not exist, returns an empty list.\n\n```kotlin val classes = driver.selectAttributes(\"h2.title\", \"class\") ```"
   }, {
@@ -3048,9 +3159,13 @@
       "description" : "The attribute name to retrieve."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* val classes = driver.selectFirstAttributeOrNull(\"h2.title\", \"class\")\n     *",
-      "expectsError" : false
+      "title" : "Read one link's target",
+      "args" : {
+        "selector" : "a",
+        "attrName" : "href"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Returns the node's attribute value, the node is located by [selector], the attribute is [attrName].\n\nIf the node does not exist, or the attribute does not exist, returns null.\n\n```kotlin val classes = driver.selectFirstAttributeOrNull(\"h2.title\", \"class\") ```"
   }, {
@@ -3071,6 +3186,15 @@
       "required" : true,
       "description" : "The property name to retrieve."
     } ],
+    "examples" : [ {
+      "title" : "Read an input's current value",
+      "args" : {
+        "selector" : "#email",
+        "propName" : "value"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
     "help" : "Returns the node's property value, the node is located by [selector], the property is [propName].\n\nIf the node does not exist, or the property does not exist, returns null.\n\n```kotlin val classes = driver.selectFirstPropertyOrNull(\"input#input\", \"value\") ```"
   }, {
     "domain" : "tab",
@@ -3086,9 +3210,12 @@
       "description" : "The selector of the element, multiple formats supported."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* val text = driver.selectFirstTextOrNull(\"h2.title\")\n     *",
-      "expectsError" : false
+      "title" : "Read the first heading's text",
+      "args" : {
+        "selector" : "h1"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Returns the node's text content, the node is located by [selector].\n\nIf the node does not exist, returns null.\n\n```kotlin val text = driver.selectFirstTextOrNull(\"h2.title\") ```"
   }, {
@@ -3148,6 +3275,15 @@
       "default" : "10000",
       "description" : "The maximum number of nodes to select."
     } ],
+    "examples" : [ {
+      "title" : "Read every row's id property",
+      "args" : {
+        "selector" : "tr",
+        "propName" : "id"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
     "help" : "Returns the nodes' property values, the nodes are located by [selector], the property is [propName].\n\nIf the nodes do not exist, or the property does not exist, returns an empty list.\n\n```kotlin val classes = driver.selectPropertyAll(\"input#input\", \"value\") ```"
   }, {
     "domain" : "tab",
@@ -3163,9 +3299,12 @@
       "description" : "The selector of the element, multiple formats supported."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* val texts = driver.selectTextAll(\"h2\")\n     *",
-      "expectsError" : false
+      "title" : "Read every price on the page",
+      "args" : {
+        "selector" : ".price"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Returns a list of text contents of all the elements matching the specified selector within the page.\n\nIf no elements match the selector, returns an empty list.\n\n```kotlin val texts = driver.selectTextAll(\"h2\") ```"
   }, {
@@ -3226,9 +3365,14 @@
       "description" : "The attribute value to set."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.setAttributeAll(\"h2.title\", \"class\", \"header\")\n     *",
-      "expectsError" : false
+      "title" : "Mark every card as audited",
+      "args" : {
+        "selector" : ".card",
+        "attrName" : "data-audited",
+        "attrValue" : "1"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Set the attribute of all elements matching [selector].\n\n```kotlin driver.setAttributeAll(\"h2.title\", \"class\", \"header\") ```"
   }, {
@@ -3255,9 +3399,15 @@
       "description" : "The property value to set."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.setProperty(\"input#input\", \"value\")\n     *",
-      "expectsError" : false
+      "title" : "Set an input's value property",
+      "args" : {
+        "selector" : "#email",
+        "propName" : "value",
+        "propValue" : "a@b.c"
+      },
+      "notes" : "Prefer `fill` for human-like typing; `setProperty` writes the DOM directly.",
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Set the property of an element located by [selector].\n\n```kotlin driver.setProperty(\"input#input\", \"value\") ```"
   }, {
@@ -3284,9 +3434,14 @@
       "description" : "The property value to set."
     } ],
     "examples" : [ {
-      "title" : "Example usage",
-      "code" : "* driver.setPropertyAll(\"input#input\", \"value\")\n     *",
-      "expectsError" : false
+      "title" : "Clear every checkbox's checked property",
+      "args" : {
+        "selector" : "input[type=checkbox]",
+        "propName" : "checked",
+        "propValue" : "false"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Set the property of all elements matching [selector].\n\n```kotlin driver.setPropertyAll(\"input#input\", \"value\") ```"
   }, {
@@ -3436,6 +3591,12 @@
     "signature" : "tab.url()",
     "description" : "The URL read-only property of the Document interface returns the document location as a string.",
     "returnType" : "String",
+    "examples" : [ {
+      "title" : "Read the current URL (alias of current_url)",
+      "expectsError" : false,
+      "runnable" : true,
+      "executable" : true
+    } ],
     "help" : "The URL read-only property of the Document interface returns the document location as a string.\n\nThis property equals to javascript `document.URL`. The `document.URL` property returns the same value. The `document.documentURI` property can be used on any document types, while the `document.URL` property can only be used on HTML documents."
   }, {
     "domain" : "tab",

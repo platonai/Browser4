@@ -502,7 +502,7 @@ data class Arg(
 
 ### 8.2 需求完成度更新
 
-- **需求 2（示例）**：**110/142**（本轮 77/140 → 110/142）。`experience`(4)、`skill`(1) 缺口清零；tab 剩余 **32** 个低频 setter/selector 家族。剩余缺口由矩阵按域持续报数。
+- **需求 2（示例）**：**142/142** —— 全量工具都有可执行示例，矩阵报 `missing altogether: 0`。缺口清零路径：77/140（`experience`4 + `skill`1）→ 110/142（含找回被显式 spec 吞掉的 7 个）→ 142/142（补齐 tab 长尾 32 个：鼠标/滚轮、typed reader、`setProperty*`、`evaluate*`、`load*Resource` 等）。这批示例不是"写上去就算"：矩阵以示例作为 happy-path 入参跑校验器，`everyWrittenTabExampleReachesTheSpec` 保证示例必须落到真实 spec 上。
 - **需求 6（返回值校验）**：声明 `outputSchema` 的工具 **16** 个 —— 第二轮新增 `experience_query/list/save/deep_learn` 与 `memory_search/read`（此前只有 crawl/command 8 个 + `tab.dialogStatus` + `batch.run`）。契约集中在 `ToolResultSchemas`，两条规则保证不撒谎：**可空性决定字段是否出现**（Jackson 会写出 `null`，而校验器把显式 `null` 既当缺字段又当类型错误，所以只有类上标了 `@JsonInclude(NON_NULL)` 的可空字段才写进 `properties`，其余宁可不写）、**`required` 只列一定写出的字段**（Kotlin 默认值非空即必然出现）。`Instant` 字段（`last_verified`）刻意不声明类型：其线上形态取决于 mapper 的 JavaTime 配置，猜错不是拒绝合法结果就是写进一份假契约。两个域各有一个「跑真实 handler、拿真实载荷过 schema」的测试（`ExperienceToolExecutorTest.outputSchemaAcceptsProduction`、`MemoryToolExecutorTest.outputSchemaAcceptsProduction`），载荷变化超纲会直接失败而不是在生产里刷 `schema_violation`。
 - **需求 8（监控）**：`session.active`、`async.queue.depth` 两个 gauge **已落地**，取值由部署侧注入（`ToolMetrics.registerSessionCountSupplier` / `registerAsyncTaskCountSupplier`），并在 `bindTo` 时随 Spring 注册表重绑（否则 gauge 会继续写进没人抓取的独立注册表）。REST 侧 `McpToolMetricsConfiguration` 从 `PulsarSessionManager.getAllSessions().size` 与 `CrawlService.runningTaskCount()`（`jobStore` 只保留运行中的 job）取值；瘦部署缺 bean 时 gauge 不注册而不是谎报 0。
 - **需求 7（日志）**：见 8.1 第 6 条。
@@ -518,9 +518,16 @@ data class Arg(
 - `bin/test.ps1 mcp-contract` 的 14 个测试类**已经**在 PR 门禁里执行：它们大多是未打标签的类（未打标签即不被 `excluded_groups` 排除），`ToolContractMatrixTest` 自带 `Unit/Fast`。因此**没有**在 `pr.yml` 里再加一步重复跑（会多花约 4 分钟），而是在 `pr.yml` 就地写明这条不变量，避免后人重复添加。
 - 新增/强化的门禁：`exampleProjectionIsLossless`、`noArgumentExamplesAreRunnable`、`frontendAliasesResolve`、`everyWrittenTabExampleReachesTheSpec`、`dispatchedStateReadersAreAdvertised`、`supplierGaugesFollowTheSpringRegistry`。
 
-### 8.5 本轮之后仍欠的事
+### 8.6 顺带修掉的非 MCP 缺陷（本轮实跑中发现）
 
-1. tab 域 32 个低频方法的可执行示例（矩阵按域报数）。
+1. **`KnowledgeStore` 的并发写/读会让文件短暂消失**（`AgentMemoryTwoRunIntegrationTest` 的偶发 WARN `Failed to load facts …` 暴露）。三个独立原因：① 共享的 SnakeYAML `Yaml` 实例被 `dump`/`load` 并发使用（无同步）；② 原子写用的临时文件名是固定的 `${name}.tmp`，两个写者互相截断对方的字节，输了的那次 `move` 还会失败；③ 发布时先 `deleteIfExists(target)` 再 `move`，而 Windows 上 `Files.move(REPLACE_EXISTING)` 在目标被占用时也会退化成"删+改名"——两种情况下读者都会看到文件不存在或 `NoSuchFileException`。现在：一个监视器同时覆盖 Yaml 实例与"读/发布"序列，读走 `readYamlFile`、发布走 `writeAtomicYaml`（临时文件名按写入唯一），空文档报"the YAML document is empty"而不是 `synchronized(...) must not be null`。新增 `KnowledgeStoreAtomicWriteTest`（6 写者 × 4 读者锤同一个文件）：**在只修了临时文件名、未加读锁的中间版本上必然失败**，加锁后连续通过——这是本次修复的负向对照。
+2. **`KnowledgeStoreConcurrencyTest` 仍然 `@Disabled`，但理由换了**：它当初因为上面的 YAML/文件锁问题被停用，而那些问题已修；现在卡住的是两条断言本身——`testConcurrentTraceSaves` 期望 10 个并发存盘产生 10 个 trace 文件，实测只有 2 个（每个 `TraceRecord` 的文件名里都带独立 `traceId`，所以要么是真丢数据、要么是过期期望），以及 `testStressConcurrent` 期望精确的尝试次数。已在注解里写清待查项，避免后人再以"flaky"为由略过。
+3. **`AgentMemoryTwoRunIntegrationTest` 已去抖**：它用固定 `delay(300)` 等异步 consolidation，机器一忙就失败（实测约每两次一次）；改为轮询它真正断言的状态（`awaitTrue`），连续 3 次单跑通过。
+4. `browser4-coding` 的 `CodeRunnerTest.bashRuns` 在本机是环境相关的偶发失败（首次跑失败、重跑通过，与本轮改动无关），全量验证时以 `-Dtest=!CodeRunnerTest` 排除并如实记录。
+
+### 8.7 本轮之后仍欠的事
+
+1. ~~tab 域 32 个低频方法的可执行示例~~ **已清零**（全量 142/142，见 8.2）。
 2. 需求 6 的覆盖面：**126 个工具仍无结果契约**。下一批候选与各自的拦路石：`webdb.export`（形状清楚：`{total,succeeded,failed,results[]}`，但该执行器目前没有任何测试夹具，声明 schema 就等于无门禁的承诺，故先放着）、`skill.list`（返回**顶层数组**，而契约矩阵现在要求 `outputSchema` 声明 `type=object` —— 要么放宽矩阵规则到 object|array，要么改返回信封）、`html_snapshot.*`（`query`/`summary` 的载荷是分页结构，需先定稳定的信封字段）。
 3. 需求 1.1 的「CI 比对显式覆盖集 == @MCP 扫描集」仍未做（现由 KDoc 提取 + 快照 + 文档漂移门禁 + lint 兜底）。
 4. 需求 8.2 的 OTel span（`mcp.tool.call`）仍未接；`TracingUtils`/`OpenTelemetryConfig` 已有但生产路径无人调用。
