@@ -770,4 +770,170 @@ crawl 想并行需要**不绑定会话驱动**、改为按 tab 从驱动池租�
 定位这类 heisenbug，最便宜的一步是**先在怀疑路径上放一个不会被日志级别吞掉的探针**——
 "探针 0 输出"直接把结论从"池租约有竞态"翻转成"根本没走池"，省掉几小时的源码阅读。
 
+## 16. 后续修正：深度身份与结算（`crawlDepthN`，4.13.x）
+
+§14 把 `currentDepth == null` 定义为 **记账式丢页** 并记失败。这条规则在本轮被推翻：
+它把**已经抓到的页面**判成丢失，而且失败记录经 `failedKeys ∩ submittedUrls` 过滤后
+**对调用方不可见**，于是 §14 想消灭的"少页却报 OK"从一个新入口回来了。触发条件不是边角场景：
+
+* **重定向**（`http→https`、`/x → /x/`）：`document.baseURI` 是落地 URL，`depths` 的键是提交 URL；
+* **`<base href>`**（jsoup 会用它覆盖 document base URI）：`<base href="/">` 让每一页的 baseURI
+  都等于站点根，而根通常就是种子页——子页被当成"重复事件"，一行都不记。
+
+### 16.1 四处修正
+
+| # | 问题 | 修正 |
+|---|---|---|
+| 1 | 用 `document.baseURI` 当页面身份查 `depths`，查不到就 `recordFailure` + 丢弃该页；这条失败不进 `failedPages`，却消耗一个 settle 名额 ⇒ 轮次提前完成、`pagesFound + failedPages.size == pagesExpected` 不再成立 | 身份回归"提交 URL"（`page.url`），与 `visited`/`depths`/`recorded` 同一套键；深度查询先提交 URL、再 serving URL（都必须是本轮的键）；查不到就**照常记录**该页，标 `depth=-1`（`UNKNOWN_DEPTH`）并打 WARN，只记成功不记失败；`-1` 的页不展开 |
+| 2 | `extractDepth()` 从 `page.configuredUrl` 正则抠 `-depth N`：`-depth` 不是 LoadOptions 选项，`configuredUrl` 由 `options.toString()`（只序列化已知选项）拼出，**永远匹配不上**——那层"重定向兜底"并不存在 | 删掉 `extractDepth()` 与 `buildArgsForDepth()` 的 `-depth N` 标记（改为 `buildLinkArgs`），`depths` 成为唯一事实来源；`CrawlLedger.REASON_NOT_QUEUED` 一并删除 |
+| 3 | `recordSuccess(key)` 之后的发现/提交一旦抛异常，catch 会对**同一个 key** 再 `recordFailure` ⇒ 一次提交结算两次 ⇒ ledger 走溢出分支并**在还有 handler 在飞时**判完成 | catch 先判 `ledger.isRecordedSuccess(key)`，只有"这一页从未落盘"才记失败 |
+| 4 | `ledger.submit(...)` 返回值被忽略、`session.submit` 照发 ⇒ 终态后仍在提交（§14.1 缺口 4 的原症状）；同一页内的重复链接也会被重复抓取 | 只有 `submit` 返回 true 才 `session.submit`；种子提交同样加闸门（被拒则直接结束轮次，而不是空等到超时） |
+
+顺带把结果行的 URL 从 serving URL 改为**提交 URL**：行 URL 现在等于 `recorded` 的去重键，
+"一行 = 本轮排队过的一个 URL"成立，`pages` 与 `failedPages` 可用同一把尺子对账
+（`crawlDepth1` 一直如此，depth ≥ 2 现在与之一致）。
+
+### 16.2 新增可测接缝与验证
+
+* `CrawlSupport.resolveQueueDepth(submittedUrl, servedUrl, depths)`——纯函数，把
+  "提交优先 / serving 兜底 / 都没有则 null"三条规则从 handler 提出来，可单测。`CrawlSupportTest`
+  新增 6 例：重定向保深度、`<base href>` 不得让子页继承种子深度、兜底命中、未知深度为 null、
+  规范化漂移，以及一条**钉住已知缺陷**的用例（见 16.3 第 1 条）。
+* `mvn -o -pl browser4-rest -am "-Dtest=Crawl*Test" -DfailIfNoTests=false -D"surefire.failIfNoSpecifiedTests=false" test`
+  → **Tests run: 79, Failures: 0, Errors: 0**（原 73 + 新增 6）。
+  Windows 上带点的 `-D` 必须按仓库既有写法转义成 `-D"key.with.dots=value"`，否则会被拆成两个参数
+  （`-Dsurefire.failIfNoSpecifiedTests` 被拆开的报错是 `Unknown lifecycle phase ".failIfNoSpecifiedTests=false"`）。
+
+### 16.3 第二轮：会话生命周期与在途视图（已修）
+
+* **B7 在途发布不再抹掉丢失计数（顺带发现一个更严重的）：** `publishIncremental` 原先**重建**记录，
+  只带 pages/linksDiscovered/diagnostic/startedTime/seedStatuses ⇒ 下一轮种子一开始发布页面，
+  上一轮种子已报的 `failedPages`/`pagesExpected`/`parallelTabs`/`maxConcurrentFetches` 就归零
+  （轮询看到的丢失计数闪回 0）。抽成纯函数 `CrawlSupport.mergeIncrementalProgress(...)` 后改为**合并**，
+  并保留 `createdAt`（TTL 清理依据，发布进度不该让任务"变年轻"）。
+* **新发现：终态记录会被复活。** 轮次超时/取消后 `writeCancelled` 已写入 TIMEOUT，
+  而仍在飞的 parse handler 还会 `publishPages` ⇒ 记录被改回 `PROCESSING`，CLI 轮询就此**永远等一个
+  不会再被终态化的任务**。`mergeIncrementalProgress` 对终态记录直接返回 null（丢弃发布），
+  `publishIncremental` 记一条 debug 日志。这不只影响超时路径：成功收尾后同样可能被晚到的发布覆盖。
+* **B8 快照持锁：** 超时/日志路径读 `results` 未持锁（`Collections.synchronizedList` 迭代需手动同步），
+  而 handler 可能还在追加 ⇒ 抽 `snapshotResults()`（`synchronized(results) { toList() }`）统一读取。
+* **C1 会话生命周期（最小修法）：** 爬取会话是直接在 `agenticContext` 上建的，manager 看不到，
+  而 `session.close()` **不会**把会话从 `AbstractPulsarContext.sessions` 摘除（只有
+  `context.closeSession()` 会）⇒ 每轮留一个已关闭会话在注册表里，`getOrCreateSession()` 取
+  `sessions.values.firstOrNull()`，更老的那个被删后可能把**已关闭的爬取会话**交出去。现改为：
+  * 新增 `CrawlSupport.releaseCrawlSession(session, context)`（`closeSession` 而非 `close`，返回失败而非吞掉），
+    四个释放点（depth0 的重试/收尾、depth1、depthN、CrawlService 的 depth0 共享会话）全部走它；
+    关闭失败按 WARN 报出——**这是真正的泄漏**：close 才解绑 browser/driver，失败后没有任何组件再持有它。
+  * 建会话时统一打 label（`CrawlSupport.crawlSessionLabel(taskId)` = `crawl-<taskId>`），
+    便于在日志/上下文转储里定位是哪次爬取占着浏览器资源。
+  * 仍**未**做（见 16.4）：不把会话纳入 `PulsarSessionManager` 的正规生命周期（`createRoundSession` +
+    `SessionKind.CRAWL`）。原因是 crawl 每轮一个会话、且刻意不复用（ledger 的每轮结算依赖"这一轮拥有它"），
+    纳入 manager 需要一并定义 kind、健康检查与释放语义；当前的 closeSession + label 已经消掉了
+    "注册表堆积 + 可能交出已关闭会话"这两个具体危害。
+
+新增可测接缝：`releaseCrawlSession`（用 Mockito 钉住"必须走 `closeSession` 而不是 `close`"、
+"失败要返回而不是吞掉"）与 `mergeIncrementalProgress`（钉住"保留丢失计数/身份/年龄"与
+"终态记录不得被复活"）。同一命令复跑 → **Tests run: 83, Failures: 0, Errors: 0**。
+
+### 16.4 仍未做（按优先级）
+
+1. **（§17.1 已修）`normalizeForVisit` 的顺序缺陷**：先 `removeSuffix("/")` 再剥 query，于是
+   `…/product/1/?utm=1` 与 `…/product/1` 是两个键——同一页面被两种写法链接时会提交两次、计两行，
+   与该函数自己写的"query 不得制造第二个身份"矛盾。修法是先剥 fragment/query 再去尾斜杠；
+   因为所有 crawl 路径的去重都派生自它，改动必须显式（`CrawlSupportTest` 已用一条用例钉住现状）。
+2. **（§17.2 / §17.3 已修）** `crawlDepthN` 的轮次超时 `depth * 300s`（上限 30 min）**恒大于**任务级 `CRAWL_TASK_TIMEOUT_MS = 600s`，
+   所以 `catch (TimeoutCancellationException)` 里"部分结果 + `outstanding()`"对 depth ≥ 2 不可达；
+   超时实际由 `CrawlService.writeCancelled` 收尾，而它**不带** `failedPages`/`pagesExpected` ⇒
+   超时的深爬仍会少页且不报账。`crawl.md` 的"5 min/level，上限 30 min"也与实际不符（depth ≥ 2 实为 10 min）。
+   这一条需要先定预算策略（轮次预算应由"任务剩余预算"派生，而不是每轮各算一份），所以留到下一轮。
+3. **在途视图仍是"单轮"而非"聚合"**：`publishPages` 只带当前轮的 pages，所以下一轮种子开始发布时
+   `pagesFound` 会从聚合值回落到单轮值（`failedPages`/`pagesExpected` 现在已被保留）。
+   要真正单调，需要让 sink 聚合各轮 pages——注意不能简单按 URL 求并集：同一 URL 被两个种子各抓一次
+   在终态记录里是两行，并集会把它们并成一行。属于显示口径问题，不是丢页问题。
+4. 多轮并发发布对同一条记录是 read-modify-write，没有 `recordSeedProgress` 那样的 per-task 锁
+   （`CrawlTaskContext.publishLock` 只在种子收尾时用）。危害是瞬时视图可能少一轮的字段，
+   下一次发布/种子收尾就会修正；要根治需让 sink 拿到 task context 的锁。
+5. 发现链接未去重，且不套用 `--ignore-url-query` / `--no-norm`（depth 1 与引擎路径都套用）；
+   `topLinks` 预算可能被重复链接吃光（重复抓取已在第一轮 #4 的闸门下消失，预算问题仍在）。
+
+## 17. 轮次预算与"没跑起来/没结算"的报账（4.13.x，§16.4 的第 1、2 条）
+
+§16.4 把两条留到"下一轮"：`normalizeForVisit` 的顺序缺陷，以及轮次预算 `depth * 300s` 与任务级 600s
+的错配。两条都在本轮修掉，各留一条钉住行为的单测。
+
+### 17.1 `normalizeForVisit`：先剥 fragment/query，最后去尾斜杠
+
+原实现是 `removeSuffix("/")` → `substringBefore('#')` → `substringBefore('?')`，于是：
+
+| 输入 | 旧键 | 新键 |
+|---|---|---|
+| `…/product/1` | `…/product/1` | 同左 |
+| `…/product/1/` | `…/product/1` | 同左 |
+| `…/product/1/?utm=1` | `…/product/1/` ❌ | `…/product/1` ✅ |
+| `…/product/1/#details` | `…/product/1/` ❌ | `…/product/1` ✅ |
+
+`visited` / `depths` / `recorded` 三张表全部派生自这个键，所以同一页面被两种写法链接时会提交两次、
+计两行、拿到两套深度——与该函数自己写的"query 不得制造第二个身份"直接矛盾。顺序改过来即收敛。
+`CrawlSupportTest` 里那条 KNOWN QUIRK 用例改成 collapse 断言，另加一条根 URL 单一身份的用例。
+
+### 17.2 轮次预算由"任务剩余预算"派生
+
+`CrawlTaskContext` 在 worker 真正开工时 arm 时钟（`armBudget`，与 `withTimeout` 同一时刻——排队时间不算），
+`fetchSeedUnit` 每轮读 `remainingBudgetMs()`，再由 `CrawlSupport.resolveRoundTimeoutMs` 定预算：
+
+```
+round = clamp( min(depth × 5min, 30min),  剩余任务预算 − 30s 报告余量,  15s 下限 )
+```
+
+* **修复前**：depth ≥ 2 的轮次预算 ≥ 任务上限 600s ⇒ `catch (TimeoutCancellationException)` 那条
+  "部分结果 + `outstanding()`"分支**不可达**；轮次只会被任务上限**杀掉**，而被杀的轮次什么都不返回
+  （既不返回 pages，也不返回 outstanding），`writeCancelled` 又只搬 `existing.pages` ⇒
+  超时的深爬就是"少页且不报账"。
+* **修复后**：任何 depth 的轮次都会在任务上限之前自己超时，并带着 `failedPages = failures + outstanding()`
+  走 `writeCompleted`，终态记录是 TIMEOUT + 丢失清单 + loss note。30s 余量就是留给
+  "快照结果 → 关会话 → 发布丢失"这段收尾的。
+* **新增预算闸门 `hasBudgetForRound`**：剩余 < 45s（30s 余量 + 15s 下限）时**不提交**该种子，直接产出
+  `unstartedSeedRound()`：0 页 / `pagesExpected = 1` / 1 行丢失 / `timedOut = true`
+  （reason = `the crawl ran out of its time budget before this URL was submitted`），种子状态 `skipped`。
+  守恒式 `pagesFound + failedPages.size == pagesExpected` 对"根本没跑起来的种子"同样成立，
+  而不是让它凭空消失。
+* depth = 0 不拿轮次预算：单页 load 是阻塞调用，`withTimeout` 中断不了它，任务上限才是它的界（注释里写明）。
+
+### 17.3 任务上限路径的报账（`writeCancelled`）
+
+`writeCancelled` 过去把 `failedPages`/`pagesExpected` 整个丢掉（连已结算种子的丢失也不报）。现在：
+
+* **已结算的轮次**：`pages` = 各轮聚合、`failedPages`/`pagesExpected` 累加——与 `recordSeedProgress` 同一把尺子；
+* **未结算的种子**：每个记一行丢失、`pagesExpected` +1、`seedStatuses` 补 `status = "timeout"`；
+  reason 用 `e is TimeoutCancellationException` 区分"撞任务上限"与"用户取消"
+  （`REASON_TASK_LIMIT` / `REASON_TASK_CANCELLED`）；
+* 快照在 `task.publishLock` 下取：`recordSeedProgress` 是"先写 round 再写 status"，
+  不加锁读会把同一个种子同时算成"已结算"和"未结算"；
+* **刻意不认领在途轮次已发布的页面**：它的提交数未知，认领就会破坏守恒式。这正是
+  `pagesFound + failedPages.size == pagesExpected` 存在的意义——宁可少认领，不可不报账；
+  loss note 会说明这些种子需要重跑。
+
+### 17.4 验证
+
+| 命令 | 结果 |
+|---|---|
+| `mvn -o -pl browser4-rest -am "-Dtest=Crawl*Test" -DfailIfNoTests=false -D"surefire.failIfNoSpecifiedTests=false" test` | **Tests run: 90, Failures: 0, Errors: 0**（原 83 + 7：`CrawlSupportTest` 22 → 28，`CrawlServiceTest` 10 → 11） |
+| `mvn -o -pl browser4-rest -am "-DexcludedGroups=<PR gate 列表>" "-Dsurefire.excludes=**integration" test` | **Tests run: 393, Failures: 0, Errors: 0**，BUILD SUCCESS（拆分提交时的 376 + §16 的 10 + 本轮的 7，账对得上） |
+
+新增/改写的用例：
+
+* `CrawlSupportTest`：尾斜杠 + query/fragment collapse、根 URL 单一身份、轮次预算派生与 30min 上限、
+  预算闸门边界（45s 整点通过 / 少 1ms 拒绝 / 0 预算取下限）、`unstartedSeedRound` 的守恒式、
+  `unfinishedSeedLosses` 只报未结算的种子；
+* `CrawlServiceTest`：`taskTimeoutMillis = 10s` 提交 3 个种子 → 终态 TIMEOUT、0 页、3 行丢失、
+  `pagesExpected = 3`、`seedStatuses` 三条 `skipped`、守恒式成立，并 `verifyNoInteractions(sessionManager)`
+  证明闸门在**碰浏览器之前**就短路（这条测试不需要浏览器，属于 PR-gate 作用域）。
+
+### 17.5 仍未做
+
+§16.4 的第 3、4、5 条不变（在途视图非聚合、发布缺 per-task 锁、发现链接未去重）。本轮新增一条：
+
+* `taskTimeoutMillis` 只有一个默认值 10 min（单测直接改这个 `@Volatile var`）。若要按请求或配置调，
+  需要在 REST/DTO 层定契约（`CrawlRequest` 加字段 + 校验 + 文档），本轮没有做。
+
 

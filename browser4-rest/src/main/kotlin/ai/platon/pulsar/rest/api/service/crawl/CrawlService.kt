@@ -4,6 +4,7 @@ import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.session.PulsarSessionManager
+import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import com.github.benmanes.caffeine.cache.Cache
 import com.github.benmanes.caffeine.cache.Caffeine
@@ -124,6 +125,18 @@ class CrawlService(
     /** How long to keep completed/failed tasks in the store (minutes). */
     @Volatile
     var taskTtlMinutes: Int = 1440 // 1 day
+
+    /**
+     * How long one crawl task may run before the server-side limit cancels it
+     * (ms), see [DEFAULT_TASK_TIMEOUT_MS].
+     *
+     * A round derives its own timeout from what is left of this budget
+     * ([resolveRoundTimeoutMs]), so the two are one mechanism, not two
+     * independent timers.  Overridable so the budget paths can be driven without
+     * waiting minutes; the CLI-facing error text always reports this value.
+     */
+    @Volatile
+    var taskTimeoutMillis: Long = DEFAULT_TASK_TIMEOUT_MS
 
     /**
      * Parallelism budget for a crawl that does not ask for one: how many
@@ -260,7 +273,11 @@ class CrawlService(
     private suspend fun runCrawlTask(task: CrawlTaskContext) {
         try {
             markProcessing(task)
-            val collected = withTimeout(CRAWL_TASK_TIMEOUT_MS.milliseconds) { collectSeeds(task) }
+            // Arm the task clock together with the task-level limit, so a round's
+            // derived budget and the limit itself measure exactly the same span.
+            val taskLimitMs = taskTimeoutMillis
+            task.armBudget(taskLimitMs)
+            val collected = withTimeout(taskLimitMs.milliseconds) { collectSeeds(task) }
             writeCompleted(task, collected)
         } catch (e: CancellationException) {
             writeCancelled(task, e)
@@ -313,7 +330,9 @@ class CrawlService(
         // from the browser driver pool and the seeds really do run in
         // parallel.  Binding a driver here is what would serialize them.
         val sharedDepth0Session = if (task.request.depth == 0) {
-            sessionManager.agenticContext.createSession()
+            // Labelled so a running crawl's session is identifiable in logs and
+            // context dumps; this task is its only owner (see the finally block).
+            sessionManager.agenticContext.createSession(PulsarSettings(label = crawlSessionLabel(task.taskId)))
         } else {
             null
         }
@@ -340,7 +359,18 @@ class CrawlService(
                 }
             }
         } finally {
-            runCatching { sharedDepth0Session?.close() }
+            // Close the session *and* deregister it: nothing else tracks it (it was
+            // not created through PulsarSessionManager), so a failure to close here
+            // leaks browser resources with no one left to reconcile them.
+            sharedDepth0Session?.let { session ->
+                releaseCrawlSession(session, sessionManager.agenticContext)?.let { failure ->
+                    logger.warn(
+                        "Crawl {}: the shared depth-0 session {} could not be closed and deregistered; " +
+                        "the browser resources it holds are no longer tracked by anything",
+                        task.taskId, session.id, failure
+                    )
+                }
+            }
         }
 
         val settledRounds = task.seedRounds.filterNotNull()
@@ -362,6 +392,10 @@ class CrawlService(
      * The in-flight counters are maintained here, around the whole
      * fetch, so the reported peak measures how much collection
      * actually overlapped.
+     *
+     * A seed whose remaining budget cannot carry a round is not started at all
+     * ([hasBudgetForRound]): it comes back as a "skipped" seed status plus one
+     * lost page, because a round killed by the task limit would report neither.
      */
     private suspend fun fetchSeedUnit(
         task: CrawlTaskContext,
@@ -377,14 +411,41 @@ class CrawlService(
         val concurrent = task.inFlight.incrementAndGet()
         task.peakInFlight.accumulateAndGet(concurrent) { a, b -> maxOf(a, b) }
         return try {
+            // Budget gate: a round that is killed by the task limit reports
+            // nothing at all, so a URL is not submitted once the remaining budget
+            // can no longer carry a round plus its report.  The URL is reported as
+            // a lost page instead — visibly, and with the accounting intact.
+            val remainingBudgetMs = task.remainingBudgetMs()
+            if (!hasBudgetForRound(remainingBudgetMs)) {
+                val reason = "$REASON_BUDGET_EXHAUSTED " +
+                    "(${remainingBudgetMs}ms of the ${taskTimeoutMillis}ms task budget left)"
+                logger.warn(
+                    "Crawl {}: seed URL {}/{} '{}' was not started — {}",
+                    task.taskId, index + 1, task.seedUrls.size, seedUrl, reason
+                )
+                return unstartedSeedRound(seedUrl) to CrawlSeedStatus(
+                    url = seedUrl,
+                    status = "skipped",
+                    pagesReturned = 0,
+                    error = reason
+                )
+            }
+            // Depth>=1 rounds wait for their URLs to settle, so they get a deadline
+            // they can actually meet.  Depth=0 is a single blocking load, which no
+            // suspend timeout can interrupt — the task limit is its bound.
+            val roundTimeoutMs = resolveRoundTimeoutMs(seedRequest.depth, remainingBudgetMs)
             val fetched = when {
                 // Depth=0 is bulk fetch: one URL, no link
                 // discovery, so its pages are its whole round.
                 seedRequest.depth == 0 -> CrawlRound(
                     pages = roundRunner.crawlDepth0(task.taskId, seedRequest, sharedDepth0Session)
                 )
-                seedRequest.depth <= 1 -> roundRunner.crawlDepth1(task.taskId, seedRequest, task.linksDiscovered)
-                else -> roundRunner.crawlDepthN(task.taskId, seedRequest, task.linksDiscovered)
+                seedRequest.depth <= 1 -> roundRunner.crawlDepth1(
+                    task.taskId, seedRequest, task.linksDiscovered, roundTimeoutMs
+                )
+                else -> roundRunner.crawlDepthN(
+                    task.taskId, seedRequest, task.linksDiscovered, roundTimeoutMs
+                )
             }
             logger.info(
                 "Crawl {}: seed URL {}/{} completed: {} → {} page(s), {} lost",
@@ -537,33 +598,77 @@ class CrawlService(
      *
      * A cancellation always transitions the task to a terminal state.
      * Historically this branch only wrote TIMEOUT when the task was still
-     * CREATED, so a task whose worker died inside withTimeout(CRAWL_TASK_TIMEOUT_MS)
+     * CREATED, so a task whose worker died inside withTimeout(taskTimeoutMillis)
      * stayed PROCESSING forever (uncancellable, invisible to 'crawl clear',
      * purged only by TTL).  Distinguish the two sources: [cancel] removes the
      * job from [jobStore] and already wrote a terminal record, so a record in a
      * terminal state is left alone; anything still PROCESSING/CREATED is a
      * seed-processing timeout and must be finalized with whatever partial
      * progress exists.
+     *
+     * The partial record reports the *accounting*, not just the pages: the losses
+     * of the seeds that did settle are carried over, and every seed whose round
+     * never returned is named as a lost URL.  A round killed by the task limit
+     * returns nothing (it never reaches its own timeout branch), so before this
+     * the terminal record of a killed deep crawl was a smaller page count with no
+     * losses at all — the exact "fewer pages, no complaint" shape the loss
+     * accounting exists to prevent.
+     *
+     * Only a seed whose round *returned* can be accounted exactly.  A seed whose
+     * round was killed mid-flight has an unknown expected count, so it is
+     * reported as exactly one lost URL and the pages its round may already have
+     * published are deliberately not claimed: claiming them without their
+     * submitted count would break `pagesFound + failedPages.size == pagesExpected`,
+     * which is the only thing that lets a caller tell "the site does not have it"
+     * from "the crawl lost it".  Re-run such a seed.
      */
     private fun writeCancelled(task: CrawlTaskContext, e: CancellationException) {
         val existing = taskStore.getIfPresent(task.taskId)
         val now = Instant.now()
         val alreadyTerminal = existing != null && existing.status in terminalStatuses
         if (!alreadyTerminal) {
+            val timedOutByTaskLimit = e is TimeoutCancellationException
+            val unfinishedReason = if (timedOutByTaskLimit) REASON_TASK_LIMIT else REASON_TASK_CANCELLED
+            // Take one consistent snapshot: `recordSeedProgress` publishes under
+            // this lock and assigns the round before its status, so reading
+            // without it could see a seed as both settled and unfinished.
+            val snapshot = synchronized(task.publishLock) {
+                val settled = task.seedRounds.filterNotNull()
+                val unfinished = unfinishedSeedLosses(task.seedUrls, task.seedStatuses, unfinishedReason)
+                CancelledSnapshot(
+                    pages = settled.flatMap { it.pages },
+                    failures = settled.flatMap { it.failedPages },
+                    unfinished = unfinished,
+                    pagesExpected = settled.sumOf { it.pagesExpected } + unfinished.size,
+                    seedStatuses = task.seedUrls.indices.map { index ->
+                        task.seedStatuses[index] ?: CrawlSeedStatus(
+                            url = task.seedUrls[index], status = "timeout", pagesReturned = 0, error = unfinishedReason
+                        )
+                    }
+                )
+            }
+            val failedPages = snapshot.failures + snapshot.unfinished
+            val lossNote = buildLossNote(snapshot.pages.size, snapshot.pagesExpected, failedPages)
             val timedOut = CrawlResponse(
                 taskId = task.taskId,
                 status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
-                error = if (existing?.status == "PROCESSING") {
+                error = if (timedOutByTaskLimit) {
                     "Crawl timed out while processing seeds (server-side limit of " +
-                        "${CRAWL_TASK_TIMEOUT_MS / 1000}s exceeded). Partial results below."
+                        "${taskTimeoutMillis / 1000}s exceeded). Partial results below."
                 } else {
                     "Crawl cancelled or timed out"
                 },
-                pagesFound = existing?.pages?.size ?: 0,
-                linksDiscovered = existing?.linksDiscovered ?: 0,
-                pages = existing?.pages,
-                seedStatuses = existing?.seedStatuses,
-                diagnostic = existing?.diagnostic,
+                pagesFound = snapshot.pages.size,
+                linksDiscovered = existing?.linksDiscovered ?: task.linksDiscovered.get(),
+                pages = snapshot.pages.takeIf { it.isNotEmpty() },
+                seedStatuses = snapshot.seedStatuses,
+                // The loss note is appended, never substituted: a diagnostic that
+                // explained "no out-links" must not hide the seeds that never ran.
+                diagnostic = listOfNotNull(existing?.diagnostic?.takeIf { it.isNotBlank() }, lossNote)
+                    .joinToString(" | ")
+                    .takeIf { it.isNotBlank() },
+                failedPages = failedPages.takeIf { it.isNotEmpty() },
+                pagesExpected = snapshot.pagesExpected,
                 // A timed-out crawl still reports the parallelism it was
                 // running under and the overlap it achieved, so the
                 // partial result says "how" as well as "how much".
@@ -574,8 +679,13 @@ class CrawlService(
             )
             taskStore.put(task.taskId, timedOut)
             onStatusChanged(timedOut)
+            logger.warn(
+                "Crawl task {} cancelled or timed out: {} — {} page(s) recorded, {} lost, {} seed(s) never settled",
+                task.taskId, e.message, snapshot.pages.size, failedPages.size, snapshot.unfinished.size
+            )
+        } else {
+            logger.warn("Crawl task {} cancelled or timed out: {}", task.taskId, e.message)
         }
-        logger.warn("Crawl task {} cancelled or timed out: {}", task.taskId, e.message)
     }
 
     /** Write the terminal record of a crawl that died on an unexpected error. */
@@ -600,6 +710,12 @@ class CrawlService(
      * Publish an in-memory progress snapshot to the task store so the CLI poll
      * loop sees real page counts while the crawl is still running.  In-memory
      * only — persistence is deferred until the crawl reaches a terminal state.
+     *
+     * The publish *adds to* the current record rather than replacing it (see
+     * [mergeIncrementalProgress]): the losses and expected totals of the seeds
+     * that already settled stay visible, and a task that has already been
+     * finalized is never moved back to PROCESSING by a parse handler that
+     * outlived it.
      */
     private fun publishIncremental(
         taskId: String,
@@ -608,16 +724,20 @@ class CrawlService(
         diagnostic: String? = null
     ) {
         val previous = taskStore.getIfPresent(taskId)
-        taskStore.put(taskId, CrawlResponse(
-            taskId = taskId,
-            status = "PROCESSING",
-            pagesFound = pages.size,
-            linksDiscovered = linksDiscovered,
-            pages = pages,
-            diagnostic = diagnostic ?: previous?.diagnostic,
-            startedTime = previous?.startedTime ?: Instant.now(),
-            seedStatuses = previous?.seedStatuses
-        ))
+        val merged = mergeIncrementalProgress(
+            taskId, previous, pages, linksDiscovered, diagnostic, terminalStatuses
+        )
+        if (merged == null) {
+            // The task is finished (round timeout, cancellation, completion) while
+            // a parse handler is still running.  Reviving it would leave the poller
+            // waiting for a record nobody will ever finalize again.
+            logger.debug(
+                "Crawl {}: dropping an incremental publish — the task is already terminal ({})",
+                taskId, previous?.status
+            )
+            return
+        }
+        taskStore.put(taskId, merged)
     }
 
     /**
@@ -757,6 +877,34 @@ class CrawlService(
 
         /** Serializes the progress publishers so a poller never reads a half-written record. */
         val publishLock = Any()
+
+        /**
+         * The instant the task budget expires (nanoTime), set by the worker when
+         * it arms the clock.  Rounds derive their own timeout from what is left
+         * of it, so the round deadline and the task limit are one mechanism.
+         */
+        private var budgetDeadlineNanos = 0L
+
+        /**
+         * Start the task clock.  Called by the worker right before the
+         * task-level limit, never at submission: a task that waited in the
+         * dispatcher queue must get its full budget, not a shortened one.
+         */
+        fun armBudget(timeoutMs: Long) {
+            budgetDeadlineNanos = System.nanoTime() + timeoutMs * 1_000_000L
+        }
+
+        /**
+         * Milliseconds left of the task budget, never negative.
+         *
+         * A task whose clock was never armed reports [Long.MAX_VALUE], so no
+         * round is ever skipped for a budget that has not started running.
+         */
+        fun remainingBudgetMs(): Long {
+            val deadline = budgetDeadlineNanos
+            if (deadline == 0L) return Long.MAX_VALUE
+            return ((deadline - System.nanoTime()) / 1_000_000L).coerceAtLeast(0L)
+        }
     }
 
     /**
@@ -768,6 +916,22 @@ class CrawlService(
         val pages: List<CrawlPageResult>,
         val seedStatuses: List<CrawlSeedStatus>,
         val rounds: List<CrawlRound>,
+    )
+
+    /**
+     * What the task knows at the moment the task-level limit (or a caller's
+     * cancellation) finalizes it: the pages of the seeds whose rounds returned,
+     * their losses, and one lost URL for every seed whose round never settled.
+     *
+     * Taken as one snapshot so the record cannot mix a settled round with a
+     * still-null status for the same seed (see [writeCancelled]).
+     */
+    private class CancelledSnapshot(
+        val pages: List<CrawlPageResult>,
+        val failures: List<CrawlFailedPage>,
+        val unfinished: List<CrawlFailedPage>,
+        val pagesExpected: Int,
+        val seedStatuses: List<CrawlSeedStatus>,
     )
 
     companion object {
@@ -795,8 +959,15 @@ class CrawlService(
          * */
         const val MAX_PARALLEL_TABS = 32
 
-        /** Maximum time (ms) a crawl task may run before being cancelled. */
-        private const val CRAWL_TASK_TIMEOUT_MS = 600_000L // 10 minutes
+        /**
+         * Default server-side limit on one crawl task (ms): 10 minutes.
+         *
+         * The limit a task actually runs under is [CrawlService.taskTimeoutMillis];
+         * no round ever gets the whole of it, because a round derives its own
+         * budget from what is left minus the margin it needs to report
+         * ([resolveRoundTimeoutMs]).
+         */
+        const val DEFAULT_TASK_TIMEOUT_MS = 600_000L // 10 minutes
 
         fun crawlPersistencePath(): Path = Path.of(
             System.getProperty("browser4.data.dir", System.getProperty("user.home")),

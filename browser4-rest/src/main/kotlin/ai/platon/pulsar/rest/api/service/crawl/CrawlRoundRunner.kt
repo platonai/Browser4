@@ -89,7 +89,8 @@ internal class CrawlRoundRunner(
             // Reuse the shared session if provided; otherwise create a private one.
             // Only private (owned) sessions are closed in the finally block.
             val ownsSession = sharedSession == null
-            val session: PulsarSession = sharedSession ?: sessionManager.agenticContext.createSession()
+            val session: PulsarSession = sharedSession ?: sessionManager.agenticContext
+                .createSession(PulsarSettings(label = crawlSessionLabel(taskId)))
 
             try {
                 val options = parseOptions(session, effectiveArgs)
@@ -104,7 +105,7 @@ internal class CrawlRoundRunner(
                         val retryDelay = FETCH_RETRY_DELAY_MS * (1L shl attempt)
                         logger.warn("Crawl {}: {} for '{}', retrying in {}ms (attempt {}/{})",
                             taskId, msg, request.url, retryDelay, attempt + 1, MAX_FETCH_RETRIES)
-                        if (ownsSession) runCatching { session.close() }
+                        if (ownsSession) releaseSession(taskId, session)
                         delay(retryDelay)
                         return@repeat
                     }
@@ -149,7 +150,7 @@ internal class CrawlRoundRunner(
                     val retryDelay = FETCH_RETRY_DELAY_MS * (1L shl attempt)
                     logger.warn("Crawl {}: protocol error for '{}', retrying in {}ms (attempt {}/{})",
                         taskId, request.url, retryDelay, attempt + 1, MAX_FETCH_RETRIES)
-                    if (ownsSession) runCatching { session.close() }
+                    if (ownsSession) releaseSession(taskId, session)
                     delay(retryDelay)
                     return@repeat
                 }
@@ -163,7 +164,7 @@ internal class CrawlRoundRunner(
                     )
                 )
             } finally {
-                if (ownsSession) runCatching { session.close() }
+                if (ownsSession) releaseSession(taskId, session)
             }
         }
 
@@ -180,9 +181,27 @@ internal class CrawlRoundRunner(
      *
      * The portal page itself is not part of the result — this strategy answers
      * "what does this listing page link to".
+     *
+     * @param roundTimeoutMs how long this round may wait for its URLs to settle
+     *   before reporting what it has, derived from the task budget by
+     *   [resolveRoundTimeoutMs].  It is a parameter rather than a constant on
+     *   purpose: a fixed budget that outlives the task-level limit only ever gets
+     *   the round killed, and a killed round cannot report the URLs it knows are
+     *   missing.
      */
-    internal suspend fun crawlDepth1(taskId: String, request: CrawlRequest, linksDiscovered: AtomicInteger): CrawlRound {
-        val session = sessionManager.agenticContext.createSession()
+    internal suspend fun crawlDepth1(
+        taskId: String,
+        request: CrawlRequest,
+        linksDiscovered: AtomicInteger,
+        roundTimeoutMs: Long
+    ): CrawlRound {
+        logger.info(
+            "Crawl {}: depth=1 round budget {}ms (drawn from what the task has left)",
+            taskId, roundTimeoutMs
+        )
+        // Labelled so the session is identifiable in logs and context dumps; the
+        // round owns its lifetime and releases it in the finally block below.
+        val session = sessionManager.agenticContext.createSession(PulsarSettings(label = crawlSessionLabel(taskId)))
         val results = Collections.synchronizedList(mutableListOf<CrawlPageResult>())
         // Per-crawl settle bookkeeping: a round is complete only when every
         // submitted URL produced a page or a reported failure, and no parse
@@ -207,7 +226,7 @@ internal class CrawlRoundRunner(
                         "auto-switching to depth=0 (bulk fetch + extraction mode)",
                         taskId
                     )
-                    runCatching { session.close() }
+                    releaseSession(taskId, session)
                     return CrawlRound(pages = crawlDepth0(taskId, request))
                 }
                 logger.warn("Crawl {}: no outLinkSelector provided, returning empty result", taskId)
@@ -320,15 +339,18 @@ internal class CrawlRoundRunner(
                 session.submit(hyperlink)
             }
 
-            // Wait until every submitted out-page settled (per-crawl, not global)
-            withTimeout(300_000L) { // 5 minute timeout for depth=1
+            // Wait until every submitted out-page settled (per-crawl, not global).
+            // The budget is the caller's, derived from what the task has left, so
+            // this round hits its timeout while it can still report the URLs that
+            // never came back instead of being killed mid-flight by the task limit.
+            withTimeout(roundTimeoutMs.milliseconds) {
                 ledger.awaitAllSettled()
             }
 
             // Deterministic ordering: identical runs over an unchanged site
             // produce identical listings.
             return CrawlRound(
-                pages = results.toList().sortedBy { it.url },
+                pages = snapshotResults(results).sortedBy { it.url },
                 failedPages = ledger.failedPages(),
                 pagesExpected = ledger.pagesExpected
             )
@@ -338,26 +360,47 @@ internal class CrawlRoundRunner(
             // swallowed by the per-seed catch, which then let the terminal write
             // replace the TIMEOUT record with OK — a truncated crawl that looked
             // successful.
-            logger.warn("Crawl {}: depth=1 timed out after collecting {} pages; saving partial results", taskId, results.size)
+            val partial = snapshotResults(results)
+            logger.warn("Crawl {}: depth=1 timed out after collecting {} pages; saving partial results", taskId, partial.size)
             return CrawlRound(
-                pages = results.toList().sortedBy { it.url },
+                pages = partial.sortedBy { it.url },
                 failedPages = ledger.failedPages() + ledger.outstanding(),
                 pagesExpected = ledger.pagesExpected,
                 timedOut = true,
-                timeoutError = "Crawl timed out after collecting ${results.size} pages (partial results saved)"
+                timeoutError = "Crawl timed out after collecting ${partial.size} pages (partial results saved)"
             )
         } finally {
             ledger.close()
-            runCatching { session.close() }
+            releaseSession(taskId, session)
         }
     }
 
     /**
      * Depth>1 round: breadth-first continuous crawl using ParsableHyperlink
      * parse handlers, where each parsed page discovers and submits its children.
+     *
+     * @param roundTimeoutMs how long this round may wait for its URLs to settle
+     *   before reporting what it has, derived from the task budget by
+     *   [resolveRoundTimeoutMs] (see [crawlDepth1] for why it is a parameter).
      */
-    internal suspend fun crawlDepthN(taskId: String, request: CrawlRequest, linksDiscovered: AtomicInteger): CrawlRound {
-        val settings = PulsarSettings(profileMode = BrowserProfileMode.SEQUENTIAL)
+    internal suspend fun crawlDepthN(
+        taskId: String,
+        request: CrawlRequest,
+        linksDiscovered: AtomicInteger,
+        roundTimeoutMs: Long
+    ): CrawlRound {
+        logger.info(
+            "Crawl {}: depth={} round budget {}ms (drawn from what the task has left)",
+            taskId, request.depth, roundTimeoutMs
+        )
+        // Labelled so the session is identifiable in logs and context dumps; the
+        // round owns its lifetime and releases it (close + deregister) in the
+        // finally block below, since this session never goes through
+        // PulsarSessionManager and nothing else tracks it.
+        val settings = PulsarSettings(
+            profileMode = BrowserProfileMode.SEQUENTIAL,
+            label = crawlSessionLabel(taskId)
+        )
         val session = sessionManager.agenticContext.createSession(settings = settings)
         val results = Collections.synchronizedList(mutableListOf<CrawlPageResult>())
         // Per-round settle bookkeeping.  The round can only complete when every
@@ -373,17 +416,21 @@ internal class CrawlRoundRunner(
             val maxDepth = request.depth
             val visited = ConcurrentHashMap.newKeySet<String>()
 
-            // Per-URL crawl bookkeeping:
-            //  - recorded: URLs whose parse event already produced a result entry.
-            //    onHTMLDocumentParsed can fire more than once per page (re-parse
-            //    after refresh, shared-session reloads); only the first event may
-            //    add a result or tick the completion counter — otherwise a single
-            //    page appears twice in the listing and the crawl can complete
-            //    early (nondeterministic totals across runs).
-            //  - depths: discovery depth captured at submission time.  Re-deriving
-            //    it from page.configuredUrl is unreliable (the -depth args are not
-            //    always preserved), which made every page — including the seed —
-            //    fall back to depth=1.
+            // Per-URL crawl bookkeeping.  Both maps are keyed by the URL this
+            // crawl *submitted*, which is the only identity it controls:
+            //  - recorded: submitted URLs whose parse event already produced a
+            //    result entry.  onHTMLDocumentParsed can fire more than once per
+            //    page (re-parse after refresh, shared-session reloads); only the
+            //    first event may add a result or settle the URL — otherwise a
+            //    single page appears twice in the listing and the crawl can
+            //    complete early (nondeterministic totals across runs).
+            //  - depths: discovery depth captured at submission time, before the
+            //    URL is handed to the session.  This is the source of truth for a
+            //    page's depth: the '-depth N' marker this used to embed in the URL
+            //    args never reaches page.configuredUrl (it is not a LoadOptions
+            //    option, so LoadOptions.toString() drops it), and the URL a
+            //    document is served under can differ from the URL it was submitted
+            //    under (redirect, '<base href>').
             val recorded = ConcurrentHashMap.newKeySet<String>()
             val depths = ConcurrentHashMap<String, Int>()
             // Serializes the visited-check + visited-mark + submit sequence so two
@@ -395,40 +442,40 @@ internal class CrawlRoundRunner(
             lateinit var parseHandler: (WebPage, FeaturedDocument) -> Any?
 
             parseHandler = crawlParse@{ page: WebPage, document: FeaturedDocument ->
-                val pageUrl = document.baseURI ?: page.url
-                val key = normalizeForVisit(pageUrl)
+                // The submission is the identity this crawl owns: `page.url` is the
+                // URL the hyperlink was handed to the session under, it is the key
+                // `recorded` dedupes on, and it is what the result row reports — so
+                // a row is always a URL this crawl queued, and one URL never yields
+                // two rows.
+                //
+                // `baseURI` is where the document was served from and may differ
+                // (a redirect, and equally a `<base href>`, which jsoup copies into
+                // the document base URI — on such a site every page's base URI can
+                // be the same root).  It is therefore only a *fallback* key for the
+                // depth lookup and the diagnosis text, never the row identity.
+                val servedUrl = document.baseURI?.takeIf { it.isNotBlank() } ?: page.url
+                val key = normalizeForVisit(page.url)
                 // Refuse everything once the round is terminal: a duplicate parse
                 // event arriving minutes later used to keep submitting links for a
                 // task the caller had already been told was finished (issue #592).
                 if (!ledger.enter()) {
                     logger.debug(
                         "Crawl {}: ignoring a late parse event for '{}' — the round is already complete",
-                        taskId, pageUrl
+                        taskId, servedUrl
                     )
                     return@crawlParse null
                 }
                 try {
-                // Depth resolution is queue-time bookkeeping, never a guess:
-                // every URL this crawl submits is registered in `depths` before
-                // submission (seed = 0, each link = discovering page's depth + 1),
-                // so the map is the source of truth.  extractDepth() re-derives
-                // the same queue-time value from the '-depth N' marker embedded in
-                // page.configuredUrl and covers parse events whose final URL
-                // differs from the submitted URL (redirects).  A page with neither
-                // record was not queued by this crawl — say so instead of silently
-                // labeling it depth=1 (the old `?: 1` fallback), and settle it so
-                // the round cannot wait for a page this crawl never submitted.
-                val currentDepth = depths[key] ?: extractDepth(page)
-                if (currentDepth == null) {
-                    logger.error(
-                        "Crawl {}: parsed page '{}' has no queue-time depth record " +
-                        "(configuredUrl='{}'); it was not submitted by this crawl — " +
-                        "dropping it from the result listing instead of silently reporting depth=1",
-                        taskId, pageUrl, page.configuredUrl
-                    )
-                    ledger.recordFailure(key, -1, page.protocolStatus.minorCode, CrawlLedger.REASON_NOT_QUEUED)
-                    return@crawlParse null
-                }
+                // Depth resolution is queue-time bookkeeping, never a guess: every
+                // URL this crawl submits is registered in `depths` before it is
+                // submitted (seed = 0, each link = discovering page's depth + 1).
+                // A miss means URL drift, not a foreign page — this handler only
+                // fires for hyperlinks this round submitted — so the document is
+                // recorded with an unknown depth rather than dropped: losing a page
+                // the round did fetch is the one outcome the ledger exists to
+                // prevent.  It is not expanded either, because a depth that cannot
+                // be bounded is exactly how a crawl runs away.
+                val currentDepth = resolveQueueDepth(page.url, servedUrl, depths)
 
                 // First parse event for this URL owns the result entry and the
                 // completion tick.  Later events (re-parses of the same page) only
@@ -437,19 +484,26 @@ internal class CrawlRoundRunner(
                 val firstEvent = recorded.add(key)
 
                 if (firstEvent) {
+                    if (currentDepth == null) {
+                        logger.warn(
+                            "Crawl {}: page served at '{}' (submitted as '{}', configuredUrl='{}') has no " +
+                            "queue-time depth record; recording it with depth {} and following no links from it",
+                            taskId, servedUrl, page.url, page.configuredUrl, UNKNOWN_DEPTH
+                        )
+                    }
                     // Record this page
                     val extractionResult = if (request.sql != null) {
-                        executeCrawlSqlQuery(session, pageUrl, request.sql)
+                        executeCrawlSqlQuery(session, page.url, request.sql)
                     } else Pair(null, null)
                     val (servedFromStore, storeAgeSeconds) = storeServeMarkers(page)
                     synchronized(results) {
                         results.add(
                             CrawlPageResult(
-                                url = pageUrl,
+                                url = page.url,
                                 title = document.title.takeIf { !it.isNullOrBlank() }
                                     ?: extractTitleFromHtml(document.html),
                                 contentLength = page.contentLength,
-                                depth = currentDepth,
+                                depth = currentDepth ?: UNKNOWN_DEPTH,
                                 extracted = extractionResult.first,
                                 extractionError = extractionResult.second,
                                 servedFromStore = servedFromStore,
@@ -463,16 +517,18 @@ internal class CrawlRoundRunner(
                         progress.publishPages(taskId, results.toList(), linksDiscovered.get())
                     }
                     ledger.recordSuccess(key)
-                    logger.debug("Crawl {}: depth={} page={}", taskId, currentDepth, pageUrl)
+                    logger.debug("Crawl {}: depth={} page={}", taskId, currentDepth, servedUrl)
                 } else {
                     logger.debug(
                         "Crawl {}: duplicate parse event for {} (depth={}); already recorded",
-                        taskId, pageUrl, currentDepth
+                        taskId, servedUrl, currentDepth
                     )
                 }
 
-                // If we haven't reached max depth, extract and submit more links
-                if (currentDepth < maxDepth) {
+                // If we haven't reached max depth, extract and submit more links.
+                // An unknown depth must not be read as depth 0: a page whose depth
+                // could not be resolved is recorded but never expanded.
+                if (currentDepth != null && currentDepth < maxDepth) {
                     val selector = options.outLinkSelector
                     if (selector.isNotBlank()) {
                         val allLinks = document.selectHyperlinks(selector)
@@ -500,7 +556,7 @@ internal class CrawlRoundRunner(
                         if (newLinks.isNotEmpty()) {
                             linksDiscovered.addAndGet(newLinks.size)
                             val childDepth = currentDepth + 1
-                            val args = buildArgsForDepth(options, childDepth)
+                            val args = buildLinkArgs(options)
                             newLinks.forEach { link ->
                                 depths[normalizeForVisit(link)] = childDepth
                                 val hyperlink = ParsableHyperlink("$link $args", parseHandler)
@@ -513,8 +569,18 @@ internal class CrawlRoundRunner(
                                 }
                                 // Register before submitting: a page that settles
                                 // faster than it is counted would end the round.
-                                ledger.submit(link, childDepth)
-                                session.submit(hyperlink)
+                                // `submit` refuses once the round is terminal and
+                                // for a URL that is already queued — nothing may be
+                                // handed to the session for a task the caller has
+                                // already been told is finished (issue #592).
+                                if (ledger.submit(link, childDepth)) {
+                                    session.submit(hyperlink)
+                                } else {
+                                    logger.debug(
+                                        "Crawl {}: not submitting '{}' — the round is complete or the URL is already queued",
+                                        taskId, link
+                                    )
+                                }
                             }
                             logger.debug(
                                 "Crawl {}: submitted {} links at depth {}",
@@ -548,12 +614,17 @@ internal class CrawlRoundRunner(
 
                 } catch (t: Throwable) {
                     // A page whose parse handler died is a lost page, not a page
-                    // that is still coming: report it, then keep the original
-                    // propagation semantics.
-                    ledger.recordFailure(
-                        key, depths[key] ?: -1, page.protocolStatus.minorCode,
-                        "the parse handler failed for this page: ${t.message}"
-                    )
+                    // that is still coming — but only when it never produced a row.
+                    // This event, or an earlier duplicate one, may already have
+                    // settled this submission as a success, and settling one
+                    // submission twice makes CrawlLedger absorb the over-count by
+                    // completing the round while other handlers are still fetching.
+                    if (!ledger.isRecordedSuccess(key)) {
+                        ledger.recordFailure(
+                            key, depths[key] ?: UNKNOWN_DEPTH, page.protocolStatus.minorCode,
+                            "the parse handler failed for this page: ${t.message}"
+                        )
+                    }
                     throw t
                 } finally {
                     // The round may only complete once no handler is in flight:
@@ -567,25 +638,35 @@ internal class CrawlRoundRunner(
             val seedKey = normalizeForVisit(request.url)
             visited.add(seedKey)
             depths[seedKey] = 0
-            val seedArgs = buildArgsForDepth(options, 0)
+            val seedArgs = buildLinkArgs(options)
             val seedHyperlink = ParsableHyperlink("${request.url} $seedArgs", parseHandler)
             seedHyperlink.eventHandlers.crawlEventHandlers.onLoaded.addLast { _, loaded ->
                 settleFromLoaded(ledger, request.url, 0, loaded)
                 null
             }
-            ledger.submit(request.url, 0)
+            // A refused seed submission must not be followed by a wait for a page
+            // that was never queued.  (Nothing can make the ledger terminal this
+            // early, so this is a guard, not a path.)
+            if (!ledger.submit(request.url, 0)) {
+                logger.warn("Crawl {}: the seed URL '{}' was not queued; ending the round", taskId, request.url)
+                return CrawlRound(pages = emptyList(), pagesExpected = 0)
+            }
             session.submit(seedHyperlink)
 
-            // Wait until every submitted URL settled (per-crawl completion, not global)
-            val timeoutMs = (maxDepth * 300_000L).coerceAtMost(1_800_000L) // max 30 min
-            withTimeout(timeoutMs.milliseconds) {
+            // Wait until every submitted URL settled (per-crawl completion, not
+            // global).  The budget is the task's remaining budget, never
+            // `depth * 5 min`: for depth >= 3 that product exceeds the whole task
+            // limit, so the round could only ever be killed by it — and a killed
+            // round reports nothing, which is how a timed-out deep crawl used to
+            // come back with fewer pages and no losses.
+            withTimeout(roundTimeoutMs.milliseconds) {
                 ledger.awaitAllSettled()
             }
 
             // Deterministic ordering: identical runs over an unchanged site
             // produce identical listings.
             return CrawlRound(
-                pages = results.toList().sortedWith(compareBy({ it.depth }, { it.url })),
+                pages = snapshotResults(results).sortedWith(compareBy({ it.depth }, { it.url })),
                 failedPages = ledger.failedPages(),
                 pagesExpected = ledger.pagesExpected
             )
@@ -595,19 +676,54 @@ internal class CrawlRoundRunner(
             // swallowed by the per-seed catch, which then let the terminal write
             // replace the TIMEOUT record with OK — a truncated crawl that looked
             // successful.
-            logger.warn("Crawl {}: depth>1 timed out after collecting {} pages; saving partial results", taskId, results.size)
+            val partial = snapshotResults(results)
+            logger.warn("Crawl {}: depth>1 timed out after collecting {} pages; saving partial results", taskId, partial.size)
             return CrawlRound(
-                pages = results.toList().sortedWith(compareBy({ it.depth }, { it.url })),
+                pages = partial.sortedWith(compareBy({ it.depth }, { it.url })),
                 failedPages = ledger.failedPages() + ledger.outstanding(),
                 pagesExpected = ledger.pagesExpected,
                 timedOut = true,
-                timeoutError = "Crawl timed out after collecting ${results.size} pages (partial results saved)"
+                timeoutError = "Crawl timed out after collecting ${partial.size} pages (partial results saved)"
             )
         } finally {
             ledger.close()
-            runCatching { session.close() }
+            releaseSession(taskId, session)
         }
     }
+
+    /**
+     * Close a round-owned session **and** deregister it from its context.
+     *
+     * Closing alone would leave the closed session in
+     * `AbstractPulsarContext.sessions` for the lifetime of the process (one dead
+     * entry per round; only `closeSession` removes it), and
+     * `getOrCreateSession()` returns `sessions.values.firstOrNull()` — so a
+     * finished round's dead session could be handed to a caller that asked for a
+     * live one.
+     *
+     * A failure here is a real leak — the close is what unbinds the browser and
+     * driver — so it is reported instead of swallowed, and it is worth reporting
+     * precisely because nothing else tracks this session.
+     */
+    private fun releaseSession(taskId: String, session: PulsarSession) {
+        releaseCrawlSession(session, sessionManager.agenticContext)?.let { failure ->
+            logger.warn(
+                "Crawl {}: session {} could not be closed and deregistered; " +
+                "the browser resources it holds are no longer tracked by anything",
+                taskId, session.id, failure
+            )
+        }
+    }
+
+    /**
+     * A consistent snapshot of the pages recorded so far.
+     *
+     * `Collections.synchronizedList` requires holding the list's own monitor to
+     * iterate it, and the timeout path reads the list while parse handlers may
+     * still be appending to it.
+     */
+    private fun snapshotResults(results: MutableList<CrawlPageResult>): List<CrawlPageResult> =
+        synchronized(results) { results.toList() }
 
     /**
      * Load the portal page and extract out-links using the same logic as
@@ -755,17 +871,19 @@ internal class CrawlRoundRunner(
         }
     }
 
-    private fun extractDepth(page: WebPage): Int? {
-        // Depth is embedded as a synthetic option in the URL's args string.
-        // `configuredUrl` carries the args (e.g. "https://... -depth 2 -parse"),
-        // while `page.url` is the resolved URL without args.
-        val url = page.configuredUrl
-        val match = Regex("""-depth\s+(\d+)""").find(url)
-        return match?.groupValues?.get(1)?.toIntOrNull()
-    }
-
-    private fun buildArgsForDepth(options: LoadOptions, depth: Int): String {
-        val parts = mutableListOf("-depth $depth -parse")
+    /**
+     * The load args of a submitted hyperlink.
+     *
+     * A child's discovery depth is deliberately NOT embedded here.  It used to
+     * be (`-depth N`) so that it could be re-read out of `page.configuredUrl`,
+     * but [LoadOptions] has no such option: `LoadOptions.toString()` — which is
+     * what builds `configuredUrl` — only serializes options it knows, so the
+     * marker was dropped on submission and every read of it failed.  Depth is
+     * queue-time bookkeeping owned by `crawlDepthN`'s `depths` map and is never
+     * re-derived from a URL.
+     */
+    private fun buildLinkArgs(options: LoadOptions): String {
+        val parts = mutableListOf("-parse")
         if (options.outLinkSelector.isNotBlank()) {
             parts.add("-outLink \"${options.outLinkSelector}\"")
         }
@@ -786,5 +904,16 @@ internal class CrawlRoundRunner(
 
         /** Base delay in ms between fetch retries; doubles each attempt (exponential backoff). */
         const val FETCH_RETRY_DELAY_MS = 1000L
+
+        /**
+         * Depth reported for a page whose queue-time depth could not be resolved:
+         * both the URL it was submitted under and the URL it was served under
+         * differ from every URL this round queued.
+         *
+         * `-1` is the project-wide "unknown depth" marker (see
+         * [CrawlFailedPage.depth]).  The page is still recorded: an unresolvable
+         * label is a reporting gap, and must never cost the page itself.
+         */
+        const val UNKNOWN_DEPTH = -1
     }
 }

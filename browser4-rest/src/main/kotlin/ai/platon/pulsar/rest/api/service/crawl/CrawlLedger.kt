@@ -54,10 +54,6 @@ class CrawlLedger(val taskId: String = "") {
         /** The page was never fetched at all (dropped or evicted before a document was produced). */
         const val REASON_NEVER_FETCHED = "the page was never fetched"
 
-        /** The parsed document was not queued by this crawl (no queue-time depth record). */
-        const val REASON_NOT_QUEUED =
-            "the parsed page was not queued by this crawl (no queue-time depth record)"
-
         /** A successful load that never produced a result row. */
         const val REASON_NOT_PARSED = "the page loaded but produced no result row (no parse event fired)"
 

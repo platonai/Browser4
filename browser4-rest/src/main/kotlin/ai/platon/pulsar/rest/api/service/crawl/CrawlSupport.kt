@@ -2,6 +2,8 @@ package ai.platon.pulsar.rest.api.service.crawl
 
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.skeleton.context.PulsarContext
+import ai.platon.pulsar.skeleton.session.PulsarSession
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -38,6 +40,16 @@ private const val MAX_REPORTED_FAILED_PAGES = 5
  * dedupe against the fragment-less URL instead of surfacing a spurious
  * trailing-'#' page (or counting it as a new link).
  *
+ * Order matters, and it is fragment/query **first**, trailing slash **last**.
+ * Dropping the slash first only collapsed `…/product/1/` onto `…/product/1`;
+ * the very same page linked as `…/product/1/?utm_source=x` kept its slash
+ * (`substringBefore('?')` then ends in '/'), so one page submitted under two
+ * spellings produced two identities — two submissions, two rows, two depths —
+ * which is exactly what this function exists to prevent.  Every crawl path
+ * derives its dedup key (and the `visited` / `depths` / `recorded` lookups)
+ * from here, so the fix has to live here: `http://h/p/` = `http://h/p` =
+ * `http://h/p?q=1` = `http://h/p#f`.
+ *
  * Note the deliberate asymmetry: this key is used to *dedupe submissions* and
  * to report losses, never to decide that a page arrived.  A page's final URL
  * can differ from the URL it was submitted under (redirects,
@@ -45,10 +57,191 @@ private const val MAX_REPORTED_FAILED_PAGES = 5
  */
 internal fun normalizeForVisit(url: String): String {
     return url.trim().lowercase()
-        .removeSuffix("/")
-        .substringBefore('#')
-        .substringBefore('?')  // strip query for dedup
+        .substringBefore('#')  // strip the fragment for dedup
+        .substringBefore('?')  // strip the query for dedup
+        .removeSuffix("/")     // …last, so '/?query' and '/#frag' fold onto the page
 }
+
+/**
+ * Resolve the queue-time depth of a parsed page.
+ *
+ * A link-discovery round registers every URL it hands to the session in a
+ * `depths` map *before* submitting it (seed = 0, each link = discovering page's
+ * depth + 1), and that map is the only source of truth for a page's depth.  The
+ * URL a document is *served* under can differ from the URL it was *submitted*
+ * under — a redirect, and equally a `<base href>` element (jsoup takes the
+ * document base URI from it) — so the lookup is anchored to the URLs this crawl
+ * actually queued.
+ *
+ * The submission is tried first on purpose.  Preferring the served URL labels a
+ * redirecting page with the depth of whatever URL it landed on, and on a site
+ * whose pages share a `<base href>` it labels every page with the seed's depth.
+ * [servedUrl] is only a fallback, and only when it is a URL this crawl queued
+ * too (a page reachable under two submitted URLs).
+ *
+ * @return the queue-time depth, or null when neither URL was queued by this
+ *   crawl.  A null is a *reporting* gap, not a lost page: the caller must still
+ *   record the page (with `UNKNOWN_DEPTH`), never drop it and never settle it
+ *   as a failure — the round cannot lose a document it fetched.
+ */
+internal fun resolveQueueDepth(
+    submittedUrl: String,
+    servedUrl: String?,
+    depths: Map<String, Int>,
+): Int? {
+    depths[normalizeForVisit(submittedUrl)]?.let { return it }
+    val servedKey = servedUrl?.takeIf { it.isNotBlank() }?.let { normalizeForVisit(it) }
+        ?: return null
+    return depths[servedKey]
+}
+
+/**
+ * The label of a session a crawl round owns: it appears in session logs and
+ * context dumps, so a running crawl's browser resources can be attributed.
+ *
+ * Nothing filters on the label.  A round session is created on the context
+ * rather than through `PulsarSessionManager`, so the round itself is its only
+ * owner — see [releaseCrawlSession].
+ */
+internal fun crawlSessionLabel(taskId: String) = "crawl-$taskId"
+
+/**
+ * Release a session a crawl round owns: close it **and** deregister it.
+ *
+ * A round creates its session on the context rather than through
+ * `PulsarSessionManager`, so nothing else tracks it: the round's `finally` is the
+ * only owner of its lifetime.  Calling `session.close()` alone leaves the closed
+ * session in `AbstractPulsarContext.sessions` for the lifetime of the process
+ * (only `closeSession` removes it) — one dead entry per round — and
+ * `getOrCreateSession()` hands back `sessions.values.firstOrNull()`, so a closed
+ * round session can be returned to a caller that asked for a live one.
+ *
+ * Failures are returned instead of thrown (and instead of being swallowed):
+ * closing unbinds browser/driver resources, so a failure there is a real leak
+ * that no other component can reconcile once the session is unregistered.
+ *
+ * @return null when the session was closed and deregistered, the failure
+ *   otherwise.
+ */
+internal fun releaseCrawlSession(session: PulsarSession, context: PulsarContext): Throwable? =
+    runCatching { context.closeSession(session) }.exceptionOrNull()
+
+/** What one depth level of a round is granted: 5 minutes. */
+internal const val ROUND_BUDGET_PER_DEPTH_MS = 300_000L
+
+/**
+ * Ceiling on a round's own budget whatever the depth (30 minutes).
+ *
+ * A round budget is a *scheduling* limit, never a promise: the task-level limit
+ * ([CrawlService.DEFAULT_TASK_TIMEOUT_MS], 10 minutes by default) is what a
+ * crawl really runs under and it is smaller, which is why a round budget is
+ * always derived from what the task has left rather than from its depth alone.
+ */
+internal const val MAX_ROUND_BUDGET_MS = 1_800_000L
+
+/**
+ * How much of the task budget a round leaves untouched so it can *report* before
+ * the task-level limit fires.
+ *
+ * A round's timeout is only the beginning of its end: it snapshots its results,
+ * closes its ledger and its session (unbinding browser and driver resources) and
+ * the service then publishes the losses.  A round still doing that when the task
+ * limit fires is killed mid-report and its accounting — the URLs it knows are
+ * missing — never reaches the terminal record at all.  The margin is that
+ * window, and it is the reason a deep crawl's own timeout is reachable at all:
+ * before, a depth>=2 round asked for 10+ minutes from a 10-minute task and could
+ * only ever be killed, never time out on its own terms.
+ */
+internal const val ROUND_REPORT_MARGIN_MS = 30_000L
+
+/**
+ * Below this, the remaining task budget cannot carry a round: the URL is not
+ * submitted at all and is reported as a loss instead (see [unstartedSeedRound]).
+ */
+internal const val MIN_ROUND_BUDGET_MS = 15_000L
+
+/** Why a URL was never submitted: the crawl spent its budget before reaching it. */
+internal const val REASON_BUDGET_EXHAUSTED =
+    "the crawl ran out of its time budget before this URL was submitted"
+
+/** Why a URL never settled: the server-side task limit fired while its round ran. */
+internal const val REASON_TASK_LIMIT =
+    "the server-side task limit fired while this URL was still being fetched"
+
+/** Why a URL never settled: a caller cancelled the crawl while its round ran. */
+internal const val REASON_TASK_CANCELLED =
+    "the crawl was cancelled before this URL settled"
+
+/**
+ * The time budget of one round: the smaller of what its depth grants it and what
+ * the task has left, minus the [ROUND_REPORT_MARGIN_MS] it needs to report.
+ *
+ * Deriving the round budget from the *task's* remaining budget is what makes a
+ * timed-out round reportable.  A fixed `depth * 5 min` does not fit inside a
+ * 10-minute task from depth 2 up, so such a round was always killed by the task
+ * limit — and a killed round returns nothing, so its outstanding URLs were
+ * neither collected nor reported as lost.  A round that is granted less than
+ * [MIN_ROUND_BUDGET_MS] is not started at all; see [hasBudgetForRound].
+ *
+ * @param depth the round's discovery depth (>= 1; the caller owns depth 0).
+ * @param remainingTaskBudgetMs what is left of the task budget; the worker of a
+ *   task derives it from the moment it armed the task clock, so the round's
+ *   deadline and the task's own limit measure the same span.
+ */
+internal fun resolveRoundTimeoutMs(depth: Int, remainingTaskBudgetMs: Long): Long {
+    val depthBudget = (depth.coerceAtLeast(1) * ROUND_BUDGET_PER_DEPTH_MS)
+        .coerceAtMost(MAX_ROUND_BUDGET_MS)
+    return minOf(depthBudget, remainingTaskBudgetMs - ROUND_REPORT_MARGIN_MS)
+        .coerceAtLeast(MIN_ROUND_BUDGET_MS)
+}
+
+/**
+ * Whether the task can still afford to start one more round.
+ *
+ * Starting a round the task limit will kill costs the crawl the URL: nothing
+ * downstream can report a round that never returned.  Reporting the seed as lost
+ * *before* submitting it keeps `pagesFound + failedPages.size == pagesExpected`
+ * exact, which is the whole point of the loss accounting.
+ */
+internal fun hasBudgetForRound(remainingTaskBudgetMs: Long): Boolean =
+    remainingTaskBudgetMs - ROUND_REPORT_MARGIN_MS >= MIN_ROUND_BUDGET_MS
+
+/**
+ * The round of a seed that was never started: no page, one submitted URL, and
+ * that URL reported as lost.
+ *
+ * The accounting is deliberately one-for-one (`pagesExpected = 1`,
+ * `failedPages.size = 1`): the seed URL is the only URL this crawl can still
+ * prove it set out to fetch, and claiming any more would invent pages it never
+ * submitted.
+ */
+internal fun unstartedSeedRound(seedUrl: String): CrawlRound = CrawlRound(
+    pages = emptyList(),
+    failedPages = listOf(
+        CrawlFailedPage(url = seedUrl, depth = 0, protocolStatus = 0, reason = REASON_BUDGET_EXHAUSTED)
+    ),
+    pagesExpected = 1,
+    timedOut = true,
+    timeoutError = "Crawl timed out: the task budget was exhausted before every seed was submitted " +
+        "(partial results saved)"
+)
+
+/**
+ * The seeds that never settled: no round of theirs completed, so their pages are
+ * not part of the result at all and the task-level terminal write has to name
+ * them instead of letting them vanish.
+ *
+ * Used by the task-limit/cancellation path, where the in-flight rounds are gone
+ * (a killed round returns nothing) and the expected count of a round that never
+ * finished is unknowable — so each unfinished seed is accounted as exactly one
+ * expected, lost URL.
+ */
+internal fun unfinishedSeedLosses(
+    seedUrls: List<String>,
+    seedStatuses: Array<CrawlSeedStatus?>,
+    reason: String,
+): List<CrawlFailedPage> = seedUrls.filterIndexed { index, _ -> seedStatuses.getOrNull(index) == null }
+    .map { CrawlFailedPage(url = it, depth = 0, protocolStatus = 0, reason = reason) }
 
 /**
  * Run [block] for every URL with at most [concurrency] URLs in flight, and
@@ -183,6 +376,54 @@ internal fun buildLossNote(
     } else ""
     return "${failedPages.size} of $pagesExpected page(s) were submitted but never delivered " +
         "(${pagesFound} recorded): $shown$more"
+}
+
+/**
+ * Merge an in-flight progress publish into the record of a running crawl.
+ *
+ * A round publishes every page it records so a poller can watch a crawl fill up.
+ * That publish **adds to** the record, it does not replace it: the losses and the
+ * expected total reported for the seeds that already settled (`recordSeedProgress`)
+ * stay visible while the remaining seeds run.  Rebuilding the record without them
+ * made `failed_pages`/`pages_expected` flicker back to empty/0 mid-crawl, so a
+ * consumer watching progress could not see accumulated loss.
+ *
+ * A terminal record is never overwritten.  A parse handler can still be running
+ * when the task has already been finalized (round timeout, cancellation), and
+ * moving a finished task back to PROCESSING would resurrect it: the poller would
+ * wait for a task that nobody will ever finalize again.
+ *
+ * @return the record to store, or null when the task is already terminal and the
+ *   publish must be dropped.
+ */
+internal fun mergeIncrementalProgress(
+    taskId: String,
+    previous: CrawlResponse?,
+    pages: List<CrawlPageResult>,
+    linksDiscovered: Int,
+    diagnostic: String?,
+    terminalStatuses: Set<String>,
+): CrawlResponse? {
+    if (previous != null && previous.status in terminalStatuses) return null
+    return CrawlResponse(
+        taskId = taskId,
+        status = "PROCESSING",
+        pagesFound = pages.size,
+        linksDiscovered = linksDiscovered,
+        pages = pages,
+        diagnostic = diagnostic ?: previous?.diagnostic,
+        // Preserve the identity and age of the task: a publish is progress, not a
+        // new task (createdAt also drives the TTL purge).
+        createdAt = previous?.createdAt ?: System.currentTimeMillis(),
+        startedTime = previous?.startedTime ?: Instant.now(),
+        seedStatuses = previous?.seedStatuses,
+        // Carried over so the in-flight view stays as complete as the last
+        // authoritative write: these are only recomputed when a seed settles.
+        failedPages = previous?.failedPages,
+        pagesExpected = previous?.pagesExpected ?: 0,
+        parallelTabs = previous?.parallelTabs ?: 0,
+        maxConcurrentFetches = previous?.maxConcurrentFetches ?: 0,
+    )
 }
 
 /**

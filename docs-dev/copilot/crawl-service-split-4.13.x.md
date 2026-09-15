@@ -94,7 +94,7 @@ browser4-rest/src/test/kotlin/ai/platon/pulsar/rest/api/service/crawl/
 | `clearTerminal` / `purgeExpiredTasks` 里重复的 JSONL 重写 | `rewritePersistence()` |
 | 常量 `MAX_FETCH_RETRIES` / `FETCH_RETRY_DELAY_MS` | `CrawlRoundRunner` 伴生对象 |
 | 常量 `MIN_FETCH_TIME` / `MAX_REPORTED_FAILED_PAGES` | `crawl/CrawlSupport.kt`（文件私有） |
-| 常量 `SEED_INTERVAL_MS` / `CRAWL_TASK_TIMEOUT_MS` / `DEFAULT_PARALLEL_TABS` / `MAX_PARALLEL_TABS` / `crawlPersistencePath()` | 仍留在 `CrawlService` 伴生对象（后三者是对外契约） |
+| 常量 `SEED_INTERVAL_MS` / `CRAWL_TASK_TIMEOUT_MS` / `DEFAULT_PARALLEL_TABS` / `MAX_PARALLEL_TABS` / `crawlPersistencePath()` | 仍留在 `CrawlService` 伴生对象（后三者是对外契约）。`CRAWL_TASK_TIMEOUT_MS` 后来改为公开常量 `DEFAULT_TASK_TIMEOUT_MS` + 可覆盖的 `taskTimeoutMillis`（轮次预算由它派生），见 `ci-stabilization-4.13.x.md` §17.2 |
 
 ## 4. "行为不变"的验证
 
