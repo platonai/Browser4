@@ -1027,3 +1027,72 @@ crawl 强制 `-refresh`，所以这条用例今天只会走 "verified fresh" 分
   `Timeout to wait for document ready`）在引擎/驱动池一侧，本轮没有动 —— 本轮只是让它不再伪装成一行。
 
 
+## 19. `CrawlParallelTabsTest#testSequentialControlRunDoesNotOverlap` 在 CI 上超时（4.13.x，未修）
+
+### 19.1 现象
+
+v4.13.19 发布之后补派了一次真正的门禁（`gh workflow run ci.yml --ref 4.13.x`，
+run [35090001184](https://github.com/platonai/Browser4/actions/runs/35090001184)，
+commit `ae250c3a9`）。整套测试只有一处红，且两次尝试（含 `gh run rerun --failed`）**同一用例、同一原因**：
+
+```
+[ERROR] CrawlParallelTabsTest.testSequentialControlRunDoesNotOverlap -- Time elapsed: 240.4 s <<< ERROR!
+java.lang.IllegalStateException: Crawl eb660148-… did not reach a terminal state within 4 minutes, last: PROCESSING
+  at CrawlParallelTabsTest.waitForTerminal(CrawlParallelTabsTest.kt:290)
+```
+
+`waitForTerminal` 的 4 分钟上限就是那条线的判定点：crawl 一直停在 `PROCESSING`，没有终态。
+
+### 19.2 为什么不是这一轮改动引起的
+
+1. **不在改动路径上**：该类的 crawl 请求体只有 `url/urls/args/depth/parallelTabs`，**不带 `sql`**，
+   所以 `executeCrawlSqlQuery` 根本不会被调用；`CrawlRoundRunner` 的编辑全部位于
+   `if (request.sql != null)` 之内，`XSqlExecutor` / 封印 / 冻结同样不可达。
+2. **测试类本身没变**：`git diff 2d8e0d627..ae250c3a9 -- …/CrawlParallelTabsTest.kt` 只有 3 行 import
+   （package split 的 `rest.api.service` → `rest.api.service.crawl`），5 个用例内容与上一次全绿的
+   CI（`v4.13.19-ci.4`）完全一致。
+3. **本地同 commit 通过**：`-Dtest=CrawlParallelTabsTest` → **5 / 0 / 0，91.2 s**；只跑失败那条方法 → **63.9 s**。
+4. **本轮新增的两个测试不会拖慢它**（共享 Spring 上下文/浏览器的假设被直接证伪）：
+
+   | 本地运行 | `CrawlParallelTabsTest` |
+   |---|---|
+   | 单独跑（对照） | 5 / 0 / 0，**91.2 s** |
+   | 先跑 `CommandXSqlTest` + `CrawlXSqlE2ETest`（CI 顺序） | 5 / 0 / 0，**78.0 s** |
+
+   后者比对照还快；同一轮里 `CommandXSqlTest` 34.4 s、`CrawlXSqlE2ETest` 7.1 s。
+
+### 19.3 与上一次全绿 CI 的数字对比
+
+| 同一 CI 工作流内的类 | ci.4 `2d8e0d627`（绿） | 本次 `ae250c3a9`（红 ×2） |
+|---|---|---|
+| `CrawlFixtureMetadataTest` | 321.1 s | 632.8 s / 650.7 s（≈2×） |
+| `CrawlParallelTabsTest` | **72.7 s** | **538.1 s / 547.0 s（≈7.4×）** |
+| ↳ `testSequentialControlRunDoesNotOverlap` | 包含在 72.7 s 内 | 240.4 s / 240.5 s → 触上限 |
+
+其余类别无异常：`browser4-rest` 单测 404/0/0，`CommandXSqlTest` 2/0/0，`CrawlXSqlE2ETest` 2/0/0，
+`CrawlXSqlTest` 9/0/0，`SwarmCrawlFixtureTest` 3/0/0 —— 本轮改动的部分在这个门禁里全绿。
+
+### 19.4 判断
+
+* 这是一条**环境敏感的时序脆弱点**，不是逻辑死锁：本地同代码 78–91 s 跑完，CI 上却是 7.4×；
+  而"7.4×"远超同批次邻居类的 2×，说明不是整台 runner 变慢，而是这类抓取在 CI 上停顿。
+* 停顿的量级与成因方向：`parallelTabs=1` 的 4 seed 顺序抓取 + 240 s 上限 ≈ **4 × 60 s**，
+  与仓库已知的 driver-scarcity 停顿（拿不到 driver 时按 60 s 量级干等，见 CLAUDE.md/§16 相关记录）同一量级；
+  该类在它之前还跑了 `CrawlFixtureMetadataTest`（本轮 2× 于 ci.4）与 `SwarmCrawlFixtureTest`，同 JVM 共享
+  浏览器与驱动池。
+* **不能**据此说"这是已证明的既有 flake"：ci.3/ci.4 是绿的，所以它是"与本次改动无关、但在 CI 上连续可复现"
+  的脆弱点。范围里唯一与无 SQL crawl 路径相关的运行时代码是 §16–§18 那三个提交
+  （`7ffc190e56` 结算/会话生命周期、`298b4f31dc` 未交付页面、`13096ebbbb` 拆分）；若继续挖，lead 在那里。
+* 已发布内容不受影响：`release.yml`（构建/6 平台产物/runtime bundle/npm/3 平台 smoke/GitHub Release）全绿，
+  ci.yml 是事后补派的质量门禁，两者互不阻塞。
+
+### 19.5 仍未做
+
+* **超时时的诊断**：`waitForTerminal` 只报了 `last: PROCESSING`，没有带上该 crawl 最近的状态/日志，
+  所以"卡在哪"只能去翻 CI 日志。下一轮应让它在超时时把任务状态、`pagesExpected/pagesFound`、
+  最近的 WARN/ERROR 摘要一起抛出来。
+* **上限的合理性**：4 分钟是这条用例写死的；本地 63.9 s、ci.4 整类 72.7 s，健康区间离上限有 3× 余量，
+  但 CI 负载下的停顿会把它吃掉。要么按类内累计耗时调大，要么让该类拥有独立上下文/独立超时策略。
+* **驱动池在该类里的分配日志**（谁占着 driver、谁在等、等了多久）没有拉出来对照，这是把"环境停顿"
+  坐实成"驱动池饥饿"的最后一步。
+
