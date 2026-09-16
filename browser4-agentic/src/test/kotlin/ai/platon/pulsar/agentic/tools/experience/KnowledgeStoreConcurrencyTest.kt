@@ -6,8 +6,10 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.deleteRecursively
@@ -36,6 +38,7 @@ import kotlin.test.*
  *
  * Re-enabled after all three were fixed in [KnowledgeStore]; it passes repeatedly.
  */
+@Timeout(value = 180, unit = TimeUnit.SECONDS)
 @OptIn(ExperimentalPathApi::class)
 @DisplayName("KnowledgeStore — Concurrent Access")
 class KnowledgeStoreConcurrencyTest {

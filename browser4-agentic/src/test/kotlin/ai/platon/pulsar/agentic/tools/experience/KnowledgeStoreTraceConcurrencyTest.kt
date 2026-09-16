@@ -8,8 +8,10 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
+import java.util.concurrent.TimeUnit
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.deleteRecursively
 import kotlin.io.path.listDirectoryEntries
@@ -24,6 +26,7 @@ import kotlin.test.assertTrue
  * dropping most of what it is told) or a stale expectation somewhere. This test
  * prints what actually landed so the difference is visible instead of guessed.
  */
+@Timeout(value = 120, unit = TimeUnit.SECONDS)
 @OptIn(ExperimentalPathApi::class)
 @DisplayName("KnowledgeStore — concurrent trace saves")
 class KnowledgeStoreTraceConcurrencyTest {

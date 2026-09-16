@@ -529,6 +529,7 @@ data class Arg(
 2. **`KnowledgeStoreConcurrencyTest` 已真正修好并重新启用**。它此前被 `@Disabled("flaky on Windows")` 挂着，而它**不是 flaky，是三个确定性竞争**：① 共享 SnakeYAML 实例无同步；② 固定 `${name}.tmp` + 先删后改名的发布；③ **`updateStats` 的读-改-写没有锁**——实测 10 个并发 trace 存盘只留下 `successes = 2`（每个写者读到过期计数再写回自己的 +1）。第 ③ 条是**丢更新**：experience 的成功/失败计数正是 confidence 与 PROMOTION 判据的来源，少算等于把证据悄悄扔掉。三条都修好后该类连续 3 次全绿，注解与 KDoc 已改写为真实历史（不再用"flaky"掩盖）。`KnowledgeStoreTraceConcurrencyTest` 单独钉住"10 次并发存盘 = 10 个文件且都能读回"。
 3. **`AgentMemoryTwoRunIntegrationTest` 已去抖**：它用固定 `delay(300)` 等异步 consolidation，机器一忙就失败（实测约每两次一次）；改为轮询它真正断言的状态（`awaitTrue`），连续 3 次单跑通过。
 4. `browser4-coding` 的 `CodeRunnerTest.bashRuns` 在本机是环境相关的偶发失败（首次跑失败、重跑通过，与本轮改动无关），全量验证时以 `-Dtest=!CodeRunnerTest` 排除并如实记录。
+5. **一次真实的 CI 教训（2026-09-16，ci.yml run 35104362040）**：本轮的 `KnowledgeStoreAtomicWriteTest` 把 CI 卡到 35 分钟超时被杀。它的读者协程写成**无界忙等**（`while (writing.get())` + 阻塞式文件读，且跑在 `Dispatchers.Default`），在 runner 的少量核上把 Default 线程占满 → 6 个写者协程永远排不上 → `writers.joinAll()` 不返回；日志在 `[INFO] Running KnowledgeStore — atomic write` 之后**静默 34 分钟**，最后被 `Tests timed out after 2100 seconds` 杀掉，而 `Run Tests` 的 exit 是 124，action 的规则是"超时绝不 reconcile 成成功"，于是 `Check Test Status` 失败、后续 Docker/E2E 全被跳过（surefire 计数 1330 / 失败 0）。本机核多所以一直绿——**"我这里过"对并发测试没有说服力**。修法：读者改成**有界且让出**（固定轮数、跑 `Dispatchers.IO`、每轮 `yield()`），三个并发测试类加 `@Timeout`（120–180 秒）作为兜底——并发测试宁可失败也不能拖垮流水线。复现验证：把线程池压到 `-Dkotlinx.coroutines.scheduler.max.pool.size=1 -Dkotlinx.coroutines.io.parallelism=2` 重跑，仍然通过。
 
 ### 8.7 本轮之后仍欠的事
 
