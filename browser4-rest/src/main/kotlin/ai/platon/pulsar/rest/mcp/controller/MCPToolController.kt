@@ -6,6 +6,7 @@ import ai.platon.pulsar.agentic.model.TcException
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.observability.ToolMetrics
+import ai.platon.pulsar.agentic.observability.ToolTracing
 import ai.platon.pulsar.agentic.tools.BatchExecutor
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.ToolCachePolicy
@@ -433,7 +434,13 @@ class MCPToolController(
         val startedAt = System.nanoTime()
         ToolMetrics.activeToolCallsCount.incrementAndGet()
         val entity = try {
-            ToolInvocationLogger.withRequestContext(requestId) { dispatchToolCall(request) }
+            // One span per call, carrying the same facts as the log lines. Tracing is
+            // optional: without the SDK this is a no-op span, never a failure.
+            ToolTracing.withSpan(request.tool, CHANNEL, sessionId) { outcome ->
+                val response = ToolInvocationLogger.withRequestContext(requestId) { dispatchToolCall(request) }
+                outcome.record(response.body?.errorCode?.takeIf { it.isNotBlank() } ?: "OK")
+                response
+            }
         } catch (e: Throwable) {
             val durationMs = (System.nanoTime() - startedAt) / 1_000_000
             ToolMetrics.activeToolCallsCount.decrementAndGet()

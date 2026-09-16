@@ -5,6 +5,7 @@ import ai.platon.pulsar.agentic.mcp.McpToolNames
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.observability.ToolMetrics
+import ai.platon.pulsar.agentic.observability.ToolTracing
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.ToolErrorCode
@@ -454,8 +455,14 @@ class Browser4MCPServer(
 
         val startedAt = System.nanoTime()
         val result = try {
-            ToolInvocationLogger.withRequestContext(requestId) {
-                dispatchToolCall(toolName, registration, arguments, sessionId, args)
+            // One span per call (requirement 8.2); a no-op span when the optional OTel
+            // SDK is not on the classpath, so tracing can never fail a call.
+            ToolTracing.withSpan(toolName, CHANNEL, sessionId) { outcome ->
+                val dispatched = ToolInvocationLogger.withRequestContext(requestId) {
+                    dispatchToolCall(toolName, registration, arguments, sessionId, args)
+                }
+                outcome.record(dispatched.errorCode()?.wire ?: "OK")
+                dispatched
             }
         } catch (e: Throwable) {
             // An escaping failure must still settle the metrics and the log, or
