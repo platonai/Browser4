@@ -119,7 +119,9 @@ internal class CrawlRoundRunner(
                 val document = session.parse(page)
 
                 val extractionResult = if (request.sql != null) {
-                    executeCrawlSqlQuery(session, request.url, request.sql)
+                    // The page and its document travel with the query: they are what makes the
+                    // read-only X-SQL a local read instead of a hidden re-fetch.
+                    executeCrawlSqlQuery(session, request.url, request.sql, page, document)
                 } else Pair(null, null)
 
                 // Fallback: if document.title is blank, try extracting <title>
@@ -302,7 +304,7 @@ internal class CrawlRoundRunner(
                         // and settles the URL; duplicates are dropped.
                         if (recorded.add(normalizeForVisit(linkUrl))) {
                             val extractionResult = if (request.sql != null) {
-                                executeCrawlSqlQuery(session, linkUrl, request.sql)
+                                executeCrawlSqlQuery(session, linkUrl, request.sql, _page, _document)
                             } else Pair(null, null)
                             val (servedFromStore, storeAgeSeconds) = storeServeMarkers(_page)
                             synchronized(results) {
@@ -531,7 +533,7 @@ internal class CrawlRoundRunner(
                     }
                     // Record this page
                     val extractionResult = if (request.sql != null) {
-                        executeCrawlSqlQuery(session, page.url, request.sql)
+                        executeCrawlSqlQuery(session, page.url, request.sql, page, document)
                     } else Pair(null, null)
                     val (servedFromStore, storeAgeSeconds) = storeServeMarkers(page)
                     synchronized(results) {
