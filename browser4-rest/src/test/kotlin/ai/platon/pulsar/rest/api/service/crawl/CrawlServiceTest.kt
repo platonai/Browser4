@@ -318,7 +318,7 @@ class CrawlServiceTest {
     private suspend fun awaitTerminal(taskId: String, timeoutMs: Long = 10_000): CrawlResponse {
         val deadline = System.currentTimeMillis() + timeoutMs
         var result = crawlService.getResult(taskId)
-        while (result.status == "CREATED" || result.status == "PROCESSING") {
+        while (!isTerminal(result.status)) {
             if (System.currentTimeMillis() > deadline) {
                 fail<Unit>("task $taskId never reached a terminal state (still ${result.status})")
             }
@@ -326,5 +326,25 @@ class CrawlServiceTest {
             result = crawlService.getResult(taskId)
         }
         return result
+    }
+
+    /**
+     * Whether a record has finished.
+     *
+     * The poll has to recognise the *pending* states, not the terminal ones:
+     * [CrawlService.submit] seeds the record with the HTTP phrase for 201
+     * (`Created`) and the worker replaces it with `PROCESSING` before the
+     * terminal phrases.  Polling on those two spellings instead returned the
+     * placeholder whenever the worker had not been scheduled yet — the poll then
+     * compared `Created` against a terminal status and failed under load.
+     */
+    private fun isTerminal(status: String) = status in TERMINAL_STATUSES
+
+    private companion object {
+        val TERMINAL_STATUSES = setOf(
+            ResourceStatus.getStatusText(ResourceStatus.SC_OK),
+            ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
+            ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
+        )
     }
 }
