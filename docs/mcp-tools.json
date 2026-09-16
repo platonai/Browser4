@@ -636,7 +636,8 @@
       },
       "expectsError" : false,
       "executable" : true
-    } ]
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"selector\",\"matchCount\",\"suggestions\"],\"properties\":{\"selector\":{\"type\":\"string\"},\"matchCount\":{\"type\":\"integer\"},\"suggestions\":{\"type\":\"array\"},\"autoDiscovered\":{\"type\":\"boolean\"},\"originalSelector\":{\"type\":\"string\"},\"analyzed\":{\"type\":\"integer\"},\"samples\":{\"type\":\"array\"},\"speculativeSuggestion\":{\"type\":\"string\"},\"speculativeMatchCount\":{\"type\":\"integer\"}}}"
   }, {
     "domain" : "html_snapshot",
     "method" : "query",
@@ -669,7 +670,8 @@
       },
       "expectsError" : false,
       "executable" : true
-    } ]
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"statusCode\",\"pageStatusCode\",\"pageContentBytes\",\"isDone\",\"event\"],\"properties\":{\"statusCode\":{\"type\":\"integer\"},\"pageStatusCode\":{\"type\":\"integer\"},\"pageContentBytes\":{\"type\":\"integer\"},\"isDone\":{\"type\":\"boolean\"},\"event\":{\"type\":\"string\"}}}"
   }, {
     "domain" : "html_snapshot",
     "method" : "readability",
@@ -696,7 +698,8 @@
       },
       "expectsError" : false,
       "executable" : true
-    } ]
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"url\",\"title\",\"byline\",\"siteName\",\"excerpt\",\"length\",\"confidence\",\"textContent\",\"content\"],\"properties\":{\"url\":{\"type\":\"string\"},\"title\":{\"type\":\"string\"},\"byline\":{\"type\":\"string\"},\"siteName\":{\"type\":\"string\"},\"excerpt\":{\"type\":\"string\"},\"textContent\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"},\"length\":{\"type\":\"integer\"},\"confidence\":{\"type\":\"number\"}}}"
   }, {
     "domain" : "html_snapshot",
     "method" : "scrape",
@@ -800,7 +803,8 @@
       },
       "expectsError" : false,
       "executable" : true
-    } ]
+    } ],
+    "outputSchema" : "{\"type\":\"array\",\"items\":{\"type\":\"string\"}}"
   }, {
     "domain" : "html_snapshot",
     "method" : "summary",

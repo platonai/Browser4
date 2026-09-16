@@ -747,6 +747,14 @@ Inspect the HTML snapshot and suggest CSS selectors for recurring patterns.
 
 Returns: `String`
 
+<details><summary>Result schema</summary>
+
+```json
+{"type":"object","required":["selector","matchCount","suggestions"],"properties":{"selector":{"type":"string"},"matchCount":{"type":"integer"},"suggestions":{"type":"array"},"autoDiscovered":{"type":"boolean"},"originalSelector":{"type":"string"},"analyzed":{"type":"integer"},"samples":{"type":"array"},"speculativeSuggestion":{"type":"string"},"speculativeMatchCount":{"type":"integer"}}}
+```
+
+</details>
+
 Examples:
 
 - Find selectors for repeated cards: `{"sessionId": "<session-id>", "selector": ".product", "max": "10"}`
@@ -767,6 +775,14 @@ Execute an X-SQL query against the current page or a specified URL.
 
 Returns: `String`
 
+<details><summary>Result schema</summary>
+
+```json
+{"type":"object","required":["statusCode","pageStatusCode","pageContentBytes","isDone","event"],"properties":{"statusCode":{"type":"integer"},"pageStatusCode":{"type":"integer"},"pageContentBytes":{"type":"integer"},"isDone":{"type":"boolean"},"event":{"type":"string"}}}
+```
+
+</details>
+
 Examples:
 
 - Run X-SQL against the current page: `{"sessionId": "<session-id>", "sql": "select dom_first_text(dom, 'h1') as title"}`
@@ -785,6 +801,14 @@ Extract the main article content (title, byline, site name, excerpt, cleaned HTM
 | `url` | String? | no | null | Fetch this URL instead of using the current page. |
 
 Returns: `String`
+
+<details><summary>Result schema</summary>
+
+```json
+{"type":"object","required":["url","title","byline","siteName","excerpt","length","confidence","textContent","content"],"properties":{"url":{"type":"string"},"title":{"type":"string"},"byline":{"type":"string"},"siteName":{"type":"string"},"excerpt":{"type":"string"},"textContent":{"type":"string"},"content":{"type":"string"},"length":{"type":"integer"},"confidence":{"type":"number"}}}
+```
+
+</details>
 
 Examples:
 
@@ -831,6 +855,14 @@ Extract text, textcontent, html, or attribute values from ALL elements matching 
 | `limit` | Int | no | -1 | limit: Int = -1 |
 
 Returns: `String`
+
+<details><summary>Result schema</summary>
+
+```json
+{"type":"array","items":{"type":"string"}}
+```
+
+</details>
 
 Examples:
 

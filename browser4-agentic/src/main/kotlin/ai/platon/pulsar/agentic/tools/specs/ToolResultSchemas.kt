@@ -72,6 +72,56 @@ object ToolResultSchemas {
         """"message":{"type":"string"},"selectors_found":{"type":"integer"}}}"""
 
     /**
+     * `html_snapshot.query` → the serialized `ScrapeResponse`.
+     *
+     * The executor serializes with `JsonInclude.ALWAYS`, so every nullable field is
+     * written as an explicit `null` — and the validator treats an explicit null as a
+     * type violation. Only the five never-null fields are therefore declared; `status`
+     * (a computed getter) and the `Instant` timestamps are left out for the reasons
+     * given in the class note.
+     */
+    const val HTML_SNAPSHOT_QUERY = """{"type":"object",""" +
+        """"required":["statusCode","pageStatusCode","pageContentBytes","isDone","event"],"properties":{""" +
+        """"statusCode":{"type":"integer"},"pageStatusCode":{"type":"integer"},""" +
+        """"pageContentBytes":{"type":"integer"},"isDone":{"type":"boolean"},"event":{"type":"string"}}}"""
+
+    /**
+     * `html_snapshot.inspect` → the JSON produced by `inspectDocument`.
+     *
+     * Only `selector`, `matchCount` and `suggestions` are written on every path
+     * (`InspectDocumentTest` asserts them across all of its scenarios);
+     * `autoDiscovered`/`originalSelector` appear only when discovery kicked in, and
+     * `analyzed`/`samples` only when the caller passed a selector. Suggestion items
+     * are intentionally untyped: their shape depends on which discovery path produced
+     * them, and a schema that guessed would reject legitimate results.
+     */
+    const val HTML_SNAPSHOT_INSPECT = """{"type":"object",""" +
+        """"required":["selector","matchCount","suggestions"],"properties":{""" +
+        """"selector":{"type":"string"},"matchCount":{"type":"integer"},"suggestions":{"type":"array"},""" +
+        """"autoDiscovered":{"type":"boolean"},"originalSelector":{"type":"string"},""" +
+        """"analyzed":{"type":"integer"},"samples":{"type":"array"},""" +
+        """"speculativeSuggestion":{"type":"string"},"speculativeMatchCount":{"type":"integer"}}}"""
+
+    /**
+     * `html_snapshot.readability` → the payload built from `ReadabilityResult`.
+     *
+     * All nine fields are non-null Kotlin values, so all nine are written and all
+     * nine are required. (`html_snapshot.summary` deliberately has **no** contract:
+     * it returns a YAML document, not JSON, so no JSON-Schema contract could ever be
+     * enforced on it.)
+     */
+    const val HTML_SNAPSHOT_READABILITY = """{"type":"object",""" +
+        """"required":["url","title","byline","siteName","excerpt","length","confidence","textContent","content"],""" +
+        """"properties":{"url":{"type":"string"},"title":{"type":"string"},"byline":{"type":"string"},""" +
+        """"siteName":{"type":"string"},"excerpt":{"type":"string"},"textContent":{"type":"string"},""" +
+        """"content":{"type":"string"},"length":{"type":"integer"},"confidence":{"type":"number"}}}"""
+
+    /**
+     * `html_snapshot.scrape_all` → a JSON array of the extracted field values.
+     */
+    const val HTML_SNAPSHOT_SCRAPE_ALL = """{"type":"array","items":{"type":"string"}}"""
+
+    /**
      * `skill.list` → `List<SkillRegistry.SkillSummary>`.
      *
      * The one advertised tool whose result is a **top-level array**, which is why

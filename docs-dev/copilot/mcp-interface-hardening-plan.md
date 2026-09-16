@@ -503,10 +503,12 @@ data class Arg(
 ### 8.2 需求完成度更新
 
 - **需求 2（示例）**：**142/142** —— 全量工具都有可执行示例，矩阵报 `missing altogether: 0`。缺口清零路径：77/140（`experience`4 + `skill`1）→ 110/142（含找回被显式 spec 吞掉的 7 个）→ 142/142（补齐 tab 长尾 32 个：鼠标/滚轮、typed reader、`setProperty*`、`evaluate*`、`load*Resource` 等）。这批示例不是"写上去就算"：矩阵以示例作为 happy-path 入参跑校验器，`everyWrittenTabExampleReachesTheSpec` 保证示例必须落到真实 spec 上。
-- **需求 6（返回值校验）**：声明 `outputSchema` 的工具 **19** 个（起点 8：crawl×4 + command×4）。新增：`tab.dialogStatus`、`batch.run`、`experience_query/list/save/deep_learn`、`memory_search/read`、`webdb_export`、`skill_list`、`skill_info`。契约集中在 `ToolResultSchemas`，两条规则保证不撒谎：**可空性决定字段是否出现**（Jackson 会写出 `null`，而校验器把显式 `null` 既当缺字段又当类型错误，所以只有类上标了 `@JsonInclude(NON_NULL)` 的可空字段才写进 `properties`，其余宁可不写）、**`required` 只列一定写出的字段**（Kotlin 默认值非空即必然出现）。`Instant` 字段（`last_verified`）刻意不声明类型：其线上形态取决于 mapper 的 JavaTime 配置，猜错不是拒绝合法结果就是写进一份假契约。
+- **需求 6（返回值校验）**：声明 `outputSchema` 的工具 **23** 个（起点 8：crawl×4 + command×4）。新增：`tab.dialogStatus`、`batch.run`、`experience_query/list/save/deep_learn`、`memory_search/read`、`webdb_export`、`skill_list`、`skill_info`、`html_snapshot_query`、`html_snapshot_inspect`、`html_snapshot_scrape_all`、`html_snapshot_readability`。契约集中在 `ToolResultSchemas`，两条规则保证不撒谎：**可空性决定字段是否出现**（Jackson 会写出 `null`，而校验器把显式 `null` 既当缺字段又当类型错误，所以只有类上标了 `@JsonInclude(NON_NULL)` 的可空字段才写进 `properties`，其余宁可不写）、**`required` 只列一定写出的字段**（Kotlin 默认值非空即必然出现）。`Instant` 字段（`last_verified`、`ScrapeResponse` 的时间戳）刻意不声明类型：其线上形态取决于 mapper 的 JavaTime 配置，猜错不是拒绝合法结果就是写进一份假契约。
   - **矩阵规则放宽到 `object|array`**：`skill.list` 是唯一返回**顶层数组**的工具（`List<SkillSummary>`），原来的"必须声明 `type=object`"会让这类工具根本无法描述；`ToolResultValidator` 本来就支持数组（校验 `items`）。
-  - **无夹具的执行器先抽纯函数再声明契约**：`webdb.export` 的载荷原来在 `ManagedSession.withLock`（`suspend inline`，Mockito 无法打桩）里就地拼装，现抽成 `WebDbToolExecutor.exportSummary(results)`——契约描述的就是这个纯函数的输出，`WebDbExportSchemaTest` 直接验证它。
-  - 每个域都有「跑真实路径、拿真实载荷过 schema」的测试：`ExperienceToolExecutorTest`、`MemoryToolExecutorTest`、`WebDbExportSchemaTest`、`SkillResultSchemaTest`（mock 服务、真实序列化），载荷变化超纲会直接失败而不是在生产里刷 `schema_violation`。
+  - **`html_snapshot.query` 的 schema 只声明 5 个字段**：该执行器用 `JsonInclude.ALWAYS` 序列化，`ScrapeResponse` 的所有可空字段都会写成显式 `null`，而显式 `null` 在校验器里是类型违规——所以只写 `statusCode`/`pageStatusCode`/`pageContentBytes`/`isDone`/`event` 这五个永不为空的字段。
+  - **`html_snapshot.inspect` 的 `required` 由既有测试反推**：`InspectDocumentTest` 在全部场景都断言 `selector`/`matchCount`/`suggestions`，而 `autoDiscovered`/`originalSelector`/`analyzed`/`samples` 只在特定路径出现（该测试明确断言某些场景 `has("autoDiscovered") == false`）。建议项 items 故意不声明类型：其形状随发现路径而变，猜一个就会拒绝合法结果。
+  - **无夹具的执行器先抽纯函数再声明契约**：`webdb.export` 的载荷原来在 `ManagedSession.withLock`（`suspend inline`，Mockito 无法打桩）里就地拼装，现抽成 `WebDbToolExecutor.exportSummary(results)`；`html_snapshot.inspect` 本身委托给纯函数 `inspectDocument`，直接可测。
+  - 每个域都有「跑真实路径、拿真实载荷过 schema」的测试：`ExperienceToolExecutorTest`、`MemoryToolExecutorTest`、`WebDbExportSchemaTest`、`SkillResultSchemaTest`、`HTMLSnapshotResultSchemaTest`（mock 服务 / 纯函数），载荷变化超纲会直接失败而不是在生产里刷 `schema_violation`。
 - **需求 8（监控）**：`session.active`、`async.queue.depth` 两个 gauge **已落地**，取值由部署侧注入（`ToolMetrics.registerSessionCountSupplier` / `registerAsyncTaskCountSupplier`），并在 `bindTo` 时随 Spring 注册表重绑（否则 gauge 会继续写进没人抓取的独立注册表）。REST 侧 `McpToolMetricsConfiguration` 从 `PulsarSessionManager.getAllSessions().size` 与 `CrawlService.runningTaskCount()`（`jobStore` 只保留运行中的 job）取值；瘦部署缺 bean 时 gauge 不注册而不是谎报 0。
 - **需求 7（日志）**：见 8.1 第 6 条。
 - **需求 3/5（两通道同码）**：不变，B 侧内置域仍是 `shadow`，切 `error` 需等计数清零。
@@ -531,7 +533,9 @@ data class Arg(
 ### 8.7 本轮之后仍欠的事
 
 1. ~~tab 域 32 个低频方法的可执行示例~~ **已清零**（全量 142/142，见 8.2）。
-2. 需求 6 的覆盖面：**123 个工具仍无结果契约**。剩下最集中的一块是 **`html_snapshot.*`（8 个方法）**：它们的载荷都在 `ManagedSession.withLock` 里就地拼装，且分页结构需要先定稳定信封字段——按 `webdb.export` 的做法逐个抽成纯函数即可，但那是独立一次改动。其余候选：`tab` 域大量返回标量/字符串的读方法（`title`/`currentUrl`/`getCookies`…）本身不是 JSON 对象，声明对象契约没有意义，需要的是「标量结果」的表达方式（矩阵现在只接受 object|array）。
+2. 需求 6 的覆盖面：**119 个工具仍无结果契约**，其中**没有契约是正确选择**的占绝大多数：
+   - **标量/文本结果**：`tab` 域大量读方法（`title`、`currentUrl`、`getCookies`、`pageSource`…）与 `html_snapshot.capture/scrape/export`、`webdb.normalize` 返回的是裸字符串或 HTML，而校验器只在结果以 `{`/`[` 开头时才解析结构化载荷——给它们声明 `{"type":"string"}` 会是一条**永远无法被强制执行**的契约，属于"文档撒谎"。要覆盖这类工具，需要先给"标量结果"一个能被校验的表达方式（例如结果信封），那是独立的接口变更。
+   - **`html_snapshot.summary` 返回的是 YAML**（`PageSummaryIndexService.generate` 产出 `.yml` 文本），不是 JSON——JSON-Schema 契约对它**在原理上**就无法强制，已在其 `ToolResultSchemas` 注释里写明，避免后人再试一遍。
 3. 需求 1.1 的「CI 比对显式覆盖集 == @MCP 扫描集」仍未做（现由 KDoc 提取 + 快照 + 文档漂移门禁 + lint 兜底）。
 4. 需求 8.2 的 OTel span（`mcp.tool.call`）仍未接；`TracingUtils`/`OpenTelemetryConfig` 已有但生产路径无人调用。
 5. `micrometer-registry-prometheus` 仍是 `optional`，`/actuator/prometheus` 需把它提为运行时依赖才可抓取（代码侧无需改动）。

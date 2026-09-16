@@ -4,6 +4,7 @@ import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
+import ai.platon.pulsar.agentic.tools.specs.ToolResultSchemas
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.sql.SQLTemplate
@@ -13,8 +14,10 @@ import ai.platon.pulsar.rest.mcp.controller.*
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryIndexService
 import ai.platon.pulsar.skeleton.workflow.parse.html.ReadabilityExtractor
+import ai.platon.pulsar.skeleton.workflow.parse.html.ReadabilityResult
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.node.ArrayNode
+import com.fasterxml.jackson.databind.node.ObjectNode
 import ai.platon.pulsar.rest.session.ManagedSession
 import kotlinx.coroutines.withTimeout
 import org.slf4j.LoggerFactory
@@ -115,6 +118,7 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("limit", "Int", "-1"),
             ),
             returnType = "String",
+            outputSchema = ToolResultSchemas.HTML_SNAPSHOT_SCRAPE_ALL,
             description = "Extract text, textcontent, html, or attribute values from ALL elements matching a CSS selector.",
             examples = listOf(
                 ToolExample(
@@ -138,6 +142,7 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("sessionId", "String", null),
             ),
             returnType = "String",
+            outputSchema = ToolResultSchemas.HTML_SNAPSHOT_QUERY,
             description = "Execute an X-SQL query against the current page or a specified URL.",
             examples = listOf(
                 ToolExample(
@@ -190,6 +195,7 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("depth", "Int", "5"),
             ),
             returnType = "String",
+            outputSchema = ToolResultSchemas.HTML_SNAPSHOT_INSPECT,
             description = "Inspect the HTML snapshot and suggest CSS selectors for recurring patterns.",
             examples = listOf(
                 ToolExample(
@@ -207,6 +213,7 @@ class HTMLSnapshotToolExecutor(
                 ToolSpec.Arg("url", "String?", "null", "Fetch this URL instead of using the current page."),
             ),
             returnType = "String",
+            outputSchema = ToolResultSchemas.HTML_SNAPSHOT_READABILITY,
             description = "Extract the main article content (title, byline, site name, excerpt, cleaned HTML, plain text) from the stored HTML snapshot using a Readability-style heuristic. When url is given, the page is fetched independently; otherwise the current session page is used.",
             examples = listOf(
                 ToolExample(
@@ -795,19 +802,31 @@ class HTMLSnapshotToolExecutor(
                         "Try a page with substantial text, or use `htmlsnapshot get text \"<selector>\"` for explicit extraction."
                 )
 
-            pulsarObjectMapper().createObjectNode().apply {
-                put("url", result.url.ifBlank { page.url })
-                put("title", result.title)
-                put("byline", result.byline)
-                put("siteName", result.siteName)
-                put("excerpt", result.excerpt)
-                put("length", result.length)
-                put("confidence", result.confidence)
-                put("textContent", result.textContent)
-                put("content", result.content)
-            }.toString()
+            readabilityPayload(result, page.url).toString()
         }
     }
+
+    /**
+     * The `html_snapshot readability` payload: the nine fields of [ReadabilityResult]
+     * plus the page URL the extractor could not know.
+     *
+     * Extracted from the `withLock` block so the shape the contract promises can be
+     * tested without a session — [ToolResultSchemas.HTML_SNAPSHOT_READABILITY]
+     * describes exactly this, and `HTMLSnapshotResultSchemaTest` drives it with a
+     * real `ReadabilityExtractor` result.
+     */
+    internal fun readabilityPayload(result: ReadabilityResult, fallbackUrl: String): ObjectNode =
+        pulsarObjectMapper().createObjectNode().apply {
+            put("url", result.url.ifBlank { fallbackUrl })
+            put("title", result.title)
+            put("byline", result.byline)
+            put("siteName", result.siteName)
+            put("excerpt", result.excerpt)
+            put("length", result.length)
+            put("confidence", result.confidence)
+            put("textContent", result.textContent)
+            put("content", result.content)
+        }
 
     // =========================================================================
     // Helpers
