@@ -1,13 +1,17 @@
 package ai.platon.pulsar.loop.impl
 
 import ai.platon.pulsar.common.AppContext
+import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_LABEL
+import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.collect.UrlFeeder
 import ai.platon.pulsar.common.config.CapabilityTypes.CRAWL_ENABLE_DEFAULT_DATA_COLLECTORS
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.warnForClose
 import ai.platon.pulsar.core.api.PulsarContext
 import ai.platon.pulsar.loop.TaskRunner
+import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
+import ai.platon.pulsar.skeleton.session.PulsarSession
 import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentSkipListMap
@@ -119,15 +123,11 @@ open class StreamingTaskLoop(
         require(applicationContext.isActive) { "Expect context is active | ${applicationContext.id}" }
         require(cx.isActive) { "Expect context is active | ${cx.id}" }
 
-        // If the swarm session is not created, create one with default SWARM settings,
-        // or if the session has been created before, use the existing one.
-        val swarmSession = cx.sessions.values.firstOrNull() { it.label == "SWARM" }
-        if (swarmSession == null) {
-            logger.warn("SWARM session does not exist, falling back to default")
-        }
-
+        // The loop consumes the URLs submitted by every session (crawl, swarm,
+        // agent, user scripts), so the session it drives must own no browser tab —
+        // see [resolveFetchSession].
         val urls = urlFeeder.asSequence()
-        var currentSession = swarmSession ?: cx.getOrCreateSession()
+        var currentSession = resolveFetchSession(cx)
         _taskRunner = StreamingTaskRunner(urls, currentSession, autoClose = false)
 
         crawlJob = scope.launch {
@@ -143,7 +143,9 @@ open class StreamingTaskLoop(
                 while (running.get() && cx.isActive) {
                     // The swarm session may have been closed and recreated;
                     // re-resolve it so a fresh runner is bound to the live one.
-                    currentSession = cx.sessions.values.firstOrNull { it.label == "SWARM" } ?: currentSession
+                    currentSession = cx.sessions.values
+                        .firstOrNull { it.label == SWARM_SESSION_LABEL && it.isActive }
+                        ?: currentSession
 
                     // clear the global illegal states, so the newly created crawler can work properly
                     StreamingTaskRunner.clearIllegalState()
@@ -166,6 +168,67 @@ open class StreamingTaskLoop(
                 }
             }
         }
+    }
+
+    /**
+     * Resolve the session this loop fetches the submitted URLs through.
+     *
+     * Every session shares one loop and one URL pool, so a submitted URL is
+     * fetched by the *loop's* session, not by the session that submitted it.
+     * That session must therefore own no browser tab:
+     *
+     * [ai.platon.pulsar.protocol.browser.emulator.impl.PrivacyManagedBrowserFetcher]
+     * first looks for a "specified" driver (or browser) on the page, which
+     * inherits from the session config — a session bound to a tab makes *every*
+     * fetch drive that one tab and bypasses the privacy pool's driver lease.
+     * Concurrent fetches then queue behind a single tab instead of leasing one
+     * tab each, and used to corrupt each other's captures before the lease
+     * existed (issue #592). The pool can serve
+     * `browser.context.number` x `browser.max.active.tabs` fetches in parallel
+     * (2 x 8 by default), which is the throughput a bulk crawl expects.
+     *
+     * The shared swarm session is such a tab-free session by design, so it is
+     * used when it exists (that is also how `swarm` keeps its parallelism).
+     * Otherwise the loop owns a dedicated tab-free session — a session created
+     * by a caller (e.g. one crawl round) must not be adopted: it can be closed
+     * as soon as that round completes, leaving the loop without a live session.
+     * */
+    internal fun resolveFetchSession(context: AbstractPulsarContext): PulsarSession {
+        val sessions = context.sessions.values
+
+        // A session that owns a tab is never usable here, whatever its label:
+        // tabs are bound lazily (the first `open`/`goto` on the swarm session
+        // binds one), so "the swarm session" is not tab-free *by construction*,
+        // only by design.  Adopting a tab-bound one would re-serialize every
+        // submitted URL behind that single tab.
+        fun PulsarSession.ownsNoTab() = boundDriver == null && boundBrowser == null
+
+        val swarm = sessions.firstOrNull { it.label == SWARM_SESSION_LABEL && it.isActive }
+        if (swarm != null) {
+            if (swarm.ownsNoTab()) return swarm
+            val owner = swarm.boundDriver?.let { "driver #${it.id}" }
+                ?: swarm.boundBrowser?.let { "browser ${it.id}" }
+                ?: "unknown"
+            logger.info(
+                "Swarm session #{} is bound to a browser tab ({}); the crawl loop will not fetch " +
+                        "submitted URLs through it — that would serialize them on one tab",
+                swarm.id, owner
+            )
+        }
+
+        sessions.firstOrNull { it.label == FETCH_SESSION_LABEL && it.isActive && it.ownsNoTab() }
+            ?.let { return it }
+
+        val tabOwners = sessions.filter { !it.ownsNoTab() }
+        logger.info(
+            "Creating a tab-free fetch session for the crawl loop; {} session(s) bound to a browser tab " +
+                    "are never used to fetch submitted URLs: {}",
+            tabOwners.size, tabOwners.joinToString { "#${it.id}(${it.label.ifBlank { "-" }})" }
+        )
+
+        return context.createSession(
+            PulsarSettings(profileMode = BrowserProfileMode.SEQUENTIAL, label = FETCH_SESSION_LABEL)
+        )
     }
 
     private fun getOrCreateUrlFeeder(): UrlFeeder {
@@ -205,5 +268,12 @@ open class StreamingTaskLoop(
     private fun createUrlFeeder(): UrlFeeder {
         val enableDefaults = config.getBoolean(CRAWL_ENABLE_DEFAULT_DATA_COLLECTORS, true)
         return UrlFeeder(context.globalCache.urlPool, enableDefaults = enableDefaults)
+    }
+
+    companion object {
+        /**
+         * Label of the tab-free session the loop owns when no swarm session exists.
+         * */
+        const val FETCH_SESSION_LABEL = "FETCH"
     }
 }

@@ -57,7 +57,7 @@ Columns appear in alphabetical order: price first, then title. This occurs in CS
 
 #### Verified Root Cause
 
-**AI diagnosis was close but identified the wrong layer.** The server-side `ResultSetUtils.getTextEntityFromCurrentRecord()` (in `browser4base/pulsar-core/pulsar-ql/.../ResultSetUtils.kt:242-257`) correctly uses `mutableMapOf()` (Kotlin LinkedHashMap), which preserves insertion/column order. The `XSQLScrapeHyperlink` class also explicitly normalizes columns with `linkedSetOf`/`linkedMapOf`.
+**AI diagnosis was close but identified the wrong layer.** The server-side `ResultSetUtils.getTextEntityFromCurrentRecord()` (in `browser4base/pulsar-core/pulsar-ql/.../ResultSetUtils.kt:242-257`) correctly uses `mutableMapOf()` (Kotlin LinkedHashMap), which preserves insertion/column order. The `XSQLHyperlink` class also explicitly normalizes columns with `linkedSetOf`/`linkedMapOf`.
 
 The actual culprit is **`serde_json` on the Rust CLI side**. When the CLI deserializes the JSON response into `serde_json::Value`, it uses `serde_json::Map` which is backed by a **`BTreeMap`** — this sorts keys alphabetically, destroying the SELECT column order. The `format_csv()` and `format_table()` functions iterate "in order of first appearance" across rows, but every row already has alphabetically-sorted keys, so "first appearance" == alphabetical.
 

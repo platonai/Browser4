@@ -14615,6 +14615,18 @@ fn build_crawl_server_params(
         m.remove("argsStdin");
         m.remove("format");
         m.remove("output");
+        // --parallel is a CLI spelling: the backend field is `parallelTabs`.
+        // Translate it here (rather than sending `parallel`) so the server
+        // never has to accept two names for one budget.
+        if let Some(value) = m.remove("parallel") {
+            if let Some(n) = value
+                .as_str()
+                .and_then(|s| s.trim().parse::<u32>().ok())
+                .or_else(|| value.as_u64().map(|n| n as u32))
+            {
+                m.insert("parallelTabs".to_string(), json!(n));
+            }
+        }
         // Insert resolved urls array
         let url_array: Vec<Value> = urls.iter().map(|u| json!(u)).collect();
         m.insert("urls".to_string(), json!(url_array));
@@ -14651,6 +14663,68 @@ fn validate_crawl_format(format: &str) -> Result<(), String> {
             other
         )),
     }
+}
+
+/// Upper bound accepted for `--parallel`.
+///
+/// Must match `CrawlService.MAX_PARALLEL_TABS`; the backend rejects anything
+/// larger, and catching it here turns a round trip into an immediate message.
+const CRAWL_MAX_PARALLEL_TABS: u32 = 32;
+
+/// Validate the --parallel value: a positive tab count within the server's
+/// ceiling. An absent/empty value is fine (the backend's default applies).
+fn validate_crawl_parallel(value: &str) -> Result<(), String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(());
+    }
+    match value.parse::<u32>() {
+        Ok(n) if n >= 1 && n <= CRAWL_MAX_PARALLEL_TABS => Ok(()),
+        Ok(0) => Err(
+            "Invalid --parallel value '0'. Use --parallel 1 for a strictly sequential crawl, \
+             or omit --parallel to use the server default"
+                .to_string(),
+        ),
+        Ok(n) => Err(format!(
+            "Invalid --parallel value '{}'. The maximum is {}, because every parallel unit needs \
+             its own browser tab",
+            n, CRAWL_MAX_PARALLEL_TABS
+        )),
+        Err(_) => Err(format!(
+            "Invalid --parallel value '{}'. Expected a positive integer (number of tabs to \
+             collect with at the same time)",
+            value
+        )),
+    }
+}
+
+/// The parallelism report for a finished crawl: the budget it ran under and the
+/// peak number of fetch units it actually had in flight.
+///
+/// Reported so "the pages were collected with several tabs" is something the
+/// user can check rather than take on faith.  A peak of 1 on a crawl with
+/// several units means the collection was serial no matter what `--parallel`
+/// asked for — which is exactly the failure a parallelism budget exists to
+/// prevent, and it would otherwise be invisible.
+fn crawl_parallelism_note(parsed: &Value) -> Option<String> {
+    let budget = parsed["parallelTabs"].as_i64().unwrap_or(0);
+    if budget <= 0 {
+        return None;
+    }
+    let peak = parsed["maxConcurrentFetches"].as_i64().unwrap_or(0);
+    let units = parsed["seedStatuses"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let verdict = if peak <= 1 && units > 1 {
+        " — nothing overlapped: the units were collected one at a time"
+    } else {
+        ""
+    };
+    Some(format!(
+        "Parallelism: budget {} tab(s), peak {} unit(s) in flight{}",
+        budget, peak, verdict
+    ))
 }
 
 /// Whether a value is a load-options duration: a plain integer (interpreted
@@ -14922,6 +14996,18 @@ async fn handle_crawl(
 
     validate_crawl_format(&format)?;
 
+    // ---- Validate the parallelism budget ----
+    // The budget is a count of browser tabs the crawl may drive at once.  A
+    // value the user cannot have meant must fail here rather than silently
+    // becoming the default: a typo that quietly serializes a bulk crawl would
+    // look exactly like a slow site.
+    validate_crawl_parallel(
+        tool_params
+            .get("parallel")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+    )?;
+
     // When the X-SQL payload goes directly to stdout (no --output file), the
     // status/progress chatter must move to stderr so a redirected
     // `--format csv > out.csv` contains ONLY the CSV.  Background crawls
@@ -15012,6 +15098,23 @@ async fn handle_crawl(
     let task_id = task_id.trim().trim_matches('"').to_string();
     crawl_status_println!("Crawl task submitted: {}", task_id);
     crawl_status_println!("  URLs: {}", urls.len());
+    // State the parallelism up front: each unit needs its own browser tab, so a
+    // user watching a slow crawl should know whether it was asked to overlap at
+    // all (and the completion report confirms what it actually achieved).
+    let requested_parallel = tool_params
+        .get("parallel")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    crawl_status_println!(
+        "  Parallel tabs: {}",
+        if requested_parallel.is_empty() {
+            "server default".to_string()
+        } else {
+            requested_parallel
+        }
+    );
     if has_sql {
         crawl_status_println!("  X-SQL extraction: enabled");
     }
@@ -15352,6 +15455,17 @@ async fn handle_crawl(
                         json_field("readonly_note", json!(note));
                     }
 
+                    // Parallelism: the budget this crawl ran under and the peak
+                    // overlap it achieved (see crawl_parallelism_note).
+                    if let Some(note) = crawl_parallelism_note(&parsed) {
+                        crawl_status_println!("{}", note);
+                        json_field("parallel_tabs", parsed["parallelTabs"].clone());
+                        json_field(
+                            "max_concurrent_fetches",
+                            parsed["maxConcurrentFetches"].clone(),
+                        );
+                    }
+
                     let summary = format!("Results written");
                     let output = write_crawl_output(&extracted_output, output_file, &summary)?;
                     match output {
@@ -15562,12 +15676,61 @@ async fn handle_crawl(
                             error_count, page_count
                         ));
                     }
+                    // Lost pages: a crawl that dropped pages must not report a page
+                    // count smaller than the number of pages it set out to fetch.
+                    // The backend guarantees pagesFound + failedPages.size ==
+                    // pagesExpected, so this is the accounting that makes "the site
+                    // does not have it" distinguishable from "the crawl lost it".
+                    if let Some(failed) = parsed["failedPages"].as_array() {
+                        if !failed.is_empty() {
+                            let pages_expected = parsed["pagesExpected"].as_i64().unwrap_or(0);
+                            page_lines.push(format!(
+                                "\n⚠ {} of {} submitted page(s) were never delivered — \
+                                 this crawl is incomplete, not just small:",
+                                failed.len(),
+                                pages_expected
+                            ));
+                            const MAX_SHOWN: usize = 5;
+                            for f in failed.iter().take(MAX_SHOWN) {
+                                let url = f["url"].as_str().unwrap_or("");
+                                let depth = f["depth"].as_i64().unwrap_or(-1);
+                                let protocol_status = f["protocolStatus"].as_i64().unwrap_or(0);
+                                let reason = f["reason"].as_str().unwrap_or("no reason reported");
+                                let status_part = if protocol_status == 0 {
+                                    String::new()
+                                } else {
+                                    format!("status={} ", protocol_status)
+                                };
+                                page_lines.push(format!(
+                                    "    depth={} | {} | {}{}",
+                                    depth, url, status_part, reason
+                                ));
+                            }
+                            if failed.len() > MAX_SHOWN {
+                                page_lines.push(format!("    (+{} more)", failed.len() - MAX_SHOWN));
+                            }
+                            json_field("failed_pages", json!(failed.clone()));
+                            json_field("pages_expected", json!(pages_expected));
+                        }
+                    }
                     // Readonly-mode note: what --readonly did (served from the
                     // store with age, or verified every page fetched fresh).
                     if let Some(note) = parsed["readonlyNote"].as_str() {
                         page_lines.push(String::new());
                         page_lines.push(note.to_string());
                         json_field("readonly_note", json!(note));
+                    }
+                    // Parallelism: the budget this crawl ran under and the peak
+                    // overlap it achieved, so a serialized "parallel" crawl is
+                    // visible instead of just slow.
+                    if let Some(note) = crawl_parallelism_note(&parsed) {
+                        page_lines.push(String::new());
+                        page_lines.push(note);
+                        json_field("parallel_tabs", parsed["parallelTabs"].clone());
+                        json_field(
+                            "max_concurrent_fetches",
+                            parsed["maxConcurrentFetches"].clone(),
+                        );
                     }
                     let page_output = page_lines.join("\n");
                     let page_summary = format!("Crawl completed. {} pages found.", page_count);
@@ -30331,6 +30494,98 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
+    // validate_crawl_parallel / crawl_parallelism_note tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn validate_crawl_parallel_accepts_positive_counts() {
+        for valid in ["", "  ", "1", "4", "32"] {
+            assert!(validate_crawl_parallel(valid).is_ok(), "'{valid}' should be accepted");
+        }
+    }
+
+    #[test]
+    fn validate_crawl_parallel_rejects_zero_with_the_sequential_hint() {
+        // 0 is the one value a user plausibly means as "no parallelism": point
+        // them at the spelling that actually does that instead of silently
+        // substituting the default.
+        let err = validate_crawl_parallel("0").unwrap_err();
+        assert!(err.contains("--parallel 1"), "expected the sequential hint, got: {err}");
+    }
+
+    #[test]
+    fn validate_crawl_parallel_rejects_above_the_server_ceiling() {
+        let err = validate_crawl_parallel("33").unwrap_err();
+        assert!(err.contains("maximum"), "expected a ceiling message, got: {err}");
+        assert!(err.contains("33"), "the rejected value must be named, got: {err}");
+    }
+
+    #[test]
+    fn validate_crawl_parallel_rejects_non_numeric() {
+        for invalid in ["many", "2.5", "-1"] {
+            let err = validate_crawl_parallel(invalid).unwrap_err();
+            assert!(
+                err.contains("Invalid --parallel"),
+                "'{invalid}' should be rejected, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn crawl_parallelism_note_is_absent_for_a_task_without_the_field() {
+        // An older backend (or a task record written before the field existed)
+        // reports 0: say nothing rather than inventing a budget.
+        let parsed = json!({"status": "OK", "pagesFound": 3});
+        assert!(crawl_parallelism_note(&parsed).is_none());
+    }
+
+    #[test]
+    fn crawl_parallelism_note_reports_budget_and_peak() {
+        let parsed = json!({
+            "status": "OK",
+            "parallelTabs": 4,
+            "maxConcurrentFetches": 4,
+            "seedStatuses": [{"url": "a"}, {"url": "b"}]
+        });
+        let note = crawl_parallelism_note(&parsed).expect("note expected");
+        assert!(note.contains("budget 4"), "got: {note}");
+        assert!(note.contains("peak 4"), "got: {note}");
+        assert!(
+            !note.contains("one at a time"),
+            "an overlapped crawl must not be reported as serial: {note}"
+        );
+    }
+
+    #[test]
+    fn crawl_parallelism_note_flags_a_serialized_multiunit_crawl() {
+        // The failure this whole feature exists to prevent: several units, a
+        // budget above 1, and yet nothing overlapped. It must be visible.
+        let parsed = json!({
+            "status": "OK",
+            "parallelTabs": 4,
+            "maxConcurrentFetches": 1,
+            "seedStatuses": [{"url": "a"}, {"url": "b"}, {"url": "c"}]
+        });
+        let note = crawl_parallelism_note(&parsed).expect("note expected");
+        assert!(note.contains("peak 1"), "got: {note}");
+        assert!(note.contains("one at a time"), "got: {note}");
+    }
+
+    #[test]
+    fn crawl_parallelism_note_does_not_flag_a_single_unit_crawl() {
+        // One seed cannot overlap with anything: a peak of 1 is the whole job,
+        // not a serialization bug, and flagging it would be noise.
+        let parsed = json!({
+            "status": "OK",
+            "parallelTabs": 4,
+            "maxConcurrentFetches": 1,
+            "seedStatuses": [{"url": "a"}]
+        });
+        let note = crawl_parallelism_note(&parsed).expect("note expected");
+        assert!(!note.contains("one at a time"), "got: {note}");
+    }
+
+    // -------------------------------------------------------------------
     // validate_crawl_option_tokens / is_duration_value tests
     // -------------------------------------------------------------------
 
@@ -30418,6 +30673,31 @@ mod tests {
         // Non-CLI keys are preserved
         assert_eq!(result["depth"], json!(2));
         assert_eq!(result["refresh"], json!(true));
+    }
+
+    #[test]
+    fn build_crawl_server_params_translates_parallel_to_parallel_tabs() {
+        let tool_params = json!({"url": "https://example.com", "parallel": "6"});
+        let urls = vec!["https://example.com".to_string()];
+        let result = build_crawl_server_params(&tool_params, &urls, None, None);
+        assert_eq!(result["parallelTabs"], json!(6));
+        // The CLI spelling must not leak: two names for one budget would let the
+        // server accept a value it never reads.
+        assert!(
+            result.get("parallel").is_none(),
+            "the CLI-only `parallel` key must be stripped, got: {result}"
+        );
+    }
+
+    #[test]
+    fn build_crawl_server_params_omits_parallel_tabs_when_not_requested() {
+        let tool_params = json!({"url": "https://example.com"});
+        let urls = vec!["https://example.com".to_string()];
+        let result = build_crawl_server_params(&tool_params, &urls, None, None);
+        assert!(
+            result.get("parallelTabs").is_none(),
+            "an unrequested budget must stay absent so the server default applies: {result}"
+        );
     }
 
     #[test]

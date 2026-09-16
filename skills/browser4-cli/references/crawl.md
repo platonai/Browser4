@@ -153,6 +153,45 @@ browser4-cli crawl --seed-file urls.txt --depth 0 --sql "
 | `url` (positional) | | string | — | Starting URL. Omit when using `--seed-file` |
 | `--seed-file` | | string | — | File with URLs to crawl, one per line. Lines starting with `#` are comments |
 | `--depth` | `-d` | int | `1` | 0 = fetch only (no links); 1+ = follow links to that depth |
+| `--parallel` | | int | `4` | How many units (pages/tabs) to collect at the same time. `1` = strictly sequential |
+
+### Parallelism (`--parallel`)
+
+A crawl is a set of **independent units** — one per seed URL — so the units are
+collected at the same time by default, each one on its own browser tab leased
+from the driver pool. `--parallel <n>` bounds how many may be in flight at once.
+
+| Value | Behavior |
+|---|---|
+| *(omitted)* | Server default (4) |
+| `1` | Strictly sequential — the historical crawl, one unit at a time |
+| `2`–`32` | Up to `<n>` units collected concurrently |
+
+```bash
+# 12 seed URLs, at most 8 collected at a time
+browser4-cli crawl --seed-file urls.txt -d 0 --parallel 8 --refresh
+
+# The same crawl, strictly sequential (for a site that rate-limits)
+browser4-cli crawl --seed-file urls.txt -d 0 --parallel 1 --refresh
+```
+
+Notes:
+
+* **Each unit needs its own tab.** `--parallel` is a budget the crawl enforces on
+  itself; the browser driver pool (`browser.context.number` ×
+  `browser.max.active.tabs`, 2 × 8 by default) is the hard ceiling. Asking for
+  more than the pool can hand out yields a lower *observed* peak, which the
+  completion report shows.
+* **The reported peak is measured, not claimed.** The crawl reports the budget it
+  ran under and the peak number of units it actually had in flight. A peak of `1`
+  on a multi-unit crawl means the collection was serial — that is called out
+  explicitly instead of leaving you with a crawl that is merely slow.
+* **Values are validated before submitting.** `0` and non-numeric values exit
+  non-zero with a hint (`--parallel 1` for the sequential form); values above 32
+  are rejected by the server.
+* At `-d 1+` the budget bounds *seed rounds*, not pages: each round discovers its
+  links and the pages themselves are fetched from the shared tab pool. Two rounds
+  are therefore free to overlap even when a single round has few links.
 
 ### X-SQL extraction flags
 
@@ -377,7 +416,19 @@ prepended to the seed file list.
 ## Timeout
 
 - CLI-side default: 600s. Override with `BROWSER4_CLI_CRAWL_TIMEOUT_SECS` env var.
-- Backend timeout scales with depth: roughly 5 min per level, capped at 30 min.
+  When the CLI wait expires the crawl keeps running server-side — poll it with
+  `crawl status` / `crawl result`.
+- Backend task limit: **10 minutes per crawl task**, however many seeds or levels
+  it has. A task that reaches it ends `TIMEOUT` and still reports the pages it
+  collected plus every seed it never settled (see below).
+- A round (one seed URL at depth >= 1) gets the **smaller** of `5 min × depth`
+  (capped at 30 min) and what the task has left minus a 30s reporting margin. It
+  therefore always times out on its own terms — with its outstanding URLs
+  reported as lost — instead of being killed by the task limit, which is what
+  used to turn a deep crawl into "fewer pages, no losses reported".
+- A seed the remaining budget cannot carry (less than ~45s left) is **not
+  submitted at all**: it is reported as a lost page and its `seedStatuses` entry
+  is `skipped`, rather than being started and killed with no accounting.
 
 ## Error handling
 
@@ -388,7 +439,11 @@ prepended to the seed file list.
 | Timeout | Exits with message + task ID; increase `BROWSER4_CLI_CRAWL_TIMEOUT_SECS` |
 | Server error | Exits with "Crawl failed: ..." and server error details |
 | No links found (depth >= 1) | Exit 0 with a `⚠ Link discovery found no out-links` warning plus the backend diagnostic (it distinguishes "selector matched nothing" from "pattern filtered them all") and the effective `--out-link-pattern`. The seed page is always counted in depth ≥ 2 crawls, so an all-filtered crawl reports `Crawl completed. 1 pages found.` (depth-1 crawls list only discovered pages and report `0 pages found`). Inspect the warning text and verify `--out-link-selector` / `--out-link-pattern` — a shell-mangled pattern (Git Bash `/`-prefix conversion) is the usual cause |
+| Pages lost (any depth) | Exit 0 with a `⚠ N of M submitted page(s) were never delivered` warning naming each lost URL, its depth, its protocol status and the reason. The crawl is **incomplete**, not merely small: `pagesFound + failedPages.size == pagesExpected` always holds. Check `failedPages` in the JSON output. A page is lost when its fetch failed after the retry budget was exhausted, when the task was dropped/evicted, when the crawl ran out of its time budget before the URL was submitted, or when the load returned no document of its own — a zero-byte fetch, or the page store substituted for a failed fetch (`reason = the load returned no document …`; such a URL is **withheld from the listing** rather than shown as a row with an empty title). Re-run, or lower `--depth` / reduce concurrency if it repeats — a repeated loss on a many-core host usually means the target site is refusing the parallel load, so try `--parallel 2` (or `--parallel 1` to rule parallelism out entirely) |
+| Crawl hit the 10-minute task limit | The task ends `TIMEOUT` and the CLI exits non-zero ("Crawl failed: Crawl timed out while processing seeds …"). `crawl result <taskId>` still carries the accounting: the losses of the seeds that settled, plus **one lost-page row per seed whose round never returned**, reason `the server-side task limit fired while this URL was still being fetched`. The pages such a round had already published are deliberately *not* claimed — its submitted count is unknown, and claiming them would break the `pagesFound + failedPages.size == pagesExpected` invariant — so re-run those URLs. Lower `--depth`, or split the seeds across several crawls, to stay inside the limit. A seed that is refused *before* it starts reports `reason = the crawl ran out of its time budget before this URL was submitted` and a `skipped` seed status |
+| Page listed with `depth=-1` (depth >= 2) | The page was fetched and recorded, but neither the URL it was queued under nor the URL it was served from is a URL this crawl submitted (a redirect combined with a `<base href>`). It is listed with `depth=-1`, counted in `pagesFound`, **not** reported as lost, and **not** expanded (`-1` is never read as depth 0). A single such row is a labelling gap; if every row has it, the site rewrites its document base URI and the listing depths are not meaningful — use `--depth 1`, or report it |
 | Invalid --format | Exits with "Invalid --format '...'. Expected: json, csv, or table" |
+| Invalid --parallel | Exits with "Invalid --parallel value '...'" — accepts a positive integer up to 32; `0` is rejected with the `--parallel 1` hint, and anything above 32 is refused by the server (HTTP 400) |
 | X-SQL failure on one page | Page logged with error; other pages continue normally |
 
 ## Rate Limiting & Polite Scraping

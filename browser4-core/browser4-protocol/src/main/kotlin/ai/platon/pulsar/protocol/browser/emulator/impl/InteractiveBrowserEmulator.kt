@@ -315,12 +315,25 @@ open class InteractiveBrowserEmulator(
         } catch (e: WebDriverException) {
             if (e.cause is java.net.ConnectException) {
                 logger.warn("Web driver is disconnected - {}", e.brief())
+            } else if (e is TabOriginMismatchException) {
+                // The guard already logged the refusal with the document details
+                logger.warn("[Handled] {} | driver #{} will be retired", e.brief(), driver.id)
             } else {
                 logger.warn("[Unexpected] WebDriverException", e)
             }
 
             driver.retire()
             exception = e
+            // A snapshot-origin refusal is a momentary, local conflict: another fetch advanced
+            // the tab between this fetch's navigation and its snapshot. The refused driver is
+            // retired here and closed when it is returned to the pool, so the retry runs on a
+            // fresh driver/tab, and the conflict has usually cleared by the time the other
+            // fetch finishes its own document. The default retry policy, however, is a remote
+            // failure backoff (30-45s per retry, see AbstractTaskRunner.retryDelayPolicy), and
+            // three retries of it span two minutes - longer than any caller waits for a task -
+            // so a fetch refused more than once could only exhaust its retry budget (408) while
+            // the caller watched it retry. Come back promptly instead.
+            crawlRetryDelayFor(e)?.let { task.page.retryDelay = it }
             response = ForwardingResponse.crawlRetry(task.page, e)
         } catch (e: TimeoutCancellationException) {
             logger.warn("[Timeout] Coroutine was cancelled, thrown by [withTimeout] | {}", e.stringify())
@@ -495,9 +508,10 @@ open class InteractiveBrowserEmulator(
      * HTTP(S) document and no main-document request was issued for this
      * navigation, the document belongs to an earlier fetch and recording it
      * would silently attribute its title and content to this URL — a
-     * [WebDriverException] is thrown instead (driver retired + crawl retry),
-     * so no metadata is recorded and nothing is written to the store under the
-     * wrong URL.
+     * [TabOriginMismatchException] (a [WebDriverException]) is thrown instead
+     * (driver retired + crawl retry, promptly, see
+     * [TAB_ORIGIN_MISMATCH_RETRY_DELAY]), so no metadata is recorded and
+     * nothing is written to the store under the wrong URL.
      */
     @Throws(WebDriverException::class)
     private suspend fun captureNavigationSnapshot(
@@ -566,7 +580,7 @@ open class InteractiveBrowserEmulator(
                 committedUrl.take(200) + "' for fetch '" + taskUrl.take(200) +
                 "' — the snapshot shows an earlier fetch's document and " + stale
             logger.warn(message)
-            throw WebDriverException(message, driver = driver)
+            throw TabOriginMismatchException(message, driver = driver)
         }
         if (entry.mainRequestId.isNotBlank() ||
             urlsReferToSamePageIgnoringQuery(committedUrl, taskUrl)
@@ -589,7 +603,7 @@ open class InteractiveBrowserEmulator(
             "' — the snapshot still shows an earlier fetch's document and no " +
             "main-document request was issued for this navigation"
         logger.warn(message)
-        throw WebDriverException(message, driver = driver)
+        throw TabOriginMismatchException(message, driver = driver)
     }
 
     /** A single document's origin URL and serialized content, read in one evaluation. */

@@ -1,4 +1,4 @@
-package ai.platon.pulsar.rest.api.service
+package ai.platon.pulsar.rest.api.service.crawl
 
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.ResourceStatus
@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.Mock
+import org.mockito.Mockito.verifyNoInteractions
 import org.mockito.MockitoAnnotations
 
 /**
@@ -253,5 +254,77 @@ class CrawlServiceTest {
             ),
             "Task should be terminal, got: ${result.status}"
         )
+    }
+
+    // ------------------------------------------------------------------
+    // Task budget: a seed that cannot fit is reported, never dropped
+    // ------------------------------------------------------------------
+
+    /**
+     * Regression: round budgets used to be fixed per depth (`depth * 5 min`,
+     * capped at 30 min), which from depth 2 up is >= the whole task limit.  Such
+     * a round could therefore only ever be *killed* by the task limit, and a
+     * killed round returns nothing — not its pages, not the URLs it knows are
+     * missing.  The terminal record then reported fewer pages with no losses at
+     * all: a truncated crawl that looked merely small.
+     *
+     * A round's budget is now derived from what the task has left, and a seed
+     * the remaining budget cannot carry is refused *before* it is submitted, so
+     * the crawl ends TIMEOUT with every seed accounted for: the URLs are in
+     * `failedPages`, the count is in `pagesExpected`, and `pagesFound +
+     * failedPages.size == pagesExpected` still holds.
+     */
+    @Test
+    fun `an exhausted task budget reports the seeds it never started`() = runBlocking {
+        // Below the round floor (report margin + minimum round budget = 45s), so
+        // no seed can be started — and no browser has to be involved to prove it.
+        crawlService.taskTimeoutMillis = 10_000
+        val seeds = listOf(
+            "https://example.com/a",
+            "https://example.com/b",
+            "https://example.com/c"
+        )
+
+        val taskId = crawlService.submit(CrawlRequest(urls = seeds, depth = 1))
+        val result = awaitTerminal(taskId)
+
+        assertEquals(
+            ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
+            result.status,
+            "a crawl that could not fetch its seeds is a timeout, never OK"
+        )
+        assertEquals(0, result.pagesFound, "no page was claimed, so none may be reported")
+        assertEquals(seeds.size, result.pagesExpected)
+        val failed = requireNotNull(result.failedPages) { "the unfetched seeds must be reported as lost" }
+        assertEquals(seeds, failed.map { it.url }, "every refused seed is named, in seed order")
+        assertTrue(
+            failed.all { it.reason == REASON_BUDGET_EXHAUSTED },
+            "the reason must say why, got: ${failed.map { it.reason }}"
+        )
+        // The accounting law the CLI's loss warning rests on.
+        assertEquals(result.pagesExpected, result.pagesFound + failed.size)
+        assertEquals(
+            seeds.size,
+            result.seedStatuses?.count { it.status == "skipped" },
+            "the poller must see the refused seeds, not a shorter crawl"
+        )
+        assertNotNull(result.diagnostic, "the terminal record must explain why it is incomplete")
+        assertNotNull(result.finishTime, "a terminal task records a finish time")
+        // The gate short-circuits before the browser: nothing was fetched at all.
+        verifyNoInteractions(sessionManager)
+    }
+
+    /** Poll a task until it reaches a terminal state, or fail with what it was doing. */
+    private suspend fun awaitTerminal(taskId: String, timeoutMs: Long = 10_000): CrawlResponse {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        var result = crawlService.getResult(taskId)
+        while (result.status == "CREATED" || result.status == "PROCESSING") {
+            if (System.currentTimeMillis() > deadline) {
+                fail<Unit>("task $taskId never reached a terminal state (still ${result.status})")
+            }
+            delay(25)
+            result = crawlService.getResult(taskId)
+        }
+        return result
     }
 }

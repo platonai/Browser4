@@ -2,8 +2,8 @@ package ai.platon.pulsar.agent.tool
 
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
-import ai.platon.pulsar.rest.api.service.CrawlRequest
-import ai.platon.pulsar.rest.api.service.CrawlService
+import ai.platon.pulsar.rest.api.service.crawl.CrawlRequest
+import ai.platon.pulsar.rest.api.service.crawl.CrawlService
 import kotlin.reflect.KClass
 
 /**

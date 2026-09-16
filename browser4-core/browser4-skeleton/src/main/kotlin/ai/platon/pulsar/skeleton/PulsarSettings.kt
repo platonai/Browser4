@@ -70,7 +70,7 @@ data class PulsarSettings(
             if (conf != null) conf.set(BROWSER_PROFILE_PATH, it) else System.setProperty(BROWSER_PROFILE_PATH, it)
         }
         contextDir?.takeIf { it.isNotBlank() }?.let {
-            if (conf != null) conf.set(BROWSER_CONTEXT_DIR, it) else System.setProperty(BROWSER_CONTEXT_DIR, it)
+            conf?.set(BROWSER_CONTEXT_DIR, it) ?: System.setProperty(BROWSER_CONTEXT_DIR, it)
         }
         when(displayMode) {
             DisplayMode.HEADLESS -> headless(conf)
@@ -138,18 +138,15 @@ data class PulsarSettings(
         }
 
         private fun parseInteractLevel(capabilities: Map<String, Any?>?): InteractLevel? {
-            val rawInteractLevel = sequenceOf("interactLevel", "interact-level")
-                .mapNotNull { capabilities?.get(it)?.toString()?.trim()?.takeIf(String::isNotEmpty) }
-                .firstOrNull()
+            val rawInteractLevel = sequenceOf("interactLevel", "interact-level").firstNotNullOfOrNull {
+                capabilities?.get(it)?.toString()?.trim()?.takeIf(String::isNotEmpty)
+            }
                 ?: return null
 
             val normalizedInteractLevel = normalizeInteractLevelAlias(rawInteractLevel)
 
             return sequenceOf(normalizedInteractLevel, rawInteractLevel)
-                .filterNotNull()
-                .distinct()
-                .mapNotNull { value -> runCatching { InteractLevel.from(value) }.getOrNull() }
-                .firstOrNull()
+                .distinct().firstNotNullOfOrNull { value -> runCatching { InteractLevel.from(value) }.getOrNull() }
         }
 
         private fun normalizeInteractLevelAlias(value: String): String {

@@ -255,6 +255,16 @@ failed, with each task's `duration_ms`.
 | `crawl [url]` | Crawl from a URL or seed file, with optional X-SQL extraction |
 | `crawl list` | List all tracked crawl tasks and their status |
 
+`crawl` collects its units (one per seed URL) concurrently by default — each unit
+runs on its own browser tab leased from the driver pool. Use `--parallel <n>` to
+bound how many run at once (`--parallel 1` restores the strictly sequential
+crawl), and read the completion report to see the budget used and the peak number
+of units that actually overlapped:
+
+```bash
+browser4-cli crawl --seed-file urls.txt --depth 0 --parallel 8 --refresh
+```
+
 ### Snapshot
 
 | Command | Description |

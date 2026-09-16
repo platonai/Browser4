@@ -177,7 +177,7 @@ Element commands (`click`, `fill`, `type`, …) resolve CSS selectors against th
 Choosing how to extract or process data? The full decision trees, comparisons, and the X-SQL quickstart template live in **[decision-trees.md](references/decision-trees.md)**. The essentials:
 
 - **4a. Extraction method:** interact → `snapshot` + refs; read content → `htmlsnapshot`; live DOM → `eval --json`; natural language → `extract`; many pages → `crawl`/`swarm`. `htmlsnapshot get`/`inspect`/`summary`/`grep`/`export` need a prior capture; `query` needs no prior capture — the current page is read from the session's live DOM, and an explicit URL loads independently (`DOM_LOAD_AND_SELECT(@url, ...)`).
-- **4b. Bulk/scale:** one list page → `query`; known URLs → `crawl --seed-file`; follow links → `crawl <url> --depth N`; parallel → `swarm`; scheduled → `loop`.
+- **4b. Bulk/scale:** one list page → `query`; known URLs → `crawl --seed-file`; follow links → `crawl <url> --depth N`; more crawl overlap → `crawl --parallel 8` (each unit collects on its own tab); parallel → `swarm`; scheduled → `loop`.
 - **4c. Query granularity:** `get` = first match; `get all` = all matches (unaligned arrays — don't combine); `query` = correlated multi-field rows.
 - **4d. Structuring pages (WebMiner):** `< 1,000 pages` → `webminer all` (free, local, zero tokens); `> 1,000 pages` → WebMiner Commercial (Spark). Acquire pages first with `crawl`/`swarm`, then feed the HTML directory in.
 - **4e. X-SQL quickstart:** `SELECT DOM_FIRST_TEXT(DOM,'h2') AS title ... FROM DOM_LOAD_AND_SELECT(@url, '.product-card')` — single quotes for CSS, `@url` unquoted, no JOIN/CTE/subqueries; run via `--sql @file.sql`.
