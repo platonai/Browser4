@@ -18406,9 +18406,14 @@ fn find_declared_cli_spec<'a>(specs: &'a [CliToolSpec], spaced: &str) -> Option<
     specs.iter().find(|s| s.cli_name == spaced)
 }
 
-/// Fetch all plugin-declared CLI tool specs from `GET /mcp/tools/specs`.
-/// Returns an empty vec when the backend is unreachable or has none.
-async fn fetch_all_declared_cli_specs(base_url: &str) -> Vec<CliToolSpec> {
+/// Fetch the raw tool specs served by `GET /mcp/tools/specs`.
+///
+/// Returns an empty vec when the backend is unreachable, answers with an error,
+/// or advertises no specs — every caller degrades to a one-line message rather
+/// than failing. The timeout is deliberately short: this is a discovery probe
+/// (`plugin commands`, `--help --examples`), not a tool call, so an absent
+/// backend must not stall the command.
+async fn fetch_tool_spec_values(base_url: &str) -> Vec<Value> {
     let url = format!("{}/mcp/tools/specs", base_url.trim_end_matches('/'));
     let Ok(client) = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
@@ -18424,12 +18429,18 @@ async fn fetch_all_declared_cli_specs(base_url: &str) -> Vec<CliToolSpec> {
     };
     body.get("tools")
         .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|t| serde_json::from_value(t.clone()).ok())
-                .collect()
-        })
+        .cloned()
         .unwrap_or_default()
+}
+
+/// Fetch all plugin-declared CLI tool specs from `GET /mcp/tools/specs`.
+/// Returns an empty vec when the backend is unreachable or has none.
+async fn fetch_all_declared_cli_specs(base_url: &str) -> Vec<CliToolSpec> {
+    fetch_tool_spec_values(base_url)
+        .await
+        .iter()
+        .filter_map(|t| serde_json::from_value(t.clone()).ok())
+        .collect()
 }
 
 /// Fetch the plugin-declared CLI tool spec matching `spaced` (e.g.
@@ -18475,6 +18486,248 @@ fn render_declared_commands(specs: &[CliToolSpec]) -> String {
         ));
     }
     lines.join("\n")
+}
+
+// ---------------------------------------------------------------------------
+// `--help --examples` — runnable usage examples of a command's tool
+// ---------------------------------------------------------------------------
+
+/// One entry of a tool spec's `examples` list, as advertised by
+/// `GET /mcp/tools/specs`.
+///
+/// `args` is written as JSON (never as a typed map) so an example carrying a
+/// non-string argument value still deserializes; `runnable`/`executable` are
+/// optional because the backend emits them only when set.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+struct ToolExampleSpec {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    args: serde_json::Map<String, Value>,
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    notes: Option<String>,
+    #[serde(default, rename = "expectsError")]
+    expects_error: bool,
+    #[serde(default)]
+    runnable: Option<bool>,
+    #[serde(default)]
+    executable: Option<bool>,
+}
+
+impl ToolExampleSpec {
+    /// Whether the example is a call a client can actually make: `runnable`
+    /// when the backend set it, otherwise the presence of arguments — the same
+    /// rule the backend's `ToolExample.executable` derives.
+    fn is_executable(&self) -> bool {
+        self.runnable.unwrap_or(!self.args.is_empty()) || self.executable == Some(true)
+    }
+}
+
+/// The part of a tool spec `--help --examples` needs: what the tool is called
+/// (`domain`, `method`, `mcpNames`) and what callable examples it carries.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+struct ToolSpecDoc {
+    #[serde(default)]
+    domain: String,
+    #[serde(default)]
+    method: String,
+    #[serde(default, rename = "mcpNames")]
+    mcp_names: Vec<String>,
+    #[serde(default)]
+    examples: Vec<ToolExampleSpec>,
+}
+
+/// Normalize a tool name for comparison: case and separators are not
+/// significant, so the CLI's camelCase tool names (`coding_listDir`) match the
+/// backend's snake_case canonical names (`coding_list_dir`).
+fn normalize_tool_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| !matches!(c, '_' | '.' | '-'))
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+/// Find the spec that advertises `tool` — the MCP name the CLI would call.
+///
+/// The spec's `mcpNames` is authoritative when present, but it does not list
+/// every frontend alias (`click` is advertised as `click` while the CLI calls
+/// `browser_click`), and the raw-spec shape carries no `mcpNames` at all, so
+/// the names derived from `domain`/`method` are tried too — against the tool
+/// name and against its alias-stripped form.
+fn find_tool_spec<'a>(specs: &'a [ToolSpecDoc], tool: &str) -> Option<&'a ToolSpecDoc> {
+    let wanted = normalize_tool_name(tool);
+    let bare = normalize_tool_name(tool.strip_prefix("browser_").unwrap_or(tool));
+    specs.iter().find(|spec| {
+        let snake_method = camel_to_snake(&spec.method);
+        let mut candidates: Vec<String> = spec.mcp_names.clone();
+        candidates.push(format!("{}_{}", spec.domain, snake_method));
+        candidates.push(snake_method);
+        candidates.iter().any(|name| {
+            let normalized = normalize_tool_name(name);
+            normalized == wanted || normalized == bare
+        })
+    })
+}
+
+/// Render an example's arguments as an inline JSON object, e.g.
+/// `{"url": "https://example.com", "depth": "1"}`.
+///
+/// String values are quoted (the backend transports every argument as a
+/// string); other JSON values keep their own form so a numeric argument is not
+/// silently turned into a string.
+fn render_example_args(args: &serde_json::Map<String, Value>) -> String {
+    let pairs = args
+        .iter()
+        .map(|(key, value)| {
+            let key = serde_json::to_string(key).unwrap_or_else(|_| format!("\"{key}\""));
+            let value = match value {
+                Value::String(text) => {
+                    serde_json::to_string(text).unwrap_or_else(|_| format!("\"{text}\""))
+                }
+                other => other.to_string(),
+            };
+            format!("{key}: {value}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{{{pairs}}}")
+}
+
+/// Render the `examples` of a tool for `--help --examples`.
+///
+/// Returns `None` when no example is renderable, so the caller prints its
+/// "no examples" line instead of a header with nothing under it.
+///
+/// Executable examples render as `- <title>: <args>`; a runnable example that
+/// takes no arguments says so (`no arguments`) rather than rendering an empty
+/// bullet; documentation-only snippets (`code` without args) render as an
+/// indented fenced block. `notes` follow on an indented `- ` line, and an
+/// example flagged `expectsError` is marked as such — a failing call presented
+/// as a happy path would be a trap.
+fn render_tool_examples(label: &str, examples: &[ToolExampleSpec]) -> Option<String> {
+    let mut lines = vec![format!("Examples for {label}:")];
+    let mut rendered = 0;
+
+    for example in examples {
+        let title = example
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .unwrap_or("example");
+
+        if !example.args.is_empty() || example.is_executable() {
+            lines.push(format!(
+                "  - {title}: {}",
+                if example.args.is_empty() {
+                    "no arguments".to_string()
+                } else {
+                    format!("`{}`", render_example_args(&example.args))
+                }
+            ));
+        } else if let Some(code) = example.code.as_deref().filter(|c| !c.trim().is_empty()) {
+            lines.push(format!("  - {title}:"));
+            lines.push("    ```".to_string());
+            for code_line in code.lines() {
+                lines.push(format!("    {code_line}"));
+            }
+            lines.push("    ```".to_string());
+        } else {
+            // Nothing callable and nothing to show — an empty bullet would be
+            // noise, so the example is skipped entirely.
+            continue;
+        }
+
+        rendered += 1;
+        if let Some(notes) = example.notes.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+            lines.push(format!("    - {notes}"));
+        }
+        if example.expects_error {
+            lines.push("    - expected to fail".to_string());
+        }
+    }
+
+    (rendered > 0).then(|| lines.join("\n"))
+}
+
+/// Resolve the MCP tool a CLI command dispatches to.
+///
+/// Mirrors the dispatch path: `CommandDef.tool_name_fn` for built-in commands
+/// (called with an empty argument map — `--help` carries no arguments, so the
+/// arg-dependent selectors fall back to their default tool), and the
+/// `plugin <domain> <method>` convention for dynamic plugin commands. Returns
+/// `None` when the command maps to no single tool.
+fn resolve_command_tool(command: &str, args: &[String]) -> Option<String> {
+    let cmd_map = commands_map();
+    if let Some(def) = cmd_map.get(command) {
+        let tool = (def.tool_name_fn)(&HashMap::new());
+        return (!tool.is_empty()).then_some(tool);
+    }
+
+    // Dynamic plugin command: `plugin-<domain> <method>` → `<domain>_<method>`.
+    // Same rule `resolve_plugin_method` applies after confirming the tool
+    // against `GET /mcp/tools`; here the spec lookup is the confirmation.
+    let domain = command.strip_prefix("plugin-")?;
+    if domain.is_empty() {
+        return None;
+    }
+    let method = args
+        .iter()
+        .skip_while(|arg| arg.as_str() != command)
+        .skip(1)
+        .find(|arg| !arg.starts_with('-'))?;
+    Some(format!("{}_{}", domain, camel_to_snake(method)))
+}
+
+/// Build the `--help --examples` report for a CLI command.
+///
+/// Sourcing: the command is mapped to its MCP tool ([resolve_command_tool]) and
+/// that tool's `examples` are read from `GET /mcp/tools/specs` — the same
+/// endpoint (and the same base URL / session-independent path) the CLI already
+/// uses to discover plugin-declared commands.
+///
+/// Never fails: an unreachable backend, an unknown command, a tool the backend
+/// does not advertise and a tool without examples each produce one explanatory
+/// line, and the command still exits 0.
+async fn build_command_examples(base_url: &str, command: &str, args: &[String]) -> String {
+    let public = help::public_command_name(command);
+    let no_examples = |reason: &str| format!("No examples available for '{public}' — {reason}");
+
+    let Some(tool) = resolve_command_tool(command, args) else {
+        return if commands_map().contains_key(command) || command.starts_with("plugin") {
+            no_examples("the command maps to no single tool.")
+        } else {
+            no_examples("unknown command.")
+        };
+    };
+
+    build_tool_examples(base_url, &tool, public).await
+}
+
+/// Like [build_command_examples] but for an already-resolved tool — used by
+/// plugin-declared commands (`ToolSpec.cliName`), whose tool name comes from the
+/// spec rather than from `CommandDef.tool_name_fn`.
+async fn build_tool_examples(base_url: &str, tool: &str, public: &str) -> String {
+    let no_examples = |reason: &str| format!("No examples available for '{public}' — {reason}");
+
+    let specs: Vec<ToolSpecDoc> = fetch_tool_spec_values(base_url)
+        .await
+        .iter()
+        .filter_map(|value| serde_json::from_value(value.clone()).ok())
+        .collect();
+    if specs.is_empty() {
+        return no_examples("is the backend running?");
+    }
+
+    let Some(spec) = find_tool_spec(&specs, tool) else {
+        return no_examples(&format!("the backend does not advertise '{tool}'."));
+    };
+
+    let label = format!("{}.{} ({})", spec.domain, spec.method, tool);
+    render_tool_examples(&label, &spec.examples)
+        .unwrap_or_else(|| no_examples(&format!("the tool '{tool}' declares no examples.")))
 }
 
 /// `plugin commands` — list CLI commands declared by installed plugins via
@@ -23192,7 +23445,18 @@ fn main() {
                 );
                 let spaced = format!("{} {}", global.args[0], global.args[1]);
                 if let Some(spec) = fetch_declared_cli_spec(&base_url, &spaced).await {
-                    Some(handle_declared_cli_command(&base_url, &spec, &global).await)
+                    // `--help --examples` on a plugin-declared command prints the
+                    // spec's examples instead of calling the tool (the declared
+                    // path forwards every option, so `--examples` would reach the
+                    // backend as an unknown argument).
+                    if global.args.iter().any(|a| a == "--examples") {
+                        let tool = format!("{}_{}", spec.domain, spec.method);
+                        let report = build_tool_examples(&base_url, &tool, &spaced).await;
+                        cli_println!("{report}");
+                        Some(Ok(()))
+                    } else {
+                        Some(handle_declared_cli_command(&base_url, &spec, &global).await)
+                    }
                 } else {
                     None
                 }
@@ -23228,6 +23492,7 @@ fn main() {
 /// Render a CLI error in the active output mode (JSON envelope or plain text)
 /// and return the process exit code.
 fn render_cli_error(json_mode: bool, command: &str, err: CliError) -> i32 {
+    let message = err.message();
     // json_mode covers global --json; json_active() covers subcommand-level
     // --json (e.g. "tab-list --json") which enables JSON inside run().
     if json_mode || json_active() {
@@ -23235,7 +23500,7 @@ fn render_cli_error(json_mode: bool, command: &str, err: CliError) -> i32 {
         // which is true here (json_init was called inside run()),
         // and we MUST emit the JSON error envelope regardless.
         let error = serde_json::json!({
-            "message": err.message(),
+            "message": message,
             "code": if err.code() == ExitCode::Usage { "USAGE_ERROR" }
                     else if err.code() == ExitCode::Session { "SESSION_ERROR" }
                     else { "COMMAND_FAILED" }
@@ -23245,8 +23510,20 @@ fn render_cli_error(json_mode: bool, command: &str, err: CliError) -> i32 {
             json_envelope("error", command, serde_json::json!({}), Some(error))
         );
     } else {
-        eprintln!("{}", format_cli_error_output(err.message()));
+        eprintln!("{}", format_cli_error_output(message));
     }
+
+    // One actionable line for a failure the user can actually act on (e.g.
+    // RATE_LIMITED). `show_failure_tip` applies the output-mode suppressions and
+    // stays silent for a failure with no remediation.
+    let meta = http::take_tool_error_meta();
+    tips::show_failure_tip(
+        command,
+        message,
+        meta.as_ref().and_then(|m| m.error_code.as_deref()),
+        meta.as_ref().and_then(|m| m.retry_after_ms),
+    );
+
     err.code() as i32
 }
 
@@ -23429,6 +23706,23 @@ async fn run(
     // Handle version
     if command == "--version" || command == "-v" || command == "version" {
         cli_println!("browser4-cli {}", VERSION);
+        return Ok(());
+    }
+
+    // `--examples` (accepted together with `--help`): print the runnable usage
+    // examples of the tool the command maps to. Handled before dispatch — and
+    // before `batch`, which maps to no single tool — so asking for examples
+    // never executes the command, and a missing backend only costs a one-line
+    // message. Never fails, never starts the server.
+    if global.args.iter().any(|a| a == "--examples") {
+        if command.starts_with('-') {
+            cli_println!("Usage: browser4-cli <command> --help --examples");
+            return Ok(());
+        }
+        cli_println!(
+            "{}",
+            build_command_examples(&base_url, command, &global.args).await
+        );
         return Ok(());
     }
 
@@ -27296,6 +27590,295 @@ mod tests {
         assert!(find_declared_cli_spec(&specs, "profile-import").is_none());
     }
 
+    // -----------------------------------------------------------------------
+    // --help --examples (requirement 2.3)
+    // -----------------------------------------------------------------------
+
+    /// The `/mcp/tools/specs` payload the example tests serve: the documented
+    /// shape (`domain`/`method`/`mcpNames`/`signature`/`arguments`/`examples`)
+    /// with a multi-example tool, a runnable no-argument example, a
+    /// documentation-only snippet and an example that expects to fail.
+    const TOOL_SPECS_FIXTURE: &str = r##"{"tools":[
+      {"domain":"tab","method":"click","mcpNames":["click"],
+       "signature":"tab.click(selector: String)",
+       "description":"Click the element matched by selector.",
+       "arguments":[{"name":"selector","type":"String","required":true}],
+       "examples":[
+         {"title":"Click a snapshot ref","args":{"selector":"#submit"},"expectsError":false},
+         {"title":"Click with a modifier","args":{"selector":"#submit","modifier":"Control"},
+          "notes":"Hold Control while clicking","expectsError":false},
+         {"title":"Click a missing element","args":{"selector":"#missing"},"expectsError":true},
+         {"title":"Click through the raw driver","code":"driver.click(selector)","expectsError":false}
+       ]},
+      {"domain":"tab","method":"tabs","mcpNames":["tabs"],
+       "examples":[{"title":"List the open tabs","args":{},"runnable":true,"expectsError":false}]},
+      {"domain":"crawl","method":"submit","mcpNames":["crawl_submit"],
+       "examples":[
+         {"title":"Submit one page and poll it","args":{"url":"https://example.com"},"expectsError":false},
+         {"title":"Crawl by SQL","args":{"url":"https://example.com","sql":"select * from dom"},
+          "notes":"Feed the task id to crawl.status","expectsError":false}
+       ]},
+      {"cliName":"profile import","domain":"profile_import","method":"import",
+       "examples":[{"title":"Import Chrome bookmarks","args":{"source":"chrome"},"expectsError":false}]}
+    ]}"##;
+
+    /// A base URL that refuses connections: bind a port, then release it.
+    fn unreachable_base_url() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind free port");
+        let addr = listener.local_addr().expect("read free port addr");
+        drop(listener);
+        format!("http://{}", addr)
+    }
+
+    fn example_args(extra: &[&str]) -> Vec<String> {
+        let mut args = vec!["click".to_string()];
+        args.extend(extra.iter().map(|a| a.to_string()));
+        args
+    }
+
+    #[test]
+    fn find_tool_spec_matches_aliases_derived_names_and_case() {
+        let specs: Vec<ToolSpecDoc> = serde_json::from_str::<Value>(TOOL_SPECS_FIXTURE).unwrap()
+            ["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| serde_json::from_value(t.clone()).unwrap())
+            .collect();
+
+        // mcpNames is authoritative when it lists the CLI tool name.
+        assert_eq!(
+            find_tool_spec(&specs, "crawl_submit").map(|s| s.method.as_str()),
+            Some("submit")
+        );
+        // `browser_click` is not in tab.click's mcpNames — the alias-stripped
+        // canonical method name matches it.
+        assert_eq!(
+            find_tool_spec(&specs, "browser_click").map(|s| s.method.as_str()),
+            Some("click")
+        );
+        assert_eq!(
+            find_tool_spec(&specs, "browser_tabs").map(|s| s.method.as_str()),
+            Some("tabs")
+        );
+        assert!(find_tool_spec(&specs, "browser_hover").is_none());
+    }
+
+    #[test]
+    fn examples_render_multi_example_tool_with_notes_and_snippet() {
+        let base_url = spawn_status_mock_server("200 OK", TOOL_SPECS_FIXTURE);
+
+        let report = block_on(build_command_examples(
+            &base_url,
+            "click",
+            &example_args(&["e5", "--help", "--examples"]),
+        ));
+
+        assert!(
+            report.starts_with("Examples for tab.click (browser_click):"),
+            "report: {report}"
+        );
+        assert!(
+            report.contains("  - Click a snapshot ref: `{\"selector\": \"#submit\"}`"),
+            "report: {report}"
+        );
+        assert!(
+            report.contains(
+                "  - Click with a modifier: `{\"selector\": \"#submit\", \"modifier\": \"Control\"}`"
+            ),
+            "report: {report}"
+        );
+        assert!(
+            report.contains("    - Hold Control while clicking"),
+            "notes must be indented under their example: {report}"
+        );
+        // An example that is expected to fail says so instead of reading as a
+        // happy path.
+        assert!(report.contains("    - expected to fail"), "report: {report}");
+        // Documentation-only snippet: rendered as an indented code block.
+        assert!(
+            report.contains("  - Click through the raw driver:\n    ```\n    driver.click(selector)\n    ```"),
+            "report: {report}"
+        );
+        // No empty bullets for examples that carry nothing callable.
+        assert!(
+            !report.contains("  - :") && !report.contains("  - \n"),
+            "report: {report}"
+        );
+    }
+
+    #[test]
+    fn examples_render_runnable_no_argument_example() {
+        let base_url = spawn_status_mock_server("200 OK", TOOL_SPECS_FIXTURE);
+
+        let report = block_on(build_command_examples(
+            &base_url,
+            "tab-list",
+            &["tab-list".to_string(), "--help".to_string(), "--examples".to_string()],
+        ));
+
+        assert!(
+            report.contains("Examples for tab.tabs (browser_tabs):"),
+            "report: {report}"
+        );
+        assert!(
+            report.contains("  - List the open tabs: no arguments"),
+            "a runnable example with empty args must still be shown: {report}"
+        );
+    }
+
+    #[test]
+    fn examples_follow_the_spaced_crawl_submit_form() {
+        let base_url = spawn_status_mock_server("200 OK", TOOL_SPECS_FIXTURE);
+
+        // `crawl submit` is not a rewritten subcommand — the CLI dispatches the
+        // standalone `crawl` command, whose tool is crawl_submit. The examples
+        // must still come from crawl.submit.
+        let report = block_on(build_command_examples(
+            &base_url,
+            "crawl",
+            &[
+                "crawl".to_string(),
+                "submit".to_string(),
+                "--help".to_string(),
+                "--examples".to_string(),
+            ],
+        ));
+
+        assert!(
+            report.contains("Examples for crawl.submit (crawl_submit):"),
+            "report: {report}"
+        );
+        assert!(
+            report.contains("  - Submit one page and poll it: `{\"url\": \"https://example.com\"}`"),
+            "report: {report}"
+        );
+        assert!(
+            report.contains(
+                "  - Crawl by SQL: `{\"url\": \"https://example.com\", \"sql\": \"select * from dom\"}`"
+            ),
+            "argument order must follow the spec: {report}"
+        );
+        assert!(report.contains("    - Feed the task id to crawl.status"), "report: {report}");
+    }
+
+    #[test]
+    fn examples_unknown_command_prints_one_line_message() {
+        // Unknown commands map to no tool, so no backend round-trip is made.
+        let report = block_on(build_command_examples(
+            &unreachable_base_url(),
+            "definitely-not-a-command",
+            &["definitely-not-a-command".to_string(), "--examples".to_string()],
+        ));
+
+        assert_eq!(
+            report,
+            "No examples available for 'definitely-not-a-command' — unknown command."
+        );
+        assert_eq!(report.lines().count(), 1, "must be one line: {report}");
+    }
+
+    #[test]
+    fn examples_command_without_a_single_tool_prints_one_line_message() {
+        let report = block_on(build_command_examples(
+            &unreachable_base_url(),
+            "batch",
+            &["batch".to_string(), "--examples".to_string()],
+        ));
+
+        assert_eq!(
+            report,
+            "No examples available for 'batch' — the command maps to no single tool."
+        );
+    }
+
+    #[test]
+    fn examples_unreachable_backend_degrades_to_a_hint() {
+        // `click` maps to browser_click; with no backend listening the probe
+        // fails and the caller still gets one clear line (and exit code 0).
+        let report = block_on(build_command_examples(
+            &unreachable_base_url(),
+            "click",
+            &example_args(&["e5", "--help", "--examples"]),
+        ));
+
+        assert_eq!(
+            report,
+            "No examples available for 'click' — is the backend running?"
+        );
+    }
+
+    #[test]
+    fn examples_report_missing_tool_and_missing_examples() {
+        // Reachable backend that does not advertise the tool at all.
+        let without_click = spawn_status_mock_server(
+            "200 OK",
+            r#"{"tools":[{"domain":"crawl","method":"submit","mcpNames":["crawl_submit"],
+                "examples":[{"title":"Submit","args":{"url":"https://example.com"}}]}]}"#,
+        );
+        let report = block_on(build_command_examples(
+            &without_click,
+            "click",
+            &example_args(&["e5", "--examples"]),
+        ));
+        assert_eq!(
+            report,
+            "No examples available for 'click' — the backend does not advertise 'browser_click'."
+        );
+
+        // Reachable backend that advertises the tool without examples.
+        let empty_examples = spawn_status_mock_server(
+            "200 OK",
+            r#"{"tools":[{"domain":"tab","method":"click","mcpNames":["click"],"examples":[]}]}"#,
+        );
+        let report = block_on(build_command_examples(
+            &empty_examples,
+            "click",
+            &example_args(&["e5", "--examples"]),
+        ));
+        assert_eq!(
+            report,
+            "No examples available for 'click' — the tool 'browser_click' declares no examples."
+        );
+    }
+
+    #[test]
+    fn examples_resolve_a_plugin_declared_command_tool() {
+        // `profile import` is not in commands_map: its tool name comes from the
+        // declared spec (`profile_import` + `import`), which is why the declared
+        // path resolves the tool itself and calls build_tool_examples.
+        let base_url = spawn_status_mock_server("200 OK", TOOL_SPECS_FIXTURE);
+        let report = block_on(build_tool_examples(
+            &base_url,
+            "profile_import_import",
+            "profile import",
+        ));
+
+        assert!(
+            report.contains("Examples for profile_import.import (profile_import_import):"),
+            "report: {report}"
+        );
+        assert!(
+            report.contains("  - Import Chrome bookmarks: `{\"source\": \"chrome\"}`"),
+            "report: {report}"
+        );
+    }
+
+    #[test]
+    fn render_tool_examples_returns_none_without_renderable_examples() {
+        // Nothing callable and nothing to show → the caller prints its message
+        // instead of a header with no bullets.
+        assert!(render_tool_examples("tab.click (click)", &[]).is_none());
+        assert!(render_tool_examples(
+            "tab.click (click)",
+            &[ToolExampleSpec {
+                title: Some("Not written yet".to_string()),
+                ..Default::default()
+            }]
+        )
+        .is_none());
+    }
+
     #[test]
     fn render_declared_commands_lists_specs_with_origin_domain() {
         let specs = vec![
@@ -30865,8 +31448,22 @@ mod tests {
     // crawl_request_timeout tests
     // -------------------------------------------------------------------
 
+    /// Serialize the tests that mutate `BROWSER4_CLI_CRAWL_TIMEOUT_SECS`.
+    ///
+    /// The variable is process-wide, so running these tests in parallel let one
+    /// observe another's value (a spurious 30s/120s instead of the expected
+    /// default) — a flaky failure unrelated to the code under test.
+    static CRAWL_TIMEOUT_ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+    fn lock_crawl_timeout_env() -> std::sync::MutexGuard<'static, ()> {
+        CRAWL_TIMEOUT_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn crawl_request_timeout_default_is_10_minutes() {
+        let _lock = lock_crawl_timeout_env();
         let _guard = clear_env("BROWSER4_CLI_CRAWL_TIMEOUT_SECS");
         // Default when env var is unset
         let timeout = crawl_request_timeout();
@@ -30875,6 +31472,7 @@ mod tests {
 
     #[test]
     fn crawl_request_timeout_env_var_overrides_default() {
+        let _lock = lock_crawl_timeout_env();
         let _guard = set_env("BROWSER4_CLI_CRAWL_TIMEOUT_SECS", "30");
         let timeout = crawl_request_timeout();
         assert_eq!(timeout, std::time::Duration::from_secs(30));
@@ -30882,6 +31480,7 @@ mod tests {
 
     #[test]
     fn crawl_request_timeout_env_var_120_seconds() {
+        let _lock = lock_crawl_timeout_env();
         let _guard = set_env("BROWSER4_CLI_CRAWL_TIMEOUT_SECS", "120");
         let timeout = crawl_request_timeout();
         assert_eq!(timeout, std::time::Duration::from_secs(120));
@@ -30889,6 +31488,7 @@ mod tests {
 
     #[test]
     fn crawl_request_timeout_env_var_invalid_falls_back_to_default() {
+        let _lock = lock_crawl_timeout_env();
         let _guard = set_env("BROWSER4_CLI_CRAWL_TIMEOUT_SECS", "not-a-number");
         let timeout = crawl_request_timeout();
         // Falls back to 600 when parse fails

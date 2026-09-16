@@ -318,6 +318,70 @@ pub struct ServerPaginationMeta {
     pub truncated: bool,
 }
 
+// ---------------------------------------------------------------------------
+// Structured failure metadata
+// ---------------------------------------------------------------------------
+
+/// The structured failure fields of a rejected MCP call.
+///
+/// A failure travels as text (`ERROR: [RATE_LIMITED] …`) *and* as fields next to
+/// it (`errorCode`, `retryAfterMs`).  The tool-call helpers return the text and
+/// therefore drop the fields; callers that need them for a user-facing hint
+/// (`tips::show_failure_tip`) read them from here instead of re-parsing prose.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolErrorMeta {
+    /// Stable failure code (`ToolErrorCode.wire`), e.g. `RATE_LIMITED`.
+    pub error_code: Option<String>,
+    /// Milliseconds the client should wait before retrying, when reported.
+    pub retry_after_ms: Option<u64>,
+}
+
+thread_local! {
+    /// Failure metadata of the most recent MCP tool call.  Cleared when a new
+    /// call starts, so it can never outlive the call that produced it.
+    static LAST_TOOL_ERROR: std::cell::RefCell<Option<ToolErrorMeta>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn clear_tool_error_meta() {
+    LAST_TOOL_ERROR.with(|cell| *cell.borrow_mut() = None);
+}
+
+fn record_tool_error(meta: ToolErrorMeta) {
+    LAST_TOOL_ERROR.with(|cell| *cell.borrow_mut() = Some(meta));
+}
+
+/// Take the structured failure metadata of the most recent failing tool call.
+///
+/// Returns `None` when the call succeeded, when it failed without structured
+/// fields (transport errors), or when the metadata has already been taken.
+pub fn take_tool_error_meta() -> Option<ToolErrorMeta> {
+    LAST_TOOL_ERROR.with(|cell| cell.borrow_mut().take())
+}
+
+/// Read the structured failure fields out of a tool-call response body.
+///
+/// The private dispatcher puts them at the top level; the standard MCP server
+/// mirrors them under `_meta`.  Both spellings of the retry delay are accepted.
+fn tool_error_meta_from_response(data: &Value) -> ToolErrorMeta {
+    let meta = data.get("_meta");
+    let pick_str = |key: &str| {
+        data.get(key)
+            .and_then(Value::as_str)
+            .or_else(|| meta.and_then(|m| m.get(key)).and_then(Value::as_str))
+            .map(str::to_string)
+    };
+    let pick_u64 = |key: &str| {
+        data.get(key)
+            .and_then(Value::as_u64)
+            .or_else(|| meta.and_then(|m| m.get(key)).and_then(Value::as_u64))
+    };
+    ToolErrorMeta {
+        error_code: pick_str("errorCode"),
+        retry_after_ms: pick_u64("retryAfterMs").or_else(|| pick_u64("retry_after_ms")),
+    }
+}
+
 impl ServerPaginationMeta {
     fn from_json(v: &Value) -> Option<Self> {
         Some(Self {
@@ -406,6 +470,9 @@ async fn call_tool_with_timeout(
     mut args: Value,
     timeout: Option<std::time::Duration>,
 ) -> Result<CallToolResult, String> {
+    // Each call owns the recorded failure metadata: it is cleared up front and
+    // only set again by this call's own failure path.
+    clear_tool_error_meta();
     normalize_refs(&mut args);
 
     let url = format!("{}/mcp/call-tool", base_url.trim_end_matches('/'));
@@ -433,6 +500,11 @@ async fn call_tool_with_timeout(
         .map_err(|e| format!("Failed to read response body: {e}"))?;
 
     if !status.is_success() {
+        // A rejected REST call can still carry the structured failure fields
+        // (e.g. 429 with `errorCode`/`retryAfterMs`) in its JSON body.
+        if let Ok(data) = serde_json::from_str::<Value>(&response_text) {
+            record_tool_error(tool_error_meta_from_response(&data));
+        }
         let message = response_text.trim();
         if message.is_empty() {
             return Err(format!(
@@ -461,6 +533,7 @@ async fn call_tool_with_timeout(
             .and_then(|item| item.get("text"))
             .and_then(|t| t.as_str())
             .unwrap_or("Unknown MCP error");
+        record_tool_error(tool_error_meta_from_response(&data));
         return Err(msg.to_string());
     }
 
@@ -472,6 +545,7 @@ async fn call_tool_with_timeout(
     // a leading "ERROR:" prefix as a hard error so the CLI exits non-zero and
     // scripts can detect failure reliably.
     if text.starts_with("ERROR:") {
+        record_tool_error(tool_error_meta_from_response(&data));
         return Err(text.trim_start_matches("ERROR: ").to_string());
     }
 
@@ -1748,5 +1822,89 @@ mod tests {
 
         // Cleanup
         std::env::remove_var(GLOBAL_TIMEOUT_OVERRIDE_ENV);
+    }
+
+    // -------------------------------------------------------------------
+    // Structured failure metadata
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_tool_error_meta_from_response_reads_top_level_and_meta() {
+        let top_level = json!({
+            "isError": true,
+            "errorCode": "RATE_LIMITED",
+            "retryAfterMs": 45,
+        });
+        assert_eq!(
+            tool_error_meta_from_response(&top_level),
+            ToolErrorMeta {
+                error_code: Some("RATE_LIMITED".to_string()),
+                retry_after_ms: Some(45),
+            }
+        );
+
+        // The standard server mirrors both fields under `_meta`.
+        let mirrored = json!({ "_meta": { "errorCode": "RATE_LIMITED", "retryAfterMs": 7 } });
+        assert_eq!(
+            tool_error_meta_from_response(&mirrored),
+            ToolErrorMeta {
+                error_code: Some("RATE_LIMITED".to_string()),
+                retry_after_ms: Some(7),
+            }
+        );
+
+        // A success body carries neither field.
+        assert_eq!(
+            tool_error_meta_from_response(&json!({ "content": [] })),
+            ToolErrorMeta::default()
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_rejected_call_records_structured_error_meta() {
+        let body = r#"{"content":[{"type":"text","text":"ERROR: [RATE_LIMITED] rate limit exceeded for browser_click (limit 10); retry after 45 ms"}],"isError":true,"errorCode":"RATE_LIMITED","retryAfterMs":45}"#;
+        let base_url = spawn_swarm_mock_server("/mcp/call-tool", body);
+        let client = make_client();
+
+        let error = call_tool(&client, &base_url, "browser_click", json!({ "ref": "#a" }))
+            .await
+            .expect_err("an isError response must fail the call");
+        assert!(error.contains("[RATE_LIMITED]"), "error: {error}");
+
+        let meta = take_tool_error_meta().expect("structured failure meta must be recorded");
+        assert_eq!(meta.error_code.as_deref(), Some("RATE_LIMITED"));
+        assert_eq!(meta.retry_after_ms, Some(45));
+        assert!(
+            take_tool_error_meta().is_none(),
+            "the metadata is taken once, so it cannot be reported twice"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_successful_call_records_no_error_meta() {
+        let client = make_client();
+
+        // A failure first: the backend reports the code in the text only (the
+        // defensive path, no `isError` flag).
+        let failure = spawn_swarm_mock_server(
+            "/mcp/call-tool",
+            r#"{"content":[{"type":"text","text":"ERROR: [RATE_LIMITED] slow down"}],"errorCode":"RATE_LIMITED","retryAfterMs":10}"#,
+        );
+        let _ = call_tool(&client, &failure, "browser_click", json!({})).await;
+        assert!(take_tool_error_meta().is_some());
+
+        // Then a success: it must not re-record (or leave behind) a failure.
+        let success = spawn_swarm_mock_server(
+            "/mcp/call-tool",
+            r#"{"content":[{"type":"text","text":"Clicked element e5"}]}"#,
+        );
+        let text = call_tool(&client, &success, "browser_click", json!({}))
+            .await
+            .expect("a successful call must succeed");
+        assert_eq!(text, "Clicked element e5");
+        assert!(
+            take_tool_error_meta().is_none(),
+            "a successful call must not expose failure metadata"
+        );
     }
 }

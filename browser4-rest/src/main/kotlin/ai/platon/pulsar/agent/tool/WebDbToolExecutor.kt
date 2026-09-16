@@ -1,7 +1,9 @@
 package ai.platon.pulsar.agent.tool
 
+import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
+import ai.platon.pulsar.agentic.tools.specs.ToolResultSchemas
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -29,24 +31,48 @@ class WebDbToolExecutor(
             domain = domain,
             method = "export",
             arguments = listOf(
-                ToolSpec.Arg("sessionId", "String", null),
-                ToolSpec.Arg("urls", "String", null),
-                ToolSpec.Arg("outputDir", "String", null),
+                ToolSpec.Arg("sessionId", "String", null, "Session whose web database is exported. Required."),
+                ToolSpec.Arg(
+                    "urls", "String", null,
+                    "Comma-separated URL list to export. Required — the export fails without it.",
+                ),
+                ToolSpec.Arg(
+                    "outputDir", "String", null,
+                    "Target directory for the exported pages. Required; the directory is created when missing.",
+                ),
             ),
             returnType = "String",
+            outputSchema = ToolResultSchemas.WEBDB_EXPORT,
             description = "Export pages from the web database to a local directory. " +
-                "Provide a comma-separated list of URLs."
+                "Provide a comma-separated list of URLs.",
+            examples = listOf(
+                ToolExample(
+                    title = "Export two pages",
+                    args = mapOf(
+                        "sessionId" to "<session-id>",
+                        "urls" to "https://example.com,https://example.org",
+                        "outputDir" to "/tmp/webdb-export",
+                    ),
+                ),
+            ),
         )
         toolSpec["normalize"] = ToolSpec(
             domain = domain,
             method = "normalize",
             arguments = listOf(
-                ToolSpec.Arg("sessionId", "String", null),
-                ToolSpec.Arg("url", "String", null),
+                ToolSpec.Arg("sessionId", "String", null, "Session used to resolve redirects. Required."),
+                ToolSpec.Arg("url", "String", null, "URL to normalize. Required."),
             ),
             returnType = "String",
             description = "Normalize a URL for use as a web database key. " +
-                "Resolves redirects, normalizes paths, and validates the URL."
+                "Resolves redirects, normalizes paths, and validates the URL.",
+            examples = listOf(
+                ToolExample(
+                    title = "Normalize a URL with query parameters",
+                    args = mapOf("sessionId" to "<session-id>", "url" to "https://example.com/a?b=1"),
+                    notes = "Returns the canonical key, e.g. https://example.com/a?b=1",
+                ),
+            ),
         )
     }
 
@@ -105,15 +131,24 @@ class WebDbToolExecutor(
                 }
             }
 
-            val result = mapOf(
-                "total" to results.size,
-                "succeeded" to results.count { it["status"] == "ok" },
-                "failed" to results.count { it["status"] == "error" },
-                "results" to results,
-            )
-            pulsarObjectMapper().writeValueAsString(result)
+            pulsarObjectMapper().writeValueAsString(exportSummary(results))
         }
     }
+
+    /**
+     * The `webdb export` payload: one entry per requested URL plus the tallies.
+     *
+     * Extracted from the `withLock` block so it can be tested: the export itself
+     * needs a live session, while the shape the contract promises is a pure
+     * function of the per-URL results — [ToolResultSchemas.WEBDB_EXPORT] describes
+     * exactly this and `WebDbExportSchemaTest` validates it.
+     */
+    internal fun exportSummary(results: List<Map<String, Any?>>): Map<String, Any?> = mapOf(
+        "total" to results.size,
+        "succeeded" to results.count { it["status"] == "ok" },
+        "failed" to results.count { it["status"] == "error" },
+        "results" to results,
+    )
 
     // =========================================================================
     // Normalize

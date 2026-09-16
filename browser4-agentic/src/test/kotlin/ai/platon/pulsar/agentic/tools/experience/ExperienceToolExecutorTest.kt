@@ -1,5 +1,8 @@
 package ai.platon.pulsar.agentic.tools.experience
 
+import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
+import ai.platon.pulsar.agentic.tools.specs.ToolSpecLint
+import ai.platon.pulsar.agentic.tools.specs.ToolSpecValidator
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
@@ -36,9 +39,70 @@ class ExperienceToolExecutorTest {
         try { tempDir.deleteRecursively() } catch (_: Exception) {}
     }
 
+    @Test
+    @DisplayName("list filters are optional, so a plain list call validates")
+    fun listFiltersAreOptional() {
+        // The executor reads filter/intent_filter with `required = false`; declaring
+        // them as bare `null` defaults (the convention for *required*) made the
+        // validator reject `experience_list` with no filter at all.
+        val spec = executor.getToolSpecs().getValue("list")
+
+        assertEquals(
+            emptyList<ToolSpecValidator.Violation>(),
+            ToolSpecValidator().validate(spec, emptyMap()),
+            "experience.list must accept a call without filters: ${ToolSpecLint.report(
+                ToolSpecLint.check(listOf(spec))
+            )}",
+        )
+    }
+
+    @Test
+    @DisplayName("the declared outputSchema accepts what every method produces")
+    fun outputSchemaAcceptsProduction(): Unit = runBlocking {
+        // Requirement 6 only means something if the declared schema describes the
+        // payload the tool really writes — so run each method and validate its answer.
+        val calls = listOf(
+            "save" to mapOf<String, Any?>(
+                "url" to "https://example.com/p/1",
+                "trace" to mapper.writeValueAsString(
+                    ExecutionTrace(
+                        url = "https://example.com/p/1",
+                        taskType = "extract",
+                        outcome = "success",
+                        steps = listOf(ActionStep(1, "navigate", value = "https://example.com/p/1")),
+                        durationMs = 1200,
+                    )
+                ),
+                "outcome" to "success",
+                "intent" to "extract the price",
+            ),
+            "query" to mapOf<String, Any?>("url" to "https://example.com/p/1"),
+            "list" to emptyMap<String, Any?>(),
+            "deep_learn" to mapOf<String, Any?>(
+                "url" to "https://example.com/p/1",
+                "intent" to "extract the price",
+                "force" to true,
+            ),
+        )
+
+        for ((method, args) in calls) {
+            val spec = executor.getToolSpecs().getValue(method)
+            assertNotNull(spec.outputSchema, "experience.$method must declare its result contract")
+
+            val text = executor.callFunctionOn("experience", method, args, knowledgeStore) as String
+            val issues = ToolResultValidator.validate(spec, ToolResultValidator.parse(text))
+
+            assertEquals(
+                emptyList<String>(), issues.map { "${it.path} ${it.message}" },
+                "experience.$method answered with a payload that violates its own schema: $text",
+            )
+        }
+    }
+
     @Nested
     @DisplayName("experience_save — Fast Learning")
     inner class FastSave {
+
         @Test
         @DisplayName("saves trace and returns stats with intent classification")
         fun testSaveSuccess(): Unit = runBlocking {

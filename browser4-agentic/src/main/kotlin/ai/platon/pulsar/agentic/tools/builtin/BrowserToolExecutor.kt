@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.api.AbstractBrowser
 import ai.platon.pulsar.api.AbstractWebDriver
@@ -22,35 +23,45 @@ class BrowserToolExecutor : AbstractToolExecutor() {
             domain = domain,
             method = "switchTab",
             arguments = listOf(
-                ToolSpec.Arg("index", "Int", null),
-                ToolSpec.Arg("tabId", "String", null)
+                ToolSpec.Arg("index", "Int?", "null", "Zero-based tab index."),
+                ToolSpec.Arg("tabId", "String?", "null", "Tab GUID; give either this or index."),
             ),
             returnType = "WebDriver",
-            description = "Switch to a specific browser tab by its zero-based index or GUID"
+            description = "Switch to a specific browser tab by its zero-based index or GUID",
+            examples = listOf(
+                ToolExample(title = "Switch to the second tab", args = mapOf("index" to "1")),
+            ),
         )
         toolSpec["newTab"] = ToolSpec(
             domain = domain,
             method = "newTab",
             arguments = listOf(ToolSpec.Arg("url", "String", "about:blank")),
             returnType = "Map<String, String>",
-            description = "Create a new tab. Returns guid and url"
+            description = "Create a new tab. Returns guid and url",
+            examples = listOf(
+                ToolExample(title = "Open a new tab on a page", args = mapOf("url" to "https://example.com")),
+            ),
         )
         toolSpec["closeTab"] = ToolSpec(
             domain = domain,
             method = "closeTab",
             arguments = listOf(
-                ToolSpec.Arg("index", "Int", null),
-                ToolSpec.Arg("tabId", "String", null)
+                ToolSpec.Arg("index", "Int?", "null", "Zero-based tab index."),
+                ToolSpec.Arg("tabId", "String?", "null", "Tab GUID; give either this or index."),
             ),
             returnType = "Boolean",
-            description = "Close a tab by zero-based index or GUID, or the current tab when omitted"
+            description = "Close a tab by zero-based index or GUID, or the current tab when omitted",
+            examples = listOf(
+                ToolExample(title = "Close the second tab", args = mapOf("index" to "1")),
+            ),
         )
         toolSpec["listTabs"] = ToolSpec(
             domain = domain,
             method = "listTabs",
             arguments = emptyList(),
             returnType = "List<Map<String, String>>",
-            description = "List all tabs with index, guid, title, and url"
+            description = "List all tabs with index, guid, title, and url",
+            examples = listOf(ToolExample(title = "List every tab", runnable = true)),
         )
     }
 

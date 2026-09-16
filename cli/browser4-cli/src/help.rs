@@ -268,6 +268,11 @@ pub fn generate_help() -> String {
         "emit full command reference as machine-readable JSON (for AI / scripts)",
         30,
     ));
+    lines.push(format_with_gap(
+        "  --help --examples",
+        "print runnable usage examples of the tool the command maps to",
+        30,
+    ));
     lines.push(format_with_gap("  --version", "print version", 30));
     lines.push(format_with_gap(
         "  --json",
@@ -2819,6 +2824,15 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli sessionstorage-clear".to_string());
     }
+
+    // Point every per-command help page at the runnable examples of the tool
+    // the command maps to (requirement 2.3). The examples live in the backend
+    // tool spec, so this is the only place the CLI can advertise them.
+    lines.push(String::new());
+    lines.push(format!(
+        "Runnable examples: `browser4-cli {} --help --examples`.",
+        public_command_name(cmd.name)
+    ));
 
     lines.join("\n")
 }

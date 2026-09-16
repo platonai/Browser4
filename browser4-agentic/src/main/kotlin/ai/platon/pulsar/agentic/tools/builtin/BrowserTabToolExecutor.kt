@@ -24,6 +24,18 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         private const val READ_ACTIONS_WHITELIST_PROPERTY = "browser4.tab.read.actions.whitelist"
         private const val READ_ACTIONS_WHITELIST_ENV = "BROWSER4_TAB_READ_ACTIONS_WHITELIST"
         private val logger: Logger = Logger.getLogger(BrowserTabToolExecutor::class.java.name)
+
+        /**
+         * Result contract of `tab.dialogStatus`.
+         *
+         * `type`/`message` are optional on purpose: the driver-less fallback answers
+         * `{pending: false}` and nothing else, and a schema that demanded all three
+         * fields would reject that legitimate result.
+         */
+        private const val DIALOG_STATUS_SCHEMA =
+            """{"type":"object","required":["pending"],"properties":""" +
+                """{"pending":{"type":"boolean"},"type":{"type":"string"},"message":{"type":"string"}}}"""
+
         // Actions that read page state and can become flaky if executed too soon after mutations/navigation.
         private val DEFAULT_READ_PAGE_STATE_ACTIONS = setOf(
             "waitForSelector", "waitForNavigation", "waitForPage",
@@ -236,6 +248,221 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 When selector is provided, the executor focuses the matched element first and then presses the key.
             """.trimIndent()
         )
+        // ------------------------------------------------------------------
+        // Explicit contracts for methods whose upstream WebDriver signature is
+        // not expressible over JSON.
+        //
+        // `ToolSpecGenerator` mirrors the base library's `WebDriver.kt`, and for
+        // an overloaded method it keeps the *last* overload. For the methods
+        // below that last overload takes a domain object (`NavigateEntry`,
+        // `RectD`, `AriaSnapshotOptions`, `Duration`, a `suspend () -> …`
+        // action) that an MCP client cannot send — and the required-argument
+        // check then rejected calls that the executor actually handles. Each
+        // spec here states what `callFunctionOn` really reads; keep them in
+        // sync with the `when (functionName)` branches below.
+        // ------------------------------------------------------------------
+        toolSpec["click"] = ToolSpec(
+            domain = domain,
+            method = "click",
+            arguments = listOf(
+                ToolSpec.Arg("selector", "String", null, "CSS or :expr(...) selector of the element to click."),
+                ToolSpec.Arg("count", "Int?", "null", "Click this many times (2 = double click)."),
+                ToolSpec.Arg("modifier", "String?", "null", "Modifier key held during the click (e.g. Control, Shift)."),
+                ToolSpec.Arg("button", "String?", "null", "Mouse button: left | right | middle."),
+                ToolSpec.Arg("autoDismissDialogs", "Boolean?", "false", "Accept any native dialog raised by the click."),
+            ),
+            returnType = "Unit",
+            description = "Click the element matched by selector, optionally with a repeat count, modifier or mouse button.",
+            help = """
+                tab.click(selector: String)
+                tab.click(selector: String, count: Int)
+                tab.click(selector: String, modifier: String)
+
+                count and modifier are mutually exclusive. The upstream WebDriver
+                overloads declare modifier as required; the executor does not, so the
+                advertised contract keeps it optional (a client that only has a
+                selector must not be rejected).
+            """.trimIndent()
+        )
+        toolSpec["dblclick"] = ToolSpec(
+            domain = domain,
+            method = "dblclick",
+            arguments = listOf(
+                ToolSpec.Arg("selector", "String", null, "CSS or :expr(...) selector of the element to double click."),
+                ToolSpec.Arg("modifier", "String?", "null", "Modifier key held during the double click."),
+                ToolSpec.Arg("autoDismissDialogs", "Boolean?", "false", "Accept any native dialog raised by the click."),
+            ),
+            returnType = "Unit",
+            description = "Double click the element matched by selector.",
+            help = """
+                tab.dblclick(selector: String)
+                tab.dblclick(selector: String, modifier: String)
+
+                The upstream overload declares modifier as required; the executor does
+                not, so a selector-only call is valid here.
+            """.trimIndent()
+        )
+        toolSpec["evaluateValue"] = ToolSpec(
+            domain = domain,
+            method = "evaluateValue",
+            arguments = listOf(
+                ToolSpec.Arg("expression", "String?", "null", "JavaScript expression, evaluated in the page."),
+                ToolSpec.Arg("selector", "String?", "null", "Scope the evaluation to this element."),
+                ToolSpec.Arg("functionDeclaration", "String?", "null", "Function body used with 'selector'."),
+                ToolSpec.Arg("awaitPromise", "Boolean?", "false", "Await a promise returned by the expression."),
+                ToolSpec.Arg("waitSelector", "String?", "null", "Wait for this selector before evaluating."),
+                ToolSpec.Arg("waitTimeout", "Long?", "null", "How long to wait for 'waitSelector' (default 30000)."),
+            ),
+            returnType = "Any?",
+            description = "Evaluate JavaScript in the page, or against the element matched by selector.",
+            help = """
+                tab.evaluateValue(expression: String)
+                tab.evaluateValue(selector: String, functionDeclaration: String)
+
+                `expression` is the page-scoped form the CLI and MCP clients use;
+                `selector` + `functionDeclaration` is the element-scoped overload the
+                executor resolves through the driver. The upstream declaration lists
+                the second overload last and without defaults, which would make both
+                of its arguments mandatory for every caller.
+            """.trimIndent()
+        )
+        toolSpec["navigate"] = ToolSpec(
+            domain = domain,
+            method = "navigate",
+            arguments = listOf(
+                ToolSpec.Arg("url", "String", null, "URL to navigate to; the executor waits for the page to load."),
+                ToolSpec.Arg("rawUrl", "String?", "null", "Low-level alternative to 'url' — must be paired with 'pageUrl'."),
+                ToolSpec.Arg("pageUrl", "String?", "null", "Page URL paired with 'rawUrl'."),
+            ),
+            returnType = "Unit",
+            description = "Navigate the current page to a URL and wait for the page to load.",
+            help = """
+                tab.navigate(url: String)
+
+                Navigates the current page to `url` and then polls document.readyState
+                until the page has loaded (covers SPA routes and same-URL navigations,
+                which waitForNavigation() cannot observe).
+                rawUrl/pageUrl are the low-level pair used by internal drivers; MCP
+                clients should pass `url`.
+            """.trimIndent()
+        )
+        toolSpec["waitForSelector"] = ToolSpec(
+            domain = domain,
+            method = "waitForSelector",
+            arguments = listOf(
+                ToolSpec.Arg("selector", "String", null, "CSS selector or :expr(...) selector to wait for."),
+                ToolSpec.Arg("timeoutMillis", "Long?", "null", "How long to wait before failing; driver default when omitted."),
+            ),
+            returnType = "Unit",
+            description = "Wait until an element matching the selector exists in the DOM.",
+            help = """
+                tab.waitForSelector(selector: String)
+                tab.waitForSelector(selector: String, timeoutMillis: Long)
+
+                Fails (TIMEOUT) instead of returning silently when the selector never appears.
+            """.trimIndent()
+        )
+        toolSpec["waitForNavigation"] = ToolSpec(
+            domain = domain,
+            method = "waitForNavigation",
+            arguments = listOf(
+                ToolSpec.Arg("oldUrl", "String?", "null", "URL to navigate away from; omit to just wait for the page to settle."),
+                ToolSpec.Arg("timeoutMillis", "Long?", "null", "How long to wait before failing."),
+            ),
+            returnType = "Unit",
+            description = "Wait for an in-flight navigation to finish.",
+            help = """
+                tab.waitForNavigation()
+                tab.waitForNavigation(oldUrl: String, timeoutMillis: Long?)
+
+                Polls document.readyState instead of the upstream `oldUrl != currentUrl()`
+                predicate, so same-URL navigations (SPA routes, fragment jumps) also
+                complete instead of timing out.
+            """.trimIndent()
+        )
+        toolSpec["waitForPage"] = ToolSpec(
+            domain = domain,
+            method = "waitForPage",
+            arguments = listOf(
+                ToolSpec.Arg("url", "String", null, "URL to wait for."),
+                ToolSpec.Arg("timeoutMillis", "Long?", "null", "How long to wait before failing; 30000 when omitted."),
+            ),
+            returnType = "Unit",
+            description = "Wait until the browser has a page at the given URL.",
+            help = """
+                tab.waitForPage(url: String)
+                tab.waitForPage(url: String, timeoutMillis: Long)
+            """.trimIndent()
+        )
+        toolSpec["waitForFunction"] = ToolSpec(
+            domain = domain,
+            method = "waitForFunction",
+            arguments = listOf(
+                ToolSpec.Arg("pageFunction", "String", null, "JavaScript expression returning a truthy value when done."),
+                ToolSpec.Arg("timeoutMillis", "Long?", "null", "How long to wait before failing; 30000 when omitted."),
+            ),
+            returnType = "Unit",
+            description = "Wait until a JavaScript expression evaluates to a truthy value.",
+            help = """
+                tab.waitForFunction(pageFunction: String)
+                tab.waitForFunction(pageFunction: String, timeoutMillis: Long)
+            """.trimIndent()
+        )
+        toolSpec["delay"] = ToolSpec(
+            domain = domain,
+            method = "delay",
+            arguments = listOf(
+                ToolSpec.Arg("millis", "Long", "1000", "How long to wait, in milliseconds."),
+            ),
+            returnType = "Unit",
+            description = "Wait unconditionally for the given number of milliseconds.",
+            help = """
+                tab.delay(millis: Long = 1000)
+            """.trimIndent()
+        )
+        toolSpec["screenshot"] = ToolSpec(
+            domain = domain,
+            method = "screenshot",
+            arguments = listOf(
+                ToolSpec.Arg("selector", "String?", "null", "Capture only the element matching this selector."),
+                ToolSpec.Arg("fullPage", "Boolean?", "null", "Capture the full scrollable page."),
+                ToolSpec.Arg("viewport", "Int?", "null", "Capture the Nth viewport (scroll-relative)."),
+            ),
+            returnType = "String",
+            description = "Capture a screenshot; pass no argument for the visible viewport, or exactly one of selector/fullPage/viewport.",
+            help = """
+                tab.screenshot()
+                tab.screenshot(selector: String)
+                tab.screenshot(fullPage: Boolean)
+                tab.screenshot(viewport: Int)
+
+                Exactly one of selector/fullPage/viewport may be given; anything else is
+                rejected rather than silently capturing the wrong region.
+            """.trimIndent()
+        )
+        toolSpec["ariaSnapshot"] = ToolSpec(
+            domain = domain,
+            method = "ariaSnapshot",
+            arguments = listOf(
+                ToolSpec.Arg("viewports", "String?", "null", "Viewport spec (e.g. \"0,1\") to capture."),
+                ToolSpec.Arg("interactive", "Boolean?", "false", "Keep only interactive nodes."),
+                ToolSpec.Arg("urls", "Boolean?", "false", "Include link URLs."),
+                ToolSpec.Arg("compact", "Boolean?", "true", "Drop empty structural nodes."),
+                ToolSpec.Arg("depth", "Int?", "-1", "Maximum tree depth; -1 for unlimited."),
+                ToolSpec.Arg("selector", "String?", "null", "Root the snapshot at this selector."),
+                ToolSpec.Arg("boxes", "Boolean?", "true", "Include element bounding boxes."),
+                ToolSpec.Arg("limit", "Int?", "-1", "Maximum number of nodes; -1 for unlimited."),
+            ),
+            returnType = "String",
+            description = "Build an ARIA accessibility snapshot of the current page.",
+            help = """
+                tab.ariaSnapshot()
+                tab.ariaSnapshot(selector: String, compact: Boolean, boxes: Boolean, …)
+
+                The upstream WebDriver method takes an AriaSnapshotOptions object; the
+                executor flattens it into these options, which is what MCP clients send.
+            """.trimIndent()
+        )
         toolSpec["saveStorageState"] = ToolSpec(
             domain = domain,
             method = "saveStorageState",
@@ -431,15 +658,41 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 All subsequent element operations resolve against the main document again.
             """.trimIndent()
         )
+
+        // Two methods the executor dispatches and the API advertises aliases for
+        // (`browser_is_enabled`, `browser_dialog_status`), but which the mirrored
+        // `WebDriver` interface does not declare — so no generated spec existed and
+        // the aliases resolved to nothing. Declared here, they become reachable.
+        toolSpec["isEnabled"] = ToolSpec(
+            domain = domain,
+            method = "isEnabled",
+            arguments = listOf(ToolSpec.Arg("selector", "String", null, "Element to inspect.")),
+            returnType = "Boolean",
+            description = "Whether the element matched by `selector` is enabled — " +
+                "not disabled and not read-only."
+        )
+        toolSpec["dialogStatus"] = ToolSpec(
+            domain = domain,
+            method = "dialogStatus",
+            arguments = emptyList(),
+            returnType = "Map",
+            description = "Report the pending JavaScript dialog, if any: " +
+                "`{pending, type, message}`. Read-only — it never dismisses the dialog.",
+            outputSchema = DIALOG_STATUS_SCHEMA
+        )
+
+        // Must stay last: the generated examples are KDoc snippets and the explicit
+        // specs above replace whole entries, so applying the callable examples
+        // (see TabToolExamples) earlier silently loses them for every method
+        // declared after this point. `TabToolExamplesTest` pins that.
+        toolSpec.replaceExamples(TabToolExamples.EXECUTABLE)
     }
 
     override fun help(method: String): String {
         val spec = toolSpec[method] ?: return "No help available for unknown method: $method"
-
-        return spec.help ?: """
-            ${spec.expression}
-            ${spec.description}
-        """.trimIndent()
+        // Keep the authored KDoc prose, but render signature/arguments/examples the
+        // same way every other executor does.
+        return renderHelp(spec)
     }
 
     private fun normalizeEvaluateValueArgs(args: Map<String, Any?>): Map<String, Any?> {

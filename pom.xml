@@ -550,6 +550,21 @@
     <dependencyManagement>
         <dependencies>
 
+            <!-- The published parent (ai.platon:pulsar-parent) pins
+                 kotlinx-coroutines at 1.10.2, and a parent's dependencyManagement
+                 beats an imported BOM's. Ktor 3.5.1 — required by
+                 io.modelcontextprotocol:kotlin-sdk 0.15.0 — is built against
+                 kotlinx-coroutines 1.11.0 and calls
+                 `BuildersKt.runBlockingK`, which 1.10.2 does not have, so the
+                 version must be raised here (declared in this POM, which wins). -->
+            <dependency>
+                <groupId>org.jetbrains.kotlinx</groupId>
+                <artifactId>kotlinx-coroutines-bom</artifactId>
+                <version>${kotlin.coroutine.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>browser4-dependencies</artifactId>
@@ -725,7 +740,7 @@
 
         <!--  Language  -->
         <javaVersion>25</javaVersion>
-        <kotlin.coroutine.version>1.10.2</kotlin.coroutine.version>
+        <kotlin.coroutine.version>1.11.0</kotlin.coroutine.version>
 
         <!--  Kotlin  -->
         <kotlin.version>2.3.21</kotlin.version>
@@ -735,7 +750,10 @@
         <spring-boot.version>4.0.6</spring-boot.version>
         <browser4-base.version>4.11.16</browser4-base.version>
 
-        <mcp-sdk.version>0.8.1</mcp-sdk.version>
+        <mcp-sdk.version>0.15.0</mcp-sdk.version>
+        <!-- Must match the Ktor the MCP SDK is built against; keep in sync with
+             <ktor.version> in browser4-dependencies/pom.xml. -->
+        <ktor.version>3.5.1</ktor.version>
         <git-commit-id-maven-plugin.version>9.0.1</git-commit-id-maven-plugin.version>
     </properties>
 

@@ -4,6 +4,7 @@ import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.context.AgenticContexts
 import ai.platon.pulsar.common.getLogger
 import io.modelcontextprotocol.kotlin.sdk.server.StdioServerTransport
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.io.asSink
 import kotlinx.io.asSource
@@ -22,9 +23,10 @@ import java.util.concurrent.CountDownLatch
  * - **STDIO** (default) — standard integration used by Claude Desktop, Cursor,
  *   Windsurf, and other MCP-compatible AI clients that launch the server as a
  *   local subprocess and communicate via stdin/stdout.
- * - **HTTP** (SSE) — for remote MCP clients that connect over HTTP.  The server
- *   listens on a configurable port and exposes `/mcp/sse` (GET, SSE stream) and
- *   `/mcp/message` (POST, JSON-RPC).
+ * - **HTTP** (stateless Streamable HTTP) — for MCP clients that connect over
+ *   HTTP. The server listens on a configurable port and exposes a single
+ *   `POST /mcp` endpoint (GET/DELETE answer 405). This replaced the deprecated
+ *   HTTP+SSE transport (`GET /mcp/sse` + `POST /mcp/message`).
  *
  * ## Display mode (headless by default)
  *
@@ -67,7 +69,7 @@ import java.util.concurrent.CountDownLatch
  * | Option | Meaning |
  * |---|---|
  * | `--transport stdio` | STDIO transport (default) — for local MCP clients |
- * | `--transport http` | HTTP/SSE transport — for remote MCP clients |
+ * | `--transport http` | Stateless Streamable HTTP transport — for HTTP MCP clients |
  * | `--port <n>` | HTTP listen port (default: 8088; only with `--transport http`) |
  * | `--headless` | Run Chrome in headless mode (default) |
  * | `--headed` | Run Chrome in headed (GUI) mode — a visible window |
@@ -91,7 +93,7 @@ import java.util.concurrent.CountDownLatch
  * # STDIO (default)
  * java -jar Browser4.jar --app mcp
  *
- * # HTTP (SSE transport)
+ * # HTTP (stateless Streamable HTTP)
  * java -jar Browser4.jar --app mcp --transport http
  * java -jar Browser4.jar --app mcp --transport http --port 8088
  *
@@ -119,7 +121,7 @@ import java.util.concurrent.CountDownLatch
  *   "mcpServers": {
  *     "browser4": {
  *       "type": "streamableHttp",
- *       "url": "http://localhost:8088/mcp/sse"
+ *       "url": "http://localhost:8088/mcp"
  *     }
  *   }
  * }
@@ -214,6 +216,77 @@ fun runBrowser4MCPServer(args: Array<String> = emptyArray()) {
     }
 }
 
+/**
+ * The app selected on the command line (`--app <name>`), with the option removed
+ * from [args] so the selected app only sees its own options.
+ */
+internal class AppInvocation(val app: String, val args: Array<String>)
+
+/**
+ * Extract the `--app <name>` / `--app=<name>` option from the command line.
+ *
+ * @return the parsed invocation, or `null` when no (well-formed) `--app` was given
+ */
+internal fun parseAppOption(args: Array<String>): AppInvocation? {
+    var app: String? = null
+    val remaining = mutableListOf<String>()
+
+    var i = 0
+    while (i < args.size) {
+        val arg = args[i]
+        when {
+            arg == "--app" -> {
+                val value = args.getOrNull(i + 1) ?: return null
+                app = value.lowercase()
+                i += 2
+                continue
+            }
+            arg.startsWith("--app=") -> {
+                app = arg.substringAfter('=').lowercase()
+            }
+            else -> remaining += arg
+        }
+        i++
+    }
+
+    return app?.let { AppInvocation(it, remaining.toTypedArray()) }
+}
+
+/**
+ * Run the standalone MCP server when the command line asks for it.
+ *
+ * This is what makes the documented entry point real:
+ *
+ * ```bash
+ * java -jar Browser4.jar --app mcp                        # STDIO
+ * java -jar Browser4.jar --app mcp --transport http       # stateless Streamable HTTP
+ * ```
+ *
+ * The launcher dispatches **before** Spring starts, because the standalone MCP
+ * server manages its own agentic context and must not boot the web application.
+ *
+ * @return `true` when the MCP server handled the invocation — the caller must
+ *   then *not* start Spring; `false` for any other app, so the caller keeps its
+ *   normal behaviour unchanged.
+ */
+fun runMcpAppIfRequested(args: Array<String>): Boolean {
+    val invocation = parseAppOption(args) ?: return false
+
+    if (invocation.app != MCP_APP_NAME) {
+        getLogger("Browser4MCPServerRunner").info(
+            "Unknown app '{}' — available apps: '{}'. Starting the default application.",
+            invocation.app, MCP_APP_NAME
+        )
+        return false
+    }
+
+    runBrowser4MCPServer(invocation.args)
+    return true
+}
+
+/** The `--app` name of the standalone MCP server. */
+const val MCP_APP_NAME = "mcp"
+
 // ---------------------------------------------------------------------------
 // Transport implementations
 // ---------------------------------------------------------------------------
@@ -228,14 +301,20 @@ private fun runStdioServer(logger: org.slf4j.Logger, agent: BasicBrowserAgent) {
     )
 
     runBlocking {
+        // `createSession` connects the transport and returns; the session stays
+        // alive until the client closes stdin, so block on its close callback —
+        // otherwise the process would exit while the AI client is still connected.
+        val closed = CompletableDeferred<Unit>()
+        val session = mcpServer.server.createSession(transport)
+        session.onClose { closed.complete(Unit) }
         logger.info("Browser4 MCP Server connected — waiting for client requests")
-        mcpServer.server.connect(transport)
+        closed.await()
         logger.info("Browser4 MCP Server STDIO session ended")
     }
 }
 
 private fun runHttpServer(logger: org.slf4j.Logger, agent: BasicBrowserAgent, port: Int) {
-    logger.info("Starting Browser4 MCP Server (HTTP/SSE transport on port {})", port)
+    logger.info("Starting Browser4 MCP Server (stateless Streamable HTTP transport on port {})", port)
 
     val server = McpHttpServer(
         toolManager = agent.agentToolManager,
@@ -244,8 +323,9 @@ private fun runHttpServer(logger: org.slf4j.Logger, agent: BasicBrowserAgent, po
     server.start()
 
     logger.info(
-        "Browser4 MCP HTTP Server listening on http://localhost:{}/mcp/sse",
+        "Browser4 MCP HTTP Server listening on http://localhost:{}{}",
         port,
+        McpHttpServer.MCP_ENDPOINT_PATH,
     )
 
     // Block until the JVM is terminated (SIGTERM / Ctrl+C).
@@ -274,7 +354,7 @@ private fun printUsage() {
         |
         |Transport options:
         |  --transport stdio    STDIO transport (default) — for local MCP clients
-        |  --transport http     HTTP/SSE transport — for remote MCP clients
+        |  --transport http     Stateless Streamable HTTP transport — for HTTP MCP clients
         |
         |HTTP options (only with --transport http):
         |  --port <n>           Listen port (default: 8088)

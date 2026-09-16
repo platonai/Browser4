@@ -3,6 +3,8 @@ package ai.platon.pulsar.agentic.tools.builtin
 import ai.platon.pulsar.api.model.FrameInfo
 import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.agentic.model.ToolCall
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
+import ai.platon.pulsar.agentic.tools.ToolErrorMapper
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.chrome.protocol.DialogEvent
@@ -14,6 +16,7 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito
 import org.mockito.Mockito.verify
@@ -766,6 +769,9 @@ class BrowserTabToolExecutorTest {
         assertEquals("payframe", value["name"])
         assertEquals(true, value["active"])
         Mockito.verify(driver).frameSwitch("#pay-frame")
+        // `verify` returns the mock, so without this the method would have a return
+        // value and JUnit 5 would silently skip the test.
+        Unit
     }
 
     @Test
@@ -800,6 +806,7 @@ class BrowserTabToolExecutorTest {
         val frames = result.value as List<*>
         assertEquals(2, frames.size)
         Mockito.verify(driver).frameList()
+        Unit
     }
 
     @Test
@@ -812,8 +819,21 @@ class BrowserTabToolExecutorTest {
         )
 
         assertTrue(!result.success)
-        assertTrue(result.exception?.cause?.message?.contains("frameSwitch requires 'frame'") == true)
+        val cause = result.exception?.cause
+        assertTrue(
+            cause?.message?.contains("frame") == true,
+            "the failure must name the missing argument, was: ${cause?.message}",
+        )
+        assertEquals(
+            ToolErrorCode.MISSING_REQUIRED_ARG,
+            ToolErrorMapper.classify(cause),
+            "a missing argument must carry the stable code, not INTERNAL",
+        )
         Mockito.verify(driver, Mockito.never()).frameSwitch(Mockito.anyString())
+        // `verify` returns the mock: without this the method would have a return
+        // value and JUnit 5 would silently skip the test (which is how this
+        // assertion could sit stale for so long).
+        Unit
     }
 
     // ── eval element-scope resolution: unresolvable targets must fail loudly ──
@@ -1109,5 +1129,44 @@ class BrowserTabToolExecutorTest {
             val message = result.exception?.cause?.message ?: ""
             assertTrue(message.contains("Element not found for ref e1265"), message)
         }
+    }
+
+    @Test
+    @DisplayName("every written tab example reaches the advertised spec")
+    fun everyWrittenTabExampleReachesTheSpec() {
+        val specs = executor.getToolSpecs()
+
+        val dead = TabToolExamples.EXECUTABLE.filterKeys { it !in specs }
+        assertTrue(
+            dead.isEmpty(),
+            "these examples were written for methods the executor does not advertise, " +
+                "so no client can ever see them: ${dead.keys}"
+        )
+
+        val dropped = TabToolExamples.EXECUTABLE.filter { (method, examples) ->
+            specs[method]?.examples != examples
+        }
+        assertTrue(
+            dropped.isEmpty(),
+            "these examples never reached their spec — most likely a spec declared after " +
+                "the `replaceExamples` call in the constructor overwrote it: ${dropped.keys}"
+        )
+    }
+
+    @Test
+    @DisplayName("the state readers the executor dispatches are advertised with their contract")
+    fun dispatchedStateReadersAreAdvertised() {
+        val specs = executor.getToolSpecs()
+        for (method in listOf("isEnabled", "dialogStatus")) {
+            assertNotNull(specs[method], "tab.$method is dispatched but not advertised")
+        }
+
+        assertTrue(specs["dialogStatus"]!!.arguments.isEmpty(), "dialogStatus takes no arguments")
+        val schema = specs["dialogStatus"]!!.outputSchema
+        assertNotNull(schema, "dialogStatus returns JSON, so it must declare its result schema")
+        assertTrue(
+            schema!!.contains("\"pending\"") && schema.contains("\"type\":\"object\""),
+            "the declared result schema must describe the {pending, type, message} map, was: $schema"
+        )
     }
 }

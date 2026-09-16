@@ -571,6 +571,103 @@ pub fn show_tip(command: &str) {
     eprintln!("\n💡 Tip: {}", tips[index].text);
 }
 
+// ---------------------------------------------------------------------------
+// Failure tips — actionable remediation for a rejected tool call
+// ---------------------------------------------------------------------------
+//
+// The rotating tips above are discovery hints and stay opt-in (`--show-tip`).
+// A failure tip is different: the call was rejected and the user has to act
+// before anything else works, so it is shown whenever the command fails with a
+// code the CLI can actually advise on — and never for a successful call.
+
+/// Read the stable `[CODE]` token the backend writes into a failure message
+/// (`ERROR: [RATE_LIMITED] …`).
+///
+/// Only SCREAMING_SNAKE_CASE is accepted, so brackets used for prose in an
+/// ordinary message are not mistaken for a code.
+fn error_code_from_message(message: &str) -> Option<&str> {
+    let rest = message.get(message.find('[')? + 1..)?;
+    let code = rest.get(..rest.find(']')?)?.trim();
+    (!code.is_empty() && code.chars().all(|c| c.is_ascii_uppercase() || c == '_')).then_some(code)
+}
+
+/// Parse the retry delay out of a rejection message
+/// (`… ; retry after 45 ms`), for backends that report it in prose only.
+fn parse_retry_after_ms(message: &str) -> Option<u64> {
+    let lower = message.to_ascii_lowercase();
+    let rest = lower.get(lower.find("retry after")? + "retry after".len()..)?;
+    rest.trim_start()
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .ok()
+}
+
+/// The actionable tip for a failed command, or `None` when the failure has
+/// none — a successful result, or a code the CLI cannot remedy (`INTERNAL`,
+/// `INVALID_ARGUMENT`, …).
+///
+/// `error_code` / `retry_after_ms` are the structured fields the backend
+/// attached to the rejected call (`http::ToolErrorMeta`); both are `None` when
+/// the failure is only visible as text.
+fn failure_tip_for(
+    command: &str,
+    error_message: &str,
+    error_code: Option<&str>,
+    retry_after_ms: Option<u64>,
+) -> Option<String> {
+    // The message is authoritative — the backend embeds the code in the text
+    // (`ERROR: [RATE_LIMITED] …`); the structured field covers a response whose
+    // text carries no token.
+    let code = error_code_from_message(error_message).or(error_code)?;
+    let name = crate::help::public_command_name(command);
+
+    let tip = match code {
+        "RATE_LIMITED" => {
+            let wait = retry_after_ms
+                .or_else(|| parse_retry_after_ms(error_message))
+                .map(|ms| format!("retry after {ms} ms"))
+                .unwrap_or_else(|| "retry after a short wait".to_string());
+            format!("rate limit exceeded for '{name}' — {wait}, or lower batch concurrency.")
+        }
+        "SESSION_UNHEALTHY" => format!(
+            "the session for '{name}' is unhealthy — re-open the session (the browser may have exited) and retry."
+        ),
+        "SESSION_NOT_FOUND" => format!(
+            "no live session for '{name}' — open one first (e.g. `browser4-cli open <url>`)."
+        ),
+        // Everything else (INTERNAL, INVALID_ARGUMENT, TIMEOUT, …) has no
+        // CLI-side remediation worth a line of noise.
+        _ => return None,
+    };
+
+    Some(format!("Tip: {tip}"))
+}
+
+/// Print the actionable tip for a failed command, when there is one.
+///
+/// Unlike [show_tip] this is not opt-in — a rejection is remediation the user
+/// needs now, not a rotating discovery hint.  It still respects the output-mode
+/// suppressions (`--json`, `--quiet`, `--raw`/`--stdout`) and stays silent for
+/// infrastructure commands.
+pub fn show_failure_tip(
+    command: &str,
+    error_message: &str,
+    error_code: Option<&str>,
+    retry_after_ms: Option<u64>,
+) {
+    if crate::quiet_active() || crate::json_active() || crate::raw_active() {
+        return;
+    }
+    if is_suppressed_command(command) {
+        return;
+    }
+    if let Some(tip) = failure_tip_for(command, error_message, error_code, retry_after_ms) {
+        eprintln!("{tip}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -655,5 +752,130 @@ mod tests {
         assert!(!is_suppressed_command("eval"));
         assert!(!is_suppressed_command("htmlsnapshot"));
         assert!(!is_suppressed_command("screenshot"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Failure tips
+    // -----------------------------------------------------------------------
+
+    /// The rejection text the private dispatcher sends: the code in brackets
+    /// followed by the rate limiter's message, which repeats the delay.
+    const RATE_LIMITED_MESSAGE: &str = "ERROR: [RATE_LIMITED] rate limit exceeded for browser_click \
+         (limit 10); retry after 45 ms";
+
+    #[test]
+    fn test_error_code_from_message_reads_the_bracketed_code() {
+        assert_eq!(error_code_from_message(RATE_LIMITED_MESSAGE), Some("RATE_LIMITED"));
+        // The defensive path in http.rs strips the `ERROR: ` prefix but keeps
+        // the code token.
+        assert_eq!(
+            error_code_from_message("[SESSION_NOT_FOUND] No active session"),
+            Some("SESSION_NOT_FOUND")
+        );
+        assert_eq!(error_code_from_message("Clicked element e5"), None);
+        assert_eq!(error_code_from_message("failed to parse [see docs]"), None);
+    }
+
+    #[test]
+    fn test_parse_retry_after_ms() {
+        assert_eq!(parse_retry_after_ms(RATE_LIMITED_MESSAGE), Some(45));
+        assert_eq!(parse_retry_after_ms("retry after 1200 ms"), Some(1200));
+        assert_eq!(parse_retry_after_ms("Retry After 7 ms"), Some(7));
+        assert_eq!(parse_retry_after_ms("retry after a while"), None);
+        assert_eq!(parse_retry_after_ms("Session not found"), None);
+    }
+
+    #[test]
+    fn test_failure_tip_rate_limited_with_structured_retry_after() {
+        let tip = failure_tip_for(
+            "click",
+            "ERROR: [RATE_LIMITED] rate limit exceeded for browser_click",
+            Some("RATE_LIMITED"),
+            Some(45),
+        )
+        .expect("a RATE_LIMITED failure must produce a tip");
+        assert_eq!(
+            tip,
+            "Tip: rate limit exceeded for 'click' — retry after 45 ms, or lower batch concurrency."
+        );
+    }
+
+    #[test]
+    fn test_failure_tip_rate_limited_without_structured_retry_after() {
+        // No structured field: the delay embedded in the message is used.
+        let text_only = failure_tip_for("click", RATE_LIMITED_MESSAGE, None, None)
+            .expect("a RATE_LIMITED failure must produce a tip");
+        assert!(text_only.contains("retry after 45 ms"), "got: {text_only}");
+
+        // Neither source reports a delay: the tip still names the problem.
+        let no_delay = failure_tip_for(
+            "click",
+            "ERROR: [RATE_LIMITED] rate limit exceeded for browser_click (limit 10)",
+            None,
+            None,
+        )
+        .expect("a RATE_LIMITED failure must produce a tip");
+        assert!(no_delay.contains("rate limit exceeded for 'click'"), "got: {no_delay}");
+        assert!(no_delay.contains("retry after a short wait"), "got: {no_delay}");
+        assert!(
+            !no_delay.contains("retry after 0 ms"),
+            "a missing delay must not be rendered as 0 ms: {no_delay}"
+        );
+    }
+
+    #[test]
+    fn test_failure_tip_uses_the_structured_code_when_the_text_has_none() {
+        let tip = failure_tip_for("click", "rate limit exceeded", Some("RATE_LIMITED"), Some(300))
+            .expect("the structured errorCode alone must be enough");
+        assert!(tip.contains("retry after 300 ms"), "got: {tip}");
+    }
+
+    #[test]
+    fn test_failure_tip_session_codes() {
+        let unhealthy = failure_tip_for(
+            "goto",
+            "ERROR: [SESSION_UNHEALTHY] the browser of session s-1 exited",
+            None,
+            None,
+        )
+        .expect("SESSION_UNHEALTHY is actionable");
+        assert!(unhealthy.contains("unhealthy") && unhealthy.contains("'goto'"), "got: {unhealthy}");
+
+        let not_found = failure_tip_for(
+            "goto",
+            "[SESSION_NOT_FOUND] No active session",
+            None,
+            None,
+        )
+        .expect("SESSION_NOT_FOUND is actionable");
+        assert!(
+            not_found.contains("no live session for 'goto'"),
+            "got: {not_found}"
+        );
+    }
+
+    #[test]
+    fn test_failure_tip_emits_nothing_for_success_or_unactionable_failures() {
+        // A successful call never produces a tip, even when its output happens
+        // to mention a failure code in prose.
+        assert_eq!(failure_tip_for("click", "Clicked element e5", None, None), None);
+        assert_eq!(
+            failure_tip_for("click", "Clicked element e5", None, Some(45)),
+            None
+        );
+        // INTERNAL and argument errors have no CLI-side remediation.
+        assert_eq!(
+            failure_tip_for("click", "ERROR: [INTERNAL] unexpected failure", Some("INTERNAL"), None),
+            None
+        );
+        assert_eq!(
+            failure_tip_for(
+                "click",
+                "ERROR: [INVALID_ARGUMENT] selector must be a string",
+                None,
+                None
+            ),
+            None
+        );
     }
 }
