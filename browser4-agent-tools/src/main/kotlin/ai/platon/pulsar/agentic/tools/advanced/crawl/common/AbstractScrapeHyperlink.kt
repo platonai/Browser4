@@ -35,7 +35,7 @@ abstract class AbstractScrapeHyperlink(
     uuid: String
 ) : ScrapeHyperlink(sql.url, uuid) {
 
-    private val logger = getLogger(XSQLScrapeHyperlink::class)
+    private val logger = getLogger(AbstractScrapeHyperlink::class)
 
     protected val sqlContext get() = session.context as AbstractBrowser4SQLContext
     protected val connectionPool get() = sqlContext.connectionPool
@@ -63,6 +63,13 @@ abstract class AbstractScrapeHyperlink(
         // logger.info("Completed | {}", page.url)
     }
 
+    /**
+     * Execute the hyperlink's own statement.
+     *
+     * This is the degenerate path: no page is involved, so nothing inside the statement can make
+     * the engine load one. A query whose page *is* resolved by a UDF load goes through
+     * [XSqlExecutor] instead, after the url inside it has been sealed read-only.
+     * */
     protected open fun executeQuery(request: ScrapeRequest, response: ScrapeResponse): ResultSet {
         var rs: ResultSet = ResultSets.newSimpleResultSet()
 

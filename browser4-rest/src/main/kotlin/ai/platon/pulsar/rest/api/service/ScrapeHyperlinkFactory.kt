@@ -6,7 +6,7 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.DegenerateXSQLScrapeHyperlink
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeHyperlink
-import ai.platon.pulsar.agentic.tools.advanced.crawl.common.XSQLScrapeHyperlink
+import ai.platon.pulsar.agentic.tools.advanced.crawl.common.XSQLHyperlink
 
 /**
  * Creates [ScrapeHyperlink] instances with the shared logic for X-SQL vs degenerate
@@ -37,7 +37,7 @@ object ScrapeHyperlinkFactory {
         val sql = request.sql
         val link = if (ScrapeAPIUtils.isScrapeUDF(sql)) {
             val xSQL = ScrapeAPIUtils.normalize(sql)
-            XSQLScrapeHyperlink(request, xSQL, session)
+            XSQLHyperlink(request, xSQL, session)
         } else {
             DegenerateXSQLScrapeHyperlink(request, session)
         }
