@@ -459,71 +459,26 @@ follow these guidelines:
 
 ## Subcommands
 
-When you submit a crawl with `--background`, the CLI returns immediately with a
-task ID.  Use these subcommands to manage and monitor background crawl tasks.
+A crawl submitted with `--background` returns a task ID immediately.  These
+subcommands manage and monitor the task afterwards.
 
-### crawl status
-
-Check the current status of a crawl task.
+| Subcommand | What it does |
+|---|---|
+| `crawl status <task-id>` | One-line summary plus the raw record: CREATED, PROCESSING or completed (OK), pages found so far, and any error information |
+| `crawl result <task-id>` | The task's current record — page listing (without `--sql`) or extracted data (with `--sql`).  A task still PROCESSING returns its partial record with `status: PROCESSING` and the CLI hints that it is not yet terminal, so `result` and `status` both work as a poll |
+| `crawl cancel <task-id>` | Cancel a running or queued task; it transitions to TIMEOUT and stays visible in `crawl list` until cleared or expired by TTL.  `{"cancelled": false}` means no running worker was found — the record is still queryable |
+| `crawl clear` | Remove completed, cancelled and failed tasks from the store; running tasks are not affected |
+| `crawl list` | List all tracked crawl tasks across all sessions |
 
 ```bash
 browser4-cli crawl status <task-id>
-```
-
-Shows whether the task is CREATED, PROCESSING, or completed (OK), along with
-pages found so far and any error information.  Prints a compact one-line
-summary in front of the raw task record.
-
-### crawl result
-
-Retrieve the current record of a crawl task.  A terminal task (OK, TIMEOUT,
-ERROR) returns the full result: page listing (without `--sql`) or extracted
-data (with `--sql`).  The record also carries the live status field, so
-polling a task that is still PROCESSING returns the record with
-`status: PROCESSING` and whatever partial progress exists — the CLI prints a
-hint when the task is not yet terminal.
-
-```bash
 browser4-cli crawl result <task-id>
-```
-
-> **Note:** `crawl result` returns the task's current record including its
-> `status` field — it does not refuse non-terminal tasks.  While a task is
-> PROCESSING, `crawl result` and `crawl status` show equivalent partial
-> records; use either to poll.
-
-### crawl cancel
-
-Cancel a running or queued crawl task.
-
-```bash
 browser4-cli crawl cancel <task-id>
-```
-
-The task transitions to TIMEOUT status.  Cancelled tasks remain visible in
-`crawl list` until manually cleared or expired by TTL.  If no running worker
-is found for the task (`{"cancelled": false}`), the CLI explains that the
-worker is already gone; the task record is still queryable and expires by
-TTL.
-
-### crawl clear
-
-Remove completed, cancelled, or failed crawl tasks from the task store.
-Running tasks are not affected.
-
-```bash
 browser4-cli crawl clear
-```
-
-### crawl list
-
-List all tracked crawl tasks across all sessions.
-
-```bash
-browser4-cli crawl list
 browser4-cli crawl list --limit 20
-browser4-cli crawl list --clear
 ```
+
+`crawl list` flags:
 
 | Flag | Type | Description |
 |---|---|---|
