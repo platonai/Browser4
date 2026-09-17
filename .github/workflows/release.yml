@@ -330,6 +330,11 @@ jobs:
         shell: bash
         run: bash cli/scripts/tests/wait-for-npm-version.tests.sh
 
+      - name: Run reconcile-release-assets.tests.sh
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash cli/scripts/tests/reconcile-release-assets.tests.sh
+
       - name: Run install-browser4-cli.tests.ps1
         if: runner.os == 'Windows'
         shell: pwsh
@@ -1377,6 +1382,11 @@ jobs:
       id-token: write
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
       - name: Download JAR artifact
         uses: actions/download-artifact@v7
         with:
@@ -1454,6 +1464,16 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Create or update GitHub Release
+        id: gh_release
+        # GitHub's release upload endpoint answers with a transient 5xx a few
+        # times a month ("Error creating asset temp dir", "Error saving asset",
+        # "Unicorn!"). v4.14.0-rc.6 lost its whole release pipeline that way
+        # (run 35265014949: 6 of 11 assets uploaded, then the job died on
+        # `##[error]Error creating asset temp dir`, skipping the attestation,
+        # the release verification and the OSS sync). The upload is not the
+        # verdict any more: continue, and let the reconciliation step below
+        # re-upload whatever is missing or truncated and decide the outcome.
+        continue-on-error: true
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228  # v3.0.2
         with:
           files: ${{ steps.asset_manifest.outputs.files }}
@@ -1467,6 +1487,27 @@ jobs:
           overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Reconcile release assets
+        timeout-minutes: 20
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_REPO: ${{ github.repository }}
+          RELEASE_ASSET_MANIFEST: ${{ steps.asset_manifest.outputs.files }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ steps.gh_release.outcome }}" != "success" ]; then
+            echo "::warning::Create or update GitHub Release reported a failure; re-uploading whatever the release is missing"
+          fi
+
+          printf '%s\n' "$RELEASE_ASSET_MANIFEST" > "$RUNNER_TEMP/release-asset-manifest.txt"
+          bash cli/scripts/reconcile-release-assets.sh \
+            --tag "$RELEASE_TAG" \
+            --repo "$RELEASE_REPO" \
+            --files-from "$RUNNER_TEMP/release-asset-manifest.txt"
 
       - name: Generate Artifact Attestation
         if: success()

@@ -1220,3 +1220,54 @@ CI 不受影响（每次从干净检出构建，没有 `target/`）；**本地**
   长时间运行的服务会保留 `capacity` 上限内的 tab，值得单独测量内存占用。
 * **CI 上的复测**：`Waited {}ms for a driver` 这条 WARN 是新的观测点，若 CI 仍出现平台化，
   先看这条（等 driver）与 `L.Task` 的耗时对比，再决定是池侧还是浏览器侧。
+
+## 21. v4.14.0-rc.6 的唯一红点：GitHub 发布接口的一次瞬时 5xx 毁掉了整个 release（4.14.x，已修）
+
+release.yml 在 tag `v4.14.0-rc.6`（run [35265014949](https://github.com/platonai/Browser4/actions/runs/35265014949)）上唯一红的是
+`Publish GitHub release` 的 `Create or update GitHub Release` 步骤：
+
+```
+2026-09-17T20:13:37.7091673Z ##[error]Error creating asset temp dir
+```
+
+该步骤 20:13:33 开始，11 个资产并行上传：日志里只有 6 个 `Uploaded`（Browser4.jar + 5 个 CLI 二进制），
+3 个 bundle（142/148/144 MB）与 2 个 CLI 二进制从未上传成功，20:15:27 步骤进程被杀、job 以 failure 结束。
+下游 4 步全部 skipped：`Generate Artifact Attestation`、`Verify Release`、`Release Summary`、
+`Sync to Aliyun OSS CDN` —— 一次服务端抖动，换来一个只挂了 6/11 个资产的 release，加上没触发的 CDN 同步。
+
+### 21.1 这不是我们的代码，也不是 action 的 bug
+
+* 报错文本**不在**所 pin 的 `softprops/action-gh-release@3d0d9888…`（v3.0.2）里：该 commit 树里
+  `dist/index.js` 的 blob 与本地取到的文件哈希一致（`git hash-object` = 树里的 sha），全文没有
+  `temp dir`、也没有 `Error creating`；v3.0.3 同样没有。
+* 它是 **GitHub release 上传端点的瞬时 5xx**，与公开记录里的 `Unicorn!`、`Error saving asset` 同类。
+  `forwardemail/mail.forwardemail.net` 的 `docs/RELEASES.md` 写得最直白：
+  "GitHub's release upload endpoint returns transient 5xx responses a few times a month
+  ('Unicorn!', 'Error saving asset', 'Error creating asset temp dir')"。
+* 推论有两条：重试是唯一有效的对策；**失败不是原子的** —— 失败的资产可能在 release 上留下一个比本地小的
+  截断版本，所以"按名字 + 字节数核对"才算验证，光看资产名在不在会漏。
+
+### 21.2 改动
+
+1. `cli/scripts/reconcile-release-assets.sh`（新）：以 release 为真值收敛 —— 列出资产 → 只上传
+   "缺失或大小不符"的文件（`gh release upload --clobber`，顺带覆盖截断资产）→ 复查，直到一致或
+   预算（默认 600 s，`--interval` 30 s）用完。已经一致时只花一次 API 调用、零上传。
+2. `cli/scripts/tests/reconcile-release-assets.tests.sh`（新，16 例，stub `gh`、无网络）：完整 release /
+   只补缺失 / 截断资产按大小补 / 上传瞬时失败后重试成功 / 列出瞬时失败 / release 不存在 /
+   永远不成功（点名资产 + 建议重跑）/ 不超预算 / 读 manifest（容忍空行与 CRLF）/ 参数校验。
+   变异验证确认套件有区分度：去掉大小核对 → `repairs a partial asset by size` 红；去掉重试 →
+   `survives the transient upload error that failed v4.14.0-rc.6` 红。
+3. `release.yml`：`Create or update GitHub Release` 加 `id: gh_release` + `continue-on-error: true`
+   （上传不再充当判据），其后新增 `Reconcile release assets` 步骤（调上面的脚本，`--files-from` 用
+   已有的 `steps.asset_manifest.outputs.files`），由它决定这一步的成败；该 job 原先**没有检出仓库**，
+   所以补了一次 `actions/checkout`（`ref: needs.prepare.outputs.tag`，与其它 job 一致）。
+4. 两个 workflow 都跑新套件：`release.yml` 的 `test-install-scripts`、`ci.yml` 的
+   `Validate install script tests`（后者每轮都跑，避免"只在 release 时跑、坏了几个月没人发现"）。
+
+### 21.3 还没做
+
+* **发布创建路径**：release 不存在时脚本直接报错退出 —— 用 title / notes / prerelease 创建 release 是
+  action 的职责（它自己有 3 次重试）。若创建本身持续 5xx，job 仍会红，只是错误信息点明"release 不存在"。
+* **上传端点整体不可用**：预算用尽后 job 仍然红，只是会点名"哪些资产还不对 + 建议 `Re-run failed jobs`"。
+* **没有真机验证**：本轮只有 stub + 变异验证，真实 5xx 无法本地复现；下一个 release tag 是首个真实检验点。
+  若那时仍红，先看 `Reconcile release assets` 步骤里的 WARN（它保留了每次失败的 GitHub 应答）。

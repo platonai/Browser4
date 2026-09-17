@@ -85,6 +85,7 @@ Runs a full CLI smoke test suitable for CI and local development:
 | `tests/install-browser4-cli.tests.sh` | Unit tests for the Unix install script |
 | `tests/install-browser4-cli.tests.ps1` | Unit tests for the Windows install script (Pester) |
 | `tests/wait-for-npm-version.tests.sh` | Unit tests for `wait-for-npm-version.sh` (stubbed `npm`, no network) |
+| `tests/reconcile-release-assets.tests.sh` | Unit tests for `reconcile-release-assets.sh` (stubbed `gh`, no network) |
 
 ## Publish (npm)
 
@@ -152,6 +153,37 @@ This makes the npm package README match the repository root README without leavi
 ### Postinstall
 
 `postinstall.js` runs automatically after `npm install browser4-cli`. It detects the platform and downloads the matching native binary to `bin/`. On global installs, it also patches npm's bin shims to invoke the native binary directly.
+
+## Release
+
+| Script | Purpose |
+|--------|---------|
+| `reconcile-release-assets.sh` | Makes a GitHub release carry exactly the assets a job produced, re-uploading what is missing or truncated; called by `release.yml` after the publishing action |
+
+### Recovering from a failed release upload
+
+GitHub's release upload endpoint answers with a transient 5xx a few times a month
+(*"Error creating asset temp dir"*, *"Error saving asset"*, *"Unicorn!"*). v4.14.0-rc.6
+(`release.yml` run 35265014949) lost its whole release pipeline that way: the publishing
+action uploaded 6 of 11 assets and then failed, which skipped the artifact attestation, the
+release verification and the OSS sync.
+
+`reconcile-release-assets.sh` treats the release as the source of truth: it lists the assets
+the release carries, uploads only the files that are missing or whose size differs
+(`gh release upload --clobber`), and re-checks until the release matches or the budget
+expires. An already complete release costs one API call and no upload.
+
+```shell
+bash scripts/reconcile-release-assets.sh --tag v4.14.0 --repo platonai/Browser4 \
+  release-assets/Browser4.jar release-assets/browser4-cli-linux-x64
+bash scripts/reconcile-release-assets.sh --tag v4.14.0 --files-from release-assets.txt
+```
+
+Exit code 0 = the release carries every given file at the local size; 1 = still missing or
+mismatched when the budget (600 s by default) expired, the release does not exist, or bad
+usage. `release.yml` runs it in its own `Reconcile release assets` step, which decides
+whether that job passed — the publishing action runs with `continue-on-error: true` for
+exactly that reason.
 
 ## Documentation
 
