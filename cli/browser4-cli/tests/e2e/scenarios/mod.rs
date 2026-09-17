@@ -1578,6 +1578,9 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_fn: mock_server::test_crawl_foreground_reports_lost_pages,
         group: Some("crawl"),
         level: ScenarioLevel::Basic,
+        exclude_by_default: false,
+        exclusion_reason: None,
+        estimated_duration_ms: None,
     },
     ScenarioDef {
         name: "test_e2e_crawl_foreground_with_discovered_links",

@@ -4639,15 +4639,19 @@ pub(super) fn test_crawl_foreground_with_sql(ctx: &mut E2ECtx) {
     );
 
     let stdout = &result.stdout;
+    // With `--sql` and no `--output`, the extracted payload owns stdout and the
+    // progress lines are routed to stderr (see CRAWL_STRUCTURED_STDOUT), so the
+    // status assertions read both streams.  The payload assertion stays on stdout.
+    let combined = format!("{}\n{}", result.stdout, result.stderr);
     assert!(
-        stdout.contains("Crawl task submitted: crawl-job-42"),
+        combined.contains("Crawl task submitted: crawl-job-42"),
         "Expected submission in:\n{}",
-        stdout
+        combined
     );
     assert!(
-        stdout.contains("X-SQL extraction: enabled"),
+        combined.contains("X-SQL extraction: enabled"),
         "Expected X-SQL indicator in:\n{}",
-        stdout
+        combined
     );
     // The mock server result page doesn't have extracted data, so we should
     // see either "No extracted data" or a completion message
