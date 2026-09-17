@@ -31,10 +31,13 @@ Comprehensive test runner for the current Maven reactors plus the Browser4 CLI p
 - `rest`: Run REST module tests
 - `skills`: Run skills module tests
 - `mcp`: Run MCP module tests
+- `mcp-contract`: Contract gate — tool matrix, docs, lint and validators (agentic + rest)
+- `ps`: Run all PowerShell `*.tests.ps1` files in the project
 - `main`: Run all Browser4 main tests (`fast`, `rest`, `it`, `e2e`)
 - `cli` / `browser4-cli`: Run Rust Browser4 CLI tests from `cli/browser4-cli`
 - `server`: Launch the standalone mock site server from `browser4-tests/browser4-rest-tests` via `spring-boot:run` (`mock-site` and `mocksiteboot` are accepted as legacy aliases)
 - `rws`: Run real-world-scenario unit tests (`common.tests.ps1`). With `--scenarios`, run all agent-scenario tasks via `run-tests.ps1`. With `--task <file>`, run a single task via `run-task.ps1`.
+- `session`: Inspect persisted test sessions (`list`, `view`, `prune`)
 - `resume`: Resume from the last failed module (`-rf`)
 
 **RWS flags** (accepted after `rws`):

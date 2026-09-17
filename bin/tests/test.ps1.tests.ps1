@@ -420,6 +420,7 @@ $testTypeMap = @{
     'rest'          = 'maven'
     'skills'        = 'maven'
     'mcp'           = 'maven'
+    'mcp-contract'  = 'maven'
     'main'          = 'maven-expand'
     'cli'           = 'cli'
     'browser4-cli'  = 'cli'
@@ -571,7 +572,7 @@ Assert-Returns -Label 'Server alone: no conflict' -Actual $hasConflict2 -Expecte
 Write-Host "━━━ Known test types: completeness ━━━" -ForegroundColor Cyan
 
 $expectedTypes = @(
-    'fast', 'it', 'e2e', 'rest', 'skills', 'mcp', 'main',
+    'fast', 'it', 'e2e', 'rest', 'skills', 'mcp', 'mcp-contract', 'main',
     'cli', 'browser4-cli',
     'server', 'mock-site', 'mocksite', 'mocksiteboot',
     'rws', 'ps', 'resume', 'session'
