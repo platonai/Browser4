@@ -37,6 +37,12 @@
     kimi, codex, dsh, copilot). The combined notes are used as the annotated
     tag message (unless -message is given) and shown as a preview.
 
+    Non-interactive hosts (CI/automation): set BROWSER4_RELEASE_YES=1 to
+    auto-confirm every prompt and to auto-skip the release-message prompt
+    (Read-Host throws in NonInteractive PowerShell). The pre-rename name
+    BROWSER4_RELEASE_ASSUME_YES is still honoured as a legacy alias;
+    BROWSER4_RELEASE_YES wins when both are set.
+
 .PARAMETER remote
     The git remote to push the tag to (default: "origin").
 
@@ -117,14 +123,37 @@ $repoRoot = (git rev-parse --show-toplevel 2>$null)
 Set-Location $repoRoot
 
 # ── Non-interactive confirmation ────────────────────────────────────
-# Every prompt routes through Confirm-Step. When BROWSER4_RELEASE_YES
+# Every prompt routes through Confirm-Step. When the non-interactive flag
 # is set (CI / automation / non-TTY shells), all prompts auto-confirm
 # (or auto-skip for the optional release message) instead of calling
 # Read-Host, which fails in NonInteractive mode.
+#
+# Two names are honoured. BROWSER4_RELEASE_YES is the canonical switch;
+# BROWSER4_RELEASE_ASSUME_YES is the name the first implementation shipped
+# (2b5b3581da) and the name bin/release/README.md kept documenting after the
+# rename (c214e2d4a8). Automation written against those docs would otherwise
+# fall through to Read-Host and die in a NonInteractive host, so the alias
+# keeps working, with a migration hint. The canonical name wins when both
+# are set.
+function Get-NonInteractiveFlag {
+    if ($env:BROWSER4_RELEASE_YES) { return 'BROWSER4_RELEASE_YES' }
+    if ($env:BROWSER4_RELEASE_ASSUME_YES) { return 'BROWSER4_RELEASE_ASSUME_YES' }
+    return ''
+}
+
+if (-not $env:BROWSER4_RELEASE_YES -and $env:BROWSER4_RELEASE_ASSUME_YES) {
+    Write-Warning "BROWSER4_RELEASE_ASSUME_YES is a legacy alias - prefer BROWSER4_RELEASE_YES (see bin/release/README.md)."
+}
+
 function Confirm-Step {
     param([string]$Prompt, [string]$Default = '')
-    if ($env:BROWSER4_RELEASE_YES) {
-        if ($Default) { return $Default }
+    if (Get-NonInteractiveFlag) {
+        # A caller that passes -Default (the release-message prompt passes '')
+        # wants exactly that value on a non-interactive host - auto-skip.
+        # Testing the *presence* of the parameter instead of its truthiness is
+        # what makes an empty default mean "skip" instead of falling through
+        # to 'y' and annotating the tag with a literal "y".
+        if ($PSBoundParameters.ContainsKey('Default')) { return $Default }
         return 'y'
     }
     return Read-Host $Prompt
