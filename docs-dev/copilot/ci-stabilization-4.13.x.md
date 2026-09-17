@@ -1096,3 +1096,127 @@ java.lang.IllegalStateException: Crawl eb660148-… did not reach a terminal sta
 * **驱动池在该类里的分配日志**（谁占着 driver、谁在等、等了多久）没有拉出来对照，这是把"环境停顿"
   坐实成"驱动池饥饿"的最后一步。
 
+
+## 20. §19 的收尾：根因是"先建新 tab、再取空闲驱动"（4.14.x，已修）
+
+4.13.x 合并进 4.14.x 后，主 CI 在 commit `5435a7d10e` 上仍红，红点从 1 个变成 3 个，全部是
+`Crawl … did not reach a terminal state within N minutes, last: PROCESSING`
+（run [35139513535](https://github.com/platonai/Browser4/actions/runs/35139513535)：3043 条测试，
+3030 通过、10 跳过、3 报错）：
+
+| 用例 | 上限 | 实际 | 结局 |
+|---|---|---|---|
+| `CrawlFixtureMetadataTest#testReadonlyCrawlSurfacesServedOrFresh` | 6 min | 361 s 触顶 | crawl 在 19:37:23 以 `status OK, 10 pages, 0 lost` **正常完成**（测试 19:37:01 已放弃） |
+| `CrawlParallelTabsTest#testSequentialControlRunDoesNotOverlap` | 4 min | 240 s 触顶 | crawl 在 19:43:44 以 `status OK, 4 pages, 0 lost` **正常完成** |
+| `CrawlParallelTabsTest#testParallelLinkDiscoveryRoundsLoseNoPages` | 4 min | 240 s 触顶 | 同一 JVM 内，前一条把池耗住之后 |
+
+两次"失败"的 crawl 都是正常终态 —— 所以问题不在 crawl 语义，而在**单次抓取越来越慢**。
+
+### 20.1 现象：单次抓取从 2.6 s 涨到 80–103 s，然后稳定在平台
+
+把 run 里 74 次 `L.Task … got 200 … in Xs` 拉成曲线：
+
+| 时刻 | 单次抓取 |
+|---|---|
+| 19:24:31 – 19:27:07 | **2.6 – 4.1 s** |
+| 19:27:18 – 19:27:37 | 7.2 – 9.4 s |
+| 19:28:24 | 21.0 s |
+| 19:29:34 – 19:30:59 | 41.8 – 52.9 s |
+| 19:32:46 – 19:53:11 | **77 – 103 s（平台，直到 run 结束都没恢复）** |
+
+停顿期间**应用一行日志都没有**：`processing seed URL 1/4` 与 `fetched seed URL` 之间是纯空白，
+INFO 级别完全看不到"卡在哪"。
+
+### 20.2 根因：等待方**先建一个新 tab，再去取空闲驱动**
+
+`LoadingWebDriverPool.pollDriverInSlices` 的循环原本是：
+
+```kotlin
+while (driver == null) {
+    resourceSafeCreateDriverIfNecessary(priority, conf)      // ← 先建
+    ...
+    driver = statefulDriverPool.poll(sliceMillis, MILLISECONDS)  // ← 再取
+}
+```
+
+而 `shouldCreateWebDriver()` 只判断容量（`resourceConsumingDriversInPool < capacity`）与资源守卫，
+**不看 standby 队列里是否已经有空闲驱动**。于是每次取驱动都新建一个 tab：
+
+```
+WARN Waited 9769ms  for a driver | active: 43, standby: 41, waiting: 1, working: 2, slots: 7
+WARN Waited 15803ms for a driver | active: 44, standby: 41, waiting: 0, working: 3, slots: 6
+WARN Waited 9278ms  for a driver | active: 46, standby: 43, waiting: 2, working: 3, slots: 4
+WARN Waited 10830ms for a driver | active: 47, standby: 44, waiting: 3, working: 3, slots: 3
+WARN Waited 16377ms for a driver | active: 48, standby: 44, waiting: 2, working: 4, slots: 2
+WARN Waited 14352ms for a driver | active: 49, standby: 44, waiting: 1, working: 5, slots: 1
+WARN Waited 18882ms for a driver | active: 50, standby: 44, waiting: 0, working: 6, slots: 0
+```
+
+`standby` 一直有 **41–44 个空闲驱动**，`working` 只有 2–6，可是每次取驱动仍然新建一个 tab，
+把 `active` 从 43 推到容量上限 50（`slots` 7→0），等待时间 9–19 s 就是**新建 tab 的耗时**。
+浏览器 tab 越多，建 tab 与页面加载越慢 —— 这正是曲线爬升并最终平台化（80–103 s）的原因，
+CI 与本地是同一个签名（本地复现见 §20.4）。
+
+### 20.3 附带机制：CPU 负载守卫会把一次等待放大到 60 s
+
+驱动创建还受 `AppSystemInfo.isSystemOverCriticalLoad`（`systemCpuLoad > CRITICAL_CPU_THRESHOLD`，
+默认 **0.85**）约束；被拒绝时等待方按 500 ms 切片轮询，最多烧掉 `POLLING_TIMEOUT = 60 s`，
+再转成 crawl retry（`Retry(1601)`）。用 `-DjacocoArgLine=-Dcritical.cpu.threshold=0.0` 强制守卫
+永远拒绝，其余完全相同（同一条用例）：
+
+| 变体 | 结果 | 关键日志 |
+|---|---|---|
+| A：默认阈值 | **1/0/0，52.6 s** | — |
+| B：`threshold=0.0` | **1/0/0，111.3 s（2.1×）** | `The system is over the critical load, will not create a new driver` → `Driver pool is exhausted after 66948ms … [Critical CPU] \| active: 1, standby: 1` → `WARN … [Exhausted] Retry task 1 in browser scope` → `L.Task … fc:1 Retry(1601)` |
+
+CI runner 上"3000 条测试 + Chrome"的 CPU 负载长期高于 0.85，这条路径随时会把单次抓取再叠加 ~60 s，
+所以它虽然**不是**主因，也必须一起处理。
+
+### 20.4 修复与验证
+
+| 改动 | 位置 | 说明 |
+|---|---|---|
+| **先取 standby，再建新 tab**（主修复） | `LoadingWebDriverPool.pollDriverInSlices` | 循环开头先 `statefulDriverPool.poll(0, MILLISECONDS)` 非阻塞取空闲驱动，取不到才走创建路径；冷启动行为不变（无空闲时立刻建） |
+| 慢等待可观测 | `LoadingWebDriverPool.poll` | 等到 driver 但等待 ≥ `SLOW_POLL_MILLIS`（5 s）时按 1 分钟节流 WARN，带等待毫秒数与 `Snapshot`（`[Critical CPU]`/容量/各计数）；池耗尽那条 INFO 也带上等待时长 |
+| 测试 JVM 关闭 CPU 守卫 | 根 `pom.xml` | `<critical.cpu.threshold>1.0</critical.cpu.threshold>` + surefire `argLine`；生产仍是 0.85，内存/磁盘守卫对测试仍生效。要复现守卫行为传 `-Dcritical.cpu.threshold=0.85` |
+| 超时改为"卡住"判定 | `CrawlParallelTabsTest` / `CrawlFixtureMetadataTest` 的 `waitForTerminal` | 墙钟上限只作挂死兜底（12/20 min），真正判据是**进度**：`pagesFound/linksDiscovered/seedStatuses` 连续 3/5 分钟不变才失败；失败信息带上 `last status` 与 `progress: pagesFound=…, linksDiscovered=…, seedsSettled=…`（§19.5 第 1 条） |
+| 回归测试 | `LoadingWebDriverPoolTest#testPollReusesAStandbyDriver` | 对旧代码失败（`expected: <1> but was: <2>`：standby 存在却仍新建），修复后通过 |
+
+同一条本地命令（`-Pall-test-modules -pl browser4-tests/browser4-rest-tests -am -DrunITs=true
+-Dtest=CrawlParallelTabsTest,CrawlFixtureMetadataTest`）修复前后：
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| `CrawlFixtureMetadataTest` | 657.4 s（5/0/0） | **243.4 s**（5/0/0） |
+| `CrawlParallelTabsTest` | 765.4 s（5/0/**1**） | **51.0 s**（5/0/0） |
+| 单次抓取 | 1m24 – 1m51（持续退化） | **2.7 – 5.0 s（全程平稳）** |
+| 池等待 WARN | 7 次，9–19 s，`active` 43→50 | 1 次，5.6 s（冷启动 `standby: 0`） |
+
+CI 修复后的数字应与 §19.3 的"健康 run"（`CrawlFixtureMetadataTest` 321 s、`CrawlParallelTabsTest` 72.7 s）
+同一量级。
+
+### 20.5 附带发现：合并后在本地 `mvn install` 会留下孤儿 class
+
+`browser4-rest/.../service/CrawlService.kt` 被 4.13.x 拆到 `service/crawl/` 之后，增量构建**不会删除**
+被删源文件产生的 class：`target/classes/ai/platon/pulsar/rest/api/service/CrawlService.class`（连同
+`CrawlRequest/CrawlResponse/CrawlPageResult/CrawlSeedStatus`）会留在产物里，并被 `install` 打进 jar。
+于是 classpath 上同时存在 `service.CrawlService` 与 `service.crawl.CrawlService`，Spring 启动即：
+
+```
+ConflictingBeanDefinitionException: Annotation-specified bean name 'crawlService' for bean class
+[ai.platon.pulsar.rest.api.service.crawl.CrawlService] conflicts with existing, non-compatible bean
+definition of same name and class [ai.platon.pulsar.rest.api.service.CrawlService]
+```
+
+CI 不受影响（每次从干净检出构建，没有 `target/`）；**本地**遇到就 `./mvnw clean install`。
+排查时注意签名：这类失败发生在 Spring 上下文启动阶段（约 1.5 s 内整类 error），与本文的抓取停顿
+（`PROCESSING` 直到上限）完全不同。
+
+### 20.6 还没做
+
+* **守卫的产品语义**：池已达容量且有人排队时，"按 500 ms 切片轮询 + 60 s 超时 + 上层重试"在负载下会把
+  延迟放大到分钟级；是否在"已经有等待者"时允许再建一个 driver（受 capacity 约束）需要单独评估。
+* **空闲 tab 的回收**：主修复让池不再堆积空闲 tab，但 `idleTimeout`（20 分钟）之外仍没有更积极的回收策略；
+  长时间运行的服务会保留 `capacity` 上限内的 tab，值得单独测量内存占用。
+* **CI 上的复测**：`Waited {}ms for a driver` 这条 WARN 是新的观测点，若 CI 仍出现平台化，
+  先看这条（等 driver）与 `L.Task` 的耗时对比，再决定是池侧还是浏览器侧。

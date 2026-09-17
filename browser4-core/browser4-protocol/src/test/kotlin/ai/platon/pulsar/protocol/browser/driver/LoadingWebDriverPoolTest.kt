@@ -103,6 +103,28 @@ class LoadingWebDriverPoolTest {
     }
 
     @Test
+    @DisplayName("poll reuses a standby driver instead of creating another one")
+    fun testPollReusesAStandbyDriver() {
+        AppSystemInfo.CRITICAL_MEMORY_THRESHOLD_MIB = 1.0
+
+        val first = pool.poll(0, VolatileConfig.UNSAFE, 5, TimeUnit.SECONDS)
+        assertSame(driver, first, "The first poll should hand out the created driver")
+        assertEquals(1, pool.numCreated, "The first poll should create exactly one driver")
+
+        // Send it back, as a finished fetch does
+        whenever(driver.isWorking).thenReturn(true)
+        pool.put(first)
+        assertEquals(1, pool.numStandby, "The returned driver should wait in the pool")
+
+        // A standby driver costs nothing to reuse, while creating one launches a tab that the pool
+        // keeps for the rest of its life - creating first filled the pool with idle tabs and left
+        // the callers waiting for a launch (see pollDriverInSlices)
+        val second = pool.poll(0, VolatileConfig.UNSAFE, 5, TimeUnit.SECONDS)
+        assertSame(first, second, "The standby driver should be handed to the next waiter")
+        assertEquals(1, pool.numCreated, "A standby driver must be reused, not replaced by a new one")
+    }
+
+    @Test
     @DisplayName("poll fails fast when the pool is retired")
     fun testPollFailsFastWhenThePoolIsRetired() {
         pool.retire()

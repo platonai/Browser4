@@ -263,9 +263,24 @@ class CrawlParallelTabsTest : RestAPITestBase() {
             .also { check(it.isNotBlank()) { "blank crawl task id" } }
     }
 
-    private fun waitForTerminal(taskId: String): CrawlResponse {
-        val deadline = Instant.now().plus(Duration.ofMinutes(4))
+    /**
+     * Wait for a crawl to settle.
+     *
+     * The wall-clock cap is a ceiling for a hang, not a speed assertion: on a loaded CI runner a
+     * healthy crawl fetches a page in ~80-100 s instead of ~2.6 s, and a fixed 4 minute cap then
+     * fails crawls that go on to finish normally (the recorded CI failure completed 2.5 minutes
+     * after the test gave up).  A crawl that stops moving is still caught, by the stall limit on
+     * the progress the record reports.
+     * */
+    private fun waitForTerminal(
+        taskId: String,
+        ceiling: Duration = Duration.ofMinutes(12),
+        stallLimit: Duration = Duration.ofMinutes(3)
+    ): CrawlResponse {
+        val deadline = Instant.now().plus(ceiling)
         var last: CrawlResponse? = null
+        var lastProgress = ""
+        var progressAt = Instant.now()
         while (Instant.now().isBefore(deadline)) {
             Thread.sleep(1_000)
             val raw = client.get().uri("/api/crawl/$taskId/result")
@@ -286,7 +301,24 @@ class CrawlParallelTabsTest : RestAPITestBase() {
             ) {
                 return result
             }
+
+            val progress = progressOf(result)
+            if (progress != lastProgress) {
+                lastProgress = progress
+                progressAt = Instant.now()
+            } else if (Duration.between(progressAt, Instant.now()) > stallLimit) {
+                error("Crawl $taskId stopped making progress for $stallLimit ($progress, status ${result.status})")
+            }
         }
-        error("Crawl $taskId did not reach a terminal state within 4 minutes, last: ${last?.status}")
+        error(
+            "Crawl $taskId did not reach a terminal state within $ceiling, " +
+                    "last: ${last?.status}, progress: ${last?.let { progressOf(it) }}"
+        )
     }
+
+    /** What the record reports about the work it has actually done so far. */
+    private fun progressOf(result: CrawlResponse): String =
+        "pagesFound=${result.pagesFound}, linksDiscovered=${result.linksDiscovered}, " +
+                "seedsSettled=${result.seedStatuses?.size ?: 0}, " +
+                "seedsSkipped=${result.seedStatuses?.count { it.status == "skipped" } ?: 0}"
 }

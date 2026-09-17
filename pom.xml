@@ -537,7 +537,7 @@
                     <reuseForks>true</reuseForks>
                     <!-- Enable byte-buddy-agent. ${jacocoArgLine} is injected by the
                          quality-gate profile's prepare-agent; empty otherwise. -->
-                    <argLine>${jacocoArgLine} -XX:+EnableDynamicAgentLoading -Djdk.net.URLClassPath.disableClassPathURLCheck=true</argLine>
+                    <argLine>${jacocoArgLine} -XX:+EnableDynamicAgentLoading -Djdk.net.URLClassPath.disableClassPathURLCheck=true -Dcritical.cpu.threshold=${critical.cpu.threshold}</argLine>
                     <systemPropertyVariables>
                         <jdk.net.URLClassPath.disableClassPathURLCheck>true</jdk.net.URLClassPath.disableClassPathURLCheck>
                     </systemPropertyVariables>
@@ -737,6 +737,22 @@
         <!-- Populated by the quality-gate profile's JaCoCo prepare-agent; empty
              by default so Surefire's argLine is unaffected when coverage is off. -->
         <jacocoArgLine></jacocoArgLine>
+
+        <!-- The driver pool refuses to create a driver while the system CPU load is
+             over AppSystemInfo.CRITICAL_CPU_THRESHOLD (0.85 by default), and a task
+             that is refused burns its whole 60 s poll timeout before the fetch is
+             retried (see LoadingWebDriverPool.pollDriverInSlices).  A test JVM that
+             drives real browsers is *supposed* to be busy: on a CI runner the suite
+             plus Chrome sit above that threshold for minutes at a time, so the pool
+             cannot grow and every fetch waits for a driver to be returned - measured
+             at 111 s against 53 s for the same test with the guard forced off, and
+             the CI crawl tests run against caps of 4 and 6 minutes.
+
+             Tests measure browser behaviour, not the host's CPU weather, so the
+             guard is off in the test JVM.  Production keeps the 0.85 default; the
+             memory and disk guards still apply to tests.  Override on demand, e.g.
+             -Dcritical.cpu.threshold=0.85 to exercise the guard. -->
+        <critical.cpu.threshold>1.0</critical.cpu.threshold>
 
         <!--  Language  -->
         <javaVersion>25</javaVersion>
