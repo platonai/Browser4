@@ -29,7 +29,7 @@ Describe 'Test-CoworkerDotPath (real Watchers.ps1)' {
         try {
             $f = Join-Path $dir '.hidden.md'
             Set-Content -Path $f -Value 'x' -Encoding UTF8
-            Test-CoworkerDotPath -Item (Get-Item -LiteralPath $f) | Should -BeTrue
+            Test-CoworkerDotPath -Item (Get-Item -Force -LiteralPath $f) | Should -BeTrue
         } finally { Remove-Item -Path $dir -Recurse -Force -ErrorAction SilentlyContinue }
     }
 
@@ -40,7 +40,7 @@ Describe 'Test-CoworkerDotPath (real Watchers.ps1)' {
             New-Item -ItemType Directory -Path $dotDir -Force | Out-Null
             $f = Join-Path $dotDir 'lock.md'
             Set-Content -Path $f -Value 'x' -Encoding UTF8
-            Test-CoworkerDotPath -Item (Get-Item -LiteralPath $f) | Should -BeTrue
+            Test-CoworkerDotPath -Item (Get-Item -Force -LiteralPath $f) | Should -BeTrue
         } finally { Remove-Item -Path $dir -Recurse -Force -ErrorAction SilentlyContinue }
     }
 
@@ -49,7 +49,7 @@ Describe 'Test-CoworkerDotPath (real Watchers.ps1)' {
         try {
             $f = Join-Path $dir 'task.md'
             Set-Content -Path $f -Value 'x' -Encoding UTF8
-            Test-CoworkerDotPath -Item (Get-Item -LiteralPath $f) | Should -BeFalse
+            Test-CoworkerDotPath -Item (Get-Item -Force -LiteralPath $f) | Should -BeFalse
         } finally { Remove-Item -Path $dir -Recurse -Force -ErrorAction SilentlyContinue }
     }
 
@@ -60,8 +60,8 @@ Describe 'Test-CoworkerDotPath (real Watchers.ps1)' {
             $cleanDir = Join-Path $dir 'visible-dir'
             New-Item -ItemType Directory -Path $dotDir -Force | Out-Null
             New-Item -ItemType Directory -Path $cleanDir -Force | Out-Null
-            Test-CoworkerDotPath -Item (Get-Item -LiteralPath $dotDir)   | Should -BeTrue
-            Test-CoworkerDotPath -Item (Get-Item -LiteralPath $cleanDir) | Should -BeFalse
+            Test-CoworkerDotPath -Item (Get-Item -Force -LiteralPath $dotDir)   | Should -BeTrue
+            Test-CoworkerDotPath -Item (Get-Item -Force -LiteralPath $cleanDir) | Should -BeFalse
         } finally { Remove-Item -Path $dir -Recurse -Force -ErrorAction SilentlyContinue }
     }
 
@@ -75,8 +75,8 @@ Describe 'Test-CoworkerDotPath (real Watchers.ps1)' {
             $hidden = Join-Path $dir '.hidden.md'
             Set-Content -Path $normal -Value 'x' -Encoding UTF8
             Set-Content -Path $hidden -Value 'x' -Encoding UTF8
-            Test-CoworkerDotPath -Item (Get-Item -LiteralPath $normal) | Should -BeFalse
-            Test-CoworkerDotPath -Item (Get-Item -LiteralPath $hidden) | Should -BeTrue
+            Test-CoworkerDotPath -Item (Get-Item -Force -LiteralPath $normal) | Should -BeFalse
+            Test-CoworkerDotPath -Item (Get-Item -Force -LiteralPath $hidden) | Should -BeTrue
         } finally { Remove-Item -Path $dir -Recurse -Force -ErrorAction SilentlyContinue }
     }
 
@@ -90,8 +90,8 @@ Describe 'Test-CoworkerDotPath (real Watchers.ps1)' {
             $normal = Join-Path $dir 'task.md'
             Set-Content -Path $hidden -Value 'x' -Encoding UTF8
             Set-Content -Path $normal -Value 'x' -Encoding UTF8
-            Test-CoworkerDotPath -Item (Get-Item -LiteralPath $hidden) | Should -BeTrue
-            Test-CoworkerDotPath -Item (Get-Item -LiteralPath $normal) | Should -BeFalse
+            Test-CoworkerDotPath -Item (Get-Item -Force -LiteralPath $hidden) | Should -BeTrue
+            Test-CoworkerDotPath -Item (Get-Item -Force -LiteralPath $normal) | Should -BeFalse
         } finally { Remove-Item -Path $dir -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
@@ -104,10 +104,10 @@ Describe 'Test-CoworkerIgnoredFile / Test-CoworkerPendingFile (real Watchers.ps1
             $task = Join-Path $dir 'task.md'
             [System.IO.File]::WriteAllBytes($keep, @())
             Set-Content -Path $task -Value 'x' -Encoding UTF8
-            Test-CoworkerIgnoredFile -Item (Get-Item -LiteralPath $keep) | Should -BeTrue
-            Test-CoworkerIgnoredFile -Item (Get-Item -LiteralPath $task) | Should -BeFalse
-            Test-CoworkerPendingFile   -Item (Get-Item -LiteralPath $keep) | Should -BeFalse
-            Test-CoworkerPendingFile   -Item (Get-Item -LiteralPath $task) | Should -BeTrue
+            Test-CoworkerIgnoredFile -Item (Get-Item -Force -LiteralPath $keep) | Should -BeTrue
+            Test-CoworkerIgnoredFile -Item (Get-Item -Force -LiteralPath $task) | Should -BeFalse
+            Test-CoworkerPendingFile   -Item (Get-Item -Force -LiteralPath $keep) | Should -BeFalse
+            Test-CoworkerPendingFile   -Item (Get-Item -Force -LiteralPath $task) | Should -BeTrue
         } finally { Remove-Item -Path $dir -Recurse -Force -ErrorAction SilentlyContinue }
     }
 
@@ -126,10 +126,10 @@ Describe 'Test-CoworkerIgnoredFile / Test-CoworkerPendingFile (real Watchers.ps1
 
             # Check the dot entries FIRST (alphabetical/enumeration order) so
             # the old cache-poisoning bug would have hidden real-task.md.
-            Test-CoworkerIgnoredFile -Item (Get-Item -LiteralPath $dotFile) | Should -BeTrue
-            Test-CoworkerIgnoredFile -Item (Get-Item -LiteralPath $keep)    | Should -BeTrue
-            Test-CoworkerIgnoredFile -Item (Get-Item -LiteralPath (Join-Path $dotDir 'inner.md')) | Should -BeTrue
-            Test-CoworkerIgnoredFile -Item (Get-Item -LiteralPath $task)    | Should -BeFalse
+            Test-CoworkerIgnoredFile -Item (Get-Item -Force -LiteralPath $dotFile) | Should -BeTrue
+            Test-CoworkerIgnoredFile -Item (Get-Item -Force -LiteralPath $keep)    | Should -BeTrue
+            Test-CoworkerIgnoredFile -Item (Get-Item -Force -LiteralPath (Join-Path $dotDir 'inner.md')) | Should -BeTrue
+            Test-CoworkerIgnoredFile -Item (Get-Item -Force -LiteralPath $task)    | Should -BeFalse
         } finally { Remove-Item -Path $dir -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
@@ -162,7 +162,13 @@ Describe 'Recursive stage scan (engineer.ps1 1ready expression)' {
                 Where-Object { -not (Test-CoworkerIgnoredFile -Item $_) })
 
             $names = @($files | ForEach-Object { $_.FullName.Substring($ready.Length + 1) })
-            ($names | Sort-Object) -join '|' | Should -BeExactly '2026\0905\b-issues.issues.md|2026\0905\deep\c-deep-task.md|a-root-task.md' -Because 'every real task at any depth is found and every dot entry is skipped'
+            # Compare with forward slashes. Join-Path above is handed the literal
+            # '2026\0905' and PowerShell normalizes it to the platform separator,
+            # so the expectation must not hardcode Windows backslashes — on Linux
+            # the real names come back as '2026/0905/...' and the assertion failed
+            # on the separator alone.
+            ($names | Sort-Object) -join '|' -replace '\\', '/' |
+                Should -BeExactly '2026/0905/b-issues.issues.md|2026/0905/deep/c-deep-task.md|a-root-task.md' -Because 'every real task at any depth is found and every dot entry is skipped'
         } finally { Remove-Item -Path $dir -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
