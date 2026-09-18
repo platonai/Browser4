@@ -15,6 +15,41 @@ cd cli/browser4-cli && cargo run --quiet -- <command>
 
 The backend server starts automatically in dev mode. Build the CLI with `cargo build` (debug) or `cargo build --release` (optimized). Add `--quiet` to `cargo run` to suppress "Finished" / "Running" build-status lines.
 
+### Several checkouts at once (development mode)
+
+Running the CLI from inside a Browser4 checkout (a directory with `ROOT.md` +
+`pom.xml`) puts it in **development mode**, which keeps parallel checkouts —
+`Browser4-4.13`, `Browser4-4.14`, git worktrees — from fighting over one port
+and one state directory:
+
+| | Installed / production | Development (source checkout) |
+|---|---|---|
+| Backend port | `8182` | first free port from **`8282`** upward (8282, 8283, …) |
+| CLI state, sessions, config | `~/.browser4/` | `~/.browser4/workspaces/<checkout>-<hash>/` |
+| Backend app data | `~/.browser4` | `…/app-data/` — browser profiles (`--user-data-dir`), H2/WebDB data, agent memory |
+| Browser prototype | `~/.browser4/browser/chrome/prototype` | linked (junction/symlink) to the global prototype — shared seed state for `SEQUENTIAL`/`TEMPORARY` contexts |
+| LLM config (`config/conf-enabled`) | `~/.browser4/config` | linked (junction/symlink) into the workspace app data — still one source of truth |
+| AOT cache | shared | per checkout (no cross-checkout invalidation) |
+| `browser4-cli stop` | stops every managed backend | stops **only this checkout's** backends (`kill-all` stays global) |
+
+So with 4.13 already serving on 8282, a command in 4.14 picks 8283
+automatically; each checkout remembers its own port, and both can run and be
+tested side by side — including **two headed browsers at once**, because each
+backend owns its app data root and therefore its own Chrome profile directory
+(the default `browser.profile.mode=DEFAULT` profile is per workspace in
+development mode). Precedence for the server URL is unchanged:
+
+```
+--server / BROWSER4_CLI_SERVER  >  config set server  >  this checkout's dev port
+```
+
+Escape hatches: `--server <url>` (or `config set server <url>`) targets a
+specific backend, `BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1` disables development mode
+entirely (production ports and the flat `~/.browser4` state), and
+`BROWSER4_CLI_STATE_DIR=<dir>` pins one shared state directory. `browser4-cli
+status` prints the workspace app data root in use; the backend keeps using the
+shared `~/.browser4` if that root cannot be prepared (the CLI warns and says so).
+
 ## Commands
 
 ### Browser sessions
@@ -45,7 +80,7 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 | `press <key> [ref]` | Press a key on the focused element or an optional target ref. `--verify`, `--follow` (detect new tabs) |
 | `key <key> [ref]` | Alias of `press` (agent-browser compatibility) |
 | `keyboard <key> [ref]` | Alias of `press` (agent-browser compatibility) |
-| `type <text> [ref]` | Type text into the focused element or an optional target ref |
+| `type <text> [ref]` | Type text into the focused element or an optional target ref. `--method auto\|chars\|exec` (needs a target ref): `auto` (default) per-character for short text, one `execCommand('insertText')` bulk insert for long/multi-line text; `chars`/`exec` force either mode |
 | `keydown <key>` | Press a key down on the keyboard |
 | `keyup <key>` | Press a key up on the keyboard |
 | `fill <ref> <text>` | Fill text into an editable element |
@@ -68,7 +103,7 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 
 | Command | Description |
 |---|---|
-| `snapshot` | Capture page snapshot to obtain element refs. Supports `--boxes`, `-i`/`--interactive`, `-u`/`--urls`, `-c`/`--compact`, `-d`/`--depth <n>`, `-s`/`--selector <sel>`, `--raw` |
+| `snapshot` | Capture page snapshot to obtain element refs. Supports `--boxes`, `-i`/`--interactive`, `-u`/`--urls`, `-c`/`--compact`, `-d`/`--depth <n>`, `-s`/`--selector <sel>`, `--raw`, `--stdout`. `--stdout`/`--raw` paginate large trees at 2000 lines/page by default (truncated output appends a hint to stdout when piped; footer goes to stderr) — use `--page N`, `--page-size N`, or `--all`/`--page-size 0` for the complete tree |
 | `get <mode> <selector> [name]` | Extract data from a page element (text, html, box, styles, property, attr) |
 | `eval [expression] [ref]` | Evaluate JavaScript expression on page or element |
 | `wait [target]` | Wait for a condition: element, time, text, URL pattern, page load, or JS expression |
@@ -86,6 +121,7 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 | `errors` | List console errors only (alias of `console --min-level error`) |
 | `resize <w> <h>` | Resize the browser window |
 | `delete-data` | Delete session data |
+| `upload <ref> <file> [file...]` | Upload one or more local files to a page file input (target must be an `<input type="file">`; paths must be readable by the browser process — remote backend: resolved on the backend host; supports multi-file and `--no-snapshot`) |
 | `batch [command...]` | Execute multiple commands in one invocation |
 
 ### Save as
@@ -104,6 +140,19 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 | `window new [url]` | Create a new browser window (equivalent to a new tab) |
 | `tab-close [index]` | Close a browser tab. Use `--guid <guid>` for GUID-based close |
 | `tab-select <index>` | Select a browser tab. Use `--guid <guid>` for GUID-based select |
+
+### Frames (iframes)
+
+| Command | Description |
+|---|---|
+| `frames` | List the page's frame tree: names, urls, depth, and the active frame |
+| `frame <target>` | Scope subsequent element commands (`click`, `fill`, `type`, `is visible`, …) into an iframe. Target forms: snapshot element ref of the iframe (`e12`, `backend:123`), iframe CSS selector (`#pay-frame`), frame name, frame id, or URL fragment from `frames` |
+| `frame main` | Return to the main document (also automatic after navigation) |
+
+Same-origin iframes are fully supported; cross-origin iframes (out-of-process
+frames) are not supported in this version — `frames` cannot see them and
+`frame` on one fails with an actionable error. See
+[`skills/browser4-cli/references/frames.md`](../../skills/browser4-cli/references/frames.md).
 
 ### DevTools
 
@@ -187,10 +236,17 @@ extensions) are also possible via `open --profile` or PROTOTYPE mode. See
 | Command | Description |
 |---|---|
 | `swarm create` | Create a swarm scrape session with parallel browser contexts |
-| `swarm submit [url]` | Submit URL(s) or X-SQL payloads as scrape jobs |
+| `swarm submit [url]` | Submit URL(s) or X-SQL payloads as scrape jobs (`--seed-file`, `--load-options`, `--batch-id`, `--wait`) |
 | `swarm query <url>` | Submit an X-SQL query to extract structured data from a loaded webpage |
 | `swarm status <id>` | Check the status of a scrape job |
 | `swarm result <id>` | Get the result of a completed scrape job |
+| `swarm list` | List tracked tasks with STARTED / FINISHED / DURATION (`--batch <id>`, `--status <state>`, `--json`) |
+
+Every `swarm submit` / `swarm query` invocation is a **batch**: the CLI mints a
+batch id (or takes `--batch-id <id>`), stamps it on every task and prints it, so
+the submission can be inspected afterwards with `swarm list --batch <id>` — e.g.
+`swarm list --batch <id> --status failed --json` prints exactly the URLs that
+failed, with each task's `duration_ms`.
 
 ### Crawl
 
@@ -198,6 +254,16 @@ extensions) are also possible via `open --profile` or PROTOTYPE mode. See
 |---|---|
 | `crawl [url]` | Crawl from a URL or seed file, with optional X-SQL extraction |
 | `crawl list` | List all tracked crawl tasks and their status |
+
+`crawl` collects its units (one per seed URL) concurrently by default — each unit
+runs on its own browser tab leased from the driver pool. Use `--parallel <n>` to
+bound how many run at once (`--parallel 1` restores the strictly sequential
+crawl), and read the completion report to see the budget used and the peak number
+of units that actually overlapped:
+
+```bash
+browser4-cli crawl --seed-file urls.txt --depth 0 --parallel 8 --refresh
+```
 
 ### Snapshot
 
@@ -268,6 +334,7 @@ Keys: `server` (default Browser4 URL), `timeout` (seconds, positive integer), `p
 | Option | Description |
 |---|---|
 | `--help [command]` | Print help (all commands, or detailed help for a specific command) |
+| `--help --examples` | Print the runnable tool examples for a command, fetched from the backend's tool specs (falls back to a one-line notice when the backend is unreachable) |
 | `--version` | Print version |
 | `--json` | Emit machine-parseable JSON to stdout |
 | `-q, --quiet` | Suppress normal output, only show errors |
@@ -296,7 +363,7 @@ Need to process multiple pages?
 ├─ Single list page? → htmlsnapshot query with DOM_LOAD_AND_SELECT
 ├─ List of known URLs? → crawl --seed-file urls.txt --depth 0 --sql @query.sql
 ├─ Need parallel execution? → swarm create → swarm query --seed-file ...
-└─ Repeated monitoring? → loop -- eval "..." -i 3600
+└─ Repeated monitoring? → loop -i 3600 -- eval "..."
 ```
 
 ### How to Turn HTML into Spreadsheets — Zero Tokens

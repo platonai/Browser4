@@ -136,4 +136,55 @@ class AbstractPulsarSessionTest {
         PulsarSettings.parse(emptyMap()).overrideConfiguration(sessionConfig)
         assertNull(sessionConfig[BROWSER_PROFILE_PATH])
     }
+
+    // ------------------------------------------------------------------
+    // Launch profile source: an explicit `open --profile <path>` must win
+    // over the session's computed context dir, otherwise the flag is
+    // silently ignored (named sessions always carry a context dir).
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `explicit profilePath wins over the session context dir`() {
+        assertEquals(
+            AbstractPulsarSession.LaunchProfileSource.PROFILE_PATH,
+            AbstractPulsarSession.resolveLaunchProfileSource(
+                contextDir = "D:/tmp/browser4/context/groups/named/PULSAR_CHROME/cx.1",
+                profilePath = "D:/profiles/chrome-system-copy",
+            )
+        )
+    }
+
+    @Test
+    fun `context dir is used when no profile path was requested`() {
+        assertEquals(
+            AbstractPulsarSession.LaunchProfileSource.CONTEXT_DIR,
+            AbstractPulsarSession.resolveLaunchProfileSource(
+                contextDir = "D:/tmp/browser4/context/groups/named/PULSAR_CHROME/cx.1",
+                profilePath = null,
+            )
+        )
+    }
+
+    @Test
+    fun `no launch profile source when neither value is set`() {
+        assertEquals(
+            AbstractPulsarSession.LaunchProfileSource.NONE,
+            AbstractPulsarSession.resolveLaunchProfileSource(contextDir = null, profilePath = null)
+        )
+    }
+
+    @Test
+    fun `blank launch profile values are treated as absent`() {
+        assertEquals(
+            AbstractPulsarSession.LaunchProfileSource.CONTEXT_DIR,
+            AbstractPulsarSession.resolveLaunchProfileSource(
+                contextDir = "D:/tmp/context",
+                profilePath = "   ",
+            )
+        )
+        assertEquals(
+            AbstractPulsarSession.LaunchProfileSource.NONE,
+            AbstractPulsarSession.resolveLaunchProfileSource(contextDir = "  ", profilePath = "")
+        )
+    }
 }

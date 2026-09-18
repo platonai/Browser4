@@ -15,6 +15,7 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.impl
 
+import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.api.AbstractWebDriver
 import ai.platon.pulsar.api.DomSettlePolicy
@@ -314,12 +315,25 @@ open class InteractiveBrowserEmulator(
         } catch (e: WebDriverException) {
             if (e.cause is java.net.ConnectException) {
                 logger.warn("Web driver is disconnected - {}", e.brief())
+            } else if (e is TabOriginMismatchException) {
+                // The guard already logged the refusal with the document details
+                logger.warn("[Handled] {} | driver #{} will be retired", e.brief(), driver.id)
             } else {
                 logger.warn("[Unexpected] WebDriverException", e)
             }
 
             driver.retire()
             exception = e
+            // A snapshot-origin refusal is a momentary, local conflict: another fetch advanced
+            // the tab between this fetch's navigation and its snapshot. The refused driver is
+            // retired here and closed when it is returned to the pool, so the retry runs on a
+            // fresh driver/tab, and the conflict has usually cleared by the time the other
+            // fetch finishes its own document. The default retry policy, however, is a remote
+            // failure backoff (30-45s per retry, see AbstractTaskRunner.retryDelayPolicy), and
+            // three retries of it span two minutes - longer than any caller waits for a task -
+            // so a fetch refused more than once could only exhaust its retry budget (408) while
+            // the caller watched it retry. Come back promptly instead.
+            crawlRetryDelayFor(e)?.let { task.page.retryDelay = it }
             response = ForwardingResponse.crawlRetry(task.page, e)
         } catch (e: TimeoutCancellationException) {
             logger.warn("[Timeout] Coroutine was cancelled, thrown by [withTimeout] | {}", e.stringify())
@@ -442,8 +456,26 @@ open class InteractiveBrowserEmulator(
             activeDOMUrls = interactResult.activeDOMMessage?.urls
             activeDomMetadata = interactResult.activeDOMMessage?.metadata
         }
-        // TODO: if the page is HTML, use driver.outerHTML(), otherwise, use driver.pageSource() and modify driver.pageSource() to return the actual content for non-HTML resources
-        val content = driver.pageSource()
+
+        // Per-fetch snapshot guard: read the document origin and its content in
+        // ONE CDP evaluation, so the content recorded and stored below is the
+        // content of the document this navigation produced.  Verifying the tab
+        // origin and reading the page source in two separate evaluations leaves
+        // a window in which a concurrent fetch on a shared tab can advance the
+        // document — the fetch would silently record and store another page's
+        // title and content under this URL.  A snapshot whose origin is an
+        // earlier fetch's document fails the fetch loudly (driver retired +
+        // crawl retry) instead of recording or storing anything.  In capture
+        // mode the tab may legitimately show a document navigated to outside
+        // this call — there, and whenever the snapshot cannot be produced, the
+        // page source is read as before, without an origin check.
+        var content: String? = null
+        if (!capture) {
+            content = captureNavigationSnapshot(navigateTask, driver, finalProtocolStatus)
+        }
+        if (content == null) {
+            content = driver.pageSource()
+        }
         // Note: originalContentLength is already set before willComputeFeature event, (if not removed by someone)
         navigateTask.originalContentLength = content?.length ?: 0
         navigateTask.pageSource = preprocessPageContent(content)
@@ -453,6 +485,183 @@ open class InteractiveBrowserEmulator(
             responseHandler.onResponseCreated(fetchTask, driver, it)
         }
     }
+
+    /**
+     * Capture the document this fetch produced — origin and content together —
+     * and return its serialized HTML only when the snapshot's origin is the
+     * document this navigation produced, or an unambiguous redirect of it.
+     * A local-file fetch is recognised through the driver's own `file://`
+     * translation of the requested path (see [UrlDocumentMatcher.referToSameLocalFile]).
+     *
+     * Content crossing (page N recorded with page M's title/contentLength)
+     * happens when a fetch captures the document of an earlier fetch that is
+     * still showing in a shared tab.  Reading the origin and the content in a
+     * single CDP evaluation closes the window between a separate origin check
+     * and a separate content read, so the returned HTML can never belong to a
+     * document that replaced this navigation's document in between.
+     *
+     * Returns null — and the caller falls back to the driver's own page
+     * source, exactly as before this guard existed — in every ambiguous
+     * direction: non-successful fetches (their errors are handled downstream),
+     * non-navigable targets, unreadable snapshots, and blank or non-navigable
+     * origins.  The one loud direction: when the snapshot shows a different
+     * HTTP(S) document and no main-document request was issued for this
+     * navigation, the document belongs to an earlier fetch and recording it
+     * would silently attribute its title and content to this URL — a
+     * [TabOriginMismatchException] (a [WebDriverException]) is thrown instead
+     * (driver retired + crawl retry, promptly, see
+     * [TAB_ORIGIN_MISMATCH_RETRY_DELAY]), so no metadata is recorded and
+     * nothing is written to the store under the wrong URL.
+     */
+    @Throws(WebDriverException::class)
+    private suspend fun captureNavigationSnapshot(
+        navigateTask: NavigateTask,
+        driver: WebDriver,
+        protocolStatus: ProtocolStatus,
+    ): String? {
+        // Non-successful fetches carry their own error handling downstream; the
+        // snapshot guard only matters when a fetch that looks successful would
+        // otherwise capture foreign content.
+        if (!protocolStatus.isSuccess) return null
+        val taskUrl = navigateTask.url ?: return null
+        if (!isNavigablePageUrl(taskUrl)) return null
+
+        // The snapshot pairs document.URL with the serialized content read in
+        // the same evaluation, so both always describe the same document.
+        val snapshot = runCatching { atomicPageSnapshot(driver) }.getOrNull()
+            ?: return null
+
+        val committedUrl = snapshot.origin.trim()
+        if (committedUrl.isEmpty() || committedUrl == "null") return null
+        if (urlsReferToSameDocument(committedUrl, taskUrl)) return snapshot.html
+        // A local-file fetch is served by the driver's own translation to the
+        // file:// URL of the requested path, so the committed document matches
+        // it as a URL only through that translation: no redirect, no
+        // main-document request.  Accept the snapshot when the committed
+        // document is exactly the file this fetch encoded.
+        if (urlsReferToSameLocalFile(committedUrl, taskUrl)) {
+            logger.debug(
+                "Snapshot origin verified: shows '{}' for local-file fetch '{}' — the " +
+                    "driver's own file:// translation of the requested path",
+                committedUrl, taskUrl
+            )
+            return snapshot.html
+        }
+        if (!isNavigablePageUrl(committedUrl)) {
+            // The snapshot shows a non-navigable document (e.g. about:blank on a
+            // fresh driver).  Its content is empty or an error page, never
+            // another crawl's content — fail open; zero-length handling applies
+            // downstream.
+            return null
+        }
+
+        // The snapshot shows a different HTTP(S) document than the requested
+        // URL.  Distinguish a redirect committed by this navigation from a tab
+        // that still shows an earlier fetch's document by the network record: a
+        // real commit (redirect included) always fires a main-document request
+        // on the navigation entry this fetch created via driver.navigate(), and
+        // the entry's typed URL is this fetch's URL.  A driver retired by an
+        // earlier fetch and reused keeps its old entry — its typed URL is the
+        // earlier fetch's URL, so it can never be mistaken for this fetch's
+        // redirect.
+        val entry = driver.navigateEntry
+        if (entry.userTypedUrl.isBlank() ||
+            !urlsReferToSameDocument(entry.userTypedUrl, taskUrl)
+        ) {
+            val stale = if (entry.userTypedUrl.isBlank()) {
+                "the driver recorded no navigation for it"
+            } else {
+                "the driver's recorded navigation is '" + entry.userTypedUrl.take(200) +
+                    "', not this fetch's URL"
+            }
+            // Recording the snapshot would silently attribute another
+            // document's title and content to this URL; fail loudly instead.
+            val message = "Tab origin mismatch: refusing to capture '" +
+                committedUrl.take(200) + "' for fetch '" + taskUrl.take(200) +
+                "' — the snapshot shows an earlier fetch's document and " + stale
+            logger.warn(message)
+            throw TabOriginMismatchException(message, driver = driver)
+        }
+        if (entry.mainRequestId.isNotBlank() ||
+            urlsReferToSamePageIgnoringQuery(committedUrl, taskUrl)
+        ) {
+            logger.debug(
+                "Snapshot origin verified: shows '{}' for fetch '{}' — a main-document " +
+                "request was issued for this navigation (redirect or committed error page)",
+                committedUrl, taskUrl
+            )
+            return snapshot.html
+        }
+
+        // This fetch's navigation entry exists but no main-document request was
+        // ever issued for it, and the snapshot shows another HTTP(S) document —
+        // it belongs to an earlier fetch.  Recording its content would silently
+        // attribute that document's title and content to this URL; fail loudly
+        // instead.
+        val message = "Tab origin mismatch: refusing to capture '" +
+            committedUrl.take(200) + "' for fetch '" + taskUrl.take(200) +
+            "' — the snapshot still shows an earlier fetch's document and no " +
+            "main-document request was issued for this navigation"
+        logger.warn(message)
+        throw TabOriginMismatchException(message, driver = driver)
+    }
+
+    /** A single document's origin URL and serialized content, read in one evaluation. */
+    private data class PageSnapshot(val origin: String, val html: String)
+
+    /**
+     * Read document.URL and the serialized document in a single CDP
+     * evaluation.  Both values come from the same execution context at the
+     * same instant, so the pair always describes one document — never the URL
+     * of one fetch's document and the content of another's.  The content is
+     * serialized exactly as [pageSource] does (annotated HTML via
+     * `__pulsar_utils__`, plain outerHTML when the utils are not injected).
+     */
+    private suspend fun atomicPageSnapshot(driver: WebDriver): PageSnapshot {
+        // The marker is escaped in the JS source (raw control characters are
+        // not allowed in JS string literals) and unescaped in the result.
+        val jsMarker = "\u0001"
+        val marker = ""
+        val js = "document.URL + '$jsMarker' + (" +
+            "window.__pulsar_utils__ && window.__pulsar_utils__.getAnnotatedHTML ? " +
+            "window.__pulsar_utils__.getAnnotatedHTML() : " +
+            "(document.documentElement ? document.documentElement.outerHTML : ''))"
+        val raw = driver.evaluate(js)
+        if (raw == null) return PageSnapshot("", "")
+        val parts = raw.toString().split(marker, limit = 2)
+        return PageSnapshot(parts[0], parts.getOrElse(1) { "" })
+    }
+
+    /** Whether [url] is a plain navigable page URL the origin guard applies to. */
+    private fun isNavigablePageUrl(url: String): Boolean {
+        return url.startsWith("http://") || url.startsWith("https://") || url.startsWith("file://")
+    }
+
+    /**
+     * Compare two URLs as referring to the same document (query included).
+     *
+     * @see UrlDocumentMatcher.referToSameDocument
+     */
+    private fun urlsReferToSameDocument(a: String, b: String): Boolean =
+        UrlDocumentMatcher.referToSameDocument(a, b)
+
+    /**
+     * Compare two URLs as referring to the same page, ignoring the query string
+     * (variant/tracking redirects such as `?psc=1` -> `?th=1`).
+     *
+     * @see UrlDocumentMatcher.referToSamePageIgnoringQuery
+     */
+    private fun urlsReferToSamePageIgnoringQuery(a: String, b: String): Boolean =
+        UrlDocumentMatcher.referToSamePageIgnoringQuery(a, b)
+
+    /**
+     * Whether the committed document is the local file a local-file fetch asked
+     * for, served by the driver's own `file://` translation of the URL.
+     *
+     * @see UrlDocumentMatcher.referToSameLocalFile
+     */
+    private fun urlsReferToSameLocalFile(committedUrl: String, taskUrl: String): Boolean =
+        UrlDocumentMatcher.referToSameLocalFile(committedUrl, taskUrl)
 
     @Throws(NavigateTaskCancellationException::class, WebDriverException::class)
     private suspend fun navigateAndInteract(
@@ -522,25 +731,34 @@ open class InteractiveBrowserEmulator(
         val page = task.page
         require(driver is AbstractWebDriver)
 
+        // The helpers below dereference the Browser4 runtime (__pulsar_utils__),
+        // which a driver registers on its tab during navigation.  A tab opened
+        // by tab-new and bound to this session afterwards never went through
+        // that registration, so the runtime can be missing here.  Re-inject it
+        // on demand (bounded); when that is not possible, degrade gracefully
+        // instead of letting a ReferenceError break capture for the whole
+        // session (until the session is closed, as reported on tab-new).
+        val hasPulsarUtils = result.state.isContinue && ensurePulsarUtils(driver, page)
+
         // Store capture meta links on the JS side so serializeAnnotatedHTML()
         // can inject them into <head> during pageSource() serialization later.
         // This avoids DOM mutation — the <link> elements appear only in the
         // serialized output, not in the live page.
-        if (result.state.isContinue) {
+        if (hasPulsarUtils) {
             updateCaptureMetaLinks(page, driver)
         }
 
         // Fast content-length estimation using native outerHTML.
         // Returns only an integer, avoiding the overhead of transferring
         // the full HTML string over the wire for a simple length check.
-        task.originalContentLength = getOriginalContentLength(driver)
+        task.originalContentLength = if (hasPulsarUtils) getOriginalContentLength(driver) else 0
 
         // Compute document features so that vi (visual-information) attributes are
         // injected into the DOM.  These attributes contain bounding-box data
         // ("x y w h") and are required by downstream consumers such as
         // html_snapshot_capture (computeInteractiveWeights) and html_snapshot_inspect
         // (PowerCSS :expr() selectors).
-        if (result.state.isContinue) {
+        if (hasPulsarUtils) {
             val interactTask = InteractTask(task, settings, driver)
             runCatching { computeDocumentFeatures(interactTask, result) }
                 .onFailure { logger.warn("Failed to compute document features during capture: {}", it.message) }
@@ -597,7 +815,16 @@ open class InteractiveBrowserEmulator(
             // can inject them into <head> during pageSource() serialization later.
             // This avoids DOM mutation — the <link> elements appear only in the
             // serialized output, not in the live page.
-            updateCaptureMetaLinks(page, driver)
+            //
+            // __pulsar_utils__ can still be missing here even after
+            // waitForJavascriptInjected timed out — a tab-new target whose
+            // document committed before the runtime was registered never gets
+            // re-injected (no frame-navigated event follows).  Re-inject on
+            // demand (bounded) instead of throwing a ReferenceError that
+            // breaks capture for the whole session.
+            if (ensurePulsarUtils(driver, page)) {
+                updateCaptureMetaLinks(page, driver)
+            }
 
             emit1(EmulateEvents.documentSteady, page, driver)
         }
@@ -605,7 +832,7 @@ open class InteractiveBrowserEmulator(
         // Fast content-length estimation using native outerHTML.
         // Returns only an integer, avoiding the overhead of transferring
         // the full HTML string over the wire for a simple length check.
-        task.navigateTask.originalContentLength = getOriginalContentLength(driver)
+        task.navigateTask.originalContentLength = runCatching { getOriginalContentLength(driver) }.getOrDefault(0)
         if (result.state.isContinue) {
             emit1(EmulateEvents.willComputeFeature, page, driver)
 
@@ -666,6 +893,56 @@ open class InteractiveBrowserEmulator(
         // Ensure __pulsar_utils__ is defined. For some type of pages, the script can not be injected.
         val utils = driver.evaluate("typeof($PULSAR_UTILS_FUNCTION)")
         return utils == "function"
+    }
+
+    /**
+     * Ensure the Browser4 dual-world runtime (__pulsar_utils__) is available on
+     * the page of [driver] before capture helpers dereference it.
+     *
+     * The runtime is registered by the driver that navigated the tab.  When the
+     * session's driver was bound to an already-loaded tab afterwards — a tab
+     * opened by tab-new and switched to, a driver swap, ... — the runtime can
+     * be missing: evaluations then fall back to the main world, where
+     * __pulsar_utils__ never exists, and every helper that dereferences it
+     * (updateCaptureMetaLinks, getOriginalContentLength, computeDocumentFeatures)
+     * throws a ReferenceError that breaks capture until the session is closed.
+     *
+     * This guard performs a bounded driver-side re-injection
+     * (see [Browser4WebDriver.ensurePulsarUtilsInjected]) when the runtime is
+     * absent.  When re-injection is not possible — the driver is not a
+     * [Browser4WebDriver], or the page refuses isolated worlds (non-HTML
+     * resource, internal page) — it reports the problem once and callers must
+     * skip the runtime-dependent helpers instead of dereferencing the missing
+     * runtime.
+     *
+     * @return true when __pulsar_utils__ is available for capture afterwards.
+     */
+    protected open suspend fun ensurePulsarUtils(driver: WebDriver, page: WebPage): Boolean {
+        // typeof() reports "undefined" instead of throwing when the runtime is
+        // missing, so the probe itself never raises.
+        val present = runCatching { isScriptInjected(driver) }.getOrDefault(false)
+        if (present) {
+            return true
+        }
+
+        val recovered = (driver as? Browser4WebDriver)?.let {
+            runCatching { it.ensurePulsarUtilsInjected() }.getOrDefault(false)
+        } ?: false
+
+        if (!recovered) {
+            val reason = if (driver is Browser4WebDriver) {
+                "re-injection failed"
+            } else {
+                "the driver does not support re-injection"
+            }
+            logger.warn(
+                "The Browser4 runtime (__pulsar_utils__) is not available on this page ($reason); " +
+                    "capture continues without the runtime-dependent helpers. url={}",
+                page.href ?: page.url
+            )
+        }
+
+        return recovered
     }
 
     /**

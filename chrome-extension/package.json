@@ -1,6 +1,6 @@
 {
   "name": "@browser4/extension",
-  "version": "0.0.1",
+  "version": "0.2.2",
   "description": "Browser4 Browser Extension",
   "private": true,
   "repository": {
@@ -21,10 +21,12 @@
     "test:watch": "vitest"
   },
   "devDependencies": {
+    "@types/chrome": "^0.2.9",
     "@vitejs/plugin-react": "^4.7.0",
     "jsdom": "^25.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "typescript": "^5.9.3",
     "vite": "^6.4.3",
     "vite-plugin-static-copy": "^3.4.0",
     "vitest": "^3.2.7"

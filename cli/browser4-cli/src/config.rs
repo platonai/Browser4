@@ -51,6 +51,11 @@ pub struct ConfigStore {
 }
 
 /// Resolve the path to the config file.
+///
+/// Lives in the *effective* state dir, so in development mode each checkout
+/// keeps its own `config.json` next to its own sessions and ports — a
+/// workspace-scoped `config set server …` cannot leak into a neighbour.  Set
+/// `BROWSER4_CLI_STATE_DIR` to share one config across checkouts.
 pub fn config_path() -> PathBuf {
     resolve_default_state_dir().join("config.json")
 }

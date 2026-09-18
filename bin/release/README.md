@@ -95,10 +95,13 @@ checks and previews the tag and release notes; it never creates or pushes anythi
   and confirm the current version is the next patch after the last GitHub release.
   Warns (and, in `-Apply` mode, asks for confirmation) if issues are found.
 - **Main-branch guard**: main is the single release source — the tag must be
-  created from the latest `origin/main` commit. The script fetches `origin/main`
-  and warns (asking for confirmation in `-Apply` mode) when `HEAD` is off main;
-  `release.yml` independently hard-fails any release whose tag does not point at
-  the latest main, so the workflow never force-resyncs main to a tag.
+  created from the latest `origin/main` commit. Maintenance releases may also
+  be tagged from the tip of the matching `X.Y.x` branch (e.g. `v4.13.12` →
+  `origin/4.13.x`). The script fetches `origin/main` and warns (asking for
+  confirmation in `-Apply` mode) when `HEAD` is off both; `release.yml`
+  independently hard-fails any release whose tag does not point at the latest
+  main or the matching maintenance branch, so the workflow never
+  force-resyncs main to a tag.
 - Creates and pushes a `v{version}` tag (e.g. `v4.13.0`), which triggers
   the release workflow via the `on.push.tags` trigger.
 - Shows changes since the previous release tag for release notes.
@@ -115,6 +118,14 @@ checks and previews the tag and release notes; it never creates or pushes anythi
   is available. The tag message (What's New + curated sections) is also
   prepended into the GitHub Release body by `release.yml`.
 - Supports `-remote`, `-message`, `-Apply`, `-DryRun`, and `-Agent`.
+- **Non-interactive hosts (CI/automation)**: set `BROWSER4_RELEASE_YES=1`
+  to auto-confirm every interactive prompt (Read-Host throws in
+  NonInteractive PowerShell). Pairs with `monitor-release.ps1 -NoWatch`,
+  which triggers this script in-process — so the same variable covers the
+  whole release run. The release-message prompt auto-skips, producing a
+  lightweight tag unless `-message` is given. The pre-rename name
+  `BROWSER4_RELEASE_ASSUME_YES` is still honoured as a legacy alias (with a
+  migration warning); `BROWSER4_RELEASE_YES` wins when both are set.
 
 ```
 .\bin\release\trigger-release.ps1                             # dry run (preview)
@@ -134,7 +145,13 @@ actually trigger and monitor.
 
 - Calls `trigger-release.ps1` to create and push the release tag (in `-Apply` mode
   you will be prompted for confirmations, just as with `trigger-release.ps1 -Apply` directly).
-- Captures the tag name and locates the triggered Release workflow run.
+- Captures the tag name and locates the triggered Release workflow run. The run is
+  identified as **the one this push created**: the workflow's existing run ids are
+  recorded before the tag is pushed, so older runs that share the tag (a re-pushed
+  or moved tag, a re-release) can never be mistaken for the new one — otherwise a
+  stale, already-completed run's conclusion would be reported as the result of the
+  new release, the post-release bump would be skipped, and a duplicate coworker
+  task would be filed.
 - Streams the workflow logs in real time.
 - Reports the final conclusion (success/failure) and exits with the same code.
 - On **success**, automatically bumps the version to the next patch
@@ -148,6 +165,9 @@ actually trigger and monitor.
 - Supports `-NoWatch` for non-interactive terminals (polls via `gh run list`/`gh run view`).
   The poll loop retries transient `gh` failures (10 attempts) and can be bounded with
   `-MaxMonitorMinutes` (default 0 = unlimited) so a stuck workflow run can't hang forever.
+  On a non-interactive host, also set `BROWSER4_RELEASE_YES=1`: this script
+  invokes `trigger-release.ps1` in-process, and that variable is what makes the
+  trigger's confirmations auto-answer (see the trigger-release section above).
 - Supports `-Apply`, `-DryRun`, `-Agent`, `-SkipVersionBump`, and `-MaxMonitorMinutes`.
 
 ```
@@ -202,9 +222,11 @@ Invoke-Pester .\bin\release\tests\monitor-release.tests.ps1
 1. Ensure all tests pass and your changes are merged into `main`.
 2. Run `check-publish-status.ps1` to verify the current version is published.
 3. Run `node bin/version.mjs bump <major|minor|patch>` to bump the version and commit.
-4. On `main`, run `.\bin\release\trigger-release.ps1 -Apply` to push the tag and start the CI release build.
-   The tag must point at the latest `origin/main` — the script warns if it does
-   not, and `release.yml` aborts the release if the tag is off main.
+4. On `main` (or the matching `X.Y.x` maintenance branch for patch releases),
+   run `.\bin\release\trigger-release.ps1 -Apply` to push the tag and start the CI release build.
+   The tag must point at the latest `origin/main` (or the tip of the matching
+   `X.Y.x` branch) — the script warns if it does not, and `release.yml` aborts
+   the release if the tag is off both.
 5. Wait for CI to build and publish to GitHub Releases.
 6. Run `.\bin\release\monitor-release.ps1 -Apply` (or `node bin/version.mjs bump patch`)
    to bump the version for the next bug-fix cycle. main is never rewritten to

@@ -1,17 +1,29 @@
 package ai.platon.pulsar.rest.mcp.controller
 
-import ai.platon.pulsar.agentic.ExtractResult
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
+import ai.platon.pulsar.agentic.mcp.McpToolNames
 import ai.platon.pulsar.agentic.model.TcException
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
+import ai.platon.pulsar.agentic.observability.ToolMetrics
+import ai.platon.pulsar.agentic.observability.ToolTracing
+import ai.platon.pulsar.agentic.tools.BatchExecutor
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
+import ai.platon.pulsar.agentic.tools.ToolCachePolicy
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
+import ai.platon.pulsar.agentic.tools.ToolErrorMapper
+import ai.platon.pulsar.agentic.tools.ToolInvocationLogger
+import ai.platon.pulsar.agentic.tools.ToolRateLimitPolicy
+import ai.platon.pulsar.agentic.tools.ToolRateLimiter
+import ai.platon.pulsar.agentic.tools.ToolResultCache
+import ai.platon.pulsar.agentic.tools.ToolResultTextRenderer
+import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
+import ai.platon.pulsar.agentic.tools.specs.ToolSpecValidator
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.CodingToolExecutor
 import ai.platon.pulsar.coding.CodingAgentShell
 import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingWorkspace
-import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -25,7 +37,9 @@ import com.fasterxml.jackson.annotation.Nulls
 import com.fasterxml.jackson.databind.node.ArrayNode
 import jakarta.servlet.http.HttpServletResponse
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
+import org.springframework.context.ApplicationContext
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
@@ -56,6 +70,44 @@ data class MCPToolCallResponse(
     @param:JsonSetter(nulls = Nulls.SKIP)
     @param:JsonProperty("isError")
     val isError: Boolean = false,
+    /**
+     * Stable failure code (see `ToolErrorCode`); absent on success. Clients that
+     * predate it simply ignore the field.
+     */
+    @get:JsonProperty("errorCode")
+    @param:JsonSetter(nulls = Nulls.SKIP)
+    @param:JsonProperty("errorCode")
+    val errorCode: String? = null,
+    /**
+     * Typed form of a successful result — the shared task envelope for
+     * long-running tools, or the JSON the tool already returns. Mirrors the MCP
+     * `structuredContent` the standard server sends.
+     */
+    @get:JsonProperty("structuredContent")
+    @param:JsonSetter(nulls = Nulls.SKIP)
+    @param:JsonProperty("structuredContent")
+    val structuredContent: Map<String, Any?>? = null,
+    /**
+     * Milliseconds until the call may be retried; set only on a `RATE_LIMITED`
+     * rejection, and mirrors the `_meta.retryAfterMs` of the standard server.
+     */
+    @get:JsonProperty("retryAfterMs")
+    @param:JsonSetter(nulls = Nulls.SKIP)
+    @param:JsonProperty("retryAfterMs")
+    val retryAfterMs: Long? = null,
+    /**
+     * `true` when the result was served from the result cache, mirroring
+     * `_meta.cached` on the standard server.
+     */
+    @get:JsonProperty("cached")
+    @param:JsonSetter(nulls = Nulls.SKIP)
+    @param:JsonProperty("cached")
+    val cached: Boolean? = null,
+    /** Age of a cached result, in milliseconds. */
+    @get:JsonProperty("cacheAgeMs")
+    @param:JsonSetter(nulls = Nulls.SKIP)
+    @param:JsonProperty("cacheAgeMs")
+    val cacheAgeMs: Long? = null,
     @get:JsonProperty("_pagination")
     @param:JsonProperty("_pagination")
     val pagination: PaginationMeta? = null
@@ -103,9 +155,64 @@ data class PaginationMeta(
 @ConditionalOnBean(PulsarSessionManager::class)
 class MCPToolController(
     private val sessionManager: PulsarSessionManager,
+    /**
+     * Used only to look up the collaborating bean an executor declares as its
+     * `receiverClass` (e.g. `UserCommandExecutor`). Optional so unit tests and
+     * non-Spring embeddings keep working — the lookup then falls back to a
+     * placeholder receiver, which is what those executors expect anyway.
+     */
+    private val applicationContext: ApplicationContext? = null,
+    /**
+     * Shared with the standard MCP server so both channels spend the same tokens
+     * for the same session — a client cannot bypass the limit by switching
+     * channel. Injectable for tests.
+     */
+    private val toolRateLimiter: ToolRateLimiter = ToolRateLimiter.shared,
+    /**
+     * Shared with the standard MCP server, so a read cached by one channel is not
+     * recomputed by the other. Injectable for tests.
+     */
+    private val toolResultCache: ToolResultCache = ToolResultCache.shared,
 ) {
+    /**
+     * Shared receiver resolution — the very same helper backs the standard MCP
+     * server, so a custom-domain tool cannot behave differently per channel.
+     */
+    private val customToolTargets: CustomToolTargets by lazy {
+        CustomToolTargets(
+            sessionManager,
+            beanResolver = { type ->
+                applicationContext?.let { ctx -> runCatching { ctx.getBean(type) }.getOrNull() }
+            },
+        )
+    }
+
+    /** Same validation rules as the standard MCP server (see ToolSpecValidator). */
+    private val validator = ToolSpecValidator.fromSystemProperties()
+
     companion object {
-        private val FRONTEND_TOOL_NAME_ALIASES: Map<String, String> = mapOf(
+        /** Log/metrics channel label for the private dispatcher. */
+        internal const val CHANNEL = "B"
+
+        /**
+         * Arguments addressed to the transport rather than to the tool: they are
+         * consumed here (`sessionId` routes the call, `cache` bypasses the result
+         * cache) and must never reach an executor's argument validation.
+         */
+        internal val CONTROL_ARGS: Set<String> = setOf("cache")
+
+        /** The client-supplied flag that bypasses the result cache for one call. */
+        internal const val CACHE_FLAG = "cache"
+
+        /**
+         * Playwright-MCP style frontend tool name aliases: the names an agent
+         * reaches for first, mapped to the internal tool they stand for.
+         *
+         * The key set is kept in sync with [McpToolNames.frontendAliases] and
+         * asserted by `McpToolAliasParityTest`; visibility is internal so that
+         * test can read it.
+         */
+        internal val FRONTEND_TOOL_NAME_ALIASES: Map<String, String> = mapOf(
             "browser_navigate" to "navigate",
             "browser_snapshot" to "aria_snapshot",
             "browser_navigate_back" to "go_back",
@@ -146,6 +253,9 @@ class MCPToolController(
             "browser_network_unroute" to "network_unroute",
             "browser_har_start" to "har_start",
             "browser_har_stop" to "har_stop",
+            "browser_frame_list" to "frame_list",
+            "browser_frame_switch" to "frame_switch",
+            "browser_frame_main" to "frame_main",
         )
 
         private const val CLEAR_SESSION_STORAGE_SCRIPT = """
@@ -257,6 +367,13 @@ class MCPToolController(
         val y: Double,
     )
 
+    /**
+     * One step of a `command_batch` response.
+     *
+     * The first block of fields is what the Rust CLI has always parsed; the second
+     * block is the shared per-step envelope (`batch_run` uses exactly these). Both
+     * are present so legacy and new clients read the same payload.
+     */
     private data class BatchExecutionResult(
         val index: Int,
         val ok: Boolean,
@@ -269,6 +386,11 @@ class MCPToolController(
         val snapshot: String? = null,
         val screenshot: String? = null,
         val pdf: String? = null,
+        // Shared envelope additions (requirement 12.2).
+        val id: String? = null,
+        val tool: String? = null,
+        val errorCode: String? = null,
+        val cached: Boolean? = null,
     )
 
     private data class BatchExecutionResponse(
@@ -276,6 +398,10 @@ class MCPToolController(
         val failureCount: Int,
         val stoppedOnError: Boolean,
         val results: List<BatchExecutionResult>,
+        /** `true` only when every executed step was served from the result cache. */
+        val cached: Boolean = false,
+        val cachedSteps: Int = 0,
+        val durationMs: Long = 0,
     )
 
     // =========================================================================
@@ -297,10 +423,52 @@ class MCPToolController(
         @RequestBody request: MCPToolCallRequest,
         response: HttpServletResponse
     ): ResponseEntity<MCPToolCallResponse> {
-        addRequestId(response)
+        val requestId = addRequestId(response)
+        val args = request.arguments ?: emptyMap()
+        val sessionId = args["sessionId"]?.toString()
 
-        logger.info("Calling tool: ${request.tool} " + request.arguments?.entries?.joinToString(" ") { "--" + it.key + "=" + it.value })
+        // Same structured logging and metrics as the standard MCP server, so a
+        // call can be followed across both channels by one request id.
+        ToolInvocationLogger.logStart(requestId, CHANNEL, request.tool, sessionId, args)
 
+        val startedAt = System.nanoTime()
+        ToolMetrics.activeToolCallsCount.incrementAndGet()
+        val entity = try {
+            // One span per call, carrying the same facts as the log lines. Tracing is
+            // optional: without the SDK this is a no-op span, never a failure.
+            ToolTracing.withSpan(request.tool, CHANNEL, sessionId) { outcome ->
+                val response = ToolInvocationLogger.withRequestContext(requestId) { dispatchToolCall(request) }
+                outcome.record(response.body?.errorCode?.takeIf { it.isNotBlank() } ?: "OK")
+                response
+            }
+        } catch (e: Throwable) {
+            val durationMs = (System.nanoTime() - startedAt) / 1_000_000
+            ToolMetrics.activeToolCallsCount.decrementAndGet()
+            ToolMetrics.recordToolCall(request.tool, false, durationMs, ToolErrorCode.INTERNAL.wire)
+            ToolInvocationLogger.logFinished(
+                requestId, CHANNEL, request.tool, durationMs, ToolErrorCode.INTERNAL, 0,
+            )
+            throw e
+        }
+
+        val body = entity.body
+        val errorCode = body?.errorCode?.toErrorCode()
+        val durationMs = (System.nanoTime() - startedAt) / 1_000_000
+        ToolMetrics.activeToolCallsCount.decrementAndGet()
+        ToolMetrics.recordToolCall(request.tool, errorCode == null, durationMs, errorCode?.wire)
+        ToolInvocationLogger.logFinished(
+            requestId, CHANNEL, request.tool, durationMs, errorCode,
+            body?.content?.sumOf { it.text.length } ?: 0,
+        )
+        return entity
+    }
+
+    /** The wire code of a failed response, or `null` when it succeeded. */
+    private fun String.toErrorCode(): ToolErrorCode? =
+        takeIf { it.isNotBlank() }?.let { wire -> runCatching { ToolErrorCode.valueOf(wire) }.getOrNull() }
+
+    /** The dispatch table, without the logging/metrics envelope. */
+    private suspend fun dispatchToolCall(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
         return try {
             when (request.tool) {
                 // Session lifecycle tools — remain inline (no session required to call these)
@@ -325,10 +493,17 @@ class MCPToolController(
     /**
      * List available MCP tools.
      *
-     * Tool specs are static (they come from executor class definitions, not session state),
-     * so we cache the result after the first successful enumeration. This avoids creating
-     * and destroying a throwaway session on every probe — which previously caused a
-     * create→launch-browser→close cycle every time the CLI polled this endpoint.
+     * Two segments, cached differently (finding G5):
+     *
+     * - the **static** segment (session lifecycle, frontend aliases, plugin domains)
+     *   comes from executor class definitions, so it is enumerated once and cached —
+     *   that avoided a create-session/launch-browser/close cycle on every CLI probe;
+     * - the **session** segment (the per-agent tab/system tools) depends on a live
+     *   session, so it is merged per request.
+     *
+     * Caching the two together meant the first probe — typically made before any
+     * session existed — froze the list at the static set, and the browser tools
+     * never appeared afterwards.
      */
     @GetMapping("/tools")
     fun listTools(
@@ -336,64 +511,67 @@ class MCPToolController(
     ): ResponseEntity<Any> {
         addRequestId(response)
 
-        // Fast path: return cached tool names if already computed
-        cachedToolNames?.let {
-            return ResponseEntity.ok(mapOf("tools" to it))
+        val tools = linkedSetOf<String>()
+        tools.addAll(staticToolNames())
+        tools.addAll(sessionToolNames())
+        return ResponseEntity.ok(mapOf("tools" to tools.toList()))
+    }
+
+    /** The session-independent tool names, enumerated once. */
+    private fun staticToolNames(): List<String> =
+        cachedToolNames ?: synchronized(this) {
+            cachedToolNames ?: buildStaticToolNames().also { cachedToolNames = it }
         }
 
-        // Slow path: compute tool names under a lock so only one request
-        // initialises the cache.
-        synchronized(this) {
-            cachedToolNames?.let {
-                return ResponseEntity.ok(mapOf("tools" to it))
-            }
+    private fun buildStaticToolNames(): List<String> {
+        val tools = linkedSetOf(
+            // Session management
+            "open_session", "close_session", "list_sessions",
+            "close_all_sessions", "kill_all_sessions", "delete_session_data",
+            "attach_browser", "check_session_ready",
+        )
 
-            val tools = linkedSetOf(
-                // Session management
-                "open_session", "close_session", "list_sessions",
-                "close_all_sessions", "kill_all_sessions", "delete_session_data",
-                "attach_browser", "check_session_ready",
+        // Include every frontend tool alias so the CLI readiness probe
+        // (which checks for "open_session" + "browser_navigate") passes
+        // without creating a throwaway session that would launch Chrome.
+        tools.addAll(FRONTEND_TOOL_NAME_ALIASES.keys)
+
+        // Composite / convenience tools that map to underlying domain tools.
+        // These should always be advertised, even when no session is active.
+        tools.addAll(
+            listOf(
+                "browser_click",
+                "browser_handle_dialog",
+                "browser_tabs",
             )
+        )
 
-            // Include every frontend tool alias so the CLI readiness probe
-            // (which checks for "open_session" + "browser_navigate") passes
-            // without creating a throwaway session that would launch Chrome.
-            tools.addAll(FRONTEND_TOOL_NAME_ALIASES.keys)
-
-            // Composite / convenience tools that map to underlying domain tools.
-            // These should always be advertised, even when no session is active.
-            tools.addAll(
-                listOf(
-                    "browser_click",
-                    "browser_handle_dialog",
-                    "browser_tabs",
-                )
-            )
-
-            // Enumerate tools from plugin-registered executors in CustomToolRegistry.
-            // These include command, crawl, swarm, skill management, and DOM snapshot tools.
-            CustomToolRegistry.instance.getAllExecutors().forEach { executor ->
-                executor.getToolSpecs().keys.forEach { method ->
-                    tools.add(toMcpToolName(executor.domain, method))
-                }
+        // Enumerate tools from plugin-registered executors in CustomToolRegistry.
+        // These include command, crawl, swarm, skill management, and DOM snapshot tools.
+        CustomToolRegistry.instance.getAllExecutors().forEach { executor ->
+            executor.getToolSpecs().keys.forEach { method ->
+                tools.add(toMcpToolName(executor.domain, method))
             }
+        }
+        return tools.toList()
+    }
 
-            val activeSession = sessionManager.getAllSessions().firstOrNull()
-            if (activeSession != null) {
-                // A real session already exists — enrich with per-agent tools.
-                try {
-                    val agent = activeSession.agenticSession.companionAgent as? BasicBrowserAgent
-                    if (agent != null) {
-                        tools.addAll(collectAdvertisedToolNames(agent.agentToolManager.getAllToolSpecs()))
-                    }
-                } catch (_: Exception) {
-                    // Session may be mid-initialisation; the static set is sufficient.
-                }
-            }
-
-            val result = tools.toList()
-            cachedToolNames = result
-            return ResponseEntity.ok(mapOf("tools" to result))
+    /**
+     * The tools a live session adds.
+     *
+     * Read-only: [PulsarSessionManager.getAllSessions] never creates a session, so a
+     * probe on an idle server costs nothing and still returns a complete answer once
+     * the CLI has opened one.
+     */
+    private fun sessionToolNames(): List<String> {
+        val activeSession = sessionManager.getAllSessions().firstOrNull() ?: return emptyList()
+        return try {
+            val agent = activeSession.agenticSession.companionAgent as? BasicBrowserAgent
+                ?: return emptyList()
+            collectAdvertisedToolNames(agent.agentToolManager.getAllToolSpecs()).toList()
+        } catch (_: Exception) {
+            // Session may be mid-initialisation; the static set is sufficient.
+            emptyList()
         }
     }
 
@@ -436,6 +614,8 @@ class MCPToolController(
         val sessionId = requireSessionId(request)
         val deleted = sessionManager.deleteSession(sessionId)
         return if (deleted) {
+            // Whatever that session's reads returned is gone with its page.
+            toolResultCache.invalidateSession(sessionId)
             ResponseEntity.ok(textResponse("Session closed"))
         } else {
             ResponseEntity.ok(errorResponse("Session not found: $sessionId"))
@@ -459,6 +639,15 @@ class MCPToolController(
                 "ownsBrowser" to s.ownsBrowser,
                 "createdAt" to s.createdAt,
                 "lastAccessedAt" to s.lastAccessedAt,
+                // Attach identity: the REQUESTED channel vs the browser that
+                // REALLY connected.  Clients (CLI list/status) use these to
+                // surface wrong-browser attachments instead of showing only
+                // the requested channel.
+                "channel" to (s.attachChannel ?: ""),
+                "browserFamily" to (s.browserIdentity?.family ?: ""),
+                "browserName" to (s.browserIdentity?.name ?: ""),
+                "browserVersion" to (s.browserIdentity?.version ?: ""),
+                "browserUa" to (s.browserIdentity?.rawUa ?: ""),
             )
         }
         val json = pulsarObjectMapper().writeValueAsString(sessions)
@@ -467,11 +656,13 @@ class MCPToolController(
 
     private fun handleCloseAllSessions(): ResponseEntity<MCPToolCallResponse> {
         val count = sessionManager.deleteAllSessions()
+        toolResultCache.clear()
         return ResponseEntity.ok(textResponse("Closed $count session(s)"))
     }
 
     private fun handleKillAllSessions(): ResponseEntity<MCPToolCallResponse> {
         val count = sessionManager.deleteAllSessions()
+        toolResultCache.clear()
         return ResponseEntity.ok(textResponse("Killed $count session(s)"))
     }
 
@@ -540,9 +731,18 @@ class MCPToolController(
             session.sessionId,
             cdpEndpoint ?: "port $cdpPort"
         )
-        return ResponseEntity.ok(
-            textResponse("""{"sessionId":"${session.sessionId}"}""")
+        // Surface the verified browser identity (from /json/version) so the
+        // CLI can print which browser the endpoint really drives instead of
+        // just the requested endpoint/channel.
+        val identity = session.browserIdentity
+        val payload = mapOf(
+            "sessionId" to session.sessionId,
+            "browser" to (identity?.name ?: ""),
+            "browserFamily" to (identity?.family ?: ""),
+            "browserVersion" to (identity?.version ?: ""),
+            "browserUa" to (identity?.rawUa ?: ""),
         )
+        return ResponseEntity.ok(textResponse(pulsarObjectMapper().writeValueAsString(payload)))
     }
 
     /**
@@ -563,15 +763,36 @@ class MCPToolController(
         } else {
             false
         }
-        return ResponseEntity.ok(
-            textResponse("""{"ready":$ready,"healthy":$healthy}""")
+        // Include attach identity so the CLI can report WHICH browser really
+        // connected (and warn when it differs from the requested channel)
+        // right at the ready/polling point.
+        val identity = session?.browserIdentity
+        val payload = mapOf(
+            "ready" to ready,
+            "healthy" to healthy,
+            "channel" to (session?.attachChannel ?: ""),
+            "browserFamily" to (identity?.family ?: ""),
+            "browserName" to (identity?.name ?: ""),
+            "browserVersion" to (identity?.version ?: ""),
+            "browserUa" to (identity?.rawUa ?: ""),
         )
+        return ResponseEntity.ok(textResponse(pulsarObjectMapper().writeValueAsString(payload)))
     }
 
     // =========================================================================
     // Batch command handler
     // =========================================================================
 
+    /**
+     * `command_batch` — the CLI's batch endpoint, now on the shared [BatchExecutor].
+     *
+     * The execution policy, the per-step envelope and the observability are the ones
+     * `batch_run` uses, so a batch behaves identically whichever channel it came
+     * through. The **response keeps the legacy fields** (`index`, `ok`,
+     * `durationMillis`, `text`/`snapshot`/`screenshot`/`pdf`, `error`, plus
+     * `failureCount`/`stoppedOnError`) and adds the shared ones (`id`, `tool`,
+     * `durationMs`, `errorCode`, `cached`), because the Rust CLI parses this payload.
+     */
     private suspend fun handleCommandBatch(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
         val args = request.arguments ?: emptyMap()
         val stepMaps = (args["steps"] as? List<*>)?.mapIndexed { index, step ->
@@ -582,39 +803,63 @@ class MCPToolController(
 
         val bail = args["bail"].toBooleanValue() ?: false
         val currentSessionId = args["sessionId"]?.toString()?.takeIf { it.isNotBlank() }
-        val results = mutableListOf<BatchExecutionResult>()
-        var stoppedOnError = false
+        val concurrency = (args["concurrency"] as? Number)?.toInt() ?: 1
 
-        for ((index, step) in stepMaps) {
-            val startedAt = System.nanoTime()
-            val result = try {
-                executeBatchStep(index, step, currentSessionId)
-            } catch (e: Exception) {
-                BatchExecutionResult(index = index, ok = false, error = e.message ?: "Unknown batch execution error")
-            }
-            val durationMillis = (System.nanoTime() - startedAt) / 1_000_000
+        val steps = stepMaps.map { (index, step) ->
+            val tool = step[MCPConstants.KEY_TOOL]?.toString()?.takeIf { it.isNotBlank() } ?: "unknown"
+            BatchExecutor.BatchStep(index = index, id = tool, tool = tool, args = step)
+        }
 
-            results += result.copy(durationMillis = durationMillis)
-            if (!result.ok && bail) {
-                stoppedOnError = true
-                break
-            }
+        val executor = BatchExecutor(
+            stepRunner = { step -> executeBatchStep(step.index, step.args, currentSessionId) },
+            readOnly = { tool -> isReadOnlyBatchTool(tool) },
+        )
+        val outcome = executor.run(steps, bail, concurrency)
+
+        val results = outcome.steps.map { step ->
+            BatchExecutionResult(
+                index = step.index,
+                ok = step.ok,
+                durationMillis = step.durationMs,
+                text = step.text,
+                error = step.error,
+                id = step.id,
+                tool = step.tool,
+                errorCode = step.errorCode,
+                cached = step.cached.takeIf { it },
+                pageUrl = step.extras["pageUrl"] as? String,
+                pageTitle = step.extras["pageTitle"] as? String,
+                snapshot = step.extras["snapshot"] as? String,
+                screenshot = step.extras["screenshot"] as? String,
+                pdf = step.extras["pdf"] as? String,
+            )
         }
 
         val body = BatchExecutionResponse(
             sessionId = currentSessionId,
-            failureCount = results.count { !it.ok },
-            stoppedOnError = stoppedOnError,
+            failureCount = outcome.failureCount,
+            stoppedOnError = outcome.stoppedOnError,
             results = results,
+            cached = outcome.cached,
+            cachedSteps = outcome.cachedSteps,
+            durationMs = outcome.durationMs,
         )
         return ResponseEntity.ok(textResponse(pulsarObjectMapper().writeValueAsString(body)))
+    }
+
+    /** Whether a legacy batch step may run in parallel with its siblings. */
+    private fun isReadOnlyBatchTool(tool: String): Boolean {
+        val domain = extractDomain(tool)
+        val spec = CustomToolRegistry.instance.get(domain)?.getToolSpecs()?.get(tool.removePrefix("${domain}_"))
+        val method = spec?.method ?: tool
+        return ToolRateLimitPolicy.isReadOnly(method) && spec != null && ToolCachePolicy.ttlMs(spec) != null
     }
 
     private suspend fun executeBatchStep(
         index: Int,
         step: Map<String, Any?>,
         currentSessionId: String?,
-    ): BatchExecutionResult {
+    ): BatchExecutor.BatchStepResult {
         val op = step[MCPConstants.KEY_OP]?.toString()
             ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_OP)
 
@@ -637,7 +882,7 @@ class MCPToolController(
         index: Int,
         step: Map<String, Any?>,
         currentSessionId: String?
-    ): BatchExecutionResult {
+    ): BatchExecutor.BatchStepResult {
         val sessionId = requireSessionId(currentSessionId)
 
         step[MCPConstants.KEY_PRE_FOCUS_SELECTOR]?.toString()?.takeIf { it.isNotBlank() }?.let {
@@ -652,18 +897,28 @@ class MCPToolController(
         val arguments =
             step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
 
-        logger.info("Calling batch tool step: $index $tool ${arguments.entries.joinToString(" ") { "--${it.key}=${it.value}" }}")
+        // `batch.step` (BatchExecutor) already logs index/tool/ok/cached/durationMs,
+        // so this line exists only for argument context — and it must therefore go
+        // through the redacting renderer. The previous `--key=value` interpolation
+        // wrote argument bodies into INFO logs, the exact leak requirement 7
+        // forbids (cookies, storage state, file paths).
+        if (logger.isDebugEnabled) {
+            logger.debug(
+                "batch.step args index={} tool={} args=[{}]",
+                index, tool, ToolInvocationLogger.renderArgs(arguments),
+            )
+        }
 
         val text = executeAgentToolText(tool, arguments)
 
-        return BatchExecutionResult(index = index, ok = true, text = text.ifBlank { null })
+        return BatchExecutor.BatchStepResult(ok = true, text = text.ifBlank { null })
     }
 
     private suspend fun handleBatchSnapshot(
         index: Int,
         step: Map<String, Any?>,
         currentSessionId: String?
-    ): BatchExecutionResult {
+    ): BatchExecutor.BatchStepResult {
         val sessionId = requireSessionId(currentSessionId)
         val tool = step[MCPConstants.KEY_TOOL]?.toString()
             ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
@@ -675,12 +930,9 @@ class MCPToolController(
             executeAgentToolText(MCPConstants.TOOL_PAGE_TITLE, mapOf(MCPConstants.KEY_SESSION_ID to sessionId))
         val snapshot = executeAgentToolText(tool, arguments)
 
-        return BatchExecutionResult(
-            index = index,
+        return BatchExecutor.BatchStepResult(
             ok = true,
-            pageUrl = pageUrl,
-            pageTitle = pageTitle,
-            snapshot = snapshot,
+            extras = mapOf("pageUrl" to pageUrl, "pageTitle" to pageTitle, "snapshot" to snapshot),
         )
     }
 
@@ -688,7 +940,7 @@ class MCPToolController(
         index: Int,
         step: Map<String, Any?>,
         currentSessionId: String?
-    ): BatchExecutionResult {
+    ): BatchExecutor.BatchStepResult {
         val sessionId = requireSessionId(currentSessionId)
         val tool = step[MCPConstants.KEY_TOOL]?.toString()
             ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
@@ -696,14 +948,14 @@ class MCPToolController(
             step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
         val screenshot = executeAgentToolText(tool, arguments)
 
-        return BatchExecutionResult(index = index, ok = true, screenshot = screenshot)
+        return BatchExecutor.BatchStepResult(ok = true, extras = mapOf("screenshot" to screenshot))
     }
 
     private suspend fun handleBatchPdf(
         index: Int,
         step: Map<String, Any?>,
         currentSessionId: String?
-    ): BatchExecutionResult {
+    ): BatchExecutor.BatchStepResult {
         val sessionId = requireSessionId(currentSessionId)
         val tool = step[MCPConstants.KEY_TOOL]?.toString()
             ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
@@ -711,7 +963,7 @@ class MCPToolController(
             step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
         val pdf = executeAgentToolText(tool, arguments)
 
-        return BatchExecutionResult(index = index, ok = true, pdf = pdf)
+        return BatchExecutor.BatchStepResult(ok = true, extras = mapOf("pdf" to pdf))
     }
 
     // =========================================================================
@@ -783,33 +1035,113 @@ class MCPToolController(
         // Extract domain from tool name and try CustomToolRegistry
         val domain = extractDomain(toolName)
         val customExecutor = CustomToolRegistry.instance.get(domain)
-        if (customExecutor != null) {
-            // Restore sessionId stripped by normalizeToolArguments — custom executors
-            // (e.g. webdb_export) may need it.
-            val sessionId = normalizedRequest.arguments["sessionId"]
-            val execArgs = if (sessionId != null) {
-                args.toMutableMap().also { it["sessionId"] = sessionId }
-            } else {
-                args
+
+        // Reject malformed calls before any dispatch, with the same rules (and
+        // codes) the standard MCP server applies.
+        validateArguments(toolName, domain, customExecutor, args)?.let { return it }
+
+        // Then spend a token: a malformed call costs nothing, and a throttled call
+        // must not reach the browser (that is what makes a retry safe).
+        rateLimit(
+            toolName = toolName,
+            clientToolName = request.tool,
+            domain = domain,
+            customExecutor = customExecutor,
+            sessionId = normalizedRequest.arguments["sessionId"]?.toString(),
+        )?.let { return it }
+
+        // A read answered from the cache skips the executor entirely (requirement 10).
+        cachedResponse(toolName, domain, customExecutor, args, normalizedRequest)?.let { return it }
+
+        val response = when {
+            customExecutor != null -> {
+                // Restore sessionId stripped by normalizeToolArguments — custom executors
+                // (e.g. webdb_export) may need it.
+                val sessionId = normalizedRequest.arguments["sessionId"]
+                val execArgs = if (sessionId != null) {
+                    args.toMutableMap().also { it["sessionId"] = sessionId }
+                } else {
+                    args
+                }
+                dispatchToCustomExecutor(toolName, domain, execArgs, customExecutor, request)
             }
-            return dispatchToCustomExecutor(toolName, domain, execArgs, customExecutor, request)
+
+            // Session-independent coding dispatch: when a coding_* tool is called
+            // without a sessionId, use the standalone CodingToolExecutor instead
+            // of requiring a browser session. This supports the `browser4 code`
+            // CLI commands for self-development, plugin/skill scaffolding, and
+            // browser JS script writing.
+            domain == "coding" && normalizedRequest.arguments["sessionId"]?.toString().isNullOrEmpty() ->
+                dispatchToStandaloneCodingTool(toolName, args, request)
+
+            // Fall back to per-session agent tool dispatch
+            else -> dispatchToAgentToolExecutor(request)
         }
 
-        // Session-independent coding dispatch: when a coding_* tool is called
-        // without a sessionId, use the standalone CodingToolExecutor instead
-        // of requiring a browser session. This supports the `browser4 code`
-        // CLI commands for self-development, plugin/skill scaffolding, and
-        // browser JS script writing.
-        if (domain == "coding") {
-            val sessionId = normalizedRequest.arguments["sessionId"]?.toString()
-            if (sessionId.isNullOrEmpty()) {
-                return dispatchToStandaloneCodingTool(toolName, args, request)
-            }
-        }
-
-        // Fall back to per-session agent tool dispatch
-        return dispatchToAgentToolExecutor(request)
+        cacheResult(toolName, domain, customExecutor, args, normalizedRequest, response)
+        return response
     }
+
+    /**
+     * Serve a cached read when one is available (requirement 10).
+     *
+     * Only the tools `ToolCachePolicy` considers idempotent reads are ever cached,
+     * so this cannot return a stale answer for a state-changing call.
+     */
+    private fun cachedResponse(
+        toolName: String,
+        domain: String,
+        customExecutor: ToolExecutor?,
+        args: Map<String, Any?>,
+        request: NormalizedToolCall,
+    ): ResponseEntity<MCPToolCallResponse>? {
+        val spec = contractSpec(toolName, domain, customExecutor) ?: return null
+        val sessionId = request.arguments["sessionId"]?.toString()
+        val cached = toolResultCache.get(spec, sessionId, args, cacheBypassRequested(request)) ?: return null
+
+        ToolInvocationLogger.logCacheHit(request.tool, cached.ageMs)
+        return ResponseEntity.ok(
+            textResponse(cached.text).copy(cached = true, cacheAgeMs = cached.ageMs)
+        )
+    }
+
+    /**
+     * Feed the result cache, and invalidate it when the call may have changed state.
+     *
+     * Called for every dispatched call, successful or not: the cache itself decides
+     * whether the call was a reusable read or a state change.
+     */
+    private fun cacheResult(
+        toolName: String,
+        domain: String,
+        customExecutor: ToolExecutor?,
+        args: Map<String, Any?>,
+        request: NormalizedToolCall,
+        response: ResponseEntity<MCPToolCallResponse>,
+    ) {
+        if (!toolResultCache.enabled) return
+        val spec = contractSpec(toolName, domain, customExecutor) ?: return
+
+        val body = response.body
+        val success = body?.isError != true
+        val text = body?.content?.firstOrNull()?.text.orEmpty()
+        val sessionId = request.arguments["sessionId"]?.toString()
+
+        toolResultCache.put(spec, sessionId, args, text, success, cacheBypassRequested(request))
+    }
+
+    /**
+     * Whether the client asked this call to skip the result cache (`cache: false`).
+     *
+     * Read from the raw arguments: the flag is stripped by
+     * [normalizeToolArguments] before dispatch, so an executor never sees it.
+     */
+    private fun cacheBypassRequested(request: NormalizedToolCall): Boolean =
+        when (val flag = request.arguments[CACHE_FLAG]) {
+            null -> false
+            is Boolean -> !flag
+            else -> flag.toString().equals("false", ignoreCase = true)
+        }
 
     /**
      * Dispatch a coding_* tool call through the standalone [CodingToolExecutor]
@@ -846,22 +1178,11 @@ class MCPToolController(
             if (exception != null) {
                 ResponseEntity.ok(errorResponse(buildErrorMessage(toolName, exception)))
             } else {
-                val text = when (val v = evaluate.value) {
-                    null -> if (evaluate.className == "null") "null" else ""
-                    is String -> v
-                    is Number, is Boolean -> v.toString()
-                    is Map<*, *>, is Collection<*>, is Array<*> -> pulsarObjectMapper().writeValueAsString(v)
-                    else -> pulsarObjectMapper().writeValueAsString(
-                        mapOf(
-                            "type" to (evaluate.className ?: v::class.qualifiedName),
-                            "description" to v.toString()
-                        )
-                    )
-                }
+                val text = ToolResultTextRenderer.render(evaluate)
 
                 val requestArgs = request.arguments ?: emptyMap()
                 val (paginatedText, pagination) = paginateIfRequested(text, requestArgs)
-                ResponseEntity.ok(textResponse(paginatedText, pagination))
+                ResponseEntity.ok(agentResultResponse(request.tool, paginatedText, pagination))
             }
         } catch (e: Exception) {
             logger.warn("Standalone coding tool failed | tool={} | method={} | {}", toolName, method, e.message)
@@ -903,6 +1224,152 @@ class MCPToolController(
     }
 
     /**
+     * The spec a call is judged against, when one can be resolved.
+     *
+     * A registered (plugin/business) executor wins; otherwise the spec of a live
+     * session is used. Never opens a session: validating a request must not have
+     * side effects.
+     */
+    private fun contractSpec(toolName: String, domain: String, customExecutor: ToolExecutor?): ToolSpec? =
+        customExecutor?.getToolSpecs()?.get(methodNameOf(toolName, domain, customExecutor))
+            ?: liveSpecOf(toolName)
+
+    /**
+     * The rate-limit verdict for one call, or `null` when it may proceed.
+     *
+     * Unlike validation this never skips: when no spec can be resolved (no session
+     * yet), the tool name still determines the domain and method, so a stampede is
+     * throttled from the very first call. In `shadow` mode the limiter only
+     * reports; `error` rejects with `RATE_LIMITED` and `retryAfterMs`.
+     *
+     * @param toolName canonical tool name, used to find the limit
+     * @param clientToolName the name the client sent (`browser_click`), used for
+     *   logs and metrics so this channel's counters join with its call counters
+     */
+    private fun rateLimit(
+        toolName: String,
+        clientToolName: String,
+        domain: String,
+        customExecutor: ToolExecutor?,
+        sessionId: String?,
+    ): ResponseEntity<MCPToolCallResponse>? {
+        val spec = contractSpec(toolName, domain, customExecutor) ?: ToolSpec(
+            domain = domain,
+            method = toolName.removePrefix("${domain}_").removePrefix("$domain."),
+        )
+
+        val decision = toolRateLimiter.acquire(spec, sessionId)
+        if (!decision.throttled) return null
+
+        toolRateLimiter.report(clientToolName, decision)
+        if (!decision.enforced) return null
+
+        return ResponseEntity.ok(
+            errorResponse(decision.rejectionMessage(clientToolName), ToolErrorCode.RATE_LIMITED)
+                .copy(retryAfterMs = decision.retryAfterMs)
+        )
+    }
+
+    /**
+     * Reject a call that violates its own published schema.
+     *
+     * The rules and the resulting codes are the ones the standard MCP server
+     * applies ([ToolSpecValidator]), so `/mcp/call-tool` and `POST /mcp` answer
+     * the same way for the same bad input. `sessionId` is a transport-level
+     * argument here and is never treated as unknown.
+     *
+     * Built-in domains (`tab`, `system`, …) are handled by
+     * [ToolSpecValidator.BuiltInPolicy], `shadow` by default: their specs mirror
+     * the upstream `WebDriver` interface, so a mismatch between the advertised
+     * signature and what the executor reads is a *finding*, not a client error —
+     * it is logged and counted, and the call still runs. Flip to `error` with
+     * `-Dmcp.validateBuiltinArgs=error` once the shadow counters stay at zero.
+     * Explicitly registered (plugin/business) executors are always enforced,
+     * because their specs are authored in this repository.
+     *
+     * @return the error response to return, or `null` when the call is valid
+     */
+    private fun validateArguments(
+        toolName: String,
+        domain: String,
+        customExecutor: ToolExecutor?,
+        args: Map<String, Any?>,
+    ): ResponseEntity<MCPToolCallResponse>? {
+        if (!ToolSpecValidator.validationEnabled()) return null
+
+        val customSpec = customExecutor?.getToolSpecs()?.get(methodNameOf(toolName, domain, customExecutor))
+        val policy = ToolSpecValidator.builtInPolicy()
+        val builtInSpec = if (customSpec == null && policy != ToolSpecValidator.BuiltInPolicy.OFF) {
+            liveSpecOf(toolName)
+        } else {
+            null
+        }
+        val spec = customSpec ?: builtInSpec ?: return null
+        val violations = validator.validate(spec, args)
+        if (violations.isEmpty()) return null
+
+        if (customSpec == null && policy == ToolSpecValidator.BuiltInPolicy.SHADOW) {
+            reportShadowViolations(toolName, spec, args, violations)
+            return null
+        }
+        return ResponseEntity.ok(
+            errorResponse(violations.joinToString("; ") { it.message }, violations.first().code)
+        )
+    }
+
+    /**
+     * The spec of a built-in tool, resolved from the sessions this server already
+     * has.
+     *
+     * Deliberately side-effect free: it never opens a session just to validate a
+     * request, so the first call of a session can only be validated when another
+     * live session already advertises the same tool (in practice the CLI opens a
+     * session before driving tools, so real traffic is covered).
+     */
+    private fun liveSpecOf(toolName: String): ToolSpec? {
+        sessionManager.getAllSessions().forEach { session ->
+            val agent = session.agenticSession.companionAgent as? BasicBrowserAgent ?: return@forEach
+            agent.agentToolManager.getAllToolSpecs().forEach { (specDomain, methods) ->
+                methods.forEach { (method, spec) ->
+                    if (toMcpToolName(specDomain, method) == toolName) return spec
+                }
+            }
+        }
+        return null
+    }
+
+    /** Log and count a shadow violation without changing the call's outcome. */
+    private fun reportShadowViolations(
+        toolName: String,
+        spec: ToolSpec,
+        args: Map<String, Any?>,
+        violations: List<ToolSpecValidator.Violation>,
+    ) {
+        violations.forEach { ToolMetrics.recordShadowViolation(toolName, it.code.wire) }
+        logger.warn(
+            "mcp.validation.shadow channel={} tool={} spec={} codes={} args={} details={}",
+            CHANNEL, toolName, spec.expression,
+            violations.joinToString(",") { it.code.wire },
+            ToolInvocationLogger.renderArgs(args),
+            violations.joinToString("; ") { it.message },
+        )
+    }
+
+    /** The executor's native method name for an advertised tool name. */
+    private fun methodNameOf(
+        toolName: String,
+        domain: String,
+        executor: ToolExecutor,
+    ): String {
+        executor.getToolSpecs().keys.firstOrNull { toMcpToolName(domain, it) == toolName }?.let { return it }
+        return when {
+            toolName.startsWith("${domain}_") -> toolName.substring(domain.length + 1)
+            toolName.startsWith("${domain}.") -> toolName.substring(domain.length + 1)
+            else -> toolName
+        }
+    }
+
+    /**
      * Dispatch a tool call to a custom executor registered in [CustomToolRegistry].
      *
      * Converts the MCP tool name to a method name (the part after the domain prefix),
@@ -930,43 +1397,13 @@ class MCPToolController(
             toMcpToolName(domain, specMethod) == toolName
         } ?: rawMethod
 
-        // Resolve the receiver: for executors that require a WebDriver (e.g., pptx),
-        // extract the session ID and get the session's driver.
-        // For executors whose receiverClass is PulsarSessionManager (e.g.
-        // HTMLSnapshotToolExecutor), look up the ManagedSession using the
-        // controller's sessionManager and pass it as the receiver.  This
-        // avoids the JVM-global CustomToolRegistry singleton holding a stale
-        // executor whose injected sessionManager belongs to a different Spring
-        // context (e.g. the mock EC server's context).
-        val receiver: Any = if (executor.receiverClass == WebDriver::class) {
-            val sessionId = args["sessionId"]?.toString()
-                ?: request.arguments?.get("sessionId")?.toString()
-            if (sessionId != null) {
-                val managed = sessionManager.getOrRecoverSession(sessionId)
-                if (managed != null) {
-                    try {
-                        managed.driver
-                    } catch (e: Exception) {
-                        logger.warn("Failed to get driver for session {}: {}", sessionId, e.message)
-                        Any()
-                    }
-                } else {
-                    Any()
-                }
-            } else {
-                Any()
-            }
-        } else if (executor.receiverClass == PulsarSessionManager::class) {
-            val sessionId = args["sessionId"]?.toString()
-                ?: request.arguments?.get("sessionId")?.toString()
-            if (sessionId != null) {
-                sessionManager.getOrRecoverSession(sessionId) ?: Any()
-            } else {
-                Any()
-            }
-        } else {
-            Any()
-        }
+        // Resolve the receiver through the same helper the standard MCP server
+        // uses (see CustomToolTargets): page-bound executors get the addressed
+        // session's driver, html_snapshot/webdb get the ManagedSession, and
+        // service-backed executors get the collaborating Spring bean.
+        val sessionId = args["sessionId"]?.toString()
+            ?: request.arguments?.get("sessionId")?.toString()
+        val receiver: Any = customToolTargets.resolve(executor, sessionId) ?: Any()
 
         return try {
             val result = executor.callFunctionOn(ToolCall(domain, method, args.toMutableMap()), receiver)
@@ -975,22 +1412,11 @@ class MCPToolController(
             if (exception != null) {
                 ResponseEntity.ok(errorResponse(buildErrorMessage(toolName, exception)))
             } else {
-                val text = when (val v = evaluate.value) {
-                    null -> if (evaluate.className == "null") "null" else ""
-                    is String -> v
-                    is Number, is Boolean -> v.toString()
-                    is Map<*, *>, is Collection<*>, is Array<*> -> pulsarObjectMapper().writeValueAsString(v)
-                    else -> pulsarObjectMapper().writeValueAsString(
-                        mapOf(
-                            "type" to (evaluate.className ?: v::class.qualifiedName),
-                            "description" to v.toString()
-                        )
-                    )
-                }
+                val text = ToolResultTextRenderer.render(evaluate)
 
                 val requestArgs = request.arguments ?: emptyMap()
                 val (paginatedText, pagination) = paginateIfRequested(text, requestArgs)
-                ResponseEntity.ok(textResponse(paginatedText, pagination))
+                ResponseEntity.ok(agentResultResponse(request.tool, paginatedText, pagination))
             }
         } catch (e: Exception) {
             logger.warn("Custom executor failed | tool={} | domain={} | {}", toolName, domain, e.message)
@@ -1024,23 +1450,26 @@ class MCPToolController(
 
         val evaluate = result.evaluate
         evaluate.exception?.let { exception ->
+            val rawMessage = exception.message ?: ""
+            val mapped = isMissingPageHelperError(rawMessage)
+            // Same mapping as [buildErrorMessage]: a raw JS ReferenceError on the
+            // missing page helper is replaced with an actionable message.
+            val message = if (mapped) missingPageHelperErrorMessage() else rawMessage
             val errorMsg = buildString {
-                append("$toolName failed: ${exception.message}")
+                append("$toolName failed: $message")
                 val causeMsg = exception.cause?.message
-                if (causeMsg != null && causeMsg != exception.message) {
+                // The cause chain is only informative when it says something the
+                // headline does not; never re-leak the raw helper ReferenceError
+                // that [mapped] just replaced.
+                if (!mapped && causeMsg != null && causeMsg != rawMessage) {
                     append(" ($causeMsg)")
                 }
             }
             throw IllegalArgumentException(errorMsg)
         }
-        // Distinguish JS null (className == "null") from JS undefined (className == "undefined")
-        // and Kotlin Unit (no meaningful return value).
-        // All three arrive as evaluate.value == null, but only JS null should produce visible output.
-        return evaluate.value?.toString() ?: when (evaluate.className) {
-            "null" -> "null"
-            "undefined" -> "undefined"
-            else -> ""
-        }
+        // JS null renders as the literal "null"; JS undefined and Kotlin Unit
+        // render as an empty string (shared with the standard MCP server).
+        return ToolResultTextRenderer.render(evaluate)
     }
 
     private fun Any?.toAnyMap(): Map<String, Any?>? {
@@ -1048,6 +1477,94 @@ class MCPToolController(
             return null
         }
         return this.entries.associate { (key, value) -> key.toString() to value }
+    }
+
+    /**
+     * Resolve the spec of an advertised tool name and build its result response.
+     *
+     * Tool names are looked up in the plugin/business registry first (those are
+     * the task-submitting domains), then across the live sessions' agent specs.
+     */
+    private fun agentResultResponse(
+        toolName: String,
+        text: String,
+        pagination: PaginationMeta?,
+    ): MCPToolCallResponse = resultResponse(resolveSpec(toolName), text, pagination)
+
+    private fun resolveSpec(toolName: String): ToolSpec? {
+        val domain = extractDomain(toolName)
+        CustomToolRegistry.instance.get(domain)?.let { executor ->
+            val specs = executor.getToolSpecs()
+            specs.keys.firstOrNull { toMcpToolName(domain, it) == toolName }?.let { return specs[it] }
+        }
+
+        sessionManager.getAllSessions().forEach { session ->
+            val agent = session.agenticSession.companionAgent as? BasicBrowserAgent ?: return@forEach
+            agent.agentToolManager.getAllToolSpecs().forEach { (specDomain, methods) ->
+                methods.forEach { (method, spec) ->
+                    if (toMcpToolName(specDomain, method) == toolName) return spec
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * Successful result: the text plus, when the tool declares one, its typed form.
+     *
+     * The typed form is the shared task envelope for a submit tool (so a generic
+     * client learns which tool polls it) or the JSON the tool already returns —
+     * the same `structuredContent` the standard MCP server sends. When the spec
+     * declares an `outputSchema`, the result is validated against it: violations
+     * are logged and counted ([ToolResultValidator]) but never fail the call here,
+     * because the payload was already produced.
+     */
+    private fun resultResponse(
+        spec: ToolSpec?,
+        text: String,
+        pagination: PaginationMeta? = null,
+    ): MCPToolCallResponse {
+        if (spec != null) {
+            val node = when {
+                spec.task != null && ToolResultValidator.isBareTaskId(text) ->
+                    ToolResultValidator.taskEnvelope(text.trim(), spec.task!!)
+                else -> ToolResultValidator.parse(text)
+            }
+            if (node != null) {
+                ToolResultValidator.report(spec, ToolResultValidator.validate(spec, node))
+            }
+        }
+
+        return MCPToolCallResponse(
+            content = listOf(MCPContent(text = text)),
+            structuredContent = structuredContentOf(spec, text),
+            pagination = pagination,
+        )
+    }
+
+    /**
+     * Jackson-shaped view of the typed result, for the REST payload.
+     *
+     * The task envelope comes from [ToolResultValidator.taskEnvelope] — the same
+     * builder the standard server uses. Hand-rolling it here meant the two channels
+     * disagreed on what a submit call returns (this one omitted `cancelTool`), which
+     * is exactly the kind of drift the shared contract is supposed to prevent.
+     */
+    private fun structuredContentOf(spec: ToolSpec?, text: String): Map<String, Any?>? {
+        spec?.task?.let { policy ->
+            if (ToolResultValidator.isBareTaskId(text)) {
+                // Round-trip through Jackson so numbers stay numbers (`pollAfterMs`
+                // is an integer in the envelope schema, not the string "1000").
+                val envelope = ToolResultValidator.taskEnvelope(text.trim(), policy)
+                return runCatching {
+                    pulsarObjectMapper().readValue(envelope.toString(), Map::class.java) as Map<String, Any?>
+                }.getOrNull()
+            }
+        }
+        val node = ToolResultValidator.parse(text) ?: return null
+        return runCatching {
+            pulsarObjectMapper().readValue(node.toString(), Map::class.java) as Map<String, Any?>
+        }.getOrNull()
     }
 
     private fun Any?.toBatchMousePosition(): BatchMousePosition? {
@@ -1085,39 +1602,15 @@ class MCPToolController(
             if (exception != null) {
                 ResponseEntity.ok(errorResponse(buildErrorMessage(request.tool, exception)))
             } else {
-                // Distinguish JS null (className == "null") from JS undefined (className == "undefined")
-                // and Kotlin Unit (no meaningful return value).
-                // All three arrive as evaluate.value == null, but only JS null should produce visible output.
-                val text = when (val v = evaluate.value) {
-                    null -> if (evaluate.className == "null") "null" else ""
-                    is String -> v
-                    is Number, is Boolean -> v.toString()
-                    // Maps, Lists, arrays etc. — serialize as valid JSON
-                    is Map<*, *>, is Collection<*>, is Array<*> -> pulsarObjectMapper().writeValueAsString(v)
-                    // ExtractResult — serialize clean JSON with success, message, and data fields
-                    is ExtractResult -> pulsarObjectMapper().writeValueAsString(
-                        mapOf(
-                            "success" to v.success,
-                            "message" to v.message,
-                            "data" to v.data
-                        )
-                    )
-                    // Non-serializable domain objects (WebDriver, Browser, etc.) —
-                    // wrap in a description object so internal object graphs are never
-                    // exposed to the client
-                    else -> pulsarObjectMapper().writeValueAsString(
-                        mapOf(
-                            "type" to (evaluate.className ?: v::class.qualifiedName),
-                            "description" to v.toString()
-                        )
-                    )
-                }
+                // Rendered by the shared renderer so the standard MCP server (8088)
+                // and this dispatcher return identical text for the same tool call.
+                val text = ToolResultTextRenderer.render(evaluate)
 
                 // Server-side pagination: when page/page-size are present, paginate
                 // the result text to reduce network traffic for large snapshots.
                 val requestArgs = request.arguments ?: emptyMap()
                 val (paginatedText, pagination) = paginateIfRequested(text, requestArgs)
-                ResponseEntity.ok(textResponse(paginatedText, pagination))
+                ResponseEntity.ok(agentResultResponse(request.tool, paginatedText, pagination))
             }
         } catch (e: Exception) {
             logger.warn(
@@ -1171,6 +1664,9 @@ class MCPToolController(
             "network_unroute" -> return ToolCall("tab", "networkUnroute", args1)
             "har_start" -> return ToolCall("tab", "harStart", args1)
             "har_stop" -> return ToolCall("tab", "harStop", args1)
+            "frame_list" -> return ToolCall("tab", "frameList", args1)
+            "frame_switch" -> return ToolCall("tab", "frameSwitch", args1)
+            "frame_main" -> return ToolCall("tab", "frameMain", args1)
         }
 
         // 2. Generic mapping
@@ -1254,15 +1750,12 @@ class MCPToolController(
 
     /**
      * Convert domain+method to snake_case MCP tool name.
-     * Must match logic in Browser4MCPServer.
+     *
+     * Delegates to [McpToolNames] so the private dispatcher and the standard MCP
+     * server cannot drift apart on spelling.
      */
-    internal fun toMcpToolName(domain: String, method: String): String {
-        val snake = method.replace(Regex("([A-Z])")) { "_${it.groupValues[1].lowercase()}" }
-        return when (domain) {
-            "tab", "system" -> snake
-            else -> "${domain}_$snake"
-        }
-    }
+    internal fun toMcpToolName(domain: String, method: String): String =
+        McpToolNames.toMcpToolName(domain, method)
 
     /**
      * Convert snake_case back to camelCase.
@@ -1321,9 +1814,16 @@ class MCPToolController(
         )
     }
 
-    private fun normalizeToolArguments(toolName: String, args: Map<String, Any?>): Map<String, Any?> {
-        return ArgumentNormalizerFactory.normalize(toolName, args)
-    }
+    /**
+     * Normalise the arguments of a call and drop the ones the transport owns.
+     *
+     * `cache` is a client→server control flag (like `sessionId`), not a tool
+     * argument: leaving it in made executors with a strict `validateArgs` reject the
+     * call as an "extraneous parameter", so the documented escape hatch broke the
+     * very call it was meant to refresh.
+     */
+    private fun normalizeToolArguments(toolName: String, args: Map<String, Any?>): Map<String, Any?> =
+        ArgumentNormalizerFactory.normalize(toolName, args).filterKeys { it !in CONTROL_ARGS }
 
     // =========================================================================
     // Helpers
@@ -1345,15 +1845,35 @@ class MCPToolController(
     private fun textResponse(text: String, pagination: PaginationMeta?): MCPToolCallResponse =
         MCPToolCallResponse(content = listOf(MCPContent(text = text)), pagination = pagination)
 
-    private fun errorResponse(message: String): MCPToolCallResponse =
-        MCPToolCallResponse(content = listOf(MCPContent(text = "ERROR: $message")), isError = true)
+    /**
+     * Build an error response carrying a stable code.
+     *
+     * The code is derived from the message (see [ToolErrorMapper]) so every
+     * existing failure path gains one without being rewritten, appears in the
+     * text after the `ERROR:` prefix for backward compatibility, and travels in
+     * the `errorCode` field for clients that branch on it.
+     */
+    private fun errorResponse(
+        message: String,
+        code: ToolErrorCode = ToolErrorMapper.classifyMessage(message),
+    ): MCPToolCallResponse = MCPToolCallResponse(
+        content = listOf(MCPContent(text = "ERROR: [${code.wire}] $message")),
+        isError = true,
+        errorCode = code.wire,
+    )
 
     /**
      * Build an error message for a tool call failure, enriching it with
      * contextual tips when the error matches known patterns (e.g. "not focusable").
      */
     private fun buildErrorMessage(toolName: String, exception: TcException): String {
-        val message = exception.message ?: "unknown error"
+        val rawMessage = exception.message ?: "unknown error"
+
+        // Map the raw JS ReferenceError on the missing page helper
+        // (__pulsar_utils__ — a session whose tab predates the backend process,
+        // or a tab that never received the injected runtime) to an actionable
+        // message instead of leaking the internal JS stack.
+        val message = if (isMissingPageHelperError(rawMessage)) missingPageHelperErrorMessage() else rawMessage
         val sb = StringBuilder("$toolName failed: $message")
 
         // Contextual tips for known error patterns
@@ -1361,8 +1881,11 @@ class MCPToolController(
             sb.append(" Tip: Use 'click <ref>' first to focus the element")
         }
 
-        // Explicit help from the tool executor
-        if (!exception.help.isNullOrBlank()) {
+        // Explicit help from the tool executor.  The static tool description /
+        // signature attached by AbstractToolExecutor is only useful for usage
+        // errors (missing/unknown parameters); on runtime errors it reads like
+        // a debug dump, so reserve it for usage errors.
+        if (isUsageError(exception.cause, rawMessage) && !exception.help.isNullOrBlank()) {
             sb.append(" help: ${exception.help}")
         }
 
@@ -1386,9 +1909,57 @@ class MCPToolController(
         return messages.joinToString(" ← ")
     }
 
-    private fun addRequestId(response: HttpServletResponse) {
-        response.addHeader("X-Request-Id", UUID.randomUUID().toString())
+    /**
+     * Stamp the call with an id, returned to the caller as `X-Request-Id` and used
+     * for both log lines and the metrics labels — the same id scheme as the
+     * standard MCP server, so one grep follows a call across channels.
+     */
+    private fun addRequestId(response: HttpServletResponse): String {
+        val requestId = ToolInvocationLogger.newRequestId(CHANNEL)
+        response.addHeader("X-Request-Id", requestId)
+        return requestId
     }
+}
+
+// =========================================================================
+// Tool error formatting helpers
+// =========================================================================
+
+/**
+ * True when [message] is the raw JS ReferenceError raised by code that
+ * dereferences the Browser4 page helper (__pulsar_utils__).
+ *
+ * The helper is injected into a tab when the backend navigates it; sessions
+ * whose tab predates the backend process (dev restarts, daemon restarts) or
+ * tabs that never received the runtime (tab-new targets) dereference it and
+ * surface this raw internal error unless it is mapped.
+ */
+internal fun isMissingPageHelperError(message: String): Boolean =
+    message.contains("__pulsar_utils__") &&
+        (message.contains("ReferenceError") || message.contains("is not defined"))
+
+/** Actionable replacement message for a missing page-helper failure. */
+internal fun missingPageHelperErrorMessage(): String =
+    "the page in this session is missing the injected page helper (__pulsar_utils__ is not " +
+        "defined — the tab predates the backend process or never received the helper); " +
+        "run `open --fresh` or re-open the session, then retry"
+
+/**
+ * Whether an exception should carry the tool's static description/signature as
+ * 'help:' text.  Static help is reserved for usage errors (bad parameters,
+ * unknown fields/methods); runtime errors get their own actionable mapping and
+ * must not read as a debug dump.
+ */
+internal fun isUsageError(cause: Throwable?, message: String): Boolean {
+    if (cause is IllegalArgumentException) return true
+    return listOf(
+        "missing parameter",
+        "missing required parameter",
+        "extraneous parameter",
+        "unknown field",
+        "unknown html_snapshot method",
+        "element references (",
+    ).any { message.contains(it, ignoreCase = true) }
 }
 
 // =========================================================================
@@ -1838,9 +2409,16 @@ internal fun inspectDocument(
             // 1. Class-based selector (primary)
             if (descClass.isNotBlank()) {
                 val classes = descClass.split("\\s+".toRegex()).take(2).joinToString(".") { it }
-                val sel = if (descId.isNotBlank()) "${descTag}.$classes#${descId}"
-                else "${descTag}.$classes"
-                candidates.add(sel to "class")
+                candidates.add("${descTag}.$classes" to "class")
+                // When the element also carries an id, record the compound selector too.
+                // Template-generated ids that are unique per match (e.g.
+                // id="product-price-B0E000001") would otherwise give every candidate a
+                // count of 1, and the recurring class would never reach the recurrence
+                // threshold. The compound form only survives when the id itself recurs;
+                // unique ids fall out in the threshold filter below.
+                if (descId.isNotBlank()) {
+                    candidates.add("${descTag}.$classes#${descId}" to "class")
+                }
             } else if (descId.isNotBlank()) {
                 candidates.add("${descTag}#${descId}" to "id")
             }

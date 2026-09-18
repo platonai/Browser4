@@ -1,5 +1,7 @@
 package ai.platon.pulsar.rest.session
 
+import ai.platon.pulsar.api.BrowserId
+import ai.platon.pulsar.api.WebDriver
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarBrowser
 import ai.platon.pulsar.chrome.PulsarWebDriver
@@ -7,20 +9,26 @@ import ai.platon.pulsar.chrome.network.NetworkObserver
 import ai.platon.pulsar.chrome.network.RouteManager
 import ai.platon.pulsar.chrome.protocol.transport.ExtensionChromeService
 import ai.platon.pulsar.chrome.protocol.transport.ExtensionMessageSender
+import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.B4Constants.BROWSER_PROFILE_MODE
+import ai.platon.pulsar.common.B4Constants.CONTEXT_DIR_CAPABILITY
 import ai.platon.pulsar.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.common.B4Constants.PROFILE_MODE_CAPABILITY
 import ai.platon.pulsar.common.B4Constants.SESSION_ID_CAPABILITY
 import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_ID
+import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.context.AbstractAgenticContext
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.agentic.context.AgenticContexts
+import ai.platon.pulsar.api.AbstractBrowser
 import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.browser.BrowserProfileMode
+import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_MODE
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.core.api.PulsarSettings
+import ai.platon.pulsar.skeleton.session.choosePageTab
 import kotlinx.coroutines.runBlocking
 import org.slf4j.LoggerFactory
 import java.io.Closeable
@@ -230,15 +238,13 @@ class PulsarSessionManager(
             return ensureSwarmSession(capabilities)
         }
 
-        // Resolve DEFAULT to a stable UUID so all session types use
-        // UUID-based IDs consistently (extension sessions already do).
-        val resolvedId = if (sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true)) {
-            generateDefaultSessionId()
-        } else {
-            sessionId
-        }
-
-        val normalizedCapabilities = normalizeCapabilities(resolvedId, capabilities)
+        // normalizeCapabilities resolves the display name (or DEFAULT) to the
+        // same stable UUID the capabilities-only path uses, registering the
+        // name -> UUID mapping — so addressing a session by explicit id or by
+        // capability always lands on the same session and the same dedicated
+        // context dir.
+        val normalizedCapabilities = normalizeCapabilities(sessionId, capabilities)
+        val resolvedId = normalizedCapabilities.getValue(SESSION_ID_CAPABILITY).toString()
         val session = sessions.computeIfAbsent(resolvedId) {
             createManagedSession(resolvedId, normalizedCapabilities)
         }
@@ -494,6 +500,28 @@ class PulsarSessionManager(
             createManagedSession(sessionId, normalizedCapabilities, SessionKind.CDP_ATTACHED)
         }
 
+        // The /json/version probe already parsed the product string — keep it
+        // so attach responses / list / status can show which browser the CDP
+        // endpoint actually drives (the CLI cannot infer it from the port).
+        session.browserIdentity = BrowserIdentity.parse(verification.browser)
+
+        // Idempotent re-attach: if the session already has a healthy driver on
+        // the same browser port, keep the existing binding. Creating a fresh
+        // PulsarBrowser wrapper + driver on every attach would leak their
+        // DevTools connections until the session closes.
+        val existingDriver = session.agenticSession.boundDriver
+        if (existingDriver != null && (existingDriver.browser as? PulsarBrowser)?.port == port &&
+            runCatching { runBlocking { existingDriver.healthy().isOK } }.getOrDefault(false)
+        ) {
+            (existingDriver.browser as? AbstractBrowser)?.frontDriver = existingDriver
+            logger.info(
+                "Re-attached session {} to browser at port {} (existing driver kept)",
+                sessionId, port
+            )
+            return session
+        }
+
+
         // Bind the external browser to the session
         val browser = PulsarBrowser(port = port, settings = BrowserSettings())
         session.agenticSession.bindBrowser(browser)
@@ -529,6 +557,9 @@ class PulsarSessionManager(
 
         /** Interval between idle-session scans (minutes). */
         private const val IDLE_REAP_INTERVAL_MINUTES = 30L
+
+        /** The context group that holds dedicated named-session profiles. */
+        private const val NAMED_CONTEXT_GROUP = "named"
 
         fun normalizeCdpEndpoint(endpoint: String, port: Int): String {
             val trimmed = endpoint.trim()
@@ -684,6 +715,11 @@ class PulsarSessionManager(
         val session = sessions.computeIfAbsent(sessionId) {
             createManagedSession(sessionId, normalizedCapabilities, SessionKind.EXTENSION_ATTACHED)
         }
+        // Remember the REQUESTED channel.  It is informational: the browser
+        // that actually connects may differ (wrong-browser attach), which is
+        // why the real identity is captured from the WS handshake in
+        // onExtensionConnected and surfaced alongside this field.
+        session.attachChannel = channel
 
         // An extension session is not usable until the extension connects via
         // WebSocket — mark it stopped up front (onExtensionConnected flips it
@@ -715,21 +751,47 @@ class PulsarSessionManager(
      * Called by [ExtensionWebSocketHandler] when an extension WebSocket
      * connection is established.  Creates an [ExtensionChromeService] wrapping
      * the connection and binds it as the browser for the pending session.
+     *
+     * @param ua The User-Agent header of the WebSocket handshake — the only
+     *   reliable signal of WHICH browser really connected (Chrome vs Edge
+     *   both run the same store extension id, so Origin cannot distinguish
+     *   them).  Parsed into [BrowserIdentity] and stored on the session for
+     *   attach/list/status display; a mismatch with the requested channel
+     *   surfaces the "attached to the wrong browser" case.
      */
-    fun onExtensionConnected(sessionId: String, sender: ExtensionMessageSender) {
+    fun onExtensionConnected(sessionId: String, sender: ExtensionMessageSender, ua: String? = null) {
         val pending = pendingExtensionConnections.remove(sessionId)
-            ?: throw IllegalStateException("No pending extension connection for session $sessionId")
+        val isReconnect = pending == null && extensionSessionIds.contains(sessionId)
+        if (pending == null && !isReconnect) {
+            throw IllegalStateException("No pending extension connection for session $sessionId")
+        }
 
         val managedSession = sessions[sessionId]
             ?: throw IllegalStateException("Session $sessionId not found")
+
+        val identity = BrowserIdentity.parse(ua)
+        managedSession.browserIdentity = identity
+        logger.info(
+            "Extension handshake for session {} | requestedChannel={} | actualBrowser={} {} | ua={}",
+            sessionId, managedSession.attachChannel ?: "default",
+            identity.name ?: identity.family, identity.version ?: "", identity.rawUa ?: "n/a"
+        )
+        if (isReconnect) {
+            logger.info("Extension reconnected to registered session {} — rebinding relay browser", sessionId)
+        }
 
         // Create the ExtensionChromeService that bridges the WebSocket
         // relay protocol to the internal ChromeService abstraction.
         val extChrome = ExtensionChromeService(sender, sessionId)
 
         // Wrap it as a PulsarBrowser so the session can use it.
+        // The extension browser is an EXTERNAL browser: it is not launched by this JVM and
+        // owns its user data dir on the user's machine. Name it with a deterministic
+        // external identity keyed by the session id, so every reconnect of the same session
+        // (and every restart with the same session id) refers to the same browser identity —
+        // no random disposable profile is ever fabricated, and no local directory is created.
         val browser = PulsarBrowser(
-            id = ai.platon.pulsar.api.BrowserId.RANDOM_TEMP,
+            id = BrowserId.external(sessionId),
             chrome = extChrome,
             settings = BrowserSettings(),
             launcher = null
@@ -745,7 +807,21 @@ class PulsarSessionManager(
         // extension.initialized event is delivered on the same Jetty thread that
         // calls afterConnectionEstablished, so blocking here would deadlock event
         // delivery.
-        val agenticSession = managedSession.agenticSession
+        bindExtensionDriver(sessionId, managedSession.agenticSession, browser)
+
+        logger.info(
+            "Extension connected and bound to session {} (reconnect={}) | elapsed={}ms",
+            sessionId, isReconnect,
+            if (pending != null) System.currentTimeMillis() - pending.createdAt else 0L
+        )
+    }
+
+    /**
+     * Binds a driver to the extension browser for the given agentic session in
+     * a background thread, preferring a non-about:blank page tab. Both the
+     * initial connect and the reconnect paths share this logic.
+     */
+    private fun bindExtensionDriver(sessionId: String, agenticSession: AgenticSession, browser: PulsarBrowser) {
         Thread {
             try {
                 val deadline = System.currentTimeMillis() + 15_000
@@ -755,24 +831,34 @@ class PulsarSessionManager(
                     tabs = browser.listTabs()
                 }
                 if (tabs.isNotEmpty()) {
-                    val driver = browser.newDriverForTab(tabs.first())
-                    // Claim the CDP event-listener slots for network tracking
-                    // and routing before any navigation runs on this driver
-                    // (the base NetworkManager registers its listeners on
-                    // navigation, and the dispatcher keeps one listener per
-                    // key — a later registration would silently never fire).
-                    if (driver is PulsarWebDriver) {
-                        NetworkObserver.forProtocol(driver.browserProtocol).preRegister()
-                        RouteManager.forProtocol(driver.browserProtocol).preRegister()
+                    // Prefer a non-about:blank page tab; null when tabs exist
+                    // but none is a page target (e.g. devtools windows).
+                    val chosen = choosePageTab(tabs.toList())
+                    if (chosen != null) {
+                        val driver = browser.newDriverForTab(chosen)
+                        // Claim the CDP event-listener slots for network tracking
+                        // and routing before any navigation runs on this driver
+                        // (the base NetworkManager registers its listeners on
+                        // navigation, and the dispatcher keeps one listener per
+                        // key — a later registration would silently never fire).
+                        if (driver is PulsarWebDriver) {
+                            NetworkObserver.forProtocol(driver.browserProtocol).preRegister()
+                            RouteManager.forProtocol(driver.browserProtocol).preRegister()
+                        }
+                        driver.free()
+                        // Initialize CDP so the driver is operational.
+                        runBlocking { driver.browserProtocol.pageEnable() }
+                        val b4Driver = toBrowser4Driver(driver)
+                        agenticSession.bindDriver(b4Driver)
+                        // Track the active tab so switchTab / listTabs work correctly.
+                        (browser as? AbstractBrowser)?.frontDriver = b4Driver
+                        logger.info(
+                            "Created extension driver for session {} (tab: {})",
+                            sessionId, driver.chromeTab.url
+                        )
+                    } else {
+                        logger.warn("No page tabs available for extension session {}", sessionId)
                     }
-                    driver.free()
-                    // Initialize CDP so the driver is operational.
-                    runBlocking { driver.browserProtocol.pageEnable() }
-                    agenticSession.bindDriver(driver)
-                    logger.info(
-                        "Created extension driver for session {} (tab: {})",
-                        sessionId, driver.chromeTab.url
-                    )
                 } else {
                     logger.warn(
                         "No tabs available for extension session {} after waiting",
@@ -790,11 +876,6 @@ class PulsarSessionManager(
             isDaemon = true
             start()
         }
-
-        logger.info(
-            "Extension connected and bound to session {} | elapsed={}ms",
-            sessionId, System.currentTimeMillis() - pending.createdAt
-        )
     }
 
     /**
@@ -999,25 +1080,44 @@ class PulsarSessionManager(
         val sessionId = when {
             explicitSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> generateDefaultSessionId()
             explicitSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> SWARM_SESSION_ID
-            hasExplicitSessionId -> displayNameToSessionId.getOrDefault(
-                explicitSessionId.trim(),
-                explicitSessionId.trim()
-            )
+            hasExplicitSessionId -> resolveSessionId(explicitSessionId.trim())
             requestedSessionId.isNullOrBlank() || requestedSessionId.equals(
                 DEFAULT_SESSION_ID,
                 ignoreCase = true
             ) -> generateDefaultSessionId()
 
             requestedSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> SWARM_SESSION_ID
-            else -> resolveOrCreateDisplayNameMapping(requestedSessionId)
+            else -> resolveSessionId(requestedSessionId)
         }
 
         val requestedProfileMode = BrowserProfileMode.fromString(
             normalizedCapabilities[PROFILE_MODE_CAPABILITY]?.toString()
         )
 
+        // The stable UUID that DEFAULT resolves to (if it has been resolved
+        // already). Both the literal "DEFAULT" and this UUID address the
+        // default session slot and must never be treated as named.
+        val defaultSessionUuid = displayNameToSessionId[DEFAULT_SESSION_ID]
+
+        // A named session is any session explicitly addressed by a display
+        // name or id other than DEFAULT/SWARM (by literal name or by the
+        // resolved default UUID). Named sessions bind a dedicated, stable
+        // chrome user data dir keyed by the resolved session id, so
+        // reopening the session never rotates to another profile (and never
+        // silently clobbers another session's state).
+        val isNamedSession = if (hasExplicitSessionId) {
+            !explicitSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) &&
+                !explicitSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) &&
+                !explicitSessionId.equals(defaultSessionUuid, ignoreCase = true)
+        } else {
+            !requestedSessionId.isNullOrBlank() &&
+                !requestedSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) &&
+                !requestedSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) &&
+                !requestedSessionId.equals(defaultSessionUuid, ignoreCase = true)
+        }
+
         normalizedCapabilities[SESSION_ID_CAPABILITY] = sessionId
-        normalizedCapabilities[PROFILE_MODE_CAPABILITY] = when {
+        val profileMode = when {
             sessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> when (requestedProfileMode) {
                 BrowserProfileMode.TEMPORARY -> BrowserProfileMode.TEMPORARY
                 BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
@@ -1035,11 +1135,63 @@ class PulsarSessionManager(
             ) && requestedProfileMode == BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
 
             sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> BrowserProfileMode.DEFAULT
+            // Named sessions below: honor an explicit TEMPORARY request;
+            // otherwise keep SEQUENTIAL as the mode marker while `contextDir`
+            // pins the session's dedicated profile.
+            requestedProfileMode == BrowserProfileMode.TEMPORARY -> BrowserProfileMode.TEMPORARY
             requestedProfileMode == BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
             else -> BrowserProfileMode.SEQUENTIAL
-        }.name
+        }
+        normalizedCapabilities[PROFILE_MODE_CAPABILITY] = profileMode.name
+        if (isNamedSession && profileMode == BrowserProfileMode.SEQUENTIAL) {
+            normalizedCapabilities[CONTEXT_DIR_CAPABILITY] = computeNamedSessionContextDir(sessionId).toString()
+        }
 
         return normalizedCapabilities
+    }
+
+    /**
+     * Resolve a session id to its stable UUID.
+     *
+     * A display name that has not been seen before is registered in
+     * [displayNameToSessionId] and gets a fresh UUID; a name that is already
+     * registered returns its existing UUID; an id that is already a resolved
+     * session UUID (a registered value) is returned as-is — so addressing a
+     * session by display name, by UUID, or through either API entry point
+     * always lands on the same session.
+     */
+    private fun resolveSessionId(sessionId: String): String {
+        val trimmed = sessionId.trim()
+        // Already a resolved session UUID (registered as a display-name
+        // value, or already a live session key)? Keep it as-is instead of
+        // wrapping it in a new UUID — otherwise addressing an existing
+        // session by its UUID would silently create a different session.
+        if (displayNameToSessionId.containsValue(trimmed) || sessions.containsKey(trimmed)) {
+            return trimmed
+        }
+        // Register the display name and persist the mapping (persistence
+        // happens after insertion — never from inside computeIfAbsent).
+        return resolveOrCreateDisplayNameMapping(trimmed)
+    }
+
+    /**
+     * Compute the dedicated chrome context directory for a named session.
+     *
+     * The directory is derived deterministically from the resolved session id
+     * (the stable UUID persisted in the session registry), so reopening the
+     * same named session always binds the same chrome user data dir — across
+     * reopens and across server restarts. Named profiles live in their own
+     * group ("named"), separated from the rotating SEQUENTIAL pool.
+     *
+     * The directory itself is NOT created here: it is materialized lazily at
+     * browser launch ([AbstractPulsarSession.createBoundDriver] calls
+     * `Files.createDirectories` before binding the profile), so an unused
+     * named session costs nothing on disk.
+     */
+    private fun computeNamedSessionContextDir(sessionId: String): Path {
+        val safeName = sessionId.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        return AppPaths.getContextBaseDir(NAMED_CONTEXT_GROUP, BrowserType.PULSAR_CHROME)
+            .resolve("cx.$safeName")
     }
 
     /**
@@ -1226,5 +1378,15 @@ class PulsarSessionManager(
 
     override fun close() {
         shutdown()
+    }
+
+    /**
+     * Wraps a raw driver into a [Browser4WebDriver] so agentic tool calls see
+     * the full Browser4 driver surface (see the curated view of [PulsarWebDriver]).
+     */
+    private fun toBrowser4Driver(rawDriver: ai.platon.pulsar.api.WebDriver): ai.platon.pulsar.api.WebDriver = when (rawDriver) {
+        is Browser4WebDriver -> rawDriver
+        is PulsarWebDriver -> Browser4WebDriver.from(rawDriver)
+        else -> rawDriver
     }
 }

@@ -1,0 +1,34 @@
+# Issues: crawl-link-options
+
+> **Source:** `20260902-195053-crawl-link-options.full.md` | **Date:** 20260902-195053 | **Mode:** dev
+
+## Scenario Background
+
+### Task
+
+| AC | Command | Result |
+|---|---|---|
+| **AC1** depth 0 | `crawl <url> --depth 0 --refresh` | ✅ PASS — "Crawl completed. 1 pages found." `depth=0 \| …/index.html \| Crawl Test Hub` |
+| **AC2** selector+pattern | `crawl <url> -d 2 -ol "a.product" -olp "/product/"` | ❌ FAIL — zero discovery as written (Git Bash mangles `/product/`); with the env-var workaround, discovery follows only product links (categories correctly excluded) but results are **corrupted**: rows carry other pages' titles, duplicates, silent page drops |
+| **AC3** depth 3 | `crawl <url> --depth 3 --refresh` | ❌ FAIL — hub only, no traversal (link discovery requires `-ol`); with `-ol "a[href]"` it reaches depth-3 pages but results are corrupted (phantom URLs, 100s runtime, ~37 rows for a 20-page site) |
+| **AC4** seed file | `crawl --seed-file … --depth 0 --refresh` | ✅ PASS — "URLs: 2", Widget Alpha + Gamma with **correct titles**, no Beta/hub |
+
+**2 of 4 ACs pass (50%).** Bulk-fetch mode (depth 0) is accurate; link-discovery modes (depth ≥ 1) return demonstrably wrong data on this build.
+
+### Execution Context
+
+1. Verified MockSite on :18080; `./b4w.ps1 help` + `crawl --help` + read SKILL.md & crawl.md — help/docs quality is genuinely high.
+2. AC1 passed first try. AC4 passed but took ~30 s (backend log shows two "0 bytes… retrying" cycles).
+3. AC2 returned only the hub — twice, deterministically. Root cause found via the **depth-1 diagnostic**, which exposed the pattern as `'C:/Program Files/Git/product/'` → **Git Bash MSYS path conversion** mangles slash-leading args. `MSYS2_ARG_CONV_EXCL='*'` fixed that, but then the corruption surfaced: batch {1,2,3} all titled "Widget Beta" in run 1 and all "Widget Alpha" in run 2; {4,5}→"Epsilon"; {6,7}→"Lambda"; 7.html×2; different pages silently missing each run.
+4. AC3 fetched only the hub; source review showed depth>1 crawls compute depth by regex-parsi...
+
+(truncated — see full.md for complete trace)
+
+---
+
+## Issues Found (0)
+
+No issues could be parsed from Section C of the agent output.
+
+See `20260902-195053-crawl-link-options.full.md` for the complete evaluation output.
+

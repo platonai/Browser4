@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env pwsh
+#!/usr/bin/env pwsh
 
 # ═══════════════════════════════════════════════════════════════════
 # CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
@@ -1037,6 +1037,61 @@ Assert-True -Label 'ECD: directory still exists after cleaning' `
 $remaining = Get-ChildItem -Path $ecdExisting -ErrorAction SilentlyContinue
 Assert-Equal -Label 'ECD: directory is empty after cleaning' `
     -Actual $remaining.Count -Expected 0
+
+Write-Host ''
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: Reset-CleanDirectory (recreate / no-recreate)
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ Reset-CleanDirectory (recreate / no-recreate) ━━━" -ForegroundColor Cyan
+
+$rcdTestDir = New-TempDir 'reset-clean'
+
+# Reset-CleanDirectory removes existing content and recreates the directory
+$rcdDir = Join-Path $rcdTestDir 'reset-dir'
+New-Item -ItemType Directory -Path $rcdDir -Force | Out-Null
+New-TempFile (Join-Path $rcdDir 'old-file.txt') 'old content'
+New-Item -ItemType Directory -Path (Join-Path $rcdDir 'subdir') -Force | Out-Null
+Reset-CleanDirectory $rcdDir 'test reset dir'
+Assert-True -Label 'RCD: reset dir exists after reset' `
+    -Condition (Test-Path $rcdDir -PathType Container)
+Assert-Equal -Label 'RCD: reset dir is empty after reset' `
+    -Actual (Get-ChildItem $rcdDir -ErrorAction SilentlyContinue).Count -Expected 0
+
+# Reset-CleanDirectory -Recreate:$false removes existing content and does NOT
+# recreate the directory — the semantics the jlink phase depends on (jlink
+# refuses an --output directory that already exists, even an empty one; see the
+# production call site in build-runtime-bundle.ps1 that passes -Recreate:$false
+# for the jlink output).
+#
+# Regression: this block used to call a Remove-CleanDirectory function that the
+# script has never defined, so the assertion below failed on every run while
+# looking like it covered the jlink contract.
+$rmDir = Join-Path $rcdTestDir 'remove-dir'
+New-Item -ItemType Directory -Path $rmDir -Force | Out-Null
+New-TempFile (Join-Path $rmDir 'old-file.txt') 'old content'
+New-Item -ItemType Directory -Path (Join-Path $rmDir 'subdir') -Force | Out-Null
+Reset-CleanDirectory $rmDir 'test remove dir' -Recreate:$false
+Assert-True -Label 'RCD: remove dir is gone after removal' `
+    -Condition (-not (Test-Path $rmDir))
+
+# A path that does not exist is a no-op: nothing to rename, nothing to delete.
+# Asserted through a real try/catch — the previous version asserted the literal
+# $true, so a throw would have gone unnoticed.
+$missingDir = Join-Path $rcdTestDir 'never-existed'
+$missingThrew = $false
+try {
+    Reset-CleanDirectory $missingDir 'test remove dir' -Recreate:$false
+} catch {
+    $missingThrew = $true
+}
+Assert-True -Label 'RCD: removing a missing dir does not throw' -Condition (-not $missingThrew)
+
+# The rename-then-delete trash sibling is cleaned up when deletion succeeds —
+# asserted for both the recreating and the non-recreating call.
+$stray = Get-ChildItem -Path $rcdTestDir -Directory -Filter '.*.old-*' -ErrorAction SilentlyContinue
+Assert-Equal -Label 'RCD: no .old-* trash dirs left behind' `
+    -Actual $stray.Count -Expected 0
 
 Write-Host ''
 

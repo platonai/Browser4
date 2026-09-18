@@ -1,0 +1,314 @@
+package ai.platon.pulsar.rest.api.controller
+
+import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
+import ai.platon.pulsar.test.TestUrls
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Tag
+import org.junit.jupiter.api.Test
+import org.springframework.http.MediaType
+import org.springframework.test.web.servlet.client.expectBody
+import java.time.Duration
+import java.time.Instant
+
+/**
+ * Verifies that a link-discovery crawl records each page's metadata under the
+ * URL that produced it — the per-fetch metadata integrity guarantee (Issue 1
+ * acceptance: "each stored title matches its URL").
+ *
+ * A depth-2 crawl over the static /generated/crawl/ fixture must produce one
+ * row per page, in a deterministic depth/URL order, with the title of the
+ * page at that URL — never another page's title, even when pages are fetched
+ * and recorded in sequence over the same browser session.
+ *
+ * Also verifies --readonly surfacing (Issue 2 acceptance): a readonly crawl
+ * either served the stored content (rows marked, note carries the age) or
+ * verifies every page was fetched fresh from the live site; in both branches
+ * each stored title still matches its URL.
+ *
+ * Tagged [IntegrationTest] so it runs in main CI + nightly (not PR CI).
+ */
+@Tag("IntegrationTest")
+class CrawlFixtureMetadataTest : RestAPITestBase() {
+
+    private val crawlBase: String by lazy { TestUrls.MOCK_CRAWL_BASE }
+
+    /** Static fixture ground truth: URL -> <title> of the file at that URL. */
+    private fun fixtureTitles(): Map<String, String> = mapOf(
+        "$crawlBase/index.html" to "Crawl Test Hub",
+        "$crawlBase/product/1.html" to "Widget Alpha — \$10.00",
+        "$crawlBase/product/2.html" to "Widget Beta — \$20.00",
+        "$crawlBase/product/3.html" to "Widget Gamma — \$30.00",
+        "$crawlBase/product/4.html" to "Widget Delta — \$40.00",
+        "$crawlBase/product/5.html" to "Widget Epsilon — \$50.00",
+        "$crawlBase/product/6.html" to "Widget Zeta — \$60.00",
+        "$crawlBase/product/7.html" to "Widget Lambda — \$70.00",
+        "$crawlBase/product/8.html" to "Widget Mu — \$80.00",
+        "$crawlBase/product/9.html" to "Widget Nu — \$90.00"
+    )
+
+    /** Depth of each fixture page in a depth-2 crawl from the hub. */
+    private fun fixtureDepths(): Map<String, Int> = mapOf(
+        "$crawlBase/index.html" to 0,
+        "$crawlBase/product/1.html" to 1,
+        "$crawlBase/product/2.html" to 1,
+        "$crawlBase/product/3.html" to 1,
+        "$crawlBase/product/4.html" to 2,
+        "$crawlBase/product/5.html" to 2,
+        "$crawlBase/product/6.html" to 2,
+        "$crawlBase/product/7.html" to 2,
+        "$crawlBase/product/8.html" to 2,
+        "$crawlBase/product/9.html" to 2
+    )
+
+    @Test
+    @DisplayName("depth-2 crawl records each stored title under the URL that produced it")
+    fun testDepth2CrawlRecordsTitlesPerUrl() {
+        val response = runCrawl(depth = 2, args = "-refresh")
+
+        assertTrue(response.status == "OK" || response.status == "SC_OK",
+            "crawl should complete OK, got: ${response.status} error=${response.error}")
+        assertNoLostPages(response)
+        val pages = requireNotNull(response.pages)
+
+        // 1 hub + 3 depth-1 + 6 depth-2 = 10 rows; no page appears twice.
+        assertEquals(10, pages.size, "expected 10 pages (hub + 9 products), got ${pages.size}")
+        assertEquals(10, pages.map { it.url }.distinct().size, "duplicate URL rows in crawl result")
+
+        // Every row's title is the title of the page at that URL, and the depth
+        // label matches the discovery depth — never another page's content.
+        val expectedTitles = fixtureTitles()
+        val expectedDepths = fixtureDepths()
+        for (page in pages) {
+            val expectedTitle = expectedTitles[page.url]
+            assertNotNull(expectedTitle, "unexpected page URL in crawl result: ${page.url}")
+            assertEquals(expectedTitle, page.title,
+                "title for ${page.url} does not match the page at that URL (crossed metadata?)")
+            assertEquals(expectedDepths[page.url], page.depth,
+                "depth for ${page.url} does not match its discovery depth")
+        }
+
+        // Deterministic ordering: depth asc, then URL asc.
+        val sortedUrls = pages.map { it.url }
+        assertEquals(pages.sortedWith(compareBy({ it.depth }, { it.url })).map { it.url }, sortedUrls,
+            "crawl result is not sorted by (depth, url)")
+    }
+
+    @Test
+    @DisplayName("readonly + refresh crawl verifies freshness and never serves stored content")
+    fun testReadonlyRefreshCrawlVerifiesFreshness() {
+        val response = runCrawl(depth = 2, args = "-readonly -refresh")
+
+        assertTrue(response.status == "OK" || response.status == "SC_OK",
+            "crawl should complete OK, got: ${response.status} error=${response.error}")
+        assertNoLostPages(response)
+        val pages = requireNotNull(response.pages)
+        assertEquals(10, pages.size, "expected 10 pages, got ${pages.size}")
+
+        // With -refresh nothing may be served from the store; every page was
+        // fetched from the live site and the note says so (Issue 2: readonly
+        // surfaces what it did — served with age, or verified fresh).
+        assertTrue(pages.none { it.servedFromStore },
+            "readonly -refresh crawl must not serve stored content, but ${pages.count { it.servedFromStore }} page(s) did")
+        val note = requireNotNull(response.readonlyNote) { "readonly crawl must produce a readonlyNote" }
+        assertTrue(note.contains("verified fresh"), "readonly note should verify freshness, got: $note")
+        assertTrue(note.contains("nothing was written to the page store"), "readonly note should state nothing was written, got: $note")
+
+        // Metadata integrity holds on the fresh fetch too.
+        val expectedTitles = fixtureTitles()
+        for (page in pages) {
+            assertEquals(expectedTitles[page.url], page.title,
+                "title for ${page.url} does not match the page at that URL")
+        }
+    }
+
+    @Test
+    @DisplayName("readonly crawl without refresh surfaces store serves with age, or verifies freshness")
+    fun testReadonlyCrawlSurfacesServedOrFresh() {
+        // No -refresh: when the page store holds the fixture pages (from
+        // earlier crawls), the load may serve stored content — readonly mode
+        // must say so with the age of the content; otherwise it must verify
+        // freshness.  Either way metadata integrity holds per row.
+        //
+        // Note: a crawl forces `-refresh` onto every load it issues (see
+        // `CrawlRoundRunner.buildEffectiveArgs`), so today this always takes the
+        // freshness branch; the stored-content branch has no coverage until that
+        // forcing is revisited (docs-dev/copilot/ci-stabilization-4.13.x.md §18).
+        val response = runCrawl(depth = 2, args = "-readonly")
+
+        assertTrue(response.status == "OK" || response.status == "SC_OK",
+            "crawl should complete OK, got: ${response.status} error=${response.error}")
+        assertNoLostPages(response)
+        val pages = requireNotNull(response.pages)
+        // Without this the test passed vacuously whenever the crawl listed no
+        // rows at all: the per-row title loop below simply never ran.
+        assertEquals(10, pages.size, "expected 10 pages, got ${pages.size}")
+        val note = requireNotNull(response.readonlyNote) { "readonly crawl must produce a readonlyNote" }
+
+        val served = pages.filter { it.servedFromStore }
+        if (served.isEmpty()) {
+            assertTrue(note.contains("verified fresh"),
+                "readonly note should verify freshness when nothing was served, got: $note")
+        } else {
+            assertTrue(note.contains("served from the page store"),
+                "readonly note should report store serves, got: $note")
+            assertTrue(note.contains("old"), "readonly note should carry the age of stored content, got: $note")
+            // Served rows carry the stored-content age; the original fetch time
+            // of stored content is preserved, so the age is always computable.
+            assertTrue(served.all { it.storeAgeSeconds != null },
+                "served-from-store rows must carry storeAgeSeconds")
+        }
+
+        // Every row — stored or fresh — still shows the title of the page at
+        // that URL.  Stored content is served under the URL it was stored for.
+        val expectedTitles = fixtureTitles()
+        for (page in pages) {
+            assertEquals(expectedTitles[page.url], page.title,
+                "title for ${page.url} does not match the page at that URL")
+        }
+    }
+
+    @Test
+    @DisplayName("two crawls submitted back to back both finish cleanly, with no lost pages")
+    fun testBackToBackCrawlsLoseNoPages() {
+        // Issue #592: a crawl that kept working after it reported completion raced
+        // with the next crawl over the shared browser session, and pages were
+        // silently dropped.  Submitting the second crawl while the first is still
+        // running makes that interference part of the test instead of an accident
+        // of CI scheduling.
+        val firstTask = submitCrawl(depth = 2, args = "-refresh")
+        val secondTask = submitCrawl(depth = 2, args = "-refresh")
+        check(firstTask != secondTask) { "expected two distinct crawl tasks" }
+
+        for ((label, taskId) in listOf("first" to firstTask, "second" to secondTask)) {
+            val response = waitForTerminal(taskId)
+            assertTrue(response.status == "OK" || response.status == "SC_OK",
+                "$label crawl should complete OK, got: ${response.status} error=${response.error}")
+            assertNoLostPages(response)
+            val pages = requireNotNull(response.pages) { "$label crawl returned no pages" }
+            assertEquals(10, pages.size,
+                "$label crawl: expected 10 pages (hub + 9 products), got ${pages.size}")
+            for (page in pages) {
+                assertEquals(fixtureTitles()[page.url], page.title,
+                    "$label crawl: title for ${page.url} does not match the page at that URL")
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Private helpers
+    // -----------------------------------------------------------------
+
+    /**
+     * Issue #592 conservation: every page a crawl submitted is either a record
+     * or a reported loss, so `pagesFound + failedPages.size == pagesExpected`.
+     *
+     * Asserting it here means a truncated crawl can no longer pass as a
+     * complete one — and when it fails, it names the pages it lost instead of
+     * only reporting a smaller page count.
+     */
+    private fun assertNoLostPages(response: CrawlResponse) {
+        val failed = response.failedPages ?: emptyList()
+        val pages = response.pages ?: emptyList()
+        assertTrue(failed.isEmpty(),
+            "crawl lost ${failed.size} page(s) of ${response.pagesExpected}: " +
+                failed.joinToString("; ") {
+                    "${it.url} (depth=${it.depth}, status=${it.protocolStatus}, reason=${it.reason})"
+                })
+        assertEquals(response.pagesExpected, pages.size,
+            "pagesFound + failedPages must equal pagesExpected " +
+                "(${pages.size} + ${failed.size} != ${response.pagesExpected})")
+    }
+
+    private fun runCrawl(depth: Int, args: String): CrawlResponse = waitForTerminal(submitCrawl(depth, args))
+
+    private fun submitCrawl(depth: Int, args: String): String {
+        val body = """
+            {"url": "${TestUrls.MOCK_CRAWL_HUB_URL}",
+             "args": "-outLink \"a.product\" -outLinkPattern \"product/\" $args",
+             "depth": $depth}
+        """.trimIndent()
+        val rawTaskId = client.post().uri("/api/crawl")
+            .contentType(MediaType.APPLICATION_JSON)
+            .body(body)
+            .exchange()
+            .expectStatus().is2xxSuccessful
+            .expectBody<String>()
+            .returnResult()
+            .responseBody
+        val taskId = rawTaskId?.trim()?.removeSurrounding("\"")
+        check(!taskId.isNullOrBlank()) { "Expected non-blank crawl task id but got: $rawTaskId" }
+
+        return taskId
+    }
+
+    /**
+     * Wait for a crawl to settle.
+     *
+     * The wall-clock cap is a ceiling for a hang, not a speed assertion: on a loaded CI runner a
+     * healthy crawl fetches a page in ~80-100 s instead of ~2.6 s, and the recorded CI failure
+     * ("did not reach a terminal state within 6 minutes") belongs to a crawl that went on to finish
+     * with `status OK, 10 pages, 0 lost` moments later.  A crawl that stops moving is still caught,
+     * by the stall limit on the progress the record reports.
+     * */
+    private fun waitForTerminal(
+        taskId: String,
+        ceiling: Duration = Duration.ofMinutes(20),
+        stallLimit: Duration = Duration.ofMinutes(5)
+    ): CrawlResponse {
+        val deadline = Instant.now().plus(ceiling)
+        var last: CrawlResponse? = null
+        var lastProgress = ""
+        var progressAt = Instant.now()
+        while (Instant.now().isBefore(deadline)) {
+            Thread.sleep(2000)
+            // Fetch the raw body and deserialize with the Kotlin-aware Jackson
+            // mapper.  `expectBody<CrawlResponse>()` uses the client-side
+            // converter without the Kotlin module: CrawlResponse's all-default
+            // constructor lets it instantiate the class, but no field is ever
+            // bound — status would stay at its "CREATED" default forever even
+            // though the server reports PROCESSING/OK.
+            val raw = client.get().uri("/api/crawl/$taskId/result")
+                .exchange()
+                .expectStatus().is2xxSuccessful
+                .expectBody<String>()
+                .returnResult()
+                .responseBody
+            val result = requireNotNull(raw) { "Empty crawl result body for $taskId" }
+                .let {
+                    jacksonObjectMapper()
+                        .registerModule(JavaTimeModule())
+                        .readValue(it, CrawlResponse::class.java)
+                }
+            last = result
+            if (result.status == "OK" || result.status == "SC_OK" ||
+                result.status == "SC_REQUEST_TIMEOUT" || result.status == "SC_INTERNAL_SERVER_ERROR"
+            ) {
+                return result
+            }
+
+            val progress = progressOf(result)
+            if (progress != lastProgress) {
+                lastProgress = progress
+                progressAt = Instant.now()
+            } else if (Duration.between(progressAt, Instant.now()) > stallLimit) {
+                error("Crawl $taskId stopped making progress for $stallLimit ($progress, status ${result.status})")
+            }
+        }
+        error(
+            "Crawl $taskId did not reach a terminal state within $ceiling, " +
+                    "last status: ${last?.status}, progress: ${last?.let { progressOf(it) }}"
+        )
+    }
+
+    /** What the record reports about the work it has actually done so far. */
+    private fun progressOf(result: CrawlResponse): String =
+        "pagesFound=${result.pagesFound}, linksDiscovered=${result.linksDiscovered}, " +
+                "seedsSettled=${result.seedStatuses?.size ?: 0}, " +
+                "seedsSkipped=${result.seedStatuses?.count { it.status == "skipped" } ?: 0}"
+}

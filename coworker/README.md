@@ -79,6 +79,21 @@ npm start -- --tasks-root ../tasks/
 
 Then open **http://127.0.0.1:8090**. The GUI exposes a REST API (`/api/stats`, `/api/tasks`, `/api/move`) and binds to localhost only by default. See `coworker/gui/README.md` for the full API reference and CLI options.
 
+## Skills
+
+`coworker/skills/` contains Claude Code skill definitions (`SKILL.md` files) that document recurring agent task types for this repository. Each skill states when to use it and the workflow to follow:
+
+| Skill | Purpose |
+|-------|---------|
+| `coworker` | Reference for the Coworker system itself: task lifecycle, state machine, workers, scheduler configuration |
+| `maintenance` | Config-driven quality checks and health monitoring (code, tests, docs, skills, dependencies, infra) |
+| `organize-task-files` | List, pair, deduplicate, and move task files across the pipeline stages (`0draft` → `6git-pushed`) |
+| `run-tests` | Discover and run Browser4 test suites via `bin/test.ps1` |
+| `task-token-usage` | Report token consumption per task from Claude Code session traces |
+| `test-production` | Acceptance-test the latest published `browser4-cli` release via `bin/test-production.ps1` |
+
+Product-focused skills for the CLI and plugins live in the repository-root `skills/` directory.
+
 ## Prerequisites
 
 GitHub CLI (`gh`) must be installed and authenticated.
@@ -90,7 +105,9 @@ See https://github.com/cli/cli#installation for installation instructions.
 Coworker keeps its control data in the current repository, but task execution can target a different repository. Configure both in `coworker/scripts/config.psd1`:
 
 - `Paths.WorkspaceRoot` keeps `coworker/tasks`, logs, and memory rooted in this repository.
-- `Paths.TargetRepositoryRoot` sets the repository where task-mode `gh copilot` runs. When omitted, task execution falls back to `WorkspaceRoot` for backward compatibility.
+- `Paths.TargetRepositoryRoot` sets the repository where task-mode agents run. When omitted, task execution falls back to `WorkspaceRoot` for backward compatibility.
+
+Task execution uses an agent backend selected by `coworker/scripts/config.ps1`, in priority order: the `BROWSER4_AGENT` environment variable (`claude`, `kimi`, `codex`, `dsh`, or `copilot`), then the per-backend argument arrays in `config.psd1` (`CLAUDE` > `KIMI` > `CODEX` > `DSH`), then `copilot` as the fallback.
 
 ## Tags
 
@@ -129,14 +146,16 @@ Default scheduled tasks:
 
 | Task | Worker Script | Trigger Path |
 |------|--------------|--------------|
-| `coworker` | `coworker.ps1` | `main/1ready` or `main/5approved` |
+| `coworker` | `engineer.ps1` | `main/1ready` or `main/5approved` |
 | `draft-refinement` | `workers/refine-drafts.ps1` | `main/0draft/refine/1ready` |
 | `commit-github-issues` | `workers/commit-github-issues.ps1` | `issues/github/commit/ready` (disabled by default) |
-| `refine-github-issues` | `workers/refine-github-issues.ps1` | `issues/draft/refine/0ready` |
+| `refine-github-issues` | `workers/refine-github-issues.ps1` | `issues/draft/refine/0ready` (disabled by default) |
 | `fetch-github-issues` | `workers/fetch-github-issues.ps1` | _(always runs, every 10 min)_ |
 | `triage-github-issues` | `workers/triage-github-issues.ps1` | `main/0draft/issues/github` (every 30 min) |
 | `organize-task-files` | `workers/organize-task-files.ps1` | _(always runs, every 5 min)_ |
 | `update-readmes` | `workers/update-readmes.ps1` | _(always runs, every 1h)_ |
+| `merge-prs` | `workers/merge-prs.ps1` | _(always runs, every 1h)_ |
+| `review-recent-issues` | `workers/review-recent-issues.ps1` | _(always runs, every 20 s)_ |
 
 ## Queue Processors
 
@@ -172,6 +191,8 @@ Coworker can extract, refine, and create GitHub issues from natural-language dra
 1. **Refine** (`refine-github-issues.ps1`): Scans `issues/draft/refine/0ready` for draft files describing one or more issues, invokes the agent to extract individual issues, formats each as a structured markdown file, and writes them to `issues/github/commit/ready`.
 
 2. **Commit** (`commit-github-issues.ps1`): Scans `issues/github/commit/ready` for formatted issue files and creates them on GitHub via `gh issue create`.
+
+Refined `.issues.md` files can instead be routed into the task pipeline through an AI review stage: `workers/review-recent-issues.ps1` scans `.issues.md` files from the last few days, moves new ones from `issues/draft/` into `issues/review/`, and reviews each file via `coworker review -Inline`. Review criteria for humans and AI reviewers are in `tasks/issues/REVIEW-GUIDE.md`; files with recorded decisions then move into `main/1ready` for task execution.
 
 Issue file format:
 ```markdown

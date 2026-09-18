@@ -13,6 +13,7 @@ import java.nio.file.StandardOpenOption
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.*
 
@@ -98,7 +99,7 @@ class KnowledgeStore(
 
     fun loadTrace(path: Path): TraceRecord? {
         return try {
-            val data = yaml.load<Map<String, Any>>(Files.readString(path))
+            val data = readYamlFile(path)
             mapToTrace(data)
         } catch (e: Exception) {
             logger.warn("Failed to load trace {}: {}", path, e.message)
@@ -127,13 +128,13 @@ class KnowledgeStore(
     /**
      * Load or create [ExperienceStats] for a (domain, intent) pair.
      */
-    fun loadStats(domain: String, intent: String): ExperienceStats {
+    fun loadStats(domain: String, intent: String): ExperienceStats = withFileLock {
         val file = statsFilePath(domain, intent)
         if (!file.exists()) {
-            return ExperienceStats.create(intent, domain, "")
+            return@withFileLock ExperienceStats.create(intent, domain, "")
         }
-        return try {
-            val data = yaml.load<Map<String, Any>>(Files.readString(file))
+        try {
+            val data = readYamlFile(file)
             mapToStats(data)
         } catch (e: Exception) {
             logger.warn("Failed to load stats for {}/{}: {}", domain, intent, e.message)
@@ -144,17 +145,23 @@ class KnowledgeStore(
     /**
      * Update [ExperienceStats] from a [TraceRecord].
      *
-     * Merges success or failure stats into the existing stats file.
+     * The read-modify-write runs **under the file lock**, and that is the whole point:
+     * load-then-save without it is a lost-update race. Ten concurrent trace saves
+     * used to leave `successes = 2` instead of 10 (each writer read a stale count and
+     * published its own `+1`), which silently under-counts the evidence that
+     * confidence and promotion decisions are made from.
      */
     fun updateStats(trace: TraceRecord) {
         val intentKey = Intent.classify(trace.intent).name.lowercase()
-        val existing = loadStats(trace.domain, intentKey)
-        val updated = if (trace.outcome == "success") {
-            existing.withSuccess(trace)
-        } else {
-            existing.withFailure(trace)
+        withFileLock {
+            val existing = loadStats(trace.domain, intentKey)
+            val updated = if (trace.outcome == "success") {
+                existing.withSuccess(trace)
+            } else {
+                existing.withFailure(trace)
+            }
+            saveStats(trace.domain, intentKey, updated)
         }
-        saveStats(trace.domain, intentKey, updated)
     }
 
     private fun saveStats(domain: String, intent: String, stats: ExperienceStats) {
@@ -177,11 +184,11 @@ class KnowledgeStore(
     /**
      * Load [KnowledgeFacts] for a (domain, intent) pair.
      */
-    fun loadFacts(domain: String, intent: String): KnowledgeFacts? {
+    fun loadFacts(domain: String, intent: String): KnowledgeFacts? = withFileLock {
         val file = factsFilePath(domain, intent)
-        if (!file.exists()) return null
-        return try {
-            val data = yaml.load<Map<String, Any>>(Files.readString(file))
+        if (!file.exists()) return@withFileLock null
+        try {
+            val data = readYamlFile(file)
             mapToFacts(data)
         } catch (e: Exception) {
             logger.warn("Failed to load facts for {}/{}: {}", domain, intent, e.message)
@@ -195,11 +202,74 @@ class KnowledgeStore(
     suspend fun saveFacts(facts: KnowledgeFacts) {
         val lock = domainLocks.getOrPut(facts.domain) { Mutex() }
         lock.withLock {
-            val dir = factsDir.resolve(facts.domain)
-            if (!dir.exists()) Files.createDirectories(dir)
-            val file = factsFilePath(facts.domain, facts.intent)
-            writeAtomicYaml(file, mapFromFacts(facts))
+            writeFactsLocked(facts)
         }
+    }
+
+    /**
+     * Merge retrospective knowledge ([FactsPatch]) into the stored facts for a
+     * `(domain, intent)` pair, atomically under the domain lock
+     * (read-modify-write without interleaving).
+     *
+     * - When no facts exist yet, a HYPOTHESIS entry is created from [urlPattern].
+     * - VERIFIED facts are immutable: the merge is REFUSED (returned via
+     *   [FactsMergeResult.rejected]) instead of silently overwriting
+     *   double-confirmed knowledge.
+     * - Otherwise selectors/hints/blockers/anti-patterns are merged in
+     *   (patch wins for the same selector key; lists are appended deduped).
+     *   Merging does NOT bump confidence/successes — status stays where it
+     *   was (HYPOTHESIS when created here); promotion still goes through
+     *   trace-based [promoteToVerified].
+     */
+    suspend fun mergeFacts(
+        domain: String,
+        intent: String,
+        urlPattern: String,
+        patch: FactsPatch,
+    ): FactsMergeResult {
+        require(!patch.isEmpty) { "mergeFacts requires a non-empty facts patch" }
+        val lock = domainLocks.getOrPut(domain) { Mutex() }
+        return lock.withLock {
+            val existing = loadFacts(domain, intent)
+            if (existing?.status == VerificationStatus.VERIFIED) {
+                return@withLock FactsMergeResult(
+                    facts = existing,
+                    rejected = true,
+                    message = "Facts for $domain/$intent are VERIFIED and immutable — " +
+                        "the knowledge patch was NOT applied. Record it as a new trace instead " +
+                        "(experience-save without --facts)."
+                )
+            }
+
+            val base = existing ?: KnowledgeFacts.createHypothesis(intent, domain, urlPattern)
+            val merged = base.copy(
+                urlPattern = urlPattern,
+                siteFacts = base.siteFacts.copy(domain = domain),
+                selectors = base.selectors + patch.selectors,
+                interactionHints = (base.interactionHints + patch.interactionHints).distinct(),
+                knownBlockers = (base.knownBlockers + patch.knownBlockers)
+                    .distinctBy { Triple(it.type, it.selector, it.action) },
+                antiPatterns = (base.antiPatterns + patch.antiPatterns).distinct(),
+                updatedAt = Instant.now(),
+            )
+            writeFactsLocked(merged)
+            FactsMergeResult(
+                facts = merged,
+                message = "Merged ${patch.selectors.size} selector(s), " +
+                    "${patch.interactionHints.size} hint(s), " +
+                    "${patch.knownBlockers.size} blocker(s), " +
+                    "${patch.antiPatterns.size} anti-pattern(s) into $domain/$intent " +
+                    "(status=${merged.status.name.lowercase()})."
+            )
+        }
+    }
+
+    /** Write one facts file; caller must hold the domain lock. */
+    private fun writeFactsLocked(facts: KnowledgeFacts) {
+        val dir = factsDir.resolve(facts.domain)
+        if (!dir.exists()) Files.createDirectories(dir)
+        val file = factsFilePath(facts.domain, facts.intent)
+        writeAtomicYaml(file, mapFromFacts(facts))
         updateIndex(facts.domain, facts.intent, facts)
         logger.info("Facts saved: {}/{} status={}", facts.domain, facts.intent, facts.status)
     }
@@ -312,7 +382,7 @@ class KnowledgeStore(
 
                 for (file in domainDir.listDirectoryEntries("*.yaml")) {
                     try {
-                        val data = yaml.load<Map<String, Any>>(Files.readString(file))
+                        val data = readYamlFile(file)
                             ?: continue
                         val factsIntent = data["intent"] as? String ?: continue
                         if (intentFilter != null && !factsIntent.contains(intentFilter, ignoreCase = true)) continue
@@ -364,25 +434,70 @@ class KnowledgeStore(
     // Atomic I/O
     // =========================================================================
 
-    private fun writeAtomicYaml(target: Path, data: Map<String, Any>) {
-        val tmp = target.resolveSibling("${target.fileName}.tmp")
+    /**
+     * Serializes access to the shared [Yaml] instance **and** to the file
+     * read-modify cycles.
+     *
+     * SnakeYAML's `Yaml` is not thread-safe: concurrent `dump`/`load` on one instance
+     * interleaves its internal state and produces truncated text ("expected
+     * '<document start>', but found '<scalar>'") or outright exceptions.
+     *
+     * The same monitor also closes the publish window of [writeAtomicYaml]: on
+     * Windows, Java's `move(REPLACE_EXISTING)` falls back to *delete-then-rename*
+     * when the target is open, so a reader can observe the file as missing (or get
+     * `NoSuchFileException` from `Files.readString`). Holding this lock for the whole
+     * exists-then-read sequence makes a reader see either the old file or the new
+     * one — the failures that had [KnowledgeStoreConcurrencyTest] disabled.
+     */
+    private val yamlLock = Any()
+
+    /** Run [block] with the file/YAML monitor held. */
+    private fun <T> withFileLock(block: () -> T): T = synchronized(yamlLock) { block() }
+
+    /** [Yaml.dump] under the shared lock. */
+    private fun yamlDump(data: Map<String, Any>): String = synchronized(yamlLock) { yaml.dump(data) }
+
+    /** [Yaml.load] under the shared lock. */
+    private fun loadYaml(text: String): Map<String, Any> {
+        val data: Map<String, Any>? = synchronized(yamlLock) { yaml.load<Map<String, Any>?>(text) }
+        // An empty document used to surface as "synchronized(...) must not be null" —
+        // a message that names this helper instead of the problem.
+        return data ?: throw IllegalArgumentException("the YAML document is empty")
+    }
+
+    /**
+     * Read one YAML file under the file lock.
+     *
+     * A caller's `exists()` check may sit outside the lock, which is fine: a publish
+     * only ever *replaces* a file (inside the lock), so a file that existed before the
+     * call exists after it — what the lock removes is the delete-then-rename gap the
+     * read itself would otherwise fall into.
+     */
+    private fun readYamlFile(file: Path): Map<String, Any> = withFileLock {
+        loadYaml(Files.readString(file))
+    }
+
+    /**
+     * Write [data] as YAML so a concurrent reader sees either the old file or the
+     * complete new one — never a missing or half-written one.
+     *
+     * Two properties matter, and the previous version had neither:
+     * - **the temporary file is unique per write.** A fixed `${name}.tmp` meant two
+     *   writers truncated each other's bytes, and the loser's `move` then failed (or
+     *   published the other's partial file);
+     * - **the publish runs under the file lock**, so the delete-then-rename fallback
+     *   Windows may take is invisible to readers (see [yamlLock]).
+     */
+    private fun writeAtomicYaml(target: Path, data: Map<String, Any>) = withFileLock {
         Files.createDirectories(target.parent)
+        val tmp = target.resolveSibling("${target.fileName}.${UUID.randomUUID().toString().take(8)}.tmp")
         try {
-            val yamlText = yaml.dump(data)
+            val yamlText = yamlDump(data)
             Files.writeString(tmp, yamlText, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)
-            // On Windows, ATOMIC_MOVE fails if the target exists even with REPLACE_EXISTING.
-            // Delete the target first, then move without ATOMIC_MOVE for cross-platform reliability.
-            Files.deleteIfExists(target)
-            Files.move(tmp, target)
+            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING)
         } catch (e: Exception) {
-            // Fallback: try with REPLACE_EXISTING if delete-before-move failed
-            try {
-                Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING)
-            } catch (fallbackError: Exception) {
-                try { tmp.deleteExisting() } catch (_: Exception) {}
-                e.addSuppressed(fallbackError)
-                throw KnowledgeStoreException("Failed to write $target: ${e.message}", e)
-            }
+            try { tmp.deleteExisting() } catch (_: Exception) {}
+            throw KnowledgeStoreException("Failed to write $target: ${e.message}", e)
         }
     }
 
@@ -404,7 +519,7 @@ class KnowledgeStore(
         if (!dir.exists()) return emptyList()
         return dir.listDirectoryEntries("*.yaml").mapNotNull { file ->
             try {
-                val data = yaml.load<Map<String, Any>>(Files.readString(file))
+                val data = readYamlFile(file)
                 mapToFacts(data)
             } catch (_: Exception) { null }
         }
@@ -418,7 +533,7 @@ class KnowledgeStore(
             if (!dir.exists()) continue
             for (file in dir.listDirectoryEntries("*.yaml")) {
                 try {
-                    val data = yaml.load<Map<String, Any>>(Files.readString(file))
+                    val data = readYamlFile(file)
                     val facts = mapToFacts(data)
                     if (facts.intent == intent) return facts
                 } catch (_: Exception) { /* skip */ }

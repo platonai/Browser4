@@ -36,24 +36,24 @@ class PulsarBrowserFactoryTest {
     fun testLaunchSystemDefaultBrowser() {
         val browser = browserFactory.launchSystemDefaultBrowser()
         browsers.add(browser)
-        assertEquals(BrowserId.SYSTEM_DEFAULT, browser.id)
-        assertEquals(BrowserId.SYSTEM_DEFAULT.contextDir, browser.id.contextDir)
+        assertEquals(BrowserId.createSystemDefault(), browser.id)
+        assertEquals(BrowserId.createSystemDefault().contextDir, browser.id.contextDir)
     }
 
     @Test
     fun testLaunchDefaultBrowser() {
         val browser = browserFactory.launchDefaultBrowser()
         browsers.add(browser)
-        assertEquals(BrowserId.DEFAULT, browser.id)
-        assertEquals(BrowserId.DEFAULT.contextDir, browser.id.contextDir)
+        assertEquals(BrowserId.createDefault(), browser.id)
+        assertEquals(BrowserId.createDefault().contextDir, browser.id.contextDir)
     }
 
     @Test
     fun testLaunchPrototypeBrowser() {
         val browser = browserFactory.launchPrototypeBrowser()
         browsers.add(browser)
-        assertEquals(BrowserId.PROTOTYPE, browser.id)
-        assertEquals(BrowserId.PROTOTYPE.contextDir, browser.id.contextDir)
+        assertEquals(BrowserId.createPrototype(), browser.id)
+        assertEquals(BrowserId.createPrototype().contextDir, browser.id.contextDir)
     }
 
     @Test

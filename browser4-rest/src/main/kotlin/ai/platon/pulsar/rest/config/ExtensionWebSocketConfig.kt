@@ -9,6 +9,8 @@ import org.springframework.context.annotation.Configuration
 import org.springframework.web.socket.config.annotation.EnableWebSocket
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
+import org.springframework.web.socket.server.jetty.JettyRequestUpgradeStrategy
+import org.springframework.web.socket.server.support.DefaultHandshakeHandler
 
 /**
  * Registers the WebSocket endpoint that the Browser4 Chrome Extension connects
@@ -37,10 +39,32 @@ class ExtensionWebSocketConfig(
     override fun registerWebSocketHandlers(registry: WebSocketHandlerRegistry) {
         registry.addHandler(extensionWebSocketHandler(), "/ws/extension/{sessionId}")
             .setAllowedOrigins("*") // extension connects from chrome-extension:// origin
+            .setHandshakeHandler(extensionHandshakeHandler())
     }
 
     @Bean
     fun extensionWebSocketHandler(): ExtensionWebSocketHandler {
         return ExtensionWebSocketHandler(sessionManager)
+    }
+
+    /**
+     * The extension relays CDP responses (e.g. `Runtime.evaluate` results of
+     * large DOM dumps or `DOMSnapshot` payloads) that routinely exceed Jetty's
+     * default 64KB WebSocket message limit.  Exceeding it makes Jetty close the
+     * connection with code 1009 ("Text message too large"), tearing down the
+     * relay mid-session.  Raise the message size limit to 16 MiB so large CDP
+     * payloads get through.
+     */
+    private fun extensionHandshakeHandler(): DefaultHandshakeHandler {
+        val strategy = JettyRequestUpgradeStrategy()
+        strategy.addWebSocketConfigurer { configurable: org.eclipse.jetty.websocket.api.Configurable ->
+            configurable.maxTextMessageSize = EXTENSION_WS_MESSAGE_LIMIT.toLong()
+            configurable.maxBinaryMessageSize = EXTENSION_WS_MESSAGE_LIMIT.toLong()
+        }
+        return DefaultHandshakeHandler(strategy)
+    }
+
+    private companion object {
+        const val EXTENSION_WS_MESSAGE_LIMIT: Int = 16 * 1024 * 1024
     }
 }

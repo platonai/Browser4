@@ -14,7 +14,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4</artifactId>
-        <version>4.14.0-rc.3</version>
+        <version>4.14.0-rc.6</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -102,17 +102,19 @@
             <artifactId>kotlin-sdk-client-jvm</artifactId>
             <version>${mcp-sdk.version}</version>
         </dependency>
-        <!-- Ktor CIO engine for embedded MCP HTTP server (lightweight, pure Kotlin) -->
+        <!-- Ktor CIO engine for embedded MCP HTTP server (lightweight, pure Kotlin).
+             The version must match the Ktor the MCP SDK is built against — see
+             ktor.version in browser4-dependencies. -->
         <dependency>
             <groupId>io.ktor</groupId>
             <artifactId>ktor-server-cio-jvm</artifactId>
-            <version>3.2.3</version>
+            <version>${ktor.version}</version>
         </dependency>
         <!-- Ktor client CIO engine: MCP HTTP transports (external memory bridge) + MCP HTTP E2E tests -->
         <dependency>
             <groupId>io.ktor</groupId>
             <artifactId>ktor-client-cio-jvm</artifactId>
-            <version>3.2.3</version>
+            <version>${ktor.version}</version>
         </dependency>
         <!-- Observability: OpenTelemetry for distributed tracing (optional) -->
         <dependency>

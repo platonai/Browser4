@@ -1,0 +1,54 @@
+{
+  "meta": {
+    "scenario": "xsql-engine-parity-fixes",
+    "mode": "upstream",
+    "source": "20260903-184139-xsql-engine-domfirstfloat-predicate-and-img-expr.full.md",
+    "date": "20260903-184139"
+  },
+  "background": {
+    "executionContext": "**Fix round 2026-09-03** for the reviewed batch `20260902-212331-x-sql-extraction-functions` (draft/2026/0902). Issues 1 and 2 of that batch were reviewed ACCEPT with the same instruction: the root cause lives in the EXTERNAL ai.platon.pulsar X-SQL UDF engine (browser4-rest depends on `pulsar-ql` / `pulsar-ql-common`; no `ai/platon/pulsar/ql/**` sources exist in this repo), so the real UDF fixes must be bundled into ONE upstream ticket (this one) that lands with the next pulsar dependency bump. In-repo deliverables for the two issues (server-side error hints, :expr warning, docs, parity tests, CLI tips) were shipped on 4.13.x on 2026-09-03 and are described in each section below under 'In-repo status'.",
+    "task": "Create the single upstream engine ticket covering both reviewed X-SQL defects: (1) DOM_FIRST_FLOAT / DOM_FIRST_INTEGER cannot be compared to a numeric literal in WHERE/HAVING (opaque H2 'Hexadecimal string contains non-hex character' 90004-197), and (2) DOM_*_IMG functions (DOM_FIRST_IMG / DOM_NTH_IMG / DOM_ALL_IMGS) silently ignore PowerCSS :expr(...) selectors while DOM_FIRST_ATTR / DOM_SELECT_FIRST / table selectors honor them. Land together with a dependency bump once fixed in pulsar-ql."
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "pulsar-ql X-SQL engine: DOM_FIRST_FLOAT/INTEGER not comparable to numeric literals in WHERE, and DOM_*_IMG ignores :expr() selectors — fix together, land with dependency bump",
+      "severity": "High",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Against the MockSite Electronics category (6 product cards):\n1. Numeric predicate: SELECT DOM_FIRST_TEXT(DOM, '.product-title') FROM DOM_LOAD_AND_SELECT(@url, '.product-card') WHERE DOM_FIRST_FLOAT(DOM, '.product-price') >= 25.0 → 417 'Expectation Failed', H2 error 'Hexadecimal string contains non-hex character: \"899.99\"' (SQL 90004-197). Also fails with an integer literal (>= 25) and with the 3-arg overload DOM_FIRST_FLOAT(DOM, sel, 0.0). Works: CAST(... AS DOUBLE) wrapper, STR_FIRST_FLOAT(DOM_FIRST_TEXT(...), 0.0), and raw DOM_FIRST_FLOAT in SELECT / ORDER BY.\n2. :expr on images: SELECT DOM_FIRST_IMG(DOM, 'img.product-img:expr(width > 100 && height > 100)') → empty string / no match, even for the tautology :expr(width >= 0), with no error or warning. The identical selector returns URLs through DOM_FIRST_ATTR(DOM, sel, 'src'), DOM_ABS_SRC(DOM_SELECT_FIRST(DOM, sel)), the FROM selector, and htmlsnapshot get attr."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "1. WHERE DOM_FIRST_FLOAT(DOM, '.price') >= 25.0 filters rows numerically — the same expression already works in SELECT and ORDER BY. 2. DOM_FIRST_IMG(DOM, 'img.x:expr(...)') returns the src of a matching image, consistent with the documented claim that :expr is usable in X-SQL DOM_* functions."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "1. WHERE/HAVING comparison against a numeric literal triggers a fallback type-conversion path that hex-decodes the custom value type's string form ('899.99') and dies with the opaque H2 error (SQL 90004-197); zero rows, no hint about the offending expression or the CAST workaround. 2. DOM_*_IMG evaluates its selector through a path that does not parse/evaluate :expr(...) (or evaluates features on an unmeasured DOM copy where every expression is false) → silent no-match, indistinguishable from 'page has no such image'."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Both defects sit in the external pulsar X-SQL UDF engine (ai.platon.pulsar pulsar-ql), not in this repo. 1. DOM_FIRST_FLOAT/DOM_FIRST_INTEGER register a custom H2 value type that is not numeric-comparable in predicates. 2. DOM_FIRST_IMG / DOM_NTH_IMG / DOM_ALL_IMGS alias implementation diverges from DOM_FIRST_ATTR / DOM_SELECT_FIRST / DOM_LOAD_AND_SELECT selector handling (img-scanning path vs PowerCSS-capable selector engine). Reproduce in pulsar-ql with its own H2 test harness; no in-repo code change can fix either."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "External dependency: ai.platon.pulsar pulsar-ql / pulsar-ql-common (function aliases per docs: DomSelectFunctions DOM_FIRST_FLOAT + DOM_FIRST_IMG implementations, H2 function/type registration). Deps declared in browser4-rest/pom.xml. Lands in Browser4 via the next pulsar dependency version bump; add regression tests in pulsar-ql (numeric predicate on DOM_FIRST_FLOAT/INTEGER; :expr parity across DOM_FIRST_IMG vs DOM_FIRST_ATTR vs DOM_SELECT_FIRST vs DOM_LOAD_AND_SELECT)."
+        },
+        {
+          "label": "Fix Plan (upstream)",
+          "body": "1. Register DOM_FIRST_FLOAT / DOM_FIRST_INTEGER (and DOM_NTH_*/DOM_ALL_* float/integer results) as numeric H2 types — or return plain DOUBLE/INT — so predicate comparisons work without CAST. 2. Route DOM_*_IMG selectors through the same PowerCSS-capable selector engine as DOM_FIRST_ATTR/DOM_SELECT_FIRST (or, if that is intentional, make the engine reject :expr on img functions with a clear error instead of a silent empty match). 3. Ship with a dependency bump in browser4-rest."
+        },
+        {
+          "label": "In-repo Status",
+          "body": "Mitigations already shipped on 4.13.x (2026-09-03, uncommitted working tree): server-side hints appended to the 417 message by HTMLSnapshotToolExecutor (CAST hint on the hex error when the SQL calls DOM_FIRST_(FLOAT|INTEGER); single-quote hint kept); logger.warn when a DOM_*_IMG function receives an :expr selector; CLI prints a targeted fix bullet + a terminal-only tip; docs corrected in SKILL.md §4e/§PowerCSS, references/x-sql.md, references/x-sql-dom-select-functions.md §3.6, references/power-dom.md; parity tests (Kotlin detectors + Rust unit tests + mock e2e). Once this upstream ticket lands, remove the workaround wording that says 'tracked upstream'."
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}

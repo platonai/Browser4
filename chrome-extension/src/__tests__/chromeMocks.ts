@@ -46,9 +46,17 @@ export const mockTabsCreate = vi.fn();
 export const mockTabsRemove = vi.fn();
 export const mockTabsUpdate = vi.fn();
 export const mockTabsQuery = vi.fn();
+export const mockTabsGet = vi.fn();
 
 export const mockTabsOnCreated = createEventMock();
 export const mockTabsOnRemoved = createEventMock();
+export const mockTabsOnUpdated = createEventMock();
+
+// ─── chrome.alarms ───────────────────────────────────────────────────────
+
+export const mockAlarmsCreate = vi.fn();
+export const mockAlarmsClear = vi.fn();
+export const mockAlarmsOnAlarm = createEventMock();
 
 // ─── chrome.runtime ───────────────────────────────────────────────────────
 
@@ -68,6 +76,7 @@ export function installChromeMocks() {
   _chromeBackup.tabs = (globalThis as any).chrome?.tabs;
   _chromeBackup.runtime = (globalThis as any).chrome?.runtime;
   _chromeBackup.windows = (globalThis as any).chrome?.windows;
+  _chromeBackup.alarms = (globalThis as any).chrome?.alarms;
 
   (globalThis as any).chrome = {
     debugger: {
@@ -82,8 +91,10 @@ export function installChromeMocks() {
       remove: mockTabsRemove,
       update: mockTabsUpdate,
       query: mockTabsQuery,
+      get: mockTabsGet,
       onCreated: mockTabsOnCreated,
       onRemoved: mockTabsOnRemoved,
+      onUpdated: mockTabsOnUpdated,
     },
     runtime: {
       sendMessage: mockRuntimeSendMessage,
@@ -91,6 +102,11 @@ export function installChromeMocks() {
     },
     windows: {
       update: mockWindowsUpdate,
+    },
+    alarms: {
+      create: mockAlarmsCreate,
+      clear: mockAlarmsClear,
+      onAlarm: mockAlarmsOnAlarm,
     },
   };
 }

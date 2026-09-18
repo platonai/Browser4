@@ -1,4 +1,5 @@
 #!/usr/bin/env pwsh
+#requires -Version 7
 
 # ===================================================================
 # CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
@@ -141,6 +142,107 @@ function Invoke-CommandAndReport {
     return $exitCode
 }
 
+# kotlin-maven-plugin (2.x) daemon failure markers.  The plugin connects to
+# a KotlinCompileDaemon; stale daemons left by crashed builds or a second
+# Maven build running concurrently surface as opaque daemon connection
+# errors ('Failed connecting to the daemon in 4 retries').
+$script:KotlinDaemonErrorPattern = '(?i)(connecting to the daemon|kotlin.{0,24}daemon)'
+
+function Write-DaemonRecoveryGuide {
+    <#
+    .SYNOPSIS
+        Print a diagnosable recovery guide for Kotlin compiler daemon
+        connection failures.
+
+    .DESCRIPTION
+        Deliberately does NOT auto-kill daemons: taskkill on java.exe could
+        kill the daemons of a concurrent legitimate build.  The guide lists
+        the manual cleanup commands instead.
+    #>
+    Write-Host ''
+    Write-Host 'Kotlin compiler daemon connection failure — recovery steps:' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host '  1. Concurrency: run only ONE Maven-driven build at a time.  If another build'
+    Write-Host '     is running (e.g. b4w.ps1, test.ps1 fast/it/e2e, a second mock-site boot),'
+    Write-Host '     wait for it to finish, then re-run this command.'
+    Write-Host '  2. Stale daemons: a crashed build can leave orphaned KotlinCompileDaemon'
+    Write-Host '     java processes that block new connections.  List them:'
+    Write-Host ''
+    Write-Host "       Get-CimInstance Win32_Process -Filter \"Name = 'java.exe'\" | Where-Object { `$_.CommandLine -match 'KotlinCompileDaemon' } | Select-Object ProcessId, CommandLine"
+    Write-Host ''
+    Write-Host '     Kill only the stale daemon PIDs — never taskkill //IM java.exe (that also'
+    Write-Host '     kills any legitimately running browser4/IDE processes):'
+    Write-Host ''
+    Write-Host '       taskkill //PID <daemon-pid> //F'
+    Write-Host ''
+    Write-Host '  3. Re-run:  test.ps1 mock-site --force'
+    Write-Host ''
+}
+
+function Invoke-KotlinCompileWithRetry {
+    <#
+    .SYNOPSIS
+        Run a Kotlin-compiling Maven invocation with ONE automatic retry on
+        Kotlin daemon connection failures.
+
+    .DESCRIPTION
+        kotlin-maven-plugin daemon errors ('Failed connecting to the daemon
+        in 4 retries') are intermittent: a single retry after a short pause
+        recovers most cases.  Non-daemon failures (real compile errors) exit
+        immediately without retry.  On a persistent daemon failure a
+        diagnosable recovery guide (Write-DaemonRecoveryGuide) is printed.
+        Output is streamed live to the host and captured for marker
+        detection.
+
+    .PARAMETER Label
+        Human-readable label for banner messages (passed through).
+    .PARAMETER PreExecPath
+        Optional directory to Push-Location into before execution.
+    .PARAMETER MvnArgs
+        Arguments for the Maven wrapper invocation.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Label,
+        [string]$PreExecPath = '',
+        [Parameter(Mandatory)][string[]]$MvnArgs
+    )
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        $exitCode = 1
+        try {
+            if ($PreExecPath) { Push-Location $PreExecPath }
+            $global:LASTEXITCODE = 0
+            $output = & $mvnwScript @MvnArgs 2>&1 | Tee-Object -Variable bootOutput | Out-Host
+            $exitCode = $LASTEXITCODE
+            $output = $bootOutput
+        }
+        catch {
+            Write-Error "Failed to execute $Label`: $_"
+            exit 1
+        }
+        finally {
+            if ($PreExecPath) { Pop-Location }
+        }
+
+        if ($exitCode -eq 0) {
+            Write-CommandBanner -Label "$Label completed successfully" -Icon '[PASS]'
+            return 0
+        }
+
+        $isDaemonFailure = (($output | Out-String) -match $script:KotlinDaemonErrorPattern)
+        if ($attempt -eq 1 -and $isDaemonFailure) {
+            Write-CommandBanner -Label "$Label hit a Kotlin compiler daemon error (exit code $exitCode) — retrying once after 5s..." -Icon '[RETRY]'
+            Start-Sleep -Seconds 5
+            continue
+        }
+
+        Write-CommandBanner -Label "$Label failed with exit code $exitCode" -Icon '[FAIL]'
+        if ($isDaemonFailure) {
+            Write-DaemonRecoveryGuide
+        }
+        exit $exitCode
+    }
+}
+
 function Invoke-BackendBuild {
     <#
     .SYNOPSIS
@@ -185,10 +287,12 @@ function Print-Usage {
     Write-Host "Options:"
     Write-Host "  -DryRun      Compile only (test-compile), do not run tests"
     Write-Host "  -Show        Print the final command, do not execute anything"
-    Write-Host "  -NoSession     Skip persisting test results to .test-sessions/<session-id>/test-session.json"
+    Write-Host "  -NoSession     Skip persisting test results to .test-sessions/<run-id>/test-session.json"
+    Write-Host "                 (each run still gets its own scratch subdirectory)"
     Write-Host "  -BuildBackend  Run mvnw test-compile before any tests (fail fast on build errors)"
-    Write-Host "  -SessionPath   Custom path for the test-session JSON file"
-    Write-Host "               (default: <repo-root>/.test-sessions/<timestamp>/test-session.json)"
+    Write-Host "  -SessionPath   Custom path for the test-session JSON file (escape hatch only;"
+    Write-Host "                 the run's scratch directory is unaffected)"
+    Write-Host "               (default: <repo-root>/.test-sessions/<run-id>/test-session.json)"
     Write-Host ""
     Write-Host "Test Types:"
     Write-Host "  fast        Run fast unit tests only"
@@ -201,6 +305,7 @@ function Print-Usage {
     Write-Host "  rest        Run REST module tests"
     Write-Host "  skills      Run skills-focused agentic tests"
     Write-Host "  mcp         Run MCP-focused agentic tests"
+    Write-Host "  mcp-contract  Contract gate: tool matrix, docs, lint, validators (agentic + rest)"
     Write-Host "  ps          Run all PowerShell *.tests.ps1 files in the project"
     Write-Host "  rws         Run real-world scenario tests (requires a mode)"
     Write-Host "              sc, scenarios <names...>  run named tasks via run-tests.ps1"
@@ -217,8 +322,9 @@ function Print-Usage {
     Write-Host "              dir --metadata, -m [path]  list files with size and date"
     Write-Host "              dir --interactive, -Interactive  pick directories interactively"
     Write-Host "              task <file>               run a single task via run-task.ps1"
-    Write-Host "  session     List or view persisted test sessions (list, view)"
+    Write-Host "  session     Inspect persisted test sessions (list, view, prune)"
     Write-Host "              list --all | --count N   Paginate session listing (default: 15)"
+    Write-Host "              prune --keep N | --all   Delete old run directories"
     Write-Host ""
     Write-Host "  RWS options (accepted after the mode):"
     Write-Host "    --production                Use installed browser4-cli instead of cargo run"
@@ -237,6 +343,7 @@ function Print-Usage {
     Write-Host "  test.ps1 -BuildBackend fast         # Build backend, then run fast tests"
     Write-Host "  test.ps1 -NoSession fast              # Run fast tests without persisting session"
     Write-Host "  test.ps1 -SessionPath out/session.json ps  # Write session to a custom path"
+    Write-Host "  test.ps1 session prune --keep 5      # Delete all but the newest 5 run directories"
     Write-Host "  test.ps1 -DryRun fast               # Show the Maven command for fast tests"
     Write-Host "  test.ps1 -DryRun it -pl browser4-core  # Show the Maven command with extra args"
     Write-Host "  test.ps1 it                         # Run integration tests"
@@ -247,8 +354,13 @@ function Print-Usage {
     Write-Host "  test.ps1 cli -- -s=tool_* -L=ALL    # Run scenarios matching a glob pattern (ALL levels)"
     Write-Host "  test.ps1 mock-site -Dmock.site.port=18080"
     Write-Host "  test.ps1 mock-site --force              # Auto-kill process on port 18080"
+    Write-Host "  NOTE: run only ONE Maven-driven build at a time. Concurrent builds (mock-site,"
+    Write-Host "        b4w.ps1, test.ps1 fast/it/e2e) contend for the Kotlin compiler daemon and"
+    Write-Host "        fail with 'Failed connecting to the daemon in 4 retries'. The launcher"
+    Write-Host "        retries once automatically; if it still fails, see the printed recovery guide."
     Write-Host "  test.ps1 skills                     # Run skills-focused agentic tests"
     Write-Host "  test.ps1 mcp                        # Run MCP-focused agentic tests"
+    Write-Host "  test.ps1 mcp-contract               # Contract gate: matrix + docs + lint + validators"
     Write-Host "  test.ps1 ps                         # Run all PowerShell *.tests.ps1 files"
     Write-Host "  test.ps1 ps -Quiet                  # Run PowerShell tests with -Quiet flag"
     Write-Host "  test.ps1 resume                     # Resume from the last failed module"
@@ -304,19 +416,44 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
     $hasRest = $testTypes -contains 'rest'
     $hasSkills = $testTypes -contains 'skills'
     $hasMcp = $testTypes -contains 'mcp'
+    $hasMcpContract = $testTypes -contains 'mcp-contract'
 
     if ($hasIT) { $mvnTestArgs += '-DrunITs=true' }
     if ($hasE2E) { $mvnTestArgs += '-DrunE2ETests=true' }
     if ($hasRest) { $mvnTestArgs += '-DrunRestTests=true' }
 
     $modules = @()
-    if ($hasSkills -or $hasMcp) {
+    if ($hasSkills -or $hasMcp -or $hasMcpContract) {
         $modules += 'browser4-agentic'
+
+        # The contract gate also inspects the plugin/business domains, whose specs
+        # live in browser4-rest (crawl, command, webdb, skill, memory, batch, ...).
+        if ($hasMcpContract) { $modules += 'browser4-rest' }
 
         if (-not ($hasFast -or $hasIT -or $hasE2E -or $hasRest)) {
             $patterns = @()
             if ($hasSkills) { $patterns += '*Skill*' }
             if ($hasMcp) { $patterns += '*MCP*' }
+            if ($hasMcpContract) {
+                # Quality gates and the generated reference travel with the contract:
+                # a tool whose docs, lint or schema drifted is not shippable either.
+                $patterns += @(
+                    'ToolContractMatrixTest',
+                    'ToolDocGeneratorTest',
+                    'ToolSpecLintTest',
+                    'ToolSpecValidatorTest',
+                    'ToolResultValidatorTest',
+                    'ToolErrorCodeTest',
+                    'ToolRateLimiterTest',
+                    'ToolResultCacheTest',
+                    'BatchExecutorTest',
+                    'BatchToolExecutorTest',
+                    'TaskEnvelopesTest',
+                    'ToolInvocationLoggerTest',
+                    'ToolMetricsTest',
+                    'McpToolAliasParityTest'
+                )
+            }
 
             if ($patterns.Count -gt 0) {
                 $mvnTestArgs += "-Dtest=$($patterns -join ',')"
@@ -348,7 +485,7 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
     $sw.Stop()
 
     # -- Persist session --------------------------------------------------
-    if ($script:SessionAvailable) {
+    if ($script:PersistSession) {
         Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
         $status = if ($exitCode -eq 0) { 'pass' } else { 'fail' }
         $dur = [math]::Round($sw.Elapsed.TotalSeconds, 1)
@@ -385,6 +522,10 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
         Write-Error "Cargo.toml not found at $cargoTomlPath"
         exit 1
     }
+
+    # Preflight: the b4w wrappers must propagate the CLI exit code.  Fast,
+    # offline (no backend, no build) — fails before the expensive e2e run.
+    Invoke-WrapperSmokeTests
 
     if ($script:Show) {
         $cargoArgs = @('test', '--test', 'e2e', '--color', 'always', '--', '--nocapture') + $additionalArgs
@@ -426,7 +567,7 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
     }
 
     # -- Persist session --------------------------------------------------
-    if ($script:SessionAvailable) {
+    if ($script:PersistSession) {
         Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
         $status = if ($exitCode -eq 0) { 'pass' } else { 'fail' }
         $dur = [math]::Round($sw.Elapsed.TotalSeconds, 1)
@@ -451,6 +592,103 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
     }
 
     if ($exitCode -ne 0) { exit $exitCode }
+}
+
+function Invoke-WrapperSmokeTests {
+    <#
+    .SYNOPSIS
+        Smoke-check that the b4w wrappers propagate the CLI exit code.
+
+    .DESCRIPTION
+        Regression guard for "b4w.ps1 swallows the CLI exit code": a failing
+        CLI invocation (unknown command -> the CLI exits 2) must come back as
+        a non-zero exit code through the wrapper's real subprocess shapes —
+        `pwsh -File b4w.ps1` (used by the Git Bash shebang and by scripts)
+        and b4w.bat on Windows.  A successful invocation (--version) must
+        still exit 0.  Fast and offline: no backend and no cargo build are
+        involved (passes -NoBuild and skips when the debug binary is absent).
+
+        Runs as a preflight of the `cli` test scope (Invoke-Browser4CliTests)
+        before the cargo e2e run.
+    #>
+    Write-CommandBanner -Label 'Running b4w wrapper exit-code smoke checks...'
+
+    $b4wPs1 = Join-Path $repoRoot 'b4w.ps1'
+    if (-not (Test-Path $b4wPs1)) {
+        Write-Error "b4w.ps1 not found at $b4wPs1"
+        exit 1
+    }
+    $b4wPs1 = (Resolve-Path $b4wPs1).Path
+
+    $exeName = if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'browser4-cli.exe' } else { 'browser4-cli' }
+    $cliExe = Join-Path $repoRoot 'cli' 'browser4-cli' 'target' 'debug' $exeName
+    if (-not (Test-Path $cliExe)) {
+        Write-Host "  [WARN] SKIP: CLI binary not found at $cliExe" -ForegroundColor Yellow
+        Write-Host '         Build it first (e.g. test.ps1 cli or cargo build) and re-run this smoke check.' -ForegroundColor Yellow
+        return
+    }
+
+    if ($script:Show -or $script:DryRun) {
+        $label = if ($script:Show) { '[SHOW] Would execute' } else { '[DRY RUN] Would execute' }
+        Write-CommandBanner -Label $label
+        Write-Host "  pwsh -NoProfile -File $b4wPs1 -NoBuild <unknown-command>   (expect non-zero exit)"
+        if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+            $b4wBatShow = Join-Path $repoRoot 'b4w.bat'
+            Write-Host "  $b4wBatShow <unknown-command>  (expect non-zero exit)"
+        }
+        Write-Host "  pwsh -NoProfile -File $b4wPs1 -NoBuild --version    (expect exit 0)"
+        return
+    }
+
+    $failed = 0
+    $unknownCmd = 'nosuchcommand_b4w_wrapper_smoke'
+
+    # 1) Failing invocation through b4w.ps1 as a subprocess (pwsh -File) —
+    #    the shape used by the Git Bash shebang, scripts, and CI.
+    $global:LASTEXITCODE = 0
+    & pwsh -NoProfile -File $b4wPs1 -NoBuild $unknownCmd *> $null
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -eq 0) {
+        Write-Host "    ❌ b4w.ps1 swallowed the CLI exit code for '$unknownCmd' (got 0)" -ForegroundColor Red
+        $failed++
+    } else {
+        Write-Host "    ✅ b4w.ps1 propagates failure exit code $exitCode for '$unknownCmd'" -ForegroundColor Green
+    }
+
+    # 2) Failing invocation through b4w.bat (Windows cmd.exe entry point).
+    if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+        $b4wBat = Join-Path $repoRoot 'b4w.bat'
+        if (Test-Path $b4wBat) {
+            $global:LASTEXITCODE = 0
+            & $b4wBat -NoBuild $unknownCmd *> $null
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -eq 0) {
+                Write-Host '    ❌ b4w.bat swallowed the CLI exit code for the same command (got 0)' -ForegroundColor Red
+                $failed++
+            } else {
+                Write-Host "    ✅ b4w.bat propagates failure exit code $exitCode" -ForegroundColor Green
+            }
+        }
+    }
+
+    # 3) Successful invocation must still exit 0 (exit-code propagation must
+    #    not turn every run into a failure).
+    $global:LASTEXITCODE = 0
+    & pwsh -NoProfile -File $b4wPs1 -NoBuild --version *> $null
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        Write-Host "    ❌ b4w.ps1 --version exited $exitCode (expected 0)" -ForegroundColor Red
+        $failed++
+    } else {
+        Write-Host '    ✅ b4w.ps1 --version exits 0' -ForegroundColor Green
+    }
+
+    Write-Host ''
+    if ($failed -gt 0) {
+        Write-CommandBanner -Label "$failed wrapper smoke check(s) failed" -Icon '[FAIL]'
+        exit 1
+    }
+    Write-CommandBanner -Label 'Wrapper exit-code smoke checks completed successfully' -Icon '[PASS]'
 }
 
 function Invoke-MockSiteBoot([string[]]$additionalArgs) {
@@ -608,6 +846,8 @@ To use a different port:
 
         # Phase 2: browser4-rest + transitive deps (slow on first build —
         #          browser4-rest compiles ~25 modules; 10-15 min cold).
+        #          Compiles Kotlin → uses the Kotlin compile daemon, so the
+        #          invocation carries one automatic daemon-failure retry.
         $preflightRestArgs = @(
             'install',
             '-pl', 'browser4-rest',
@@ -615,11 +855,13 @@ To use a different port:
             '-DskipTests',
             '-q'
         )
-        Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @preflightRestArgs } `
-            -Label 'InstallBrowser4Rest' -PreExecPath $repoRoot
+        Invoke-KotlinCompileWithRetry -Label 'InstallBrowser4Rest' -PreExecPath $repoRoot -MvnArgs $preflightRestArgs
     }
 
-    Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @mvnArgs } -Label 'MockSiteBoot' -PreExecPath $mockSiteModuleDir
+    # 'package spring-boot:run' compiles Kotlin (browser4-rest-tests and its
+    # -am reactor modules) → one automatic Kotlin-daemon retry, with a
+    # diagnosable recovery guide if it persists.
+    Invoke-KotlinCompileWithRetry -Label 'MockSiteBoot' -PreExecPath $mockSiteModuleDir -MvnArgs $mvnArgs
 }
 
 function Show-RwsDirectoryTree {
@@ -2909,7 +3151,7 @@ Return ONLY the refined Markdown. Do not include any preamble, commentary, or co
     }
 
     # -- Persist session --------------------------------------------------
-    if ($script:SessionAvailable) {
+    if ($script:PersistSession) {
         Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
         $status = if ($exitCode -eq 0) { 'pass' } else { 'fail' }
         $dur = [math]::Round($sw.Elapsed.TotalSeconds, 1)
@@ -3124,7 +3366,7 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
     Write-Rule
 
     # -- Persist session --------------------------------------------------
-    if ($script:SessionAvailable) {
+    if ($script:PersistSession) {
         Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
         Update-TestSessionResult -RepoRoot $repoRoot -TestKey 'ps' `
             -Status $overallStatus -ExitCode $overallExit -DurationSec $totalSec `
@@ -3256,14 +3498,18 @@ function Invoke-ResumeTests([string[]]$additionalArgs) {
 function Invoke-SessionCommand([string[]]$additionalArgs) {
     <#
     .SYNOPSIS
-        List or view persisted test sessions from .test-sessions/.
+        List, view, or prune persisted test sessions from .test-sessions/.
 
     .DESCRIPTION
-        Operates on the .test-sessions/ directory in the repo root.
+        Operates on the .test-sessions/ directory in the repo root, where every
+        test run owns one subdirectory (<run-id>/test-session.json plus that
+        run's scratch files).
+
         Subcommands:
           list              List all past test sessions in a summary table.
           view <sessionId>  Pretty-print a single session's JSON.
                             Supports prefix matching on the timestamp ID.
+          prune             Delete old run directories, keeping the newest N.
 
         Without a subcommand, shows session-specific usage.
     #>
@@ -3277,9 +3523,9 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
     $subArgs = @($additionalArgs | Select-Object -Skip 1)
 
     # -- Help (no subcommand or unknown) -------------------------------
-    if ($subcommand -eq '' -or $subcommand -notin @('list', 'view')) {
-        if ($subcommand -ne '' -and $subcommand -notin @('list', 'view')) {
-            Write-Error "Unknown session subcommand '$subcommand'. Valid subcommands: list, view"
+    if ($subcommand -eq '' -or $subcommand -notin @('list', 'view', 'prune')) {
+        if ($subcommand -ne '' -and $subcommand -notin @('list', 'view', 'prune')) {
+            Write-Error "Unknown session subcommand '$subcommand'. Valid subcommands: list, view, prune"
         }
         Write-Host ''
         Write-Host 'Usage: test.ps1 session <subcommand> [options]'
@@ -3289,6 +3535,9 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
         Write-Host '                      --all        Show all sessions'
         Write-Host '                      --count N    Show last N sessions'
         Write-Host '  view <sessionId>  Show the full JSON for a session'
+        Write-Host '  prune             Delete old run directories (default: keep newest 10)'
+        Write-Host '                      --keep N     Keep the newest N run directories'
+        Write-Host '                      --all        Delete every run directory'
         Write-Host ''
         Write-Host 'Options:'
         Write-Host '  -Show             Print the command, do not execute'
@@ -3298,12 +3547,88 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
         Write-Host '  test.ps1 session list'
         Write-Host '  test.ps1 session view 20260724T1917'
         Write-Host '  test.ps1 session view 20260724T1917366034791Z'
+        Write-Host '  test.ps1 session prune --keep 5'
         exit 0
     }
 
     # -- Guard: .test-sessions directory must exist --------------------
     if (-not (Test-Path -LiteralPath $sessionsDir -PathType Container)) {
         Write-Host 'No .test-sessions directory found. Run some tests first.' -ForegroundColor Yellow
+        exit 0
+    }
+
+    # ===================================================================
+    # session prune [--keep N] [--all]
+    # ===================================================================
+    if ($subcommand -eq 'prune') {
+        $keep = 10
+        $pruneAll = $false
+
+        $i = 0
+        while ($i -lt $subArgs.Count) {
+            $a = $subArgs[$i]
+            if ($a -eq '--all') {
+                $pruneAll = $true
+                $i++
+            } elseif ($a -in @('--keep', '-Keep', '-k') -and ($i + 1) -lt $subArgs.Count) {
+                $val = $subArgs[$i + 1]
+                if ($val -match '^\d+$') {
+                    $keep = [int]$val
+                    $i += 2
+                } else {
+                    Write-Error "session prune --keep requires a non-negative integer, got: $val"
+                    exit 1
+                }
+            } else {
+                Write-Error "Unknown session prune flag: $a. Valid flags: --keep N, --all"
+                exit 1
+            }
+        }
+
+        # '_legacy' holds pre-restructure artifacts and is deliberately excluded
+        # from pruning so old evidence is never destroyed by a routine cleanup.
+        $runDirs = @(Get-ChildItem -Path $sessionsDir -Directory |
+            Where-Object { $_.Name -ne '_legacy' } |
+            Sort-Object LastWriteTime -Descending)
+
+        if ($runDirs.Count -eq 0) {
+            Write-Host 'Nothing to prune - no run directories in .test-sessions/.' -ForegroundColor Yellow
+            exit 0
+        }
+
+        $doomed = @(if ($pruneAll) { $runDirs } else { $runDirs | Select-Object -Skip $keep })
+
+        if ($doomed.Count -eq 0) {
+            $total = $runDirs.Count
+            Write-Host "Nothing to prune - $total run $(if ($total -eq 1) { 'directory' } else { 'directories' }) present, keeping the newest $keep." -ForegroundColor Green
+            exit 0
+        }
+
+        $isPreview = $script:Show -or $script:DryRun
+        $noun = if ($doomed.Count -eq 1) { 'directory' } else { 'directories' }
+        $keptLabel = if ($pruneAll) { 'none' } else { "the newest $keep" }
+
+        Write-Host ''
+        Write-Host "$(if ($isPreview) { '[DRY RUN] Would delete' } else { 'Deleting' }) $($doomed.Count) run $noun, keeping ${keptLabel}:" -ForegroundColor $(if ($isPreview) { 'Yellow' } else { 'Cyan' })
+
+        foreach ($dir in $doomed) {
+            $bytes = (Get-ChildItem -LiteralPath $dir.FullName -Recurse -File -ErrorAction SilentlyContinue |
+                Measure-Object -Property Length -Sum).Sum
+            if (-not $bytes) { $bytes = 0 }
+            $sizeMb = [math]::Round($bytes / 1MB, 2)
+            Write-Host ("  - {0,-34} {1,8} MB  {2}" -f $dir.Name, $sizeMb, $dir.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))
+
+            if (-not $isPreview) {
+                Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        Write-Host ''
+        if ($isPreview) {
+            Write-Host 'Re-run without -DryRun/-Show to actually delete.' -ForegroundColor DarkGray
+        } else {
+            Write-Host "Pruned $($doomed.Count) run $noun." -ForegroundColor Green
+        }
         exit 0
     }
 
@@ -3347,6 +3672,17 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
 
         if ($sessionDirs.Count -eq 0) {
             Write-Host 'No test sessions found in .test-sessions/.' -ForegroundColor Yellow
+            # Pre-restructure runs were archived under _legacy/ and are
+            # deliberately excluded from the live listing — point at them
+            # instead of implying the history is empty.
+            $legacyRoot = Join-Path $sessionsDir '_legacy'
+            if (Test-Path -LiteralPath $legacyRoot -PathType Container) {
+                $archived = @(Get-ChildItem -Path $legacyRoot -Directory -ErrorAction SilentlyContinue |
+                    Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'test-session.json') -PathType Leaf })
+                if ($archived.Count -gt 0) {
+                    Write-Host "  $($archived.Count) archived session(s) present under .test-sessions/_legacy/ - use 'session view <id>' to read one." -ForegroundColor DarkGray
+                }
+            }
             exit 0
         }
 
@@ -3448,8 +3784,17 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
             return
         }
 
-        # Find matching session directories (support prefix matching)
-        $matches = @(Get-ChildItem -Path $sessionsDir -Directory |
+        # Find matching session directories across live runs and the _legacy
+        # archive (support prefix matching)
+        $searchRoots = @($sessionsDir)
+        $legacyRoot = Join-Path $sessionsDir '_legacy'
+        if (Test-Path -LiteralPath $legacyRoot -PathType Container) {
+            $searchRoots += $legacyRoot
+        }
+
+        $matches = @($searchRoots | ForEach-Object {
+                Get-ChildItem -Path $_ -Directory -ErrorAction SilentlyContinue
+            } |
             Where-Object {
                 $_.Name -like "$sessionIdPattern*" -and
                 (Test-Path -LiteralPath (Join-Path $_.FullName 'test-session.json') -PathType Leaf)
@@ -3503,6 +3848,7 @@ $testTypeMap = @{
     'rest'          = 'maven'
     'skills'        = 'maven'
     'mcp'           = 'maven'
+    'mcp-contract'  = 'maven'
     'main'          = 'maven-expand'
     'cli'           = 'cli'
     'browser4-cli'  = 'cli'
@@ -3596,16 +3942,37 @@ if ($testTypes.Count -eq 0) {
 }
 
 # ===================================================================
-# Load test-session module (soft dependency, skipped when -NoSession)
+# Load test-session module (soft dependency)
 # ===================================================================
+# The module is loaded even with -NoSession: every run still gets its own
+# scratch subdirectory.  -NoSession only suppresses the test-session.json write.
 $script:SessionAvailable = $false
+$script:PersistSession = $false
+$script:SessionRunDir = ''
 $script:_NextIsSessionPath = $false
-if (-not $script:NoSession) {
-    $sessionModulePath = Join-Path $scriptDir 'common' 'test-session.psm1'
-    if (Test-Path $sessionModulePath) {
-        Import-Module $sessionModulePath -Force -ErrorAction SilentlyContinue
-        $script:SessionAvailable = $true
-    }
+$sessionModulePath = Join-Path $scriptDir 'common' 'test-session.psm1'
+if (Test-Path $sessionModulePath) {
+    Import-Module $sessionModulePath -Force -ErrorAction SilentlyContinue
+    $script:SessionAvailable = $true
+}
+
+# -------------------------------------------------------------------
+# One subdirectory per run
+# -------------------------------------------------------------------
+# .test-sessions/<run-id>/ holds test-session.json AND every scratch file the
+# run produces.  The path is resolved and published through
+# BROWSER4_TEST_SESSION_DIR up-front so scenario runners, coworker workers and
+# agents spawned below all inherit the same directory instead of scattering
+# files across the .test-sessions/ root.
+#
+# The directory itself is created lazily — by the first session write
+# (Write-TestSession creates its parent) or by the first child that needs it.
+# Invocations that never execute a test therefore leave nothing behind:
+# argument errors, display-only `rws dir` listings, -Show, and `session`.
+$wantsRunDir = -not ($script:Show -or ($testTypes -contains 'session'))
+if ($script:SessionAvailable -and $wantsRunDir) {
+    $script:SessionRunDir = Publish-TestSessionRunDir -RepoRoot $repoRoot
+    $script:PersistSession = -not $script:NoSession
 }
 
 # Timestamped log directory for this test run. Lives in .test/ so it
@@ -3693,6 +4060,14 @@ if ($psTests.Count -gt 0) {
 
 if ($launchTargets.Count -gt 0) {
     Invoke-MockSiteBoot -additionalArgs $additionalArgs
+}
+
+# -- Report where this run's artifacts landed -------------------------
+# Printed only when a run directory was actually materialised (see the lazy
+# creation note above), so invocations that executed nothing stay silent.
+if ($script:SessionRunDir -and (Test-Path -LiteralPath $script:SessionRunDir -PathType Container)) {
+    Write-Host ''
+    Write-Host "  Session: $($script:SessionRunDir)" -ForegroundColor DarkGray
 }
 
 exit 0

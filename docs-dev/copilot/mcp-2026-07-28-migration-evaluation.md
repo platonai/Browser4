@@ -5,6 +5,31 @@
 
 ---
 
+## 〇、实施状态（2026-09，分支 `feat/mcp-channel-parity`）
+
+阶段一（标准 MCP server 迁移）**已落地**，摘要如下：
+
+| 项目 | 现状 |
+|---|---|
+| SDK | `kotlin-sdk` 0.8.1 → **0.15.0**（`mcp-sdk.version`，root pom + browser4-dependencies BOM） |
+| 传输 | 弃用的 HTTP+SSE（`GET /mcp/sse` + `POST /mcp/message`）→ **无状态 Streamable HTTP 单端点 `POST /mcp`**（`Application.mcpStatelessStreamableHttp`，GET/DELETE 返回 405） |
+| 会话 | 协议层无会话；应用层会话通过工具参数 `sessionId` 显式传递（`ToolManagerResolver`，Spring 侧接 `PulsarSessionManager`） |
+| 客户端 URL | `http://host:8088/mcp/sse` → `http://host:8088/mcp` |
+| 安全 | 新增 DNS rebinding 防护（默认开启，`Host` 头校验），`-Dmcp.http.allowedHosts` / `-Dmcp.http.dnsRebindingProtection` 可控 |
+| 连带升级 | Ktor 3.2.3 → **3.5.1**（SDK 0.15.0 编译基线）、kotlinx-coroutines 1.10.2 → **1.11.0**（Ktor 3.5.1 调用 `BuildersKt.runBlockingK`，1.10.2 无此符号；该版本由外部父 POM `ai.platon:pulsar-parent` 钉住，需在 root pom 的 dependencyManagement 显式覆盖） |
+| 测试 | `McpHttpServerE2ETest` 改为 Streamable HTTP 客户端全协议用例（11 用例）；外部记忆桥的 SSE 夹具改为 SDK 自带 SSE 端点（生产侧 SSE 客户端不变） |
+| 未做 | 客户端 `server/discover`、`_meta` 请求级元数据、`ttlMs`/`cacheScope`、header 路由（`Mcp-Method`/`Mcp-Name`）等 2026-07-28 增量，待 kotlin-sdk 发布完整支持后补 |
+
+阶段二（CLI 私有 RPC 迁移）**未做**，维持选项 A：`/mcp/call-tool` 保留为 browser4 私有 RPC（batch、`_pagination`、`/mcp/tools/specs` 等自定义语义不变）。
+
+> **构建提示**：`mcp-sdk.version`/`ktor.version` 由 browser4-dependencies BOM 提供，而
+> `kotlinx-coroutines` 由外部父 POM 钉住、在本仓库 root pom 中覆盖。BOM 与 root pom 的
+> 依赖管理在 **`-pl <module> -am` 这类局部构建中不会被重建**（Maven 从本地仓库取已安装副本），
+> 因此切换分支后请先执行一次完整 `install`（或 `mvn -N install` + `mvn -pl browser4-dependencies install`），
+> 否则会静默用回 0.8.1 / Ktor 3.2.3 / coroutines 1.10.2 并在运行时报 `NoSuchMethodError`。
+
+---
+
 ## 一、结论摘要
 
 **可以迁，值得迁，但分为两个独立工作面，风险与收益差异很大：**

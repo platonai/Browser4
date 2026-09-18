@@ -50,7 +50,18 @@ Browser4 computes these features for every DOM node:
 | `seq` | Node sequence in document order |
 | `txt_dns` | Text node density |
 
-These are usable in any CSS selector via `:expr(...)`, in X-SQL `DOM_*` functions, and in `htmlsnapshot get` / `htmlsnapshot query` commands.
+These are usable in any CSS selector via `:expr(...)`, in X-SQL `DOM_*` attribute/text/select functions, and in `htmlsnapshot get` / `htmlsnapshot query` commands.
+
+> **Where `:expr(...)` is evaluated — and where it is not.** Visual filters are
+> evaluated by the page-load/scoping path: in the `DOM_LOAD_AND_SELECT`
+> selector (the X-SQL `FROM` clause) and in `htmlsnapshot get` / `get all` /
+> `inspect` selectors over the stored snapshot. Inside **`DOM_FIRST_*` /
+> `DOM_ALL_*` X-SQL UDF selector arguments** `:expr` support is uneven: the
+> image helpers `DOM_FIRST_IMG` / `DOM_NTH_IMG` / `DOM_ALL_IMGS` **ignore
+> `:expr(...)` and silently match nothing** (no error). Keep `DOM_*_IMG`
+> selectors plain (`'img'`) and read image URLs through
+> `DOM_FIRST_ATTR(DOM, sel, 'src')` / `DOM_SELECT_FIRST`, or scope the visual
+> filter in the `FROM` clause.
 
 ---
 
@@ -65,8 +76,10 @@ Filters elements by a mathematical expression over their numerical features.
 ### Examples
 
 ```sql
--- Select images larger than 400×400 in X-SQL
-SELECT DOM_FIRST_IMG(DOM, 'img:expr(width > 400 && height > 400)')
+-- Select images larger than 400×400 in X-SQL.
+-- ⚠ DOM_FIRST_IMG ignores :expr(...) (silently matches nothing) — read the
+-- src through DOM_FIRST_ATTR instead:
+SELECT DOM_FIRST_ATTR(DOM, 'img:expr(width > 400 && height > 400)', 'src')
 FROM DOM_LOAD_AND_SELECT('https://example.com', ':root')
 
 -- Select product images that are large enough to be the main photo
@@ -168,9 +181,10 @@ browser4-cli htmlsnapshot get all attr "img:expr(width>400)" src
 # htmlsnapshot inspect with :expr()
 browser4-cli htmlsnapshot inspect "div:expr(width>400 && width<500)"
 
-# X-SQL query with :expr() in selectors
+# X-SQL query with :expr() in selectors.
+# (DOM_FIRST_IMG ignores :expr() — read 'src' through DOM_FIRST_ATTR:)
 browser4-cli htmlsnapshot query . --sql "
-SELECT DOM_FIRST_IMG(DOM, 'img:expr(width>400 && height>400)')
+SELECT DOM_FIRST_ATTR(DOM, 'img:expr(width>400 && height>400)', 'src')
 FROM DOM_LOAD_AND_SELECT('https://www.amazon.com/dp/B0CXJ1NT4B', ':root')
 "
 ```

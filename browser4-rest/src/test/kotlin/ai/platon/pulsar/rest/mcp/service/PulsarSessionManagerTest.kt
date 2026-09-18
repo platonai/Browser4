@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.mcp.service
 
+import ai.platon.pulsar.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.GenericAgenticSession
@@ -84,6 +85,10 @@ class PulsarSessionManagerTest {
         assertNotEquals("team-a", session.sessionId, "Named session should use UUID, not raw name")
         assertEquals(session.sessionId, session.capabilities?.get("sessionId"))
         assertEquals("SEQUENTIAL", session.capabilities?.get("profileMode"))
+        // Named sessions bind a dedicated context dir derived from the session id
+        val contextDir = session.capabilities?.get("contextDir")
+        assertNotNull(contextDir, "Named sessions must bind a dedicated context dir")
+        assertTrue(contextDir!!.endsWith("cx.${session.sessionId}"), "Context dir must be keyed by the session id: $contextDir")
     }
 
     @Test
@@ -114,6 +119,7 @@ class PulsarSessionManagerTest {
         assertNotEquals("team-b", session.sessionId, "Named session should use UUID, not raw name")
         assertEquals(session.sessionId, session.capabilities?.get("sessionId"))
         assertEquals("SEQUENTIAL", session.capabilities?.get("profileMode"))
+        assertNotNull(session.capabilities?.get("contextDir"), "Named sessions must bind a dedicated context dir")
         assertSame(session, sessionManager.getSession("team-b"))
     }
 
@@ -121,9 +127,92 @@ class PulsarSessionManagerTest {
     fun getOrCreateSessionByIdUsesExplicitSessionIdWhenCapabilitiesAreMissing() {
         val session = sessionManager.getOrCreateSession("team-f")
 
-        assertEquals("team-f", session.sessionId)
-        assertEquals("team-f", session.capabilities?.get("sessionId"))
+        // Explicit ids go through the same name -> UUID resolution as the
+        // capabilities path, so both entry points address the same session.
+        assertNotEquals("team-f", session.sessionId, "Explicit id should resolve to a UUID, not the raw name")
+        assertEquals(session.sessionId, session.capabilities?.get("sessionId"))
         assertEquals("SEQUENTIAL", session.capabilities?.get("profileMode"))
+        assertNotNull(session.capabilities?.get("contextDir"), "Named session by explicit id must bind a dedicated context dir")
+        assertSame(session, sessionManager.getSession("team-f"), "Display name must resolve back to the same session")
+    }
+
+    @Test
+    fun explicitIdAndCapabilitiesEntryPointsResolveToSameSessionAndContextDir() {
+        val byId = sessionManager.getOrCreateSession("team-cross")
+        val byCapabilities = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-cross"))
+
+        assertEquals(byId.sessionId, byCapabilities.sessionId,
+            "Both entry points must resolve the same display name to the same UUID")
+        assertSame(byId, byCapabilities, "Both entry points must land on the same session")
+        assertEquals(
+            byId.capabilities?.get("contextDir"),
+            byCapabilities.capabilities?.get("contextDir"),
+            "Both entry points must bind the same dedicated context dir"
+        )
+        assertSame(byId, sessionManager.getSession(byId.sessionId),
+            "A session addressed by its resolved UUID must be found")
+    }
+
+    @Test
+    fun defaultSessionByExplicitIdGetsNoNamedContextDir() {
+        val session = sessionManager.getOrCreateSession(DEFAULT_SESSION_ID)
+
+        // DEFAULT addressed through the explicit-id entry point must behave
+        // exactly like the capabilities path: stable default UUID, no named
+        // context dir (regression guard for a DEFAULT misjudged as named).
+        assertNotEquals(DEFAULT_SESSION_ID, session.sessionId, "DEFAULT should be resolved to a UUID")
+        assertEquals(session.sessionId, session.capabilities?.get("sessionId"))
+        assertNull(session.capabilities?.get("contextDir"), "Default sessions must not pin a named context dir")
+        assertSame(session, sessionManager.getOrCreateSession(mapOf("sessionId" to DEFAULT_SESSION_ID)),
+            "DEFAULT by explicit id and by capability must land on the same session")
+    }
+
+    @Test
+    fun namedSessionsBindSameDedicatedContextDirAcrossReopens() {
+        val first = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-stable"))
+        val second = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-stable"))
+
+        assertEquals(first.sessionId, second.sessionId, "Same display name must resolve to the same UUID")
+        val firstDir = first.capabilities?.get("contextDir")
+        val secondDir = second.capabilities?.get("contextDir")
+        assertNotNull(firstDir, "Named sessions must carry a dedicated context dir capability")
+        assertEquals(firstDir, secondDir, "Reopening a named session must keep the same context dir")
+        assertTrue(
+            firstDir!!.contains("named") && firstDir.endsWith("cx.${first.sessionId}"),
+            "Expected a named-group context dir keyed by the session id, but got $firstDir"
+        )
+    }
+
+    @Test
+    fun differentNamedSessionsGetDifferentContextDirs() {
+        val teamX = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-x"))
+        val teamY = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-y"))
+
+        assertNotEquals(teamX.sessionId, teamY.sessionId)
+        assertNotNull(teamX.capabilities?.get("contextDir"))
+        assertNotNull(teamY.capabilities?.get("contextDir"))
+        assertNotEquals(teamX.capabilities?.get("contextDir"), teamY.capabilities?.get("contextDir"))
+    }
+
+    @Test
+    fun namedSessionWithExplicitTemporaryModeStaysTemporaryAndGetsNoContextDir() {
+        val session = sessionManager.getOrCreateSession(
+            mapOf("sessionId" to "team-tmp", "profileMode" to "TEMPORARY")
+        )
+
+        assertEquals("TEMPORARY", session.capabilities?.get("profileMode"))
+        assertNull(session.capabilities?.get("contextDir"), "TEMPORARY named sessions must not pin a context dir")
+    }
+
+    @Test
+    fun defaultAndSwarmSessionsDoNotGetNamedContextDir() {
+        val defaultSession = sessionManager.getOrCreateSession(
+            mapOf("sessionId" to "DEFAULT", "profileMode" to "SEQUENTIAL")
+        )
+        assertNull(defaultSession.capabilities?.get("contextDir"), "Default sessions must keep rotating through the pool")
+
+        val swarmSession = sessionManager.ensureSwarmSession(mapOf("profileMode" to "SEQUENTIAL"))
+        assertNull(swarmSession.capabilities?.get("contextDir"), "Swarm sessions must keep rotating through the pool")
     }
 
     @Test

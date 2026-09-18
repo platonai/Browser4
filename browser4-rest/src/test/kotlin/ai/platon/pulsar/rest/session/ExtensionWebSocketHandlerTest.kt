@@ -9,8 +9,10 @@ import org.mockito.Mock
 import org.mockito.Mockito.`when`
 import org.mockito.MockitoAnnotations
 import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.verify
+import org.springframework.http.HttpHeaders
 import org.springframework.web.socket.WebSocketSession
 import java.net.URI
 
@@ -42,6 +44,9 @@ class ExtensionWebSocketHandlerTest {
             URI.create("ws://127.0.0.1:8182/ws/extension/$sessionId")
         )
         `when`(webSocketSession.isOpen).thenReturn(true)
+        // The handler logs the handshake User-Agent to tell Edge from Chrome; a
+        // bare mock returns null for the headers and would NPE on connect.
+        `when`(webSocketSession.handshakeHeaders).thenReturn(HttpHeaders())
 
         handler = ExtensionWebSocketHandler(sessionManager)
     }
@@ -58,7 +63,8 @@ class ExtensionWebSocketHandlerTest {
         val captor = argumentCaptor<ExtensionMessageSender>()
         verify(sessionManager).onExtensionConnected(
             org.mockito.kotlin.eq(sessionId),
-            captor.capture()
+            captor.capture(),
+            anyOrNull()
         )
 
         val sender = captor.firstValue
@@ -78,7 +84,7 @@ class ExtensionWebSocketHandlerTest {
     @Test
     @DisplayName("afterConnectionEstablished closes WS on bind failure")
     fun `closes websocket on bind failure`() {
-        `when`(sessionManager.onExtensionConnected(any(), any())).thenThrow(
+        `when`(sessionManager.onExtensionConnected(any(), any(), anyOrNull())).thenThrow(
             IllegalStateException("No pending connection")
         )
 
@@ -126,7 +132,8 @@ class ExtensionWebSocketHandlerTest {
         val captor = argumentCaptor<ExtensionMessageSender>()
         verify(sessionManager).onExtensionConnected(
             org.mockito.kotlin.eq(sessionId),
-            captor.capture()
+            captor.capture(),
+            anyOrNull()
         )
 
         val sender = captor.firstValue
@@ -145,7 +152,8 @@ class ExtensionWebSocketHandlerTest {
         val captor = argumentCaptor<ExtensionMessageSender>()
         verify(sessionManager).onExtensionConnected(
             org.mockito.kotlin.eq(sessionId),
-            captor.capture()
+            captor.capture(),
+            anyOrNull()
         )
 
         val sender = captor.firstValue
@@ -162,7 +170,8 @@ class ExtensionWebSocketHandlerTest {
         val captor = argumentCaptor<ExtensionMessageSender>()
         verify(sessionManager).onExtensionConnected(
             org.mockito.kotlin.eq(sessionId),
-            captor.capture()
+            captor.capture(),
+            anyOrNull()
         )
 
         assertTrue(captor.firstValue.isOpen)
@@ -177,7 +186,8 @@ class ExtensionWebSocketHandlerTest {
         val captor = argumentCaptor<ExtensionMessageSender>()
         verify(sessionManager).onExtensionConnected(
             org.mockito.kotlin.eq(sessionId),
-            captor.capture()
+            captor.capture(),
+            anyOrNull()
         )
 
         val sender = captor.firstValue

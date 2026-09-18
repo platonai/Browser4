@@ -20,7 +20,7 @@ browser4-cli crawl "https://example.com" --out-link-selector "a[href]"
 browser4-cli crawl --seed-file urls.txt --depth 0
 
 # Bulk fetch + X-SQL extraction to CSV
-browser4-cli crawl --seed-file urls.txt --sql @extract.sql --format csv -o results.csv
+browser4-cli crawl --seed-file urls.txt --sql "@extract.sql" --format csv -o results.csv
 ```
 
 > **Note:** `--out-link-selector` is required for link discovery.
@@ -42,7 +42,7 @@ Crawl loads seed URLs, optionally follows links up to a configurable depth, dedu
 ```bash
 # Extract product URLs from search results (via eval or X-SQL), write to urls.txt
 browser4-cli crawl --seed-file urls.txt --depth 0 --refresh \
-  --sql @extract.sql --format csv -o products.csv
+  --sql "@extract.sql" --format csv -o products.csv
 ```
 
 `extract.sql`:
@@ -95,7 +95,7 @@ browser4-cli crawl --seed-file urls.txt --depth 0 --sql-stdin --format table < q
 ### X-SQL from file (@ prefix)
 
 ```bash
-browser4-cli crawl --seed-file urls.txt --depth 0 --sql @extract.sql --format csv -o out.csv
+browser4-cli crawl --seed-file urls.txt --depth 0 --sql "@extract.sql" --format csv -o out.csv
 ```
 
 ## Modes
@@ -153,6 +153,45 @@ browser4-cli crawl --seed-file urls.txt --depth 0 --sql "
 | `url` (positional) | | string | — | Starting URL. Omit when using `--seed-file` |
 | `--seed-file` | | string | — | File with URLs to crawl, one per line. Lines starting with `#` are comments |
 | `--depth` | `-d` | int | `1` | 0 = fetch only (no links); 1+ = follow links to that depth |
+| `--parallel` | | int | `4` | How many units (pages/tabs) to collect at the same time. `1` = strictly sequential |
+
+### Parallelism (`--parallel`)
+
+A crawl is a set of **independent units** — one per seed URL — so the units are
+collected at the same time by default, each one on its own browser tab leased
+from the driver pool. `--parallel <n>` bounds how many may be in flight at once.
+
+| Value | Behavior |
+|---|---|
+| *(omitted)* | Server default (4) |
+| `1` | Strictly sequential — the historical crawl, one unit at a time |
+| `2`–`32` | Up to `<n>` units collected concurrently |
+
+```bash
+# 12 seed URLs, at most 8 collected at a time
+browser4-cli crawl --seed-file urls.txt -d 0 --parallel 8 --refresh
+
+# The same crawl, strictly sequential (for a site that rate-limits)
+browser4-cli crawl --seed-file urls.txt -d 0 --parallel 1 --refresh
+```
+
+Notes:
+
+* **Each unit needs its own tab.** `--parallel` is a budget the crawl enforces on
+  itself; the browser driver pool (`browser.context.number` ×
+  `browser.max.active.tabs`, 2 × 8 by default) is the hard ceiling. Asking for
+  more than the pool can hand out yields a lower *observed* peak, which the
+  completion report shows.
+* **The reported peak is measured, not claimed.** The crawl reports the budget it
+  ran under and the peak number of units it actually had in flight. A peak of `1`
+  on a multi-unit crawl means the collection was serial — that is called out
+  explicitly instead of leaving you with a crawl that is merely slow.
+* **Values are validated before submitting.** `0` and non-numeric values exit
+  non-zero with a hint (`--parallel 1` for the sequential form); values above 32
+  are rejected by the server.
+* At `-d 1+` the budget bounds *seed rounds*, not pages: each round discovers its
+  links and the pages themselves are fetched from the shared tab pool. Two rounds
+  are therefore free to overlap even when a single round has few links.
 
 ### X-SQL extraction flags
 
@@ -177,6 +216,15 @@ browser4-cli crawl --seed-file urls.txt --depth 0 --sql "
 | `--out-link-pattern` | `-olp` | regex | `.+` | Regex to filter extracted links |
 | `--top-links` | `-tl` | int | `20` | Max links extracted per page |
 
+> **Git Bash / MSYS2 caveat — leading-`/` pattern values:** when you run the CLI
+> from Git Bash, argument values that start with `/` (e.g.
+> `-olp "/product/"`) are converted into Windows paths
+> (`C:/Program Files/Git/product/`) before the CLI sees them — the pattern then
+> filters out every link and the crawl silently reports only the seed page.
+> Use `./b4w.sh` from Git Bash (it exports `MSYS2_ARG_CONV_EXCL='*'`, disabling
+> the conversion), run from PowerShell, or use a value that does not start with
+> `/` (e.g. `-olp "product/"`). See [shell-quoting.md](shell-quoting.md).
+
 ### LoadOptions flags
 
 | Flag | Short | Type | Description |
@@ -184,11 +232,11 @@ browser4-cli crawl --seed-file urls.txt --depth 0 --sql "
 | `--args` | `-a` | string | Raw LoadOptions passthrough (see [LoadOptions Guide](load-options-guide.md)) |
 | `--refresh` | | bool | Force fresh fetch (ignore cache) |
 | `--parse` | | bool | Parse pages after fetch |
-| `--expires` | | string | Cache TTL: `1d`, `1h`, `30m`, etc. |
-| `--priority` | `-p` | int | Queue priority (lower = higher priority) |
-| `--page-load-timeout` | | string | Max wait for each page load |
-| `--ignore-url-query` | | bool | Strip query params from URLs |
-| `--no-norm` | | bool | Disable URL normalization |
+| `--expires` | | string | Cache TTL: `1d`, `1h`, `30m`, etc. Invalid values are rejected by the CLI (non-zero exit) |
+| `--priority` | `-p` | int | Queue priority (non-negative integer; lower = higher priority) |
+| `--page-load-timeout` | | string | Max wait per page load: seconds number (`30`) or duration (`30s`, `1m`) |
+| `--ignore-url-query` | | bool | Strip query params from **discovered out-link** hrefs (no effect on seed URLs in depth-0 bulk fetch) |
+| `--no-norm` | | bool | Disable URL normalization of **discovered out-link** hrefs (no effect on seed URLs in depth-0 bulk fetch) |
 | `--readonly` | | bool | Non-destructive mode |
 
 ### Async flag
@@ -242,7 +290,8 @@ When no X-SQL is provided, the default output lists crawled pages:
 ```
 Crawl task submitted: 550e8400-e29b-41d4-a716-446655440000
   URLs: 3
-Crawling... 1 pages found so far
+Crawling... 2 pages found (12s elapsed)
+Crawling... 3 pages found (18s elapsed)
 
 Crawl completed. 3 pages found.
   depth=0 | https://example.com/page1 | Page 1 Title
@@ -250,10 +299,24 @@ Crawl completed. 3 pages found.
   depth=0 | https://example.com/page3 | Page 3 Title
 ```
 
+> **Timing — slow progress is normal:** each page takes **several seconds**
+> (roughly 5–7 s) through the backend parse/load pipeline, even for local
+> pages, and progress lines update only when a page completes. A small local
+> crawl of 3–10 pages can legitimately take 20–60 seconds — repeated
+> `Crawling...` lines with a growing elapsed time are progress, not a hang.
+
 ## Testing locally with MockSite
 
 The mock e-commerce site (`./bin/test.ps1 mock-site`) provides predictable
 product pages for testing crawl extraction without hitting live websites.
+
+> **Browser vs. raw HTML:** MockSite serves a JavaScript-hydrated page variant
+> to browsers (the crawl fetch pipeline), which can differ from the static
+> HTML a plain `curl` receives — e.g. category/navigation anchors arrive as
+> `href="#"` and the rendered product list may be a subset.  When debugging
+> link-discovery counts, verify the *browser* DOM with `eval` or
+> `htmlsnapshot inspect` rather than assuming `curl` output matches what the
+> crawler sees.
 
 ### MockSite selectors
 
@@ -302,7 +365,7 @@ SQLEOF
 
 # 4. Run the crawl
 browser4-cli crawl --seed-file seed-urls.txt --depth 0 --refresh \
-  --sql @extract.sql --format table
+  --sql "@extract.sql" --format table
 ```
 
 > **Tip:** When selectors don't match, use `htmlsnapshot grep` with `--selector`
@@ -320,12 +383,20 @@ browser4-cli crawl "https://example.com" -ol "a[href]" -a "-nMaxRetry 5 -lazyFlu
 ## URL deduplication
 
 - Visited URLs are normalized: lowercase, trailing slash removed, query string
-  always stripped for dedup purposes.
+  and URL fragment always stripped for dedup purposes.
 - The same URL is never visited twice within a crawl session.
+- Fragment-only anchors (`href="#"`, `href="#section"`) can never navigate to
+  a new document and are skipped during link extraction — they are not counted
+  as discovered out-links.
 - Use `--ignore-url-query` to additionally strip query parameters from extracted
   link hrefs before resolution.
 - Use `--no-norm` to disable LoadOptions-level normalization (does not affect
   internal dedup normalization).
+
+> **Scope note:** `--ignore-url-query` and `--no-norm` only affect links
+> *discovered* during depth ≥ 1 link discovery.  Seed URLs in a depth-0 bulk
+> fetch are always fetched and reported verbatim, so these flags produce no
+> observable change there.
 
 ## Seed files
 
@@ -345,7 +416,19 @@ prepended to the seed file list.
 ## Timeout
 
 - CLI-side default: 600s. Override with `BROWSER4_CLI_CRAWL_TIMEOUT_SECS` env var.
-- Backend timeout scales with depth: roughly 5 min per level, capped at 30 min.
+  When the CLI wait expires the crawl keeps running server-side — poll it with
+  `crawl status` / `crawl result`.
+- Backend task limit: **10 minutes per crawl task**, however many seeds or levels
+  it has. A task that reaches it ends `TIMEOUT` and still reports the pages it
+  collected plus every seed it never settled (see below).
+- A round (one seed URL at depth >= 1) gets the **smaller** of `5 min × depth`
+  (capped at 30 min) and what the task has left minus a 30s reporting margin. It
+  therefore always times out on its own terms — with its outstanding URLs
+  reported as lost — instead of being killed by the task limit, which is what
+  used to turn a deep crawl into "fewer pages, no losses reported".
+- A seed the remaining budget cannot carry (less than ~45s left) is **not
+  submitted at all**: it is reported as a lost page and its `seedStatuses` entry
+  is `skipped`, rather than being started and killed with no accounting.
 
 ## Error handling
 
@@ -355,8 +438,12 @@ prepended to the seed file list.
 | Empty seed file | Exits with "No URLs provided." after parsing |
 | Timeout | Exits with message + task ID; increase `BROWSER4_CLI_CRAWL_TIMEOUT_SECS` |
 | Server error | Exits with "Crawl failed: ..." and server error details |
-| No links found (depth >= 1) | Completes with 0 pages; verify `--out-link-selector` |
+| No links found (depth >= 1) | Exit 0 with a `⚠ Link discovery found no out-links` warning plus the backend diagnostic (it distinguishes "selector matched nothing" from "pattern filtered them all") and the effective `--out-link-pattern`. The seed page is always counted in depth ≥ 2 crawls, so an all-filtered crawl reports `Crawl completed. 1 pages found.` (depth-1 crawls list only discovered pages and report `0 pages found`). Inspect the warning text and verify `--out-link-selector` / `--out-link-pattern` — a shell-mangled pattern (Git Bash `/`-prefix conversion) is the usual cause |
+| Pages lost (any depth) | Exit 0 with a `⚠ N of M submitted page(s) were never delivered` warning naming each lost URL, its depth, its protocol status and the reason. The crawl is **incomplete**, not merely small: `pagesFound + failedPages.size == pagesExpected` always holds. Check `failedPages` in the JSON output. A page is lost when its fetch failed after the retry budget was exhausted, when the task was dropped/evicted, when the crawl ran out of its time budget before the URL was submitted, or when the load returned no document of its own — a zero-byte fetch, or the page store substituted for a failed fetch (`reason = the load returned no document …`; such a URL is **withheld from the listing** rather than shown as a row with an empty title). Re-run, or lower `--depth` / reduce concurrency if it repeats — a repeated loss on a many-core host usually means the target site is refusing the parallel load, so try `--parallel 2` (or `--parallel 1` to rule parallelism out entirely) |
+| Crawl hit the 10-minute task limit | The task ends `TIMEOUT` and the CLI exits non-zero ("Crawl failed: Crawl timed out while processing seeds …"). `crawl result <taskId>` still carries the accounting: the losses of the seeds that settled, plus **one lost-page row per seed whose round never returned**, reason `the server-side task limit fired while this URL was still being fetched`. The pages such a round had already published are deliberately *not* claimed — its submitted count is unknown, and claiming them would break the `pagesFound + failedPages.size == pagesExpected` invariant — so re-run those URLs. Lower `--depth`, or split the seeds across several crawls, to stay inside the limit. A seed that is refused *before* it starts reports `reason = the crawl ran out of its time budget before this URL was submitted` and a `skipped` seed status |
+| Page listed with `depth=-1` (depth >= 2) | The page was fetched and recorded, but neither the URL it was queued under nor the URL it was served from is a URL this crawl submitted (a redirect combined with a `<base href>`). It is listed with `depth=-1`, counted in `pagesFound`, **not** reported as lost, and **not** expanded (`-1` is never read as depth 0). A single such row is a labelling gap; if every row has it, the site rewrites its document base URI and the listing depths are not meaningful — use `--depth 1`, or report it |
 | Invalid --format | Exits with "Invalid --format '...'. Expected: json, csv, or table" |
+| Invalid --parallel | Exits with "Invalid --parallel value '...'" — accepts a positive integer up to 32; `0` is rejected with the `--parallel 1` hint, and anything above 32 is refused by the server (HTTP 400) |
 | X-SQL failure on one page | Page logged with error; other pages continue normally |
 
 ## Rate Limiting & Polite Scraping
@@ -372,62 +459,26 @@ follow these guidelines:
 
 ## Subcommands
 
-When you submit a crawl with `--background`, the CLI returns immediately with a
-task ID.  Use these subcommands to manage and monitor background crawl tasks.
+A crawl submitted with `--background` returns a task ID immediately.  These
+subcommands manage and monitor the task afterwards.
 
-### crawl status
-
-Check the current status of a crawl task.
+| Subcommand | What it does |
+|---|---|
+| `crawl status <task-id>` | One-line summary plus the raw record: CREATED, PROCESSING or completed (OK), pages found so far, and any error information |
+| `crawl result <task-id>` | The task's current record — page listing (without `--sql`) or extracted data (with `--sql`).  A task still PROCESSING returns its partial record with `status: PROCESSING` and the CLI hints that it is not yet terminal, so `result` and `status` both work as a poll |
+| `crawl cancel <task-id>` | Cancel a running or queued task; it transitions to TIMEOUT and stays visible in `crawl list` until cleared or expired by TTL.  `{"cancelled": false}` means no running worker was found — the record is still queryable |
+| `crawl clear` | Remove completed, cancelled and failed tasks from the store; running tasks are not affected |
+| `crawl list` | List all tracked crawl tasks across all sessions |
 
 ```bash
 browser4-cli crawl status <task-id>
-```
-
-Shows whether the task is CREATED, PROCESSING, or completed (OK), along with
-pages found so far and any error information.
-
-### crawl result
-
-Retrieve the full result of a completed crawl task.  Returns the same output
-as a foreground crawl: page listing (without `--sql`) or formatted extraction
-data (with `--sql`).
-
-```bash
 browser4-cli crawl result <task-id>
-```
-
-> **Note:** Only returns results for tasks in terminal state (OK, TIMEOUT,
-> ERROR).  Use `crawl status` first to verify completion.
-
-### crawl cancel
-
-Cancel a running or queued crawl task.
-
-```bash
 browser4-cli crawl cancel <task-id>
-```
-
-The task transitions to TIMEOUT status.  Cancelled tasks remain visible in
-`crawl list` until manually cleared or expired by TTL.
-
-### crawl clear
-
-Remove completed, cancelled, or failed crawl tasks from the task store.
-Running tasks are not affected.
-
-```bash
 browser4-cli crawl clear
-```
-
-### crawl list
-
-List all tracked crawl tasks across all sessions.
-
-```bash
-browser4-cli crawl list
 browser4-cli crawl list --limit 20
-browser4-cli crawl list --clear
 ```
+
+`crawl list` flags:
 
 | Flag | Type | Description |
 |---|---|---|

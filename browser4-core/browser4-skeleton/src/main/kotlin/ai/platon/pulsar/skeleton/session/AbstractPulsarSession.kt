@@ -1,15 +1,20 @@
 package ai.platon.pulsar.skeleton.session
 
+import ai.platon.pulsar.api.AbstractBrowser
 import ai.platon.pulsar.api.Browser
 import ai.platon.pulsar.api.BrowserId
 import ai.platon.pulsar.api.BrowserProfile
 import ai.platon.pulsar.api.model.BrowserSettings
+import ai.platon.pulsar.api.model.BrowserTab
 import ai.platon.pulsar.chrome.Browser4WebDriver
+import ai.platon.pulsar.chrome.PulsarBrowser
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.AppPaths.WEB_CACHE_DIR
+import ai.platon.pulsar.common.B4Constants.BROWSER_CONTEXT_DIR
 import ai.platon.pulsar.common.B4Constants.BROWSER_PROFILE_PATH
 import ai.platon.pulsar.common.browser.BrowserProfileMode
+import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_MODE
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_DISPLAY_MODE
@@ -33,6 +38,7 @@ import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
 import org.jsoup.nodes.Element
 import org.slf4j.LoggerFactory
 import java.nio.ByteBuffer
+import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
 import java.util.*
@@ -40,6 +46,27 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+
+/**
+ * Chooses the page tab to bind a driver to, shared by [AbstractPulsarSession]
+ * and the REST layer. Picks a tab whose URL starts with [preferUrl] (when
+ * given), else the first non-about:blank page tab, else the first page tab.
+ * [excludeTabId] removes a tab from consideration — used during driver-link
+ * recovery to skip the stale driver's own tab.
+ *
+ * Returns null when no candidate remains.
+ */
+fun choosePageTab(
+    tabs: List<BrowserTab>,
+    preferUrl: String? = null,
+    excludeTabId: String? = null,
+): BrowserTab? {
+    val pageTabs = tabs.filter { it.isPageType() && it.id != excludeTabId }
+    val preferred = preferUrl?.let { url -> pageTabs.firstOrNull { it.url?.startsWith(url) == true } }
+    return preferred
+        ?: pageTabs.firstOrNull { it.urlOrEmpty.equals("about:blank", ignoreCase = true).not() }
+        ?: pageTabs.firstOrNull()
+}
 
 /**
  * Created by Vincent on 18-1-17.
@@ -60,6 +87,20 @@ abstract class AbstractPulsarSession(
     override val id: Long
 ) : PulsarSession {
 
+    /**
+     * Which user data directory a session launch must bind.
+     */
+    internal enum class LaunchProfileSource {
+        /** `open --profile <path>` — the caller named the directory. */
+        PROFILE_PATH,
+
+        /** The session's own context dir (named sessions keep one per session). */
+        CONTEXT_DIR,
+
+        /** Neither was set: the profile mode decides. */
+        NONE,
+    }
+
     companion object {
         private val SEQUENCER = AtomicLong()
         fun nextId() = SEQUENCER.incrementAndGet()
@@ -77,11 +118,33 @@ abstract class AbstractPulsarSession(
          * profile the legacy `launch(mode)` path would have chosen.
          */
         internal fun browserIdFor(mode: BrowserProfileMode): BrowserId = when (mode) {
-            BrowserProfileMode.SYSTEM_DEFAULT -> BrowserId.SYSTEM_DEFAULT
-            BrowserProfileMode.DEFAULT -> BrowserId.DEFAULT
-            BrowserProfileMode.PROTOTYPE -> BrowserId.PROTOTYPE
-            BrowserProfileMode.SEQUENTIAL -> BrowserId.NEXT_SEQUENTIAL
-            BrowserProfileMode.TEMPORARY -> BrowserId.RANDOM_TEMP
+            BrowserProfileMode.SYSTEM_DEFAULT -> BrowserId.createSystemDefault()
+            BrowserProfileMode.DEFAULT -> BrowserId.createDefault()
+            BrowserProfileMode.PROTOTYPE -> BrowserId.createPrototype()
+            BrowserProfileMode.SEQUENTIAL -> BrowserId.createNextSequential()
+            BrowserProfileMode.TEMPORARY -> BrowserId.createRandomTemp()
+        }
+
+        /**
+         * Resolve which user data directory source a launch must use.
+         *
+         * An explicit `open --profile <path>` ([BROWSER_PROFILE_PATH]) always
+         * wins over the session's computed context dir
+         * ([BROWSER_CONTEXT_DIR]).  The caller asked for that exact directory —
+         * e.g. a Chrome profile snapshot produced by `profile-import` — so
+         * silently launching into the managed context dir instead would mount
+         * the wrong profile and hide every imported cookie, bookmark and login.
+         *
+         * @param contextDir The session's computed context dir, if any.
+         * @param profilePath The requested profile path, if any.
+         */
+        internal fun resolveLaunchProfileSource(
+            contextDir: String?,
+            profilePath: String?,
+        ): LaunchProfileSource = when {
+            !profilePath.isNullOrBlank() -> LaunchProfileSource.PROFILE_PATH
+            !contextDir.isNullOrBlank() -> LaunchProfileSource.CONTEXT_DIR
+            else -> LaunchProfileSource.NONE
         }
     }
 
@@ -239,25 +302,54 @@ abstract class AbstractPulsarSession(
             // would silently start a fresh anonymous profile.
             val existingBrowser = boundBrowser
             if (existingBrowser != null) {
-                val driver = existingBrowser.newDriver() as PulsarWebDriver
-                val b4Driver = Browser4WebDriver.from(driver)
+                // Prefer binding to an existing page tab (e.g. the user's
+                // active tab after attach --cdp) instead of creating a
+                // new about:blank tab. Falls back to newDriver() when
+                // no existing page tab is available.
+                val driver = (existingBrowser as? PulsarBrowser)
+                    ?.let { pb ->
+                        val tabs = runCatching { pb.listTabs() }.getOrNull()?.toList().orEmpty()
+                        choosePageTab(tabs)?.let { pb.newDriverForTab(it) }
+                    }
+                    ?: existingBrowser.newDriver()
+                val pulsarDriver = driver as PulsarWebDriver
+                val b4Driver = Browser4WebDriver.from(pulsarDriver)
                 bindDriver(b4Driver)
+                (existingBrowser as? AbstractBrowser)?.frontDriver = b4Driver
                 return b4Driver
             }
 
+            val contextDir = sessionConfig[BROWSER_CONTEXT_DIR]?.toString()?.takeIf { it.isNotBlank() }
             val profilePath = sessionConfig[BROWSER_PROFILE_PATH]?.toString()?.takeIf { it.isNotBlank() }
             val mode = BrowserProfileMode.fromString(sessionConfig[BROWSER_CONTEXT_MODE])
-            val browser = when {
-                profilePath != null -> {
+            // An explicit `open --profile <path>` wins over the session's
+            // computed context dir — see resolveLaunchProfileSource.  Named
+            // sessions always carry a context dir, so checking profilePath first
+            // is what makes `--profile` (and `profile-import`'s "mount the
+            // snapshot" step) actually take effect instead of being silently
+            // ignored.
+            val browser = when (resolveLaunchProfileSource(contextDir, profilePath)) {
+                LaunchProfileSource.PROFILE_PATH -> {
                     // `open --profile <path>`: launch Chrome with the given
                     // directory as the user data dir. The path is used as-is,
                     // so it must point at a full Chrome user data directory
                     // (e.g. a copied system profile), not a Browser4-managed
                     // context dir.
-                    val profile = BrowserProfile(Path.of(profilePath), Fingerprint.DEFAULT)
+                    val profile = BrowserProfile(Path.of(profilePath!!), Fingerprint.DEFAULT)
                     context.browserManager.launch(BrowserId(profile), BrowserSettings(sessionConfig))
                 }
-                sessionConfig[BROWSER_DISPLAY_MODE] != null -> {
+                LaunchProfileSource.CONTEXT_DIR -> {
+                    // Named session (e.g. `open --name <n>`): the backend
+                    // computed a dedicated context dir from the stable session
+                    // id. Bind the same chrome user data dir on every launch
+                    // instead of rotating through the SEQUENTIAL pool, so the
+                    // session's cookies / login state survive across restarts.
+                    val contextDirPath = Path.of(contextDir!!)
+                    Files.createDirectories(contextDirPath)
+                    val profile = BrowserProfile.create(BrowserType.PULSAR_CHROME, contextDirPath)
+                    context.browserManager.launch(BrowserId(profile), BrowserSettings(sessionConfig))
+                }
+                LaunchProfileSource.NONE -> if (sessionConfig[BROWSER_DISPLAY_MODE] != null) {
                     // The session explicitly requested a display mode (e.g.
                     // `headed=true` from `open --headed`). The context-level browser
                     // manager launches with the server-wide configuration, which
@@ -266,8 +358,7 @@ abstract class AbstractPulsarSession(
                     // session's choice. Launch with the session's own settings so
                     // the requested display mode actually reaches Chrome.
                     context.browserManager.launch(browserIdFor(mode), BrowserSettings(sessionConfig))
-                }
-                else -> {
+                } else {
                     // No explicit display mode on the session — keep the legacy
                     // launch path so server-level defaults apply unchanged.
                     context.browserManager.launch(mode)
@@ -298,6 +389,14 @@ abstract class AbstractPulsarSession(
         synchronized(context) {
             sessionConfig.putBean(driver)
             bindBrowser(driver.browser)
+            // HTML captured through this driver records the page URL as a
+            // `link[rel=normalizedURI]`, next to the `vi` bounding boxes it also
+            // injects while serializing.  Normalization is this session's policy
+            // (`PulsarSession.normalize`), so the session installs it on the
+            // driver instead of letting every capture path invent its own URL.
+            (driver as? Browser4WebDriver)?.pageUrlNormalizer = { url ->
+                runCatching { normalize(url).takeIf { it.isNotNil }?.urlString }.getOrNull()
+            }
         }
     }
 

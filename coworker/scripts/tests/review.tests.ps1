@@ -68,11 +68,27 @@ function global:Read-IssuesFile {
     $issuesHeaderIdx = -1
     if ($normalized -match '## Issues Found') { $issuesHeaderIdx = $normalized.IndexOf('## Issues Found') }
     $issues = @()
+
+    # Fallback for files without a "## Issues Found" heading (bare "## Issues"
+    # or none): scan from the first "### Issue N:" block to the next level-2
+    # heading — mirror review.ps1 Read-IssuesFile.
+    $issuesSection = ''
     if ($issuesHeaderIdx -ge 0) {
         $issuesSectionStart = $normalized.IndexOf("`n", $issuesHeaderIdx) + 1
         $howToIdx = $normalized.IndexOf("`n## How to Reproduce", $issuesSectionStart)
         if ($howToIdx -lt 0) { $howToIdx = $normalized.Length }
         $issuesSection = $normalized.Substring($issuesSectionStart, [Math]::Max(0, $howToIdx - $issuesSectionStart))
+    }
+    else {
+        $firstIssueMatch = [regex]::Match($normalized, '(?m)^###\s+Issue\s+\d+:')
+        if ($firstIssueMatch.Success) {
+            $nextH2Idx = $normalized.IndexOf("`n## ", $firstIssueMatch.Index + 1)
+            if ($nextH2Idx -lt 0) { $nextH2Idx = $normalized.Length }
+            $issuesSection = $normalized.Substring($firstIssueMatch.Index, [Math]::Max(0, $nextH2Idx - $firstIssueMatch.Index))
+        }
+    }
+
+    if ($issuesSection) {
         $issueBlocks = @($issuesSection -split '(?=###\s+Issue\s+\d+:)') |
             Where-Object { $_ -match '###\s+Issue\s+(\d+):\s*(.+)' }
         $issueNum = 0
@@ -481,6 +497,70 @@ Describe 'Read-IssuesFile' {
         $f = Read-IssuesFile -FilePath $filePath
 
         $f.Issues.Count | Should -Be 0
+    }
+
+    It 'parses files with a bare "## Issues" heading (no "Issues Found")' {
+        # Some hand-written/converted files omit the canonical "## Issues Found"
+        # heading.  They must still be readable (fallback to the first
+        # "### Issue N:" block), matching issue-model.js.
+        $bareHeader = @"
+# Issues: bare-header-scenario
+
+> **Source:** ``20260725-120000-bare.full.md`` | **Date:** 20260725-120000 | **Mode:** dev
+
+## Scenario Background
+
+### Task
+
+The agent filled out a form.
+
+### Execution Context
+
+Trace text.
+
+## Issues
+
+### Issue 1: Snapshot preview too short
+
+**Severity:** Medium
+**Category:** UX
+
+#### Reproduction
+
+Run ``snapshot -i``.
+
+#### Human Review
+
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- **Notes:**
+
+Nice one.
+
+### Issue 2: Second issue title
+
+**Severity:** Low
+**Category:** Docs
+
+#### Reproduction
+
+Steps.
+
+## Summary
+
+Trailing level-2 sections must not leak into the issue blocks.
+"@
+        $filePath = Write-FixtureFile -FileName 'bare-header.issues.md' -Content $bareHeader
+        $f = Read-IssuesFile -FilePath $filePath
+
+        $f.Issues.Count | Should -Be 2
+        $f.Issues[0].Title    | Should -BeExactly 'Snapshot preview too short'
+        $f.Issues[0].Severity | Should -BeExactly 'Medium'
+        $f.Issues[0].Decision | Should -BeExactly 'ACCEPT'
+        $f.Issues[0].Notes    | Should -BeExactly 'Nice one.'
+        $f.Issues[1].Title    | Should -BeExactly 'Second issue title'
+        # Background is terminated by the "## Issues" heading, not the file end
+        $f.Background.ExecutionContext | Should -BeExactly 'Trace text.'
     }
 
     It 'throws on missing file' {

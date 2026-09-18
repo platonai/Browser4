@@ -1,0 +1,277 @@
+{
+  "meta": {
+    "source": "20260831-201526-bulk-scale-routing.issues.json",
+    "date": "20260831-201526",
+    "mode": "dev",
+    "scenario": "bulk-scale-routing"
+  },
+  "background": {
+    "executionContext": "**Preparation:** Verified `pwd` = repo root; created `./.test-sessions/`; read `skills/browser4-cli/SKILL.md` (full), `AGENTS.md`, and the `crawl.md`, `swarm.md`, `loop.md`, `x-sql.md` references; ran `./b4w.ps1 help` (saved to `.test-sessions/help.txt`) and per-command `--help`; confirmed MockSite up on :18080 and backend UP (server URL `http://localhost:18182`, dev-mode local build, version 4.14.0-rc.3).\n\n**AC1:** `./b4w.ps1 goto \"http://localhost:18080/ec/b?node=1292115012\"` → `./b4w.ps1 htmlsnapshot` (capture) → wrote `.test-sessions/listing-query.sql` → `./b4w.ps1 htmlsnapshot query --sql \"@.test-sessions/listing-query.sql\" --format table` → 6 rows (title/price/link). No URL arg needed; `@url` resolved to the session page.\n\n**AC2:** Wrote `.test-sessions/seed-urls.txt` (3 `/ec/dp/B0E…` URLs) and `.test-sessions/product-query.sql` (`DOM_BASE_URI`, `#productTitle`, `#product-price` from `DOM_LOAD_AND_SELECT(@url,'body')` per crawl.md's MockSite example) → `./b4w.ps1 crawl --seed-file .test-sessions/seed-urls.txt --depth 0 --sql @.test-sessions/product-query.sql --format table --refresh` → 3 rows; took ~96s with repetitive `Crawling... N pages found so far` lines.\n\n**AC3:** Inspected fixture hub (3 `a.product` links, category links, anchor links) → `./b4w.ps1 crawl … -d 2 -ol \"a.product\" -olp \"/product/\"` → **1 page, 0 links** (silent). Retried with `--parse --refresh` → same. `-ol \"a.product\"` without pattern → 3 pages ✓. `-olp \"product\"` → 3 pages ✓. `-olp \"/generated/crawl/product\"` → diagnostic revealed the mangled pattern `C:/Program Files/Git/generated/crawl/product` (MSYS path conversion). `./b4w.sh crawl … -d 2 -ol \"a.product\" -olp \"/product/\"` → 9 product pages, no category pages. Result payload showed **all 9 pages at depth=1** even though 6 of them are 2 hops from the seed; the depth-3 page (`depth3/8.html`) was correctly excluded.\n\n**AC4:** `./b4w.ps1 swarm create --display-mode HEADLESS --max-browser-contexts 2 --max-open-tabs 4` → stale-task warning, session created. `swarm query --sql @… --seed-file … --refresh` → **503 \"Swarm not installed\"** (plugin absent from dev bundle). Found built JAR at `browser4-plugins/browser4-swarm/target/browser4-swarm-4.14.0-rc.3.jar`; copied to `<bundle>/plugins/` (empty dir); `./b4w.ps1 stop` + restart (~7–10 min rebuild) → `plugin list` shows swarm loaded. Recreated session with `--clear-stale`, resubmitted query → 3 jobs queued → completed (first job took ~1.5 min to leave `queued`); `swarm status` → `isDone:true`; `swarm result` → resultSet with url/title/price per URL, `pageContentBytes` set; `swarm close` → session closed, tasks retained.\n\n**AC5:** `./b4w.ps1 -s price-watch goto \"http://localhost:18080/ec/dp/B0E000001\"` → started loop in background → `loop --list` showed `1/2 iters, running`; `loop --status --name mock-price-watch` showed full state → loop completed 2 iterations (`$899.99` twice), state auto-cleaned; `loop --history` recorded it.\n\n**AC6:** Wrote `.test-sessions/ac6-few-urls.ps1` (PowerShell `foreach` over 3 URLs: `goto`, `htmlsnapshot -q`, `htmlsnapshot get text \"#productTitle\"`, `Start-Sleep 2`) → all 3 titles extracted; `htmlsnapshot -q` errored (\"unexpected positional arguments\") but didn't block; removing `-q` (or using `--quiet`) works.\n\n**Cleanup:** verified `git status` shows only pre-existing modifications (`main.rs`, `managed_processes.rs`); all session artifacts live under `.test-sessions/`; the plugin JAR copies landed in gitignored dirs (`plugins/`, `target/`).\n\n**Decisions:** used `--sql @file` + `--format table` per docs; kept queries in files to avoid Windows quoting issues; used `--refresh` for deterministic fresh fetches; reused AC2 seed/query files for AC4 as instructed; used `b4w.sh` for the AC3 pattern-mangled invocation; installed the swarm plugin JAR manually (already built in `target/`) rather than rebuilding the bundle.\n\n**Workarounds required:** (1) `b4w.sh` instead of `b4w.ps1` for `-olp` patterns starting with `/`; (2) manual swarm plugin install + backend restart; (3) dropping `-q` in the AC6 script.\n\n---",
+    "commands": "",
+    "task": "All 6 acceptance criteria were ultimately satisfied, though AC3 and AC4 required significant workarounds:\n\n- **AC1 ✓** — `htmlsnapshot query` with `DOM_LOAD_AND_SELECT(@url, '.product-card')` returned 6 correlated rows (title + price + link) from the MockSite listing page, exactly as §4b prescribes.\n- **AC2 ✓** — `crawl --seed-file --depth 0 --sql @query.sql --format table --refresh` returned one structured row per seed URL (3/3, ~96s).\n- **AC3 ✓ (with workaround)** — the documented command `crawl <url> -d 2 -ol \"a.product\" -olp \"/product/\"` **silently discovered 0 links** when invoked via `./b4w.ps1` from Git Bash (MSYS path-mangled the pattern into `C:/Program Files/Git/product/`). Via `./b4w.sh` the same command discovered 9 product pages and correctly excluded category/anchor links.\n- **AC4 ✓ (with workaround)** — `swarm query` initially failed with `503 {\"error\":\"Swarm not installed\"}` because the dev-mode backend bundle ships without plugin JARs. After copying the already-built `browser4-swarm-4.14.0-rc.3.jar` into the runtime bundle's `plugins/` dir and restarting (~10 min), all 3 seed URLs extracted in parallel, polled via `swarm status`, fetched via `swarm result`, and the session was closed.\n- **AC5 ✓** — named `price-watch` session + `loop --name mock-price-watch --count 2 -i 10 -- -s price-watch eval …` ran 2 iterations 10s apart, each returning `$899.99`; `loop --list` / `loop --status` showed live progress; state auto-cleaned on completion.\n- **AC6 ✓** — a PowerShell loop over 3 URLs (goto → htmlsnapshot → `htmlsnapshot get text \"#productTitle\"` + `Start-Sleep 2`) extracted all 3 titles with no crawl/swarm/loop needed (the script's `htmlsnapshot -q` failed, but `-q` is optional).",
+    "workarounds": ""
+  },
+  "assessment": {
+    "completionStatus": "Successful — all 6 acceptance criteria met, but AC3 required switching from b4w.ps1 to b4w.sh to dodge MSYS path mangling, and AC4 required manually installing the swarm plugin into the dev bundle and restarting the backend (~10 min).",
+    "successRate": "90",
+    "issuesFound": 7,
+    "majorBlockers": "AC4 (swarm) was fully blocked until the browser4-swarm plugin JAR was manually copied into the dev runtime bundle's plugins/ dir and the backend restarted — an undocumented dev-mode step. AC3's documented command failed silently under Git Bash via b4w.ps1 due to MSYS path conversion of -olp '/product/'.",
+    "mostConfusingAspects": "1) The documented crawl example -olp \"/product/\" silently returning 1 page with no error on Windows Git Bash. 2) swarm working at 'swarm create' but failing with 503 at 'swarm query' with no dev-mode install instructions. 3) '-q' being rejected after a command with a 'positional arguments' error despite being documented as a global flag. 4) Crawl result payload labeling 2-hop pages as depth=1.",
+    "mostValuableImprovements": "1) Fix/document the -olp leading-slash mangling (MSYS2_ARG_CONV_EXCL in b4w.ps1, safe examples in help, or a diagnostic whenever the pattern filter empties the link set). 2) Ship/auto-stage the swarm plugin for dev-mode backends and document the install step in swarm.md. 3) Fix crawl depth attribution in the result payload. 4) Accept -q anywhere (or improve the error message).",
+    "usabilityRating": 6
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "out-link-pattern starting with '/' is silently mangled by Git Bash (MSYS path conversion), breaking the documented crawl example on Windows",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "From Git Bash on Windows: ./b4w.ps1 crawl \"http://localhost:18080/generated/crawl/index.html\" -d 2 -ol \"a.product\" -olp \"/product/\""
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Crawl discovers the 9 product pages and excludes category/anchor links (as the crawl --help example and task instructions promise)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Crawl completes successfully with '1 pages found' (only the seed page) and NO error or diagnostic — 0 links discovered. A diagnostic appears only for some patterns: using -olp \"/generated/crawl/product\" prints 'the out-link pattern 'C:/Program Files/Git/generated/crawl/product' filtered them all', proving MSYS converted the leading-slash argument into a Windows path before it reached the backend. The same command via ./b4w.sh works (9 pages)."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "MSYS2/Git Bash path conversion rewrites arguments starting with '/' (e.g. '/product/') into Windows paths ('C:/Program Files/Git/product/') before the b4w.ps1/pwsh boundary. The regex then matches nothing. Quoting the argument does not prevent this. b4w.sh survives because its bash wrapper passes arguments through differently. The failure is silent because 0 matched links is a legitimate crawl outcome ('No links found (depth >= 1) completes with 0 pages' per crawl.md). The crawl --help example '-olp \"/product/\"' is exactly the broken form."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/help.rs (crawl examples); skills/browser4-cli/references/shell-quoting.md; skills/browser4-cli/references/crawl.md"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Change the crawl --help and crawl.md examples to use a leading-slash-free pattern (e.g. -olp \"product/\") or the safe \"\"\\\".*?/product/\"\"\"\" form on Windows\n- Document in shell-quoting.md that MSYS converts arguments starting with '/', and that b4w.sh or pwsh direct invocation is required for -olp patterns with leading slashes\n- In b4w.ps1, export MSYS2_ARG_CONV_EXCL=\"*\" (or equivalent) before invoking pwsh so slash-leading args pass through unmangled\n- Emit a diagnostic (like the existing 'filtered them all' message) whenever 0 links survive the out-link-pattern filter — the current silent completion hides the problem"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "Swarm backend unavailable in dev mode: swarm query fails with 503 'Swarm not installed' and no documented fix",
+      "severity": "High",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1. Start dev backend via ./b4w.ps1 (auto-starts locally built bundle). 2. ./b4w.ps1 swarm create --display-mode HEADLESS. 3. ./b4w.ps1 swarm query --sql @query.sql --seed-file urls.txt --refresh"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Swarm jobs run against the local backend, as the SKILL.md §4b decision tree and swarm.md quick start imply for the parallel path."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "swarm query fails with HTTP 503 {\"error\":\"Swarm not installed\",\"message\":\"Swarm backend is not installed. Install the browser4-swarm plugin and restart the server.\"}. swarm create succeeds (it is CLI-side) but no jobs can run. The dev runtime bundle (browser4-apps/browser4-bundle/target/runtime-bundle/...) has an empty plugins/ directory. swarm.md documents the 503 but not how to enable the plugin in a dev-mode setup. Manual fix that worked: copy browser4-plugins/browser4-swarm/target/browser4-swarm-4.14.0-rc.3.jar into <bundle>/plugins/ and restart the backend (~10 min)."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The runtime-bundle build script stages plugin JARs (build-runtime-bundle.ps1 line ~951 copies the swarm JAR), but the dev bundle used by the daemon was built earlier without plugins and is not refreshed when source changes — the daemon rebuilds the server libs but not the bundle's plugins/ dir ('Installed bundle: v4.14.0-rc.2' vs server 4.14.0-rc.3). First-time dev users have no documented path to enable swarm."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-apps/browser4-bundle/build-runtime-bundle.ps1 (plugin staging); cli/browser4-cli/src/daemon.rs (bundle freshness/rebuild decision); skills/browser4-cli/references/swarm.md (missing dev-mode setup instructions)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a 'Dev mode' section to swarm.md explaining the plugin requirement and the exact copy-JAR-into-bundle-plugins + restart procedure\n- Make the daemon stage missing plugin JARs from browser4-plugins/*/target/*.jar when starting a dev backend, or rebuild the bundle when plugins are absent\n- Surface a more actionable CLI error: when swarm is unavailable, point to plugin list / the dev-mode install step instead of just 'Swarm not installed'"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "Crawl result reports pages discovered in later waves with depth=1 instead of their true depth",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1. ./b4w.sh crawl \"http://localhost:18080/generated/crawl/index.html\" -d 2 -ol \"a.product\" -olp \"/product/\" (via b4w.sh). 2. ./b4w.ps1 crawl result <task-id>"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Pages directly linked from the seed should be depth=1 and pages linked from those pages depth=2 (products 4-9 are only reachable via product pages 1-3, which link to 4.html/5.html etc.)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "All 9 product pages are reported with \"depth\" : 1 in the result payload, even though 6 of them (products 4-9) are 2 hops from the seed — the hub page contains only 3 product links. The depth cap still behaved correctly: the depth-3 page (depth3/8.html, linked from product/4.html) was NOT fetched, so internal depth tracking is correct and only the reported depth field is wrong."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Likely an off-by-one (or wave-index vs graph-depth mix-up) in the crawl result builder that assigns each discovered page the depth of the wave that enqueued it rather than its true distance from the seed. Needs verification in CrawlService's page-record construction."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/CrawlService.kt (page depth attribution in result)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Compute depth as distance from the seed (parent depth + 1) when recording pages in the result payload\n- Add a test asserting depth values for a 3-level fixture graph (hub -> product -> related -> depth3)\n- If depth is intentionally wave-relative, document that semantics in crawl.md instead of implying graph depth"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "Documented global short flag '-q' is rejected when placed after a command, with a misleading 'unexpected positional arguments' error",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "From Git Bash: ./b4w.ps1 htmlsnapshot -q  (also page-info -q, goto <url> -q)"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "-q is documented as a global option ('-q, --quiet — suppress normal output'); it should be accepted after the command like --quiet is."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Error: error: unexpected positional arguments (this command accepts none): [\"-q\"] (goto says 'accepts 1'). Placing -q before the command (./b4w.ps1 --quiet htmlsnapshot) works, and --quiet after the command works. A first-time user writing `htmlsnapshot -q` (natural flag position) gets a confusing error that calls a documented flag a positional argument."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The CLI's argument parser only recognizes short global flags before the command word; after the command, '-q' falls through to the subcommand's positional parser, which reports it as an unexpected positional. The error message does not hint that -q is a valid global flag."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs (global flag parsing / rewrite_prefixed_command); cli/browser4-cli/src/commands.rs (command arg definitions)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Accept -q (and other documented global short flags) in any position, or at minimum special-case the error: 'unknown option -q (global flags must precede the command: browser4-cli -q htmlsnapshot)'\n- Make the parser treat unknown dashed tokens as unknown options instead of positional arguments"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "Backend restart in dev mode triggers a 5-10+ minute rebuild that looks like a hang",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1. ./b4w.ps1 stop 2. ./b4w.ps1 goto <url> (or any command that auto-starts the server)"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "After 'stop', the next command should restart the backend in the documented ~10s-3min window for a source-tree dev setup."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The restarting goto command did not complete within 400s and again within 420s (moved to background twice); the server eventually came UP. AGENTS.md documents first-launch build latency (~1-3 min) but not that every stop/start cycle re-runs a multi-minute bundle build, so the long silence reads as a hang with no progress indication."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The daemon rebuilds/refreshes the backend bundle from source on restart in dev mode; the rebuild duration depends on Maven incremental state and can far exceed the documented first-launch estimate. The CLI prints no progress while the build runs (the spinner/output appears only later)."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/daemon.rs (dev bundle rebuild on restart); b4w.ps1 (startup pipeline)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Print explicit build progress ('Rebuilding backend bundle from source... this can take several minutes') while the daemon rebuilds\n- Reuse the last built bundle when source is unchanged (incremental check) so stop/start is fast in the common case\n- Update AGENTS.md to state that stop/start cycles re-trigger the build and its real duration"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "Crawl progress output is noisy and uninformative; per-page fetch is slow for small seed sets",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1. ./b4w.ps1 crawl --seed-file .test-sessions/seed-urls.txt --depth 0 --sql @.test-sessions/product-query.sql --format table --refresh"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Progress reporting that shows meaningful per-page status and an indication of expected duration."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The same line 'Crawling... 1 pages found so far' repeated ~6 times with no new information, then a single '1/3 seeds done... (86s elapsed)' line; the 3-page crawl took ~96s (~30s/page) — slower than the equivalent swarm (3 jobs finished in ~1.5 min including worker startup) and much slower than AC6's shell loop over the same URLs. For the 'known URLs' case (§4b → crawl --seed-file), a first-time user sees no ETA and no way to tell if the crawl is progressing or stuck."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The CLI's poll loop prints only the cumulative pages-found count on every poll tick regardless of delta, and the backend rate-limits sequential page fetches (intended politeness), which is unbuffered by any UI-level progress estimate."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/http.rs (crawl progress polling output); browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/CrawlService.kt (per-page pacing)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Only print progress when the count changes, and include per-URL status (fetched/extracted/failed) as each page completes\n- Show an elapsed-time and pages/sec figure after the first page completes\n- For depth-0 seed crawls, note in the output when parallel swarm would be faster for large seed files"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "swarm --help and main help hide swarm create's flags (display mode, parallelism) behind a second help level",
+      "severity": "Low",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1. ./b4w.ps1 swarm --help 2. ./b4w.ps1 help swarm"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The swarm section should surface --display-mode, --max-browser-contexts, --max-open-tabs (the flags the task's AC4 requires for headless parallelism) so users don't have to open the reference doc."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "swarm --help lists only subcommand names and one-line descriptions; the create flags appear only in ./b4w.ps1 swarm create --help or in swarm.md. A first-time user following SKILL.md §4b ('parallel → swarm') must guess to run 'swarm create --help' to discover the parallelism controls."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The help renderer for subcommand groups shows only subcommand summaries, not each subcommand's options; swarm create's options are documented but not surfaced in group-level help."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/help.rs (swarm group help rendering)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Include a compact options block for key subcommands (create/query) in swarm --help, at minimum the parallelism and display-mode flags\n- Or add a 'Common flags' line to the swarm group header: 'swarm create --display-mode HEADLESS --max-browser-contexts N --max-open-tabs M'"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

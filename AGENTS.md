@@ -261,7 +261,15 @@ logger.info("Task {} finished in {} ms", taskId, cost)  // placeholders, never c
 
 **Coverage targets:** Global ≥70%, Core ≥80%, Utilities ≥90%, Controllers ≥85%
 
-**CI:** `.github/workflows/ci.yml` builds all-main-modules, starts Dockerized app on port 8182, runs `cargo test` in `cli/browser4-cli`, limits Maven tests to fast/unit tags by excluding `Slow`, `Heavy`, `Integration`, `E2E`, `SDK`, `Requires*`, `ManualOnly`.
+**CI has two gates with different Maven test scopes** — pick the tags for the gate you are writing tests for:
+
+| Gate | Workflow | Maven `excluded_groups` | Scope |
+|---|---|---|---|
+| PR Quality Gate | `.github/workflows/pr.yml` | `ManualOnly,RequiresAI,E2E,E2ETest,Slow,Heavy,HeavyTest,Integration,IntegrationTest,RequiresServer,RequiresBrowser,RequiresDocker,TestInfraCheck` | fast/unit only (`run_pulsar_tests: 'false'`) |
+| CI/CD Pipeline (main + release tags) | `.github/workflows/ci.yml` | `ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck` | adds integration/infra tests that need Chrome, Docker and the started app |
+
+Both gates pass `-Dsurefire.excludes=**integration**` (class-file pattern, not tags) and both derive success from the surefire XML totals — a test class is skipped by **tag**, never by name. `SDK` is excluded by neither gate (no test carries that tag today); `Heavy` is excluded only by the PR gate, `HeavyTest` by both. `.github/workflows/ci.yml` also builds all-main-modules, starts a Dockerized app on port 8182 and runs `cargo test` in `cli/browser4-cli`.
+See [CI stabilization notes](docs-dev/copilot/ci-stabilization-4.13.x.md) before changing either list.
 
 ## Configuration
 

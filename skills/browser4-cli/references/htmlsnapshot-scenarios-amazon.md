@@ -465,7 +465,7 @@ browser4-cli htmlsnapshot export --file "airpods-pro-2-$(date +%Y%m%d).html"
 # Diff the exported files to detect changes
 diff airpods-pro-2-20260622.html airpods-pro-2-20260629.html
 # Or grep the new export for specific price changes
-browser4-cli htmlsnapshot grep -o '\$[0-9]+\.[0-9]{2}'
+browser4-cli htmlsnapshot grep '[$][0-9]+\.[0-9]{2}'   # literal $ written [$] — Rust regex has no \$ escape
 ```
 
 > **Why start with summary and inspect instead of jumping to extraction?** Scenario 1 demonstrated direct extraction using pre-known selectors. But when you encounter an unfamiliar product page — a different category, a new layout version, or an international Amazon locale — you cannot rely on assumptions. By starting with `summary` (structure overview) and `inspect` (selector discovery), you make the workflow robust against Amazon's frequent A/B tests and layout changes. Running `summary` before extraction is like reading the table of contents before diving into a book.

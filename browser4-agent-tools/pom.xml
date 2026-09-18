@@ -15,7 +15,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4</artifactId>
-        <version>4.14.0-rc.3</version>
+        <version>4.14.0-rc.6</version>
     </parent>
 
     <artifactId>browser4-agent-tools</artifactId>
@@ -76,6 +76,13 @@
         <dependency>
             <groupId>io.mockk</groupId>
             <artifactId>mockk-jvm</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- The X-SQL executor talks to an h2 context and a JDBC connection; both are stubbed in
+             its tests rather than started. -->
+        <dependency>
+            <groupId>org.mockito.kotlin</groupId>
+            <artifactId>mockito-kotlin</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

@@ -1,12 +1,14 @@
 <#
 .SYNOPSIS
-    Count lines of Kotlin and Java code using cloc.
+    Count lines of Kotlin, Java, PowerShell, Bash, JavaScript (Node.js), and
+    Rust code using cloc.
 
 .DESCRIPTION
-    Optionally checks out a Git ref, then runs cloc to count Kotlin and Java
-    lines of code. Outputs a single line in the format:
+    Optionally checks out a Git ref, then runs cloc to count Kotlin, Java,
+    PowerShell, Bash, JavaScript (Node.js), and Rust lines of code. Outputs a
+    single line in the format:
 
-        [ref] [YYYY/MM/DD] Kotlin=NNNNN,Java=NNNNN
+        [ref] [YYYY/MM/DD] Kotlin=NNNNN,Java=NNNNN,PowerShell=NNNNN,Bash=NNNNN,JavaScript=NNNNN,Rust=NNNNN
 
     The ref and date prefix are omitted when the ref is not provided and the
     commit date cannot be determined.
@@ -23,18 +25,21 @@
 
 .EXAMPLE
     ./cloc.ps1
-    # [spinner] Kotlin=24501,Java=18320
+    # [spinner] Kotlin=24501,Java=18320,PowerShell=820,Bash=110,JavaScript=640,Rust=930
 
 .EXAMPLE
     ./cloc.ps1 main
-    # [spinner] main 2026/06/30 Kotlin=24501,Java=18320
+    # [spinner] main 2026/06/30 Kotlin=24501,Java=18320,PowerShell=820,Bash=110,JavaScript=640,Rust=930
 
 .EXAMPLE
     ./cloc.ps1 -Quiet
-    # Kotlin=24501,Java=18320
+    # Kotlin=24501,Java=18320,PowerShell=820,Bash=110,JavaScript=640,Rust=930
 
 .NOTES
     Requires cloc (https://github.com/AlDanial/cloc) and Git to be on PATH.
+    Node.js source (.js/.mjs/.cjs) is reported under "JavaScript" by cloc;
+    shell scripts are reported as "Bourne Shell" (.sh) and
+    "Bourne Again Shell" (.bash) and summed under "Bash".
 #>
 
 [CmdletBinding()]
@@ -46,6 +51,19 @@ Param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Languages counted by this script, mapped to the names cloc reports in its
+# output. Node.js source (.js/.mjs/.cjs) is reported as "JavaScript"; shell
+# scripts are reported as "Bourne Shell" (.sh) and "Bourne Again Shell" (.bash)
+# and are summed under the "Bash" label.
+$Script:CountLanguages = [ordered]@{
+    'Kotlin'     = @('Kotlin')
+    'Java'       = @('Java')
+    'PowerShell' = @('PowerShell')
+    'Bash'       = @('Bourne Shell', 'Bourne Again Shell')
+    'JavaScript' = @('JavaScript')
+    'Rust'       = @('Rust')
+}
 
 # ═══════════════════════════════════════════════════════════════════════
 # Helpers
@@ -88,7 +106,10 @@ function Invoke-CLoc {
         }
     } catch { }
 
-    # Fallback: parse plain-text cloc output (e.g. "Kotlin  42 10 5 27").
+    # Fallback: parse plain-text cloc output. Rows look like
+    # "Bourne Shell   3   0   0   4" (language, files, blank, comment, code).
+    # Language names may contain spaces, so match the full name at line start
+    # and take the trailing number as the code count.
     $result = @{}
     try {
         $output = & cloc $Path 2>$null
@@ -96,13 +117,11 @@ function Invoke-CLoc {
         return $result
     }
 
+    $pattern = '^(?<lang>' + (($Languages | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\s+.*?(?<code>\d+)$'
     foreach ($line in $output) {
-        if ($line -notmatch '^\s*(Kotlin|Java)\b') { continue }
-        $norm  = ($line -replace '\s+', ' ').Trim()
-        $parts = -split $norm
-        if ($parts.Count -ge 5) {
-            $result[$parts[0]] = [int] $parts[4]
-        }
+        $norm = ($line -replace '\s+', ' ').Trim()
+        if ($norm -notmatch $pattern) { continue }
+        $result[$Matches['lang']] = [int] $Matches['code']
     }
     return $result
 }
@@ -180,7 +199,10 @@ $date = Get-CommitDate
 # Show spinner while cloc runs.
 $spinner = if (-not $Quiet) { Start-Spinner -Message 'Counting lines of code' }
 try {
-    $counts = Invoke-CLoc -Languages 'Kotlin', 'Java' -Path $repoRoot
+    # Flatten the map values into the unique cloc language names to request.
+    $allClocNames = @()
+    foreach ($clocNames in $CountLanguages.Values) { $allClocNames += $clocNames }
+    $counts = Invoke-CLoc -Languages ($allClocNames | Select-Object -Unique) -Path $repoRoot
 } finally {
     Stop-Spinner -State $spinner
 }
@@ -196,11 +218,14 @@ $prefixParts = @()
 if ($Ref)  { $prefixParts += $Ref }
 if ($date) { $prefixParts += $date }
 
-# Build the counts segment: "Kotlin=NNNNN,Java=NNNNN"
+# Build the counts segment: "Kotlin=NNNNN,Java=NNNNN,PowerShell=...,..."
 $countParts = @()
-foreach ($lang in @('Kotlin', 'Java')) {
-    $n = if ($counts.ContainsKey($lang)) { $counts[$lang] } else { 0 }
-    $countParts += "${lang}=${n}"
+foreach ($label in $CountLanguages.Keys) {
+    $n = 0
+    foreach ($name in $CountLanguages[$label]) {
+        if ($counts.ContainsKey($name)) { $n += [int] $counts[$name] }
+    }
+    $countParts += "${label}=${n}"
 }
 
 # Emit a single result line to stdout.

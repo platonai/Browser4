@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertSame
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -286,6 +287,71 @@ class Browser4WebDriverTest {
     }
 
     @Test
+    @DisplayName("normalizeStorageStateCookie keeps explicit non-root paths (domain- and url-scoped)")
+    fun normalizeStorageStateCookieKeepsNonRootPaths() {
+        val domainScoped = Browser4WebDriver.normalizeStorageStateCookie(
+            mapOf("name" to "session_id", "value" to "abc123", "domain" to "localhost", "path" to "/app")
+        )
+        assertEquals("/app", domainScoped["path"], "domain-scoped cookie must keep its explicit path")
+        assertEquals("localhost", domainScoped["domain"])
+
+        val urlScoped = Browser4WebDriver.normalizeStorageStateCookie(
+            mapOf("name" to "session_id", "value" to "abc123", "url" to "http://localhost:18080/x", "path" to "/app")
+        )
+        assertEquals("/app", urlScoped["path"], "url-scoped cookie must keep its explicit path")
+        assertEquals("http://localhost:18080/x", urlScoped["url"])
+    }
+
+    @Test
+    @DisplayName("normalizeStorageStateCookie rejects paths that do not start with /")
+    fun normalizeStorageStateCookieRejectsRelativePath() {
+        val error = runCatching {
+            Browser4WebDriver.normalizeStorageStateCookie(
+                mapOf("name" to "bad_path", "value" to "v", "domain" to "localhost", "path" to "app")
+            )
+        }.exceptionOrNull()
+        assertTrue(error is IllegalArgumentException, "expected an IllegalArgumentException, got $error")
+        assertTrue(
+            error?.message?.contains("bad_path") == true,
+            "expected the error to name the cookie, got ${error?.message}"
+        )
+        assertTrue(
+            error?.message?.contains("start with '/'") == true,
+            "expected the path rule in the message, got ${error?.message}"
+        )
+    }
+
+    @Test
+    @DisplayName("normalizeStorageStateCookie rejects cookie names the browser will not store")
+    fun normalizeStorageStateCookieRejectsUnstorableNames() {
+        for (badName in listOf("a b", "a;b", "a=b", "a\tb")) {
+            val error = runCatching {
+                Browser4WebDriver.normalizeStorageStateCookie(
+                    mapOf("name" to badName, "value" to "v", "url" to "http://example.com")
+                )
+            }.exceptionOrNull()
+            assertTrue(error is IllegalArgumentException, "expected rejection for name '$badName', got $error")
+            assertTrue(
+                error?.message?.contains(badName) == true,
+                "expected the error to name the cookie, got ${error?.message}"
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("normalizeStorageStateCookie accepts names Chrome accepts (unicode, punctuation)")
+    fun normalizeStorageStateCookieAcceptsBrowserNames() {
+        // Chrome's CDP layer accepts these; the in-repo pre-validation must not
+        // over-reject names a round-tripped state can legitimately contain.
+        for (goodName in listOf("utf_\u540d", "quote\"name", "brace{name}", "dollar\$name", "dot.name", "a-b_c")) {
+            val normalized = Browser4WebDriver.normalizeStorageStateCookie(
+                mapOf("name" to goodName, "value" to "v", "domain" to "localhost")
+            )
+            assertEquals(goodName, normalized["name"], "name '$goodName' must be preserved")
+        }
+    }
+
+    @Test
     @DisplayName("restoreLocalStorageScript clears and rewrites the entries array")
     fun restoreLocalStorageScriptClearsAndRewrites() {
         val script = Browser4WebDriver.restoreLocalStorageScript(
@@ -308,6 +374,92 @@ class Browser4WebDriverTest {
         assertFalse(
             Browser4WebDriver.isDocumentOriginReady("https://www.example.com", "http://127.0.0.1:47815")
         )
+    }
+
+    // -------------------------------------------------------------------------
+    // Cookie reads over the extension relay (raw CDP result parsing)
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("extractCookiesFromCdpResult reads the CDP getAllCookies envelope")
+    fun extractCookiesFromCdpResultReadsEnvelope() {
+        val raw = mapOf(
+            "cookies" to listOf(
+                mapOf("name" to "UserToken", "value" to "abc", "domain" to ".csdn.net", "path" to "/"),
+                mapOf("name" to "SESSION", "value" to "xyz", "domain" to "msg.csdn.net", "path" to "/"),
+            )
+        )
+
+        val cookies = Browser4WebDriver.extractCookiesFromCdpResult(raw)
+
+        assertEquals(2, cookies.size)
+        assertEquals("UserToken", cookies[0]["name"])
+        assertEquals(".csdn.net", cookies[0]["domain"])
+    }
+
+    @Test
+    @DisplayName("extractCookiesFromCdpResult accepts a bare array and JSON nodes")
+    fun extractCookiesFromCdpResultAcceptsBareArrayAndNodes() {
+        val bare = listOf(mapOf("name" to "a", "value" to "1", "domain" to "example.com"))
+        assertEquals(1, Browser4WebDriver.extractCookiesFromCdpResult(bare).size)
+
+        // The relay may answer with Jackson nodes instead of plain maps.
+        val node = ai.platon.pulsar.common.serialize.json.pulsarObjectMapper()
+            .readTree("""{"cookies":[{"name":"a","value":"1","domain":"example.com"}]}""")
+        assertEquals(1, Browser4WebDriver.extractCookiesFromCdpResult(node).size)
+    }
+
+    @Test
+    @DisplayName("extractCookiesFromCdpResult returns empty for absent cookie payloads")
+    fun extractCookiesFromCdpResultReturnsEmptyForAbsentPayloads() {
+        assertTrue(Browser4WebDriver.extractCookiesFromCdpResult(null).isEmpty())
+        assertTrue(Browser4WebDriver.extractCookiesFromCdpResult("not a cookie payload").isEmpty())
+        assertTrue(Browser4WebDriver.extractCookiesFromCdpResult(mapOf("other" to 1)).isEmpty())
+        assertTrue(Browser4WebDriver.extractCookiesFromCdpResult(mapOf("cookies" to "oops")).isEmpty())
+    }
+
+    @Test
+    @DisplayName("raw CDP cookies normalize into the storage-state round-trip shape")
+    fun rawCdpCookiesNormalizeIntoStorageStateShape() {
+        // A single entry as returned by the live extension relay: extra CDP
+        // fields (priority, size, sourcePort, session) must not leak into the
+        // state payload, and a session cookie (-1 expiry) must drop `expires`.
+        val raw = mapOf(
+            "cookies" to listOf(
+                mapOf(
+                    "name" to "UserToken", "value" to "abc", "domain" to ".csdn.net", "path" to "/",
+                    "expires" to -1.0, "httpOnly" to true, "secure" to false, "sameSite" to "Lax",
+                    "priority" to "Medium", "size" to 36, "sourcePort" to 443, "session" to true,
+                )
+            )
+        )
+
+        val normalized = Browser4WebDriver.extractCookiesFromCdpResult(raw)
+            .map { Browser4WebDriver.normalizeStorageStateCookie(it) }
+
+        assertEquals(1, normalized.size)
+        assertEquals(
+            linkedMapOf(
+                "name" to "UserToken",
+                "value" to "abc",
+                "domain" to ".csdn.net",
+                "path" to "/",
+                "httpOnly" to true,
+                "secure" to false,
+                "sameSite" to "Lax",
+            ),
+            normalized[0]
+        )
+        assertFalse(normalized[0].containsKey("expires"), "session cookies must not carry an expiry")
+        assertFalse(normalized[0].containsKey("priority"), "CDP-only fields must not leak into the state")
+    }
+
+    @Test
+    @DisplayName("captureLocalStorageScript serializes localStorage as a JSON object")
+    fun captureLocalStorageScriptSerializesLocalStorage() {
+        val script = Browser4WebDriver.captureLocalStorageScript()
+        assertTrue(script.contains("JSON.stringify"), "expected a JSON result: $script")
+        assertTrue(script.contains("window.localStorage"), "expected localStorage read: $script")
     }
 
     @Test
@@ -396,7 +548,7 @@ class Browser4WebDriverTest {
     }
 
     @Test
-    @DisplayName("buildDragSequenceScript embeds randomized delays and jittered points")
+    @DisplayName("buildDragSequenceScript embeds randomized delays and the resolved target point")
     fun buildDragSequenceScriptEmbedsRandomizedDelays() {
         val delays = listOf(111L, 222L, 333L, 444L)
         val script = Browser4WebDriver.buildDragSequenceScript(
@@ -410,7 +562,144 @@ class Browser4WebDriverTest {
         delays.forEach { delay ->
             assertTrue(script.contains("sleep($delay)"), "expected embedded delay $delay: $script")
         }
-        assertTrue(script.contains("elementFromPoint(30.75, 40.0)"), "expected jittered target point: $script")
+        // The resolved (jittered) target point is the default drop point for
+        // the center mode and feeds the elementFromPoint occlusion pre-check.
+        assertTrue(script.contains("var dropX = 30.75"), "expected embedded target x: $script")
+        assertTrue(script.contains("var dropY = 40.0"), "expected embedded target y: $script")
+        assertTrue(script.contains("elementFromPoint(dropX, dropY)"), "expected pre-check on the drop point: $script")
+        // Center drops carry the rect branch too, but its guard is statically
+        // false, so the drop point is never re-derived from the rect.
+        assertTrue(
+            script.contains("if (\"center\" === 'top' || \"center\" === 'bottom')"),
+            "center drops must not re-derive the point from the rect: $script"
+        )
+    }
+
+    @Test
+    @DisplayName("buildDragSequenceScript pins top/bottom drops to the live rect edge region")
+    fun buildDragSequenceScriptPinsEdgeDrops() {
+        val base = listOf("top", "bottom")
+        base.forEach { position ->
+            val script = Browser4WebDriver.buildDragSequenceScript(
+                targetCssPath = "div#target",
+                sourceX = 1.0,
+                sourceY = 1.0,
+                targetX = 30.0,
+                targetY = 40.0,
+                delays = List(6) { it.toLong() + 1 },
+                dropPosition = position,
+            )
+            assertTrue(
+                script.contains("if (\"$position\" === 'top' || \"$position\" === 'bottom')"),
+                "expected the edge-region branch to be selected for '$position': $script"
+            )
+            assertTrue(
+                script.contains("dropY = \"$position\" === 'bottom' ? targetRect.bottom - 2 : targetRect.top + 2"),
+                "expected an edge-region drop point for '$position': $script"
+            )
+            assertTrue(script.contains("if (targetRect.height > 4)"), "expected a degenerate-size guard: $script")
+        }
+    }
+
+    @Test
+    @DisplayName("buildDragSequenceScript sweeps dragover events only for positioned drops")
+    fun buildDragSequenceScriptSweepsOnlyWhenPositioned() {
+        val center = Browser4WebDriver.buildDragSequenceScript(
+            targetCssPath = "div#target",
+            sourceX = 1.0,
+            sourceY = 1.0,
+            targetX = 1.0,
+            targetY = 1.0,
+            delays = listOf(1L, 2L, 3L, 4L),
+            dropPosition = "center",
+        )
+        val bottom = Browser4WebDriver.buildDragSequenceScript(
+            targetCssPath = "div#target",
+            sourceX = 1.0,
+            sourceY = 1.0,
+            targetX = 1.0,
+            targetY = 1.0,
+            delays = listOf(1L, 2L, 3L, 4L, 5L, 6L),
+            dropPosition = "bottom",
+        )
+        fun dragoverCount(script: String): Int =
+            Regex("'dragover'").findAll(script).count()
+        assertEquals(1, dragoverCount(center), "center drops keep the legacy single dragover: $center")
+        // The sweep step table is emitted once and loops at runtime, so the
+        // positioned script textually carries 2 dragover dispatches which run
+        // as 2 sweep events + the final dragover = 3 runtime events.
+        assertEquals(2, dragoverCount(bottom), "positioned drops sweep two dragover events before the final one: $bottom")
+        assertTrue(bottom.contains("sweep"), "expected the sweep step table: $bottom")
+        assertTrue(bottom.contains("delay: 3") && bottom.contains("delay: 4"), "expected per-sweep-step delays: $bottom")
+        assertTrue(bottom.contains("sleep(5)") && bottom.contains("sleep(6)"), "expected final dragover/drop delays: $bottom")
+    }
+
+    @Test
+    @DisplayName("buildDragSequenceScript requires 6 delays for positioned drops")
+    fun buildDragSequenceScriptRequiresSixDelaysWhenPositioned() {
+        assertThrows(IllegalArgumentException::class.java) {
+            Browser4WebDriver.buildDragSequenceScript(
+                targetCssPath = "div#target",
+                sourceX = 1.0,
+                sourceY = 1.0,
+                targetX = 1.0,
+                targetY = 1.0,
+                delays = listOf(1L, 2L, 3L, 4L),
+                dropPosition = "top",
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            Browser4WebDriver.buildDragSequenceScript(
+                targetCssPath = "div#target",
+                sourceX = 1.0,
+                sourceY = 1.0,
+                targetX = 1.0,
+                targetY = 1.0,
+                delays = List(6) { 1L },
+                dropPosition = "center",
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("parseDragPositionReport renders the resulting DOM placement")
+    fun parseDragPositionReportRendersPlacement() {
+        assertEquals(
+            "Dropped li#priorityHigh as child 4 of 4 in ul#priorityList",
+            Browser4WebDriver.parseDragPositionReport(
+                """{"ok":true,"tag":"li","id":"priorityHigh","parentTag":"ul","parentId":"priorityList","index":3,"total":4}"""
+            )
+        )
+        assertEquals(
+            "Dropped li as child 1 of 2 in ul",
+            Browser4WebDriver.parseDragPositionReport(
+                """{"ok":true,"tag":"li","id":"","parentTag":"ul","parentId":"","index":0,"total":2}"""
+            )
+        )
+        assertNull(Browser4WebDriver.parseDragPositionReport("""{"ok":false}"""))
+        assertNull(Browser4WebDriver.parseDragPositionReport("""{"ok":true,"tag":"li","id":"","parentTag":"ul","parentId":"","index":4,"total":4}"""))
+        assertNull(Browser4WebDriver.parseDragPositionReport(null))
+        assertNull(Browser4WebDriver.parseDragPositionReport("not-json"))
+    }
+
+    @Test
+    @DisplayName("dragPositionReportJs resolves tag, id and sibling placement")
+    fun dragPositionReportJsContainsPlacementLogic() {
+        val js = Browser4WebDriver.dragPositionReportJs()
+        assertTrue(js.contains("this.tagName.toLowerCase()"), "expected tag resolution: $js")
+        assertTrue(js.contains("kids.indexOf(this)"), "expected child index resolution: $js")
+    }
+
+    @Test
+    @DisplayName("DragDropPosition.from normalizes case and rejects unknown values")
+    fun dragPositionFromValidatesValues() {
+        assertEquals("center", Browser4WebDriver.DragDropPosition.from("center").key)
+        assertEquals("top", Browser4WebDriver.DragDropPosition.from("TOP").key)
+        assertEquals("bottom", Browser4WebDriver.DragDropPosition.from(" bottom ").key)
+        val thrown = assertThrows(IllegalArgumentException::class.java) {
+            Browser4WebDriver.DragDropPosition.from("middle")
+        }
+        assertTrue(thrown.message.orEmpty().contains("middle"), "expected the offending value in the message")
     }
 
     @Test
@@ -512,12 +801,193 @@ class Browser4WebDriverTest {
         )
     }
 
+    // -------------------------------------------------------------------------
+    // Capture annotations (vi and the normalizedURI link)
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("viDataStatusJs short-circuits a document that already has vi data")
+    fun viDataStatusJsShortCircuitsOnComputedData() {
+        val js = Browser4WebDriver.viDataStatusJs()
+
+        assertTrue(
+            js.indexOf("u._viDataComputed === true") < js.indexOf("u.compute()"),
+            "an already annotated document must not be computed again: $js"
+        )
+        assertTrue(
+            js.contains("status = '${Browser4WebDriver.VI_DATA_COMPUTED}'"),
+            "the short circuit must report the computed status: $js"
+        )
+    }
+
+    @Test
+    @DisplayName("viDataStatusJs reports a tab without the Browser4 runtime")
+    fun viDataStatusJsReportsMissingRuntime() {
+        val js = Browser4WebDriver.viDataStatusJs()
+
+        assertTrue(
+            js.contains("window.__pulsar_utils__"),
+            "the runtime must be read defensively so a missing one does not throw: $js"
+        )
+        assertTrue(
+            js.contains("typeof u.getAnnotatedHTML !== 'function'"),
+            "a runtime without the annotated serializer must not be computed for: $js"
+        )
+        assertTrue(
+            js.contains("'${Browser4WebDriver.VI_DATA_UNAVAILABLE}'"),
+            "the missing runtime must report the unavailable status: $js"
+        )
+    }
+
+    @Test
+    @DisplayName("viDataStatusJs leaves a document without a body alone")
+    fun viDataStatusJsSkipsDocumentsWithoutBody() {
+        val js = Browser4WebDriver.viDataStatusJs()
+
+        assertTrue(
+            js.contains("!document.body || !document.body.firstChild"),
+            "compute() no-ops without a body, so it must not be called: $js"
+        )
+        assertTrue(
+            js.contains("'${Browser4WebDriver.VI_DATA_NOT_READY}'"),
+            "a bodyless document must report the not-ready status: $js"
+        )
+    }
+
+    @Test
+    @DisplayName("viDataStatusJs reports a runtime that produced no vi data")
+    fun viDataStatusJsReportsFailure() {
+        val js = Browser4WebDriver.viDataStatusJs()
+
+        assertTrue(
+            js.contains("try { u.compute(); } catch (e)"),
+            "a compute failure must not escape into the serialization path: $js"
+        )
+        assertTrue(
+            js.contains(
+                "u._viDataComputed === true ? '${Browser4WebDriver.VI_DATA_COMPUTED}' " +
+                    ": '${Browser4WebDriver.VI_DATA_FAILED}'"
+            ),
+            "the flag must be verified after computing, not assumed: $js"
+        )
+    }
+
+    @Test
+    @DisplayName("viDataStatusJs reports the stored page URL and the live document URL")
+    fun viDataStatusJsReportsLinkAndDocumentUrl() {
+        val js = Browser4WebDriver.viDataStatusJs()
+
+        assertTrue(js.contains("u._captureMetaLinks"), "the stored capture links must be read: $js")
+        assertTrue(
+            js.contains("'${Browser4WebDriver.CAPTURE_META_LINK_REL}'"),
+            "the normalizedURI link must be the one reported: $js"
+        )
+        assertTrue(js.contains("document.URL"), "the live document URL must be reported: $js")
+        // The three fields travel inside one JS string joined by the separator,
+        // spelled as an escape so the generated source stays plain ASCII.
+        val separatorEscape = Browser4WebDriver.fieldSeparatorJsEscape
+        assertTrue(
+            js.contains("'$separatorEscape'"),
+            "the fields must be joined by the '$separatorEscape' escape: $js"
+        )
+        assertTrue(
+            !js.contains(Browser4WebDriver.VI_DATA_FIELD_SEPARATOR),
+            "the raw control character must not be emitted into the JS source: $js"
+        )
+    }
+
+    @Test
+    @DisplayName("the field separator escape matches the parsed separator")
+    fun fieldSeparatorEscapeMatchesParsedSeparator() {
+        assertEquals("\u0001", Browser4WebDriver.VI_DATA_FIELD_SEPARATOR)
+        assertEquals("\\u0001", Browser4WebDriver.fieldSeparatorJsEscape)
+    }
+
+    @Test
+    @DisplayName("parseViDataProbe splits the status, the stored link and the document URL")
+    fun parseViDataProbeSplitsFields() {
+        val probe = Browser4WebDriver.parseViDataProbe(
+            "computed\u0001https://example.com/\u0001https://example.com/?th=1"
+        )
+
+        assertEquals("computed", probe?.status)
+        assertEquals("https://example.com/", probe?.storedUri)
+        assertEquals("https://example.com/?th=1", probe?.documentUrl)
+    }
+
+    @Test
+    @DisplayName("parseViDataProbe keeps a blank link for an unannotated document")
+    fun parseViDataProbeKeepsBlankLink() {
+        val probe = Browser4WebDriver.parseViDataProbe("unavailable\u0001\u0001about:blank")
+
+        assertEquals("unavailable", probe?.status)
+        assertEquals("", probe?.storedUri)
+        assertEquals("about:blank", probe?.documentUrl)
+    }
+
+    @Test
+    @DisplayName("parseViDataProbe rejects unexpected evaluation results")
+    fun parseViDataProbeRejectsUnexpectedResults() {
+        assertNull(Browser4WebDriver.parseViDataProbe(null), "null is not a probe")
+        assertNull(Browser4WebDriver.parseViDataProbe(42), "a number is not a probe")
+        assertNull(Browser4WebDriver.parseViDataProbe("computed"), "a missing separator is not a probe")
+        assertNull(
+            Browser4WebDriver.parseViDataProbe("computed\u0001a\u0001b\u0001c"),
+            "extra fields mean the result was not produced by the probe"
+        )
+    }
+
+    @Test
+    @DisplayName("storeCaptureMetaLinkJs writes the normalized URI without dropping other links")
+    fun storeCaptureMetaLinkJsMergesTheLink() {
+        val js = Browser4WebDriver.storeCaptureMetaLinkJs("https://example.com/a'b")
+
+        assertTrue(
+            js.contains("u._captureMetaLinks = u._captureMetaLinks || {}"),
+            "existing capture links must be preserved: $js"
+        )
+        assertTrue(
+            js.contains("""u._captureMetaLinks['normalizedURI'] = 'https://example.com/a\'b'"""),
+            "the URL must be stored escaped under the normalizedURI rel: $js"
+        )
+    }
+
+    @Test
+    @DisplayName("a vi failure is reported once per document URL")
+    fun viFailureIsReportedOncePerDocument() {
+        assertTrue(
+            Browser4WebDriver.shouldReportViFailure(null, "https://example.com/"),
+            "the first failure on a document must be reported"
+        )
+        assertFalse(
+            Browser4WebDriver.shouldReportViFailure("https://example.com/", "https://example.com/"),
+            "a repeated read of the same failing document must stay quiet"
+        )
+        assertTrue(
+            Browser4WebDriver.shouldReportViFailure("https://example.com/", "https://example.com/other"),
+            "a failure on another document must be reported"
+        )
+    }
+
+    @Test
+    @DisplayName("vi statuses are distinct non-blank tokens")
+    fun viStatusesAreDistinct() {
+        val statuses = setOf(
+            Browser4WebDriver.VI_DATA_COMPUTED,
+            Browser4WebDriver.VI_DATA_NOT_READY,
+            Browser4WebDriver.VI_DATA_UNAVAILABLE,
+            Browser4WebDriver.VI_DATA_FAILED,
+        )
+
+        assertEquals(4, statuses.size, "the statuses must be distinguishable")
+        assertTrue(statuses.none { it.isBlank() }, "statuses must not be blank: $statuses")
+    }
+
     private fun dialogDriver(protocol: BrowserProtocol = mock()): Browser4WebDriver {
         val browser = mock<PulsarBrowser>()
         whenever(browser.settings).thenReturn(BrowserSettings())
         return Browser4WebDriver("test", BrowserTab(), protocol, browser)
     }
-
     @Suppress("UNCHECKED_CAST")
     private fun pendingDialogs(driver: Browser4WebDriver): Queue<DialogEvent> {
         val field = driver.dialogHandler.javaClass.getDeclaredField("pendingDialogs")

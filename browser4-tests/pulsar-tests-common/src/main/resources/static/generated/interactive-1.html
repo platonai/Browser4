@@ -52,9 +52,11 @@
 <section id="userInformation" data-testid="userInformation" class="section section-user-info" data-role="section" data-component="user-info-section">
     <h2>📋 User Information</h2>
     <p>Enter your name below and see it reflected instantly.</p>
-    <label for="name">Your Name:</label>
-    <input type="text" id="name" data-testid="nameInput" class="input input-name" placeholder="Type here..." data-role="input" data-component="name-input" aria-label="Enter your name" />
-    <p class="result result-name" id="nameOutput" data-testid="nameOutput" data-role="output" data-component="name-output" aria-live="polite"></p>
+    <form id="userForm" data-testid="userForm" class="form form-user" data-role="form" data-component="user-form" onsubmit="return false;">
+        <label for="name">Your Name:</label>
+        <input type="text" id="name" data-testid="nameInput" class="input input-name" placeholder="Type here..." data-role="input" data-component="name-input" aria-label="Enter your name" />
+        <p class="result result-name" id="nameOutput" data-testid="nameOutput" data-role="output" data-component="name-output" aria-live="polite"></p>
+    </form>
 </section>
 
 <section id="preferences" data-testid="preferences" class="section section-preferences" data-role="section" data-component="preferences-section">
@@ -86,6 +88,19 @@
     <button id="toggleMessageButton" data-testid="toggleMessageButton" class="btn btn-toggle" onclick="toggleMessage()" data-role="button" data-component="toggle-message-button" data-action="toggle-message" aria-expanded="false" aria-controls="hiddenMessage" aria-label="Toggle hidden message visibility">Toggle Message</button>
     <p id="hiddenMessage" data-testid="hiddenMessage" class="hidden toggle-message" data-role="message" data-component="hidden-message" aria-hidden="true" role="region">🎉 Surprise! You've discovered the hidden message.</p>
 </section>
+
+<footer id="pageFooter" data-testid="pageFooter" class="footer footer-main" data-role="footer" data-component="site-footer">
+    <p>Useful links for this demo page:</p>
+    <ul class="footer-links" data-role="list" data-component="footer-links">
+        <li><a id="footerLinkTop" data-testid="footerLinkTop" class="footer-link" href="#userInformation" data-role="link" data-component="footer-link-top">Back to user information</a></li>
+        <li><a id="footerLinkForm" data-testid="footerLinkForm" class="footer-link" href="#userForm" data-role="link" data-component="footer-link-form">Jump to the form</a></li>
+        <li><a id="footerLinkPage" data-testid="footerLinkPage" class="footer-link" href="/generated/interactive-1.html" data-role="link" data-component="footer-link-page" rel="self">Reload this page</a></li>
+    </ul>
+    <div class="footer-badges" data-role="group" data-component="footer-badges">
+        <img id="badgeImg1" data-testid="badgeImg1" class="badge-img" src="data:image/svg+xml;utf8,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='24'%20height='24'%3E%3Crect%20width='24'%20height='24'%20fill='%230066cc'/%3E%3C/svg%3E" alt="Demo badge one" width="24" height="24" data-role="img" data-component="badge-img-1" />
+        <img id="badgeImg2" data-testid="badgeImg2" class="badge-img" src="data:image/svg+xml;utf8,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='24'%20height='24'%3E%3Crect%20width='24'%20height='24'%20fill='%2300cc66'/%3E%3C/svg%3E" alt="Demo badge two" width="24" height="24" data-role="img" data-component="badge-img-2" />
+    </div>
+</footer>
 
 <script>
     document.getElementById('name').addEventListener('input', function () {

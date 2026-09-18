@@ -4,8 +4,12 @@ import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.model.*
+import ai.platon.pulsar.agentic.model.RateLimit
+import ai.platon.pulsar.agentic.observability.ToolMetrics
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
+import ai.platon.pulsar.agentic.tools.ToolRateLimiter
+import ai.platon.pulsar.agentic.tools.ToolResultCache
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner
@@ -75,6 +79,8 @@ class MCPToolControllerTest {
 
     @AfterEach
     fun tearDown() {
+        System.clearProperty("mcp.validateBuiltinArgs")
+
         // Clean up any test executors leaked into the singleton registry.
         CustomToolRegistry.instance.getAllDomains().forEach {
             CustomToolRegistry.instance.unregister(it)
@@ -1180,12 +1186,418 @@ class MCPToolControllerTest {
         Unit
     }
 
+    @Test
+    fun `missing page helper ReferenceError is mapped to an actionable message`() = runBlocking {
+        mockTool("tab", "evaluateValue")
+
+        `when`(agentToolManager.execute(any())).thenReturn(
+            toolCallResult(
+                evaluate = TcEvaluate(
+                    expression = "html_snapshot.capture(sessionId=\"...\")",
+                    exception = TcException(
+                        expression = "html_snapshot.capture(sessionId=\"...\")",
+                        cause = RuntimeException(
+                            "ReferenceError: __pulsar_utils__ is not defined at <anonymous>:1:1"
+                        ),
+                        help = "Capture the current page as an HTML snapshot with metadata, interactive elements, and link groups."
+                    )
+                )
+            )
+        )
+
+        val request = MCPToolCallRequest(
+            tool = "browser_evaluate",
+            arguments = mapOf("sessionId" to sessionId, "expression" to "1")
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.isError)
+        val errorText = result.body!!.content[0].text
+        // The internal JS stack must not leak to the user ...
+        assertFalse(errorText.contains("ReferenceError"), "Raw ReferenceError should be mapped away: $errorText")
+        assertFalse(errorText.contains("at <anonymous>"), "JS stack must not leak: $errorText")
+        // ... and the user must get an actionable remediation instead
+        assertTrue(errorText.contains("open --fresh"), "Expected actionable 'open --fresh' hint in: $errorText")
+        Unit
+    }
+
+    @Test
+    fun `runtime errors do not append the static tool description as help text`() = runBlocking {
+        mockTool("tab", "evaluateValue")
+
+        `when`(agentToolManager.execute(any())).thenReturn(
+            toolCallResult(
+                evaluate = TcEvaluate(
+                    expression = "tab.evaluateValue(expression=\"boom\")",
+                    exception = TcException(
+                        expression = "tab.evaluateValue(expression=\"boom\")",
+                        cause = RuntimeException("The browser tab crashed mid-evaluation"),
+                        help = "Evaluate a JavaScript expression and return its value."
+                    )
+                )
+            )
+        )
+
+        val request = MCPToolCallRequest(
+            tool = "browser_evaluate",
+            arguments = mapOf("sessionId" to sessionId, "expression" to "boom")
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.isError)
+        val errorText = result.body!!.content[0].text
+        assertTrue(errorText.contains("browser_evaluate failed:"), "Expected tool prefix, got: $errorText")
+        assertTrue(errorText.contains("crashed"), "Expected runtime message in: $errorText")
+        assertFalse(
+            errorText.contains("help:"),
+            "Runtime errors must not carry the static tool description as 'help:', got: $errorText"
+        )
+        Unit
+    }
+
+    @Test
+    fun `usage errors keep the static help text`() = runBlocking {
+        mockTool("tab", "evaluateValue")
+
+        `when`(agentToolManager.execute(any())).thenReturn(
+            toolCallResult(
+                evaluate = TcEvaluate(
+                    expression = "tab.evaluateValue(expression=null)",
+                    exception = TcException(
+                        expression = "tab.evaluateValue(expression=null)",
+                        cause = IllegalArgumentException("Missing required parameter 'expression' for evaluateValue"),
+                        help = "Evaluate a JavaScript expression and return its value."
+                    )
+                )
+            )
+        )
+
+        val request = MCPToolCallRequest(
+            tool = "browser_evaluate",
+            arguments = mapOf("sessionId" to sessionId)
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.isError)
+        val errorText = result.body!!.content[0].text
+        assertTrue(errorText.contains("Missing required parameter"), "Expected usage message in: $errorText")
+        assertTrue(
+            errorText.contains("help: Evaluate a JavaScript expression"),
+            "Usage errors should keep the static help text, got: $errorText"
+        )
+        Unit
+    }
+
     private fun toolCallResult(value: Any? = null, evaluate: TcEvaluate? = null): ToolCallResult {
         val resolvedEvaluate = evaluate ?: TcEvaluate(value = value)
         return ToolCallResult(
             evaluate = resolvedEvaluate,
             message = resolvedEvaluate.exception?.message,
         )
+    }
+
+    // =========================================================================
+    // Built-in contract validation: shadow first, enforce later
+    // =========================================================================
+
+    /**
+     * A session that advertises `tab.navigate(url: String)`.
+     *
+     * Built-in domains are only validated through the sessions the server already
+     * has, so a violation cannot be observed without one.
+     */
+    private fun mockLiveNavigateSpec() {
+        `when`(sessionManager.getAllSessions()).thenReturn(listOf(managedSession))
+        `when`(agentToolManager.getAllToolSpecs()).thenReturn(
+            mapOf(
+                "tab" to mapOf(
+                    "navigate" to ToolSpec(
+                        domain = "tab",
+                        method = "navigate",
+                        arguments = listOf(ToolSpec.Arg("url", "String", null)),
+                        returnType = "Unit",
+                        description = "Navigate the current page to a URL.",
+                    )
+                )
+            )
+        )
+        runBlocking { `when`(agentToolManager.execute(any())).thenReturn(toolCallResult("ok")) }
+    }
+
+    /** How many shadow violations `navigate` has accumulated in this JVM. */
+    private fun shadowViolations(tool: String): Double =
+        ToolMetrics.currentRegistry()
+            .find("tool.validation.shadow.violations")
+            .tag("tool_name", tool)
+            .counter()
+            ?.count() ?: 0.0
+
+    @Test
+    fun `built-in contract violations are observed but not enforced by default`() = runBlocking {
+        mockLiveNavigateSpec()
+        val before = shadowViolations("navigate")
+
+        // 'url' is required by the spec and missing here: a contract violation.
+        val result = controller.callTool(
+            MCPToolCallRequest(tool = "navigate", arguments = mapOf("sessionId" to sessionId)),
+            response,
+        )
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertEquals(false, result.body!!.isError, "shadow mode must not turn a mismatch into a client error")
+        Mockito.verify(agentToolManager).execute(any())
+        assertTrue(
+            shadowViolations("navigate") > before,
+            "the mismatch must be counted so it can be fixed before enforcement is switched on",
+        )
+    }
+
+    @Test
+    fun `built-in contract violations are rejected once the policy says error`() = runBlocking {
+        System.setProperty("mcp.validateBuiltinArgs", "error")
+        mockLiveNavigateSpec()
+
+        val result = controller.callTool(
+            MCPToolCallRequest(tool = "navigate", arguments = mapOf("sessionId" to sessionId)),
+            response,
+        )
+
+        assertTrue(result.body!!.isError, "error policy must reject the malformed call")
+        assertEquals("MISSING_REQUIRED_ARG", result.body!!.errorCode)
+        Mockito.verify(agentToolManager, Mockito.never()).execute(any())
+        // `verify` returns the mock: without this the expression body would make the
+        // method return a value, and JUnit would silently skip the test.
+        Unit
+    }
+
+    @Test
+    fun `built-in validation can be switched off entirely`() = runBlocking {
+        System.setProperty("mcp.validateBuiltinArgs", "off")
+        mockLiveNavigateSpec()
+        val before = shadowViolations("navigate")
+
+        val result = controller.callTool(
+            MCPToolCallRequest(tool = "navigate", arguments = mapOf("sessionId" to sessionId)),
+            response,
+        )
+
+        assertEquals(false, result.body!!.isError)
+        Mockito.verify(agentToolManager).execute(any())
+        assertEquals(before, shadowViolations("navigate"), "off means no validation at all")
+    }
+
+    // =========================================================================
+    // /mcp/tools — static + session segments
+    // =========================================================================
+
+    @Test
+    fun `the tool list grows when a session appears`() {
+        // No session yet: the CLI's readiness probe must still see the static set.
+        `when`(sessionManager.getAllSessions()).thenReturn(emptyList())
+        val before = listedTools()
+
+        assertTrue(before.contains("open_session"), "the static segment is always advertised")
+        assertTrue(before.contains("browser_navigate"), "aliases are advertised before a session exists")
+        assertFalse(before.contains("navigate"), "session tools cannot be enumerated without a session")
+
+        // A session appears: the very next probe must add its tools. Freezing the
+        // first enumeration is what made the browser tools invisible forever (G5).
+        mockLiveNavigateSpec()
+        val after = listedTools()
+
+        assertTrue(after.contains("navigate"), "the session's tools must appear, saw ${after.size} tools")
+        assertTrue(after.containsAll(before), "the static segment must survive the merge")
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun listedTools(): List<String> {
+        val body = controller.listTools(response).body as Map<String, Any?>
+        return (body["tools"] as List<*>).filterIsInstance<String>()
+    }
+
+    // =========================================================================
+    // Result cache (requirement 10)
+    // =========================================================================
+
+    /** A controller with its own cache and a frozen clock. */
+    private fun cachedController(): MCPToolController = MCPToolController(
+        sessionManager,
+        null,
+        ToolRateLimiter.shared,
+        ToolResultCache(
+            enabledProvider = { true },
+            ttlMultiplierProvider = { 1.0 },
+            maxEntriesProvider = { 100 },
+            clock = { 0L },
+        ),
+    )
+
+    /**
+     * A live session advertising a cacheable read and a page action.
+     *
+     * Both are needed: the read is what gets cached, and the click is what must
+     * invalidate it. Without a resolvable spec the channel caches nothing at all
+     * (it fails open to "no cache"), which is the safe direction.
+     */
+    private fun mockCacheableSessionTools() {
+        `when`(sessionManager.getAllSessions()).thenReturn(listOf(managedSession))
+        `when`(agentToolManager.getAllToolSpecs()).thenReturn(
+            mapOf(
+                "tab" to mapOf(
+                    "getText" to ToolSpec(
+                        domain = "tab", method = "getText",
+                        arguments = listOf(ToolSpec.Arg("selector", "String", null)),
+                        returnType = "String", description = "Read the text of an element.",
+                    ),
+                    "click" to ToolSpec(
+                        domain = "tab", method = "click",
+                        arguments = listOf(ToolSpec.Arg("selector", "String", null)),
+                        returnType = "Unit", description = "Click an element.",
+                    ),
+                )
+            )
+        )
+        runBlocking { `when`(agentToolManager.execute(any())).thenReturn(toolCallResult("Cached text")) }
+    }
+
+    @Test
+    fun `a repeated read is served from the cache and the tool runs once`() = runBlocking {
+        mockCacheableSessionTools()
+        val cached = cachedController()
+        val request = MCPToolCallRequest(
+            tool = "get_text",
+            arguments = mapOf("sessionId" to sessionId, "selector" to "#a"),
+        )
+
+        val first = cached.callTool(request, response)
+        assertEquals(false, first.body!!.isError)
+        assertNull(first.body!!.cached, "the first answer was not cached")
+
+        val second = cached.callTool(request, response)
+
+        assertEquals(true, second.body!!.cached, "the second answer comes from the cache")
+        assertNotNull(second.body!!.cacheAgeMs)
+        assertEquals(first.body!!.content[0].text, second.body!!.content[0].text)
+        Mockito.verify(agentToolManager, Mockito.times(1)).execute(any())
+        Unit
+    }
+
+    @Test
+    fun `a page action invalidates the cached reads of that session`() = runBlocking {
+        mockCacheableSessionTools()
+        val cached = cachedController()
+        val read = MCPToolCallRequest(
+            tool = "get_text",
+            arguments = mapOf("sessionId" to sessionId, "selector" to "#a"),
+        )
+
+        cached.callTool(read, response)
+        assertEquals(true, cached.callTool(read, response).body!!.cached)
+
+        // A click may have changed the page.
+        cached.callTool(
+            MCPToolCallRequest("click", mapOf("sessionId" to sessionId, "selector" to "#a")),
+            response,
+        )
+
+        val afterAction = cached.callTool(read, response)
+        assertNull(afterAction.body!!.cached, "the read must run again after a state change")
+        Mockito.verify(agentToolManager, Mockito.times(3)).execute(any())
+        Unit
+    }
+
+    @Test
+    fun `cache false bypasses the cache for one call`() = runBlocking {
+        mockCacheableSessionTools()
+        val cached = cachedController()
+
+        cached.callTool(
+            MCPToolCallRequest("get_text", mapOf("sessionId" to sessionId, "selector" to "#a")),
+            response,
+        )
+        val fresh = cached.callTool(
+            MCPToolCallRequest("get_text", mapOf("sessionId" to sessionId, "selector" to "#a", "cache" to false)),
+            response,
+        )
+
+        assertNull(fresh.body!!.cached, "the caller asked for fresh data")
+        // The control flag must not leak into the tool's arguments: an executor with
+        // a strict validateArgs would reject the call as an extraneous parameter.
+        assertFalse(fresh.body!!.isError, "cache:false must refresh, not fail: ${fresh.body!!.content[0].text}")
+        Mockito.verify(agentToolManager, Mockito.times(2)).execute(any())
+        Unit
+    }
+
+    // =========================================================================
+    // Rate limiting (requirement 9)
+    // =========================================================================
+
+    /** A controller whose limiter rejects after [burst] calls, with a frozen clock. */
+    private fun rateLimitedController(burst: Int = 1): MCPToolController = MCPToolController(
+        sessionManager,
+        null,
+        ToolRateLimiter(
+            modeProvider = { ToolRateLimiter.Mode.ERROR },
+            overrideProvider = { mapOf("navigate" to RateLimit(0.001, burst)) },
+            clock = { 0L },
+        ),
+    )
+
+    @Test
+    fun `a throttled call is rejected with RATE_LIMITED and a retry hint`() = runBlocking {
+        mockTool("tab", "navigate")
+        val limited = rateLimitedController(burst = 1)
+        val request = MCPToolCallRequest(
+            tool = "navigate",
+            arguments = mapOf("sessionId" to sessionId, "url" to "https://example.com"),
+        )
+
+        val first = limited.callTool(request, response)
+        assertEquals(false, first.body!!.isError, "the burst call passes")
+
+        val second = limited.callTool(request, response)
+
+        assertEquals(true, second.body!!.isError, "the second call must be throttled")
+        assertEquals("RATE_LIMITED", second.body!!.errorCode)
+        assertNotNull(second.body!!.retryAfterMs, "the body must tell the client how long to wait")
+        assertTrue(second.body!!.content[0].text.contains("RATE_LIMITED"), second.body!!.content[0].text)
+        Mockito.verify(agentToolManager, Mockito.times(1)).execute(any())
+        // `verify` returns the mock: see the note above on JUnit skipping such tests.
+        Unit
+    }
+
+    @Test
+    fun `shadow mode counts the throttled call but lets it through`() = runBlocking {
+        mockTool("tab", "navigate")
+        val shadow = MCPToolController(
+            sessionManager,
+            null,
+            ToolRateLimiter(
+                modeProvider = { ToolRateLimiter.Mode.SHADOW },
+                overrideProvider = { mapOf("navigate" to RateLimit(0.001, 1)) },
+                clock = { 0L },
+            ),
+        )
+        val request = MCPToolCallRequest(
+            tool = "navigate",
+            arguments = mapOf("sessionId" to sessionId, "url" to "https://example.com"),
+        )
+
+        repeat(3) {
+            val result = shadow.callTool(request, response)
+            assertEquals(false, result.body!!.isError, "shadow mode must never reject")
+        }
+        Mockito.verify(agentToolManager, Mockito.times(3)).execute(any())
+
+        val shadowCount = ToolMetrics.currentRegistry()
+            .find("tool.rate.limits").tag("kind", "shadow").counters().sumOf { it.count() }
+        assertTrue(shadowCount > 0.0, "the finding must be counted so enforcement can be justified later")
     }
 
     // =========================================================================
@@ -1691,5 +2103,116 @@ class MCPToolControllerTest {
             val camelMethod = controller.snakeToCamelCase(rawMethod)
             assertEquals(method, camelMethod, "snakeToCamelCase round-trip failed: $rawMethod → $camelMethod, expected $method")
         }
+    }
+
+    // =====================================================================
+    // Frame switching tools (frame_list / frame_switch / frame_main)
+    // =====================================================================
+
+    @Test
+    fun `test frame_list tool maps to tab frameList`() = runBlocking {
+        mockTool("tab", "frameList")
+
+        val request = MCPToolCallRequest(
+            tool = "frame_list",
+            arguments = mapOf("sessionId" to sessionId)
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("frameList", toolCall.method)
+    }
+
+    @Test
+    fun `test frame_switch tool maps to tab frameSwitch with the frame argument`() = runBlocking {
+        mockTool("tab", "frameSwitch")
+
+        val request = MCPToolCallRequest(
+            tool = "frame_switch",
+            arguments = mapOf("sessionId" to sessionId, "frame" to "#pay-frame")
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("frameSwitch", toolCall.method)
+        assertEquals("#pay-frame", toolCall.arguments["frame"])
+    }
+
+    @Test
+    fun `test frontend browser_frame_switch alias maps to tab frameSwitch`() = runBlocking {
+        mockTool("tab", "frameSwitch")
+
+        val request = MCPToolCallRequest(
+            tool = "browser_frame_switch",
+            arguments = mapOf("sessionId" to sessionId, "frame" to "payframe")
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("frameSwitch", toolCall.method)
+        assertEquals("payframe", toolCall.arguments["frame"])
+    }
+
+    @Test
+    fun `test frame_main tool maps to tab frameMain`() = runBlocking {
+        mockTool("tab", "frameMain")
+
+        val request = MCPToolCallRequest(
+            tool = "frame_main",
+            arguments = mapOf("sessionId" to sessionId)
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("frameMain", toolCall.method)
+    }
+
+    @Test
+    fun `test frontend browser_frame_main alias maps to tab frameMain`() = runBlocking {
+        mockTool("tab", "frameMain")
+
+        val request = MCPToolCallRequest(
+            tool = "browser_frame_main",
+            arguments = mapOf("sessionId" to sessionId)
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("frameMain", toolCall.method)
     }
 }

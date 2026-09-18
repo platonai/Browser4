@@ -48,6 +48,24 @@ class AgentMemoryTwoRunIntegrationTest {
         memory.knowledgeProvider!!, memory.scope, background, delayMs = 50,
     )
 
+    /**
+     * Wait until [condition] holds, up to [timeoutMs].
+     *
+     * The consolidator sleeps before depositing, so a fixed `delay(300)` is a race:
+     * on a loaded machine the deposit legitimately lands later, which made these
+     * assertions fail roughly every other run. Polling the state the test actually
+     * asserts keeps the failure mode real (knowledge that never arrives still fails)
+     * without depending on machine speed.
+     */
+    private suspend fun awaitTrue(timeoutMs: Long = 10_000, condition: suspend () -> Boolean): Boolean {
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000
+        while (System.nanoTime() < deadline) {
+            if (condition()) return true
+            delay(25)
+        }
+        return condition()
+    }
+
     @Test
     @DisplayName("run1 deposits knowledge; run2 recall fuses L0 facts + L1 knowledge")
     fun testTwoRunClosedLoop() = runBlocking {
@@ -60,16 +78,18 @@ class AgentMemoryTwoRunIntegrationTest {
         memory.sink.completed(run1, "a1", "extracted product title", listOf("title"), durationMs = 1200)
         // The engine's completion hook schedules the consolidation (short delay).
         quickConsolidator().schedule(run1)
-        delay(300)
 
         // 4 events on disk (started / 2 tools / completed) + task list visible.
         assertEquals(4, memory.eventLog.readTask("a1", run1).size)
         assertEquals(1, memory.queryService.listTasks(memory.scope).size)
 
         // ── Run 2: a NEW task on the same site — recall must fuse L0 + L1 ──
-        val section = memory.recall.recall(
-            "extract the product title from https://example.com/dp/67890", memory.scope,
+        val recallUrl = "extract the product title from https://example.com/dp/67890"
+        assertTrue(
+            awaitTrue { memory.recall.recall(recallUrl, memory.scope).contains("[L1]") },
+            "the knowledge deposit never reached the recall section",
         )
+        val section = memory.recall.recall(recallUrl, memory.scope)
         assertTrue(section.contains("## Memory"), "recall section must be injected on run 2")
         assertTrue(section.contains("[L0]"), "L0 fact hits must be present: $section")
         assertTrue(section.contains("[L1]"), "L1 PEM knowledge must be present: $section")
@@ -86,11 +106,18 @@ class AgentMemoryTwoRunIntegrationTest {
         memory.sink.failed(runF, "a1", "selector #title not found", "SELECTOR_DRIFT", step = 1)
         // The engine's completion hook schedules the consolidation (short delay).
         quickConsolidator().schedule(runF)
-        delay(300)
 
         val tasks = memory.queryService.listTasks(memory.scope)
         assertEquals("failure", tasks.first { it.taskId == runF }.outcome)
         // The failure category lands in the PEM trace (visible to later queries).
+        assertTrue(
+            awaitTrue {
+                memory.knowledgeProvider!!.query(
+                    "extract the product title", "https://example.com/dp/88888", memory.scope,
+                ).hits.isNotEmpty()
+            },
+            "the failure deposit never became queryable",
+        )
         val hits = memory.knowledgeProvider!!.query(
             "extract the product title", "https://example.com/dp/88888", memory.scope,
         )

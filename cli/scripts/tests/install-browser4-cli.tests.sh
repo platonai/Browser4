@@ -27,8 +27,8 @@ dim()    { echo -e "\033[2m$*\033[0m"; }
 
 test() {
     local name="$1"
-    local fn="$2"
-    if "$fn"; then
+    shift
+    if "$@"; then
         PASS=$((PASS + 1))
         green "  PASS  $name"
     else
@@ -109,25 +109,64 @@ test "--source invalid rejected" bash -c "
     bash '$INSTALL_SCRIPT' --source invalid --dry-run 2>&1 | grep -qi 'github.*oss\|must be'
 "
 
-test "--dry-run flag accepted" bash -c "
-    bash '$INSTALL_SCRIPT' --dry-run 2>&1 | grep -qi 'DRY-RUN\|dry-run\|Install'
+test "--version rejects a following option as its value" bash -c "
+    rc=0
+    out=\$(bash '$INSTALL_SCRIPT' --version --dry-run 2>&1) || rc=\$?
+    [[ \$rc -ne 0 ]] && echo \"\$out\" | grep -q 'requires a value'
 "
 
-test "--silent flag accepted" bash -c "
-    bash '$INSTALL_SCRIPT' --silent --dry-run 2>&1 | grep -v '^$' | head -1 | grep -qv '→\|step'
+test "--install-dir rejects a following option as its value" bash -c "
+    rc=0
+    out=\$(bash '$INSTALL_SCRIPT' --install-dir --silent 2>&1) || rc=\$?
+    [[ \$rc -ne 0 ]] && echo \"\$out\" | grep -q 'requires a value'
+"
+
+test "--version accepts a bare semver and prefixes it with v" bash -c "
+    bash '$INSTALL_SCRIPT' --locate --version 4.13.18 2>&1 | grep -q 'releases/download/v4\.13\.18/'
+"
+
+test "--version with the v prefix is left untouched" bash -c "
+    bash '$INSTALL_SCRIPT' --locate --version v4.13.18 2>&1 | grep -q 'releases/download/v4\.13\.18/'
+"
+
+test "--dry-run flag accepted" bash -c "
+    bash '$INSTALL_SCRIPT' --dry-run 2>&1 | grep -q 'DRY-RUN'
+"
+
+test "--silent suppresses progress output" bash -c "
+    out=\$(bash '$INSTALL_SCRIPT' --silent --dry-run 2>&1)
+    echo \"\$out\" | grep -q 'DRY-RUN' && ! echo \"\$out\" | grep -q 'Install:'
 "
 
 test "--skip-local flag accepted" bash -c "
-    bash '$INSTALL_SCRIPT' --skip-local --dry-run 2>&1 | grep -qi 'skip\|DRY-RUN\|Already\|Install'
+    bash '$INSTALL_SCRIPT' --skip-local --dry-run 2>&1 | grep -q 'Skipping local binary check'
 "
 
 test "--no-path flag accepted" bash -c "
-    bash '$INSTALL_SCRIPT' --no-path --dry-run 2>&1 | grep -vq 'Added to PATH'
+    ! bash '$INSTALL_SCRIPT' --no-path --dry-run 2>&1 | grep -q 'Added to PATH'
 "
 
 test "unknown arg rejected" bash -c "
     bash '$INSTALL_SCRIPT' --bogus-flag 2>&1 | grep -q 'Unknown argument'
 "
+
+# A PATH that has everything the diagnostics need except the download tooling.
+# `--locate` must still answer; a real install must refuse with a clear message
+# instead of failing later with 'curl: command not found'.
+minimal_path_locate_works() {
+    local dir; dir="$(mktemp -d)"
+    local bash_bin; bash_bin=$(command -v bash)
+    local tool tool_path
+    for tool in uname stat cat grep awk sed dirname basename tr od; do
+        tool_path=$(command -v "$tool") && ln -sf "$tool_path" "$dir/$tool"
+    done
+    local locate_rc=0 install_rc=0
+    PATH="$dir" "$bash_bin" "$INSTALL_SCRIPT" --locate >/dev/null 2>&1 || locate_rc=$?
+    PATH="$dir" "$bash_bin" "$INSTALL_SCRIPT" --dry-run --no-path >/dev/null 2>&1 || install_rc=$?
+    rm -rf "$dir"
+    [[ $locate_rc -eq 0 ]] && [[ $install_rc -ne 0 ]]
+}
+test "--locate needs no download tooling, installing does" minimal_path_locate_works
 
 echo ""
 
@@ -191,6 +230,103 @@ test "OSS URL NOT using broken download/latest pattern" bash -c "
 
 echo ""
 
+# ── Download integrity (stubbed curl -- no network) ────
+
+echo "--- Download integrity ---" | cyan
+
+STUB_DIR="$(mktemp -d)"
+mkdir -p "$STUB_DIR"
+
+cat > "$STUB_DIR/curl" << 'STUBEOF'
+#!/usr/bin/env bash
+# curl stub for the installer tests.  Honours -o <file>, takes the body from
+# STUB_BODY (html = an error page, elf = a native binary), reports STUB_STATUS
+# and records its own command line in STUB_ARGS_FILE so a test can assert on
+# the headers the installer would have sent.
+out=""
+printf '%s\n' "$*" >> "${STUB_ARGS_FILE:-/dev/null}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [[ "${STUB_STATUS:-200}" == "200" ]]; then
+  if [[ "${STUB_BODY:-elf}" == "html" ]]; then
+    { printf '<html>'; head -c 200000 /dev/zero | tr '\0' 'x'; printf '</html>'; } > "$out"
+  else
+    { printf '\177ELF\002\001\001\000'; head -c 200000 /dev/zero; } > "$out"
+  fi
+fi
+echo "${STUB_STATUS:-200}"
+exit "${STUB_EXIT:-0}"
+STUBEOF
+chmod +x "$STUB_DIR/curl"
+
+stub_install() {
+    # $1 = body kind (html|elf), $2 = source, $3 = args file, $4 = extra env
+    local body="$1" source="$2" args_file="$3" dir rc=0
+    dir="$(mktemp -d)"
+    STUB_BODY="$body" STUB_ARGS_FILE="$args_file" \
+        PATH="$STUB_DIR:$PATH" bash "$INSTALL_SCRIPT" \
+        --source "$source" --no-path --skip-backend --skip-local \
+        --install-dir "$dir/inst" >"$dir/out" 2>&1 || rc=$?
+    printf '%s\n' "$rc" > "$dir/rc"
+    echo "$dir"
+}
+
+download_rejects_html() {
+    local args; args="$(mktemp)"
+    local dir; dir=$(stub_install html oss "$args")
+    local rc; rc=$(cat "$dir/rc")
+    local rejected=0
+    grep -q 'not a native executable' "$dir/out" && rejected=1
+    rm -rf "$dir" "$args"
+    [[ "$rc" -ne 0 ]] && [[ $rejected -eq 1 ]]
+}
+
+download_accepts_elf() {
+    local args; args="$(mktemp)"
+    local dir; dir=$(stub_install elf oss "$args")
+    local rc; rc=$(cat "$dir/rc")
+    local installed; installed=$(find "$dir/inst" -maxdepth 1 -type f -name 'browser4-cli-*' 2>/dev/null | head -1)
+    local ok=1
+    [[ "$rc" -eq 0 ]] && [[ -n "$installed" ]] && [[ -x "$installed" ]] && ok=0
+    rm -rf "$dir" "$args"
+    [[ $ok -eq 0 ]]
+}
+
+token_not_sent_to_oss() {
+    local args; args="$(mktemp)"
+    export GITHUB_TOKEN=stub-secret-token
+    local dir; dir=$(stub_install elf oss "$args")
+    unset GITHUB_TOKEN
+    local leaked=0
+    grep -q 'stub-secret-token' "$args" && leaked=1
+    rm -rf "$dir" "$args"
+    [[ $leaked -eq 0 ]]
+}
+
+token_sent_to_github() {
+    local args; args="$(mktemp)"
+    export GITHUB_TOKEN=stub-secret-token
+    local dir; dir=$(stub_install elf github "$args")
+    unset GITHUB_TOKEN
+    local sent=0
+    grep -q 'stub-secret-token' "$args" && sent=1
+    rm -rf "$dir" "$args"
+    [[ $sent -eq 1 ]]
+}
+
+test "download rejects an HTML error page (bad magic bytes)" download_rejects_html
+test "download accepts a native binary body" download_accepts_elf
+test "GITHUB_TOKEN is never sent to the OSS mirror" token_not_sent_to_oss
+test "GITHUB_TOKEN is sent to GitHub" token_sent_to_github
+
+rm -rf "$STUB_DIR"
+
+echo ""
+
 # ── Functions (extracted via copy without main call) ──
 
 echo "--- Functions ---" | cyan
@@ -232,7 +368,9 @@ test "get_default_install_dir returns non-empty" bash -c "
 
 test "detect_china_locale returns 0 or 1 (no crash)" bash -c "
     source '$FUNC_TEST_SCRIPT' >/dev/null 2>&1
-    detect_china_locale && true || true
+    rc=0
+    detect_china_locale || rc=\$?
+    [[ \$rc -eq 0 || \$rc -eq 1 ]]
 "
 
 test "detect_os returns valid OS" bash -c "
@@ -323,7 +461,10 @@ test "header is ASCII (no box-drawing chars)" bash -c "
 "
 
 test "header does not contain Unicode box-drawing" bash -c "
-    ! bash '$INSTALL_SCRIPT' --locate 2>&1 | grep -P '[\x{2500}-\x{257F}]' 2>/dev/null || true
+    # Portable (no grep -P): drop the ANSI colour escapes first, then any byte
+    # outside printable ASCII would be a non-ASCII character; the installer
+    # prints ASCII only.
+    ! bash '$INSTALL_SCRIPT' --locate 2>&1 | tr -d '\033' | LC_ALL=C grep -q '[^ -~]'
 "
 
 echo ""
@@ -333,7 +474,13 @@ echo ""
 echo "--- Edge cases ---" | cyan
 
 test "double dash in --version handled (no operator parsing)" bash -c "
-    bash '$INSTALL_SCRIPT' --locate 2>&1 | grep -q 'version'
+    # '--version --dry-run' must not be read as the tag '--dry-run'; the value
+    # has to be a release tag, and a bare semver gets the 'v' prefix.
+    rc=0
+    out=\$(bash '$INSTALL_SCRIPT' --version --dry-run 2>&1) || rc=\$?
+    [[ \$rc -ne 0 ]] || exit 1
+    echo \"\$out\" | grep -q 'looks like another option' || exit 1
+    bash '$INSTALL_SCRIPT' --locate --version 4.13.18 2>&1 | grep -q 'releases/download/v4\.13\.18/'
 "
 
 test "empty --version with dry-run doesn't download" bash -c "

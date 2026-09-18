@@ -82,8 +82,9 @@ Refs are **ephemeral** — treat them as single-use handles. Any interaction can
 ### Output Modes
 
 - **Default** — human-readable output on stdout.
-- **`--show-tip` / `-tip`** — show a relevant rotating tip on stderr after each successful command (suppressed by default).
-- **`--json`** — single-line JSON envelope on stdout for structured commands (`tab-list`, `htmlsnapshot get/query`, `eval`). **Exception:** `snapshot` stays YAML-focused and warns on stderr instead of returning JSON.
+- **`--show-tip` / `-tip`** — show a relevant, rotating tip on stderr after each successful command. Tips are suppressed by default; use this flag to enable them.
+- **`--json`** — single-line JSON envelope on stdout for commands that support structured output. This is the clean machine-readable mode for commands such as `tab-list`, `htmlsnapshot get`, `htmlsnapshot query`, and `eval`. **Exception:** `snapshot` remains YAML-focused and warns on stderr instead of returning JSON snapshot data.
+- **File output (default for AI commands)** — `extract` and `summarize` save their result to a timestamped file in `.browser4-cli/snapshot/` and print only a link; add `--stdout` (or `--raw`) to print the payload directly. When `extract --schema` is used, the requested schema fields are emitted as plain **top-level JSON** (in the file and on stdout) — no envelope to parse.
 - **`--quiet` / `-q`** — suppress all normal output; only errors appear on stderr.
 
 ### Display Mode (Headless vs Headed)
@@ -93,7 +94,11 @@ Refs are **ephemeral** — treat them as single-use handles. Any interaction can
 | **Headless** | `--headless` | No GUI window | **Default for AI agents** — scraping, automation, CI/CD, server environments |
 | **Headed** | `--headed` | Visible browser window | Debugging, user demonstration, interactive development |
 
-**Rule for AI agents: always use `--headless` by default.** Use `--headed` only when the user **explicitly** requests a visible browser ("show me the browser", "I want to see", "open visibly", "headed", "watch what happens").
+> **Choosing the whole setup** (session × display × browser source — including
+> when to attach to your own browser instead of launching one): see
+> [browser-modes.md](references/browser-modes.md).
+
+**Rule for AI agents: always use `--headless` by default.** Use `--headed` only when the user **explicitly** requests a visible browser ("show me the browser", "I want to see", "open visibly", "headed", "watch what happens"). If user participation in the page interaction is required — e.g., logging in or entering a verification code (CAPTCHA) — open a **headed** browser so the user can see and act on the page.
 
 Set the display mode with `open` when starting a **new** session; `goto` does not accept `--headless`/`--headed` — it inherits the session's mode:
 
@@ -107,21 +112,23 @@ browser4-cli goto https://other-page.com             # stays headless (or headed
 
 ### Sessions
 
-Named sessions isolate browser state (cookies, localStorage, tabs). Use `-s <name>` to target a named session; `goto` auto-opens/reconnects — you rarely need to manage sessions manually. `list` shows a "Next open" column: **Reuse** (reconnects to the active window) or **Refresh** (opens fresh — session stale or missing). Session state lives in `~/.browser4` by default; when unwritable (sandboxed shells) the CLI falls back to `./.browser4-cli-state` with a warning — set `BROWSER4_CLI_STATE_DIR` / `BROWSER4_RUNTIME_DIR` to explicit writable paths to silence it.
+Named sessions isolate browser state (cookies, localStorage, tabs) in a **dedicated browser profile directory** keyed by the session id — reopening always restores the same profile. Use `-s <name>` to target a named session; `goto` auto-opens/reconnects. `list` shows a "Next open" column: **Reuse** (reconnects to the active window) or **Refresh** (opens fresh — session stale/missing). State lives in `~/.browser4` by default (per checkout in development mode — see **Development Mode** below), falling back to `./.browser4-cli-state` when unwritable; override with `BROWSER4_CLI_STATE_DIR` / `BROWSER4_RUNTIME_DIR`.
 
 ### Configuration
 
-CLI defaults (`config.json`) and server-side runtime overrides are managed by the `config` command family — see **[config.md](references/config.md)** for the full reference:
+CLI defaults (`config.json`: `server`, `timeout`, `proxy`, `session`) and server-side runtime overrides are managed by the `config` command family — `config list` prints every value, `config set server <url>` pins a backend; see **[config.md](references/config.md)** for the full key reference.
 
-```bash
-browser4-cli config                              # List all values + config file path
-browser4-cli config set server http://localhost:8182
-browser4-cli config set agent.llm.maxRequestTokens 800000   # server-side runtime override
-```
+### Development Mode (one backend per checkout)
+
+Running the CLI from inside a Browser4 checkout (a directory holding `ROOT.md` + `pom.xml`) enables **development mode**: each checkout owns a backend port (first free from **8282** upward), a state namespace (`~/.browser4/workspaces/<checkout>-<hash>/`) and a backend app data root, so parallel checkouts and git worktrees run side by side — `stop` then stops only this checkout's backends. Full matrix, shared paths and escape hatches: **[development-mode.md](references/development-mode.md)**.
 
 ### Tab Management
 
 Tab commands (`tab-list`, `tab-new`, `tab-select`, `tab-close`, `window new`) scope to a session. **Re-snapshot after `tab-select`** — tab switches change the active page context. See **[tab-management.md](references/tab-management.md)** for the tab lifecycle, GUID-based targeting, cross-session operations, and extension-session quirks.
+
+### Frame Switching (iframes)
+
+Element commands (`click`, `fill`, `type`, …) resolve CSS selectors against the **main document** by default. For iframe content, switch first: `frames` lists the frame tree; `frame "<target>"` switches (element ref, CSS selector, frame name/id, or URL fragment — nested frames by switching repeatedly); `frame main` returns. Scope resets on navigation. **Same-origin iframes are fully supported**; cross-origin ones fail with an actionable error. `eval` always runs in the main document. See **[frames.md](references/frames.md)** for details.
 
 ## 3. Command Map
 
@@ -130,7 +137,8 @@ Tab commands (`tab-list`, `tab-new`, `tab-select`, `tab-close`, `window new`) sc
 | `goto`, `open`, `close`, `reload` | Navigation & session management | Every session starts here | — |
 | `snapshot` | Capture accessibility tree (AXTree) with element refs | **Page structure & interaction** — find elements to click, fill, etc. Use `snapshot` when you need refs (e5, e36) to interact with. | [snapshot.md](references/snapshot.md) |
 | `snapshot grep` | Search snapshot content with regex | Find elements by text or pattern | — |
-| `click`, `dblclick`, `drag`, `hover`, `fill`, `type`, `press`, `select`, `check`, `generate-locator` | Page interaction | Form filling, button clicks, mouse actions, navigation | — |
+| `click`, `dblclick`, `drag`, `hover`, `fill`, `type`, `press`, `select`, `check`, `generate-locator` | Page interaction | Form filling, button clicks, mouse actions, navigation. `type --method auto\|chars\|exec` (needs a target ref) bulk-inserts long (>150 chars) or multi-line text in one `execCommand('insertText')` instead of typing per character | — |
+| `upload <ref> <file> [file...]` | Upload local files to a page file input | Send attachments/photos/documents to an `<input type="file">`; the target must be a file input, paths must be readable on the machine running the browser | [upload.md](references/upload.md) |
 | `focus`, `key`, `keyboard` | Focus an element / press a key (key & keyboard alias `press`) | Explicit focus before typing, agent-browser-style keypresses | — |
 | `is visible\|enabled\|checked <sel>` | Element state assertions | Verify visibility, enabled-ness, or checked state before acting | — |
 | `dialog-accept`, `dialog-dismiss`, `dialog-status` | Native JS dialog handling | After clicking buttons that trigger alert/confirm/prompt; `dialog-status` inspects the pending dialog | — |
@@ -148,12 +156,13 @@ Tab commands (`tab-list`, `tab-new`, `tab-select`, `tab-close`, `window new`) sc
 | `swarm` | Parallel scraping across browser contexts | High-throughput extraction | [swarm.md](references/swarm.md) |
 | `loop` | Repeated task execution with persistence | Monitoring, scheduled checks | [loop.md](references/loop.md) |
 | `state-save`, `state-load`, `cookie-*`, `*-storage-*` | Browser storage management | Auth state reuse, cookie manipulation | [storage-state.md](references/storage-state.md) |
-| `attach` | Connect to existing Chrome/Edge via CDP | Debug live browser, reuse auth | [attach.md](references/attach.md) |
+| `attach` | Connect to existing Chrome/Edge via CDP | Debug live browser, reuse auth — after attaching, check the printed actual browser; a ⚠ warning flags a channel mismatch (e.g. requested msedge but Chrome connected) | [attach.md](references/attach.md) |
 | `webdb export`, `webdb normalize` | Export cached pages, normalize URLs to database keys | Post-crawl content extraction, URL key lookup | [webdb.md](references/webdb.md) |
 | `skills`, `skills get`, `skills path`, `skills unpack` | Bundled AI agent skill files | Refresh agent instructions, unpack skill files | [skills.md](references/skills.md) |
 | `skill-list`, `skill-info`, `skill-install`, `skill-uninstall`, `skill-reload` | Backend skill management | Install/manage server-side skills | [skills.md](references/skills.md) |
 | `screenshot`, `scroll`, `wait`, `resize` | Visual capture & viewport control | Screenshots, viewport sizing, scroll control; `wait --download` polls a download directory | — |
 | `tab-list`, `tab-new`, `tab-select`, `tab-close`, `window new` | Tab & window management | Multi-tab workflows, session-scoped tab operations | [tab-management.md](references/tab-management.md) |
+| `frames`, `frame <target>`, `frame main` | Iframe frame switching | Interact with content inside `<iframe>`s: `frame "#pay-frame"` then `fill`/`click`/`is visible` resolve inside that frame; `frames` lists the frame tree | [frames.md](references/frames.md) |
 | `diff snapshot` | Unified diff between two saved accessibility snapshots | Verify what changed between interactions (`snapshot --auto-diff` equivalent on saved files) | — |
 | `download`, `wait --download` | Download management | `download --dir <path>` configures the browser download folder; `wait --download` blocks until a download completes | — |
 | `network requests`, `network request <id>`, `network har start`, `network har stop`, `network route`, `network unroute` | Network request inspection, HAR recording & request routing | Inspect what the page loaded (XHR/fetch/status/headers), debug API calls, record a `.har` file (Chrome DevTools importable), or mock/abort matching requests (Fetch interception). `network requests --filter api --status 2xx`; `network har start --content text` then `network har stop ./capture.har`; `network route "**/api/users" --body '{"users":[]}'` | [network.md](references/network.md) |
@@ -163,20 +172,12 @@ Tab commands (`tab-list`, `tab-new`, `tab-select`, `tab-close`, `window new`) sc
 | `config` | Persistent CLI defaults (server, timeout, proxy, session) | Set default server URL, timeout, proxy, or session name | [config.md](references/config.md) |
 | `status`, `doctor`, `doctor log`, `doctor metrics`, `doctor status` | Server health & diagnostics | `doctor status` prints the aggregated status report (health, build, runtime, LLM, sessions, browsers, swarm, plugins, skills, metrics, logs) in layers: summary by default, `--verbose` for full detail, `--section <name>` for one report, `--json` for machine-readable output. `status` prints the web status panel URL (`http://<server>:8182/status`) — a live dashboard of the same reports; `http://<server>:8182/pages.html` shows every open page | — |
 
-### Refreshing This Skill
-
-```bash
-browser4-cli skills | skills get browser4-cli [--full] | skills unpack
-```
-
-Skill files are unpacked during `browser4-cli install` (and refreshed by `upgrade`); `BROWSER4_SKILLS_DIR` overrides the location, and install/upgrade also copy skills to `~/.agents/skills` for AI agents.
-
 ## 4. Decision Trees
 
 Choosing how to extract or process data? The full decision trees, comparisons, and the X-SQL quickstart template live in **[decision-trees.md](references/decision-trees.md)**. The essentials:
 
-- **4a. Extraction method:** interact → `snapshot` + refs; read content → `htmlsnapshot`; one-step article (no selectors, no LLM) → `htmlsnapshot readability`; live DOM → `eval --json`; natural language → `extract`; many pages → `crawl`/`swarm`. `htmlsnapshot get`/`inspect`/`summary`/`grep`/`export`/`readability` need a prior capture; `query` and `readability <url>` fetch independently (`DOM_LOAD_AND_SELECT(@url, ...)`).
-- **4b. Bulk/scale:** one list page → `query`; known URLs → `crawl --seed-file`; follow links → `crawl <url> --depth N`; parallel → `swarm`; scheduled → `loop`.
+- **4a. Extraction method:** interact → `snapshot` + refs; read content → `htmlsnapshot`; live DOM → `eval --json`; natural language → `extract`; many pages → `crawl`/`swarm`. `htmlsnapshot get`/`inspect`/`summary`/`grep`/`export` need a prior capture; `query` needs no prior capture — the current page is read from the session's live DOM, and an explicit URL loads independently (`DOM_LOAD_AND_SELECT(@url, ...)`).
+- **4b. Bulk/scale:** one list page → `query`; known URLs → `crawl --seed-file`; follow links → `crawl <url> --depth N`; more crawl overlap → `crawl --parallel 8` (each unit collects on its own tab); parallel → `swarm`; scheduled → `loop`.
 - **4c. Query granularity:** `get` = first match; `get all` = all matches (unaligned arrays — don't combine); `query` = correlated multi-field rows.
 - **4d. Structuring pages (WebMiner):** `< 1,000 pages` → `webminer all` (free, local, zero tokens); `> 1,000 pages` → WebMiner Commercial (Spark). Acquire pages first with `crawl`/`swarm`, then feed the HTML directory in.
 - **4e. X-SQL quickstart:** `SELECT DOM_FIRST_TEXT(DOM,'h2') AS title ... FROM DOM_LOAD_AND_SELECT(@url, '.product-card')` — single quotes for CSS, `@url` unquoted, no JOIN/CTE/subqueries; run via `--sql @file.sql`.
@@ -197,32 +198,29 @@ Choosing how to extract or process data? The full decision trees, comparisons, a
 
 > **Note:** Output pagination defaults — `get html`, `get all html`, and `grep` paginate at 2K lines. `get text` and `get all text` are not paginated by default. Use `--all` to disable pagination, or `--page N` for subsequent pages.
 
+> **Note — `snapshot --stdout`/`--raw` pagination:** large stdout trees are paginated at **2000 lines/page** by default. When truncated, the footer goes to stderr, and when stdout is a pipe/redirect a `# … output truncated: showing N of M lines — re-run with --all (or --page-size 0) for the full tree.` hint is appended to stdout so the cut is visible in captured output. `--page-size 0` (or `--all`) disables paging. For very large pages, prefer bounding the capture with `-v N`, `--depth`, `--selector`, or `--no-boxes` over full-tree dumps.
+
 > **Snapshot modes — when to use `-v 0` vs `-i` vs default:**
 >
 > | Mode | What it shows | Best for |
 > |------|--------------|----------|
 > | `snapshot` (default) | Full AX tree with all element refs | General exploration, first look at a page |
 > | `snapshot -v 0` | Current visible screen (a single screen-height viewport chunk) | Long pages — read one chunk at a time to keep output small. Use `-v all` for the entire page |
-> | `snapshot -i` | **Interactive elements only:** buttons, links, inputs, selects, textareas. Strips generic `<div>`, `<span>`, and other non-interactive containers | Simple forms, login pages, sparse pages with clear interactive controls. Reduces noise when you only need clickable/fillable elements |
+> | `snapshot -i` | **Interactive-oriented layout** — inner text is aggregated into the enclosing element's name so each ref line reads as a self-contained target | Quick orientation before acting via refs; form-heavy pages. Pair with `-v 0` (`snapshot -i -v 0`) for one focused screenful |
 > | `htmlsnapshot` | Static HTML (CSS selectors) | Content extraction (text, attributes), when you need CSS selectors instead of AX refs |
 >
-> **`-i` trade-off:** Interactive mode discards structural context. On e-commerce/search pages where product cards use generic `<div>` wrappers, `-i` may strip the containers you need. For these pages, prefer `--viewport 0` or use `htmlsnapshot` for CSS-based extraction.
->
-> **Example — simple form page (`snapshot -i --stdout`):** shows only form fields and buttons — `# e5  textbox  "Email"  /url: /login`, `# e6  textbox  "Password"  /url: /login`, `# e7  button  "Sign In"  /url: /login` — instead of the full 200+ line tree.
+> **`-i` does not shrink the tree:** it aggregates text into element names — addressable headings, paragraphs and generic containers all remain. It changes the layout, it does not reduce the tree to buttons/links; use `htmlsnapshot` when you need CSS-selector extraction instead of refs.
 
 > **Warning:** `htmlsnapshot` captures the **current live DOM** at capture time. Re-capture (run `htmlsnapshot`) after any interaction or navigation to reflect JS updates — a previously captured snapshot is stale only if you do not re-capture. The auto-captured snapshot after `goto` is an earlier capture and does not include later interactions. For one-off live reads without a capture step, use `eval`. The `htmlsnapshot inspect` command reads the stored snapshot — re-capture first to inspect the updated DOM.
 
-> **Warning — backend startup fails in sandboxed/restricted environments:** The Browser4 backend (Spring Boot/JVM) writes its log files to a `logs/` directory inside the runtime bundle — `BROWSER4_RUNTIME_DIR` (default `%APPDATA%/browser4` on Windows, `~/.local/share/browser4` on Linux). In sandboxes that only allow writes to the workspace, this write is denied and the server never becomes ready: `goto`/`open` hang until the startup timeout with `FileNotFoundException … Access denied` (or `拒绝访问`) in the startup log.
+> **Warning — backend startup fails in sandboxed/restricted environments:** the backend writes its logs into the runtime bundle's `logs/` directory, under `BROWSER4_RUNTIME_DIR` (default `%APPDATA%/browser4` on Windows, `~/.local/share/browser4` on Linux). Where only the workspace is writable that write is denied and `goto`/`open` hang until the startup timeout with `FileNotFoundException … Access denied` (or `拒绝访问`).
 >
-> **Diagnose:** the failed command prints a startup-log path under `🧾 Details` — look for a `logs\*.log` (or `logs/*.log`) write failure there.
->
-> **Fix:** point the runtime and state at writable locations before the first launch:
+> **Fix:** the failed command prints the startup-log path under `🧾 Details` — look for a `logs\*.log` write failure there, then point the runtime and state at writable locations before the first launch:
 > ```bash
-> # PowerShell
-> $env:BROWSER4_RUNTIME_DIR  = "D:\workspace\browser4-runtime"  # JRE/JARs + logs (~200 MB)
-> $env:BROWSER4_CLI_STATE_DIR = "D:\workspace\.browser4-state"  # session state
+> $env:BROWSER4_RUNTIME_DIR   = "D:\workspace\browser4-runtime"  # JRE/JARs + logs (~200 MB)
+> $env:BROWSER4_CLI_STATE_DIR = "D:\workspace\.browser4-state"   # session state
 > ```
-> `BROWSER4_RUNTIME_DIR` relocates the runtime (re-downloads the bundle if not already present); `BROWSER4_CLI_STATE_DIR` already auto-falls back to `./.browser4-cli-state` when `~/.browser4` is unwritable.
+> `BROWSER4_RUNTIME_DIR` relocates the runtime (re-downloads the bundle if absent); `BROWSER4_CLI_STATE_DIR` already auto-falls back to `./.browser4-cli-state` when `~/.browser4` is unwritable.
 
 ## 6. Quick Patterns
 
@@ -239,6 +237,8 @@ Proven copy-paste recipes — full walkthroughs in **[quick-patterns.md](referen
 9. **PowerCSS** — `:expr()` visual-feature selectors; full reference in [power-dom.md](references/power-dom.md)
 10. **Agent Task Lifecycle** — `agent run` (async) → `status` → `result`; or `--wait [--wait-timeout]`
 11. **Agent Memory** — run-start `## Memory` recall, `memory_note`, `memory_search`/`read`/`forget`, auto-deposit
+12. **Typing text (`type`)** — `type "text" <ref>`; add `--method auto|chars|exec` (requires a target ref): `auto` (default) types short text per-character and switches to a one-shot `execCommand('insertText')` bulk insert for long (>150 chars) or multi-line text on textarea/contenteditable; `chars` forces per-character typing; `exec` forces the bulk insert. `--verify` keeps its strict read-back semantics for tool callers.
+13. **File Upload** — `upload <ref> <file> [file...]` uploads one or more local files to a page file input (`<input type="file">` only); the paths must be readable by the browser process (remote backend: resolved on the backend host). Multi-file, absolute paths, `--no-snapshot` supported; see [upload.md](references/upload.md).
 
 ## 7. Reference Map
 
@@ -247,6 +247,7 @@ Organized by task — follow the link that matches what you're trying to do:
 **Start here (distilled core):** [quickstart.md](references/quickstart.md) — distilled resident quick reference (core loop, copy-paste template, key commands, snapshot vs htmlsnapshot, critical warnings); embedded in the CLI engine's system prompt — full details live in this SKILL.md.
 
 **Interact with pages (accessibility tree & element refs):** [snapshot.md](references/snapshot.md) — `snapshot`, `snapshot grep`, `-v` viewport paging, `--auto-diff`, `-i` interactive mode, element refs
+[upload.md](references/upload.md) — upload local files to a page `<input type="file">` (multi-file, `--no-snapshot`, browser-host path rules)
 
 **Extract data from pages:**
 [htmlsnapshot.md](references/htmlsnapshot.md) — `get`, `get all`, `query`, `grep`, `summary`, `inspect`, `export`
@@ -267,8 +268,13 @@ Organized by task — follow the link that matches what you're trying to do:
 [attach.md](references/attach.md) — connect to existing Chrome/Edge via CDP
 [tab-management.md](references/tab-management.md) — multi-tab workflows: tab lifecycle, GUID targeting, cross-session operations
 
-**Manage skills and agent instructions:**
+**Choose how the browser runs:**
+[browser-modes.md](references/browser-modes.md) — session (default / named / swarm) × display (headless / headed / SUPERVISED) × browser source (managed / `attach --cdp` / `attach --extension`), plus profile mode, interact level, contexts, and their failure modes
+
+**Manage skills & configuration:**
 [skills.md](references/skills.md) — bundled skill files, backend skill management
+[config.md](references/config.md) — `config` command family: CLI defaults and server-side runtime overrides
+[development-mode.md](references/development-mode.md) — one backend per checkout: development ports from 8282, per-checkout state and app data, workspace-scoped `stop`
 
 **AI-powered extraction:** [agent.md](references/agent.md) — `extract`, `summarize`, `agent run|status|result`, LLM provider config
 
@@ -282,11 +288,10 @@ Organized by task — follow the link that matches what you're trying to do:
 
 **Troubleshoot:** [shell-quoting.md](references/shell-quoting.md) — avoid shell-quoting breakage for complex JS/X-SQL on Windows / Git Bash
 
-**Manage configuration:** [config.md](references/config.md) — `config` command family: CLI defaults and server-side runtime overrides
+## 8. Installation
 
-## Installation
-
-```
-https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1
-and install-browser4-cli.sh
+```bash
+npm install -g browser4-cli && browser4-cli install     # Node.js available
+irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex   # Windows
+curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash  # Linux/macOS
 ```

@@ -80,11 +80,22 @@ class InferenceEngine(
     }
 
     /**
-     * Returns an ObjectNode with extracted fields expanded at top-level, plus:
-     *   - metadata: { progress, completed }
-     *   - inputTokenCount, outputTokenCount, totalTokenCount, inferenceTimeMillis
+     * Run the two-stage structured extraction pipeline and return an
+     * [ExtractInferenceResult] whose [ExtractInferenceResult.result] is the
+     * CLEAN schema payload — the extraction fields exactly as the model
+     * returned them, with no task bookkeeping merged in.
+     *
+     * Token counts, timing and the evaluation metadata (progress/completed)
+     * are carried separately by [ExtractInferenceResult] and surfaced through
+     * inference events/logs; they never leak into the payload the caller
+     * asked the model to produce.
+     *
+     * The [ExtractInferenceResult.completed] flag is truthful: it is `true`
+     * whenever usable content is present in the payload, even if the advisory
+     * evaluation call reported `completed: false` (a successful extraction
+     * must never look incomplete).
      */
-    suspend fun extract(params: ExtractParams): ObjectNode {
+    suspend fun extract(params: ExtractParams): ExtractInferenceResult {
         InferenceEventEmitter.onWillExtract(params)
 
         val messages = InferencePromptBuilder.buildExtractionPrompt(params)
@@ -102,10 +113,18 @@ class InferenceEngine(
         val extractStartTime = Instant.now()
         val extractResponse: ModelResponse = cta.generateResponseRaw(messages)
 
+        // The model is asked for the schema fields ONLY, but live responses can
+        // echo the engine's own bookkeeping back into the payload (the summary
+        // keys inputToken/outputToken/totalToken/inferenceTimeMillis and an
+        // evaluator-shaped metadata{progress,completed} object).  Strip those
+        // deterministically here — the ExtractResultEnvelopeTest contract says
+        // data must contain exactly the requested schema fields, so payload
+        // contamination must never reach callers.
         val extractedNode: ObjectNode = runCatching {
             pulsarObjectMapper().readTree(extractResponse.content) as? ObjectNode
                 ?: JsonNodeFactory.instance.objectNode()
         }.getOrElse { JsonNodeFactory.instance.objectNode() }
+        stripInferenceBookkeeping(extractedNode)
 
         val extractOutputFile: Path = inferenceLogger.log(
             subdirectory = "extract",
@@ -141,7 +160,15 @@ class InferenceEngine(
                 ?: JsonNodeFactory.instance.objectNode()
         }.getOrElse { JsonNodeFactory.instance.objectNode() }
         val progress = metaNode.path("progress").asText("")
-        val completed = metaNode.path("completed").asBoolean(false)
+        val metaCompleted = metaNode.path("completed").asBoolean(false)
+
+        // The completion flag must reflect reality: once usable content is
+        // present the extraction counts as complete, even if the advisory
+        // metadata call reported "completed": false (it may signal that more
+        // viewports remain).  Only when no content was produced do we fall
+        // back to the evaluator model's judgment.
+        val contentPresent = extractedNode.size() > 0
+        val completed = metaCompleted || contentPresent
 
         inferenceLogger.logSummary(
             filename = "extract.jsonl",
@@ -163,16 +190,11 @@ class InferenceEngine(
 
         val totalInferenceTimeMillis = DateTimes.elapsedTime(extractStartTime).toMillis()
 
-        val result: ObjectNode = (extractedNode.deepCopy()).apply {
-            set<ObjectNode>("metadata", JsonNodeFactory.instance.objectNode().apply {
-                put("progress", progress)
-                put("completed", completed)
-            })
-            put("inputToken", inputTokenCount)
-            put("outputToken", outputTokenCount)
-            put("totalToken", totalTokenCount)
-            put("inferenceTimeMillis", totalInferenceTimeMillis)
-        }
+        // The user payload is the clean extraction result ONLY.  Bookkeeping
+        // (metadata{progress,completed} and the token/time metrics) must not
+        // be merged into it — it pollutes schema-constrained output and makes
+        // the completion flag indistinguishable from a user field.
+        val result: ObjectNode = extractedNode.deepCopy()
 
         val inferenceResult = ExtractInferenceResult(
             result = result,
@@ -187,7 +209,7 @@ class InferenceEngine(
         )
         InferenceEventEmitter.onDidExtract(params, inferenceResult)
 
-        return result
+        return inferenceResult
     }
 
     suspend fun summarize(instruction: String?, textContent: String): String {
@@ -206,5 +228,45 @@ class InferenceEngine(
         // TODO: count token usage
 
         return response.content
+    }
+
+    companion object {
+        /**
+         * Deterministically remove engine bookkeeping that the model echoed into
+         * the extraction payload.  The extract prompt asks for schema fields only,
+         * but live model responses sometimes carry the engine's own summary keys
+         * back (token/timing counters, and an evaluator-shaped metadata object
+         * with progress/completed).  Per the ExtractResultEnvelopeTest contract,
+         * data must contain exactly the requested schema fields, so these keys are
+         * stripped recursively — never merged into the user payload, never exposed
+         * as if they were extracted fields.
+         */
+        internal fun stripInferenceBookkeeping(node: ObjectNode) {
+            // Summary keys the engine logs (never schema fields).
+            for (key in listOf("inputToken", "outputToken", "totalToken", "inferenceTimeMillis")) {
+                node.remove(key)
+            }
+            // Evaluator-shaped metadata echo: an object whose keys are progress /
+            // completed (or a metadata prefix).  Leave a legitimate user field
+            // named "metadata" (e.g. product metadata) alone unless it has this
+            // bookkeeping shape.
+            val metadata = node.get("metadata")
+            if (metadata is ObjectNode) {
+                val keys = metadata.fieldNames().asSequence().toSet()
+                if ("progress" in keys || "completed" in keys) {
+                    node.remove("metadata")
+                }
+            }
+            // Recurse into remaining containers.
+            val fields = node.fields().asSequence().map { it.value }.toList()
+            for (child in fields) {
+                when (child) {
+                    is ObjectNode -> stripInferenceBookkeeping(child)
+                    is com.fasterxml.jackson.databind.node.ArrayNode ->
+                        child.forEach { if (it is ObjectNode) stripInferenceBookkeeping(it) }
+                    else -> {}
+                }
+            }
+        }
     }
 }

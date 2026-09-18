@@ -21,7 +21,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4</artifactId>
-    <version>4.14.0-rc.3</version>
+    <version>4.14.0-rc.6</version>
     <packaging>pom</packaging>
 
     <name>Browser4</name>
@@ -47,7 +47,7 @@
         <connection>scm:git:https://github.com/platonai/browser4.git</connection>
         <developerConnection>scm:git:https://github.com/platonai/browser4.git</developerConnection>
         <url>https://github.com/platonai/browser4</url>
-        <tag>v4.14.0-rc.3</tag>
+        <tag>v4.14.0-rc.6</tag>
     </scm>
 
     <issueManagement>
@@ -537,7 +537,7 @@
                     <reuseForks>true</reuseForks>
                     <!-- Enable byte-buddy-agent. ${jacocoArgLine} is injected by the
                          quality-gate profile's prepare-agent; empty otherwise. -->
-                    <argLine>${jacocoArgLine} -XX:+EnableDynamicAgentLoading -Djdk.net.URLClassPath.disableClassPathURLCheck=true</argLine>
+                    <argLine>${jacocoArgLine} -XX:+EnableDynamicAgentLoading -Djdk.net.URLClassPath.disableClassPathURLCheck=true -Dcritical.cpu.threshold=${critical.cpu.threshold}</argLine>
                     <systemPropertyVariables>
                         <jdk.net.URLClassPath.disableClassPathURLCheck>true</jdk.net.URLClassPath.disableClassPathURLCheck>
                     </systemPropertyVariables>
@@ -549,6 +549,21 @@
 
     <dependencyManagement>
         <dependencies>
+
+            <!-- The published parent (ai.platon:pulsar-parent) pins
+                 kotlinx-coroutines at 1.10.2, and a parent's dependencyManagement
+                 beats an imported BOM's. Ktor 3.5.1 — required by
+                 io.modelcontextprotocol:kotlin-sdk 0.15.0 — is built against
+                 kotlinx-coroutines 1.11.0 and calls
+                 `BuildersKt.runBlockingK`, which 1.10.2 does not have, so the
+                 version must be raised here (declared in this POM, which wins). -->
+            <dependency>
+                <groupId>org.jetbrains.kotlinx</groupId>
+                <artifactId>kotlinx-coroutines-bom</artifactId>
+                <version>${kotlin.coroutine.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
@@ -723,9 +738,25 @@
              by default so Surefire's argLine is unaffected when coverage is off. -->
         <jacocoArgLine></jacocoArgLine>
 
+        <!-- The driver pool refuses to create a driver while the system CPU load is
+             over AppSystemInfo.CRITICAL_CPU_THRESHOLD (0.85 by default), and a task
+             that is refused burns its whole 60 s poll timeout before the fetch is
+             retried (see LoadingWebDriverPool.pollDriverInSlices).  A test JVM that
+             drives real browsers is *supposed* to be busy: on a CI runner the suite
+             plus Chrome sit above that threshold for minutes at a time, so the pool
+             cannot grow and every fetch waits for a driver to be returned - measured
+             at 111 s against 53 s for the same test with the guard forced off, and
+             the CI crawl tests run against caps of 4 and 6 minutes.
+
+             Tests measure browser behaviour, not the host's CPU weather, so the
+             guard is off in the test JVM.  Production keeps the 0.85 default; the
+             memory and disk guards still apply to tests.  Override on demand, e.g.
+             -Dcritical.cpu.threshold=0.85 to exercise the guard. -->
+        <critical.cpu.threshold>1.0</critical.cpu.threshold>
+
         <!--  Language  -->
         <javaVersion>25</javaVersion>
-        <kotlin.coroutine.version>1.10.2</kotlin.coroutine.version>
+        <kotlin.coroutine.version>1.11.0</kotlin.coroutine.version>
 
         <!--  Kotlin  -->
         <kotlin.version>2.3.21</kotlin.version>
@@ -733,9 +764,12 @@
         <kotlin.compiler.jvmTarget>${javaVersion}</kotlin.compiler.jvmTarget>
 
         <spring-boot.version>4.0.6</spring-boot.version>
-        <browser4-base.version>4.11.8</browser4-base.version>
+        <browser4-base.version>4.11.16</browser4-base.version>
 
-        <mcp-sdk.version>0.8.1</mcp-sdk.version>
+        <mcp-sdk.version>0.15.0</mcp-sdk.version>
+        <!-- Must match the Ktor the MCP SDK is built against; keep in sync with
+             <ktor.version> in browser4-dependencies/pom.xml. -->
+        <ktor.version>3.5.1</ktor.version>
         <git-commit-id-maven-plugin.version>9.0.1</git-commit-id-maven-plugin.version>
     </properties>
 

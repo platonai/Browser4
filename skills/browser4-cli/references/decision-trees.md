@@ -30,9 +30,9 @@ tier: decision
 | `htmlsnapshot summary` | **Yes** — requires stored snapshot | Statistical summary of selectors on the stored page |
 | `htmlsnapshot grep` | **Yes** — requires stored snapshot | Regex search over the stored HTML |
 | `htmlsnapshot export` | **Yes** — requires stored snapshot | Exports the stored HTML to a file |
-| `htmlsnapshot query` | **No** — fetches independently | Uses `DOM_LOAD_AND_SELECT(@url, ...)` which re-fetches the page, bypassing the stored snapshot entirely |
+| `htmlsnapshot query` | **No** — no capture needed | Current page → queries the session's **live DOM** (seeded before the SQL runs; login/SPA state visible). Other URLs → independent webdb load, no session state |
 
-> **If you get "No HTML snapshot found" or a timeout:** either run `htmlsnapshot` first to capture, or use `htmlsnapshot query` with `@url` for independent fetching.
+> **If you get "No HTML snapshot found" or a timeout:** either run `htmlsnapshot` first to capture, or use `htmlsnapshot query` — it needs no prior capture (current page reads the live DOM; an explicit URL is fetched independently).
 
 > **⚠️ Important:** `htmlsnapshot` captures the **current live DOM** at capture time. Content added or modified by JavaScript before the capture (form submission results, dynamic updates, SPA route changes) **is reflected** — but only if you run `htmlsnapshot` (capture) *after* the interaction. The stored snapshot becomes stale only if you do not re-capture after a navigation or interaction. For one-off live reads without a capture step, use `eval`.
 
@@ -46,7 +46,12 @@ Need to extract data from a page?
 │  → eval --json for live DOM (use --stdin or --file on Windows)
 ├─ Static page, one field? → htmlsnapshot get text "<selector>"
 ├─ Static page, one field, ALL matches? → htmlsnapshot get all text "<selector>"
-├─ Don't know the right CSS selector? → htmlsnapshot get text article  (auto-discovers content)
+├─ Don't know the right CSS selector?
+│  → htmlsnapshot inspect   # real auto-discovery — finds RECURRING patterns (list/grid pages)
+│  → htmlsnapshot summary   # detail/single-block pages (visual clustering), then read with explicit selectors
+│  (Note: htmlsnapshot get text accepts ANY plain CSS selector — e.g. `get text "article"` is
+│   just a tag search and matches nothing on pages without <article>; inspect/summary are the
+│   discovery tools, not `get`)
 ├─ Static page, multiple correlated fields (title+price+url per item)?
 │  → htmlsnapshot query with X-SQL DOM_LOAD_AND_SELECT
 ├─ Dynamic/complex JS logic needed? → eval --json
@@ -60,8 +65,9 @@ Need to process multiple pages?
 │  → htmlsnapshot query with DOM_LOAD_AND_SELECT
 ├─ Multiple known URLs (list in a file)? → crawl --seed-file urls.txt --depth 0 --sql @query.sql
 ├─ Crawl from a start URL (follow links)? → crawl <url> --out-link-selector "..." --depth N
+├─ Need higher crawl throughput? → add --parallel 8 (crawl already collects on several tabs by default; each unit gets its own tab)
 ├─ Need parallel execution (high throughput)? → swarm create → swarm query --seed-file ...
-├─ Repeated monitoring (check every hour)? → loop -- eval "..." -i 3600
+├─ Repeated monitoring (check every hour)? → loop -i 3600 -- eval "..."
 └─ Just a few URLs in a shell script?
    → browser4-cli open --headless (once) then use goto for each URL; add wait between iterations
 ```
@@ -78,6 +84,7 @@ Have HTML files and want structured data — without tokens?
 └─ Need to acquire pages first?
    ├─ Single pages: browser4-cli open --headless → htmlsnapshot → htmlsnapshot export
    ├─ Bulk download: browser4-cli crawl --seed-file urls.txt --depth 0
+   │  (add --parallel 8 for more overlap; each unit collects on its own tab)
    └─ High throughput: browser4-cli swarm create → swarm query --seed-file ...
        Then feed the HTML directory to WebMiner
 ```
@@ -114,9 +121,9 @@ Have HTML files and want structured data — without tokens?
 | `webminer all <html-dir>` | Full pipeline: encode → cluster → views (`--max-files`, `--output`, `--resume`) |
 | `webminer views <result-dir>` | Rebuild the interactive views from an existing run |
 
-Requires JDK 17+ (auto-detected: `JAVA_HOME` → Browser4 runtime bundle JRE → common paths → `PATH`). Any other command is forwarded verbatim to `scent-miner.jar` (e.g. `webminer encode <dir>`).
+Requires JDK 17+ (auto-detected: JAVA_HOME → Browser4 runtime bundle JRE → common paths → PATH). Any other command is forwarded verbatim to scent-miner.jar (e.g. webminer encode <dir>).
 
-> **Install:** `browser4-cli webminer install`. The JAR is also downloadable from [web-miner releases](https://github.com/platonai/web-miner/releases).
+> **Install:** rowser4-cli webminer install (or the legacy launcher .\webminer.ps1 install from the [web-miner](https://github.com/platonai/web-miner) project). The JAR is also downloadable from [web-miner releases](https://github.com/platonai/web-miner/releases).
 
 See **[web-miner/SKILL.md](../../browser4-web-miner/SKILL.md)** for the full reference.
 
@@ -151,21 +158,26 @@ XSQL
 # 2. Discover the right CSS selector to replace .product-card:
 browser4-cli htmlsnapshot inspect --selector-base64 <base64-of-selector>
 
-# 3. Run it
-browser4-cli htmlsnapshot query "https://example.com/products" --sql @query.sql
+# 3. Run it — default output is the raw JSON response envelope (machine-readable).
+#    Add --format table (or csv) for human-readable output; --result-only prints
+#    just the resultSet. Error envelopes (417/5xx) exit non-zero:
+browser4-cli htmlsnapshot query "https://example.com/products" --sql @query.sql --format table
 ```
 
 **Discover selectors** before writing the query:
 
 ```bash
-browser4-cli htmlsnapshot inspect                    # interactive: lists all elements with CSS classes/ids
-browser4-cli htmlsnapshot summary                    # statistical summary of selectors on the page
-browser4-cli htmlsnapshot get text ".price" --all    # quick test: does this selector match elements?
+browser4-cli htmlsnapshot inspect                    # recurring-pattern discovery (list/grid pages)
+browser4-cli htmlsnapshot summary                    # visual clustering (detail/single-block pages)
+browser4-cli htmlsnapshot get all text ".price"      # quick test: how many elements does this selector match?
 ```
+
+`htmlsnapshot inspect` finds **recurring** patterns — it is built for list/grid pages (search results, product cards, tables). A single product/article/detail page has no repeating block, so inspect may surface nothing or an unrelated side rail; when that happens it prints "No recurring pattern found". For detail pages use `htmlsnapshot summary` (visual clustering) or `htmlsnapshot get` with explicit selectors (`htmlsnapshot get text "h1"`, `get attr "#product-image" src`).
 
 ## Reference Map
 
 - [SKILL.md §5](../SKILL.md#5-critical-warnings) — critical warnings (selectors go stale, shell quoting, stale snapshots)
+- [browser-modes.md](browser-modes.md) — which session / display mode / browser source to use
 - [htmlsnapshot.md](htmlsnapshot.md) — command reference for `get` / `query` / `grep` / `summary` / `inspect` / `export`
 - [x-sql.md](x-sql.md) — X-SQL function reference
 - [crawl.md](crawl.md) — bulk multi-page extraction

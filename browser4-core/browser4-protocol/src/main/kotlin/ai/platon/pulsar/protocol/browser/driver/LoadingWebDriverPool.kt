@@ -13,6 +13,7 @@ import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_MAX_OPEN_TABS
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.config.VolatileConfig
+import ai.platon.pulsar.common.logging.ThrottlingLogger
 import ai.platon.pulsar.common.readable
 import ai.platon.pulsar.common.stringify
 import ai.platon.pulsar.api.Browser
@@ -43,10 +44,29 @@ class LoadingWebDriverPool constructor(
     companion object {
         var CLOSE_ALL_TIMEOUT = Duration.ofSeconds(60)
         var POLLING_TIMEOUT = Duration.ofSeconds(60)
+
+        /**
+         * The wait for a driver is done in slices of this duration, see [pollDriverInSlices].
+         *
+         * The slice has to be short enough to re-evaluate the resource guard while waiting - the guard
+         * can refuse to create a driver during a transient load spike - and long enough to avoid busy
+         * waiting. It also bounds how long the stateful driver pool is locked while waiting.
+         * */
+        var POLLING_SLICE = Duration.ofMillis(500)
+
+        /**
+         * How long a driver wait has to last before it is reported, see [poll].
+         *
+         * A starved pool and a slow page load look identical to the caller - both are simply a slow
+         * fetch - so the wait itself has to be logged for the two to be told apart.
+         * */
+        var SLOW_POLL_MILLIS = 5_000L
+
         private val ID_SUPPLIER = AtomicInteger()
     }
 
     private val logger = LoggerFactory.getLogger(LoadingWebDriverPool::class.java)
+    private val throttlingLogger = ThrottlingLogger(logger, ttl = Duration.ofMinutes(1))
 
     val id = ID_SUPPLIER.incrementAndGet()
 
@@ -216,15 +236,31 @@ class LoadingWebDriverPool constructor(
 
     @Throws(BrowserLaunchException::class, WebDriverPoolExhaustedException::class, InterruptedException::class)
     fun poll(priority: Int, conf: MutableConfig, timeout: Long, unit: TimeUnit): WebDriver {
+        val start = System.nanoTime()
         val driver = pollWebDriver(priority, conf, timeout, unit)
+        val waitedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)
+
         if (driver == null) {
             val snapshot = takeSnapshot()
             val message = String.format("%s", snapshot.format(true))
             if (AppContext.isActive) {
                 // log only when the application is active
-                logger.info("Driver pool is exhausted, rethrow WebDriverPoolExhaustedException | $message")
+                logger.info(
+                    "Driver pool is exhausted after {}ms, rethrow WebDriverPoolExhaustedException | {}",
+                    waitedMillis, message
+                )
             }
             throw WebDriverPoolExhaustedException(browserId.toString(), "Driver pool is exhausted ($snapshot)")
+        }
+
+        if (waitedMillis >= SLOW_POLL_MILLIS) {
+            // The task got a driver, but only after waiting for one.  The snapshot carries the
+            // reason the pool could not grow - a refused creation under critical load, or a pool
+            // that is already at capacity - which is otherwise invisible at the caller.
+            throttlingLogger.warn(
+                "Waited {}ms for a driver (poll timeout {}ms) | {}",
+                waitedMillis, unit.toMillis(timeout), takeSnapshot().format(true)
+            )
         }
 
         return driver
@@ -355,11 +391,61 @@ class LoadingWebDriverPool constructor(
         _numWaitingTasks.incrementAndGet()
 
         val driver = try {
-            resourceSafeCreateDriverIfNecessary(priority, conf)
-            statefulDriverPool.poll(timeout, unit)
+            pollDriverInSlices(priority, conf, unit.toMillis(timeout))
         } finally {
             _numWaitingTasks.decrementAndGet()
             lastActiveTime = Instant.now()
+        }
+
+        return driver
+    }
+
+    /**
+     * Wait for a driver for at most [timeoutMillis].
+     *
+     * An idle driver is always taken before a new one is created: taking one off the standby queue is
+     * free, while creating one launches a tab that the pool then keeps for the rest of its life, so
+     * creating first spends the pool's capacity on idle tabs.  A pool that has served a few crawls
+     * ends up holding dozens of standby drivers while its callers still pay for a tab launch, and the
+     * browser gets slower with every tab it accumulates (measured on CI: 44 idle drivers, capacity
+     * exhausted at 50 tabs, and a fetch that takes 80-100 s against 2.6 s on an idle pool).
+     *
+     * A driver can be created only when the resource guard in [shouldCreateWebDriver] allows it, and the
+     * guard refuses while the system is over the critical load - a CPU spike caused by another browser
+     * launching is enough. Trying to create a driver only once and then blocking for the whole timeout
+     * turns such a transient refusal into a hard [WebDriverPoolExhaustedException] long after the load
+     * has settled, so the guard is re-evaluated in each slice of the wait.
+     *
+     * Waiting in slices also releases the stateful driver pool from time to time, so a driver returned
+     * by a task running in the same pool can be offered to this waiting thread.
+     * */
+    private fun pollDriverInSlices(priority: Int, conf: MutableConfig, timeoutMillis: Long): WebDriver? {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+        var driver: WebDriver? = null
+
+        while (driver == null) {
+            // A standby driver costs nothing to reuse, so it is taken before anything is created.
+            driver = statefulDriverPool.poll(0, TimeUnit.MILLISECONDS)
+            if (driver != null) {
+                break
+            }
+
+            resourceSafeCreateDriverIfNecessary(priority, conf)
+
+            // The pool can not serve tasks anymore, e.g. it is retired or closed, do not wait for it
+            if (!isActive) {
+                break
+            }
+
+            val remainingNanos = deadline - System.nanoTime()
+            if (remainingNanos <= 0) {
+                break
+            }
+
+            val sliceMillis = TimeUnit.NANOSECONDS.toMillis(remainingNanos)
+                .coerceAtMost(POLLING_SLICE.toMillis())
+                .coerceAtLeast(1)
+            driver = statefulDriverPool.poll(sliceMillis, TimeUnit.MILLISECONDS)
         }
 
         return driver
@@ -421,6 +507,19 @@ class LoadingWebDriverPool constructor(
                 "Critical memory: {}, resource consuming drivers: {}/{}/{} (slots/pool/browser), will not create new driver",
                 AppSystemInfo.formatAvailableMemory(),
                 numDriverSlots, resourceConsumingDriversInPool, resourceConsumingDriversInBrowser
+            )
+        } else if (isCriticalResources) {
+            // The guard can refuse only transiently, the load can settle at any moment, so the waiters
+            // keep polling for a driver, see pollDriverInSlices. The message must stay exactly the same
+            // for the throttling to take effect, the varying details are logged at the debug level.
+            throttlingLogger.info(
+                "The system is over the critical load, will not create a new driver | {}",
+                browserId
+            )
+            logger.debug(
+                "The system is over the critical load, will not create a new driver | {}" +
+                        " | resource consuming drivers: {}/{}/{} (slots/pool/browser)",
+                browserId, numDriverSlots, resourceConsumingDriversInPool, resourceConsumingDriversInBrowser
             )
         }
 

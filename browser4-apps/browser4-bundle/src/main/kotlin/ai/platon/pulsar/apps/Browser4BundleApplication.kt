@@ -1,5 +1,7 @@
 package ai.platon.pulsar.apps
 
+import ai.platon.pulsar.agentic.llm.LlmConfigNormalizer
+import ai.platon.pulsar.agentic.mcp.server.runMcpAppIfRequested
 import ai.platon.pulsar.boot.autoconfigure.PulsarContextInitializer
 import ai.platon.pulsar.boot.plugin.PluginClasspathEnhancer
 import ai.platon.pulsar.common.getLogger
@@ -85,6 +87,15 @@ class Browser4BundleApplication(
 
 fun runBrowser4BundleApplication(args: Array<String>) {
     PluginClasspathEnhancer.enhance(Path.of("plugins"))
+    // Rewrite env-style LLM keys (DEEPSEEK_API_KEY=...) in conf-enabled
+    // properties files to dotted keys before any session is created, so the
+    // engine's `deepseek.api.key` lookups actually bind.
+    LlmConfigNormalizer.normalize()
+    // `--app mcp` starts the standalone MCP server (stdio or HTTP/SSE) instead of
+    // the web application; it owns its agentic context and never boots Spring.
+    if (runMcpAppIfRequested(args)) {
+        return
+    }
     runApplication<Browser4BundleApplication>(*args) {
         // Buffer startup steps so /actuator/startup can report per-phase
         // timing (bean init, auto-configuration evaluation, etc.).

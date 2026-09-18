@@ -34,10 +34,10 @@ browser4-cli fill <ref> "<value>"
 browser4-cli press Enter
 browser4-cli wait --load networkidle
 browser4-cli snapshot -v 0 --auto-diff --stdout   # verify changes
-browser4-cli htmlsnapshot get text "article" --all
+browser4-cli htmlsnapshot get all text "<css-selector>"   # all matches
 ```
 
-`--stdout` prints directly; the default writes to a file. The CLI snapshots automatically after interactions; `--no-snapshot` skips that round-trip.
+`get` returns only the first match; `get all` returns every match (querySelectorAll). `--stdout` prints directly; the default writes to a file. The CLI snapshots automatically after interactions; `--no-snapshot` skips that round-trip.
 
 ## Key Commands
 
@@ -46,7 +46,7 @@ browser4-cli htmlsnapshot get text "article" --all
 | Navigation / sessions | `open --headless <url>` / `goto <url>` / `close` / `reload`; multiple sessions with `-s <name>` |
 | Read page + get refs | `snapshot -v 0` (current screen) / `-v all` (full page) / `-i` (interactive only) / `snapshot grep <pattern>` |
 | Interact | `click` / `dblclick` / `hover` / `drag` / `fill` / `type` / `press` / `select` / `check` / `focus` / `key` |
-| Extract | `htmlsnapshot get text\|attr\|html "<css>" [--all]`; `query --sql @f.sql` (X-SQL multi-field); `eval --json` (live DOM); `extract` (natural language, needs LLM key) |
+| Extract | `htmlsnapshot get text\|attr\|html "<css>"` (first match) / `get all ... "<css>"` (all matches); `query --sql @f.sql` (X-SQL multi-field); `eval --json` (live DOM); `extract` (natural language, needs LLM key) |
 | Bulk / structured | `crawl <url> --depth N --sql @f.sql`; `swarm create/query` (parallel); `loop` (scheduled repeats) |
 | State | `state-save` / `state-load` / `cookie-*`; `attach` (connect to existing Chrome) |
 | Tabs | `tab-list` / `tab-new <url>` / `tab-select <index>` (re-snapshot after switching) |
@@ -60,7 +60,7 @@ browser4-cli htmlsnapshot get text "article" --all
 | Use for | **Interaction** — get refs to click/fill | **Extraction** — read text / data / attributes |
 | Decider | "I need to click a button / find an input" | "I need to read an article / extract a price" |
 
-`htmlsnapshot` (capture) must run once **before** `get` / `get all` / `inspect` / `grep` / `export` become available; `query` is the exception — it re-fetches independently and needs no prior capture. For JS-updated content, capture before extracting; `eval --json` reads the live DOM. **Re-capture after every navigation/interaction** or the snapshot goes stale.
+`htmlsnapshot` (capture) must run once **before** `get` / `get all` / `inspect` / `grep` / `export` become available; `query` is the exception — it needs no prior capture (current page → live DOM; other URLs → independent fetch). For JS-updated content, capture before extracting; `eval --json` reads the live DOM. **Re-capture after every navigation/interaction** or the snapshot goes stale.
 
 ## Refs: Single-Use Handles
 
@@ -70,7 +70,7 @@ refs are temporary handles: any interaction (click/fill/type/press/select/check/
 
 - **Selectors go stale**: they break when sites change their HTML. Discover selectors with `htmlsnapshot inspect` / `summary` before extracting; scenario docs are patterns, not recipes.
 - **Shell quoting (Windows)**: for complex JS/SQL use `--sql @file.sql`, `--sql-stdin`, `eval --file` / `--stdin` / `--base64`; quote `@file` paths in PowerShell (`--sql "@q.sql"`). Never inline double-quoted CSS selectors.
-- **Paginated output**: read `snapshot -v 0` per screen; locate with `snapshot grep`; `get html` / `grep` paginate at 2K lines by default (`--page N` to page). **Don't cat snapshot files** (they can exceed 256KB).
+- **Paginated output**: read `snapshot -v 0` per screen; locate with `snapshot grep`; `get html` / `grep` and `snapshot --stdout` paginate at 2K lines by default (`--page N` to page; `--all` or `--page-size 0` for the full tree — a `# … output truncated …` hint is appended to stdout when piped). **Don't cat snapshot files** (they can exceed 256KB).
 - **eval --ref must be an arrow function**: `element => element.textContent`; writing `element.textContent` returns null — the most common mistake.
 - **Dialogs**: clicking something that triggers `alert`/`confirm`/`prompt` times out; handle with `dialog-accept` / `dialog-dismiss` (or `click --auto-dismiss-dialogs <ref>`).
 - **Sandboxed environments**: when the JVM cannot write its logs, `open`/`goto` time out at startup — set `BROWSER4_RUNTIME_DIR` / `BROWSER4_CLI_STATE_DIR` to writable directories.

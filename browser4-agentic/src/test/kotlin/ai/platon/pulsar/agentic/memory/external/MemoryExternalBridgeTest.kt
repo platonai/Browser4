@@ -120,7 +120,7 @@ class MemoryExternalBridgeTest {
         val s2cOut = PipedOutputStream(s2cIn)
 
         serverJob = scope.launch {
-            memoryServer.connect(
+            memoryServer.createSession(
                 StdioServerTransport(
                     inputStream = c2sIn.asSource().buffered(),
                     outputStream = s2cOut.asSink().buffered(),

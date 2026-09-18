@@ -6,9 +6,8 @@
 # Windows.  Running `./b4w.ps1` directly from Git Bash may cause the shell
 # working directory to reset to the user home directory after each command
 # (a side-effect of how PowerShell inherits and reports CWD from bash).
-# This wrapper avoids that by using `exec pwsh` with individually-quoted
-# arguments, which also prevents dash-prefixed flags from being consumed
-# as PowerShell parameter names.
+# This wrapper avoids that by using `exec pwsh -File`, passing the original
+# arguments through verbatim ("$@").
 #
 # Usage: ./b4w.sh [args...]          (same as ./b4w.ps1 [args...])
 #
@@ -21,24 +20,37 @@
 
 . "$(dirname "$0")/bin/tools/install-powershell.sh"
 
-# When PowerShell receives arguments from bash, dash-prefixed flags like
-# --sql, --stdout, -v can be misinterpreted as PowerShell parameter names
-# rather than literal CLI arguments.  This causes errors such as:
-#   snapshot -v 0 --stdout  →  Unknown command: 'snapshot-0'
-#   swarm query --sql @q.sql →  Missing required argument: <url>
+# Argument handling:
 #
-# To prevent this, we wrap every argument in PowerShell single quotes
-# before passing it to pwsh.  PowerShell treats single-quoted tokens as
-# literal string values — no variable expansion, no escape processing
-# (except '' for a literal single quote).  This safely handles arguments
-# containing spaces, double quotes, dollar signs, and backticks.
+# b4w.sh delegates to b4w.ps1 with `pwsh -File`, forwarding each argument as
+# its own argv element ("$@").  b4w.ps1 deliberately declares NO param()
+# block, so PowerShell collects every token (including dash-prefixed flags
+# like --sql, --stdout, -v and -i) in $args and passes them to the CLI
+# untouched — no single-quote wrapping or Invoke-Expression dance is needed,
+# unlike the older `pwsh -Command "& script 'a' 'b'"` approach this script
+# previously used.
 #
-# Prior approach (double-quote wrapping with \" escaping) broke on JSON
-# values like '{"lang":"en"}' because \" inside -Command interacts
-# destructively with PowerShell's command-line parser.
+# `pwsh -File` also makes the PowerShell process exit with the exact exit
+# code that b4w.ps1 propagates from browser4-cli (usage errors exit 2, tool
+# failures exit 1), so `./b4w.sh ...; echo $?` and &&-chains see the real
+# CLI status.  (`pwsh -Command "& script ..."` collapses every nonzero
+# script exit code to 1, which is why it is not used here.)
 #
-# Workaround for direct ./b4w.ps1 users in Git Bash:
-#   ./b4w.ps1 "swarm" "query" "--sql" "@query.sql" "--seed-file" "./urls.txt"
+# MSYS2 path conversion: when Git Bash spawns a native executable (pwsh),
+# arguments that begin with '/' are silently rewritten into Windows paths
+# (e.g. "/product/" becomes "C:/Program Files/Git/product/").  Quoting does
+# NOT stop this conversion, so pattern-like values such as
+#   crawl <url> -olp "/product/"
+# would reach the backend mangled and silently filter out every link.
+# MSYS2_ARG_CONV_EXCL='*' disables conversion for every argument of the
+# child process (MSYS_NO_PATHCONV=1 is the equivalent older spelling).
+
+if [ -n "$MSYS2_ARG_CONV_EXCL" ]; then
+    # Respect a user/global override if one is already set.
+    :
+else
+    export MSYS2_ARG_CONV_EXCL='*'
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # On Git Bash (MSYS2/Cygwin), pwd produces Unix-style paths like
@@ -47,21 +59,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if command -v cygpath >/dev/null 2>&1; then
     SCRIPT_DIR="$(cygpath -w "$SCRIPT_DIR")"
 fi
-ARGS=""
-for arg in "$@"; do
-    # Wrap each argument in PowerShell single quotes so that special
-    # characters (spaces, double quotes, $, backticks) are treated
-    # literally.  PowerShell single-quoted strings only recognise ''
-    # as an escape (for a literal single quote), so we escape any
-    # embedded single quotes before wrapping.
-    safe="${arg//\'/\'\'}"
-    ARGS="$ARGS '$safe'"
-done
 
-if [ -z "$ARGS" ]; then
+if [ "$#" -eq 0 ]; then
     exec pwsh -NoProfile -ExecutionPolicy Bypass -File "$SCRIPT_DIR/b4w.ps1"
 else
-    # Use -Command with the call operator (&) so PowerShell evaluates the
-    # individually single-quoted arguments as string literals.
-    exec pwsh -NoProfile -ExecutionPolicy Bypass -Command "& '$SCRIPT_DIR/b4w.ps1' $ARGS"
+    exec pwsh -NoProfile -ExecutionPolicy Bypass -File "$SCRIPT_DIR/b4w.ps1" "$@"
 fi

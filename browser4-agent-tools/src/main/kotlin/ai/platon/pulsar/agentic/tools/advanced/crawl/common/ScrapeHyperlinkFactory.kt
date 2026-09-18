@@ -34,7 +34,7 @@ object ScrapeHyperlinkFactory {
         val sql = request.sql
         val link = if (ScrapeAPIUtils.isScrapeUDF(sql)) {
             val xSQL = ScrapeAPIUtils.normalize(sql)
-            XSQLScrapeHyperlink(request, xSQL, session)
+            XSQLHyperlink(request, xSQL, session)
         } else {
             DegenerateXSQLScrapeHyperlink(request, session)
         }

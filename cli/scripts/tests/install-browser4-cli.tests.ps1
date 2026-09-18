@@ -37,6 +37,21 @@ function Test($name, [ScriptBlock]$block) {
     }
 }
 
+# ── Harness self-test ──
+# An assertion that throws MUST be counted as a failure.  Without this check a
+# harness that silently swallows failures looks perfectly green, which is
+# exactly how this suite's PowerShell sibling (the bash one) stayed green while
+# running no assertions at all.
+$selfTestFail = $script:fail
+Write-Host "  (one deliberate FAIL follows -- the harness self-test)" -ForegroundColor DarkGray
+Test "__harness self-test (must be reported as a failure)" { throw "expected failure" }
+if ($script:fail -ne ($selfTestFail + 1)) {
+    Write-Host "  FATAL  the harness does not record failures -- aborting" -ForegroundColor Red
+    exit 1
+}
+$script:fail = $selfTestFail
+Write-Host "  OK    harness self-test (a throwing assertion is counted as a failure)" -ForegroundColor DarkGray
+
 function RunScript([string]$scriptArgs, [ref]$exitCode) {
     # Use -Command to control stderr redirect (2> path must come before script args,
     # which -File would pass as literal arguments to the script).
@@ -52,7 +67,15 @@ function RunScript([string]$scriptArgs, [ref]$exitCode) {
     $out = $proc.StandardOutput.ReadToEnd()
     $proc.WaitForExit()
     $exitCode.Value = $proc.ExitCode
-    $err = if (Test-Path $tmpErr) { Get-Content $tmpErr -Raw -ErrorAction SilentlyContinue; Remove-Item $tmpErr -Force -ErrorAction SilentlyContinue } else { "" }
+    # Never leave $err as AutomationNull: `$null -eq $err` is true for it, but
+    # `$err -notmatch 'x'` returns an empty array, which is falsey -- an
+    # assertion written that way can never fail.
+    $err = ""
+    if (Test-Path $tmpErr) {
+        $err = Get-Content $tmpErr -Raw -ErrorAction SilentlyContinue
+        Remove-Item $tmpErr -Force -ErrorAction SilentlyContinue
+    }
+    if ($null -eq $err) { $err = "" }
     return [PSCustomObject]@{ Output = $out; Error = $err; ExitCode = $proc.ExitCode }
 }
 
@@ -217,10 +240,24 @@ Test "-SkipLocal flag accepted" {
     if ($ec4 -ne 0) { throw "Exit code: $ec4, output: $($r4.Output)" }
 }
 
-Test "-Force rejected (replaced by -SkipIfInstalled)" {
-    $ec5 = 0; $r5 = RunScript -scriptArgs "-Force -DryRun" -exitCode ([ref]$ec5)
-    if ($r5.Error -notmatch 'Force') {
-        throw "-Force should be rejected, got: $($r5.Error)"
+Test "-Force overrides -SkipIfInstalled, and is a live parameter" {
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) "b4-force-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+    foreach ($n in @('browser4-cli-win32-x64.exe', 'browser4-cli-linux-x64', 'browser4-cli-darwin-arm64')) {
+        Set-Content -Path (Join-Path $tmp $n) -Value "dummy" -Encoding Ascii
+    }
+    try {
+        $ecA = 0; $rA = RunScript -scriptArgs "-SkipIfInstalled -DryRun -SkipBackend -AddToPath:`$false -InstallDir `"$tmp`"" -exitCode ([ref]$ecA)
+        if ($rA.Output -notmatch 'Binary already installed') {
+            throw "Expected the -SkipIfInstalled skip path, got: $($rA.Output)"
+        }
+        $ecB = 0; $rB = RunScript -scriptArgs "-SkipIfInstalled -Force -DryRun -SkipBackend -AddToPath:`$false -InstallDir `"$tmp`"" -exitCode ([ref]$ecB)
+        if ($ecB -ne 0) { throw "-Force must be accepted, exit code: $ecB" }
+        if ($rB.Output -match 'Binary already installed') {
+            throw "-Force must override -SkipIfInstalled, got: $($rB.Output)"
+        }
+    } finally {
+        Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -236,8 +273,8 @@ Test "-Source github accepted" {
 
 Test "-Source invalid rejected" {
     $ec8 = 0; $r8 = RunScript -scriptArgs "-Source invalid -DryRun" -exitCode ([ref]$ec8)
-    if ($r8.Error -notmatch 'Source|invalid|parameter') {
-        throw "-Source invalid should be rejected, got: $($r8.Error)"
+    if ($ec8 -eq 0) {
+        throw "-Source invalid must fail, output: $($r8.Output)"
     }
 }
 
@@ -246,9 +283,33 @@ Test "-Silent flag accepted" {
     if ($ec9 -ne 0) { throw "Exit code: $ec9, output: $($r9.Output)" }
 }
 
-Test "-Version flag accepted" {
-    $ec10 = 0; $r10 = RunScript -scriptArgs "-Version v4.11.0 -DryRun" -exitCode ([ref]$ec10)
+Test "-Version reaches the download URLs" {
+    $ec10 = 0; $r10 = RunScript -scriptArgs "-Version v4.11.0 -DryRun -AddToPath:`$false" -exitCode ([ref]$ec10)
     if ($ec10 -ne 0) { throw "Exit code: $ec10, output: $($r10.Output)" }
+    if ($r10.Output -notmatch 'releases/download/v4\.11\.0/') {
+        throw "The tag never reached the URLs: $($r10.Output)"
+    }
+}
+
+Test "-Version accepts a bare semver and prefixes it with v" {
+    $ec11 = 0; $r11 = RunScript -scriptArgs "-Version 4.11.0 -DryRun -AddToPath:`$false" -exitCode ([ref]$ec11)
+    if ($ec11 -ne 0) { throw "Exit code: $ec11, output: $($r11.Output)" }
+    if ($r11.Output -notmatch 'releases/download/v4\.11\.0/') {
+        throw "Bare semver was not normalised to v4.11.0: $($r11.Output)"
+    }
+}
+
+Test "-Version rejects a path-traversal tag" {
+    $ec12 = 0; $r12 = RunScript -scriptArgs "-Version ../../evil -DryRun" -exitCode ([ref]$ec12)
+    if ($ec12 -eq 0) { throw "Traversal tag must be rejected, output: $($r12.Output)" }
+}
+
+Test "-DryRun does not probe the installed CLI" {
+    $ec13 = 0; $r13 = RunScript -scriptArgs "-DryRun -AddToPath:`$false" -exitCode ([ref]$ec13)
+    if ($ec13 -ne 0) { throw "Exit code: $ec13, output: $($r13.Output)" }
+    if ($r13.Output -match 'Backend already installed') {
+        throw "-DryRun ran 'status' on the installed CLI: $($r13.Output)"
+    }
 }
 
 Write-Host ""
@@ -256,10 +317,25 @@ Write-Host ""
 # ── Functions via dot-source ──
 Write-Host "--- Functions ---" -ForegroundColor Cyan
 
-# Strip trailing Main call and dot-source for function-level tests
-$scriptContent = Get-Content $installScript -Raw
-$scriptContent = $scriptContent -replace '\r?\nMain\s*$', ''
-$scriptContent = $scriptContent -replace '\$ErrorActionPreference\s*=\s*"Stop"', ''
+# Strip the trailing `Main` call and dot-source for function-level tests.
+# Strip it by AST extent, never by regex: if a line is ever appended after
+# `Main`, a regex silently stops matching and this suite would perform a REAL
+# install and edit the user PATH.
+$installAst = [System.Management.Automation.Language.Parser]::ParseFile($installScript, [ref]$null, [ref]$null)
+$mainCall = @($installAst.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.CommandAst] -and
+    $node.GetCommandName() -eq 'Main' -and
+    $node.Extent.Text.Trim() -eq 'Main'
+}, $true)) | Select-Object -Last 1
+if (-not $mainCall) {
+    throw "Could not locate the top-level 'Main' invocation in $installScript -- refusing to dot-source the installer"
+}
+$allLines = Get-Content $installScript
+$scriptContent = ($allLines[0..($mainCall.Extent.StartLineNumber - 2)] -join "`n") -replace '\$ErrorActionPreference\s*=\s*"Stop"', ''
+if ($scriptContent -match '(?m)^\s*Main\s*$') {
+    throw "The stripped copy still invokes Main -- refusing to dot-source the installer"
+}
 $sb = [ScriptBlock]::Create($scriptContent)
 
 & {
@@ -313,6 +389,31 @@ $sb = [ScriptBlock]::Create($scriptContent)
         if ($result -ne $null) { throw "Expected null, got: $result" }
     }
 
+    Test "Find-LocalBinary finds a bundled binary and enforces the 100 KB gate" {
+        # The bundled-binary path is what a sideload install uses; it used to be
+        # untestable because the dot-sourced copy never had a usable ScriptDir.
+        $tmp = Join-Path ([System.IO.Path]::GetTempPath()) "b4-local-$([System.IO.Path]::GetRandomFileName())"
+        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+        try {
+            $name = Get-BinaryName -PlatformKey (Get-PlatformKey)
+            [System.IO.File]::WriteAllBytes((Join-Path $tmp $name), (New-Object byte[] 204800))
+            $savedScriptDir = $ScriptDir
+            try {
+                $ScriptDir = $tmp
+                $found = Find-LocalBinary -BinaryName $name
+                if (-not $found) { throw "A 200 KB bundled binary was not found in $tmp" }
+                [System.IO.File]::WriteAllBytes((Join-Path $tmp 'browser4-cli-too-small'), (New-Object byte[] 10))
+                if (Find-LocalBinary -BinaryName 'browser4-cli-too-small') {
+                    throw "A 10-byte file passed the 100 KB gate"
+                }
+            } finally {
+                $ScriptDir = $savedScriptDir
+            }
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     Test "Test-LocalBinary returns false for empty string" {
         if (Test-LocalBinary -Path "") { throw "Should be false" }
     }
@@ -331,9 +432,43 @@ $sb = [ScriptBlock]::Create($scriptContent)
         if ($action -ne "upgrade") { throw "Expected 'upgrade', got: $action" }
     }
 
-    Test "Get-BackendAction defaults to upgrade on empty status" {
+    Test "Get-BackendAction defaults to install on empty status" {
+        # An empty status means "no CLI answer" (fresh machine, or `status`
+        # failed).  Defaulting to upgrade would run `upgrade` on a machine that
+        # has nothing to upgrade.
         $action = Get-BackendAction -StatusOutput ""
-        if ($action -ne "upgrade") { throw "Expected 'upgrade', got: $action" }
+        if ($action -ne "install") { throw "Expected 'install', got: $action" }
+    }
+
+    Test "Test-BinaryMagic accepts ELF, PE and Mach-O" {
+        $tmp = [System.IO.Path]::GetTempFileName()
+        try {
+            $cases = @{
+                'elf'    = [byte[]]@(0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01)
+                'pe'     = [byte[]]@(0x4d, 0x5a, 0x90, 0x00, 0x03)
+                'macho'  = [byte[]]@(0xcf, 0xfa, 0xed, 0xfe, 0x07)
+            }
+            foreach ($name in $cases.Keys) {
+                [System.IO.File]::WriteAllBytes($tmp, $cases[$name])
+                if (-not (Test-BinaryMagic -Path $tmp)) { throw "Rejected a valid $name header" }
+            }
+        } finally {
+            Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Test "Test-BinaryMagic rejects an HTML error page" {
+        $tmp = [System.IO.Path]::GetTempFileName()
+        try {
+            [System.IO.File]::WriteAllText($tmp, "<html><body>404 Not Found</body></html>")
+            if (Test-BinaryMagic -Path $tmp) { throw "An HTML body was accepted as a binary" }
+        } finally {
+            Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Test "Test-BinaryMagic rejects a missing file" {
+        if (Test-BinaryMagic -Path "/nonexistent/binary-xyz") { throw "A missing file was accepted" }
     }
 }
 

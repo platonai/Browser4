@@ -108,6 +108,58 @@ class InspectDocumentTest {
         }
 
         @Test
+        @DisplayName("discovers recurring class selectors even when elements carry unique per-card ids")
+        fun recurringClassWithUniquePerCardIds() {
+            // Mirrors the MockSite /ec product cards (HtmlRenderer.kt): the price/rating
+            // elements carry template-generated ids that are unique per card
+            // (id="product-price-B0E000001") but their classes recur. The compound
+            // class+id selector matches a single element per card, so without the
+            // class-only candidate the recurring class never reaches the threshold.
+            val html = """
+                <div class="product-card" id="product-1" vi="0 0 300 200">
+                  <h2 class="product-title">TV One</h2>
+                  <span class="product-price" id="product-price-1">899.99</span>
+                  <div class="product-rating" id="product-rating-1" data-rating="4.6">4.6 (521)</div>
+                </div>
+                <div class="product-card" id="product-2" vi="0 220 300 200">
+                  <h2 class="product-title">TV Two</h2>
+                  <span class="product-price" id="product-price-2">599.00</span>
+                  <div class="product-rating" id="product-rating-2" data-rating="4.5">4.5 (210)</div>
+                </div>
+                <div class="product-card" id="product-3" vi="0 440 300 200">
+                  <h2 class="product-title">TV Three</h2>
+                  <span class="product-price" id="product-price-3">199.99</span>
+                  <div class="product-rating" id="product-rating-3" data-rating="4.4">4.4 (312)</div>
+                </div>
+            """.trimIndent()
+            val result = inspect(html, ".product-card")
+            assertEquals(3, result["matchCount"].asInt())
+
+            val suggestions = result["suggestions"]
+            assertTrue(suggestions.size() > 0, "Should have suggestions")
+
+            // The recurring class selectors must be suggested — not hidden by the unique ids
+            val selectors = suggestions.map { it["selector"].asText() }
+            assertTrue(selectors.any { it == "span.product-price" },
+                "Should suggest the recurring span.product-price class selector, got: $selectors")
+            assertTrue(selectors.any { it == "div.product-rating" },
+                "Should suggest the recurring div.product-rating class selector, got: $selectors")
+
+            // Compound selectors carrying a per-card unique id match a single element and
+            // must fall out of the recurrence filter
+            assertTrue(selectors.none { it.contains("product-price") && it.contains("#") },
+                "Compound selectors with per-card price ids should be filtered, got: $selectors")
+            assertTrue(selectors.none { it.contains("product-rating") && it.contains("#") },
+                "Compound selectors with per-card rating ids should be filtered, got: $selectors")
+
+            // Price suggestion carries the distinct numeric values as samples
+            val priceSug = suggestions.first { it["selector"].asText() == "span.product-price" }
+            assertEquals(3, priceSug["matchCount"].asInt())
+            val samples = priceSug["textSamples"].map { it.asText() }
+            assertTrue(samples.any { it.contains("899.99") }, "Should sample prices, got: $samples")
+        }
+
+        @Test
         @DisplayName("discovers id-based selectors")
         fun discoversIdSelectors() {
             val html = """

@@ -107,12 +107,31 @@ jobs:
         shell: pwsh
         run: ./bin/skill-doc-lint.ps1
 
+      - name: Validate install script tests
+        shell: bash
+        run: |
+          # The installer suites are fast (~25 s) and need no Java, Docker or
+          # browser.  They used to run only inside the release workflow, so a
+          # suite whose assertions had silently stopped executing stayed green
+          # for months; run them on every CI round instead.
+          bash cli/scripts/tests/install-browser4-cli.tests.sh
+          bash cli/scripts/tests/wait-for-npm-version.tests.sh
+          bash cli/scripts/tests/reconcile-release-assets.tests.sh
+
       - name: Run Tests
         id: run-tests
         if: inputs.skip_tests != true
         uses: ./.github/actions/run-tests
         with:
           maven_profiles: 'all-main-modules,all-test-modules'
+          # NOTE: excluded_groups REPLACES the root pom's <surefire.excludedGroups>
+          # default, it does not extend it. Compared with that default
+          # (Slow,Heavy,RequiresServer,RequiresBrowser,RequiresAI,RequiresDocker,
+          #  Integration,E2E,ManualOnly,TestInfraCheck,IntegrationTest,E2ETest,HeavyTest)
+          # this short list deliberately re-enables Integration/IntegrationTest/
+          # Heavy/Requires* so the pipeline also covers the integration and
+          # infrastructure suite (Chrome, Docker and the started app are available
+          # here). See docs-dev/copilot/ci-stabilization-4.13.x.md before editing.
           excluded_groups: 'ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck'
           timeout_minutes: '35'
 
