@@ -1,9 +1,41 @@
 name: PowerShell Tests
 
-# Run bin/test.ps1 ps whenever a .ps1 file is changed.
-# Fast, self-contained — no Java/Maven/Docker dependency needed.
+# Runs bin/test.ps1 ps — every *.tests.ps1 in the repository — plus the
+# skill-document lint. Fast and self-contained: no Java/Maven/Docker, ~3 min.
+#
+# This is the only place the *.tests.ps1 suite runs: pr.yml parses five
+# hardcoded RWS scripts without executing a suite, and ci.yml is tag-only plus
+# manual dispatch. The suite therefore used to run on the nightly schedule
+# alone — and a scheduled workflow is fired on the default branch only — so a
+# release line could carry a red PS gate that no run ever saw. 4.14.x did: a
+# stale test-type map and a call to a function the script never defined, both
+# fixed in e863f936a3 and 2dd1658ea1.
 
 on:
+  # Any release line that touches PowerShell code. This workflow file is part
+  # of the filter, so a change to the gate is exercised by the gate.
+  push:
+    branches:
+      - main
+      - '*.x'
+    paths:
+      - '**/*.ps1'
+      - '**/*.psm1'
+      - '**/*.psd1'
+      - '.github/workflows/ps1-tests.yml'
+  # Every PR touching PowerShell code, whatever branch it targets (pr.yml only
+  # guards PRs whose base is main/master, so X.Y.x PRs had no PS coverage).
+  pull_request:
+    paths:
+      - '**/*.ps1'
+      - '**/*.psm1'
+      - '**/*.psd1'
+      - '.github/workflows/ps1-tests.yml'
+  # On demand. GitHub only exposes workflow_dispatch once the file is on the
+  # default branch, so this becomes usable after the next merge into main.
+  workflow_dispatch:
+  # Nightly safety net: the only trigger that also covers the default branch
+  # when nothing was pushed.
   schedule:
     - cron: '23 3 * * *'
 
