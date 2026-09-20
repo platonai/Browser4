@@ -7499,7 +7499,7 @@ async fn handle_html_snapshot_get(
             display_selector
         );
         cli_println!(
-            "  The snapshot may be stale — it reflects the DOM at capture time. If the page has changed since the last `htmlsnapshot`, re-capture with `htmlsnapshot` first."
+            "  The read used the LIVE page, so the element is simply not there — check the selector, the current URL, and that the page has finished loading."
         );
         cli_println!(
             "  Verify the selector with `htmlsnapshot grep \"{}\"`, or discover valid selectors with `htmlsnapshot inspect`.",
@@ -8759,9 +8759,10 @@ async fn handle_html_snapshot_inspect(
         // captured yet. Make this very explicit.
         if selector == ":root" {
             cli_println!("");
-            cli_println!("  ⚠️  No HTML snapshot found. htmlsnapshot inspect requires a prior capture.");
-            cli_println!("  Run this first:  browser4-cli htmlsnapshot");
-            cli_println!("  Then re-run:     browser4-cli htmlsnapshot inspect");
+            cli_println!("  ⚠️  No elements matched the default :root selector.");
+            cli_println!("  inspect analyzes the LIVE page, so no capture is needed — make sure the page is");
+            cli_println!("  loaded, then retry with a narrower selector:");
+            cli_println!("       browser4-cli htmlsnapshot inspect \".your-selector\"");
         } else {
             cli_println!("- No elements matched. Check the CSS selector and ensure a HTML snapshot has been captured (`browser4-cli htmlsnapshot`).");
         }
@@ -9524,7 +9525,7 @@ fn run_grep_on_source(
             if final_pattern.contains('\\') {
                 msg.push_str("\n💡 Tip: The pattern contains backslash escapes. If you meant to match literal text, try -F (--fixed-strings) to disable regex matching.");
                 if final_pattern.contains("\\$") {
-                    msg.push_str("\n   If you meant a literal $ sign: Rust regex has no \\$ escape — write [$] instead (e.g. '[$][0-9]+' matches \"$12\"). Bare ^ and $ anchor the start/end of a line.");
+                    msg.push_str("\n   If you meant a literal $ sign: write [$] instead (e.g. '[$][0-9]+' matches \"$12\") — it survives every shell layer. Bare ^ and $ anchor the start/end of a line.");
                 }
             } else if final_pattern.contains('|') {
                 msg.push_str("\n💡 Tip: Alternation (|) is supported. If you meant a literal pipe character, try -F (--fixed-strings).");

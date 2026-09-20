@@ -18,6 +18,8 @@ Run a JavaScript expression against the **live DOM** of the current page and pri
 | Stdin shorthand | `browser4-cli eval --js` | `--js` is an alias for `--stdin` |
 | Base64 | `browser4-cli eval --base64 <b64>` | Inline, quoting-proof (Windows PowerShell: `[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('expr'))`) |
 | JSON wrap | `browser4-cli eval --json "document.title"` | Machine-readable output (scalars get quoted) |
+| Async | `browser4-cli eval --await "fetch('/api').then(r => r.json())"` | Expressions returning a Promise (fetch, async work) |
+| Wait for render | `browser4-cli eval --wait-selector ".result" --wait-timeout 10000 "document.querySelector('.result').textContent"` | SPA/React pages that render asynchronously (default timeout: 30000 ms) |
 | Element-scoped | `browser4-cli eval "element => element.textContent" --ref e5` | Read a specific element's properties |
 
 `--file` also accepts the `@`-prefix file convention used across the CLI: `eval --file "@script.js"` behaves like `--sql @query.sql`.

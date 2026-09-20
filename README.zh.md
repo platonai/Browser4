@@ -261,7 +261,7 @@ browser4-cli pdf --filename page.pdf
 | 工具 | 适用场景 | 输入模型 | 输出模型 |
 |---|---|---|---|
 | `snapshot` | 点击、输入、查找可交互元素 | 实时可访问性树 | `e15` 这类 ref |
-| `htmlsnapshot` | DOM 检查、CSS 提取、X-SQL | 已存储的 HTML 快照 | CSS 选择器和查询结果 |
+| `htmlsnapshot` | DOM 检查、CSS 提取、X-SQL | 实时页面 DOM（抓取可选） | CSS 选择器和查询结果 |
 
 #### LLM 配置
 
@@ -405,12 +405,12 @@ browser4-cli cdp Runtime.evaluate --json '{"expression":"document.title"}'
 |---|---|
 | `htmlsnapshot` | `htmlsnapshot capture` 的简写。 |
 | `htmlsnapshot capture` | 捕获并存储静态 HTML 快照，同时返回页面和交互元素的元数据。 |
-| `htmlsnapshot get <field> [selector] [name]` | 从已存储快照中提取第一个匹配项的 `text`、`html` 或 `attr`。 |
-| `htmlsnapshot get all <field> [selector] [name]` | 从已存储快照中提取全部匹配值。支持 `--offset` 和 `--limit`。 |
+| `htmlsnapshot get <field> [selector] [name]` | 从实时页面 DOM 中提取第一个匹配项的 `text`、`textcontent`、`html` 或 `attr`。 |
+| `htmlsnapshot get all <field> [selector] [name]` | 从实时页面 DOM 中提取全部匹配值。支持 `--offset` 和 `--limit`。 |
 | `htmlsnapshot query [url]` | 运行 X-SQL。支持 `--sql <query\|@file>`、`--sql-stdin`、`--sql-base64`、结果分页和提取导向输出选项。 |
-| `htmlsnapshot export` | 把已存储 HTML 导出到文件。支持位置参数文件路径或 `--file <path>`，以及 `--clean`。 |
-| `htmlsnapshot summary` | 生成压缩版 Web Page Summary Index（WPSI）。 |
-| `htmlsnapshot grep <pattern>` | 用 grep 风格参数搜索已存储 HTML。 |
+| `htmlsnapshot export` | 把实时页面 HTML 导出到文件。支持位置参数文件路径或 `--file <path>`，以及 `--clean`。 |
+| `htmlsnapshot summary` | 基于实时页面生成压缩版 Web Page Summary Index（WPSI）。 |
+| `htmlsnapshot grep <pattern>` | 用 grep 风格参数搜索实时页面 HTML。 |
 | `htmlsnapshot inspect [selector]` | 发现重复 DOM 模式和候选选择器。支持 `--max`、`--depth`、`--stdin`、`--selector-base64`。 |
 
 重要规则：

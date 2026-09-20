@@ -1578,7 +1578,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[
-                ArgDef { name: "pattern", description: "Regex or literal pattern to search for. Use | for alternation (e.g. 'price|rating|stars'), not \\|. Rust regex dialect: ^ and $ anchor the start/end of a line, and a literal $ must be written [$] — \\$ is an invalid escape (use -F to match plain text)", optional: true },
+                ArgDef { name: "pattern", description: "Regex or literal pattern to search for. Use | for alternation (e.g. 'price|rating|stars') — an escaped \\| is also accepted and converted. Rust regex dialect: ^ and $ anchor the start/end of a line, so write a literal dollar as [$] (e.g. '[$][0-9]+'); \\$ also compiles as an escaped dollar, but [$] survives every shell. Use -F to match plain text", optional: true },
             ],
             options: &[
                 OptionDef { name: "ignore-case", short: Some("i"), is_bool: true, description: "Case-insensitive matching" },
@@ -3236,7 +3236,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- HtmlSnapshot ----
         CommandDef {
             name: "htmlsnapshot",
-            description: "Capture: take a static HTML snapshot of the current page and store it for later querying. Returns page metadata — URL, title, size, timestamps, and interactive elements (tag, class, id, aria, bounding box). Follow with `htmlsnapshot get`, `inspect`, or `summary` to read from the stored snapshot. Short form of `htmlsnapshot capture`.",
+            description: "Capture: take a static HTML snapshot of the current page and store it. Returns page metadata — URL, title, size, timestamps, and interactive elements (tag, class, id, aria, bounding box). Read commands (`get`, `get all`, `inspect`, `summary`, `grep`, `export`) serve the LIVE page and need no prior capture, so capturing is optional: use it for the metadata or for a deliberate archived copy. Short form of `htmlsnapshot capture`.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: true,
@@ -3248,7 +3248,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-capture",
-            description: "Capture: take a static HTML snapshot of the current page and store it for later querying. Returns page metadata — URL, title, size, timestamps, and interactive elements (tag, class, id, aria, bounding box). Follow with `htmlsnapshot get`, `inspect`, or `summary` to read from the stored snapshot.",
+            description: "Capture: take a static HTML snapshot of the current page and store it. Returns page metadata — URL, title, size, timestamps, and interactive elements (tag, class, id, aria, bounding box). Read commands (`get`, `get all`, `inspect`, `summary`, `grep`, `export`) serve the LIVE page and need no prior capture, so capturing is optional: use it for the metadata or for a deliberate archived copy.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: true,
@@ -3260,7 +3260,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-get",
-            description: "Extract elements from the HTML snapshot stored in Browser4's page storage (text, textcontent, html, attr). Supports batch mode for multi-step workflows.",
+            description: "Extract elements from the LIVE page of the active tab (text, textcontent, html, attr) — no prior `htmlsnapshot` capture needed. Supports batch mode for multi-step workflows.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: true,
@@ -3286,7 +3286,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-get-all",
-            description: "Extract ALL matching elements from the HTML snapshot (querySelectorAll semantics); supports --offset and --limit for pagination. Supports batch mode.",
+            description: "Extract ALL matching elements from the LIVE page (querySelectorAll semantics) — no prior `htmlsnapshot` capture needed; supports --offset and --limit for pagination. Supports batch mode.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: true,
@@ -3320,7 +3320,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-query",
-            description: "Run X-SQL. Without a URL (or when the URL is the session's current page) the query is seeded from the LIVE page first, so it sees login state, SPA updates and eval mutations; an explicit different URL runs an independent scrape/webdb load. htmlsnapshot capture is only needed for inspect/get/summary, not for query. IMPORTANT: CSS selectors in X-SQL must use single quotes (SQL syntax); double quotes mean SQL identifiers.",
+            description: "Run X-SQL. Without a URL (or when the URL is the session's current page) the query is seeded from the LIVE page first, so it sees login state, SPA updates and eval mutations; an explicit different URL runs an independent scrape/webdb load. No `htmlsnapshot` capture is required by any read command. IMPORTANT: CSS selectors in X-SQL must use single quotes (SQL syntax); double quotes mean SQL identifiers.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -3383,7 +3383,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-export",
-            description: "Export snapshot HTML from Browser4's page storage to a local file. The file path can be passed as a positional argument or via --file.",
+            description: "Export the LIVE page's HTML to a local file — no prior `htmlsnapshot` capture needed. The file path can be passed as a positional argument or via --file.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -3423,7 +3423,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-summary",
-            description: "Summarize: read the stored HTML snapshot and produce a compressed Web Page Summary Index (WPSI) — preserves page structure, key nodes, and stats in <1% of original HTML size. Use `htmlsnapshot` first to capture the page into storage.",
+            description: "Summarize: produce a compressed Web Page Summary Index (WPSI) from the LIVE page — preserves page structure, key nodes, and stats in <1% of original HTML size. No prior `htmlsnapshot` capture needed.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -3444,12 +3444,12 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-grep",
-            description: "Search the HTML snapshot HTML using regex patterns with grep-style output",
+            description: "Search the LIVE page's HTML using regex patterns with grep-style output — no prior `htmlsnapshot` capture needed",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
             args: &[
-                ArgDef { name: "pattern", description: "Regex or literal pattern to search for. Use | for alternation (e.g. 'price|rating|stars'), not \\|. Rust regex dialect: ^ and $ anchor the start/end of a line, and a literal $ must be written [$] — \\$ is an invalid escape (use -F to match plain text)", optional: true },
+                ArgDef { name: "pattern", description: "Regex or literal pattern to search for. Use | for alternation (e.g. 'price|rating|stars') — an escaped \\| is also accepted and converted. Rust regex dialect: ^ and $ anchor the start/end of a line, so write a literal dollar as [$] (e.g. '[$][0-9]+'); \\$ also compiles as an escaped dollar, but [$] survives every shell. Use -F to match plain text", optional: true },
             ],
             options: &[
                 OptionDef { name: "ignore-case", short: Some("i"), is_bool: true, description: "Case-insensitive matching" },
@@ -3639,7 +3639,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-inspect",
-            description: "Inspect: read the stored HTML snapshot and discover CSS selectors for recurring patterns (product cards, prices, titles). Use `htmlsnapshot` first to capture the page into storage.",
+            description: "Inspect: analyze the LIVE page and discover CSS selectors for recurring patterns (product cards, prices, titles) — no prior `htmlsnapshot` capture needed.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,

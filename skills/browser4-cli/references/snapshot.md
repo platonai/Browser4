@@ -124,7 +124,7 @@ Grep operates on the most recent snapshot. If no snapshot exists yet, run `snaps
 | `--page N` | Show page N of paginated results |
 | `--all` | Disable pagination (show all results) |
 
-Patterns are **Rust regex** (same dialect as `htmlsnapshot grep`): `|` is alternation, `^`/`$` anchor the start/end of a line, and a literal `$` must be written `[$]` (e.g. `'[$][0-9.]+'` for prices) — `\$` is an invalid escape, not a way to write a literal dollar. Use `-F` to match plain text. See the [htmlsnapshot grep dialect notes](htmlsnapshot.md#regex-dialect) for details.
+Patterns are **Rust regex** (same dialect as `htmlsnapshot grep`): `|` is alternation (an escaped `\|` is also accepted and converted), `^`/`$` anchor the start/end of a line, so write a literal `$` as `[$]` (e.g. `'[$][0-9.]+'` for prices) — it survives every shell layer (`\$` also compiles as an escaped dollar, but is easy to lose between shell layers). Use `-F` to match plain text. See the [htmlsnapshot grep dialect notes](htmlsnapshot.md#regex-dialect) for details.
 
 ## Ref Lifecycle
 

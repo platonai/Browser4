@@ -165,13 +165,13 @@ browser4-cli crawl --seed-file urls.txt --depth 0 --parallel 8 --refresh
 
 | Command | Description |
 |---|---|
-| `htmlsnapshot` | Short form of `htmlsnapshot capture` — capture a static HTML snapshot and return metadata |
+| `htmlsnapshot` | Short form of `htmlsnapshot capture` — capture a static HTML snapshot and return metadata (optional: reads use the live page) |
 | `htmlsnapshot capture` | Capture a static HTML snapshot and return metadata |
-| `htmlsnapshot get <field> [selector] [name]` | Extract elements from the stored HTML snapshot (text, html, attr) |
-| `htmlsnapshot query [url]` | Run X-SQL against the stored HTML snapshot |
-| `htmlsnapshot export` | Export snapshot HTML to a local file (--clean strips scripts/styles/non-standard attrs) |
-| `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from the stored HTML snapshot |
-| `htmlsnapshot grep [OPTIONS] <pattern>` | Search snapshot HTML with regex patterns and grep-style output |
+| `htmlsnapshot get <field> [selector] [name]` | Extract elements from the live page (text, textcontent, html, attr) — no prior capture needed |
+| `htmlsnapshot query [url]` | Run X-SQL against the live page (current page) or an independently fetched URL |
+| `htmlsnapshot export` | Export the live page's HTML to a local file (--clean strips scripts/styles/non-standard attrs) |
+| `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from the live page |
+| `htmlsnapshot grep [OPTIONS] <pattern>` | Search the live page's HTML with regex patterns and grep-style output |
 | `generate-locator <ref>` | Generate a unique CSS selector path for an element |
 
 ### Skills
