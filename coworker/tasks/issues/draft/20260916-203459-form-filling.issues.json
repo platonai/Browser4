@@ -1,0 +1,214 @@
+{
+  "meta": {
+    "mode": "dev",
+    "date": "20260916-203459",
+    "scenario": "form-filling",
+    "source": "20260916-203459-form-filling.full.md"
+  },
+  "background": {
+    "executionContext": "**Setup:** verified cwd = repo root; MockSite already serving on :18080; ran `help`; read `skills/browser4-cli/SKILL.md` fully; `list` showed pre-existing sessions (`ac-extract`, `(default)`), so I used an isolated named session `-s formfill` per the SKILL's concurrent-run guidance.\n\n**Main flow** (all `./b4w.ps1 -s formfill …`): `goto` → `snapshot -i --stdout` (discovered refs e3–e18, e173/e174) → `fill e3/e4/e5` → `help select` → `select e6 \"United States\" --verify`, `select e9 \"Advanced\" --verify` → `check e15/e16/e18` → `get text \"#state-log\"` (pre-submit sanity: `formValid: true`) → `click e173` → `wait --load networkidle` → verified → `snapshot -v 0 --stdout`.\n\n**Probes:** `fill` on the hidden dynamic phone field; `fill --verify` exit code (captured without a pipe); a `get` mode matrix with repeats to check determinism; the CLI's own recommended `htmlsnapshot` workaround; `press Enter` on a clean fully-valid form; and `fill --submit` (the Quick Start's headline form workflow).\n\n**Key decisions/workarounds:** used an isolated session to avoid clobbering existing ones; switched from refs to CSS selectors (`#first-name`, `#submit-btn`) for re-runs — every interaction command accepts them, which sidesteps ref-staleness entirely and turned out to be the most valuable practical shortcut; verified via non-input elements because `get attr <input> value` fails misleadingly.\n\n\n\n**Notes on what worked well** (worth preserving in any refactor): `goto` auto-started the backend and session with zero setup; `snapshot -i` produced clean, human-readable refs and accessible names; `fill`/`select`/`check` all succeeded on the first attempt with clear confirmations; `select --verify` and `get box`/`get styles` were solid; the CLI proactively warned `Page is scrolled 1056px down — use snapshot -v -1`, which pre-empted a real documentation trap; and — the standout — **all interaction commands accept CSS selectors**, so `fill \"#first-name\"`, `select \"#country\"`, `check \"#agree-terms\"` and `click \"#submit-btn\"` bypassed ref-staleness entirely. That shortcut is under-emphasised relative to the SKILL's heavy ref-lifecycle guidance, and it was the most useful practical discovery of the session.\n\nArtifacts are in `.test-sessions/20260916T1722282030412Z/` (`REPORT-form-filling.md`, `f01`–`f09` command outputs, final deliverable `f09-final-result-snapshot-v0.txt`, and probe scripts). The `formfill` session is left open.",
+    "task": "**Task completed successfully.** The registration form at `http://localhost:18080/generated/form-filling.html` was filled, validated, submitted, and verified.\n\nSubmitted values: **Ada Lovelace**, `ada.lovelace@example.com`, country **United States**, experience **Advanced**, comments *\"Automating a checkout regression suite with Browser4.\"*, 3 topic checkboxes (automation/testing/ai — ≥2 required), terms agreed.\n\nVerification evidence:\n- `get text \"#result-data\"` → `{ \"firstName\": \"Ada\", \"lastName\": \"Lovelace\", \"email\": \"ada.lovelace@example.com\", \"country\": \"us\", \"comments\": \"Automating a checkout regression suite with Browser4.\", \"contactMethod\": \"email\", \"topics\": [ \"automation\", \"testing\", \"ai\" ], ... \"experienceLevel\": \"advanced\" }`\n- `get attr \"#result-panel\" class` → `callout success visible`\n- `get text \"#validation-summary\"` → `All validation checks passed.`\n- Final `snapshot -v 0` shows `Completion 5 / 5 required`, `Last event submit-success:email`, `Submission Status` → *\"Your form data was captured successfully.\"*, and the full `Last submission payload`.\n\n**Important caveat:** the task succeeded only because the submit button was *clicked*. The alternative it offers — \"Press Enter or click the submit button\" — is broken. The Enter path navigates the page natively and destroys the very state the task then asks you to verify (Issue 1)."
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "`fill --submit` / `press Enter` force a native form submission, bypassing the page's Enter handler and destroying page state",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "1. ./b4w.ps1 -s formfill goto \"http://localhost:18080/generated/form-filling.html\"\n2. Fill required fields: fill \"#first-name\" \"Grace\"; fill \"#last-name\" \"Hopper\"; fill \"#email\" \"grace.hopper@example.com\"; select \"#country\" \"United States\"; check \"#agree-terms\"\n3. ./b4w.ps1 -s formfill fill \"#email\" \"grace.hopper@example.com\"   (ensures focus is on a text input)\n4. ./b4w.ps1 -s formfill press Enter\n5. ./b4w.ps1 -s formfill page-info  and  get text \"#state-log\"\nSame outcome with the Quick Start's headline workflow: ./b4w.ps1 -s formfill fill \"#last-name\" \"Hopper\" --submit",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Enter should behave like a real user keypress. The fixture registers a form-level keydown handler that calls event.preventDefault() and routes Enter to its own submitForm(), which renders an in-page 'Submission Status' result panel (exactly what clicking the submit button produces). The page should not navigate.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The page performed a native GET submission and navigated to http://localhost:18080/generated/form-filling.html?firstName=Grace&lastName=Hopper&email=grace.hopper%40example.com&country=us&contact-method=email&topic=automation&phoneNumber=&company=&experienceLevel=intermediate&comments=  . All JavaScript state was destroyed on reload: state-log shows submitCount 0, lastSubmission null, eventLog [\"page-ready\"], requiredCompleted 0 — the intended result panel never survives and cannot be verified. The CLI still printed a bare success line: '✓ Filled 'Hopper' into #last-name' / '✓ Pressed 'Enter'' with no warning that a forced submission occurred. Clicking the submit button (click #submit-btn) is unaffected and works correctly, so the two documented submit paths silently diverge.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "press() unconditionally calls trySubmitFormOnEnter() after any Enter key (Browser4WebDriver.kt:1237 for the no-selector path, :1264 for the element path). That method evaluates the upstream PulsarWebDriver.TRY_SUBMIT_FORM_ON_ENTER_JS, which goes straight to form.requestSubmit() and then form.submit(). requestSubmit() fires a cancelable 'submit' event, but the fallback calls form.submit() regardless — and form.submit() neither fires the submit event nor can be cancelled, so any page-level preventDefault() is ignored. The sibling helper submitFormFallbackJs (line 336-350) has the same defect: it dispatches synthetic keydown/keypress/keyup (line 343-345) and then unconditionally calls form.submit() (line 347). Because the main-world keydown handler's preventDefault() cannot stop the later programmatic submit(), pages that intercept Enter to render results client-side get force-navigated instead. The upstream comment ('a CDP-dispatched Enter does not reliably trigger implicit form submission') is a real problem, but the safety net is too aggressive: it should distinguish 'page handled Enter' from 'nothing happened', and it should never call form.submit() after requestSubmit() (or only when the submit event was not cancelled).",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-core/browser4-browser/src/main/kotlin/ai/platon/pulsar/chrome/Browser4WebDriver.kt: submitFormFallbackJs() (line 336, the unconditional form.submit() at line 347) and trySubmitFormOnEnter() (line 2030); shared upstream constant PulsarWebDriver.TRY_SUBMIT_FORM_ON_ENTER_JS",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Drop the unconditional form.submit() fallback: call form.requestSubmit() only, and treat a cancelled submit event (page called preventDefault) as 'handled' — do not re-submit.\n- Detect whether the page's own Enter handling ran before forcing a submit: dispatch the keydown first and check event.defaultPrevented (a dispatched KeyboardEvent reports this), then only run the safety net when nothing prevented it and no navigation is pending.\n- Make the safety net observable: when a fallback submission is forced, print a warning instead of a plain '✓ Filled …' — e.g. 'note: page did not handle Enter; submitted the nearest form natively' — so users can tell the two paths apart.\n- Set a flag/job so the forced-submit path waits for the resulting navigation to settle and reports the new URL explicitly, rather than leaving the user to notice the URL change.\n- Add a regression test with a form whose submit button is type=\"button\" and whose Enter handling lives in a keydown handler calling preventDefault(); assert that press Enter does NOT navigate and that the in-page result is rendered.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "`get attr <selector> <name>` reports 'No elements matched' and exits 0 when the attribute is simply absent",
+      "severity": "High",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -s formfill get attr \"#email\" class          # element exists; it has no class attribute\n./b4w.ps1 -s formfill get attr \"#first-name\" value      # <input> carries no value attribute\n./b4w.ps1 -s formfill get text \"#first-name\"            # <input> has no text node\nControl that succeeds on the very same element: ./b4w.ps1 -s formfill get attr \"#first-name\" id",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Per the bundled SKILL.md (get command row): 'attribute/property reads via CSS are the least reliable mode, and a missing attribute reads as null (ambiguous with a failed resolution)'. The user should get null / an empty value, or at minimum a message that distinguishes 'element resolved, attribute absent' from 'selector matched nothing'. For `get text` on a control with no text node, the same distinction applies.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Prints an error that blames the selector:\n\nNo elements matched \"#email\".\n  The `get` command resolves refs against the live page; CSS selector support varies by mode and backend resolution.\n  For CSS selector-based extraction, capture the DOM first with `htmlsnapshot`, then use `htmlsnapshot get text \"{selector}\"`.\n\nand exits 0. The element demonstrably exists and resolvesthe control `get attr \"#first-name\" id` returns 'first-name' on the same element in the same session, and `eval` confirms the element is present. This directly obstructs the task's own step 8 ('Use get text or get attr to verify the submission'): the natural call for a form field, `get attr \"#email\" value`, returns 'No elements matched' even though the field holds ada.lovelace@example.com, while `get property \"#email\" value` works. Exit code 0 also means scripts cannot detect the failure.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The get tool's element-resolution path conflates two distinct outcomes — 'selector matched no node' and 'node matched but the requested attribute/text is unavailable' — into a single 'No elements matched' diagnostic. Additionally the requested attribute is read as a DOM *attribute* rather than a property, so values set through the DOM property (input.value, which is how all user typing and all CLI fills arrive) are invisible; only `get property` reads them. The error text then compounds the problem by recommending an htmlsnapshot-based workaround that cannot work for the same reason (see the related issue). Investigation needed: the exact resolution site is in the backend `get` executor (the CLI only renders the message), so the fix likely belongs where the element-vs-attribute result is marshalled.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Distinguish the two failure modes in the resolver: return 'element not found' only when no node matches; when a node matches but the attribute/text is absent, return null/empty and say so — e.g. 'Attribute \"class\" not present on <input#email> — did you mean `get property`?'.\n- For `attr` mode, fall back to the live DOM property when the attribute is absent (or auto-route `value` reads on form controls to property semantics), so `get attr \"#email\" value` returns the typed value on inputs.\n- Exit non-zero when the element genuinely cannot be resolved, so scripts can distinguish success from failure.\n- Update the SKILL.md caveat to match observed behaviour ('reports No elements matched') or fix the behaviour to match the documented 'reads as null'.\n- Add tests covering: existing element + absent attribute, input + value read via attr, input + text read, and textarea + value read.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "`fill --verify` prints an explicit verification failure yet exits 0, after a `✓ Filled` success line",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "1. ./b4w.ps1 -s formfill goto \"http://localhost:18080/generated/form-filling.html\"\n2. ./b4w.ps1 -s formfill fill \"#phone-number\" \"+1 555 123 4567\" --verify   (phone field is inside a display:none wrapper at this point)\n3. Echo the exit code without piping: ./b4w.ps1 -s formfill fill \"#phone-number\" \"+1 555 123 4567\" --verify > out.txt 2>&1; echo $?\nContrast: the CLI documents that `select --verify` exits non-zero on a genuine mismatch.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Either a non-zero exit (matching the `select --verify` contract: 'a genuine mismatch exits non-zero, so scripts can rely on --verify'), or at minimum no success glyph contradicting the verification result. CI scripts must be able to trust --verify.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Output was:\n✓ Filled '+1 555 123 4567' into #phone-number\nVerification: text was NOT typed  element is empty.\n### Page ...\nand FILL_VERIFY_EXIT=0. The two lines directly contradict each other, and an automated caller that only checks the exit code treats a failed fill as a success. `select --verify` documents and honours a non-zero-on-mismatch contract, so the two --verify flags are inconsistent.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The verify result is rendered as a message but never propagated to the process exit status, and the pre-verification '✓ Filled' line is emitted before/independently of the verification outcome. The non-zero contract appears to be implemented for `select --verify` but not wired through the shared fill/type verification path.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Propagate the verification result to the exit code for `fill --verify` (and `type --verify`), matching the documented `select --verify` contract.\n- Suppress or downgrade the `✓ Filled …` line when verification fails; print a single unambiguous failure line instead.\n- Document the exit-code contract for every `--verify` flag in the same wording used by `select --verify`, and add a test asserting the non-zero exit on a genuine mismatch.\n- Consider making `--verify` the default for `fill` on non-rendered targets, or emitting an explicit 'element is not visible/rendered' hint at fill time (see the hidden-dynamic-field issue).",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "The `htmlsnapshot` workaround recommended by the `get` error message also fails, and misattributes the cause to stale snapshots",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -s formfill htmlsnapshot                       # capture, seconds earlier — not stale\n./b4w.ps1 -s formfill htmlsnapshot get attr \"#first-name\" id     # succeeds: first-name\n./b4w.ps1 -s formfill htmlsnapshot get attr \"#first-name\" value  # fails\n./b4w.ps1 -s formfill htmlsnapshot get attr \"#email\" value       # fails",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The error message's recommended fallback should actually work for the case that triggered it — reading a value off a filled form control.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Both value reads return:\n\nNo elements matched \"#first-name\".\n  The snapshot may be stale  it reflects the DOM at capture time. If the page has changed since the last `htmlsnapshot`, re-capture with `htmlsnapshot` first.\n  Verify the selector with `htmlsnapshot grep \"#first-name\"`, or discover valid selectors with `htmlsnapshot inspect`.\n\nThe staleness hint is factually wrong — the snapshot was captured moments before, and `htmlsnapshot get attr \"#first-name\" id` on the same snapshot succeeds. The message sends the user chasing a non-existent staleness problem.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Input values set through the DOM property are never serialized into the document's value attribute, so a static HTML snapshot can never expose them. The suggested workaround is therefore structurally incapable of verifying a filled input, and the diagnostic picks staleness as the assumed cause because it reuses the generic 'attribute lookup returned nothing' path rather than distinguishing absent-attribute from stale-snapshot.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Stop recommending `htmlsnapshot` for reading live form-control values; point at `get property <selector> value` instead, which is the mode that actually works.\n- Only emit the staleness hint when the target element is genuinely absent from the snapshot (e.g. capture time precedes a navigation recorded in the session), not on every empty attribute lookup.\n- Distinguish 'selector not found in snapshot' from 'attribute absent on found element' in the htmlsnapshot get diagnostics, mirroring the fix for the live `get` path.\n- Add a doc note that static HTML snapshots cannot see DOM-property values, so snapshot-based extraction is unsuitable for post-fill verification.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 5,
+      "title": "`htmlsnapshot grep` is recommended to 'verify the selector' but cannot verify a CSS selector",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -s formfill htmlsnapshot\n./b4w.ps1 -s formfill htmlsnapshot grep \"#first-name\"    # -> 0 matches found\n./b4w.ps1 -s formfill htmlsnapshot get attr \"#first-name\" id   # -> first-name  (selector is valid)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The remedy offered for a failed lookup should let the user confirm whether their selector is right.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "`htmlsnapshot grep \"#first-name\"` reports '0 matches found'. grep is a literal/regex search over the raw HTML text, where the element appears as id=\"first-name\" and never as the CSS token #first-name — so it returns zero matches for a perfectly valid selector. A user following the advice concludes the selector is invalid, when it is not.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The hint conflates two different tools: grep searches HTML text with a regex dialect, whereas the failing lookup used CSS-selector matching. No CSS-selector search is offered in the diagnosis, so the suggested command structurally cannot answer the question it is proposed for.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Replace the hint with a CSS-aware verification command, e.g. `htmlsnapshot get attr \"<selector>\" id` or a dedicated `htmlsnapshot select \"<selector>\"` that reports match counts by CSS semantics.\n- If grep is kept, show the correct invocation for the common case (searching for the attribute text, e.g. `htmlsnapshot grep 'id=\"first-name\"'`) and state explicitly that grep is a text search, not a CSS selector search.\n- Document the grep regex dialect alongside the hint (the SKILL already documents Rust-regex alternation and the [$] anchor workaround — surface it here too).",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 6,
+      "title": "Hidden dynamic fields are listed in snapshots with no explicit hidden marker, and `fill` reports success when writing to them",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "1. ./b4w.ps1 -s formfill goto \"http://localhost:18080/generated/form-filling.html\"   (contact method defaults to 'email')\n2. ./b4w.ps1 -s formfill snapshot -i --stdout\n   -> textbox \"tel phone-number phoneNumber +1 555 123 4567\" [ref=e7]   (no [box=…] attribute)\n   -> textbox \"text company company Browser4 Labs\" [ref=e8]\n3. ./b4w.ps1 -s formfill fill \"#phone-number\" \"+1 555 123 4567\"\n4. ./b4w.ps1 -s formfill eval 'document.querySelector(\"#phone-number\").value'   (via --file)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A snapshot should make it obvious that e7/e8 are not currently rendered, so a user following 'fill in each text input field' knows to skip them or to first switch the contact-method radio that reveals them. Writing to a non-rendered field should warn rather than report unqualified success.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "e7/e8 appear as ordinary textbox entries among the real fields; the only cue that they are inactive is the absence of a [box=…] attribute, which is easy to miss and never explained. `fill` then reports '✓ Filled '+1 555 123 4567' into #phone-number' and exits 0, but the page's updateDynamicFields() immediately clears the value because the contact method is 'email' — a read-back via `get property` shows '' and state-log shows phoneNumber \"\". The write is silently discarded. As a secondary inconsistency, these fields' accessible names are raw attribute concatenations ('tel phone-number phoneNumber +1 555 123 4567', 'text company company Browser4 Labs') while every other field has a clean label-derived name ('First Name', 'Email'), because their <label> is only rendered when the field is revealed.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The accessibility-tree renderer does not surface a visibility/hidden state for AX nodes that exist in the DOM but are not rendered — the missing bounding box is the only signal, and it is unlabelled. fill() targets the element by selector/ref and successfully dispatches input events without an interactability gate (the --timeout option waits for the element to become interactable but does not fail when it never does), so the command cannot observe that the page discarded the value. The name inconsistency stems from axe name computation falling back to attribute concatenation when the associated <label> is display:none.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/snapshot.rs (snapshot rendering — mark non-rendered/zero-box AX nodes as [hidden]) and the backend fill executor (interactability gate before dispatch)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Render an explicit [hidden] (or [not-rendered]) marker on AX entries that have no box, and document it in the snapshot legend; users currently have to infer it from a missing attribute.\n- Have `fill` detect that the target has no layout box and warn (e.g. 'element is not rendered (display:none) — value may be discarded by the page'), or fail unless --force is passed.\n- Make the shared `--timeout` interactability wait report an explicit timeout when the element never becomes interactable, rather than proceeding silently.\n- Note in the SKILL's ref-lifecycle guidance that hidden fields still occupy refs, so a naive 'fill every textbox' loop can target fields that the page will clear.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}

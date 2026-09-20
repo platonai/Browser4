@@ -1,0 +1,410 @@
+{
+  "meta": {
+    "mode": "dev",
+    "scenario": "Calabi-Yau",
+    "source": "20260920-050652-Calabi-Yau.full.md",
+    "date": "20260920-050652"
+  },
+  "background": {
+    "executionContext": "**Setup.** Confirmed cwd `D:/workspace/Browser4/Browser4-4.13`; created `.test-sessions/20260920T0355347004286Z/`; ran `./b4w.ps1 help` and read `skills/browser4-cli/SKILL.md` plus `references/htmlsnapshot-scenarios-amazon.md`, `references/crawl.md`, and `references/snapshot.md`.\n\n**Search.** `open --headless \"https://www.amazon.com/s?k=Calabi-Yau\"` in a named session `cy-gift`. Session opened, backend auto-started in 14.1 s. Page title confirmed it was a results page, not a bot challenge.\n\n**Choosing extraction.** `htmlsnapshot summary` gave the page skeleton but its \"Suggested Commands\" were unusable and it typed the page \"Product Detail\". `htmlsnapshot inspect` picked a 1104-match `div` container and surfaced off-screen accessibility widgets. I fell back to `eval --file` (a JS probe) to read the DOM directly — this is what finally revealed the 16 cards, their ASINs, and that `h2 a` is null for every card. `htmlsnapshot query` with `DOM_LOAD_AND_SELECT(@div[data-component-type=s-search-result])` then extracted all 16 titles/prices/ratings in one pass.\n\n**Detail pages.** First attempted the documented bulk path — `crawl --seed-file urls.txt --depth 0 --sql @detail.sql --format json`. It completed all 16 pages in ~280 s but with an over-qualified price selector of mine. I re-ran with a broader query; that run blew the 600 s cap, died server-side, and I recovered partial data with `crawl result <task-id>`. Because crawl output didn't give me everything, I wrote a per-page probe and ran `goto` + `eval --json` across all 16 ASINs (backgrounded, ~2.5 min each). This produced the final dataset: USD prices, star ratings, review counts, breadcrumbs, and the decisive discovery that five ASINs are Amazon Music pages.\n\n**Workarounds required.** (1) `--file` for all JS instead of inline `eval`; (2) `htmlsnapshot query --sql @file.sql` instead of inline SQL; (3) abandoning `inspect`/`summary` suggestions for hand-written probes; (4) `crawl result` to recover a timed-out crawl; (5) `PYTHONIOENCODING=utf-8` to read Chinese output under this machine's GBK console.\n\n**One correction to an early hypothesis.** I initially suspected `crawl` silently dropped JS-rendered fields, because my first crawl returned empty prices. Checking `crawl result` disproved it — the prices were there all along; my selector was wrong. I did not report it.\n\n---",
+    "task": "## The search\n\n`https://www.amazon.com/s?k=Calabi-Yau` returns **16 results** — and the pool is far narrower than the task premise assumes. It is almost entirely graduate-level mathematics/physics literature, plus streaming music pages and exactly **one** physical art object.\n\nCritically, **5 of the 16 \"products\" are Amazon Music pages** (`/dp/<ASIN>` redirects to a Music player page) — three albums and two tracks whose metadata merely matched the query, including two that aren't Calabi-Yau albums at all (`Devic Kingdom` by Robert Vincs, and Tesseract's `Altered State`). These have no price, no rating, and no buy button: they are streaming pages, not gifts.\n\nI reviewed the **detail page of all 16 results** (the task asked for 10).\n\n## Shortlist — 10 best options as a gift for a 12-year-old boy\n\n| # | Item (ASIN) | Type / Price | Rating | Gift suitability |\n|---|---|---|---|---|\n| 1 | **Bathsheba **Calabi-Yau Manifold Crystal** (B08P25TBLY) | Home & Kitchen decoration — **$129.89** | 5.0★ (3) | **Best.** 3-inch laser-etched glass cube showing a 3-D cross-section of the Calabi-Yau quintic, rubber feet, \"best displayed against a dark background\". A real, tangible desk object. Only 3 left in stock. |\n| 2 | **Knights of the Calabi-Yau: Metaphysical Sci-Fi Fantasy Adventure** (B0C6VT75C6) | **Paperback from $14.99** (Kindle $4.99) | 5.0★ (15) | **Best budget pick.** An actual adventure novel; age-appropriate. |\n| 3 | **Calabi Yau Space** — Dopplereffekt (B000QEKHT4) | Audio CD — **$101.09** | 4.7★ (4) | Physical CD, in stock; instrumental electronic music named after the manifold. Expensive import. |\n| 4 | **The Shape of a Life** (B07N8V6DQX) | Kindle $17.99 / Audiobook | 4.3★ (149) | Biography of Shing-Tung Yau (the \"Yau\"). Inspiring but adult reading level. |\n| 5 | **L'homme de Calabi-Yau** (B0CQ3Y81XJ) | Paperback from $24.06 | — | Only if the boy reads French. |\n| 6 | **Calabi Yau Manifolds and Related Geometries** (B006NU6M5I, Chinese ed.) | Paperback $22.60 | — | Cheapest physical book, but a graduate text. |\n| 7 | **Calabi-Yau Manifolds: A Bestiary for Physicists** (981021927X) | Paperback $61.04 | 5.0★ (2) | Graduate physics text. |\n| 8 | **Calabi-Yau Manifolds and Related Geometries** (3540440593) | Paperback $69.96 | 4.6★ (3) | Graduate math text. |\n| 9 | **The Calabi–Yau Landscape** (B09BLRXFK2) | Kindle $44.59 / Paperback $56.63 | 4.0★ (1) | Graduate lecture notes. |\n| 10 | **Dimer Models and Calabi-Yau Algebras** (0821853082) | Paperback $89.18 | — | Research monograph. |\n\n*(Excluded as not giftable: the 5 Amazon Music pages; `B0DSZ61MSM` Bestiary 2nd ed. — Kindle $55.00 / Hardcover $126.61 — is graduate-level.)*\n\n## The pick\n\n**Bathsheba Sculpture — Calabi-Yau Manifold Crystal, $129.89 (ASIN B08P25TBLY).**\n\nIt is the only item in the entire result set that is simultaneously a **physical object**, **five-star rated**, and **directly about Calabi-Yau geometry**. The publisher's description explains it accessibly — string theory's six hidden dimensions, compactified, with the model showing a 3-D cross-section of the quintic `z1⁵+z2⁵+z3⁵+z4⁵+z5⁵=0` — which makes it a genuine \"what *is* that?\" conversation piece on a 12-year-old's shelf rather than another book they won't read. Caveats, stated plainly: **3 ratings is thin evidence**, it's a display object rather than a toy (glass, so a careless kid could chip it), and at $129.89 it's a considered purchase. If the budget is smaller, **#2 — the *Knights of the Calabi-Yau* paperback at $14.99** — is the honest alternative.\n\n---"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "crawl reports success while emitting fully-empty rows for pages that matched nothing",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -s cy-gift crawl --seed-file .test-sessions/20260920T0355347004286Z/urls.txt --depth 0 --sql \"@.test-sessions/20260920T0355347004286Z/detail.sql\" --format json -o out.json"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Pages from which no field could be extracted should be flagged (a per-row warning, a null/'not extracted' marker, or at minimum a count in the summary line), since the consumer cannot distinguish them from real data."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The run printed '16 pages crawled, 16 rows extracted.' and exited 0. Five rows (B0CHB79PLJ, B0C6HVDH7W, B0FVVXCRF9, B08LD61Q67, B000TPUTTS) are empty strings in every single field. Those URLs are Amazon Music pages: /dp/<ASIN> redirects to a Music player page that has no #productTitle, no price and no rating, so every X-SQL projection resolves to an empty string."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The X-SQL projection emits a row of empty strings when no source selector matches, and the crawl aggregator counts rows without checking whether any column actually produced a value. There is no per-row 'nothing extracted' signal."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-rest CrawlRoundRunner.kt / browser4-agent-tools .../crawl/common/ScrapeAPIUtils.kt (row emission and result aggregation)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Mark rows where every projected column is empty, e.g. add \"noFieldsExtracted\": true.\n- Report the count distinctly in the completion line: '16 pages crawled, 11 rows with data, 5 rows empty'.\n- Detect the /dp/<ASIN> -> Amazon Music redirect (or a missing page-title element) and surface it as a per-URL status rather than an empty row."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "htmlsnapshot summary emits invalid CSS selectors labelled \"Copy-paste ready\"",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1) ./b4w.ps1 -s cy-gift goto \"https://www.amazon.com/s?k=Calabi-Yau\"\n2) ./b4w.ps1 -s cy-gift htmlsnapshot summary\n3) Run any command from the '### Suggested Commands' block, e.g.:\n   ./b4w.ps1 -s cy-gift htmlsnapshot get all text \".s-main-slot s-result-list s-search-results sg-row a\" --limit 5"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The command prints 'Copy-paste ready — use these to extract data', so running it should return page data."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Returns []. Note the sibling output printed 3 identical suggested commands, and each fails the same way. The supplied selectors join CSS class names with spaces ('.s-main-slot s-result-list s-search-results sg-row') instead of dots, so they are not valid selectors for the intended element."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "PageSummaryIndexService.buildSelectorHint() returns \".$className\" where className is the element's entire class attribute string. For a multi-class element this yields '.a-size-base s-desktop-toolbar a-text-normal' — one class selector followed by two descendant type/tag selectors, matching nothing. The CLI then interpolates this string verbatim into a copy-paste command without validating it. Confirmed in the raw summary YAML: `selector: \".a-size-base s-desktop-toolbar a-text-normal\"`."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-core/browser4-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/workflow/parse/html/PageSummaryIndexService.kt:424 (buildSelectorHint); consumed at cli/browser4-cli/src/main.rs:8515"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- In buildSelectorHint, split className on whitespace and prefix every token with '.': `className.trim().split(Regex(\"\\\\s+\")).joinToString(\"\") { \".$it\" }`.\n- Validate the generated selector before printing it in Suggested Commands; if it does not resolve, omit it rather than emitting a broken command.\n- De-duplicate the suggested-command list (three identical lines were printed for three link groups sharing one container).\n- Add a regression test using a multi-class element (e.g. `class=\"a-size-base s-desktop-toolbar\"`)."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "htmlsnapshot inspect auto-discovery selects a useless container on the documented Amazon example",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -s cy-gift goto \"https://www.amazon.com/s?k=Calabi-Yau\"\n./b4w.ps1 -s cy-gift htmlsnapshot inspect"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "references/htmlsnapshot-scenarios-amazon.md states the auto-discovery \"finds .s-result-item automatically\" and returns selectors with coverage percentages for the product cards."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Output is `### Inspect: \"div\" (1104 matches, 20 analyzed)`. The sampled elements are page chrome — `div#a-page`, `#nav-assist-search div.keyboard-shortcut-container`, `span.shortcut-key.nav-assistant-card-font`, `span.plus-sign-color` — all off-screen accessibility widgets (note their negative x coordinates, e.g. box -9966 181). The suggested selectors are navigation shortcuts; the 16 real product cards are never surfaced. The documented discovery-first workflow yields nothing usable on its own canonical example."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The auto-discovery heuristic picks the broadest / most frequent sibling group (`div`, 1104 matches) instead of scoring candidates by 'repeating card that contains links and an image'. Off-screen accessibility helper nodes (negative x coordinates, zero-size boxes) are not excluded from candidate scoring, so they dominate the sample."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "backend htmlsnapshot inspect auto-discovery (candidate selection / scoring); not located in this pass — follow-up analysis needed"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Exclude off-screen nodes (negative x, or x+width <= 0) and zero-area nodes from candidate scoring.\n- Score candidates by 'repeating child containing an <a> and an <img>' rather than by raw match count, and cap the analyzed container breadth.\n- When the top candidate matches more than ~200 elements, report that the discovery is too broad and suggest scoping with --selector."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "Documented Amazon search-result selectors are inverted relative to the current DOM",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -s cy-gift goto \"https://www.amazon.com/s?k=Calabi-Yau\"\n./b4w.ps1 -s cy-gift htmlsnapshot get all text \"h2 a.a-link-normal\" --limit 3\n# compare with:\n./b4w.ps1 -s cy-gift htmlsnapshot get all text \"a.a-link-normal h2 span\" --limit 3"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The documented selector returns the product titles, as shown in references/htmlsnapshot-scenarios-amazon.md scenario 15b/15c."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "`h2 a.a-link-normal` returns [] ('No elements matched'). The working selector `a.a-link-normal h2 span` returns [\"Calabi-Yau Manifold Crystal\", \"The Shape of a Life: One Mathematician's Search for the Universe's Hidden Geometry\", \"Calabi–Yau Manifolds: A Bestiary for Physicists\"]. A DOM probe over all 16 cards confirms `card.querySelector('h2 a')` is null for every card — the anchor now WRAPS the h2 (`a.a-link-normal > h2 > span`), the exact inverse of the documented structure. The same doc's `#feature-bullets` also returns empty on the current detail-page layout, and the price container on detail pages is `#corePrice_feature_div`, not the `#corePriceDisplay_desktop_feature_div` shown in the doc's example output."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Amazon changed the card markup after the doc's 2026-07-10 verification date: the title anchor moved from inside the h2 to around it. The doc carries a locale/variation warning but its copy-paste examples are presented as verified and are now wrong."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "skills/browser4-cli/references/htmlsnapshot-scenarios-amazon.md (scenarios 15b, 15c, 16b, 16c)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Update the search-card selectors to `a.a-link-normal h2 span` (titles) and keep `.a-offscreen` for prices, noting the anchor-wraps-h2 structure.\n- Update the detail-page price container to `#corePrice_feature_div` and add `#productFactsDesktopExpander` as the current feature-bullet container.\n- Add a one-line self-check at the top of each scenario (e.g. `htmlsnapshot get all text \"a.a-link-normal h2 span\" --limit 3`) so a reader verifies selectors before relying on them, and remove the implication that the listed selectors are copy-paste safe."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "b4w.ps1 leaks Rust build output onto stdout, corrupting --json output",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run any ./b4w.ps1 <command> --json while the wrapper decides the CLI needs rebuilding. Observed mid-run on two consecutive invocations:\n./b4w.ps1 -s cy-gift eval --file probe3.js --json"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "With --json, stdout contains exactly one parseable JSON envelope, so scripts and agents can json.loads() the output."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "stdout begins with three lines of build chatter, then the JSON:\n  Rust sources changed, rebuilding browser4-cli...\n     Compiling browser4-cli v4.13.20 (D:\\workspace\\Browser4\\Browser4-4.13\\cli\\browser4-cli)\n      Finished `dev` profile [unoptimized + debuginfo] target(s) in 30.18s\n  {\"status\":\"ok\",\"command\":\"eval\",...}\njson.loads() fails with 'Expecting value: line 1 column 1 (char 0)'. 2 of 16 result files in my run were corrupted this way; both also incurred a 17-48 s build penalty mid-workflow. The trigger appeared spontaneously without any source edit by me."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The rebuild/status messages emitted by the wrapper (and the rebuild path it delegates to) are written to stdout instead of stderr. --json purity is not enforced by a test."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "b4w.ps1 / b4w.sh wrapper (rebuild branch) and the rebuild spawn path in cli/browser4-cli/src/daemon.rs"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Route all build/status/progress messages to stderr, leaving stdout for command output only.\n- Add a regression test asserting that `--json` stdout parses as a single JSON object even when a rebuild occurs.\n- Investigate why the wrapper decided the sources had changed with no edit (mtime-based staleness check?), to avoid surprise rebuilds."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "A 16-URL depth-0 crawl exceeds the 600 s cap; only an environment variable raises it",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -s cy-gift crawl --seed-file urls.txt --depth 0 --sql \"@detail2.sql\" --format json -o out.json\n# 16 Amazon /dp/ URLs, default --parallel 4"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A 16-page bulk fetch should complete, or the CLI should warn up front that the job may exceed the limit and point at --parallel / --background."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "At 600 s the CLI printed 'Crawl timed out after 600 seconds (CLI wait)' and exited non-zero without writing out.json. `crawl status <id>` then reported the server-side task itself had died: \"status\": \"Request Timeout\", error \"Crawl timed out while processing seeds (server-side limit of 600s exceeded). Partial results below.\" Only 8 of 16 pages were processed. Partial data was recoverable via `crawl result <id>`, which the error message did correctly suggest."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "cli/browser4-cli/src/http.rs:14 sets CRAWL_REQUEST_TIMEOUT_SECS = 600, matching a server-side 600 s seed-processing cap. The CLI wait and the server cap are the same value, so they race and the CLI gives up at the same moment the server does. Amazon pages take ~15-25 s each, so 16 pages at --parallel 4 exceeds 10 minutes. `crawl --help` documents neither the limit nor the env var nor --parallel as the mitigation; the only remedy offered is BROWSER4_CLI_CRAWL_TIMEOUT_SECS, which must be set before the run."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/http.rs:14 (CRAWL_REQUEST_TIMEOUT_SECS) and cli/browser4-cli/src/main.rs:13893 (timeout message)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Document the 600 s cap, BROWSER4_CLI_CRAWL_TIMEOUT_SECS and `--parallel N` in `crawl --help` and in the docs' bulk-fetch recipe.\n- Add a `--timeout` flag so the limit is settable per invocation instead of only via an env var.\n- Print guidance during the run when elapsed time is high relative to the page count (e.g. 'consider --parallel 8 or --background')."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "Runtime bundle is stale relative to the checked-out sources",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run any ./b4w.ps1 command from the repository root."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Per the development setup, the backend runs from the local source tree and matches the code currently checked out."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Every invocation warns: '⚠ the existing local Browser4 runtime bundle was built from 4.13.18-SNAPSHOT sources, but the checked-out sources are 4.13.20-SNAPSHOT. ⚠ Serving the OLD backend build — behaviour may not match the checked-out code.' All findings in this report therefore describe the 4.13.18 backend, while the code pointers above come from the 4.13.20 working tree (where the same functions are present)."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The wrapper performs a freshness check and warns, but does not enforce it: it continues serving the existing bundle unless BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1 is set, which is only mentioned in the warning text."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-apps/browser4-bundle/build-runtime-bundle.ps1; staleness check in b4w.ps1"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Make the warning actionable in dev mode: offer an auto-rebuild (or prompt) when the bundle version differs from the checkout, rather than only printing the command to run.\n- Surface the served backend version in `page-info` or a `version` command so a user can tell what they are actually talking to."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "htmlsnapshot summary misclassifies an Amazon search page as \"Product Detail\"",
+      "severity": "Low",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -s cy-gift goto \"https://www.amazon.com/s?k=Calabi-Yau\"\n./b4w.ps1 -s cy-gift htmlsnapshot summary"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "`Type: Search Results` — the page is https://www.amazon.com/s?k=Calabi-Yau with h1 '显示： 1' and an '.s-main-slot' result list."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The summary reports `Type: Product Detail`."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "inferPageType() evaluates the branch order `hasAddToCart -> \"Product Detail\"` before `isSearchUrl -> \"Search Results\"`. Product cards on a search results page each contain an add-to-cart button, so hasAddToCart is true and short-circuits the classification before the (correct) URL-based signal is ever consulted."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-core/browser4-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/workflow/parse/html/PageSummaryIndexService.kt:533-548 (inferPageType)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Test isSearchUrl / hasSearch before hasAddToCart, or require add-to-cart to be unique to the page (a single buy box) before classifying as Product Detail.\n- Add regression cases for a search-results URL containing multiple add-to-cart buttons."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 9,
+      "title": "Locale and currency differ between the crawl fetcher and the session browser for the same URL",
+      "severity": "Low",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "At the same point in time, on the same ASIN:\n  ./b4w.ps1 -s cy-gift crawl --seed-file urls.txt --depth 0 --sql \"@detail.sql\"   -> title \"Calabi-Yau Manifold Crystal\", USD\n  ./b4w.ps1 -s cy-gift goto \"https://www.amazon.com/dp/B08P25TBLY\" && ./b4w.ps1 -s cy-gift eval --file review.js\n     -> title \"Bathsheba 雕塑 Calabi-Yau 歧管水晶\", price \"CNY869.59\"\nAfter one navigation with \"&language=en_US\", the session also switched to English/USD, and the probe then reported $129.89."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The same URL fetched two ways should resolve to the same locale, so extracted titles, prices and currency are comparable across commands."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "crawl returned English titles and USD; the interactive session simultaneously returned Chinese titles and CNY. Adding `&language=en_US` to a navigation flipped the session to English/USD, which suggests the navigation set a locale cookie that the crawl context either already had or does not share."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Not confirmed. Most likely the crawl fetcher's browser context and the named session's profile differ in Accept-Language header or `lc-main` locale cookie. Amazon then geo/locale-serves different markup. Needs investigation of how crawl initialises its context versus how `open`/`goto` initialise a session profile."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "crawl fetch context initialisation (browser4-rest CrawlRoundRunner.kt / load options) vs. session profile creation in cli/browser4-cli/src/session_registry.rs"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Investigate and document how the fetch locale is chosen, then align the crawl context with the session profile's locale.\n- Expose an explicit locale / Accept-Language option on crawl and on `open`.\n- Note the currency/locale dependence in the X-SQL extraction docs, since price values differ by locale."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 10,
+      "title": "goto warns \"post-command snapshot timed out after 10s\" on heavy pages that loaded fine",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -s cy-gift goto \"https://www.amazon.com/dp/B08P25TBLY\""
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Either wait longer for the snapshot, or report success without an alarming warning."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Prints 'Warning: post-command snapshot timed out after 10s (page may still be initializing).' The navigation itself succeeded — the immediately following `eval` returned the full page data. The wording invites the reader to distrust a navigation that actually worked."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "A fixed 10 s budget for the automatic post-command snapshot, applied to pages of ~1.6 MB. The message does not distinguish 'navigation succeeded, snapshot skipped' from 'navigation may have failed'."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/commands.rs (post-command auto-snapshot budget)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Reword to make clear the navigation succeeded and only the optional auto-snapshot was skipped, e.g. 'Navigation OK; automatic snapshot skipped after 10s (use --no-snapshot to silence, or run snapshot explicitly).'\n- Consider scaling the snapshot budget with document size, or emitting this at info level rather than as a warning."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 11,
+      "title": "htmlsnapshot grep rejects -o with a confusing error message",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -s cy-gift htmlsnapshot grep -o 'data-component-type=\"[^\"]*\"'"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Either support grep's -o/--only-matching (the output is grep-style, so the habit is natural), or report 'unknown option: -o'."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Error: error: unexpected positional arguments (this command accepts 1): [\"-o\"] — a doubled 'error:' prefix, and a flag-shaped token described as a positional argument, which sends the reader looking in the wrong direction."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Argument parsing treats any unrecognised leading-dash token as a positional argument rather than reporting an unknown option, and the error prefix is composed twice."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/args.rs (or the htmlsnapshot grep argument parser)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Detect leading-dash tokens and report 'unknown option: -o (did you mean --only-matching?)'.\n- Fix the duplicated 'Error: error:' prefix.\n- If feasible, implement -o/--only-matching, since the command is presented as grep-compatible."
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}
