@@ -120,7 +120,32 @@ open class XSQLHyperlink(
             response.pageContentBytes = page.contentLength.toInt()
             response.pageStatusCode = page.protocolStatus.minorCode
 
+            // Content presence is decided independently of the protocol status:
+            // the bytes are what the extraction reads, and a page whose bytes
+            // arrived is extractable even when the status records a timeout or a
+            // cancellation — the load already ran against those bytes.
+            // Whether such a task ends as a failure stays the business of the
+            // crawl event handlers (`fail` below), which keep the real reason;
+            // this only stops the extraction from throwing the data away.
+            val contentPresent = page.contentLength > 0L || page.content != null
+
             if (page.protocolStatus.isSuccess) {
+                extractWithCache(page, document)
+            } else if (contentPresent) {
+                // Extracting anyway turns a slow-but-arrived fetch into data
+                // instead of an empty result set; the message says why the
+                // status disagrees, so the caller can weigh the result.
+                logger.warn(
+                    "Page content arrived ({} bytes) but the protocol status is {} — extracting anyway | {}",
+                    page.contentLength, page.protocolStatus, page.url
+                )
+                response.message = buildString {
+                    append("Page content arrived but the protocol status is ")
+                    append(page.protocolStatus.minorCode)
+                    append(" (")
+                    append(page.protocolStatus.reason ?: "unknown")
+                    append("). Extracted anyway; verify the results.")
+                }
                 extractWithCache(page, document)
             } else if (page.protocolStatus.isFailed) {
                 response.message = buildString {
@@ -239,7 +264,9 @@ open class XSQLHyperlink(
         document: FeaturedDocument,
         normSQL: NormXSQL,
     ): List<Map<String, Any?>>? {
-        if (!page.protocolStatus.isSuccess || page.contentLength == 0L || page.content == null) {
+        // Keyed on content presence, not on the protocol status: a page whose
+        // bytes arrived is selectable even when the status recorded a timeout.
+        if (page.contentLength == 0L || page.content == null) {
             logger.info("No content | Protocol Status: {} | Page URL: {} | Document Base URI: {}", page.protocolStatus, page.url, document.baseURI)
             response.statusCode = ResourceStatus.SC_NO_CONTENT
             response.refresh(ResourceStatus.SC_NO_CONTENT, ResourceStatus.SC_NO_CONTENT, false)

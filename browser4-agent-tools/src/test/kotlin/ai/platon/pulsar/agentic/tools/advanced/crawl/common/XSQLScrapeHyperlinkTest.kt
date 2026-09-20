@@ -396,6 +396,57 @@ class XSQLScrapeHyperlinkTest {
         assertEquals(listOf(mapOf("t" to "title")), response.resultSet)
     }
 
+    @Test
+    @DisplayName("content that arrived is extracted even when the protocol status is not a success")
+    fun contentThatArrivedIsExtractedDespiteTheStatus() {
+        // A slow load can record a timeout (a retry/canceled status) while its
+        // bytes are already in hand.  Discarding those bytes turned a
+        // slow-but-arrived fetch into an empty result set, so the extraction now
+        // runs anyway and the message says why the status disagrees.
+        val html = "<html><body><h3>title</h3></body></html>"
+        val link = XSQLHyperlink(
+            ScrapeRequest("select t from load_and_select('https://example.com', ':root')"),
+            ScrapeAPIUtils.normalize("select t from load_and_select('https://example.com', ':root')"),
+            sessionThatRuns(resultSetOf(listOf("t"), listOf("title"))),
+        )
+        val page = newPage()
+        page.protocolStatus = ProtocolStatus.retry(RetryScope.CRAWL, "recorded timeout")
+        page.isFetched = true
+        page.prevFetchTime = java.time.Instant.now()
+        page.setByteArrayContent(html.toByteArray())
+
+        link.extract(page, document(html))
+
+        val response = link.response
+        assertEquals(
+            listOf(mapOf("t" to "title")), response.resultSet,
+            "the bytes arrived, so the data must be extracted instead of dropped"
+        )
+        assertTrue(
+            response.message?.contains("Extracted anyway") == true,
+            "the message must explain the protocol status: ${response.message}"
+        )
+    }
+
+    @Test
+    @DisplayName("a failed fetch that carried no bytes reports the failure instead of extracting")
+    fun failedFetchWithoutContentReportsTheFailure() {
+        // No bytes means there is nothing to select from: the message must stay
+        // the actionable failure, and the query must not run at all.
+        val link = hyperlink()
+        val page = newPage()
+        page.protocolStatus = ProtocolStatus.failed(ProtocolStatusCodes.SC_REQUEST_TIMEOUT)
+        page.isFetched = true
+
+        link.extract(page, FeaturedDocument.NIL)
+
+        assertTrue(
+            link.response.message?.contains("Page fetch failed with status") == true,
+            "a contentless failure must keep its failure message: ${link.response.message}"
+        )
+        assertNull(link.response.resultSet, "a fetch with no bytes must not produce a result set")
+    }
+
     /** A one-row result set, as the engine would hand it back for the statement under test. */
     private fun resultSetOf(columns: List<String>, row: List<String>): SimpleResultSet =
         SimpleResultSet().apply {

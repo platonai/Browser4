@@ -294,6 +294,34 @@ internal fun isDocumentDelivered(fetched: Boolean, html: String?): Boolean =
     fetched && !html.isNullOrBlank()
 
 /**
+ * Why a page that loaded carried no bytes, in the words of its own protocol
+ * status.
+ *
+ * The message this replaces guessed ("possible protocol handler not ready") and
+ * sent users after a component that is usually healthy, while the evidence sat
+ * in the page all along: a RETRY status means the fetch layer already queued
+ * another attempt (typically the privacy/browser layer refusing the fetch before
+ * any network I/O), and a FAILED status carries the reason that was recorded.
+ * [isRetry] is checked first — a retry status also reports failed.
+ */
+internal fun buildZeroByteDiagnostic(page: WebPage): String {
+    val status = page.protocolStatus
+    val reason = status.reason?.toString()?.takeIf { it.isNotBlank() }
+    val suffix = reason?.let { " ($it)" }.orEmpty()
+    return when {
+        status.isRetry ->
+            "fetch returned 0 bytes: the fetch layer queued a retry$suffix — usually the " +
+                "privacy/browser layer refusing the fetch before any network I/O; retry once " +
+                "the browser pool recovers"
+
+        status.isFailed ->
+            "fetch returned 0 bytes: the fetch failed with status ${status.minorCode}$suffix"
+
+        else -> "fetch returned 0 bytes: the page loaded but has no content"
+    }
+}
+
+/**
  * Extract the <title> text from raw HTML when [FeaturedDocument.title]
  * returns blank.  Handles the case where the parse pipeline skips title
  * extraction on cached content.  Returns null when no <title> tag is found.

@@ -99,8 +99,10 @@ internal class CrawlRoundRunner(
                 // If the page loaded but content is empty, retry after a delay.
                 // When using a shared session the protocol handler shouldn't be
                 // an issue, but transient network problems can still cause this.
+                // The message reports the real protocol-level cause instead of
+                // guessing at the protocol handler.
                 if (page.contentLength == 0L) {
-                    val msg = "fetch returned 0 bytes (possible protocol handler not ready)"
+                    val msg = buildZeroByteDiagnostic(page)
                     if (attempt < MAX_FETCH_RETRIES - 1) {
                         val retryDelay = FETCH_RETRY_DELAY_MS * (1L shl attempt)
                         logger.warn("Crawl {}: {} for '{}', retrying in {}ms (attempt {}/{})",

@@ -1,6 +1,11 @@
 package ai.platon.pulsar.rest.api.service.crawl
 
 import ai.platon.pulsar.common.ResourceStatus
+import ai.platon.pulsar.common.config.MutableConfig
+import ai.platon.pulsar.persist.ProtocolStatus
+import ai.platon.pulsar.persist.RetryScope
+import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
+import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.skeleton.context.PulsarContext
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -509,6 +514,38 @@ class CrawlSupportTest {
         // The oldest stored content is the one that bounds how fresh the crawl is.
         assertTrue(note.contains("(stored content up to 1h 1m old)"), note)
         assertTrue(note.contains("1 fetched fresh"), note)
+    }
+
+    // ------------------------------------------------------------------
+    // buildZeroByteDiagnostic
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a 0-byte diagnostic reports the page's protocol status instead of guessing at the protocol handler")
+    fun testZeroByteDiagnosticReportsTheProtocolStatus() {
+        val conf = MutableConfig(true).toVolatileConfig()
+
+        val retryPage = GoraWebPage.newWebPage("https://example.com", conf).apply {
+            protocolStatus = ProtocolStatus.retry(RetryScope.CRAWL, "privacy context refused")
+        }
+        val retryMessage = buildZeroByteDiagnostic(retryPage)
+        assertTrue(retryMessage.contains("queued a retry"), retryMessage)
+        assertTrue(retryMessage.contains("privacy context refused"), retryMessage)
+        // The message this replaced sent users after a component that is usually healthy.
+        assertFalse(retryMessage.contains("protocol handler"), retryMessage)
+
+        val failedPage = GoraWebPage.newWebPage("https://example.com", conf).apply {
+            protocolStatus = ProtocolStatus.failed(ProtocolStatusCodes.SC_REQUEST_TIMEOUT)
+        }
+        val failedMessage = buildZeroByteDiagnostic(failedPage)
+        assertTrue(failedMessage.contains("the fetch failed with status"), failedMessage)
+        assertTrue(failedMessage.contains(failedPage.protocolStatus.minorCode.toString()), failedMessage)
+
+        val emptyPage = GoraWebPage.newWebPage("https://example.com", conf).apply {
+            protocolStatus = ProtocolStatus.STATUS_SUCCESS
+        }
+        val emptyMessage = buildZeroByteDiagnostic(emptyPage)
+        assertTrue(emptyMessage.contains("no content"), emptyMessage)
     }
 
     private companion object {
