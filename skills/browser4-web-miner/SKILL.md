@@ -87,7 +87,13 @@ browser4-cli webminer views <result-dir> # Rebuild views from an existing run
 - Any other command is forwarded verbatim to `scent-miner.jar`, e.g.
   `browser4-cli webminer encode <dir>`.
 - Runs started through the CLI set `-Dapp.name=webminer`, so the views
-  task-output root is `%TEMP%\webminer-pereg\ml\tasks\...` (see [Output](#output)).
+  task-output root is `%TEMP%\webminer-<user>\ml\tasks\...` (`<user>` is the OS
+  user name; see [Output](#output)).
+- The bare `webminer` panel and `webminer version` keep the update check quiet:
+  the GitHub → OSS-mirror fallback notices (rate limit, HTTP status, unreachable)
+  are suppressed, and the `Published` line is omitted entirely when the release
+  carries no `published_at`.  `webminer install` / `update` still report the
+  fallback.
 
 ## Installing WebMiner
 
@@ -167,10 +173,12 @@ java -jar scent-miner.jar views <html-dir>-ml-output/kmeans-result/p<timestamp>
 2. **Views** (interactive HTML report + Excel + JSON) — the `views` stage of
    `all` writes them to the application's **temp task-output root**, NOT under
    `<html-dir>-ml-output`:
-   `%TEMP%\<app>-pereg\ml\tasks\unsupervised\result\p<timestamp>\predictionAndMinimalFeatures.views\`
-   on Windows (the `<app>` prefix follows `-Dapp.name`: `pulsar` for a direct
-   `java -jar` run, `webminer` when launched through `browser4-cli webminer`).
-   The end of the run prints the resolved absolute views path.
+   `%TEMP%\<app>-<user>\ml\tasks\unsupervised\result\p<timestamp>\predictionAndMinimalFeatures.views\`
+   on Windows, and `<java.io.tmpdir>/<app>-<user>/ml/tasks/unsupervised/result/p<timestamp>/predictionAndMinimalFeatures.views/`
+   on Linux/macOS (`/tmp/...` on Linux, `$TMPDIR` on macOS) — the `<app>` prefix
+   follows `-Dapp.name` (`webminer` when launched through `browser4-cli webminer`,
+   `pulsar` for a direct `java -jar` run) and `<user>` is the OS user name.  The
+   end of the run prints the resolved absolute views path.
 
 So after `java -jar scent-miner.jar all ./html-pages/` the clustered results
 look like:
@@ -185,20 +193,28 @@ html-pages-ml-output/
           └── clusteringInfo.txt
 ```
 
-and the views (`index.html`, `*.xlsx`, `*.json`) live in the temp
+and the views (`<project>.html`, `*.xlsx`, `*.json`) live in the temp
 task-output directory printed by the run.
+
+> **The real report is `<project>.html` (e.g. `p<timestamp>.html`), not
+> `index.html`.**  The `index.html` inside the views directory is an
+> auto-generated directory listing ("Index of predictionAndMinimalFeatures.views")
+> — opening it shows a file list, not the interactive clustering report.
+> Open `<project>.html` instead.
 
 To place the views **beside the clustered results** (e.g. to archive them with
 the project), rebuild them from the result directory:
 
 ```bash
-java -jar scent-miner.jar views <html-dir>-ml-output/kmeans-result/p<timestamp>
+browser4-cli webminer views <html-dir>-ml-output/kmeans-result/p<timestamp>
+# (equivalent to: java -jar scent-miner.jar views <html-dir>-ml-output/kmeans-result/p<timestamp>)
 ```
 
 This writes `predictionAndMinimalFeatures.views/` inside the given result
-directory.  Open the generated `index.html` in a browser to explore the
-clustering results. The `.xlsx` files can be opened in Excel for sorting,
-filtering, or further analysis.
+directory — the recommended way to locate artifacts, since the output path is
+explicit instead of an opaque temp path.  Open the generated `<project>.html`
+in a browser to explore the clustering results. The `.xlsx` files can be
+opened in Excel for sorting, filtering, or further analysis.
 
 ## Tips
 

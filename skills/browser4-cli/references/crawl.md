@@ -318,6 +318,21 @@ product pages for testing crawl extraction without hitting live websites.
 > `htmlsnapshot inspect` rather than assuming `curl` output matches what the
 > crawler sees.
 
+### MockSite URL discovery
+
+Don't guess product IDs — MockSite exposes a sitemap built exactly for URL
+discovery.  The bare path `http://localhost:18080/ec/dp/` (trailing slash)
+404s: product pages always require an ID (`/ec/dp/<product-id>`).
+
+```bash
+# Enumerate all product URLs (101 products, 20 categories)
+curl -s http://localhost:18080/ec/sitemap.xml
+
+# Build a seed file for crawl/swarm from the sitemap (first 8 products)
+curl -s http://localhost:18080/ec/sitemap.xml \
+  | grep -o 'http://localhost:18080/ec/dp/[A-Z0-9]*' | head -8 > seed-urls.txt
+```
+
 ### MockSite selectors
 
 MockSite's product pages use ID selectors (unlike the class selectors common on
@@ -439,12 +454,23 @@ prepended to the seed file list.
 | Timeout | Exits with message + task ID; increase `BROWSER4_CLI_CRAWL_TIMEOUT_SECS` |
 | Server error | Exits with "Crawl failed: ..." and server error details |
 | No links found (depth >= 1) | Exit 0 with a `⚠ Link discovery found no out-links` warning plus the backend diagnostic (it distinguishes "selector matched nothing" from "pattern filtered them all") and the effective `--out-link-pattern`. The seed page is always counted in depth ≥ 2 crawls, so an all-filtered crawl reports `Crawl completed. 1 pages found.` (depth-1 crawls list only discovered pages and report `0 pages found`). Inspect the warning text and verify `--out-link-selector` / `--out-link-pattern` — a shell-mangled pattern (Git Bash `/`-prefix conversion) is the usual cause |
-| Pages lost (any depth) | Exit 0 with a `⚠ N of M submitted page(s) were never delivered` warning naming each lost URL, its depth, its protocol status and the reason. The crawl is **incomplete**, not merely small: `pagesFound + failedPages.size == pagesExpected` always holds. Check `failedPages` in the JSON output. A page is lost when its fetch failed after the retry budget was exhausted, when the task was dropped/evicted, when the crawl ran out of its time budget before the URL was submitted, or when the load returned no document of its own — a zero-byte fetch, or the page store substituted for a failed fetch (`reason = the load returned no document …`; such a URL is **withheld from the listing** rather than shown as a row with an empty title). Re-run, or lower `--depth` / reduce concurrency if it repeats — a repeated loss on a many-core host usually means the target site is refusing the parallel load, so try `--parallel 2` (or `--parallel 1` to rule parallelism out entirely) |
+| Pages lost (any depth) | Exits **6** after printing a `Summary: ok: <n>, failed: <m>` line and a `⚠ N of M submitted page(s) were never delivered` warning naming each lost URL, its depth, its protocol status and the reason. The crawl is **incomplete**, not merely small: `pagesFound + failedPages.size == pagesExpected` always holds. Check `failedPages` in the JSON output. A page is lost when its fetch failed after the retry budget was exhausted, when the task was dropped/evicted, when the crawl ran out of its time budget before the URL was submitted, or when the load returned no document of its own — a zero-byte fetch, or the page store substituted for a failed fetch (`reason = the load returned no document …`; such a URL is **withheld from the listing** rather than shown as a row with an empty title). Re-run, or lower `--depth` / reduce concurrency if it repeats — a repeated loss on a many-core host usually means the target site is refusing the parallel load, so try `--parallel 2` (or `--parallel 1` to rule parallelism out entirely) |
 | Crawl hit the 10-minute task limit | The task ends `TIMEOUT` and the CLI exits non-zero ("Crawl failed: Crawl timed out while processing seeds …"). `crawl result <taskId>` still carries the accounting: the losses of the seeds that settled, plus **one lost-page row per seed whose round never returned**, reason `the server-side task limit fired while this URL was still being fetched`. The pages such a round had already published are deliberately *not* claimed — its submitted count is unknown, and claiming them would break the `pagesFound + failedPages.size == pagesExpected` invariant — so re-run those URLs. Lower `--depth`, or split the seeds across several crawls, to stay inside the limit. A seed that is refused *before* it starts reports `reason = the crawl ran out of its time budget before this URL was submitted` and a `skipped` seed status |
 | Page listed with `depth=-1` (depth >= 2) | The page was fetched and recorded, but neither the URL it was queued under nor the URL it was served from is a URL this crawl submitted (a redirect combined with a `<base href>`). It is listed with `depth=-1`, counted in `pagesFound`, **not** reported as lost, and **not** expanded (`-1` is never read as depth 0). A single such row is a labelling gap; if every row has it, the site rewrites its document base URI and the listing depths are not meaningful — use `--depth 1`, or report it |
 | Invalid --format | Exits with "Invalid --format '...'. Expected: json, csv, or table" |
 | Invalid --parallel | Exits with "Invalid --parallel value '...'" — accepts a positive integer up to 32; `0` is rejected with the `--parallel 1` hint, and anything above 32 is refused by the server (HTTP 400) |
-| X-SQL failure on one page | Page logged with error; other pages continue normally |
+| X-SQL failure on one page | Page logged with error; other pages continue normally — the crawl still completes, but the run exits 6 (see below) |
+
+**Partial failures exit 6.** When the CLI polls a crawl to a terminal state, a run
+that lost pages (`failedPages`) or delivered pages with no usable content (an
+`extractionError`, or a 0-byte `contentLength`) is reported as completed *with
+errors*: it prints `Summary: ok: <n>, failed: <m>`, records `pages_failed` in its
+JSON, stores the local task as `partial failure (<ok> of <pages> pages ok)`, and
+exits **6** (`PartialFailure`).  Exit 0 stays reserved for a crawl where nothing
+failed — a clean crawl's output is unchanged.  In `--json` mode the failure path
+emits the error envelope, which carries no accumulated fields, so the counts
+arrive only inside `error.message`; `pages_failed` is present on the success path,
+where it is `0`.
 
 ## Rate Limiting & Polite Scraping
 

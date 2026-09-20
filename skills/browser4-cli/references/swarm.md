@@ -330,14 +330,15 @@ Swarm tasks progress through these states:
 | `completed` | `200` | `OK` | `isDone: true` — the canonical completion indicator |
 | `failed (<reason>)` | `4xx`/`5xx` | varies | Task failed with an error code; check `message` for details |
 
-> **Tip:** `swarm status` outputs both the raw `status` (HTTP-derived) and a `lifecycleState` field with task-oriented labels. Use `lifecycleState` for programmatic checks; use the raw fields for debugging.
+> **Tip:** `swarm status` outputs both the raw `status` (HTTP-derived) and a `lifecycleState` field with task-oriented labels. Use `lifecycleState` for programmatic checks; use the raw fields for debugging. Note that `lifecycleState` is derived from `statusCode` alone, so pair it with `isDone` before treating a job as finished.
 
 ## Errors & Recovery
 
 | Symptom | Recovery |
 |----------|---------|
 | All subcommands exit non-zero | Check stderr for details |
-| Task not done yet | `swarm status` shows `isDone: false` — wait and retry, or use `--wait` on submission. A `statusCode` of `200` also indicates completion even if `isDone` lags. |
+| Task not done yet | `swarm status` shows `isDone: false` — wait and retry, or use `--wait` on submission. Terminal means `isDone: true` (or a recorded `finishTime`, or a 4xx/5xx `statusCode`); a bare `statusCode: 200` does **not** mean finished — the backend sets 200 when the page's X-SQL *starts executing*, well before extraction ends, so `--wait` would return early. |
+| `status 408` on every job | A fetch that times out is **retried**, not settled: the task stays non-terminal and is re-queued while its retry budget lasts (`fetch.maxPrivacyRetries`, default 5, bounds the privacy-layer refusals; LoadOptions `-nMaxRetry` bounds the per-page retries) — only once the budget is exhausted is the page marked failed with 408. If the page's bytes arrived anyway, extraction still runs and the response says "Extracted anyway; verify the results" instead of dropping the data. When *every* job ends failed with 408, the browser/fetch pool is the suspect rather than the pages: `swarm close` + `swarm create --clear-stale`, then re-submit with `-refresh`. |
 | Task stuck as "queued" (201) | Workers may be busy. Check with `swarm list`. **On a freshly created session, a queued phase of up to ~60s is normal cold start** while the browser contexts boot — check once after 60–90s before suspecting a stall. If all tasks still show `queued` after warm-up, the worker pool may be stalled — try `swarm list --clear` to remove stale tasks, then `swarm close` and `swarm create` to restart the session. Add `--wait` to block until jobs complete. |
 | Missing LLM/API key | Surfaces as task-level error in `swarm status` / `swarm result` |
 | Long-running tasks | Set `--deadline` to bound execution |
@@ -353,4 +354,5 @@ Swarm tasks progress through these states:
 - Task IDs are UUIDs (e.g. `ca40ced0-2239-4209-9d81-34bcd50e50c1`). Save them or use `swarm list` to rediscover.
 - `swarm status` shows metadata only (isDone, statusCode, message). Use `swarm result` for the actual data payload (resultSet).
 - Both `swarm submit` and `swarm query` tasks are tracked and appear in `swarm list`.
+- **Testing with MockSite:** discover product URLs via `curl -s http://localhost:18080/ec/sitemap.xml` instead of guessing IDs — the bare `/ec/dp/` path (trailing slash) 404s; product pages always require an ID. See `crawl.md` → "MockSite URL discovery" for a seed-file one-liner.
 - **Windows Git Bash users:** Arguments with dashes (`--sql`, `--stdout`, `-v`) can be mangled by the bash→pwsh boundary. Quote them individually: `./b4w.ps1 "swarm" "query" "--sql" "@query.sql" "--seed-file" "./urls.txt"`. Or use `pwsh` directly and run commands inside PowerShell, or use the `b4w.sh` bash wrapper which handles the quoting automatically.

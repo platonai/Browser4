@@ -86,6 +86,7 @@ Refs are **ephemeral** — treat them as single-use handles. Any interaction can
 - **`--json`** — single-line JSON envelope on stdout for commands that support structured output. This is the clean machine-readable mode for commands such as `tab-list`, `htmlsnapshot get`, `htmlsnapshot query`, and `eval`. **Exception:** `snapshot` remains YAML-focused and warns on stderr instead of returning JSON snapshot data.
 - **File output (default for AI commands)** — `extract` and `summarize` save their result to a timestamped file in `.browser4-cli/snapshot/` and print only a link; add `--stdout` (or `--raw`) to print the payload directly. When `extract --schema` is used, the requested schema fields are emitted as plain **top-level JSON** (in the file and on stdout) — no envelope to parse.
 - **`--quiet` / `-q`** — suppress all normal output; only errors appear on stderr.
+- **Global flags after the command** — `-q` / `--quiet` and `--timeout <secs>` / `--timeout=<secs>` are also accepted *after* the command name (they are hoisted into the global flags): `browser4-cli htmlsnapshot -q`, `browser4-cli webdb export "url1,url2" ./out --timeout 30`.  Two exceptions: `--json` after the command belongs to the command (`batch --json` reads JSON from stdin) and is never hoisted, and `--timeout` is hoisted only when the command does not define its own — `wait --timeout` stays in milliseconds.  A global flag that still lands as a stray positional is rejected with the hint "global flags must appear before the command".
 
 ### Display Mode (Headless vs Headed)
 
@@ -112,7 +113,12 @@ browser4-cli goto https://other-page.com             # stays headless (or headed
 
 ### Sessions
 
-Named sessions isolate browser state (cookies, localStorage, tabs) in a **dedicated browser profile directory** keyed by the session id — reopening always restores the same profile. Use `-s <name>` to target a named session; `goto` auto-opens/reconnects. `list` shows a "Next open" column: **Reuse** (reconnects to the active window) or **Refresh** (opens fresh — session stale/missing). State lives in `~/.browser4` by default (per checkout in development mode — see **Development Mode** below), falling back to `./.browser4-cli-state` when unwritable; override with `BROWSER4_CLI_STATE_DIR` / `BROWSER4_RUNTIME_DIR`.
+Named sessions isolate browser state (cookies, localStorage, tabs) in a **dedicated browser profile directory** keyed by the session id — reopening always restores the same profile. Use `-s <name>` to target a named session; `goto` auto-opens/reconnects. `list` shows a "Next open" column: **Reuse** (reconnects to the active window) or **Refresh** (opens fresh — session stale/missing).
+
+Two on-disk locations — don't confuse them:
+
+- **Session state** lives in `~/.browser4` by default (per checkout in development mode — see **Development Mode** below), falling back to `./.browser4-cli-state` when unwritable; override with `BROWSER4_CLI_STATE_DIR` / `BROWSER4_RUNTIME_DIR`.
+- **Snapshots** (accessibility-tree captures from `snapshot` / `htmlsnapshot`) live in `./.browser4-cli/snapshot/`, relative to the directory the command runs in — the same directory the `extract` / `summarize` file output uses. Look there when hunting saved snapshot files or cleaning up capture artifacts.
 
 ### Configuration
 

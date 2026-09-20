@@ -637,6 +637,18 @@ CLI state lives under `~/.browser4` unless overridden.
 
 The runtime bundle is stored separately in a platform-conventional application-data directory, so clearing session state does not force a re-download of Browser4 itself.
 
+### Exit codes
+
+| Code | Meaning |
+|---:|---|
+| `0` | Success — the command completed successfully. |
+| `1` | Internal error — unexpected failure. |
+| `2` | Usage error — invalid arguments, unknown command, bad URL, missing required arguments. |
+| `3` | Session error — no active session, the session expired, or a session conflict. |
+| `4` | Server error — the server is unreachable, the health check timed out, or daemon startup failed. |
+| `5` | Batch partial failure — one or more commands in a batch failed; the batch itself was processed. |
+| `6` | Partial failure — the command completed but one or more items failed (e.g. `crawl` pages that failed to fetch or extract); results are partial. |
+
 ---
 
 ## 🚀 Build from Source
