@@ -315,10 +315,10 @@ class CrawlServiceTest {
     }
 
     /** Poll a task until it reaches a terminal state, or fail with what it was doing. */
-    private suspend fun awaitTerminal(taskId: String, timeoutMs: Long = 10_000): CrawlResponse {
+    private suspend fun awaitTerminal(taskId: String, timeoutMs: Long = 30_000): CrawlResponse {
         val deadline = System.currentTimeMillis() + timeoutMs
         var result = crawlService.getResult(taskId)
-        while (result.status == "CREATED" || result.status == "PROCESSING") {
+        while (result.isStillRunning()) {
             if (System.currentTimeMillis() > deadline) {
                 fail<Unit>("task $taskId never reached a terminal state (still ${result.status})")
             }
@@ -327,4 +327,17 @@ class CrawlServiceTest {
         }
         return result
     }
+
+    /**
+     * The `status` field mixes vocabularies on this line: [CrawlResponse] defaults
+     * to the `"CREATED"` token, the service writes both raw tokens (`"PROCESSING"`)
+     * and `ResourceStatus` display text (`"Created"`, `"Request Timeout"`), and
+     * [CrawlResponse.finishTime] is the model's own "reached a terminal state"
+     * marker.  Comparing against the upper-case tokens alone therefore matched only
+     * the default and exited on the *first* poll, so the caller asserted on
+     * `"Created"` and failed within milliseconds instead of waiting for the terminal
+     * record.  Match case-insensitively and treat a recorded finish time as final.
+     */
+    private fun CrawlResponse.isStillRunning(): Boolean =
+        finishTime == null && (status.equals("CREATED", true) || status.equals("PROCESSING", true))
 }

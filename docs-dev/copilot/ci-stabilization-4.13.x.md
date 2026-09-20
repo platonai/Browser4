@@ -1027,7 +1027,7 @@ crawl 强制 `-refresh`，所以这条用例今天只会走 "verified fresh" 分
   `Timeout to wait for document ready`）在引擎/驱动池一侧，本轮没有动 —— 本轮只是让它不再伪装成一行。
 
 
-## 19. `CrawlParallelTabsTest#testSequentialControlRunDoesNotOverlap` 在 CI 上超时（4.13.x，未修）
+## 19. `CrawlParallelTabsTest#testSequentialControlRunDoesNotOverlap` 在 CI 上超时（4.13.x，已于 v4.13.20 修，见 19.6）
 
 ### 19.1 现象
 
@@ -1095,4 +1095,33 @@ java.lang.IllegalStateException: Crawl eb660148-… did not reach a terminal sta
   但 CI 负载下的停顿会把它吃掉。要么按类内累计耗时调大，要么让该类拥有独立上下文/独立超时策略。
 * **驱动池在该类里的分配日志**（谁占着 driver、谁在等、等了多久）没有拉出来对照，这是把"环境停顿"
   坐实成"驱动池饥饿"的最后一步。
+
+### 19.6 修复（v4.13.20，2026-09-20）
+
+v4.13.20 的门禁（标签 `v4.13.20-ci.1`，run 35497172762）**两次尝试分别挂在两个用例上**，
+两者是同一个根因的两个面：**`status` 字段混用两套词表**，而测试的等待循环只认其中一套。
+
+`CrawlService` 既写裸 token（`status = "PROCESSING"`，两处），又写 `ResourceStatus` 可读文本
+（`getStatusText(...)` → `"OK"` / `"Request Timeout"` / `"Created"`，多处），而 `CrawlResponse.status`
+的默认值是 token `"CREATED"`。
+
+| 用例 | 现象 | 根因 | 修法 |
+|---|---|---|---|
+| `CrawlServiceTest#an exhausted task budget reports the seeds it never started` | attempt 1 红：`expected: <Request Timeout> but was: <Created>`，`Time elapsed: 0.008 s` | `awaitTerminal` 的守卫只比较大写 token，而服务结算写的是可读文本 `"Created"` → **首次轮询即退出循环**，断言立刻失败（本地靠"结算够快"侥幸通过） | 大小写无关比较，并以 `CrawlResponse.finishTime` 作为权威终态标记；轮询上限 10 s → 30 s（任务自身预算是 10 s） |
+| `CrawlParallelTabsTest#testSequentialControlRunDoesNotOverlap` | attempt 2 红：`240.4 s` 触上限，`last: PROCESSING`（与 §19.1 同用例、同 240.4 s） | 4 分钟写死上限被 CI 负载吃掉（本地 63.9–91.2 s，CI 同比 7.4×）；另外 `isTerminal` 只认 `"SC_REQUEST_TIMEOUT"` / `"SC_INTERNAL_SERVER_ERROR"` 这类**服务从不产出的拼写**，真超时的任务永远不会被识别为终态 | 上限 4 → 10 分钟（对健康值 ~7× 余量，仍有界）；终态判定同时接受 token 与可读文本并接受 `finishTime`；超时消息带上任务自身账目（status / pages / links / parallelTabs / waiting / error / diagnostic / seeds） |
+
+`19.5` 的前两条（超时诊断、上限合理性）随之落地；第三条（驱动池分配日志）仍未做，
+所以"这是驱动池饥饿"仍属假设——若 10 分钟上限再被吃掉，新消息里的
+`waiting=` / `seeds=` 会直接指出卡在哪个 seed。
+
+本地验证（2026-09-20，Windows，JDK 25 / GraalVM）：
+
+| 命令 | 结果 |
+|---|---|
+| `-pl browser4-rest -am -Dtest=CrawlServiceTest` | **11 / 0 / 0，3.869 s**（该用例 0.112 s） |
+| `-pl browser4-tests/browser4-rest-tests -am -DrunRestTests=true -Dtest=CrawlParallelTabsTest` | **5 / 0 / 0，126.2 s**，BUILD SUCCESS |
+
+**未做（留给后续）**：服务侧统一状态词表。测试侧已兼容两套，但同一个字段继续混用
+token 与可读文本仍会持续制造这类陷阱——根治应在 `CrawlService` 出口统一
+（例如一律写 `getStatusText(...)`，或一律写 token），并同步 CLI 的解析。
 

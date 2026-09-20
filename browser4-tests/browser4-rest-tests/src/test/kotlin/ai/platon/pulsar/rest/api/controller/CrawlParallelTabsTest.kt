@@ -263,8 +263,21 @@ class CrawlParallelTabsTest : RestAPITestBase() {
             .also { check(it.isNotBlank()) { "blank crawl task id" } }
     }
 
+    /**
+     * Terminal-state wait for a single crawl.
+     *
+     * This was a hard-coded 4 minutes, which a loaded CI runner ate: a healthy local
+     * run of this class finishes in ~64–91 s, while on CI the same code took 7.4x
+     * longer (class 72.7 s green → 538.1 s red) and the sequential control run hit
+     * the cap while still `PROCESSING`, failing the gate twice — see
+     * `docs-dev/copilot/ci-stabilization-4.13.x.md` §19.  10 minutes keeps roughly a
+     * 7x margin over the healthy time while staying bounded, so a genuinely stuck
+     * crawl still fails — now with the task's own account of where it stopped.
+     */
+    private val terminalWait: Duration = Duration.ofMinutes(10)
+
     private fun waitForTerminal(taskId: String): CrawlResponse {
-        val deadline = Instant.now().plus(Duration.ofMinutes(4))
+        val deadline = Instant.now().plus(terminalWait)
         var last: CrawlResponse? = null
         while (Instant.now().isBefore(deadline)) {
             Thread.sleep(1_000)
@@ -281,12 +294,51 @@ class CrawlParallelTabsTest : RestAPITestBase() {
                         .readValue(it, CrawlResponse::class.java)
                 }
             last = result
-            if (result.status == "OK" || result.status == "SC_OK" ||
-                result.status == "SC_REQUEST_TIMEOUT" || result.status == "SC_INTERNAL_SERVER_ERROR"
-            ) {
+            if (result.isTerminal()) {
                 return result
             }
         }
-        error("Crawl $taskId did not reach a terminal state within 4 minutes, last: ${last?.status}")
+        // The old failure said only "last: PROCESSING", which said nothing about how
+        // far the crawl got.  Report the task's own accounting instead (§19.5).
+        error(
+            "Crawl $taskId did not reach a terminal state within ${terminalWait.toMinutes()} minutes: " +
+                (last?.describe() ?: "no result was ever returned")
+        )
+    }
+
+    /**
+     * Terminal detection has to accept every spelling used on this line: the
+     * response defaults to the `"CREATED"` token, [CrawlService] settles with
+     * `ResourceStatus` display text (`"OK"`, `"Request Timeout"`,
+     * `"Internal Server Error"`, `"Not Found"`), and [CrawlResponse.finishTime] is
+     * the model's own terminal marker.  The previous check compared against
+     * `"SC_REQUEST_TIMEOUT"` / `"SC_INTERNAL_SERVER_ERROR"` spellings that the
+     * service never emits, so a crawl that had already timed out could never be
+     * recognised and the wait ran out its whole cap before blaming a stall.
+     */
+    private fun CrawlResponse.isTerminal(): Boolean =
+        finishTime != null ||
+            status.equals("OK", true) ||
+            status.equals("Request Timeout", true) ||
+            status.equals("Internal Server Error", true) ||
+            status.equals("Not Found", true)
+
+    /** One line of the task's own accounting, for a timeout that has to be actionable. */
+    private fun CrawlResponse.describe(): String = buildString {
+        append("status=").append(status)
+        append(", pages=").append(pagesFound).append('/').append(pagesExpected)
+        append(", links=").append(linksDiscovered)
+        append(", parallelTabs=").append(parallelTabs)
+        append(", waiting=").append(
+            Duration.between(startedTime ?: Instant.ofEpochMilli(createdAt), Instant.now()).seconds
+        ).append('s')
+        error?.let { append(", error=").append(it) }
+        diagnostic?.let { append(", diagnostic=").append(it) }
+        failedPages?.takeIf { it.isNotEmpty() }?.let { append(", failedPages=").append(it.size) }
+        seedStatuses?.takeIf { it.isNotEmpty() }?.let { seeds ->
+            append(", seeds=[").append(
+                seeds.joinToString("; ") { "${it.url.substringAfterLast('/')}:${it.status}" }
+            ).append(']')
+        }
     }
 }
