@@ -300,6 +300,11 @@ pub fn generate_help() -> String {
         "override Browser4 server URL",
         30,
     ));
+    lines.push(format_with_gap(
+        "  (anywhere)",
+        "-q/--quiet and --timeout are also accepted after the command (e.g. 'htmlsnapshot -q'); --json after the command belongs to the command",
+        30,
+    ));
 
     // Environment variables
     lines.push(

@@ -223,7 +223,8 @@ pub fn parse_github_release(v: &Value) -> Option<ReleaseInfo> {
         published_at: v
             .get("published_at")
             .and_then(|p| p.as_str())
-            .map(str::to_string),
+            .map(str::to_string)
+            .filter(|s| !s.is_empty()),
         jar_url,
         jar_size: asset.get("size").and_then(|s| s.as_u64()),
         jar_checksum,
@@ -245,7 +246,8 @@ pub fn parse_oss_release(v: &Value) -> Option<ReleaseInfo> {
         published_at: v
             .get("published_at")
             .and_then(|p| p.as_str())
-            .map(str::to_string),
+            .map(str::to_string)
+            .filter(|s| !s.is_empty()),
         jar_url,
         jar_size: asset.get("size").and_then(|s| s.as_u64()),
         jar_checksum,
@@ -279,7 +281,13 @@ fn proxy_hint() -> String {
 /// Fetch the latest release metadata, trying GitHub first and falling back
 /// to the OSS mirror.  `Ok(None)` means the metadata was reachable but no
 /// `scent-miner.jar` asset exists; `Err` means both sources failed.
-pub async fn fetch_latest_release() -> Result<Option<ReleaseInfo>, String> {
+///
+/// When `quiet` is true, the intermediate fallback notices (rate-limit,
+/// HTTP status, unreachable GitHub) are suppressed — they describe normal
+/// operation of the GitHub → mirror fallback and are noise for displays
+/// like the bare `webminer` status panel.  The final error still reports
+/// when BOTH sources failed.
+pub async fn fetch_latest_release(quiet: bool) -> Result<Option<ReleaseInfo>, String> {
     let client = async_client(30).await?;
     match client.get(GITHUB_API_LATEST).send().await {
         Ok(resp) if resp.status().is_success() => {
@@ -287,22 +295,28 @@ pub async fn fetch_latest_release() -> Result<Option<ReleaseInfo>, String> {
                 if let Some(info) = parse_github_release(&v) {
                     return Ok(Some(info));
                 }
-                eprintln!("[webminer] Latest GitHub release does not contain scent-miner.jar; trying OSS mirror ...");
+                if !quiet {
+                    eprintln!("[webminer] Latest GitHub release does not contain scent-miner.jar; trying OSS mirror ...");
+                }
             }
         }
         Ok(resp) => {
-            if resp.status().as_u16() == 403 {
-                eprintln!("[webminer] GitHub API rate limit exceeded; trying OSS mirror ...");
-            } else {
-                eprintln!(
-                    "[webminer] GitHub API returned HTTP {}; trying OSS mirror ...",
-                    resp.status()
-                );
+            if !quiet {
+                if resp.status().as_u16() == 403 {
+                    eprintln!("[webminer] GitHub API rate limit exceeded; trying OSS mirror ...");
+                } else {
+                    eprintln!(
+                        "[webminer] GitHub API returned HTTP {}; trying OSS mirror ...",
+                        resp.status()
+                    );
+                }
             }
         }
         Err(e) => {
-            eprintln!("[webminer] Cannot reach GitHub API: {e}");
-            eprintln!("[webminer] Trying OSS mirror ...");
+            if !quiet {
+                eprintln!("[webminer] Cannot reach GitHub API: {e}");
+                eprintln!("[webminer] Trying OSS mirror ...");
+            }
         }
     }
 
@@ -597,7 +611,7 @@ async fn install_release(release: &ReleaseInfo, force: bool) -> Result<InstallOu
 pub async fn install(version: Option<&str>, force: bool) -> Result<InstallOutcome, String> {
     let release = match version {
         Some(v) => fetch_release_for_version(v).await?,
-        None => match fetch_latest_release().await? {
+        None => match fetch_latest_release(false).await? {
             Some(r) => r,
             None => {
                 return Err("Cannot find the latest release (no scent-miner.jar asset). Check your internet connection.".to_string());
@@ -613,7 +627,7 @@ pub async fn update() -> Result<InstallOutcome, String> {
     let Some(installed) = installed else {
         return Err("No webminer installation found. Run `browser4-cli webminer install` first.".to_string());
     };
-    let latest = fetch_latest_release()
+    let latest = fetch_latest_release(false)
         .await?
         .ok_or_else(|| "Cannot check for updates: the latest release has no scent-miner.jar asset.".to_string())?;
     if installed == latest.tag_name {
@@ -637,7 +651,10 @@ pub async fn version_status() -> VersionStatus {
     let jar_bytes = installed_jar_path()
         .and_then(|p| std::fs::metadata(p).ok())
         .map(|m| m.len());
-    let (latest, latest_error) = match fetch_latest_release().await {
+    // Quiet: the bare status display should not print rate-limit/mirror
+    // fallback noise for what is a purely informational check — the panel
+    // already reports "cannot reach" when both sources failed.
+    let (latest, latest_error) = match fetch_latest_release(true).await {
         Ok(Some(info)) => (Some(info), None),
         Ok(None) => (
             None,
@@ -822,6 +839,47 @@ mod tests {
     fn github_release_missing_jar_asset() {
         let v = json!({ "tag_name": "v0.0.7", "assets": [ { "name": "other.jar" } ] });
         assert!(parse_github_release(&v).is_none());
+    }
+
+    #[test]
+    fn empty_published_at_is_dropped() {
+        // An empty `published_at` must come through as `None`, not as
+        // `Some("")` — otherwise the status panel prints a blank
+        // "Published :" line.
+        let github = json!({
+            "tag_name": "v0.0.7",
+            "published_at": "",
+            "assets": [
+                {
+                    "name": "scent-miner.jar",
+                    "browser_download_url": "https://github.com/example/scent-miner.jar"
+                }
+            ]
+        });
+        assert_eq!(parse_github_release(&github).unwrap().published_at, None);
+
+        let oss = json!({
+            "tag": "v0.0.7",
+            "published_at": "",
+            "assets": [ { "name": "scent-miner.jar" } ]
+        });
+        assert_eq!(parse_oss_release(&oss).unwrap().published_at, None);
+
+        // A real timestamp still round-trips.
+        let dated = json!({
+            "tag_name": "v0.0.7",
+            "published_at": "2025-01-01T00:00:00Z",
+            "assets": [
+                {
+                    "name": "scent-miner.jar",
+                    "browser_download_url": "https://github.com/example/scent-miner.jar"
+                }
+            ]
+        });
+        assert_eq!(
+            parse_github_release(&dated).unwrap().published_at.as_deref(),
+            Some("2025-01-01T00:00:00Z")
+        );
     }
 
     #[test]

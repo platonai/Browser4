@@ -342,6 +342,33 @@ fn looks_like_negative_value(token: &str) -> bool {
             .all(|c| c.is_ascii_digit() || c == '-' || c == '.' || c == ',')
 }
 
+/// A token that is a known global flag mistakenly placed after the command
+/// name (e.g. `htmlsnapshot -q`).  Used to produce a targeted error hint
+/// instead of a bare "unexpected positional arguments" rejection.
+fn is_global_flag_token(token: &str) -> bool {
+    matches!(
+        token,
+        "-q" | "--quiet"
+            | "--json"
+            | "--pretty"
+            | "--show-tip"
+            | "-tip"
+            | "--help-json"
+            | "--timeout"
+    ) || token.starts_with("--timeout=")
+}
+
+/// Build the hint appended to "unexpected positional arguments" errors when
+/// any offending token is a global flag.
+fn global_flag_hint(tokens: &[&String]) -> String {
+    if tokens.iter().any(|t| is_global_flag_token(t)) {
+        " (global flags must appear before the command, e.g. 'browser4-cli -q htmlsnapshot')"
+            .to_string()
+    } else {
+        String::new()
+    }
+}
+
 /// Build the argument map for the `upload` command.
 ///
 /// Upload accepts a target ref followed by ONE OR MORE file paths
@@ -418,9 +445,10 @@ pub fn build_command_args(
     };
 
     if positional.len() > arg_names.len() && arg_names.is_empty() {
+        let hint = global_flag_hint(&positional.iter().collect::<Vec<_>>());
         return Err(format!(
-            "error: unexpected positional arguments (this command accepts none): {:?}",
-            &positional
+            "error: unexpected positional arguments (this command accepts none): {:?}{}",
+            &positional, hint
         ));
     }
 
@@ -461,10 +489,12 @@ pub fn build_command_args(
                     .map(|(_, t)| t)
                     .collect();
                 if !offending.is_empty() {
+                    let hint = global_flag_hint(&offending);
                     return Err(format!(
-                        "error: unexpected positional arguments (this command accepts {}): {:?}",
+                        "error: unexpected positional arguments (this command accepts {}): {:?}{}",
                         arg_names.len(),
-                        &offending
+                        &offending,
+                        hint
                     ));
                 }
                 result.insert(name.to_string(), json!(positional[i..].join(" ")));
@@ -1000,6 +1030,39 @@ mod tests {
         assert!(result
             .unwrap_err()
             .contains("unexpected positional arguments"));
+    }
+
+    #[test]
+    fn test_global_flag_rejection_carries_position_hint() {
+        // When the stray token is a known global flag, the error must point at
+        // the placement rule instead of leaving the user with a bare
+        // "unexpected positional arguments" rejection.
+        let mut raw = HashMap::new();
+        raw.insert("_".to_string(), json!(["htmlsnapshot", "-q"]));
+        let result = build_command_args(&raw, &[], &[]);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("global flags must appear before the command"),
+            "error should hint at the placement rule: {err}"
+        );
+
+        // The hint also rides on the flag-aware "accepts N" path.
+        let mut raw_flag = HashMap::new();
+        raw_flag.insert("_".to_string(), json!(["goto", "http://example.com/page", "--quiet"]));
+        let err_flag = build_command_args(&raw_flag, &["url"], &[]).unwrap_err();
+        assert!(
+            err_flag.contains("global flags must appear before the command"),
+            "error should hint at the placement rule: {err_flag}"
+        );
+
+        // Non-flag-like stray positionals don't get the hint.
+        let mut raw2 = HashMap::new();
+        raw2.insert("_".to_string(), json!(["htmlsnapshot", "extra"]));
+        let result2 = build_command_args(&raw2, &[], &[]);
+        assert!(!result2
+            .unwrap_err()
+            .contains("global flags must appear before the command"));
     }
 
     #[test]

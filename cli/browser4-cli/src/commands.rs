@@ -837,7 +837,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "webminer-views",
-            description: "Rebuild the interactive views (index.html, xlsx, json) from an existing clustering result directory",
+            description: "Rebuild the interactive views (<project>.html, xlsx, json) from an existing clustering result directory",
             category: Category::WebMiner,
             hidden: false,
             batch_supported: false,

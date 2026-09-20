@@ -336,6 +336,9 @@ enum ExitCode {
     Server = 4,
     /// One or more commands in a batch failed (processing itself succeeded).
     BatchPartial = 5,
+    /// The command ran to completion but one or more items failed
+    /// (e.g. crawl pages that failed to fetch or extract) — results are partial.
+    PartialFailure = 6,
 }
 
 /// Normalised error type that pairs a machine-readable exit code with a
@@ -14893,12 +14896,57 @@ fn write_crawl_output(
     }
 }
 
+/// Failure accounting for a terminal crawl: `(ok_pages, failed)`.
+///
+/// The primary signal is `failedPages` — the backend's own loss ledger of URLs
+/// it submitted and never got a page back for.  It is disjoint from `pages`
+/// (`pagesFound + failedPages.size == pagesExpected`), so the ledger alone
+/// gives a coherent split of the crawl's work items.
+///
+/// Delivered pages that failed X-SQL extraction (`extractionError`) or came
+/// back with a 0-byte body are added on top: they are pages the crawl *did*
+/// deliver but which carry no usable content, and they are never part of the
+/// loss ledger.  Historical crawl rows carry no `failedPages` at all; there
+/// the per-page errors and seed-level errors are the only backstop, and the
+/// two are not summed (a seed that errors is normally also a lost page, so
+/// adding both would report more failures than the crawl had work items).
+fn crawl_failure_counts(parsed: &Value, page_count: usize) -> (usize, usize) {
+    let broken_pages = parsed["pages"]
+        .as_array()
+        .map(|pages| {
+            pages
+                .iter()
+                .filter(|pg| {
+                    pg["extractionError"].as_str().is_some()
+                        || pg["contentLength"].as_i64().unwrap_or(-1) == 0
+                })
+                .count()
+        })
+        .unwrap_or(0);
+
+    let seed_errors = parsed["seedStatuses"]
+        .as_array()
+        .map(|statuses| {
+            statuses
+                .iter()
+                .filter(|s| s["status"].as_str().unwrap_or("") == "error")
+                .count()
+        })
+        .unwrap_or(0);
+
+    let failed = match parsed["failedPages"].as_array() {
+        Some(lost) => lost.len() + broken_pages,
+        None => broken_pages.max(seed_errors),
+    };
+    (page_count.saturating_sub(broken_pages), failed)
+}
+
 async fn handle_crawl(
     client: &Client,
     base_url: &str,
     tool_params: &Value,
     _session_name: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), CliError> {
     // ---- Resolve URLs ----
     let url = tool_params
         .get("url")
@@ -14930,7 +14978,7 @@ async fn handle_crawl(
             .read_to_string(&mut input)
             .map_err(|e| format!("Failed to read X-SQL query from stdin: {e}"))?;
         if input.trim().is_empty() {
-            return Err("Stdin was empty but --sql-stdin was specified.".to_string());
+            return Err("Stdin was empty but --sql-stdin was specified.".into());
         }
         Some(input)
     } else {
@@ -14965,7 +15013,7 @@ async fn handle_crawl(
             .read_to_string(&mut input)
             .map_err(|e| format!("Failed to read args from stdin: {e}"))?;
         if input.trim().is_empty() {
-            return Err("Stdin was empty but --args-stdin was specified.".to_string());
+            return Err("Stdin was empty but --args-stdin was specified.".into());
         }
         Some(input.trim().to_string())
     } else {
@@ -15218,7 +15266,8 @@ async fn handle_crawl(
                 task_id,
                 task_id,
                 task_id
-            ));
+            )
+            .into());
         }
 
         tokio::time::sleep(poll_interval).await;
@@ -15747,6 +15796,11 @@ async fn handle_crawl(
 
                 json_field("pages", json!(pages));
                 json_field("pages_found", json!(page_count));
+                // Failure accounting: reported in JSON (`pages_failed`) and in
+                // the exit code, so automation can detect a partially failed
+                // crawl instead of parsing the ⚠ warning lines.
+                let (ok_count, failed_total) = crawl_failure_counts(&parsed, page_count);
+                json_field("pages_failed", json!(failed_total));
                 // Update the locally-tracked task status so `crawl list`
                 // reflects completion instead of forever showing "pending".
                 let _ = update_async_task_status(
@@ -15754,12 +15808,32 @@ async fn handle_crawl(
                     &format!("{} ({} pages)", status, page_count),
                     None,
                 );
+                // Exit non-zero when anything failed, so a crawl that lost
+                // pages (or delivered pages with no usable content) is not
+                // mistaken for a clean one.  Exit 0 stays reserved for fully
+                // successful crawls, whose output is unchanged.
+                if failed_total > 0 {
+                    cli_println!("\nSummary: ok: {}, failed: {}", ok_count, failed_total);
+                    let _ = update_async_task_status(
+                        &task_id,
+                        &format!("partial failure ({} of {} pages ok)", ok_count, page_count),
+                        None,
+                    );
+                    return Err(CliError(
+                        ExitCode::PartialFailure,
+                        format!(
+                            "crawl completed with errors: ok: {}, failed: {}. \
+                             Use 'crawl result {}' or --verbose for per-page diagnostics.",
+                            ok_count, failed_total, task_id
+                        ),
+                    ));
+                }
                 return Ok(());
             }
             "SC_REQUEST_TIMEOUT" | "SC_INTERNAL_SERVER_ERROR" => {
                 let err_msg = error.unwrap_or("Unknown crawl error");
                 let _ = update_async_task_status(&task_id, &format!("error: {}", err_msg), None);
-                return Err(format!("Crawl failed: {}", err_msg));
+                return Err(format!("Crawl failed: {}", err_msg).into());
             }
             _ => {
                 // Still running — progress is reported on the periodic cadence
@@ -17800,7 +17874,11 @@ async fn print_webminer_status(show_usage: bool) -> Result<(), CliError> {
                 .unwrap_or_else(|| "?".to_string());
             cli_println!("  Latest    : {}  ({size})", latest.tag_name);
             if let Some(published) = &latest.published_at {
-                cli_println!("  Published : {published}");
+                // Never print an empty Published line — an empty value is
+                // worse than omitting the field entirely.
+                if !published.is_empty() {
+                    cli_println!("  Published : {published}");
+                }
             }
             if status.installed.as_deref() != Some(latest.tag_name.as_str()) {
                 cli_println!();
@@ -19651,6 +19729,15 @@ fn windows_powershell_candidates() -> Vec<String> {
         "powershell.exe".to_string(),
         "pwsh.exe".to_string(),
     ]
+}
+
+/// Unix counterpart of [`windows_powershell_candidates`]: there is no
+/// PowerShell to prefer, so the candidate list is empty.  Test-only — the
+/// binary never asks for PowerShell candidates off Windows (the whole
+/// Windows install path is `#[cfg(windows)]`).
+#[cfg(all(not(windows), test))]
+fn windows_powershell_candidates() -> Vec<String> {
+    Vec::new()
 }
 
 /// Arguments for running the downloaded install script under PowerShell.
@@ -22360,25 +22447,93 @@ fn preferred_prefixed_group_form(command: &str) -> Option<&'static str> {
 fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::GlobalFlags, bool) {
     if let Some(rewritten) = rewrite_prefixed_command(&global.args) {
         let cmd = rewritten[0].clone();
+        let (args, quiet, timeout_secs) = hoist_post_command_global_flags(&cmd, &rewritten);
         let new_global = args::GlobalFlags {
             session_name: global.session_name.clone(),
             server_url: global.server_url.clone(),
             json: global.json,
-            quiet: global.quiet,
+            quiet: global.quiet || quiet,
             proxy_url: global.proxy_url.clone(),
             show_tip: global.show_tip,
             pretty: global.pretty,
             help_json: global.help_json,
-            timeout_secs: global.timeout_secs,
-            args: rewritten,
+            timeout_secs: global.timeout_secs.or(timeout_secs),
+            args,
         };
         (cmd, new_global, true)
     } else {
         let Some(raw_command) = global.args.first() else {
             return (String::new(), global.clone(), false);
         };
-        (raw_command.clone(), global.clone(), false)
+        let cmd = raw_command.clone();
+        let (args, quiet, timeout_secs) = hoist_post_command_global_flags(&cmd, &global.args);
+        let new_global = args::GlobalFlags {
+            session_name: global.session_name.clone(),
+            server_url: global.server_url.clone(),
+            json: global.json,
+            quiet: global.quiet || quiet,
+            proxy_url: global.proxy_url.clone(),
+            show_tip: global.show_tip,
+            pretty: global.pretty,
+            help_json: global.help_json,
+            timeout_secs: global.timeout_secs.or(timeout_secs),
+            args,
+        };
+        (cmd, new_global, false)
     }
+}
+
+/// Hoist well-known global flags that appear AFTER the subcommand into the
+/// global flags (e.g. `htmlsnapshot -q` → quiet mode, `webdb export
+/// --timeout 30` → HTTP timeout).  Without this, post-command global flags
+/// are parsed as positional subcommand args and rejected with
+/// "unexpected positional arguments".
+///
+/// `-q`/`--quiet` is hoisted unconditionally — no command defines a `quiet`
+/// option.  `--timeout` is only hoisted when the command does NOT define its
+/// own `timeout` option (several commands do: `wait`, `click`, `pdf`, ...).
+/// `--json` is deliberately NOT hoisted: after the command it may belong to
+/// the command itself (e.g. `batch --json` reads JSON input from stdin).
+///
+/// Returns `(args, hoisted_quiet, hoisted_timeout_secs)`.
+fn hoist_post_command_global_flags(
+    command: &str,
+    raw_args: &[String],
+) -> (Vec<String>, bool, Option<u64>) {
+    let cmd_map = commands_map();
+    let has_timeout_opt = cmd_map
+        .get(command)
+        .is_some_and(|c| c.options.iter().any(|o| o.key() == "timeout"));
+
+    let mut args = Vec::with_capacity(raw_args.len());
+    let mut quiet = false;
+    let mut timeout_secs = None;
+    let mut i = 0;
+    while i < raw_args.len() {
+        let arg = raw_args[i].as_str();
+        if i > 0 {
+            if arg == "-q" || arg == "--quiet" {
+                quiet = true;
+                i += 1;
+                continue;
+            }
+            if !has_timeout_opt {
+                if arg == "--timeout" && i + 1 < raw_args.len() {
+                    timeout_secs = raw_args[i + 1].parse().ok();
+                    i += 2;
+                    continue;
+                }
+                if let Some(value) = arg.strip_prefix("--timeout=") {
+                    timeout_secs = value.parse().ok();
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+        args.push(raw_args[i].clone());
+        i += 1;
+    }
+    (args, quiet, timeout_secs)
 }
 
 #[derive(Debug, Clone)]
@@ -27281,6 +27436,96 @@ mod tests {
         assert!(!from_spaced_prefix);
     }
 
+    // -----------------------------------------------------------------------
+    // hoist_post_command_global_flags tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn hoist_global_flags_hoists_quiet_after_command() {
+        let (args, quiet, timeout) =
+            hoist_post_command_global_flags("htmlsnapshot", &["htmlsnapshot".into(), "-q".into()]);
+        assert!(
+            quiet,
+            "post-command -q must be hoisted to the global quiet flag"
+        );
+        assert!(timeout.is_none());
+        assert_eq!(args, vec!["htmlsnapshot"]);
+    }
+
+    #[test]
+    fn hoist_global_flags_hoists_timeout_when_command_has_no_timeout_option() {
+        let (args, quiet, timeout) = hoist_post_command_global_flags(
+            "webdb-export",
+            &["webdb-export".into(), "--timeout".into(), "30".into()],
+        );
+        assert_eq!(timeout, Some(30));
+        assert!(!quiet);
+        assert_eq!(args, vec!["webdb-export"]);
+
+        // The `--timeout=<secs>` spelling is hoisted too.
+        let (args_eq, _, timeout_eq) = hoist_post_command_global_flags(
+            "webdb-export",
+            &["webdb-export".into(), "--timeout=45".into()],
+        );
+        assert_eq!(timeout_eq, Some(45));
+        assert_eq!(args_eq, vec!["webdb-export"]);
+    }
+
+    #[test]
+    fn hoist_global_flags_keeps_command_defined_timeout() {
+        // `wait` defines its own --timeout option (milliseconds) — hoisting
+        // it would steal a legitimate subcommand option.
+        let (args, _quiet, timeout) = hoist_post_command_global_flags(
+            "wait",
+            &["wait".into(), "--timeout".into(), "5000".into()],
+        );
+        assert!(timeout.is_none());
+        assert_eq!(args, vec!["wait", "--timeout", "5000"]);
+    }
+
+    #[test]
+    fn hoist_global_flags_keeps_json_for_batch_stdin_mode() {
+        // `--json` after the command may belong to the command itself
+        // (`batch --json` reads JSON input from stdin) — never hoisted.
+        let (args, _quiet, _timeout) =
+            hoist_post_command_global_flags("batch", &["batch".into(), "--json".into()]);
+        assert_eq!(args, vec!["batch", "--json"]);
+    }
+
+    #[test]
+    fn hoist_global_flags_never_rewrites_the_command_token() {
+        // Index 0 is the command itself — even when the command name is
+        // shaped like a hoistable flag it must survive untouched.
+        let (args, quiet, timeout) =
+            hoist_post_command_global_flags("-q", &["-q".into(), "extra".into()]);
+        assert!(!quiet);
+        assert!(timeout.is_none());
+        assert_eq!(args, vec!["-q", "extra"]);
+    }
+
+    #[test]
+    fn normalize_command_invocation_hoists_post_command_quiet() {
+        let global = args::GlobalFlags {
+            session_name: None,
+            server_url: None,
+            json: false,
+            quiet: false,
+            proxy_url: None,
+            show_tip: false,
+            pretty: false,
+            help_json: false,
+            timeout_secs: None,
+            args: vec!["htmlsnapshot".to_string(), "-q".to_string()],
+        };
+
+        let (command, normalized, from_spaced_prefix) = normalize_command_invocation(&global);
+
+        assert_eq!(command, "htmlsnapshot");
+        assert!(normalized.quiet, "post-command -q must reach the global flags");
+        assert_eq!(normalized.args, vec!["htmlsnapshot".to_string()]);
+        assert!(!from_spaced_prefix);
+    }
+
     #[test]
     fn rewrite_prefixed_command_supports_agent_run() {
         let rewritten = rewrite_prefixed_command(&[
@@ -31654,6 +31899,99 @@ mod tests {
             parse_crawl_poll_response(&response),
             CrawlPollStatus::Done { pages_found: 0 }
         );
+    }
+
+    // -------------------------------------------------------------------
+    // crawl_failure_counts tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn crawl_failure_counts_clean_crawl_reports_no_failures() {
+        let parsed = json!({
+            "status": "OK",
+            "pagesFound": 2,
+            "pages": [
+                {"url": "https://example.com/a", "contentLength": 1000},
+                {"url": "https://example.com/b", "contentLength": 2000}
+            ],
+            "failedPages": [],
+            "pagesExpected": 2
+        });
+        assert_eq!(crawl_failure_counts(&parsed, 2), (2, 0));
+    }
+
+    #[test]
+    fn crawl_failure_counts_counts_the_loss_ledger() {
+        // pagesFound (2) + failedPages (1) == pagesExpected (3): the ledger is
+        // the loss signal and stays disjoint from the delivered pages.
+        let parsed = json!({
+            "status": "OK",
+            "pagesFound": 2,
+            "pages": [
+                {"url": "https://example.com/a", "contentLength": 1000},
+                {"url": "https://example.com/b", "contentLength": 2000}
+            ],
+            "failedPages": [
+                {"url": "https://example.com/lost", "depth": 1, "protocolStatus": 408, "reason": "timeout"}
+            ],
+            "pagesExpected": 3
+        });
+        assert_eq!(crawl_failure_counts(&parsed, 2), (2, 1));
+    }
+
+    #[test]
+    fn crawl_failure_counts_adds_delivered_pages_with_no_usable_content() {
+        // A delivered page with an extraction error or a 0-byte body is a
+        // failure too, and is never part of the loss ledger.
+        let parsed = json!({
+            "status": "OK",
+            "pagesFound": 3,
+            "pages": [
+                {"url": "https://example.com/a", "contentLength": 1000},
+                {"url": "https://example.com/b", "contentLength": 0},
+                {"url": "https://example.com/c", "contentLength": 500, "extractionError": "selector not found"}
+            ],
+            "failedPages": [],
+            "pagesExpected": 3
+        });
+        assert_eq!(crawl_failure_counts(&parsed, 3), (1, 2));
+    }
+
+    #[test]
+    fn crawl_failure_counts_falls_back_when_the_ledger_is_absent() {
+        // Historical crawl rows carry no `failedPages`: per-page errors and
+        // seed-level errors are then the only backstop, and they are not
+        // summed (a failed seed is normally a lost page as well).
+        let parsed = json!({
+            "status": "OK",
+            "pagesFound": 2,
+            "pages": [
+                {"url": "https://example.com/a", "contentLength": 0},
+                {"url": "https://example.com/b", "contentLength": 2000}
+            ],
+            "seedStatuses": [
+                {"url": "https://example.com/a", "status": "error", "error": "boom"},
+                {"url": "https://example.com/x", "status": "error", "error": "boom"},
+                {"url": "https://example.com/y", "status": "error", "error": "boom"}
+            ]
+        });
+        // max(broken pages = 1, seed errors = 3), not 4.
+        assert_eq!(crawl_failure_counts(&parsed, 2), (1, 3));
+    }
+
+    #[test]
+    fn crawl_failure_counts_ignores_seed_errors_when_the_ledger_exists() {
+        // With a loss ledger present the seed errors are already reflected in
+        // it — adding them again would over-report.
+        let parsed = json!({
+            "status": "OK",
+            "pagesFound": 1,
+            "pages": [{"url": "https://example.com/a", "contentLength": 1000}],
+            "failedPages": [{"url": "https://example.com/x", "reason": "boom"}],
+            "seedStatuses": [{"url": "https://example.com/x", "status": "error", "error": "boom"}],
+            "pagesExpected": 2
+        });
+        assert_eq!(crawl_failure_counts(&parsed, 1), (1, 1));
     }
 
     // -------------------------------------------------------------------
