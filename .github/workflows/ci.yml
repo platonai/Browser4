@@ -128,7 +128,14 @@ jobs:
           # infrastructure suite (Chrome, Docker and the started app are available
           # here). See docs-dev/copilot/ci-stabilization-4.13.x.md before editing.
           excluded_groups: 'ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck'
-          timeout_minutes: '35'
+          # 50 minutes, not 35. The crawl integration classes are the long pole and
+          # grew to ~11 minutes each on GitHub runners (CrawlFixtureMetadataTest
+          # 668.8 s + CrawlParallelTabsTest 671.7 s in run 35507033919), so the old
+          # 35-minute cap killed the reactor while ScrapeServiceTests was still
+          # running — the gate failed on budget with zero test failures
+          # (status=timeout, Maven exit 124). See
+          # docs-dev/copilot/ci-stabilization-4.13.x.md §19.7 before changing this.
+          timeout_minutes: '50'
 
       - name: Check Test Status
         if: inputs.skip_tests != true

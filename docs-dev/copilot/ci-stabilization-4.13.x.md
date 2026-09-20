@@ -1125,3 +1125,41 @@ v4.13.20 的门禁（标签 `v4.13.20-ci.1`，run 35497172762）**两次尝试�
 token 与可读文本仍会持续制造这类陷阱——根治应在 `CrawlService` 出口统一
 （例如一律写 `getStatusText(...)`，或一律写 token），并同步 CLI 的解析。
 
+### 19.7 门禁测试预算：35 → 50 分钟（v4.13.20，2026-09-20）
+
+`v4.13.20-ci.2`（run [35507033919](https://github.com/platonai/Browser4/actions/runs/35507033919)）
+是 19.6 的修复上线后的第一次门禁。结果是**零失败**，但仍然是红的：
+
+```
+Total Tests: 2018   Failed: 0   Passed: 2005   Skipped: 13
+⏱️ Tests timed out after 2100 seconds (limit 2100s) — the reactor was killed, results are incomplete
+```
+
+原因不在测试：`Run Tests` 走 `./.github/actions/run-tests`，它用 `timeout 2100` 包住
+Maven；`exit 124` 被映射成 `status=timeout`，于是 `Check Test Status` 打印
+"Failed Tests: 0" 却仍然 `exit 1`。**这是预算问题，不是结果问题。**
+
+被谁吃掉（同一 run 的时间线）：
+
+| 时间 | 事件 | 耗时 |
+|---|---|---|
+| 11:13:32 | 测试步骤开始 | — |
+| 11:18:14 | 快速单测段结束 | ~5 min |
+| 11:29:23 | `CrawlFixtureMetadataTest` 完成 | **668.8 s** |
+| 11:40:36 | `CrawlParallelTabsTest` 完成（19.6 修复后 5/0/0） | **671.7 s** |
+| 11:40:42 | `ScrapeServiceTests` 开始 | — |
+| 11:48:32 | `timeout` 杀进程 | 该类 **8 分钟无输出** |
+
+即两个 crawl 集成类各 ~11 分钟（合 22 分钟），随后 `ScrapeServiceTests` 长时间无输出，
+35 分钟预算见底。注意 19.6 的修复本身让诚实耗时 **+2 分钟**（`CrawlParallelTabsTest`
+原先在 240 s 报错退出，现在会真正跑完 671.7 s）——预算本来就贴边，这一改把它顶破。
+
+**处置**：`.github/workflows/ci.yml` 的 `timeout_minutes` 由 `'35'` 提到 `'50'`，
+并在该行上方写明依据。取 50 而不是更大，是因为当前整套约 40 分钟；
+若下一轮仍被 kill，说明还有**卡住**的类（而不是"慢"的类），那就该先去查
+`ScrapeServiceTests` 为何 8 分钟不产出，而不是继续加预算。
+
+**仍未做**：`ScrapeServiceTests` 在 CI 上长时间无输出的原因（本轮没有它的失败日志可看，
+因为它从未跑完）；以及 19.5 第三条的驱动池分配日志。
+
+
