@@ -151,13 +151,28 @@ object ToolResultSchemas {
     /**
      * `webdb.export` → the per-URL summary built by the executor.
      *
-     * `error` is only written for a failed entry, so it is not required.
+     * A per-URL `status` is `ok`, `empty` (the page was exported but the stored
+     * record held no bytes) or `error`.  `empty` is tallied on its own so
+     * `succeeded` can never count a 0-byte file as a success.
+     *
+     * `error` and `contentLength` are only written when they apply, so they are
+     * not required.
      */
     const val WEBDB_EXPORT = """{"type":"object",""" +
-        """"required":["total","succeeded","failed","results"],"properties":{""" +
-        """"total":{"type":"integer"},"succeeded":{"type":"integer"},"failed":{"type":"integer"},""" +
+        """"required":["total","succeeded","empty","failed","results"],"properties":{""" +
+        """"total":{"type":"integer"},"succeeded":{"type":"integer"},"empty":{"type":"integer"},""" +
+        """"failed":{"type":"integer"},""" +
         """"results":{"type":"array","items":{"type":"object","required":["url","status"],"properties":{""" +
-        """"url":{"type":"string"},"status":{"type":"string"},"error":{"type":"string"}}}}}}"""
+        """"url":{"type":"string"},"status":{"type":"string"},"contentLength":{"type":"integer"},""" +
+        """"error":{"type":"string"}}}}}}"""
+
+    /**
+     * `webdb.normalize` → the canonical url of the request plus the storage key
+     * the page is filed under (the name `webdb.export` writes it to disk with).
+     */
+    const val WEBDB_NORMALIZE = """{"type":"object",""" +
+        """"required":["url","normalizedUrl","storageKey"],"properties":{""" +
+        """"url":{"type":"string"},"normalizedUrl":{"type":"string"},"storageKey":{"type":"string"}}}"""
 
     /** `memory.search` → [ai.platon.pulsar.agentic.memory.SearchPage]. */    const val MEMORY_SEARCH = """{"type":"object","required":["hits"],"properties":{""" +
         """"hits":{"type":"array","items":{"type":"object",""" +

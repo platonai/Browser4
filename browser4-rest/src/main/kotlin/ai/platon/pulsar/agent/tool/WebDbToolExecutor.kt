@@ -9,6 +9,7 @@ import ai.platon.pulsar.skeleton.session.PulsarSession
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import java.nio.file.Path
 import kotlin.io.path.createDirectories
+import kotlin.io.path.fileSize
 import kotlin.reflect.KClass
 
 /**
@@ -64,13 +65,15 @@ class WebDbToolExecutor(
                 ToolSpec.Arg("url", "String", null, "URL to normalize. Required."),
             ),
             returnType = "String",
+            outputSchema = ToolResultSchemas.WEBDB_NORMALIZE,
             description = "Normalize a URL for use as a web database key. " +
-                "Resolves redirects, normalizes paths, and validates the URL.",
+                "Resolves redirects, normalizes paths, and validates the URL. " +
+                "Returns the canonical URL plus the storage key the page is filed under.",
             examples = listOf(
                 ToolExample(
                     title = "Normalize a URL with query parameters",
                     args = mapOf("sessionId" to "<session-id>", "url" to "https://example.com/a?b=1"),
-                    notes = "Returns the canonical key, e.g. https://example.com/a?b=1",
+                    notes = "Returns JSON: {\"url\":..., \"normalizedUrl\":..., \"storageKey\":...}",
                 ),
             ),
         )
@@ -124,8 +127,20 @@ class WebDbToolExecutor(
 
             val results = urlList.map { url ->
                 runCatching {
-                    exportPage(session, url, targetDir)
-                    mapOf("url" to url, "status" to "ok")
+                    val contentLength = exportPage(session, url, targetDir)
+                    if (contentLength > 0L) {
+                        mapOf("url" to url, "status" to "ok", "contentLength" to contentLength)
+                    } else {
+                        // A stored page with 0 bytes is corruption, not success —
+                        // exporting it silently pollutes downstream pipelines
+                        // (e.g. WebMiner input directories) with an empty file.
+                        mapOf(
+                            "url" to url,
+                            "status" to "empty",
+                            "contentLength" to contentLength,
+                            "error" to "Stored page content is empty (0 bytes); re-fetch the URL with -refresh",
+                        )
+                    }
                 }.getOrElse { e ->
                     mapOf("url" to url, "status" to "error", "error" to (e.message ?: "unknown"))
                 }
@@ -146,6 +161,9 @@ class WebDbToolExecutor(
     internal fun exportSummary(results: List<Map<String, Any?>>): Map<String, Any?> = mapOf(
         "total" to results.size,
         "succeeded" to results.count { it["status"] == "ok" },
+        // Exported but empty: a distinct outcome, so a caller can never read
+        // `succeeded == total` while some files hold no bytes.
+        "empty" to results.count { it["status"] == "empty" },
         "failed" to results.count { it["status"] == "error" },
         "results" to results,
     )
@@ -165,7 +183,19 @@ class WebDbToolExecutor(
         return managed.withLock {
             val session = managed.agenticSession
             val normUrl = session.normalize(url)
-            normUrl.urlString
+            // Serialized here, like the export summary: the wire format is the
+            // executor's business, and `ToolResultSchemas.WEBDB_NORMALIZE` is a
+            // description of exactly this object.
+            pulsarObjectMapper().writeValueAsString(
+                mapOf(
+                    "url" to url,
+                    "normalizedUrl" to normUrl.urlString,
+                    // The key the page is actually filed under — `webdb export`
+                    // derives its filename from exactly this string, so showing
+                    // it makes the web database key visible to users.
+                    "storageKey" to sanitizeFilename(normUrl.urlString),
+                )
+            )
         }
     }
 
@@ -180,21 +210,25 @@ class WebDbToolExecutor(
 
     /**
      * Export a single page from webdb to the target directory.
+     *
+     * @return the number of bytes written, so the caller can flag a 0-byte
+     *   (corrupt) export instead of reporting it as a success.
      */
-    private suspend fun exportPage(session: PulsarSession, url: String, targetDir: Path): String {
+    private suspend fun exportPage(session: PulsarSession, url: String, targetDir: Path): Long {
         val normalizedUrl = session.normalize(url).urlString
         val page = session.getOrNull(normalizedUrl)
             ?: throw IllegalArgumentException("Page not found in webdb: $url (normalized: $normalizedUrl)")
         val filename = sanitizeFilename(normalizedUrl)
         val path = targetDir.resolve(filename)
-        return session.exportTo(page, path).toString()
+        session.exportTo(page, path)
+        return runCatching { path.fileSize() }.getOrDefault(0L)
     }
 
     /**
      * Derive a safe filename from a URL.
      * Example: "http://example.com/page" → "example.com_page.htm"
      */
-    private fun sanitizeFilename(url: String): String {
+    internal fun sanitizeFilename(url: String): String {
         val cleaned = url
             .removePrefix("https://")
             .removePrefix("http://")

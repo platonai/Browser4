@@ -40,13 +40,20 @@ class WebDbExportSchemaTest {
         val executor = ToolRegistryFixture.executors().filterIsInstance<WebDbToolExecutor>().single()
 
         val results = listOf(
-            mapOf<String, Any?>("url" to "https://example.com", "status" to "ok"),
-            mapOf<String, Any?>("url" to "https://example.org", "status" to "error", "error" to "unknown host"),
+            mapOf<String, Any?>("url" to "https://example.com", "status" to "ok", "contentLength" to 4096L),
+            mapOf<String, Any?>(
+                "url" to "https://example.org", "status" to "empty", "contentLength" to 0L,
+                "error" to "Stored page content is empty (0 bytes); re-fetch the URL with -refresh",
+            ),
+            mapOf<String, Any?>("url" to "https://example.net", "status" to "error", "error" to "unknown host"),
         )
         val summary = executor.exportSummary(results)
 
-        assertEquals(2, summary["total"])
+        // Three entries, three different outcomes: the 0-byte page is `empty`,
+        // so it is neither a success nor a failure.
+        assertEquals(3, summary["total"])
         assertEquals(1, summary["succeeded"])
+        assertEquals(1, summary["empty"])
         assertEquals(1, summary["failed"])
 
         val json = ai.platon.pulsar.common.serialize.json.pulsarObjectMapper().writeValueAsString(summary)

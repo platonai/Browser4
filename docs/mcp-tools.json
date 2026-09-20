@@ -3753,13 +3753,13 @@
       "expectsError" : false,
       "executable" : true
     } ],
-    "outputSchema" : "{\"type\":\"object\",\"required\":[\"total\",\"succeeded\",\"failed\",\"results\"],\"properties\":{\"total\":{\"type\":\"integer\"},\"succeeded\":{\"type\":\"integer\"},\"failed\":{\"type\":\"integer\"},\"results\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"url\",\"status\"],\"properties\":{\"url\":{\"type\":\"string\"},\"status\":{\"type\":\"string\"},\"error\":{\"type\":\"string\"}}}}}}"
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"total\",\"succeeded\",\"empty\",\"failed\",\"results\"],\"properties\":{\"total\":{\"type\":\"integer\"},\"succeeded\":{\"type\":\"integer\"},\"empty\":{\"type\":\"integer\"},\"failed\":{\"type\":\"integer\"},\"results\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"url\",\"status\"],\"properties\":{\"url\":{\"type\":\"string\"},\"status\":{\"type\":\"string\"},\"contentLength\":{\"type\":\"integer\"},\"error\":{\"type\":\"string\"}}}}}}"
   }, {
     "domain" : "webdb",
     "method" : "normalize",
     "mcpNames" : [ "webdb_normalize" ],
     "signature" : "webdb.normalize(sessionId: String, url: String)",
-    "description" : "Normalize a URL for use as a web database key. Resolves redirects, normalizes paths, and validates the URL.",
+    "description" : "Normalize a URL for use as a web database key. Resolves redirects, normalizes paths, and validates the URL. Returns the canonical URL plus the storage key the page is filed under.",
     "returnType" : "String",
     "arguments" : [ {
       "name" : "sessionId",
@@ -3778,9 +3778,10 @@
         "sessionId" : "<session-id>",
         "url" : "https://example.com/a?b=1"
       },
-      "notes" : "Returns the canonical key, e.g. https://example.com/a?b=1",
+      "notes" : "Returns JSON: {\"url\":..., \"normalizedUrl\":..., \"storageKey\":...}",
       "expectsError" : false,
       "executable" : true
-    } ]
+    } ],
+    "outputSchema" : "{\"type\":\"object\",\"required\":[\"url\",\"normalizedUrl\",\"storageKey\"],\"properties\":{\"url\":{\"type\":\"string\"},\"normalizedUrl\":{\"type\":\"string\"},\"storageKey\":{\"type\":\"string\"}}}"
   } ]
 }

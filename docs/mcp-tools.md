@@ -3930,7 +3930,7 @@ Returns: `String`
 <details><summary>Result schema</summary>
 
 ```json
-{"type":"object","required":["total","succeeded","failed","results"],"properties":{"total":{"type":"integer"},"succeeded":{"type":"integer"},"failed":{"type":"integer"},"results":{"type":"array","items":{"type":"object","required":["url","status"],"properties":{"url":{"type":"string"},"status":{"type":"string"},"error":{"type":"string"}}}}}}
+{"type":"object","required":["total","succeeded","empty","failed","results"],"properties":{"total":{"type":"integer"},"succeeded":{"type":"integer"},"empty":{"type":"integer"},"failed":{"type":"integer"},"results":{"type":"array","items":{"type":"object","required":["url","status"],"properties":{"url":{"type":"string"},"status":{"type":"string"},"contentLength":{"type":"integer"},"error":{"type":"string"}}}}}}
 ```
 
 </details>
@@ -3945,7 +3945,7 @@ Examples:
 webdb.normalize(sessionId: String, url: String)
 ```
 
-Normalize a URL for use as a web database key. Resolves redirects, normalizes paths, and validates the URL.
+Normalize a URL for use as a web database key. Resolves redirects, normalizes paths, and validates the URL. Returns the canonical URL plus the storage key the page is filed under.
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -3954,8 +3954,16 @@ Normalize a URL for use as a web database key. Resolves redirects, normalizes pa
 
 Returns: `String`
 
+<details><summary>Result schema</summary>
+
+```json
+{"type":"object","required":["url","normalizedUrl","storageKey"],"properties":{"url":{"type":"string"},"normalizedUrl":{"type":"string"},"storageKey":{"type":"string"}}}
+```
+
+</details>
+
 Examples:
 
 - Normalize a URL with query parameters: `{"sessionId": "<session-id>", "url": "https://example.com/a?b=1"}`
-  - Returns the canonical key, e.g. https://example.com/a?b=1
+  - Returns JSON: {"url":..., "normalizedUrl":..., "storageKey":...}
 
