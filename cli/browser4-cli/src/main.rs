@@ -26531,9 +26531,13 @@ mod tests {
 
         let expected_dir = crate::snapshot::snapshot_dir().canonicalize().unwrap_or_else(|_| {
             // snapshot_dir may not exist yet; the resolver does not create it
-            // (save_snapshot does).  Compare against the raw relative form in
-            // that case.
-            crate::snapshot::snapshot_dir()
+            // (save_snapshot does).  The resolver joins that relative dir onto
+            // the current directory, so compare in the same absolute form —
+            // returning the raw relative path here made the test pass or fail
+            // depending on whether an earlier run had already created the dir.
+            std::env::current_dir()
+                .map(|cwd| cwd.join(crate::snapshot::snapshot_dir()))
+                .unwrap_or_else(|_| crate::snapshot::snapshot_dir())
         });
         assert_eq!(
             resolved.parent().map(|p| display_without_verbatim_prefix(p)),
