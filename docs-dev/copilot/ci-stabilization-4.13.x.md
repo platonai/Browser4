@@ -846,11 +846,11 @@ crawl 想并行需要**不绑定会话驱动**、改为按 tab 从驱动池租�
    超时实际由 `CrawlService.writeCancelled` 收尾，而它**不带** `failedPages`/`pagesExpected` ⇒
    超时的深爬仍会少页且不报账。`crawl.md` 的"5 min/level，上限 30 min"也与实际不符（depth ≥ 2 实为 10 min）。
    这一条需要先定预算策略（轮次预算应由"任务剩余预算"派生，而不是每轮各算一份），所以留到下一轮。
-3. **在途视图仍是"单轮"而非"聚合"**：`publishPages` 只带当前轮的 pages，所以下一轮种子开始发布时
+3. **（§22 已修）在途视图仍是"单轮"而非"聚合"**：`publishPages` 只带当前轮的 pages，所以下一轮种子开始发布时
    `pagesFound` 会从聚合值回落到单轮值（`failedPages`/`pagesExpected` 现在已被保留）。
    要真正单调，需要让 sink 聚合各轮 pages——注意不能简单按 URL 求并集：同一 URL 被两个种子各抓一次
    在终态记录里是两行，并集会把它们并成一行。属于显示口径问题，不是丢页问题。
-4. 多轮并发发布对同一条记录是 read-modify-write，没有 `recordSeedProgress` 那样的 per-task 锁
+4. **（§22 已修）** 多轮并发发布对同一条记录是 read-modify-write，没有 `recordSeedProgress` 那样的 per-task 锁
    （`CrawlTaskContext.publishLock` 只在种子收尾时用）。危害是瞬时视图可能少一轮的字段，
    下一次发布/种子收尾就会修正；要根治需让 sink 拿到 task context 的锁。
 5. **（§21 已修）发现链接未去重**，且不套用 `--ignore-url-query` / `--no-norm`（depth 1 与引擎路径都套用）；
@@ -1392,6 +1392,82 @@ worker 写的 `"PROCESSING"`）与 `ResourceStatus` 可读文本（`"OK"`、`"Re
 * `--ignore-url-query` 对**种子 URL** 的影响（`CombinedUrlNormalizer` 在加载种子时也会剥 query）
   不在本轮范围：那是引擎侧行为，且与 coworker 报告里的另一条 issue 重合，需要单独判断
   "种子是否应当原样抓取"。
+
+
+
+## 22. 在途进度视图：只报"最后一轮"、且无锁 read-modify-write（4.13.x，§16.4 第 3、4 条）
+
+两条同族：都不是丢页，而是**派生出来的在途视图**既不聚合（第 3 条）也不互斥（第 4 条），
+共同破坏同一个承诺——*运行中的计数只增不减、且不超过终态值*。
+
+### 22.1 探针：多种子 crawl + 150 ms 轮询，把回落量出来
+
+新增 `ConcurrencyProbeController` 的 `/__probe/hub/{id}?links=N&delayMs=M`（hub 自身立即返回、
+它的链接指向慢页面，于是每一轮都持续几秒并多次发布）与 `CrawlInFlightProgressTest`
+（真实浏览器，150 ms 轮询 `/api/crawl/{id}/result`）。
+
+**改动前**（3 个种子、每 hub 3 条 600 ms 链接、`parallelTabs=1`，共 9 页）的轨迹只列变化点：
+
+```
+pages=0/0 links=0 → 1/0 → 2/0 → 3/3 links=3          ← 种子 A 结算（聚合值 3）
+→ 1/3 links=6 → 2/3 → 6/6 links=6                    ← 回落 3 → 1；随后 B 结算
+→ 1/6 links=9 → 2/6 → 9/9 OK                         ← 又回落 6 → 1
+```
+
+断言直接给出证据：`pagesFound fell back from 3 to 1 while the crawl was running`。
+`pagesExpected` 同期从 0 跳到该轮的值（它只统计**已结算**种子，属预期口径，见 22.4）。
+
+第 4 条（并发发布的 read-modify-write）在探针里**没有**稳定复现——窗口只有一次 get/put 的宽度，
+靠轮询撞上它属于撞运气。所以它是**按结构修**的，并由第 3 条的不变量在真实 crawl 上兜底。
+
+### 22.2 修法：一个聚合视图 + 一条加锁写入路径
+
+* **聚合**：`CrawlTaskContext.publishedPages: MutableMap<Int, List<CrawlPageResult>>`（按 seed index），
+  记录里的 pages = `CrawlSupport.aggregateInFlightPages(...)` = 各轮**最新一次**发布按 seed 顺序拼接。
+  *为什么不是按 URL 求并集*：终态记录一行 = 一次抓取，同一 URL 被两个种子各抓一次就是两行
+  （`SeedCollection.pages` 直接拼接各轮 pages），并集会让在途值**小于**终态值——把"计数回落"换成了
+  "最后一步长大"。这条规则由单测钉住（`testAggregateIsNotAUrlUnion`）。
+* **单写入路径**：`CrawlProgressSink` 由"每个 crawl 一个、按 taskId 发布"改为**每轮一个**
+  （`SeedProgressSink(task, seedIndex)`，作为参数传给 `crawlDepth1` / `crawlDepthN`）；
+  服务侧只剩一个 `publishInFlight(task, seedIndex, pages, linksDiscovered, diagnostic)`，
+  在 `synchronized(task.publishLock)` 内完成"记下本轮 pages → 聚合 → 合并旧记录 → 写回"。
+  `recordSeedProgress`（种子结算）也把该轮的 pages 写进同一张表、并改用同一个聚合视图，
+  于是两个发布者报的是**同一个数**（此前一个是"已结算轮之和"、另一个是"当前轮"，这正是回落来源）。
+* **顺带修掉一个更小的同类问题**：`publishDiagnostic`（某轮没发现可跟进链接时）原先**整条重建**记录
+  并把 `status` 写成 `OK`——多种子 crawl 里只要有一个种子没有 out-link，轮询方就会看到整个任务"已完成"。
+  现在它走同一条合并路径（`PROCESSING` + diagnostic），终态仍由 `writeCompleted` 写。
+* §16.3 的语义保持不变：终态记录**丢弃**晚到的发布（`mergeIncrementalProgress` 返回 null 的那条路径）。
+
+### 22.3 验证
+
+| 层 | 证据 | 结果 |
+|---|---|---|
+| 本地 · 单测 | `CrawlSupportTest` 新增 3 条（求和 / 非 URL 并集 / seed 顺序） | **44 / 0 / 0**（原 41） |
+| 本地 · 单测 | `browser4-rest` 全部 crawl 单测类（8 个类） | **116 / 0 / 0** |
+| 本地 · 集成 | `CrawlInFlightProgressTest`：顺序 3 种子（9 页）与 2 路并行（6 页）各全程 150 ms 轮询 | **3 / 0 / 0，145.9 s**（改前同用例在 `pagesFound fell back from 3 to 1` 处红） |
+| 本地 · 集成 | `CrawlParallelTabsTest`（多种子并行 + depth-1 两轮共享 out-link 的既有用例） | **5 / 0 / 0，105.0 s** |
+| 本地 · 集成 | `CrawlFixtureMetadataTest`（depth ≥ 2 的 parse handler 发布路径） | **5 / 0 / 0，625.0 s** |
+
+改后同一探针的轨迹（顺序用例）变成单调：
+
+```
+pages=0/0 → 1/0 → 2/0 → 3/3 → 4/3 → 5/3 → 6/6 → 7/6 → 8/6 → 9/9 OK
+```
+
+`CrawlInFlightProgressTest` 现在的断言就是这两条的验收条件：运行中 `pagesFound` / `pagesExpected` /
+`failedPages` 各自单调不减、在途值不超过终态值、且确实观测到视图在增长（至少 3 个不同计数——
+只采到最后一个样本的 run 什么也证明不了）。
+
+### 22.4 边界与仍未做
+
+* **`pagesExpected` 是"已结算种子"的口径**（不是一开始就报总数）：深爬在跑的时候它会随种子结算
+  阶梯式上升。要让它在起跑时就是总数，得先在 REST 契约里定义"还没提交的页算不算已承诺"，
+  所以本轮刻意保留现状，只保证**不回落**。
+* **取消/超时任务不满足"在途 ≤ 终态"**：终态是"已返回轮次的 pages + 每个未结算种子 1 条丢失"，
+  而在途视图含正在跑的轮次已收集的部分。这是 §17.3 / §19.5 的报账口径，不在本轮范围
+  （测试只对正常完成的 crawl 断言该性质）。
+* 第 4 条的竞态没有**直接**复现用例（见 22.1）：它由"两条发布路径共用同一把锁与同一个写入函数"
+  在结构上消除，并由上述不变量覆盖。
 
 
 

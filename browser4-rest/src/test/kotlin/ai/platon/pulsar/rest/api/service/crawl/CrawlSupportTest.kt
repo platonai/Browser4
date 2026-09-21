@@ -684,6 +684,58 @@ class CrawlSupportTest {
     }
 
     // ------------------------------------------------------------------
+    // aggregateInFlightPages
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("the in-flight view sums the rounds that published, it does not follow the last one")
+    fun testAggregateInFlightPagesSumsTheRounds() {
+        // Round 0 published two pages, round 1 published one: the record a poller
+        // reads must count three.  Reporting only the round that published last is
+        // what made a real crawl's count fall back from 3 to 1.
+        val published = mutableMapOf(
+            0 to listOf(CrawlPageResult("https://example.com/a"), CrawlPageResult("https://example.com/b")),
+            1 to listOf(CrawlPageResult("https://example.com/c"))
+        )
+        assertEquals(3, aggregateInFlightPages(published).size)
+
+        // A round only ever grows, so its latest publish replaces its own earlier
+        // one rather than piling up snapshots of the same page.
+        published[0] = published.getValue(0) + CrawlPageResult("https://example.com/d")
+        assertEquals(4, aggregateInFlightPages(published).size)
+    }
+
+    @Test
+    @DisplayName("two seeds that fetched one URL are two rows in flight, as they are in the result")
+    fun testAggregateIsNotAUrlUnion() {
+        // The terminal record keeps one row per fetch, so a URL two seeds both
+        // collected is two rows.  A URL union here would make the in-flight count
+        // smaller than the terminal one — the same "the count went down" symptom,
+        // deferred to the end of the crawl.
+        val shared = mapOf(
+            0 to listOf(CrawlPageResult("https://example.com/a")),
+            1 to listOf(CrawlPageResult("https://example.com/a"))
+        )
+
+        assertEquals(2, aggregateInFlightPages(shared).size)
+    }
+
+    @Test
+    @DisplayName("the aggregate is reported in seed order")
+    fun testAggregateFollowsSeedOrder() {
+        val published = mapOf(
+            2 to listOf(CrawlPageResult("https://example.com/c")),
+            0 to listOf(CrawlPageResult("https://example.com/a")),
+            1 to listOf(CrawlPageResult("https://example.com/b"))
+        )
+
+        assertEquals(
+            listOf("https://example.com/a", "https://example.com/b", "https://example.com/c"),
+            aggregateInFlightPages(published).map { it.url }
+        )
+    }
+
+    // ------------------------------------------------------------------
     // buildLossNote
     // ------------------------------------------------------------------
 

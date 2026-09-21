@@ -530,6 +530,23 @@ internal fun buildLossNote(
 }
 
 /**
+ * The pages a crawl has published so far, aggregated over its seed rounds.
+ *
+ * One round publishes only what *it* collected, and several rounds publish at the
+ * same time, so the in-flight record has to add them up.  Keyed by seed index,
+ * each round's latest publish replaces its own earlier one (a round only ever
+ * grows), and the result is every round's pages in seed order.
+ *
+ * A URL-keyed union would be wrong here.  The terminal record keeps one row per
+ * *fetch*: [CrawlService] concatenates the rounds' page lists, so a URL two seeds
+ * both fetched is two rows.  Merging by URL would make the in-flight count
+ * smaller than the terminal one — the same "the count went down" symptom this
+ * aggregation exists to remove, only deferred to the end of the crawl.
+ */
+internal fun aggregateInFlightPages(published: Map<Int, List<CrawlPageResult>>): List<CrawlPageResult> =
+    published.entries.sortedBy { it.key }.flatMap { it.value }
+
+/**
  * Merge an in-flight progress publish into the record of a running crawl.
  *
  * A round publishes every page it records so a poller can watch a crawl fill up.

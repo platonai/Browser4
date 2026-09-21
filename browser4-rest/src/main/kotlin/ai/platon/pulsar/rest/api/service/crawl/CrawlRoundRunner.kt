@@ -21,20 +21,26 @@ import kotlin.time.Duration.Companion.milliseconds
  * Where a round reports the progress it made, without knowing that a task store
  * exists.  [CrawlService] backs it with the in-memory task records, so the
  * execution of a round stays independent of the bookkeeping around it.
+ *
+ * One sink belongs to **one round** (one task, one seed): publishing is a
+ * read-modify-write of the task record under the task's lock, and only a sink
+ * bound to that task can take it.  A sink shared by every round of every crawl
+ * could not do this — it would have to look the task up by id, and the publish
+ * would race the seed bookkeeping it has to merge with.
  */
 internal interface CrawlProgressSink {
 
     /**
-     * Publish the pages collected so far by one seed round, so a poller sees
-     * real page counts while the crawl is still running.
+     * Publish the pages one round has collected so far, so a poller sees real
+     * page counts while the crawl is still running.
      *
      * [diagnostic] is set when the round has something to explain (e.g. the
      * seed page had no followable out-links) and must be preserved otherwise.
      */
-    fun publishPages(taskId: String, pages: List<CrawlPageResult>, linksDiscovered: Int, diagnostic: String? = null)
+    fun publishPages(pages: List<CrawlPageResult>, linksDiscovered: Int, diagnostic: String? = null)
 
     /** Record a diagnostic-only outcome, for a round that produced no pages at all. */
-    fun publishDiagnostic(taskId: String, diagnostic: String)
+    fun publishDiagnostic(diagnostic: String)
 }
 
 /**
@@ -52,9 +58,11 @@ internal interface CrawlProgressSink {
  *    submits its own children.
  *
  * The runner owns no crawl state: the task record, the seed budget and the
- * incremental publishing all belong to [CrawlService], which hands over a
- * [CrawlProgressSink] instead.  That is what makes a round's lifetime exactly
- * one call and lets several seeds run their rounds concurrently.
+ * incremental publishing all belong to [CrawlService], which hands each round its
+ * own [CrawlProgressSink].  That is what makes a round's lifetime exactly one
+ * call and lets several seeds run their rounds concurrently — and it is why the
+ * sink is a parameter of the depth>=1 rounds rather than a field: a publish is a
+ * read-modify-write of the record of *its* task, under *that* task's lock.
  *
  * Every round reports what it lost, not only what it collected: a submitted URL
  * that never produced a page is settled through [CrawlLedger] and comes back in
@@ -62,7 +70,6 @@ internal interface CrawlProgressSink {
  */
 internal class CrawlRoundRunner(
     private val sessionManager: PulsarSessionManager,
-    private val progress: CrawlProgressSink,
 ) {
     private val logger = LoggerFactory.getLogger(CrawlRoundRunner::class.java)
 
@@ -190,12 +197,15 @@ internal class CrawlRoundRunner(
      *   purpose: a fixed budget that outlives the task-level limit only ever gets
      *   the round killed, and a killed round cannot report the URLs it knows are
      *   missing.
+     * @param progress where this round publishes what it collects; bound to the
+     *   task it belongs to, so the publish can take that task's lock.
      */
     internal suspend fun crawlDepth1(
         taskId: String,
         request: CrawlRequest,
         linksDiscovered: AtomicInteger,
-        roundTimeoutMs: Long
+        roundTimeoutMs: Long,
+        progress: CrawlProgressSink
     ): CrawlRound {
         logger.info(
             "Crawl {}: depth=1 round budget {}ms (drawn from what the task has left)",
@@ -250,7 +260,7 @@ internal class CrawlRoundRunner(
                     "Verify the URL is accessible and retry."
                 }
                 logger.info("Crawl {}: {}", taskId, diagnostic)
-                progress.publishDiagnostic(taskId, diagnostic)
+                progress.publishDiagnostic(diagnostic)
                 return CrawlRound(pages = emptyList(), pagesExpected = 0)
             }
 
@@ -325,7 +335,7 @@ internal class CrawlRoundRunner(
                                 // Publish in-memory progress so the CLI poll loop sees
                                 // pages as they arrive instead of 'waiting for first
                                 // page' for the whole seed round.
-                                progress.publishPages(taskId, results.toList(), linksDiscovered.get())
+                                progress.publishPages(results.toList(), linksDiscovered.get())
                             }
                             ledger.recordSuccess(linkUrl)
                         } else {
@@ -400,12 +410,15 @@ internal class CrawlRoundRunner(
      * @param roundTimeoutMs how long this round may wait for its URLs to settle
      *   before reporting what it has, derived from the task budget by
      *   [resolveRoundTimeoutMs] (see [crawlDepth1] for why it is a parameter).
+     * @param progress where this round publishes what it collects (see
+     *   [crawlDepth1]).
      */
     internal suspend fun crawlDepthN(
         taskId: String,
         request: CrawlRequest,
         linksDiscovered: AtomicInteger,
-        roundTimeoutMs: Long
+        roundTimeoutMs: Long,
+        progress: CrawlProgressSink
     ): CrawlRound {
         logger.info(
             "Crawl {}: depth={} round budget {}ms (drawn from what the task has left)",
@@ -555,7 +568,7 @@ internal class CrawlRoundRunner(
                         // page counts while the crawl is still running, instead of
                         // repeating 'waiting for first page' until the whole crawl
                         // finishes.
-                        progress.publishPages(taskId, results.toList(), linksDiscovered.get())
+                        progress.publishPages(results.toList(), linksDiscovered.get())
                     }
                     ledger.recordSuccess(key)
                     logger.debug("Crawl {}: depth={} page={}", taskId, currentDepth, servedUrl)
@@ -652,7 +665,6 @@ internal class CrawlRoundRunner(
                             if (diagnostic != null) {
                                 logger.info("Crawl {}: {}", taskId, diagnostic)
                                 progress.publishPages(
-                                    taskId,
                                     synchronized(results) { results.toList() },
                                     linksDiscovered.get(),
                                     diagnostic

@@ -39,6 +39,11 @@ class ConcurrencyProbeController {
     private val maxConcurrent = AtomicInteger()
     private val totalRequests = AtomicInteger()
 
+    private companion object {
+        /** A hub that linked to more than this would take minutes to drain. */
+        const val MAX_HUB_LINKS = 32
+    }
+
     /**
      * A slow, well-formed HTML page.
      *
@@ -77,6 +82,50 @@ class ConcurrencyProbeController {
         "totalRequests" to totalRequests.get(),
         "inFlight" to inFlight.get(),
     )
+
+    /**
+     * A portal page whose only out-links are [slow] pages.
+     *
+     * The in-flight progress view of a crawl is written by every round while it
+     * runs, so observing it needs a crawl that lasts long enough for two rounds
+     * to publish at the same time — a hub whose links each hold the server open
+     * for `delayMs` does exactly that.  Each link is a distinct path with a
+     * distinct title, so a collected row can still be checked against the page
+     * it claims to have come from.
+     *
+     * The hub itself answers immediately: the time has to be spent on the
+     * discovered links, otherwise only the seed round would be observable.
+     *
+     * @param links how many slow pages the hub links to (1..32).
+     * @param delayMs the hold time handed to every linked [slow] page.
+     */
+    @GetMapping(value = ["/hub", "/hub/{id}"], produces = ["text/html"])
+    fun hub(
+        @PathVariable(name = "id", required = false) id: String?,
+        @RequestParam(name = "links", defaultValue = "4") links: Int,
+        @RequestParam(name = "delayMs", defaultValue = "1000") delayMs: Long,
+    ): String {
+        val tag = id ?: "probe"
+        val anchors = (1..links.coerceIn(1, MAX_HUB_LINKS)).joinToString("\n                ") { index ->
+            """<a class="probe-link" href="/__probe/slow/$tag-$index?delayMs=$delayMs">Probe $tag-$index</a>"""
+        }
+        return """
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <title>Probe hub $tag</title>
+        </head>
+        <body>
+            <h1>Probe hub $tag</h1>
+            <p id="probe-hub-id">$tag</p>
+            <div class="links">
+                $anchors
+            </div>
+        </body>
+        </html>
+        """.trimIndent()
+    }
 
     /** Zero the counters, so the next crawl is measured on its own. */
     @PostMapping("/reset")

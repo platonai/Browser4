@@ -61,34 +61,28 @@ class CrawlService(
         objectMapper = pulsarObjectMapper()
     )
 
-    /**
-     * Where a running round publishes what it collected.  Declared before the
-     * [roundRunner] that reports through it: the runner is handed a sink, not a
-     * reference to the service, so a round never reaches into the task store.
-     */
-    private val progressSink: CrawlProgressSink = object : CrawlProgressSink {
-        override fun publishPages(
-            taskId: String,
-            pages: List<CrawlPageResult>,
-            linksDiscovered: Int,
-            diagnostic: String?
-        ) = publishIncremental(taskId, pages, linksDiscovered, diagnostic)
-
-        override fun publishDiagnostic(taskId: String, diagnostic: String) {
-            // A round that produced no page at all: the diagnostic *is* the
-            // result.  In-memory only — there is no terminal state to persist
-            // yet, and the terminal write of the crawl replaces this record.
-            taskStore.put(taskId, CrawlResponse(
-                taskId = taskId,
-                status = CrawlStatus.OK,
-                pagesFound = 0,
-                diagnostic = diagnostic
-            ))
-        }
-    }
-
     /** Executes one round of a crawl; stateless, so it is shared by all tasks. */
-    private val roundRunner = CrawlRoundRunner(sessionManager, progressSink)
+    private val roundRunner = CrawlRoundRunner(sessionManager)
+
+    /**
+     * Where one seed round publishes what it collected.
+     *
+     * Bound to its task and its seed index, because a publish is a
+     * read-modify-write of the task record *and* of that round's slice of the
+     * in-flight page view — both under the task's [CrawlTaskContext.publishLock],
+     * which a shared, id-keyed sink could not take.
+     */
+    private inner class SeedProgressSink(
+        private val task: CrawlTaskContext,
+        private val seedIndex: Int,
+    ) : CrawlProgressSink {
+
+        override fun publishPages(pages: List<CrawlPageResult>, linksDiscovered: Int, diagnostic: String?) =
+            publishInFlight(task, seedIndex, pages, linksDiscovered, diagnostic)
+
+        override fun publishDiagnostic(diagnostic: String) =
+            publishInFlight(task, seedIndex, emptyList(), task.linksDiscovered.get(), diagnostic)
+    }
 
     @EventListener(ApplicationReadyEvent::class)
     fun restoreFromDisk() {
@@ -429,6 +423,10 @@ class CrawlService(
             // they can actually meet.  Depth=0 is a single blocking load, which no
             // suspend timeout can interrupt — the task limit is its bound.
             val roundTimeoutMs = resolveRoundTimeoutMs(seedRequest.depth, remainingBudgetMs)
+            // One sink per seed round: it carries the task (and its publish lock),
+            // so this round's progress is merged into the crawl's record under
+            // that lock instead of racing the seed bookkeeping.
+            val seedProgress = SeedProgressSink(task, index)
             val fetched = when {
                 // Depth=0 is bulk fetch: one URL, no link
                 // discovery, so its pages are its whole round.
@@ -436,10 +434,10 @@ class CrawlService(
                     pages = roundRunner.crawlDepth0(task.taskId, seedRequest, sharedDepth0Session)
                 )
                 seedRequest.depth <= 1 -> roundRunner.crawlDepth1(
-                    task.taskId, seedRequest, task.linksDiscovered, roundTimeoutMs
+                    task.taskId, seedRequest, task.linksDiscovered, roundTimeoutMs, seedProgress
                 )
                 else -> roundRunner.crawlDepthN(
-                    task.taskId, seedRequest, task.linksDiscovered, roundTimeoutMs
+                    task.taskId, seedRequest, task.linksDiscovered, roundTimeoutMs, seedProgress
                 )
             }
             logger.info(
@@ -500,13 +498,21 @@ class CrawlService(
      * is deferred until the crawl completes to avoid writing
      * intermediate states.  Concurrent seeds publish under a lock so
      * a reader never sees a half-written record.
+     *
+     * The pages it reports are the crawl's aggregate view, not only this seed's:
+     * the rounds that are still running have published their own pages, and the
+     * count a poller sees must never fall back when the next seed starts.
      */
     private fun recordSeedProgress(task: CrawlTaskContext, index: Int, round: CrawlRound, status: CrawlSeedStatus) {
         synchronized(task.publishLock) {
             task.seedRounds[index] = round
             task.seedStatuses[index] = status
+            // The settled round confirms what its publishes reported; recording it
+            // here keeps the aggregate complete even for a round that never
+            // published (a depth-0 seed collects without reporting page by page).
+            task.publishedPages[index] = round.pages
             val settled = task.seedRounds.filterNotNull()
-            val pages = settled.flatMap { it.pages }
+            val pages = aggregateInFlightPages(task.publishedPages)
             val currentResult = taskStore.getIfPresent(task.taskId)
             val incrementalResponse = CrawlResponse(
                 taskId = task.taskId,
@@ -702,37 +708,45 @@ class CrawlService(
     }
 
     /**
-     * Publish an in-memory progress snapshot to the task store so the CLI poll
-     * loop sees real page counts while the crawl is still running.  In-memory
-     * only — persistence is deferred until the crawl reaches a terminal state.
+     * Add one round's publish to the in-flight record of a running crawl.
      *
-     * The publish *adds to* the current record rather than replacing it (see
-     * [mergeIncrementalProgress]): the losses and expected totals of the seeds
-     * that already settled stay visible, and a task that has already been
-     * finalized is never moved back to PROCESSING by a parse handler that
-     * outlived it.
+     * The record is the crawl's *aggregate* view: the pages of every round that
+     * has published so far ([aggregateInFlightPages]), merged into what the
+     * settled seeds have already reported.  Publishing only the round's own pages
+     * made the count fall back — a poller watched 3 pages become 1 when the next
+     * seed's round published its first page.
+     *
+     * Both publishers ([SeedProgressSink] and [recordSeedProgress]) take
+     * [CrawlTaskContext.publishLock], so the read-modify-write cannot lose a
+     * contribution from the other one.  In-memory only: persistence is deferred
+     * until the crawl reaches a terminal state.
      */
-    private fun publishIncremental(
-        taskId: String,
+    private fun publishInFlight(
+        task: CrawlTaskContext,
+        seedIndex: Int,
         pages: List<CrawlPageResult>,
         linksDiscovered: Int,
         diagnostic: String? = null
     ) {
-        val previous = taskStore.getIfPresent(taskId)
-        val merged = mergeIncrementalProgress(
-            taskId, previous, pages, linksDiscovered, diagnostic, terminalStatuses
-        )
-        if (merged == null) {
-            // The task is finished (round timeout, cancellation, completion) while
-            // a parse handler is still running.  Reviving it would leave the poller
-            // waiting for a record nobody will ever finalize again.
-            logger.debug(
-                "Crawl {}: dropping an incremental publish — the task is already terminal ({})",
-                taskId, previous?.status
+        synchronized(task.publishLock) {
+            task.publishedPages[seedIndex] = pages
+            val aggregated = aggregateInFlightPages(task.publishedPages)
+            val previous = taskStore.getIfPresent(task.taskId)
+            val merged = mergeIncrementalProgress(
+                task.taskId, previous, aggregated, linksDiscovered, diagnostic, terminalStatuses
             )
-            return
+            if (merged == null) {
+                // The task is finished (round timeout, cancellation, completion)
+                // while a parse handler is still running.  Reviving it would leave
+                // the poller waiting for a record nobody will ever finalize again.
+                logger.debug(
+                    "Crawl {}: dropping an incremental publish — the task is already terminal ({})",
+                    task.taskId, previous?.status
+                )
+                return
+            }
+            taskStore.put(task.taskId, merged)
         }
-        taskStore.put(taskId, merged)
     }
 
     /**
@@ -869,6 +883,20 @@ class CrawlService(
         // concurrently (see [mapCrawlSeedsConcurrently]).
         val seedRounds: Array<CrawlRound?> = arrayOfNulls(seedUrls.size)
         val seedStatuses: Array<CrawlSeedStatus?> = arrayOfNulls(seedUrls.size)
+
+        /**
+         * The pages each seed round has published so far, by seed index.
+         *
+         * The in-flight record is derived from this map, so it is the crawl's
+         * aggregate view of what it has collected: every round's latest publish
+         * replaces its own earlier one (a round only ever grows), and the record
+         * reports all of them (see [aggregateInFlightPages]).
+         *
+         * Guarded by [publishLock] — the publishers are the rounds' parse handlers
+         * (one per seed) and [CrawlService.recordSeedProgress], and all of them
+         * read-modify-write the same task record.
+         */
+        val publishedPages = mutableMapOf<Int, List<CrawlPageResult>>()
 
         /** Serializes the progress publishers so a poller never reads a half-written record. */
         val publishLock = Any()

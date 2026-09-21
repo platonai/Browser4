@@ -505,6 +505,13 @@ browser4-cli crawl result <task-id>
 > `status` field — it does not refuse non-terminal tasks.  While a task is
 > `Processing`, `crawl result` and `crawl status` show equivalent partial
 > records; use either to poll.
+>
+> **While a task runs, the progress counts only grow.**  `pagesFound` counts
+> every page collected so far across *all* seeds (not just the seed that reported
+> last), and `pagesExpected` / `failedPages` never fall back once reported — a
+> poller can treat a decrease as a bug.  Note that `pagesExpected` covers the
+> seeds that have already finished, so on a multi-seed crawl it climbs as seeds
+> settle rather than being the final total from the start.
 
 ### crawl cancel
 
