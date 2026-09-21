@@ -12,7 +12,6 @@ import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
-import ai.platon.pulsar.ql.h2.utils.ResultSetUtils
 import ai.platon.pulsar.skeleton.event.impl.DefaultCrawlEventHandlers
 import ai.platon.pulsar.skeleton.event.impl.DefaultLoadEventHandlers
 import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
@@ -121,8 +120,33 @@ open class XSQLHyperlink(
             response.pageContentBytes = page.contentLength.toInt()
             response.pageStatusCode = page.protocolStatus.minorCode
 
+            // Content presence is decided independently of the protocol status:
+            // the bytes are what the extraction reads, and a page whose bytes
+            // arrived is extractable even when the status records a timeout or a
+            // cancellation — the load already ran against those bytes.
+            // Whether such a task ends as a failure stays the business of the
+            // crawl event handlers (`fail` below), which keep the real reason;
+            // this only stops the extraction from throwing the data away.
+            val contentPresent = page.contentLength > 0L || page.content != null
+
             if (page.protocolStatus.isSuccess) {
-                doExtract(page, document)
+                extractWithCache(page, document)
+            } else if (contentPresent) {
+                // Extracting anyway turns a slow-but-arrived fetch into data
+                // instead of an empty result set; the message says why the
+                // status disagrees, so the caller can weigh the result.
+                logger.warn(
+                    "Page content arrived ({} bytes) but the protocol status is {} — extracting anyway | {}",
+                    page.contentLength, page.protocolStatus, page.url
+                )
+                response.message = buildString {
+                    append("Page content arrived but the protocol status is ")
+                    append(page.protocolStatus.minorCode)
+                    append(" (")
+                    append(page.protocolStatus.reason ?: "unknown")
+                    append("). Extracted anyway; verify the results.")
+                }
+                extractWithCache(page, document)
             } else if (page.protocolStatus.isFailed) {
                 response.message = buildString {
                     append("Page fetch failed with status ")
@@ -166,48 +190,94 @@ open class XSQLHyperlink(
         complete(page)
     }
 
-    protected open fun doExtract(page: WebPage, document: FeaturedDocument) {
-        if (!page.protocolStatus.isSuccess || page.contentLength == 0L || page.content == null) {
+    /**
+     * Run the X-SQL against [page], which is local by construction: this handler is invoked from
+     * the load of that very page, while the page is still hot in the session's caches.
+     *
+     * The statement is executed by the h2 engine, which resolves the url in its FROM clause itself
+     * — `load_and_select()` calls `PulsarSession.load()`. Two things must hold for that inner load
+     * to be read-only, and both are established here, in the same breath as the query:
+     *
+     *  1. the statement is sealed with `-readonly` and stripped of every option that could force a
+     *     web load ([ScrapeAPIUtils.normalizeForReadOnlyQuery]);
+     *  2. the page and its document are frozen in the global page cache — the cache the engine's
+     *     own session shares, since both live in the same context — under the url the engine
+     *     resolves the page by, and the frozen copy is verified immediately before the statement
+     *     runs.
+     *
+     * Without (2) `-readonly` is only a promise about a page that happens to be cached: on a cache
+     * miss `PulsarSession.load()` quietly falls through to a full web load, which modifies the
+     * page and repeats the fetch in the middle of the query.
+     *
+     * @return the extracted rows, or null when the statement was refused or failed
+     * */
+    protected open fun extractWithCache(page: WebPage, document: FeaturedDocument): List<Map<String, Any?>>? {
+        val normSQL = try {
+            ScrapeAPIUtils.normalizeForReadOnlyQuery(sql.sql)
+        } catch (e: Exception) {
+            // A statement that could still fetch is a bug, not a query to run: report it instead
+            // of letting the engine load the page over the network while the query executes.
+            return refuse(page, "The X-SQL could not be sealed read-only: ${e.message}")
+        }
+
+        val queryUrl = ScrapeAPIUtils.resolveQueryUrl(session, normSQL.url)
+
+        // Freeze first, verify last: the window the UDF looks through is the gap between the check
+        // and the statement, not the time that has passed since the page was fetched.
+        val local = ScrapeAPIUtils.freezePageForQuery(session, queryUrl, page, document)
+        if (!local) {
+            return refuse(
+                page,
+                "The page '$queryUrl' is not in the local page cache, so the read-only X-SQL would " +
+                        "have re-fetched it from the web. The query was not executed; load the page " +
+                        "again and retry."
+            )
+        }
+
+        return executeXSQL(page, document, normSQL)
+    }
+
+    /**
+     * Fail the extraction loudly instead of running a query that would reach the web.
+     *
+     * The response is left non-terminal and empty: the crawl event handlers decide how the task
+     * ends, and an empty result set keeps the CLI from rendering a "successful" page whose data
+     * was never extracted.
+     * */
+    private fun refuse(page: WebPage, message: String): List<Map<String, Any?>>? {
+        logger.warn("{} | page: {} | status: {}", message, page.url, page.protocolStatus)
+        response.message = message
+        response.resultSet = emptyList()
+        response.refresh(ResourceStatus.SC_EXPECTATION_FAILED, page.protocolStatus.minorCode, false)
+        return null
+    }
+
+    /**
+     * Execute the sealed [normSQL] and record the outcome on the response.
+     *
+     * The running and the shaping of the statement belong to [XSqlExecutor], which the crawl uses
+     * as well; what stays here is what this path alone knows — the page it was driven by, and the
+     * response the swarm task is watching.
+     * */
+    protected open fun executeXSQL(
+        page: WebPage,
+        document: FeaturedDocument,
+        normSQL: NormXSQL,
+    ): List<Map<String, Any?>>? {
+        // Keyed on content presence, not on the protocol status: a page whose
+        // bytes arrived is selectable even when the status recorded a timeout.
+        if (page.contentLength == 0L || page.content == null) {
             logger.info("No content | Protocol Status: {} | Page URL: {} | Document Base URI: {}", page.protocolStatus, page.url, document.baseURI)
             response.statusCode = ResourceStatus.SC_NO_CONTENT
             response.refresh(ResourceStatus.SC_NO_CONTENT, ResourceStatus.SC_NO_CONTENT, false)
         }
 
-        val rs = executeQuery(request, response)
-
-        // Read column names from ResultSetMetaData BEFORE converting to text
-        // entities.  JDBC metadata preserves the SQL SELECT column order, which
-        // is the deterministic source of truth for column ordering.  Without
-        // this, column order depends on the iteration order of row-key maps,
-        // which varies across Map implementations and causes inconsistent CSV
-        // headers, JSON field order, and table columns.
-        val metaData = rs.metaData
-        // Use lowercase column labels so they match the keys produced by
-        // ResultSetUtils.getTextEntitiesFromResultSet (which lowercases
-        // via ResultSetMetaData.getColumnName + toLowerCase).  Without
-        // this the reorder pass produces duplicate columns: the original-
-        // case lookup returns null, and the "append extras" loop re-adds
-        // the lowercased key — giving each column twice.
-        val sqlColumnOrder = (1..metaData.columnCount).map { metaData.getColumnLabel(it).lowercase() }
-
-        val rawResultSet = ResultSetUtils.getTextEntitiesFromResultSet(rs)
-
-        // Ensure all column keys are present in every row. When a selector
-        // finds no match, the corresponding column should contain null rather
-        // than being silently absent — missing data must be visible.
-        // Use SQL column order first, then append any extra keys discovered
-        // during row iteration (edge case: computed columns with dynamic names).
-        val allKeys = linkedSetOf<String>()
-        allKeys.addAll(sqlColumnOrder)
-        for (row in rawResultSet) {
-            allKeys.addAll(row.keys)
-        }
-        response.resultSet = rawResultSet.map { row ->
-            val filled = linkedMapOf<String, Any?>()
-            for (key in allKeys) {
-                filled[key] = row[key]
-            }
-            filled
+        val result = XSqlExecutor.execute(session, normSQL)
+        // The status is owned by the execution, not by whatever the page status set above: a
+        // statement that ran is a success even when the page had nothing to select from.
+        response.statusCode = result.statusCode
+        if (!result.isSuccess) {
+            response.message = result.error
         }
 
         // Always ensure resultSet is non-null before transitioning to a
@@ -215,12 +285,9 @@ open class XSQLHyperlink(
         // a race where the CLI fetches an empty resultSet for a "completed"
         // task.  By guaranteeing at least an empty list here, the CLI always
         // sees a consistent (empty or populated) resultSet.
-        if (response.resultSet == null) {
-            response.resultSet = emptyList()
-        }
-
+        response.resultSet = result.rows ?: emptyList()
         response.refresh(response.statusCode, page.protocolStatus.minorCode, false)
+
+        return result.rows
     }
 }
-
-typealias XSQLScrapeHyperlink = XSQLHyperlink

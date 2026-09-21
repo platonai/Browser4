@@ -1,8 +1,8 @@
 package ai.platon.pulsar.rest.api.controller
 
-import ai.platon.pulsar.rest.api.service.CrawlRequest
-import ai.platon.pulsar.rest.api.service.CrawlResponse
-import ai.platon.pulsar.rest.api.service.CrawlService
+import ai.platon.pulsar.rest.api.service.crawl.CrawlRequest
+import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
+import ai.platon.pulsar.rest.api.service.crawl.CrawlService
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
@@ -36,8 +36,22 @@ class CrawlController(
         if (request.depth < 0) {
             throw IllegalArgumentException("depth must be >= 0, got ${request.depth}")
         }
-        logger.info("Crawl request: url='{}' seeds={} depth={} args='{}' sql={}",
-            request.url, request.urls?.size ?: 0, request.depth, request.args, request.sql != null)
+        // A non-positive budget is clamped to the server default rather than
+        // rejected (see CrawlService.resolveParallelTabs), but a caller that
+        // explicitly asks for more tabs than the server will ever hand out
+        // should hear about it instead of silently getting a smaller crawl.
+        request.parallelTabs?.let {
+            if (it > CrawlService.MAX_PARALLEL_TABS) {
+                throw IllegalArgumentException(
+                    "parallelTabs must be <= ${CrawlService.MAX_PARALLEL_TABS}, got $it"
+                )
+            }
+        }
+        logger.info(
+            "Crawl request: url='{}' seeds={} depth={} args='{}' sql={} parallelTabs={}",
+            request.url, request.urls?.size ?: 0, request.depth, request.args, request.sql != null,
+            crawlService.resolveParallelTabs(request)
+        )
         return crawlService.submit(request)
     }
 

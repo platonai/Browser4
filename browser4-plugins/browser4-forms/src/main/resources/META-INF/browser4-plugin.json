@@ -1,8 +1,0 @@
-{
-  "name": "browser4-forms",
-  "version": "1.0.0",
-  "sdkVersion": "${project.version}",
-  "description": "Detect forms, their fields and submit buttons on the current page",
-  "dependsOn": ["browser4-skeleton", "browser4-protocol", "browser4-agentic"],
-  "autoConfigurationClasses": ["ai.platon.pulsar.forms.config.FormsAutoConfiguration"]
-}

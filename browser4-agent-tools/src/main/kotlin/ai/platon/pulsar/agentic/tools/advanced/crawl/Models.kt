@@ -14,6 +14,8 @@ import java.util.*
 
 data class ScrapeRequest(
     var sql: String,
+    /** Optional id shared by every task of one batch submission. */
+    var batchId: String? = null,
 )
 
 /**
@@ -26,6 +28,7 @@ data class QueryRequest @JsonCreator constructor(
     @param:JsonProperty("url") var url: String = "",
     @param:JsonProperty("args") var args: String = "",
     @param:JsonProperty("query") var query: String = "",
+    @param:JsonProperty("batchId") var batchId: String? = null,
 ) {
     init {
         require(query.isNotBlank()) { "query must not be blank" }
@@ -42,7 +45,16 @@ data class ScrapeResponse(
     var pageStatusCode: Int = ProtocolStatusCodes.SC_CREATED,
     var pageContentBytes: Int = 0,
 
+    /**
+     * True once the task reached a terminal state.
+     *
+     * The JSON name is pinned to `isDone` on purpose: the Spring REST mapper
+     * applies the Java Bean convention and would otherwise emit `done`, while
+     * every client (CLI, MCP tools, tests) and the docs read `isDone`.
+     */
     @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @get:JsonProperty("isDone")
+    @set:JsonProperty("isDone")
     var isDone: Boolean = false,
 
     var resultSet: List<Map<String, Any?>>? = null,
@@ -51,6 +63,13 @@ data class ScrapeResponse(
 
     /** Diagnostic message for failed tasks (e.g. X-SQL type mismatch, syntax error). */
     var message: String? = null,
+
+    /**
+     * Identifier shared by every task of one batch submission (e.g. a single
+     * `swarm submit --seed-file urls.txt` call).  Null for tasks submitted
+     * without a batch id.
+     */
+    var batchId: String? = null,
 ) {
     val status: String get() = ResourceStatus.getStatusText(statusCode)
 
@@ -65,6 +84,18 @@ data class ScrapeResponse(
 
     /** Set when the task reaches a terminal state (done or failed). */
     var finishTime: Instant? = null
+
+    /**
+     * Wall-clock duration of the task in milliseconds: `startedTime -> finishTime`
+     * for a task that ran to completion, `createdTime -> finishTime` for one that
+     * never started, and null while the task is still running.
+     */
+    val durationMillis: Long?
+        get() {
+            val end = finishTime ?: return null
+            val start = startedTime ?: createdTime ?: return null
+            return java.time.Duration.between(start, end).toMillis().coerceAtLeast(0)
+        }
 
     companion object {
         fun notFound(id: String) = ScrapeResponse(

@@ -324,6 +324,19 @@ pub(super) fn test_storage_state_commands(ctx: &mut E2ECtx) {
         load_without_session.stdout
     );
 
+    // state-load of a missing file must fail with a stable, locale-independent
+    // error prefix (the raw OS error text is localized on non-English
+    // Windows, e.g. Chinese on zh-CN).
+    let missing_state_path = ctx.workspace_dir.join("does-not-exist.json");
+    let _ = fs::remove_file(&missing_state_path); // guard against leftovers from aborted runs
+    let missing_state_path_text = missing_state_path.to_string_lossy().into_owned();
+    let missing_load = run_command_expecting_failure(
+        ctx,
+        &["state-load", &missing_state_path_text],
+        "Failed to read storage state file",
+    );
+    let _ = missing_load;
+
     run_command(ctx, &["goto", &interactive_url]);
     wait_for_eval_text(
         ctx,
@@ -355,8 +368,16 @@ pub(super) fn test_storage_state_commands(ctx: &mut E2ECtx) {
     );
 
     let cookie_get_result = run_command(ctx, &["cookie-get", "session_id"]);
-    let cookie_get: serde_json::Value = serde_json::from_str(cookie_get_result.stdout.trim())
-        .expect("cookie-get should return JSON");
+    assert_eq!(
+        cookie_get_result.stdout.trim(),
+        "abc123",
+        "cookie-get should print the bare cookie value by default:\n{}",
+        cookie_get_result.stdout
+    );
+
+    let cookie_get_full_result = run_command(ctx, &["cookie-get", "session_id", "--full"]);
+    let cookie_get: serde_json::Value = serde_json::from_str(cookie_get_full_result.stdout.trim())
+        .expect("cookie-get --full should return JSON");
     assert_eq!(cookie_get["name"].as_str(), Some("session_id"));
     assert_eq!(cookie_get["value"].as_str(), Some("abc123"));
 
@@ -426,6 +447,18 @@ pub(super) fn test_storage_state_commands(ctx: &mut E2ECtx) {
         "false",
         2_000,
         "Expected cookie-delete to remove the session_id cookie",
+    );
+
+    // Deleting a cookie that is not present must not claim success — it
+    // reports the not-found state and stays idempotent (exit 0), matching
+    // localstorage-delete / sessionstorage-delete.
+    let missing_delete_result = run_command(ctx, &["cookie-delete", "no_such_cookie"]);
+    assert!(
+        missing_delete_result
+            .stdout
+            .contains("Cookie not found: no_such_cookie (nothing to delete)"),
+        "Expected cookie-delete of a missing cookie to report not found:\n{}",
+        missing_delete_result.stdout
     );
 
     run_command(ctx, &["cookie-set", "clear_one", "1", "--path=/"]);
@@ -1118,6 +1151,73 @@ pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
         "Expected uploadName to become 'upload.txt' after upload",
     );
 
+    // Multi-file upload (the fixture input now has the `multiple` attribute):
+    // the CLI must keep each path separate instead of joining them.
+    let second_upload_path = ctx.workspace_dir.join("_e2e_upload_second.txt");
+    std::fs::write(&second_upload_path, "second file").expect("write second temp file");
+    run_command(
+        ctx,
+        &[
+            "upload",
+            "#file-input",
+            &upload_path,
+            &second_upload_path.to_string_lossy(),
+        ],
+    );
+    wait_for_state_or_abort(
+        ctx,
+        |s| {
+            s["uploadName"].as_str() == Some("upload.txt")
+                && s["uploadCount"].as_u64() == Some(2)
+        },
+        3_000,
+        "Expected uploadCount to become 2 (two separate files) after multi-file upload",
+    );
+    let _ = std::fs::remove_file(&second_upload_path);
+
+    // Negative: uploading to a non-file input must fail loudly (the driver
+    // validates the target instead of letting CDP report an opaque error).
+    let non_file_result = run_command_expecting_failure(
+        ctx,
+        &["upload", "#fill-target", &upload_path],
+        "only file inputs accept uploads",
+    );
+    assert_ne!(
+        non_file_result.exit_code, 0,
+        "upload to a non-file input must fail:\n{}",
+        non_file_result.stderr
+    );
+
+    // Negative: a missing local file fails before dispatch (CLI usage error).
+    let missing_path = ctx.workspace_dir.join("_e2e_upload_missing.txt");
+    let _ = std::fs::remove_file(&missing_path);
+    let missing_result = run_command_expecting_failure(
+        ctx,
+        &["upload", "#file-input", &missing_path.to_string_lossy()],
+        "not found or not readable",
+    );
+    assert_ne!(
+        missing_result.exit_code, 0,
+        "upload of a missing file must fail:\n{}",
+        missing_result.stderr
+    );
+
+    // Long-text typing through the executor's bulk-insert path (method=exec):
+    // 200 CJK characters must arrive in one execCommand('insertText') insert
+    // and be tracked by the page (the driver read-back semantics run
+    // server-side; the page state proves the editor received the text).
+    let long_text: String = (0..200).map(|_| "长").collect();
+    run_command(
+        ctx,
+        &["type", &long_text, "#type-target", "--method", "exec"],
+    );
+    wait_for_state_or_abort(
+        ctx,
+        |s| s["typeValue"].as_str().map(|v| v.chars().count()) == Some(200),
+        5_000,
+        "Expected typeValue to contain the full 200-char bulk-inserted text",
+    );
+
     // Verify the console command is recognised by the backend (was previously "Unknown tool")
     let console_result = run_command(ctx, &["console", "info"]);
     assert!(
@@ -1133,6 +1233,18 @@ pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     assert!(
         !webdb_result.stderr.contains("Unknown tool: webdb_export"),
         "webdb-export command should be recognised by the backend:\n{}",
+        webdb_result.stderr
+    );
+    // webdb export is read-only w.r.t. the current viewport: it must not
+    // trigger the post-command auto-snapshot ('### Page' / '### Snapshot'
+    // block + snapshot YAML on disk). Regression for the webdb export stray
+    // snapshot issue — see no_snapshot_commands().
+    assert!(
+        !webdb_result.stdout.contains("### Page")
+            && !webdb_result.stderr.contains("### Page")
+            && !webdb_result.stdout.contains("### Snapshot"),
+        "webdb-export must not emit the post-command snapshot block, got:\nstdout: {}\nstderr: {}",
+        webdb_result.stdout,
         webdb_result.stderr
     );
 
@@ -1532,6 +1644,338 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
     assert_eq!(
         interactive_guid, final_guid,
         "GUID should be stable across tab-list calls. Before: {interactive_guid}, after: {final_guid}"
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+/// Poll `network requests` until every [expected] substring appears in the
+/// output or [deadline] passes, panicking with the last output on timeout.
+/// Polling replaces fixed sleeps: loaded CI machines get more time, fast ones
+/// less.
+fn poll_network_requests_until(
+    ctx: &mut E2ECtx,
+    expected: &[&str],
+    deadline: Instant,
+    context: &str,
+) -> String {
+    let mut last = String::new();
+    while Instant::now() < deadline {
+        let check = run_command(ctx, &["network", "requests"]);
+        last = check.stdout.clone();
+        if expected.iter().all(|needle| last.contains(needle)) {
+            return last;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    panic!(
+        "timed out waiting for {expected:?} in network requests ({context}); last output:\n{last}"
+    );
+}
+
+/// Poll the network fixture's `#results` element until it contains every
+/// [expected] substring or [deadline] passes, panicking with the last text.
+fn poll_network_results_until(
+    ctx: &mut E2ECtx,
+    expected: &[&str],
+    deadline: Instant,
+    context: &str,
+) -> String {
+    let mut last = String::new();
+    while Instant::now() < deadline {
+        last = eval_text(ctx, "document.getElementById('results').textContent");
+        if expected.iter().all(|needle| last.contains(needle)) {
+            return last;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    panic!(
+        "timed out waiting for {expected:?} in #results ({context}); last text:\n{last}"
+    );
+}
+
+/// Network request inspection & HAR recording against a real browser.
+///
+/// Uses the `/network` fixture which issues two fetches on load:
+/// one that returns 200 JSON and one that 404s.
+pub(super) fn test_network_requests_and_har(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    // 1. Open the interactive fixture (any page works — traffic from THIS load
+    // is not tracked yet: network tracking is opt-in and enables the CDP
+    // Network domain on first use).
+    let open_result = run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
+    assert!(
+        open_result.stdout.contains("Session opened:"),
+        "Expected session to open. Output:\n{}",
+        open_result.stdout
+    );
+    sleep(Duration::from_secs(2));
+
+    // Close and reopen so the scenario also covers tracking on a freshly
+    // created session (the observer is per tab; a new session must track
+    // independently of the previous one).
+    let close_result = run_command(ctx, &["close"]);
+    assert!(
+        close_result.stdout.contains("Session closed."),
+        "Expected session to close. Output:\n{}",
+        close_result.stdout
+    );
+    let reopen_result = run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
+    assert!(
+        reopen_result.stdout.contains("Session opened:"),
+        "Expected session to reopen. Output:\n{}",
+        reopen_result.stdout
+    );
+    sleep(Duration::from_secs(1));
+
+    // 2. First network command enables tracking; navigate to a DIFFERENT URL
+    // (goto short-circuits when already at the target URL) so the load and its
+    // fetches are observed.
+    let first_list = run_command(ctx, &["network", "requests"]);
+    assert!(
+        first_list.stdout.contains("["),
+        "network requests should print a JSON array, got:\n{}",
+        first_list.stdout
+    );
+
+    let goto_result = run_command(ctx, &["goto", &ctx.network_url()]);
+    assert!(
+        goto_result.stdout.contains("Navigated to")
+            || goto_result.stdout.contains("Page loaded"),
+        "goto should succeed, got:\n{}",
+        goto_result.stdout
+    );
+
+    // 3. Both fetches are now tracked — poll instead of a fixed sleep so the
+    // assertion is robust under load.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let list_output = poll_network_requests_until(
+        ctx,
+        &["network-endpoint-ok", "network-endpoint-missing"],
+        deadline,
+        "after goto to /network",
+    );
+    assert!(
+        list_output.contains("network-endpoint-ok"),
+        "expected the 200 fetch in tracked requests, got:\n{}",
+        list_output
+    );
+    assert!(
+        list_output.contains("network-endpoint-missing"),
+        "expected the 404 fetch in tracked requests, got:\n{}",
+        list_output
+    );
+
+    // 4. Filters.
+    let filtered = run_command(ctx, &["network", "requests", "--filter", "network-endpoint-ok"]);
+    assert!(
+        filtered.stdout.contains("network-endpoint-ok") && !filtered.stdout.contains("network-endpoint-missing"),
+        "filter=network-endpoint-ok should keep only the ok request, got:\n{}",
+        filtered.stdout
+    );
+
+    let failed = run_command(ctx, &["network", "requests", "--status", "4xx"]);
+    assert!(
+        failed.stdout.contains("network-endpoint-missing"),
+        "--status 4xx should include the 404 fetch, got:\n{}",
+        failed.stdout
+    );
+    assert!(
+        !failed.stdout.contains("network-endpoint-ok"),
+        "--status 4xx should exclude the 200 fetch, got:\n{}",
+        failed.stdout
+    );
+
+    // 5. Request detail — parse the list as JSON to find the ok request id.
+    let list_json: serde_json::Value =
+        serde_json::from_str(&strip_snapshot_output(&list_output))
+            .unwrap_or_else(|e| panic!("network requests output should be JSON: {e}\n{}", list_output));
+    let ok_entry = list_json
+        .as_array()
+        .and_then(|arr| {
+            arr.iter().find(|entry| {
+                entry["url"]
+                    .as_str()
+                    .is_some_and(|url| url.contains("network-endpoint-ok"))
+            })
+        })
+        .unwrap_or_else(|| panic!("expected an entry for network-endpoint-ok in:\n{}", list_json));
+    let request_id = ok_entry["requestId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("expected requestId in entry:\n{ok_entry}"));
+    let detail = run_command(ctx, &["network", "request", request_id]);
+    assert!(
+        detail.stdout.contains("responseBody"),
+        "request detail should include the response body, got:\n{}",
+        detail.stdout
+    );
+    // The tool result is JSON with the body as an (escaped) string field;
+    // parse it instead of string-matching, which would trip on escaping.
+    let detail_json: serde_json::Value =
+        serde_json::from_str(&strip_snapshot_output(&detail.stdout))
+            .unwrap_or_else(|e| panic!("network request output should be JSON: {e}\n{}", detail.stdout));
+    assert_eq!(
+        detail_json["responseBody"].as_str(),
+        Some(r#"{"status":"ok","source":"fixture"}"#),
+        "response body should contain the fixture payload, got:\n{}",
+        detail.stdout
+    );
+
+    // 6. HAR recording — traffic generated while recording is captured.
+    // Navigate away and back so new traffic flows while recording.
+    let start = run_command(ctx, &["network", "har", "start", "--content", "text"]);
+    assert!(
+        start.stdout.contains("recording"),
+        "har start should confirm recording, got:\n{}",
+        start.stdout
+    );
+
+    run_command(ctx, &["goto", &ctx.other_url()]);
+    run_command(ctx, &["goto", &ctx.network_url()]);
+    // Poll until the recording observed both fetches again, so the HAR below
+    // provably contains them (no fixed sleep).
+    let deadline = Instant::now() + Duration::from_secs(15);
+    poll_network_requests_until(
+        ctx,
+        &["network-endpoint-ok", "network-endpoint-missing"],
+        deadline,
+        "while HAR recording",
+    );
+
+    let har_path = ctx.state_dir.join("network-test.har");
+    let stop = run_command(
+        ctx,
+        &["network", "har", "stop", har_path.to_str().expect("har path")],
+    );
+    assert!(
+        stop.stdout.contains("HAR saved"),
+        "har stop should report the saved file, got:\n{}",
+        stop.stdout
+    );
+
+    let har_text = std::fs::read_to_string(&har_path)
+        .unwrap_or_else(|e| panic!("expected HAR file at {}: {e}", har_path.display()));
+    let har: serde_json::Value = serde_json::from_str(&har_text)
+        .unwrap_or_else(|e| panic!("HAR file should be valid JSON: {e}\n{}", har_text));
+    assert_eq!(har["log"]["version"], "1.2", "HAR version should be 1.2");
+    let entries = har["log"]["entries"]
+        .as_array()
+        .expect("HAR should have entries");
+    assert!(
+        entries.len() >= 2,
+        "expected at least 2 HAR entries, got {}",
+        entries.len()
+    );
+    let ok_entry = entries
+        .iter()
+        .find(|entry| {
+            entry["request"]["url"]
+                .as_str()
+                .is_some_and(|url| url.contains("network-endpoint-ok"))
+        })
+        .unwrap_or_else(|| panic!("expected a HAR entry for network-endpoint-ok in:\n{har_text}"));
+    assert_eq!(ok_entry["response"]["status"], 200);
+    let ok_body = ok_entry["response"]["content"]["text"].as_str().unwrap_or("");
+    assert!(
+        ok_body.contains("\"status\":\"ok\""),
+        "HAR text mode should embed the JSON body, got: {ok_body}"
+    );
+    let missing_entry = entries
+        .iter()
+        .find(|entry| {
+            entry["request"]["url"]
+                .as_str()
+                .is_some_and(|url| url.contains("network-endpoint-missing"))
+        })
+        .unwrap_or_else(|| panic!("expected a HAR entry for network-endpoint-missing in:\n{har_text}"));
+    assert_eq!(missing_entry["response"]["status"], 404);
+
+    // 7. Routing — mock the ok endpoint's body, abort the missing one, then
+    // unroute and confirm the fixture sees the real responses again.
+    let route = run_command(
+        ctx,
+        &["network", "route", "**/api/network-endpoint-ok.json", "--body", r#"{"routed":true}"#, "--content-type", "application/json"],
+    );
+    assert!(
+        route.stdout.contains("routed"),
+        "network route should confirm the route, got:\n{}",
+        route.stdout
+    );
+
+    run_command(ctx, &["goto", &ctx.other_url()]);
+    run_command(ctx, &["goto", &ctx.network_url()]);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let results = poll_network_results_until(
+        ctx,
+        &["ok: 200", r#"{"routed":true}"#],
+        deadline,
+        "route mock",
+    );
+    assert!(
+        results.contains("ok: 200") && results.contains(r#"{"routed":true}"#),
+        "the ok fetch should receive the mocked body, got:\n{}",
+        results
+    );
+
+    let abort = run_command(
+        ctx,
+        &["network", "route", "**/api/network-endpoint-missing.json", "--abort"],
+    );
+    assert!(
+        abort.stdout.contains("routed"),
+        "network route --abort should confirm the route, got:\n{}",
+        abort.stdout
+    );
+    run_command(ctx, &["goto", &ctx.other_url()]);
+    run_command(ctx, &["goto", &ctx.network_url()]);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let results = poll_network_results_until(
+        ctx,
+        &["missing: error"],
+        deadline,
+        "route abort",
+    );
+    assert!(
+        results.contains("missing: error"),
+        "the aborted fetch should fail in the page, got:\n{}",
+        results
+    );
+
+    let unroute = run_command(ctx, &["network", "unroute"]);
+    assert!(
+        unroute.stdout.contains("unrouted"),
+        "network unroute should confirm removal, got:\n{}",
+        unroute.stdout
+    );
+    run_command(ctx, &["goto", &ctx.other_url()]);
+    run_command(ctx, &["goto", &ctx.network_url()]);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let results = poll_network_results_until(
+        ctx,
+        &["missing: 404"],
+        deadline,
+        "after unroute",
+    );
+    assert!(
+        results.contains("missing: 404"),
+        "after unroute the missing fetch should 404 again, got:\n{}",
+        results
+    );
+
+    // 8. Clear drops the tracked buffer.
+    run_command(ctx, &["network", "requests", "--clear"]);
+    let after_clear = run_command(ctx, &["network", "requests"]);
+    assert!(
+        !after_clear.stdout.contains("network-endpoint-ok"),
+        "after --clear the buffer should be empty, got:\n{}",
+        after_clear.stdout
     );
 
     run_command(ctx, &["close"]);
@@ -2471,4 +2915,741 @@ pub(super) fn test_interactive_enhanced_tracking(ctx: &mut E2ECtx) {
     }
 
     run_command(ctx, &["close"]);
+}
+
+pub(super) fn test_htmlsnapshot_capture_after_tab_new(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    // Open the interactive fixture (the full navigate registers the runtime on
+    // the original session driver — the pre-tab-new baseline).
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    sleep(Duration::from_secs(2));
+    let title = eval_text(ctx, "document.title");
+    assert_eq!(title.trim(), INTERACTIVE_TITLE);
+
+    // ── 1. Baseline capture on the original tab ─────────────────────
+    // Interactive elements are computed from __pulsar_utils__ document
+    // features (vi attributes), so their presence proves the runtime was
+    // available for this capture.
+    let first = run_command(ctx, &["htmlsnapshot", "capture"]);
+    assert_eq!(
+        first.exit_code, 0,
+        "Baseline htmlsnapshot capture failed:\nstdout: {}\nstderr: {}",
+        first.stdout, first.stderr
+    );
+    assert!(
+        first.stdout.contains(&format!("Snapshot: \"{INTERACTIVE_TITLE}\"")),
+        "Baseline capture should report the interactive fixture:\n{}",
+        first.stdout
+    );
+    assert!(
+        first.stdout.contains("interactive elements"),
+        "Baseline capture should report interactive elements (requires the __pulsar_utils__ runtime):\n{}",
+        first.stdout
+    );
+
+    // ── 2. tab-new to the form fixture ──────────────────────────────
+    // The CLI auto-switches to the new tab.  The tab's document committed
+    // before the dual-world runtime could be registered on it, and the
+    // session driver bound afterwards never receives the frame-navigated
+    // re-injection.
+    let form_url = ctx.form_url();
+    let new_tab = run_command(ctx, &["tab-new", &form_url]);
+    assert_eq!(
+        new_tab.exit_code, 0,
+        "tab-new failed:\nstdout: {}\nstderr: {}",
+        new_tab.stdout, new_tab.stderr
+    );
+    let tab_list = strip_snapshot_output(&run_command(ctx, &["tab-list", "--json"]).stdout);
+    assert!(
+        tab_list.contains(&form_url),
+        "Expected the form fixture tab after tab-new:\n{tab_list}"
+    );
+
+    // ── 3. Capture on the tab-new target — the regression ───────────
+    // Before the fix this capture threw 'ReferenceError: __pulsar_utils__ is
+    // not defined' on the server, and every later capture on the session
+    // failed until the session was closed.
+    let second = run_command(ctx, &["htmlsnapshot", "capture"]);
+    assert_eq!(
+        second.exit_code, 0,
+        "htmlsnapshot capture after tab-new failed:\nstdout: {}\nstderr: {}",
+        second.stdout, second.stderr
+    );
+    assert!(
+        second.stdout.contains(&format!("Snapshot: \"{FORM_TITLE}\"")),
+        "Capture after tab-new should target the new tab (form fixture):\n{}",
+        second.stdout
+    );
+    assert!(
+        second.stdout.contains("interactive elements"),
+        "Capture after tab-new should report interactive elements (requires the re-injected __pulsar_utils__ runtime on the tab-new target):\n{}",
+        second.stdout
+    );
+    let combined = format!("{}\n{}", second.stdout, second.stderr);
+    assert!(
+        !combined.contains("ReferenceError"),
+        "Capture after tab-new must not surface a __pulsar_utils__ ReferenceError:\n{combined}"
+    );
+
+    // ── 4. Captures keep working — the failure was session-wide ─────
+    let third = run_command(ctx, &["htmlsnapshot", "capture"]);
+    assert_eq!(
+        third.exit_code, 0,
+        "Follow-up capture after tab-new failed:\nstdout: {}\nstderr: {}",
+        third.stdout, third.stderr
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+
+// ---------------------------------------------------------------------------
+// download — real download flow against the download fixture
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_download_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    run_command(
+        ctx,
+        &["open", &ctx.download_url(), OPEN_PROFILE_MODE_ARG],
+    );
+
+    // Configure downloads into an isolated directory (Browser.setDownloadBehavior).
+    let dl_dir = ctx.state_dir.join("downloads");
+    std::fs::create_dir_all(&dl_dir).expect("create download dir");
+    let dl_dir_str = dl_dir.to_string_lossy().into_owned();
+    let configure = run_command(ctx, &["download", "--dir", &dl_dir_str]);
+    assert!(
+        configure.exit_code == 0,
+        "download should configure the browser, got:\n{}",
+        configure.stdout
+    );
+
+    // Clicking the fixture link must land the file in the configured dir.
+    run_command(ctx, &["click", "#download-link"]);
+
+    let target = dl_dir.join("download-me.txt");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        if target.exists() {
+            let len = target.metadata().map(|m| m.len()).unwrap_or(0);
+            if len > 0 {
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    assert!(
+        target.exists(),
+        "Expected the downloaded file at {} (dir listing: {:?})",
+        target.display(),
+        std::fs::read_dir(&dl_dir)
+            .map(|it| it
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect::<Vec<_>>())
+            .unwrap_or_default()
+    );
+    let content = std::fs::read_to_string(&target).unwrap_or_else(|e| {
+        panic!("failed to read downloaded file {}: {e}", target.display())
+    });
+    assert!(
+        content.contains("browser4 download fixture payload"),
+        "Expected the fixture payload in the downloaded file, got:\n{}",
+        content
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+// ---------------------------------------------------------------------------
+// profiler start/stop — live V8 CPU profiling via CDP
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_profiler_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
+    goto_interactive_page(ctx);
+
+    let start = run_command(ctx, &["profiler", "start"]);
+    assert!(
+        start.stdout.contains("CPU profiler started"),
+        "profiler start should confirm, got:\n{}",
+        start.stdout
+    );
+
+    // Generate CPU activity so the profile is non-trivial.
+    run_command(
+        ctx,
+        &["eval", "for (let i = 0; i < 200000; i++) { Math.sqrt(i); } 'done'"],
+    );
+
+    let out_path = ctx.state_dir.join("e2e.cpuprofile");
+    let out_str = out_path.to_string_lossy().into_owned();
+    let stop = run_command(ctx, &["profiler", "stop", "--file", &out_str]);
+    assert!(
+        stop.stdout.contains("CPU profile saved"),
+        "profiler stop should report the saved file, got:\n{}",
+        stop.stdout
+    );
+
+    let profile_text = std::fs::read_to_string(&out_path)
+        .unwrap_or_else(|e| panic!("expected .cpuprofile at {}: {e}", out_path.display()));
+    let profile: serde_json::Value = serde_json::from_str(&profile_text)
+        .unwrap_or_else(|e| panic!("profile should be valid JSON: {e}\n{profile_text}"));
+    assert!(
+        profile.get("nodes").and_then(|v| v.as_array()).is_some(),
+        "expected a nodes array in the cpuprofile, got:\n{}",
+        profile_text
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+// ---------------------------------------------------------------------------
+// agent-browser A/B-tier command gaps — real DOM behaviour on the interactive
+// fixture (the mock scenario covers CLI plumbing; this covers real effects)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_agent_browser_command_gaps_live(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
+    goto_interactive_page(ctx);
+
+    // ── focus: the element becomes the real focused element (CDP DOM.focus
+    // sets activeElement; the JS focus event is not dispatched in headless) ──
+    run_command(ctx, &["focus", "#fill-target"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut focused = false;
+    while Instant::now() < deadline {
+        if eval_text(ctx, "document.activeElement ? document.activeElement.id : ''")
+            .contains("fill-target")
+        {
+            focused = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(focused, "focus should make fill-target the active element");
+
+    // ── is-visible / is-enabled / is-checked against the real DOM ──
+    // isVisible reports real visibility: display:none and unresolvable
+    // selectors are false. (Upstream predicateOnPage used to map any non-null
+    // Boolean result — `false` included — to true; fixed in the base library.)
+    let visible = run_command(ctx, &["is", "visible", "#click-target"]);
+    assert!(
+        visible.stdout.contains("true"),
+        "is visible should report true for an existing element, got:\n{}",
+        visible.stdout
+    );
+    let hidden = run_command(ctx, &["is", "visible", "#hidden-target"]);
+    assert!(
+        hidden.stdout.contains("false"),
+        "is visible should report false for a display:none element, got:\n{}",
+        hidden.stdout
+    );
+    let enabled = run_command(ctx, &["is", "enabled", "#click-target"]);
+    assert!(
+        enabled.stdout.contains("true"),
+        "is enabled should report true for an enabled element, got:\n{}",
+        enabled.stdout
+    );
+    let disabled = run_command(ctx, &["is", "enabled", "#disabled-target"]);
+    assert!(
+        disabled.stdout.contains("false"),
+        "is enabled should report false for a disabled element, got:\n{}",
+        disabled.stdout
+    );
+    run_command(ctx, &["check", "#check-target"]);
+    let checked = run_command(ctx, &["is", "checked", "#check-target"]);
+    assert!(
+        checked.stdout.contains("true"),
+        "is checked should report true after check, got:\n{}",
+        checked.stdout
+    );
+
+    // ── scrollintoview: the page actually scrolls (scroll-target sits
+    // ~1600px below the fold on the fixture) ──
+    let before_scroll = eval_text(ctx, "window.scrollY");
+    run_command(ctx, &["scrollintoview", "#scroll-target"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut scrolled = false;
+    while Instant::now() < deadline {
+        let now_scroll = eval_text(ctx, "window.scrollY");
+        let before: f64 = before_scroll.trim().parse().unwrap_or(0.0);
+        let now: f64 = now_scroll.trim().parse().unwrap_or(0.0);
+        if now > before {
+            scrolled = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(scrolled, "scrollintoview should scroll the page");
+
+    // ── pushstate: history.pushState without a reload ──
+    run_command(ctx, &["pushstate", "/pushed-path"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut pushed = false;
+    while Instant::now() < deadline {
+        if eval_text(ctx, "location.pathname").contains("/pushed-path") {
+            pushed = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(pushed, "Expected pushstate to change the URL path");
+
+    // ── highlight: succeeds on a real element ──
+    let highlight = run_command(ctx, &["highlight", "#click-target"]);
+    assert!(
+        highlight.exit_code == 0,
+        "highlight should succeed on a real element, got:\n{}",
+        highlight.stdout
+    );
+
+    // ── errors: page console error surfaces through the errors command ──
+    // Console interception is installed on the first consoleMessages call, so
+    // warm it up BEFORE triggering the error. The error is raised through the
+    // eval command (console.error from a CDP-dispatched click does not reach
+    // the buffered console in headless Chrome), then poll for the message.
+    run_command_allowing_failure(ctx, &["errors"]);
+    run_command(
+        ctx,
+        &["eval", "console.error('fixture-console-error'); 'logged'"],
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut saw_error = false;
+    while Instant::now() < deadline {
+        let errors = run_command_allowing_failure(ctx, &["errors"]);
+        if errors.stdout.contains("fixture-console-error") {
+            saw_error = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    assert!(saw_error, "errors should surface the fixture console error");
+
+    // ── key / keyboard: real keystrokes land in the focused input (aliases
+    // of press; CDP Input.dispatchKeyEvent inserts text natively even when
+    // the page's JS key listeners do not fire in headless) ──
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut ready = false;
+    while Instant::now() < deadline {
+        if eval_text(ctx, "document.activeElement ? document.activeElement.id : ''")
+            .contains("fill-target")
+        {
+            ready = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(ready, "fill-target should be focused before key presses");
+    run_command(ctx, &["key", "a"]);
+    run_command(ctx, &["keyboard", "b"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut typed = false;
+    while Instant::now() < deadline {
+        if eval_text(ctx, "document.getElementById('fill-target').value").contains("ab") {
+            typed = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(typed, "key + keyboard should type into the focused input");
+
+    // ── set geo: CDP emulation is applied on the real browser ──
+    let geo = run_command(ctx, &["set", "geo", "--lat=37.7749", "--lon=-122.4194"]);
+    assert!(
+        geo.exit_code == 0,
+        "set geo should succeed on the real browser, got:\n{}",
+        geo.stdout
+    );
+
+    // ── dialog-status: reports a pending JS dialog (must run while the
+    // interactive fixture is still the current tab) ──
+    eval_text(
+        ctx,
+        "(() => { setTimeout(() => document.getElementById('prompt-target').click(), 100); return 'scheduled'; })()",
+    );
+    let deadline = Instant::now() + Duration::from_millis(10_000);
+    let mut saw_pending = false;
+    while Instant::now() < deadline {
+        let status = run_command_allowing_failure(ctx, &["dialog-status"]);
+        if status.stdout.contains("true") && status.stdout.contains("prompt") {
+            saw_pending = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(
+        saw_pending,
+        "dialog-status should report the pending prompt dialog"
+    );
+    // Clean up the pending dialog so the session closes cleanly.
+    let deadline = Instant::now() + Duration::from_millis(10_000);
+    let mut accepted = false;
+    while Instant::now() < deadline {
+        let result = run_command_allowing_failure(ctx, &["dialog-accept", "accepted by cli"]);
+        if result.exit_code == 0 {
+            accepted = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(accepted, "Expected dialog-accept to succeed within 10 s");
+
+    // ── window-new: creates a real new tab (and selects it) ──
+    let window_new = run_command(ctx, &["window", "new", &ctx.other_url()]);
+    assert!(
+        window_new.stdout.contains("Created tab"),
+        "window-new should report the created tab, got:\n{}",
+        window_new.stdout
+    );
+    // The new tab is now current — close it with a no-arg tab-close.
+    run_command(ctx, &["tab-close"]);
+
+    run_command(ctx, &["close"]);
+}
+
+// ---------------------------------------------------------------------------
+// Frame switching — same-origin iframes (frame / frames commands)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_frame_switch_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    run_command(
+        ctx,
+        &["open", &ctx.frame_switch_url(), OPEN_PROFILE_MODE_ARG],
+    );
+
+    // Wait until the iframes committed their documents (same-origin, so the
+    // main frame can see inside via contentDocument).
+    let ready_deadline = Instant::now() + Duration::from_secs(15);
+    let mut frames_ready = false;
+    while Instant::now() < ready_deadline {
+        let probe = eval_text(
+            ctx,
+            "document.getElementById('pay-frame') && document.getElementById('pay-frame').contentDocument \
+             && document.getElementById('pay-frame').contentDocument.getElementById('pay-submit') ? 'ready' : 'pending'",
+        );
+        if probe.contains("ready") {
+            frames_ready = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(frames_ready, "pay-frame iframe should load its document");
+
+    // ── frames: the frame tree lists every iframe and marks the main frame active
+    let frames_out = run_command(ctx, &["frames"]);
+    for expected in ["payframe", "otherframe", "nestedframe", "frame-pay.html", "\"active\":true"] {
+        assert!(
+            frames_out.stdout.contains(expected),
+            "frames output should contain '{expected}', got:\n{}",
+            frames_out.stdout
+        );
+    }
+
+    // ── frame <element ref>: a snapshot-style ref (backend node id) of the
+    // iframe element resolves through DOM.describeNode (agent-browser parity:
+    // ref → owned frame id via contentDocument). Resolve the iframe's backend
+    // node id via DOM.getFrameOwner (keyed by the CDP frame id, so it cannot
+    // go stale between calls), then switch by that ref.
+    let pay_frame_id = named_frame_id(&frames_out.stdout, "payframe")
+        .unwrap_or_else(|| panic!("expected the payframe id in:\n{}", frames_out.stdout));
+    let owner_out = run_command(
+        ctx,
+        &[
+            "cdp",
+            "DOM.getFrameOwner",
+            "--json",
+            &format!(r##"{{"frameId":"{pay_frame_id}"}}"##),
+        ],
+    );
+    let iframe_backend = json_field_value(&owner_out.stdout, "backendNodeId")
+        .unwrap_or_else(|| panic!("expected a backendNodeId in:\n{}", owner_out.stdout));
+    let by_ref = run_command(ctx, &["frame", &format!("backend:{iframe_backend}")]);
+    assert!(
+        by_ref.stdout.contains("payframe"),
+        "frame backend:{iframe_backend} (element ref) should report the payframe, got:\n{}",
+        by_ref.stdout
+    );
+    run_command(ctx, &["frame", "main"]);
+
+    // ── frame <css selector>: switch into the payment iframe
+    let switched = run_command(ctx, &["frame", "#pay-frame"]);
+    assert!(
+        switched.stdout.contains("payframe"),
+        "frame #pay-frame should report the payframe, got:\n{}",
+        switched.stdout
+    );
+
+    // Scoped fill: #card-number lives inside the pay-frame document only.
+    run_command(ctx, &["fill", "#card-number", "4111-1111-1111-1111"]);
+    let card_value = eval_text(
+        ctx,
+        "document.getElementById('pay-frame').contentDocument.getElementById('card-number').value",
+    );
+    assert!(
+        card_value.contains("4111-1111-1111-1111"),
+        "fill inside the selected frame should reach the iframe input, got:\n{card_value}"
+    );
+
+    // Scoped click: #pay-submit exists only inside the pay-frame document.
+    run_command(ctx, &["click", "#pay-submit"]);
+    let pay_state_deadline = Instant::now() + Duration::from_secs(10);
+    let mut paid = false;
+    while Instant::now() < pay_state_deadline {
+        let state = eval_text(
+            ctx,
+            "document.getElementById('pay-frame').contentDocument.getElementById('pay-state').textContent",
+        );
+        if state.contains("submitted:4111-1111-1111-1111") {
+            paid = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(paid, "click inside the selected frame should update the iframe state");
+
+    // Scoped reads: is-visible resolves inside the selected frame.
+    let in_frame_visible = run_command(ctx, &["is", "visible", "#card-name"]);
+    assert!(
+        in_frame_visible.stdout.contains("true"),
+        "is visible should resolve #card-name inside the selected frame, got:\n{}",
+        in_frame_visible.stdout
+    );
+    // Main-document elements are NOT visible from inside the frame scope.
+    let main_el_scoped = run_command_allowing_failure(ctx, &["is", "visible", "#main-button"]);
+    assert!(
+        main_el_scoped.stdout.contains("false"),
+        "is visible should NOT resolve #main-button inside the frame scope, got:\n{}",
+        main_el_scoped.stdout
+    );
+
+    // Scoped wait: `wait <selector>` resolves inside the selected frame
+    // (#card-number exists only in the pay-frame document; an unscoped wait
+    // would time out).
+    let scoped_wait = run_command(ctx, &["wait", "#card-number", "--timeout", "5000"]);
+    assert!(
+        scoped_wait.exit_code == 0,
+        "wait should resolve #card-number inside the selected frame, got:\n{}",
+        scoped_wait.stdout
+    );
+
+    // XPath inside a selected frame must fail loudly with guidance instead of
+    // resolving against the wrong document or degrading to not-found.
+    run_command_expecting_failure(
+        ctx,
+        &["click", "//*[@id='pay-submit']"],
+        "XPath selectors are not supported inside a selected frame",
+    );
+
+    // ── frame main: scope returns to the main document
+    let main_switch = run_command(ctx, &["frame", "main"]);
+    assert!(
+        main_switch.stdout.contains("main") || main_switch.exit_code == 0,
+        "frame main should succeed, got:\n{}",
+        main_switch.stdout
+    );
+    let main_visible = run_command(ctx, &["is", "visible", "#main-button"]);
+    assert!(
+        main_visible.stdout.contains("true"),
+        "is visible should resolve #main-button again after frame main, got:\n{}",
+        main_visible.stdout
+    );
+    run_command(ctx, &["fill", "#main-input", "hello-main"]);
+    let main_value = eval_text(ctx, "document.getElementById('main-input').value");
+    assert!(
+        main_value.contains("hello-main"),
+        "fill should reach the main-document input after frame main, got:\n{main_value}"
+    );
+
+    // ── frame <name>: switch by frame name
+    let by_name = run_command(ctx, &["frame", "payframe"]);
+    assert!(
+        by_name.stdout.contains("payframe"),
+        "frame payframe (by name) should succeed, got:\n{}",
+        by_name.stdout
+    );
+    run_command(ctx, &["frame", "main"]);
+
+    // ── frame <url substring>: switch by a fragment of the frame's URL
+    let by_url = run_command(ctx, &["frame", "frame-pay.html"]);
+    assert!(
+        by_url.stdout.contains("payframe"),
+        "frame frame-pay.html (by url substring) should succeed, got:\n{}",
+        by_url.stdout
+    );
+    run_command(ctx, &["frame", "main"]);
+
+    // ── nested frames: #nested-frame then #inner-frame from inside
+    run_command(ctx, &["frame", "#nested-frame"]);
+    run_command(ctx, &["click", "#nested-button"]);
+    let nested_deadline = Instant::now() + Duration::from_secs(10);
+    let mut nested_clicked = false;
+    while Instant::now() < nested_deadline {
+        let state = eval_text(
+            ctx,
+            "document.getElementById('nested-frame').contentDocument.getElementById('nested-state').textContent",
+        );
+        if state.contains("nested-clicked") {
+            nested_clicked = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(nested_clicked, "click inside the nested frame host should update its state");
+
+    // Switch deeper: #inner-frame resolves inside the nested frame's document.
+    let inner_switch = run_command(ctx, &["frame", "#inner-frame"]);
+    assert!(
+        inner_switch.exit_code == 0,
+        "nested frame switch should succeed, got:\n{}",
+        inner_switch.stdout
+    );
+    run_command(ctx, &["click", "#inner-button"]);
+    let inner_deadline = Instant::now() + Duration::from_secs(10);
+    let mut inner_clicked = false;
+    while Instant::now() < inner_deadline {
+        let state = eval_text(
+            ctx,
+            "document.getElementById('nested-frame').contentDocument.getElementById('inner-frame') \
+             && document.getElementById('nested-frame').contentDocument.getElementById('inner-frame').contentDocument \
+             ? document.getElementById('nested-frame').contentDocument.getElementById('inner-frame').contentDocument.getElementById('inner-state').textContent : ''",
+        );
+        if state.contains("inner-clicked") {
+            inner_clicked = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(inner_clicked, "click inside the innermost frame should update its state");
+    run_command(ctx, &["frame", "main"]);
+
+    // ── cross-origin iframe (v1 limitation, documented): a cross-origin
+    // iframe runs in its own renderer process (OOPIF). This stack does not
+    // use Target.setAutoAttach, so such frames are NOT part of the page
+    // session's frame tree: they cannot be listed or switched into. Attempts
+    // to target one must fail with an actionable error, never silently.
+    // (The assertion accepts both failure flavors: "Frame not found" when
+    // the frame is invisible to the tree, or "not reachable" on Chrome
+    // builds without site isolation where it is listed but not pierceable.)
+    let fixture_port = ctx
+        .fixture_base_url
+        .rsplit(':')
+        .next()
+        .and_then(|s| s.parse::<u16>().ok())
+        .expect("fixture base url should carry a port");
+    let _cross_server = CrossOriginFixtureServer::start(
+        fixture_port,
+        load_html_fixture(FRAME_OTHER_FIXTURE_FILE),
+    );
+    run_command(ctx, &["goto", &ctx.frame_cross_url()]);
+    // Give the cross-origin iframe time to start (its element exists in the
+    // main document regardless of isolation).
+    let cross_probe_deadline = Instant::now() + Duration::from_secs(10);
+    let mut cross_frame_present = false;
+    while Instant::now() < cross_probe_deadline {
+        if eval_text(ctx, "document.getElementById('cross-frame') ? 'yes' : 'no'").contains("yes") {
+            cross_frame_present = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(cross_frame_present, "the cross-origin iframe element should exist");
+
+    let cross_switch = run_command_allowing_failure(ctx, &["frame", "crossframe"]);
+    let cross_switch_output = format!("{}\n{}", cross_switch.stdout, cross_switch.stderr);
+    assert!(
+        cross_switch.exit_code != 0
+            && (cross_switch_output.contains("Frame not found")
+                || cross_switch_output.contains("not reachable")),
+        "targeting a cross-origin frame should fail with an actionable error, got (exit {}):\n{cross_switch_output}",
+        cross_switch.exit_code
+    );
+    // The main document stays fully operable afterwards.
+    run_command(ctx, &["frame", "main"]);
+    run_command(ctx, &["click", "#cross-main-button"]);
+    let cross_clicked = eval_text(ctx, "document.getElementById('cross-state').textContent");
+    assert!(
+        cross_clicked.contains("cross-main-clicked"),
+        "main-document click should work on the cross-origin page, got:\n{cross_clicked}"
+    );
+
+    // ── navigation resets the frame scope automatically
+    goto_interactive_page(ctx);
+    let frames_after_nav = run_command(ctx, &["frames"]);
+    assert!(
+        frames_after_nav.stdout.contains("\"active\":true"),
+        "frames after navigation should still list the main frame as active, got:\n{}",
+        frames_after_nav.stdout
+    );
+    assert!(
+        !frames_after_nav.stdout.contains("payframe"),
+        "frames after navigation should not list the old page's iframes, got:\n{}",
+        frames_after_nav.stdout
+    );
+    // Element operations work against the main document right away.
+    run_command(ctx, &["click", "#click-target"]);
+    let click_deadline = Instant::now() + Duration::from_secs(10);
+    let mut clicked = false;
+    while Instant::now() < click_deadline {
+        let count = eval_text(ctx, "window.__browser4State.clickCount");
+        if count.trim() == "1" {
+            clicked = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    assert!(clicked, "click should work on the main document after navigation");
+
+    // ── error path: unknown frame target
+    run_command_expecting_failure(ctx, &["frame", "#no-such-frame"], "Frame not found");
+
+    run_command(ctx, &["close"]);
+}
+
+/// Find the first `"field": <integer>` anywhere in a CLI stdout payload
+/// (the JSON may be pretty-printed or wrapped by banners).
+fn json_field_value(stdout: &str, field: &str) -> Option<i64> {
+    let needle = format!("\"{field}\":");
+    let mut search_from = 0;
+    while let Some(relative) = stdout[search_from..].find(&needle) {
+        let value_start = search_from + relative + needle.len();
+        let digits: String = stdout[value_start..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '-')
+            .collect();
+        if let Ok(value) = digits.parse::<i64>() {
+            return Some(value);
+        }
+        search_from = value_start;
+    }
+    None
+}
+
+/// Extract the CDP frame id of the frame whose `name` equals [name] from a
+/// `frames` command payload (a JSON array of frame objects).
+fn named_frame_id(stdout: &str, name: &str) -> Option<String> {
+    let start = stdout.find('[')?;
+    let end = stdout.rfind(']')?;
+    let value: serde_json::Value = serde_json::from_str(&stdout[start..=end]).ok()?;
+    let frames = value.as_array()?;
+    frames
+        .iter()
+        .find(|frame| frame.get("name").and_then(|v| v.as_str()) == Some(name))
+        .and_then(|frame| frame.get("id").and_then(|v| v.as_str()))
+        .map(str::to_string)
 }

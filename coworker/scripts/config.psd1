@@ -44,6 +44,7 @@
     CLAUDE = @(
         'claude'
         '--dangerously-skip-permissions'
+        '--allow-dangerously-skip-permissions'
         '--verbose'
     )
 }

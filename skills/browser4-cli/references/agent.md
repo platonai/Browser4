@@ -122,6 +122,15 @@ browser4-cli extract "product name, price, ratings"
 browser4-cli extract "all article headlines and authors" --schema '{"fields":[{"name":"title","type":"string"},{"name":"author","type":"string"}]}'
 ```
 
+**Output destination:** `extract` saves its result to a **timestamped file**
+(`.browser4-cli/snapshot/extract-*.txt` under your working directory) and
+prints only a link — it does **not** echo the payload to stdout by default.
+Add `--stdout` (or `--raw`) to print the extracted content directly, or
+`--filename <path>` to choose the saved path. When `--schema` is given, the
+requested fields arrive as plain **top-level JSON** — both in the saved file
+and on stdout — so `extract "..." --schema @schema.json --stdout` can be
+piped straight into JSON consumers.
+
 ### 7. Synchronous Summarization (summarize)
 
 ```bash

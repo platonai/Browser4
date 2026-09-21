@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.pulsar.agentic.ExtractResult
 import ai.platon.pulsar.agentic.model.DirectValue
 import ai.platon.pulsar.agentic.model.TcEvaluate
 import ai.platon.pulsar.agentic.model.ToolCall
@@ -13,6 +14,19 @@ interface ToolExecutor {
 
     val domain: String
     val receiverClass: KClass<*>
+
+    /**
+     * Whether [callFunctionOn] consumes the receiver.
+     *
+     * Executors that hold their collaborators as fields (crawl → `CrawlService`,
+     * memory → a fallback backend, experience → a `KnowledgeStore`) don't need
+     * one, and the dispatcher must not refuse to run them merely because no
+     * target object was bound for their domain — that made every business-domain
+     * tool advertised by the standard MCP server fail with "no target object is
+     * available". Keep `true` (the default) for executors that cast the receiver
+     * (page-bound tools, `html_snapshot` → `ManagedSession`, `command`).
+     */
+    val requiresReceiver: Boolean get() = true
 
     suspend fun callFunctionOn(tc: ToolCall, receiver: Any = Any()): TcEvaluate
 
@@ -37,13 +51,53 @@ abstract class AbstractToolExecutor : ToolExecutor {
         return toolSpec.values.mapNotNull { it.description }.joinToString("\n")
     }
 
+    /**
+     * In-band usage reference for one method: the signature, what each argument
+     * means, and how a call looks.
+     *
+     * This is the channel an MCP client reaches through the `help` tool, so it
+     * carries the same information as the generated documentation — argument
+     * descriptions harvested from the source KDoc and the spec's examples.
+     */
     override fun help(method: String): String {
         val spec = toolSpec[method] ?: return ""
-        return """
-            ${spec.description}
-            ${spec.expression}
-        """.trimIndent()
+        return renderHelp(spec)
     }
+
+    protected fun renderHelp(spec: ToolSpec): String = buildString {
+        appendLine(spec.description ?: spec.expression)
+        appendLine(spec.expression)
+
+        val documented = spec.arguments.filter { !it.description.isNullOrBlank() }
+        if (documented.isNotEmpty()) {
+            appendLine()
+            appendLine("Arguments:")
+            documented.forEach { arg -> appendLine("  ${arg.name}: ${arg.description}") }
+        }
+
+        val examples = spec.examples
+        if (examples.isNotEmpty()) {
+            appendLine()
+            appendLine("Examples:")
+            examples.forEach { example ->
+                val label = example.title?.takeIf { it.isNotBlank() }?.let { "$it: " } ?: ""
+                when {
+                    example.executable ->
+                        appendLine("  $label${example.args.entries.joinToString(", ") { "${it.key}=${it.value}" }}")
+                    example.code != null ->
+                        appendLine("  $label${example.code.lineSequence().first().trim()}")
+                }
+                example.notes?.takeIf { it.isNotBlank() }?.let { appendLine("    note: $it") }
+            }
+        }
+
+        // Authored help adds caveats the KDoc does not repeat.
+        val extra = spec.help?.takeIf { it.isNotBlank() && it != spec.description }
+        if (extra != null) {
+            appendLine()
+            append(extra)
+        }
+    }.trimEnd()
 
     override suspend fun callFunctionOn(tc: ToolCall, receiver: Any): TcEvaluate {
         val domain = tc.domain
@@ -78,10 +132,25 @@ abstract class AbstractToolExecutor : ToolExecutor {
                         // Wrap non-serializable domain objects in a description map
                         // to prevent Jackson from walking into internal object graphs
                         // (e.g. PulsarWebDriver → browser → settings → Spring Environment → ...)
-                        mapOf(
-                            "type" to qualifiedName,
-                            "description" to r.toString()
-                        ) to qualifiedName
+                        if (r is ExtractResult) {
+                            // agent.extract: a stable, documented envelope whose
+                            // `description` holds the CLEAN schema payload (extraction
+                            // fields only — task bookkeeping like token counts lives in
+                            // inference events/logs, never inside the payload).  The
+                            // truthful completion flag is envelope-level:
+                            // completed=true whenever usable content is present, so a
+                            // successful extraction never reports "completed": false.
+                            mapOf(
+                                "type" to qualifiedName,
+                                "description" to r.toString(),
+                                "completed" to r.completed
+                            ) to qualifiedName
+                        } else {
+                            mapOf(
+                                "type" to qualifiedName,
+                                "description" to r.toString()
+                            ) to qualifiedName
+                        }
                     }
                 }
             }

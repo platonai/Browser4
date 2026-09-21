@@ -49,8 +49,11 @@ inputs:
 
 outputs:
   test_status:
-    description: 'Test execution status'
+    description: 'Test execution status (success | failed | timeout)'
     value: ${{ steps.reconcile-status.outputs.status }}
+  run_exit_code:
+    description: 'Maven exit code (124 means the timeout killed the reactor before it finished)'
+    value: ${{ steps.run-tests.outputs.run_exit_code }}
   test_count:
     description: 'Total number of tests executed'
     value: ${{ steps.test-summary.outputs.test_count }}
@@ -168,6 +171,11 @@ runs:
           test_cmd="$test_cmd -DrunITs=true"
         fi
 
+        # Keep building after a failing module so one run reports every failing
+        # module, not just the first one (the surefire XML totals below decide
+        # the final status, so this only widens the failure list).
+        test_cmd="$test_cmd --fail-at-end"
+
         # Add batch mode and other options
         test_cmd="$test_cmd -B"
 
@@ -177,21 +185,29 @@ runs:
         # Execute tests with timeout
         timeout_seconds=$(( ${{ fromJSON(inputs.timeout_minutes) }} * 60 ))
 
-        if timeout $timeout_seconds $test_cmd; then
-          end_time=$(date +%s)
-          test_time=$((end_time - start_time))
-          echo ""
+        exit_code=0
+        timeout $timeout_seconds $test_cmd || exit_code=$?
+
+        end_time=$(date +%s)
+        test_time=$((end_time - start_time))
+        echo ""
+
+        if [ "$exit_code" -eq 0 ]; then
           echo "✅ Tests completed successfully in ${test_time} seconds"
           echo "status=success" >> $GITHUB_OUTPUT
+        elif [ "$exit_code" -eq 124 ]; then
+          # `timeout` killed Maven: the modules that never ran produced no
+          # surefire XML at all, so a zero failure count below means "did not
+          # run", not "passed".  Report the timeout explicitly; the reconcile
+          # step must never turn this into a success.
+          echo "⏱️ Tests timed out after ${test_time} seconds (limit ${timeout_seconds}s) — the reactor was killed, results are incomplete"
+          echo "status=timeout" >> $GITHUB_OUTPUT
         else
-          end_time=$(date +%s)
-          test_time=$((end_time - start_time))
-          echo ""
-          echo "❌ Tests failed or timed out after ${test_time} seconds"
+          echo "❌ Tests failed after ${test_time} seconds (Maven exit code $exit_code)"
           echo "status=failed" >> $GITHUB_OUTPUT
-
-          # Still continue to generate summary
         fi
+
+        echo "run_exit_code=$exit_code" >> $GITHUB_OUTPUT
 
         echo "::endgroup::"
 
@@ -307,19 +323,29 @@ runs:
 
         # Get the initial status from test execution
         EXEC_STATUS="${{ steps.run-tests.outputs.status }}"
+        RUN_EXIT_CODE="${{ steps.run-tests.outputs.run_exit_code }}"
         FAILED_COUNT="${{ steps.test-summary.outputs.failed_count }}"
 
         # Set defaults if empty
         EXEC_STATUS="${EXEC_STATUS:-failed}"
+        RUN_EXIT_CODE="${RUN_EXIT_CODE:-0}"
         FAILED_COUNT="${FAILED_COUNT:-0}"
 
         echo "🔍 Status Analysis:"
         echo "  - Execution Status: $EXEC_STATUS"
+        echo "  - Maven exit code: $RUN_EXIT_CODE"
         echo "  - Failed Test Count: $FAILED_COUNT"
 
+        # A timeout (exit 124) means Maven was killed before the reactor
+        # finished, so the modules that never ran contributed no surefire XML:
+        # FAILED_COUNT == 0 then only says "nothing that ran failed".  Never
+        # reconcile a truncated run to success.
+        if [ "$RUN_EXIT_CODE" == "124" ] || [ "$EXEC_STATUS" == "timeout" ]; then
+          FINAL_STATUS="failed"
+          echo "  - Final Status: failed (test run timed out — results are incomplete)"
         # Reconcile: if no tests failed, override status to success
         # This handles cases where Maven exits non-zero for non-test-failure reasons
-        if [ "$FAILED_COUNT" == "0" ]; then
+        elif [ "$FAILED_COUNT" == "0" ]; then
           FINAL_STATUS="success"
           echo "  - Final Status: success (no test failures detected)"
         else

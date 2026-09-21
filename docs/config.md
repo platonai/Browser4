@@ -299,6 +299,7 @@ docker run -d -p 8182:8182 `
     - All `SEQUENTIAL` and `TEMPORARY` modes inherit from this prototype.
   - `SEQUENTIAL` **[Advanced]**: Selects a user data directory from a managed pool to enable sequential isolation.
   - `TEMPORARY` **[Advanced]**: Generates a new, isolated user data directory for each browser instance.
+  - **Named sessions** (`open --name <n>` / `--sessionId <id>`): the backend binds a **dedicated profile directory** keyed by the stable session id (`~/.browser4/context/groups/named/PULSAR_CHROME/cx.<sessionUuid>`), so reopening the session always restores the same cookies / login state instead of rotating through the `SEQUENTIAL` pool. An explicit `TEMPORARY` request on a named session is honored as-is.
 
 * **`proxy.rotation.url`**
   [**Advanced**] Only for `SEQUENTIAL` and `TEMPORARY` modes.
@@ -323,7 +324,9 @@ docker run -d -p 8182:8182 `
 
     * `GUI`: Launches a visible browser window.
     * `HEADLESS`: Runs without a graphical window.
-    * `SUPERVISED`: Linux-only; uses Xvfb for headless GUI simulation.
+    * `SUPERVISED`: Linux-only; wraps the browser launch in an external supervisor process — in practice an Xvfb-based program such as `xvfb-run`, to simulate a GUI without a display.
+      The supervisor must be configured: set `browser.launch.supervisor.process` (and optionally `browser.launch.supervisor.process.args`), e.g.
+      `browser.launch.supervisor.process=xvfb-run`. Without a configured — and locatable — supervisor the mode has no effect (Chrome is launched normally), and it does **not** imply headless.
 
   > **Session-level override wins:** when a session is created with an explicit
   > display mode (e.g. `open --headed` / `open --headless` sets the `headed`

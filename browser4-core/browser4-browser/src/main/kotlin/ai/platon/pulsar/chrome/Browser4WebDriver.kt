@@ -7,7 +7,11 @@ import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.api.model.PageTarget
 import ai.platon.pulsar.api.model.SnapshotOptions
 import ai.platon.pulsar.api.model.WebDriverException
+import ai.platon.pulsar.chrome.network.HarContentMode
+import ai.platon.pulsar.chrome.network.NetworkObserver
 import ai.platon.pulsar.chrome.network.RobustRPC
+import ai.platon.pulsar.chrome.network.RouteManager
+import ai.platon.pulsar.chrome.network.TrackedNetworkRequest
 import ai.platon.pulsar.chrome.protocol.Keyboard
 import ai.platon.pulsar.chrome.protocol.util.withNodeObjectId
 import ai.platon.pulsar.chrome.util.ChromeDriverException
@@ -16,10 +20,17 @@ import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.urls.URLUtils
 import com.fasterxml.jackson.annotation.JsonInclude
+import com.fasterxml.jackson.core.type.TypeReference
+import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.random.Random
 
 /**
@@ -67,6 +78,17 @@ open class Browser4WebDriver(
     browser: PulsarBrowser
 ) : PulsarWebDriver(uniqueID, chromeTab, browserProtocol, browser) {
 
+    init {
+        // Claim the CDP event-listener slots before the base library's
+        // NetworkManager registers them on first navigation: its event
+        // dispatcher keeps only one listener per event key, so a listener
+        // registered later would silently never fire. Per-protocol sharing
+        // (see NetworkObserver.forProtocol) makes this a single registration
+        // per tab no matter how many drivers wrap it.
+        NetworkObserver.forProtocol(browserProtocol).preRegister()
+        RouteManager.forProtocol(browserProtocol).preRegister()
+    }
+
     /**
      * Viewport center of a drag element, plus the stable CSS path used to
      * re-locate it inside the drag script (where CDP node object ids are
@@ -91,6 +113,19 @@ open class Browser4WebDriver(
 
         /** Settle delay after the post-navigation body wait (see [waitForNavigationSettled]). */
         private const val NAVIGATION_DOM_SETTLE_DELAY_MS = 1_000L
+
+        /** Supported [typeAuto] insertion methods. */
+        internal val TYPE_METHODS = setOf("auto", "chars", "exec")
+
+        /**
+         * Text length above which [typeAuto]'s `auto` method prefers one bulk
+         * `execCommand('insertText')` over per-code-point typing (~150 chars ≈
+         * 13-36 s at the 90-240 ms/char type cadence).
+         */
+        internal const val TYPE_EXEC_LONG_THRESHOLD = 150
+
+        /** The dual-world runtime global probed by [ensurePulsarUtilsInjected]. */
+        private const val PULSAR_UTILS_FUNCTION = "__pulsar_utils__"
 
         private val storageStateMapper: ObjectMapper = jacksonObjectMapper()
             .setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
@@ -219,6 +254,99 @@ open class Browser4WebDriver(
         }
 
         /**
+         * Probe used by [Browser4WebDriver.typeAuto] before choosing an insertion
+         * strategy.  Evaluated with `this` bound to the target element; returns
+         * `{found:false}` when the locator resolves to nothing, otherwise the
+         * element kind, disabled/readOnly flags, and its CURRENT text (for the
+         * verify read-back).
+         */
+        fun typeTargetProbeJs(): String =
+            """
+            function() {
+                var el = this;
+                if (!el) { return { found: false }; }
+                var tag = (el.tagName || '').toUpperCase();
+                var kind = el.isContentEditable ? 'contenteditable'
+                    : (tag === 'TEXTAREA' ? 'textarea'
+                    : (tag === 'INPUT' ? 'input' : 'other'));
+                var text = (tag === 'INPUT' || tag === 'TEXTAREA') ? (el.value || '')
+                    : ((el.innerText !== undefined ? el.innerText : '') || '');
+                return { found: true, kind: kind, disabled: !!el.disabled, readOnly: !!el.readOnly, text: text };
+            }
+            """.trimIndent()
+
+        /**
+         * Bulk-insert [text] via `document.execCommand('insertText')` on the
+         * element bound as `this`.  Focuses the element, collapses the cursor to
+         * the end of the content, then inserts the whole string in one editor
+         * transaction.  Returns `{ok: true}` on success or `{ok: false,
+         * reason}` when the element is not editable or the command is rejected.
+         *
+         * Note: `execCommand` is deprecated but supported in Chrome/Edge/Firefox
+         * (no removal schedule).  It synthesizes `beforeinput`/`input` events
+         * WITHOUT a key event chain — sites that require keyboard events
+         * (shortcuts, autocomplete) will not see it; that trade-off is why
+         * typeAuto keeps per-code-point `chars` as the default for short text.
+         */
+        fun typeExecJs(text: String): String =
+            """
+            function() {
+                var el = this;
+                if (!el) { return { ok: false, reason: 'no element' }; }
+                if (!el.isContentEditable && !(el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+                    return { ok: false, reason: 'target is not an editable input/textarea/contenteditable' };
+                }
+                if (el.disabled || el.readOnly) {
+                    return { ok: false, reason: 'target is disabled or read-only' };
+                }
+                try { el.focus(); } catch (e) {}
+                if (el.isContentEditable) {
+                    try {
+                        var sel = window.getSelection();
+                        var range = document.createRange();
+                        range.selectNodeContents(el);
+                        range.collapse(false);
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                    } catch (e) {}
+                } else {
+                    try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) {}
+                }
+                var text = '${escapeJsString(text)}';
+                var ok = false;
+                try { ok = document.execCommand('insertText', false, text); } catch (e) { ok = false; }
+                return ok ? { ok: true } : { ok: false, reason: "execCommand('insertText') returned false" };
+            }
+            """.trimIndent()
+
+        /**
+         * Read the current text of the element bound as `this` — `value` for
+         * input/textarea, `innerText` for contenteditable — used by the
+         * typeAuto verify read-back.
+         */
+        fun typeReadBackJs(): String =
+            """
+            function() {
+                var el = this;
+                if (!el) { return null; }
+                var tag = (el.tagName || '').toUpperCase();
+                if (tag === 'INPUT' || tag === 'TEXTAREA') { return el.value || ''; }
+                return (el.innerText !== undefined ? el.innerText : '') || '';
+            }
+            """.trimIndent()
+
+        /**
+         * Normalize editor text before verification compares: NBSP → space and
+         * CRLF/CR → LF (browsers and editors differ in how they store line
+         * breaks).  Trailing whitespace differences are handled by the caller
+         * (trimmed on both sides of the comparison).
+         */
+        fun normalizeEditorText(text: String): String =
+            text.replace("\u00a0", " ")
+                .replace("\r\n", "\n")
+                .replace('\r', '\n')
+
+        /**
          * The IIFE used by [submitFormFallback] (and the executor's fallback) to
          * submit the nearest form of the element matched by [selector] with DOM
          * keyboard events and `requestSubmit()`/`submit()` — a last-resort path
@@ -289,12 +417,30 @@ open class Browser4WebDriver(
          * normalization so states saved by `tab.saveStorageState()` round-trip
          * unchanged.
          *
+         * Beyond the upstream pass-through this validates the two fields whose
+         * violations make the downstream CDP layer reject the whole batch with
+         * the opaque `Invalid cookie fields` error (no field attribution):
+         * cookie paths that do not start with `/`, and cookie names containing
+         * characters the browser will not store (`;`, `=`, whitespace/control
+         * characters).  Failing here names the offending cookie so callers can
+         * act on it instead of receiving the browser's generic rejection.
+         *
          * @param cookie Raw cookie entry from the storage-state payload.
          * @return A map with the canonical `Network.setCookies` field set.
          */
         fun normalizeStorageStateCookie(cookie: Map<String, Any?>): Map<String, Any?> {
             val name = cookie["name"]?.toString()?.trim().orEmpty()
             require(name.isNotEmpty()) { "Storage state cookie name must not be blank" }
+            // Chrome's Network.setCookies rejects cookie names containing ';',
+            // '=', or whitespace/control characters ("Invalid cookie fields").
+            // Validate in-repo so the error names the cookie instead of leaking
+            // the browser's opaque rejection.
+            require(
+                name.none { it == ';' || it == '=' || it.code < 0x21 || it.code == 0x7F }
+            ) {
+                "Storage state cookie name '$name' contains characters the browser rejects " +
+                    "(whitespace/control characters, ';', '=')"
+            }
 
             val normalized = linkedMapOf<String, Any?>(
                 "name" to name,
@@ -303,7 +449,15 @@ open class Browser4WebDriver(
 
             cookie["url"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["url"] = it }
             cookie["domain"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["domain"] = it }
-            cookie["path"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["path"] = it }
+            cookie["path"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { path ->
+                // Chrome rejects cookie paths that do not start with '/'
+                // ("Invalid cookie fields"); validate in-repo so the error names
+                // the cookie instead of leaking the browser's opaque rejection.
+                require(path.startsWith('/')) {
+                    "Storage state cookie '$name' has an invalid path '$path': cookie paths must start with '/'"
+                }
+                normalized["path"] = path
+            }
             cookie["expires"]?.toString()?.toDoubleOrNull()?.takeIf { it > 0 }?.let { normalized["expires"] = it }
             cookie["httpOnly"]?.toString()?.toBooleanStrictOrNull()?.let { normalized["httpOnly"] = it }
             cookie["secure"]?.toString()?.toBooleanStrictOrNull()?.let { normalized["secure"] = it }
@@ -330,6 +484,47 @@ open class Browser4WebDriver(
               return entries.length;
             })()
             """.trimIndent()
+
+        /**
+         * JavaScript returning the active origin's `localStorage` as a JSON
+         * object (`{"name": "value"}`), the capture counterpart of
+         * [restoreLocalStorageScript].  Used by `saveStorageState()`.
+         */
+        fun captureLocalStorageScript(): String =
+            "JSON.stringify(Object.fromEntries(Object.entries(window.localStorage)))"
+
+        /** Target type for one raw CDP cookie object. */
+        private val COOKIE_MAP_TYPE = object : TypeReference<Map<String, Any?>>() {}
+
+        /**
+         * Extract the cookie list from a raw `Network.getAllCookies` CDP result.
+         *
+         * The command answers `{"cookies": [...]}`, but the runtime shape depends
+         * on the transport: a direct CDP connection deserializes into typed CDP
+         * objects, while the extension relay hands back generic JSON maps/nodes.
+         * Nothing here is cast to
+         * `ai.platon.cdt.kt.protocol.types.network.Cookie` — that cast is what
+         * makes cookie reads fail on `attach --extension` sessions.
+         *
+         * @param result The raw value returned by `executeCdpCommand`.
+         * @return One map per cookie; empty when [result] carries no cookie array.
+         */
+        fun extractCookiesFromCdpResult(result: Any?): List<Map<String, Any?>> {
+            if (result == null) return emptyList()
+
+            val root = runCatching { pulsarObjectMapper().valueToTree<JsonNode>(result) }.getOrNull()
+                ?: return emptyList()
+            val cookies = when {
+                root.isArray -> root
+                root.isObject -> root.get("cookies") ?: return emptyList()
+                else -> return emptyList()
+            }
+            if (!cookies.isArray) return emptyList()
+
+            return cookies.mapNotNull { node ->
+                runCatching { pulsarObjectMapper().convertValue(node, COOKIE_MAP_TYPE) }.getOrNull()
+            }
+        }
 
         /**
          * True once the evaluated `location.origin` has committed to exactly
@@ -418,7 +613,26 @@ open class Browser4WebDriver(
          * All failures are reported before any event is dispatched, so a retry
          * of the outer RPC block re-runs the sequence idempotently.
          *
-         * [delays] must contain exactly 4 randomized inter-event delays (ms).
+         * [dropPosition] selects the drop point on the target:
+         *  - `"center"` (legacy): the resolved viewport point ([targetX]/[targetY],
+         *    already jittered by the caller) is used verbatim.
+         *  - `"top"` / `"bottom"`: the drop point is pinned to the live
+         *    top/bottom edge region of the target (`rect.top + 2` /
+         *    `rect.bottom - 2`, read at dispatch time).  Child-index-based
+         *    reorder handlers decide insert-before/insert-after from the drop
+         *    point's y relative to child centers, so the ±2px jitter around a
+         *    center point makes placement a coin flip; an edge-region point
+         *    resolves deterministically (`--at bottom` of an item = insert
+         *    after it, `--at top` = insert before it).  For targets shorter
+         *    than ~5px the edge region is degenerate and the center point is
+         *    kept.  When positioned, two intermediate `dragover` events sweep
+         *    from the source point toward the drop point so handlers that
+         *    track dragenter/dragover transitions observe the approach, and a
+         *    final `dragover` lands exactly on the drop point.
+         *
+         * [delays] must contain exactly 4 randomized inter-event delays (ms)
+         * for `"center"`, or exactly 6 for `"top"`/`"bottom"` (the two extra
+         * delays pace the sweep events).
          */
         internal fun buildDragSequenceScript(
             targetCssPath: String,
@@ -427,9 +641,30 @@ open class Browser4WebDriver(
             targetX: Double,
             targetY: Double,
             delays: List<Long>,
+            dropPosition: String = "center",
         ): String {
-            require(delays.size == 4) { "drag sequence requires exactly 4 delays" }
+            val positioned = dropPosition == "top" || dropPosition == "bottom"
+            require(if (positioned) delays.size == 6 else delays.size == 4) {
+                "drag sequence requires exactly ${if (positioned) 6 else 4} delays for drop position '$dropPosition'"
+            }
             val targetJson = pulsarObjectMapper().writeValueAsString(targetCssPath)
+            val positionJson = pulsarObjectMapper().writeValueAsString(dropPosition)
+            // Positioned drops interpolate two sweep dragover events between
+            // the source point and the final drop point.
+            val sweepBlock = if (positioned) """
+                    const sweep = [ { t: 0.34, delay: ${delays[2]} }, { t: 0.67, delay: ${delays[3]} } ];
+                    for (const step of sweep) {
+                        const t = step.t;
+                        const ix = $sourceX + (dropX - $sourceX) * t;
+                        const iy = $sourceY + (dropY - $sourceY) * t;
+                        fire(document.elementFromPoint(ix, iy) || hit, 'dragover', ix, iy);
+                        await sleep(step.delay);
+                    }
+            """.trimIndent() else ""
+            // After dragenter the event pace depends on the drop mode: center
+            // sleeps once before the single dragover; positioned sleeps per
+            // sweep step, then once more before the final dragover.
+            val (dragoverIndex, dropIndex) = if (positioned) 4 to 5 else 2 to 3
             // CDP Runtime.callFunctionOn requires a *function declaration*, not
             // an expression — an IIFE is rejected with "Given expression does
             // not evaluate to a function".  `async function()` + awaitPromise
@@ -451,7 +686,15 @@ open class Browser4WebDriver(
                             error: 'Target element was not found at drag time'
                         });
                     }
-                    const hit = document.elementFromPoint($targetX, $targetY);
+                    var dropX = $targetX;
+                    var dropY = $targetY;
+                    if ($positionJson === 'top' || $positionJson === 'bottom') {
+                        const targetRect = target.getBoundingClientRect();
+                        if (targetRect.height > 4) {
+                            dropY = $positionJson === 'bottom' ? targetRect.bottom - 2 : targetRect.top + 2;
+                        }
+                    }
+                    const hit = document.elementFromPoint(dropX, dropY);
                     // The hit must be the target itself or one of its
                     // descendants (b.contains(a): the target contains the
                     // hit).  A hit on an *ancestor* means the target is not
@@ -479,13 +722,14 @@ open class Browser4WebDriver(
                     };
                     fire(source, 'dragstart', $sourceX, $sourceY);
                     await sleep(${delays[0]});
-                    fire(hit, 'dragenter', $targetX, $targetY);
+                    fire(hit, 'dragenter', dropX, dropY);
                     await sleep(${delays[1]});
-                    fire(hit, 'dragover', $targetX, $targetY);
-                    await sleep(${delays[2]});
-                    fire(hit, 'drop', $targetX, $targetY);
-                    await sleep(${delays[3]});
-                    fire(source, 'dragend', $targetX, $targetY);
+            $sweepBlock
+                    fire(hit, 'dragover', dropX, dropY);
+                    await sleep(${delays[dragoverIndex]});
+                    fire(hit, 'drop', dropX, dropY);
+                    await sleep(${delays[dropIndex]});
+                    fire(source, 'dragend', dropX, dropY);
                     return JSON.stringify({ ok: true });
                 }
             """.trimIndent()
@@ -503,7 +747,246 @@ open class Browser4WebDriver(
             }
             return parsed?.get("error")?.asText() ?: "Unknown drag failure"
         }
+
+        /**
+         * The `function()` body evaluated with `this` bound to an element.
+         * Returns a comparable fingerprint of the element's DOM position
+         * (parent key + child index + sibling count).  The element is bound
+         * via its CDP object id, which stays valid across reparenting, so the
+         * fingerprint can be re-read after a dispatch to verify the element
+         * actually moved.
+         */
+        internal fun dragPositionFingerprintJs(): String =
+            """
+            function() {
+                if (!(this instanceof Element)) {
+                    return JSON.stringify({ ok: false });
+                }
+                const parent = this.parentElement;
+                if (!parent) {
+                    return JSON.stringify({ ok: false });
+                }
+                const kids = Array.prototype.filter.call(parent.children, (c) => c.nodeType === 1);
+                const parentKey = parent.tagName.toLowerCase() + (parent.id ? '#' + parent.id : '');
+                return JSON.stringify({
+                    ok: true,
+                    parentKey: parentKey,
+                    index: kids.indexOf(this),
+                    total: kids.length
+                });
+            }
+            """.trimIndent()
+
+        /**
+         * The `function()` body evaluated with `this` bound to the dragged
+         * element (re-located by its original locator after the drag).  Returns
+         * the element's tag/id and its position among its siblings' parent.
+         */
+        internal fun dragPositionReportJs(): String =
+            """
+            function() {
+                if (!(this instanceof Element)) {
+                    return JSON.stringify({ ok: false });
+                }
+                const parent = this.parentElement;
+                if (!parent) {
+                    return JSON.stringify({ ok: false });
+                }
+                const kids = Array.prototype.filter.call(parent.children, (c) => c.nodeType === 1);
+                return JSON.stringify({
+                    ok: true,
+                    tag: this.tagName.toLowerCase(),
+                    id: this.id || '',
+                    parentTag: parent.tagName.toLowerCase(),
+                    parentId: parent.id || '',
+                    index: kids.indexOf(this),
+                    total: kids.length
+                });
+            }
+            """.trimIndent()
+
+        /**
+         * Render the JSON produced by [dragPositionReportJs] into a
+         * human-readable placement summary, or null when the value is missing,
+         * malformed, or reports `ok: false`.
+         */
+        internal fun parseDragPositionReport(value: Any?): String? {
+            val json = value as? String ?: return null
+            val node = runCatching { pulsarObjectMapper().readTree(json) }.getOrNull() ?: return null
+            if (node.get("ok")?.asBoolean() != true) {
+                return null
+            }
+            val tag = node.get("tag")?.asText()?.takeIf { it.isNotBlank() } ?: "element"
+            val id = node.get("id")?.asText().orEmpty()
+            val parentTag = node.get("parentTag")?.asText()?.takeIf { it.isNotBlank() } ?: "element"
+            val parentId = node.get("parentId")?.asText().orEmpty()
+            val index = node.get("index")?.takeIf { it.isNumber }?.asInt() ?: return null
+            val total = node.get("total")?.takeIf { it.isNumber }?.asInt() ?: return null
+            if (total <= 0 || index < 0 || index >= total) {
+                return null
+            }
+            val self = "$tag${if (id.isNotEmpty()) "#$id" else ""}"
+            val parent = "$parentTag${if (parentId.isNotEmpty()) "#$parentId" else ""}"
+            return "Dropped $self as child ${index + 1} of $total in $parent"
+        }
+
+        // ---------------------------------------------------------------------
+        // Capture annotations: visual information (vi) and the normalized URI
+        //
+        // The runtime materializes `vi` bounding boxes and the capture meta links
+        // only in the HTML it serializes: the boxes live in a WeakMap that
+        // `compute()` fills, the links in `_captureMetaLinks`, and the serializer
+        // injects both while it walks the document.  Every read that skips those
+        // steps therefore loses the annotation silently.  The statuses below let
+        // the driver tell "nothing to do" apart from "nothing that can be done",
+        // so the failure is logged instead of being smuggled into an unannotated
+        // HTML string.
+        // ---------------------------------------------------------------------
+
+        /** [viDataStatusJs] status: the document already has vi data, or has it now. */
+        internal const val VI_DATA_COMPUTED = "computed"
+
+        /** [viDataStatusJs] status: the document cannot be annotated yet (no body, or not parsed). */
+        internal const val VI_DATA_NOT_READY = "not-ready"
+
+        /** [viDataStatusJs] status: the Browser4 runtime (and its serializer) is not on this tab. */
+        internal const val VI_DATA_UNAVAILABLE = "unavailable"
+
+        /** [viDataStatusJs] status: the runtime is present but produced no vi data. */
+        internal const val VI_DATA_FAILED = "failed"
+
+        /**
+         * The `rel` of the capture meta link that records the page URL, matching
+         * `AppConstants.PULSAR_DOCUMENT_NORMALIZED_URI`.  The serializer writes it
+         * into the serialized `<head>` so an offline copy of the page stays
+         * self-describing.
+         */
+        internal const val CAPTURE_META_LINK_REL = "normalizedURI"
+
+        /**
+         * Field separator of the [viDataStatusJs] result.  A control character
+         * cannot occur in a status, a URL or an attribute value, so the single
+         * evaluation result splits without a JSON round trip.
+         *
+         * The generated JS spells it out as the `\u0001` escape sequence (see
+         * [fieldSeparatorJsEscape]) so the evaluated source stays plain ASCII.
+         */
+        internal const val VI_DATA_FIELD_SEPARATOR = "\u0001"
+
+        /**
+         * [VI_DATA_FIELD_SEPARATOR] as it appears inside the generated JS source,
+         * i.e. the escape sequence the JavaScript engine turns back into the
+         * control character at evaluation time.
+         */
+        internal val fieldSeparatorJsEscape: String =
+            "\\u" + VI_DATA_FIELD_SEPARATOR.first().code.toString(16).padStart(4, '0')
+
+        /**
+         * Probe evaluated on the live tab: the vi (visual-information) state of
+         * the document — computing the data when the document has none yet — the
+         * `normalizedURI` currently stored for serialization, and the live
+         * document URL.
+         *
+         * Evaluated as a single CDP call so the check and the computation cannot
+         * be interleaved by a navigation.  The status is one of the `VI_DATA_*`
+         * constants rather than a boolean so the caller can log the difference
+         * between an expected no-op and a real failure; the stored link and the
+         * document URL let the caller decide — without a second round trip —
+         * whether the link has to be (re)stored before serializing.
+         */
+        internal fun viDataStatusJs(): String =
+            """
+            (function () {
+              var u = window.$PULSAR_UTILS_FUNCTION;
+              var url = document.URL || '';
+              if (!u || typeof u.getAnnotatedHTML !== 'function') {
+                return '$VI_DATA_UNAVAILABLE$fieldSeparatorJsEscape$fieldSeparatorJsEscape' + url;
+              }
+              var links = u._captureMetaLinks || {};
+              var stored = links['$CAPTURE_META_LINK_REL'] || '';
+              var status;
+              if (u._viDataComputed === true) {
+                status = '$VI_DATA_COMPUTED';
+              } else if (typeof u.compute !== 'function') {
+                status = '$VI_DATA_UNAVAILABLE';
+              } else if (!document.body || !document.body.firstChild) {
+                status = '$VI_DATA_NOT_READY';
+              } else {
+                try { u.compute(); } catch (e) { /* reported as failed below */ }
+                status = u._viDataComputed === true ? '$VI_DATA_COMPUTED' : '$VI_DATA_FAILED';
+              }
+              return status + '$fieldSeparatorJsEscape' + stored + '$fieldSeparatorJsEscape' + url;
+            })()
+            """.trimIndent()
+
+        /**
+         * JS storing [normalizedUri] as the page URL the annotated serializer
+         * writes into the serialized `<head>`.
+         *
+         * Best effort by construction: the value lands in the runtime's capture
+         * meta links (no DOM mutation), and the serializer emits it only while
+         * serializing, so the live page stays untouched.
+         */
+        internal fun storeCaptureMetaLinkJs(normalizedUri: String): String =
+            """
+            (function () {
+              var u = window.$PULSAR_UTILS_FUNCTION;
+              if (!u) return false;
+              u._captureMetaLinks = u._captureMetaLinks || {};
+              u._captureMetaLinks['$CAPTURE_META_LINK_REL'] = '${escapeJsString(normalizedUri)}';
+              return true;
+            })()
+            """.trimIndent()
+
+        /**
+         * The vi state of the live document as reported by [viDataStatusJs]:
+         * the [status], the page URL currently stored for serialization
+         * ([storedUri], blank when none is stored), and the live document URL
+         * ([documentUrl]).
+         */
+        internal data class ViDataProbe(val status: String, val storedUri: String, val documentUrl: String)
+
+        /**
+         * Parse a [viDataStatusJs] result, or null when the evaluation produced
+         * something unexpected (a truncated or non-string result).
+         */
+        internal fun parseViDataProbe(value: Any?): ViDataProbe? {
+            val text = value as? String ?: return null
+            val parts = text.split(VI_DATA_FIELD_SEPARATOR)
+            if (parts.size != 3) return null
+            return ViDataProbe(parts[0], parts[1], parts[2])
+        }
+
+        /**
+         * Whether a vi failure on [documentUrl] still has to be reported, given
+         * the URL of the last reported failure.  One warning per document keeps
+         * a page that cannot be annotated from flooding the log on every read.
+         */
+        internal fun shouldReportViFailure(lastReportedUrl: String?, documentUrl: String): Boolean =
+            lastReportedUrl != documentUrl
     }
+
+/**
+ * Where on the target element a drag should drop.  `top`/`bottom` pin the
+ * drop point to the target's live top/bottom edge region, making
+ * insert-before/insert-after deterministic on child-index-based reorder
+ * lists (the legacy `center` point sits exactly on the insert boundary, so
+ * ±2px jitter decides the outcome).
+ */
+internal enum class DragDropPosition(val key: String) {
+    CENTER("center"),
+    TOP("top"),
+    BOTTOM("bottom");
+
+    companion object {
+        /** Resolve [key] (case-insensitive) to a [DragDropPosition]. */
+        fun from(key: String): DragDropPosition =
+            entries.firstOrNull { it.key == key.trim().lowercase() }
+                ?: throw IllegalArgumentException(
+                    "Unknown drag position '$key' (expected one of: ${entries.joinToString { it.key }})"
+                )
+    }
+}
 
     // ---------------------------------------------------------------------------
     // Extension surface
@@ -525,6 +1008,133 @@ open class Browser4WebDriver(
      * per-instance, so it is tracked independently from the parent's counters.
      */
     private val rpc = RobustRPC(this)
+
+    /**
+     * Network observer for this tab, shared by every driver wrapping the same
+     * tab protocol (see [NetworkObserver.forProtocol]).
+     *
+     * Network tracking and HAR recording are opt-in: the CDP `Network` domain
+     * is enabled on the first `network*`/`har*` call, so tabs that never use
+     * the feature pay no overhead. The event listeners themselves are
+     * registered eagerly at construction so they claim the dispatcher slot
+     * before the base library's `NetworkManager` does on first navigation.
+     */
+    private val networkObserver: NetworkObserver by lazy {
+        NetworkObserver.forProtocol(browserProtocol)
+    }
+
+    /**
+     * Request router for this tab (CDP `Fetch` interception), shared per tab
+     * protocol like the network observer; the `Fetch.requestPaused` listener
+     * is registered eagerly at construction for the same reason.
+     */
+    private val routeManager: RouteManager by lazy {
+        RouteManager.forProtocol(browserProtocol)
+    }
+
+    /**
+     * List network requests tracked for this tab, optionally filtered.
+     *
+     * The CDP `Network` domain is enabled on first use; requests observed
+     * afterwards are retained in a bounded in-memory store (oldest evicted).
+     *
+     * @param filter Only requests whose URL contains this text (case-insensitive).
+     * @param type Only requests whose CDP resource type is in this comma-separated list (e.g. `xhr,fetch`).
+     * @param method Only requests with this HTTP method (case-insensitive).
+     * @param status Status filter: exact code (`200`), wildcard (`2xx`), or range (`400-499`).
+     * @param clear When true, drop all tracked requests first.
+     * @return The matching requests in observation order.
+     */
+    suspend fun networkRequests(
+        filter: String? = null,
+        type: String? = null,
+        method: String? = null,
+        status: String? = null,
+        clear: Boolean = false,
+    ): List<TrackedNetworkRequest> {
+        networkObserver.ensureEnabled()
+        // Strip captured bodies: list results carry metadata only; bodies are
+        // retrieved through networkRequestDetail.
+        return networkObserver.networkRequests(filter, type, method, status, clear).map { it.withoutBody() }
+    }
+
+    /**
+     * Full detail of one tracked network request, including headers, timing,
+     * and the response body (fetched on demand when available).
+     *
+     * @param requestId The CDP network request id, as shown by [networkRequests].
+     * @throws IllegalArgumentException when the request id is unknown.
+     */
+    suspend fun networkRequestDetail(requestId: String): Map<String, Any?> {
+        networkObserver.ensureEnabled()
+        return networkObserver.networkRequestDetail(requestId)
+    }
+
+    /**
+     * Start a HAR recording session on this tab.
+     *
+     * @param contentMode Which response bodies to embed in the HAR: `none`,
+     * `text` (text-like MIME types only), or `all` (binary base64-encoded).
+     * @return Recording metadata.
+     */
+    suspend fun harStart(contentMode: String = "none"): Map<String, Any?> {
+        val mode = HarContentMode.parse(contentMode)
+        return networkObserver.harStart(mode)
+    }
+
+    /**
+     * Stop the active HAR recording and build the HAR 1.2 document from all
+     * requests observed so far.
+     *
+     * @return `{ recording, contentMode, entries, har }` where `har` is the
+     * HAR document (serialize to JSON to get a `.har` file).
+     */
+    suspend fun harStop(): Map<String, Any?> {
+        return networkObserver.harStop()
+    }
+
+    /**
+     * Route matching requests to a mock response or abort them, via the CDP
+     * `Fetch` domain (agent-browser compatible).
+     *
+     * @param urlPattern URL pattern: `*` matches all; plain text matches URLs
+     * containing it; `*` globs are supported (e.g. `**` + `/api/users`).
+     * @param abort When true, matching requests fail instead of being sent.
+     * @param body Mock response body (plain text; JSON strings work as-is).
+     * @param contentType Content-Type for the mock response (e.g. `application/json`).
+     * @param resourceType Only intercept requests of these CDP resource types
+     * (comma-separated, e.g. `xhr,fetch`); empty matches all.
+     * @return `{ "routed": urlPattern }`.
+     */
+    suspend fun networkRoute(
+        urlPattern: String,
+        abort: Boolean = false,
+        body: String? = null,
+        contentType: String? = null,
+        resourceType: String? = null,
+    ): Map<String, Any?> {
+        require(urlPattern.isNotBlank()) { "networkRoute requires a non-blank urlPattern" }
+        require(abort || body != null) {
+            "networkRoute requires at least one action: --abort or --body"
+        }
+        val response = if (body != null) {
+            RouteManager.RouteResponse(body = body, contentType = contentType)
+        } else {
+            null
+        }
+        val types = resourceType?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
+        return routeManager.route(urlPattern, response, abort, types)
+    }
+
+    /**
+     * Remove routes. Without [urlPattern] every route is removed and Fetch
+     * interception is disabled.
+     *
+     * @return `{ "unrouted": urlPattern | "all" }`.
+     */
+    suspend fun networkUnroute(urlPattern: String? = null): Map<String, Any?> {
+        return routeManager.unroute(urlPattern)
+    }
 
     /**
      * Capture the browser/page state, degrading gracefully when the page is unusable.
@@ -550,27 +1160,6 @@ open class Browser4WebDriver(
             logger.warn("browserUseState degraded ({}); returning dummy state", e.message)
             BrowserUseState.DUMMY
         }
-    }
-
-    /**
-     * Click on the element identified by [selector] the given number of times.
-     *
-     * On Windows the parent implementation dispatches a synthetic DOM click
-     * (`dispatchDomClick`) instead of CDP mouse events, because CDP
-     * `Input.dispatchMouseEvent` does not reliably trigger DOM click events in
-     * headless Chrome.  A synthetic `HTMLElement.click()` never transfers focus
-     * to the clicked element though — unlike a real mouse click.  Focus the
-     * target first (best-effort) so that clicking an `<input>` behaves like a
-     * native click and subsequent typing lands in the right element.
-     *
-     * @param selector A CSS selector, XPath, or "backend:nodeId" locator for the target element.
-     * @param count Number of consecutive clicks (1 = single, 2 = double, etc.).
-     * @throws WebDriverException if the element cannot be found or interacted with.
-     */
-    @Throws(WebDriverException::class)
-    override suspend fun click(selector: String, count: Int) {
-        focusElementBeforeClick(selector)
-        super.click(selector, count)
     }
 
     /**
@@ -644,6 +1233,180 @@ open class Browser4WebDriver(
         } catch (e: Exception) {
             // Element is not focusable — that's fine for the click itself.
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Click & double-click fixes — upstream pulsar-browser:4.11.x dispatches
+    // Windows clicks through pure DOM JS (dispatchDomClick), which never moves
+    // the mouse.  Two consequences: CSS :hover stays stuck on whatever element
+    // a previous operation hovered (not the element being clicked), and a
+    // click whose handler opens a native JS dialog (alert/confirm/prompt)
+    // blocks the CDP evaluate until the dialog is handled — the caller hangs
+    // for its full HTTP timeout with no explanation.  These overrides move the
+    // pointer to the click target first (so hover state reflects the element
+    // under the pointer when the click lands) and watch the driver's
+    // [dialogHandler] while the click is in flight, responding immediately
+    // when the page opens a dialog instead of hanging.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Driver-scoped scope for parked click dispatches.  A click that opened a
+     * native dialog is *parked* here — still awaiting the CDP response that
+     * arrives once the dialog is handled — while the click method returns an
+     * early, actionable error.  The scope intentionally outlives any single
+     * request: the parked click finishes when the user later runs
+     * dialog-accept / dialog-dismiss, so the page state the click was meant to
+     * trigger still lands.
+     */
+    private val clickWatchScope: CoroutineScope by lazy {
+        CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    }
+
+    /**
+     * Move the pointer to the click target's center before dispatching the
+     * click, so the pointer physically rests on the element when its click
+     * events fire.  The upstream Windows click path never moves the mouse
+     * (pure DOM JS), so without this step CSS `:hover` keeps reflecting the
+     * previous operation's element — stale highlights and hover tooltips
+     * persist across clicks and snapshots taken right after a click miss the
+     * tooltip that a real user would see.
+     *
+     * Uses the drag-style instant scroll + visibility poll, so the resolved
+     * center is stable before the pointer moves.  Best-effort: when the
+     * element cannot be resolved or never becomes visible, the pointer is
+     * left alone and the upstream click proceeds as before.
+     */
+    private suspend fun movePointerToClickTarget(selector: String) {
+        runCatching {
+            evaluateValue(
+                selector,
+                "function(){ this.scrollIntoView({ block: 'center', behavior: 'instant' }); return true; }",
+            )
+        }
+        // Poll until the resolved center lands inside the viewport (the scroll
+        // commits asynchronously on the renderer).  Never re-scrolls inside
+        // the poll — that would restart any in-flight scroll animation.
+        var center: DragCenter? = null
+        for (attempt in 0 until 15) {
+            center = resolveDragCenter(selector)
+            if (center == null) {
+                return
+            }
+            val c = center ?: return
+            val visible = c.viewportWidth <= 0 || (
+                c.x >= 0 && c.y >= 0 && c.x <= c.viewportWidth && c.y <= c.viewportHeight
+                )
+            if (visible) {
+                break
+            }
+            delay(150)
+        }
+        val point = center ?: return
+        val visible = point.viewportWidth <= 0 || (
+            point.x >= 0 && point.y >= 0 && point.x <= point.viewportWidth && point.y <= point.viewportHeight
+            )
+        if (visible) {
+            mouseMove(point.x, point.y)
+        }
+    }
+
+    /**
+     * Run a click-family [block] in the background while watching the driver's
+     * [dialogHandler] for a native dialog opened by the click.
+     *
+     * A dialog-opening click blocks the renderer's main thread at the
+     * `alert()`/`confirm()`/`prompt()` call, so the CDP evaluation never
+     * returns until the dialog is handled — without this watch the caller
+     * hangs for its full HTTP timeout.  Here the click is parked in
+     * [clickWatchScope] and the watch responds as soon as the dialog event
+     * arrives:
+     *
+     *  - auto-dismiss mode ([DialogHandler.isAutoDismissEnabled]): the dialog
+     *    is accepted immediately, so the parked click completes and the
+     *    overall click succeeds (this makes `--auto-dismiss-dialogs` actually
+     *    work for dialog-triggering clicks, which the upstream drain — only
+     *    run after a completed click — cannot unblock).
+     *  - otherwise a [WebDriverException] with an actionable message is
+     *    thrown *without* cancelling the parked click.  The CDP evaluation is
+     *    blocked on the dialog and stays in flight; a later
+     *    dialog-accept/dialog-dismiss unblocks it, the click completes, and
+     *    the page state updates as if the click had never been interrupted.
+     *
+     * Stale dialogs are drained first so the watch can only ever report a
+     * dialog opened by *this* click (the upstream implementation repeats the
+     * drain at the start of every click).
+     */
+    private suspend fun <T> withDialogWatch(action: String, block: suspend () -> T): T {
+        dialogHandler.dismissAllPending()
+        val outcome = CompletableDeferred<Result<T>>()
+        clickWatchScope.launch {
+            outcome.complete(runCatching { block() })
+        }
+        while (true) {
+            val dialog = dialogHandler.peekPendingDialog()
+            if (dialog != null) {
+                if (dialogHandler.isAutoDismissEnabled) {
+                    // Auto-dismiss mode: accept the dialog so the parked click
+                    // can resume; keep watching in case the handler opens more.
+                    dialogHandler.acceptDialog()
+                    delay(150)
+                    continue
+                }
+                // The page opened a dialog and the click is paused on it.
+                // Report promptly (the caller would otherwise hang for its
+                // full HTTP timeout) but leave the click parked — see the
+                // KDoc above.
+                val type = dialog.type
+                val dialogMessage = dialog.message.takeIf { it.isNotBlank() }
+                val detail = if (dialogMessage != null) {
+                    val clipped = if (dialogMessage.length > 100) dialogMessage.take(100) + "..." else dialogMessage
+                    ": \"$clipped\""
+                } else {
+                    ""
+                }
+                throw WebDriverException(
+                    "The $action opened a native $type dialog$detail and is paused until the dialog is handled. " +
+                        "Run 'dialog-accept' (or 'dialog-dismiss') to let the click finish; do not re-run the click.",
+                    driver = this@Browser4WebDriver,
+                )
+            }
+            if (outcome.isCompleted) {
+                break
+            }
+            delay(150)
+        }
+        return outcome.await().getOrThrow()
+    }
+
+    /**
+     * Left-click [count] times on [selector], with the pointer moved onto the
+     * element first and native dialogs reported as they open (see
+     * [movePointerToClickTarget] and [withDialogWatch]).
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun click(selector: String, count: Int) {
+        movePointerToClickTarget(selector)
+        withDialogWatch("click") { super.click(selector, count) }
+    }
+
+    /**
+     * Click [selector] with a [modifier] key held; see [click] for the
+     * pointer-move and dialog-watch behaviour.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun click(selector: String, modifier: String) {
+        movePointerToClickTarget(selector)
+        withDialogWatch("click") { super.click(selector, modifier) }
+    }
+
+    /**
+     * Double-click [selector] (with an optional [modifier]); see [click] for
+     * the pointer-move and dialog-watch behaviour.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun dblclick(selector: String, modifier: String) {
+        movePointerToClickTarget(selector)
+        withDialogWatch("dblclick") { super.dblclick(selector, modifier) }
     }
 
     // ---------------------------------------------------------------------------
@@ -772,6 +1535,121 @@ open class Browser4WebDriver(
                     delay(randomDelayMillis("type"))
                 }
             }
+        }
+    }
+
+    /**
+     * Type [text] into the element identified by [selector] with a pluggable
+     * insertion strategy and optional read-back verification.
+     *
+     * ## Methods
+     * - `chars` — per-code-point `Input.insertText` with randomized 90-240ms
+     *   delays (the classic [typeSafe] path; keeps the cursor semantics for
+     *   chained operations like `ArrowLeft` → type).
+     * - `exec` — one `document.execCommand('insertText')` call for the WHOLE
+     *   text after focusing and collapsing the cursor to the end.  Fast and
+     *   reliable on contenteditable editors that accept `beforeinput`
+     *   `insertText` transactions (X.com composer and many DraftJS/ProseMirror
+     *   based editors), but produces NO keyboard event chain — sites that
+     *   require key events (shortcuts, autocomplete) may not react to it.
+     * - `auto` (default) — `exec` when the text is long (>150 chars) or
+     *   multi-line AND the target can hold the text (textarea/contenteditable,
+     *   or input without newlines — `<input>` drops newlines); otherwise
+     *   `chars`.
+     *
+     * ## Verification
+     * When [verify] is true the driver reads the element text back after the
+     * insert (normalized: NBSP→space, CRLF→LF, trailing whitespace trimmed)
+     * and compares it against `old + text`.  Any mismatch throws
+     * [IllegalStateException] — typing never fails silently.  Verification is
+     * off by default so existing callers keep their current behavior; the
+     * `exec` path still throws immediately when the editor rejects the insert
+     * (returned false / not editable) regardless of [verify].
+     *
+     * @throws IllegalArgumentException for an unknown method, an unresolvable
+     *   target, a non-editable/disabled/read-only target, or an exec insert
+     *   the editor rejected.
+     * @throws IllegalStateException when [verify] is true and the read-back
+     *   does not match.
+     */
+    @Throws(WebDriverException::class)
+    suspend fun typeAuto(selector: String, text: String, method: String = "auto", verify: Boolean = false) {
+        require(selector.isNotBlank()) { "typeAuto requires a selector (verification needs a read-back target)" }
+        require(text.isNotEmpty()) { "typeAuto requires non-empty text" }
+        val mode = method.lowercase()
+        require(mode in TYPE_METHODS) { "type method must be one of ${TYPE_METHODS.joinToString("|")} (got '$method')" }
+
+        // Probe the target once: kind / disabled / readOnly / current text.
+        val probeResult = evaluateValue(selector, typeTargetProbeJs())
+        val probe = probeResult as? Map<*, *>
+        if (probe == null || probe["found"] != true) {
+            throw IllegalArgumentException(
+                "type: no element found for selector [$selector]. " +
+                    "The selector may be stale — re-run `snapshot` to refresh refs."
+            )
+        }
+        val kind = (probe["kind"] as? String) ?: "other"
+        val disabled = probe["disabled"] == true
+        val readOnly = probe["readOnly"] == true
+        if (disabled || readOnly) {
+            throw IllegalArgumentException(
+                "type: target [$selector] is ${if (disabled) "disabled" else "read-only"} — user input is blocked."
+            )
+        }
+        val oldText = (probe["text"] as? String) ?: ""
+
+        val hasNewline = text.contains('\n') || text.contains('\r')
+        val isLong = text.length > TYPE_EXEC_LONG_THRESHOLD
+        // exec cannot deliver newlines into <input> (they are dropped silently).
+        val execCapable = kind == "contenteditable" || kind == "textarea" || (kind == "input" && !hasNewline)
+        val useExec = when {
+            kind == "other" -> false
+            mode == "exec" -> true
+            mode == "auto" -> execCapable && (isLong || hasNewline)
+            else -> false
+        }
+
+        if (useExec) {
+            val execResult = evaluateValue(selector, typeExecJs(text))
+            val exec = execResult as? Map<*, *>
+            if (exec?.get("ok") != true) {
+                val reason = (exec?.get("reason") as? String) ?: "editor rejected the bulk insert"
+                throw IllegalArgumentException(
+                    "type (method=$mode): bulk insert into [$selector] failed: $reason. " +
+                        "The page may need per-character input — use method=chars (browser4-cli type --method chars) " +
+                        "or paste the content manually."
+                )
+            }
+        } else {
+            // Per-code-point typing (also the fallback for non-editable-looking
+            // targets like plain divs, preserving legacy behavior).
+            typeSafe(text, selector)
+        }
+
+        if (verify) {
+            verifyTypedText(selector, oldText, text)
+        }
+    }
+
+    /**
+     * Read back the element text after a type operation and compare it with
+     * `old + text` (both normalized); throw on mismatch so typing never fails
+     * silently.  See [typeAuto] for the normalization rules.
+     */
+    private suspend fun verifyTypedText(selector: String, oldText: String, typedText: String) {
+        val newValue = evaluateValue(selector, typeReadBackJs())
+        val newText = newValue as? String ?: ""
+        val expected = (normalizeEditorText(oldText) + normalizeEditorText(typedText)).trimEnd()
+        val actual = normalizeEditorText(newText).trimEnd()
+        if (actual != expected) {
+            throw IllegalStateException(
+                "type: verification failed — the editor content does not match the typed text.\n" +
+                    "  expected (suffix): ...${expected.takeLast(120)}\n" +
+                    "  actual   (suffix): ...${actual.takeLast(120)}\n" +
+                    "The page may have rewritten, truncated, or dropped characters. " +
+                    "If the editor is a rich-text composer, retry with method=exec " +
+                    "(browser4-cli type --method exec) or check the element constraints."
+            )
         }
     }
 
@@ -968,6 +1846,266 @@ open class Browser4WebDriver(
         evaluateValueDetail(consoleClearJs())
 
     // ---------------------------------------------------------------------------
+    // Dual-world runtime recovery — PulsarWebDriver registers the Browser4
+    // runtime (__pulsar_utils__) into a tab's isolated world when it navigates
+    // or when the tab's main frame navigates (onFrameNavigated0).  A driver
+    // bound to a tab *after* its document committed — a tab opened by tab-new
+    // and then switched to, or any driver swap — has neither hook fired, so
+    // its isolated-world context cache is empty (or points at a world that no
+    // longer exists) and evaluations fall back to the main world, where
+    // __pulsar_utils__ never exists.  Every helper that dereferences it
+    // (capture meta links, document features, original-content-length, ...)
+    // then throws a ReferenceError that breaks capture until the session is
+    // closed.  This method (re-)establishes the runtime on demand.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Ensure the Browser4 dual-world runtime (__pulsar_utils__) is available
+     * to evaluations on this tab, re-registering it when the tab never
+     * received it.
+     *
+     * The recovery mirrors [PulsarWebDriver.onFrameNavigated0]: stale cached
+     * execution contexts are dropped, then the isolated world of the current
+     * main frame is located or created.  `Page.createIsolatedWorld` is
+     * idempotent per frame + world name — when the world already exists (a
+     * previous driver instance registered it for this document), its context
+     * id is returned and reused, and the runtime is injected only when the
+     * world is fresh and empty, so an already-initialized world is never
+     * re-run.
+     *
+     * @return true when `__pulsar_utils__` is available afterwards.
+     */
+    suspend fun ensurePulsarUtilsInjected(): Boolean {
+        // typeof() does not dereference the variable, so a missing runtime
+        // reports "undefined" instead of throwing a ReferenceError.  When the
+        // cached isolated-world context is valid this probe resolves through
+        // the isolated world; a driver with no cached context (e.g. freshly
+        // bound to an already-loaded tab) falls back to the main world and
+        // reports missing — the recovery below then locates or creates the
+        // real isolated world and caches its context id.
+        if (runCatching { evaluate("typeof($PULSAR_UTILS_FUNCTION)") }.getOrDefault(null) == "function") {
+            return true
+        }
+
+        return runCatching {
+            val runtimeJs = settings.dualWorldScriptLoader.getIsolatedWorldJs(false)
+            if (runtimeJs.isBlank()) {
+                return false
+            }
+            check(browserProtocol.isOpen) { "Underlying browser (BrowserProtocol) is closed" }
+
+            val worldManager = page.isolatedWorldManager
+            val mainFrameId = browserProtocol.getFrameTree().frame.id
+            val contextId = worldManager.createIsolatedWorld(mainFrameId)
+            val hasRuntime = browserProtocol.evaluate(
+                "typeof($PULSAR_UTILS_FUNCTION)",
+                contextId = contextId,
+            )?.result?.value == "function"
+            if (!hasRuntime) {
+                worldManager.injectRuntime(runtimeJs, contextId)
+            }
+
+            val verified = browserProtocol.evaluate(
+                "typeof($PULSAR_UTILS_FUNCTION)",
+                contextId = contextId,
+            )?.result?.value == "function"
+            if (!verified) {
+                logger.warn(
+                    "Failed to inject the Browser4 runtime into the isolated world of tab {}",
+                    guid
+                )
+            }
+            verified
+        }.getOrDefault(false)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Capture annotations — the annotated serializer behind [pageSource] /
+    // [outerHTML] emits `vi` bounding boxes and the `normalizedURI` link only
+    // once the runtime holds them, and silently degrades to plain `outerHTML`
+    // otherwise.  Layout-dependent consumers (html snapshot bounding boxes,
+    // X-SQL visual features) and offline consumers of a captured page (the page
+    // URL of the artifact) therefore cannot rely on the serializer alone.  The
+    // fetch/capture pipeline annotates the pages it captures itself;
+    // [ensureViDataComputed] gives every other WebDriver-layer HTML read the same
+    // guarantee on demand.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Normalizes the URL of the live document for the `normalizedURI` capture
+     * link, returning null when the URL has no normal form.
+     *
+     * Normalization is a session-scoped policy (`PulsarSession.normalize`), so
+     * the session that binds this driver installs it here; a driver without one
+     * cannot annotate captured HTML with a page URL and leaves the link alone.
+     */
+    @Volatile
+    var pageUrlNormalizer: ((url: String) -> String?)? = null
+
+    /**
+     * The document URL of the last reported vi failure, so a page that cannot be
+     * annotated does not log one warning per serialization.
+     */
+    @Volatile
+    private var viFailureReportedForUrl: String? = null
+
+    /**
+     * Ensure the live document of this tab is annotated for serialization: its
+     * visual-information (`vi`) data is computed when the document has none yet,
+     * and the page URL used by offline consumers (`link[rel=normalizedURI]`) is
+     * stored so both annotations reach the HTML together.
+     *
+     * `__pulsar_utils__.getAnnotatedHTML()` — the serializer behind [pageSource]
+     * and [outerHTML] — returns plain `documentElement.outerHTML` while
+     * `_viDataComputed` is false, and the boxes cannot be recovered afterwards:
+     * the runtime keeps them in a WeakMap that only `compute()` fills.  The link
+     * has the same shape: it is injected into the serialized `<head>` from
+     * `_captureMetaLinks`, which only the fetch/capture pipeline used to store.
+     * Without this call the HTML of a session that merely navigated (goto, tab
+     * switch, form submission) carries no annotation at all, while the same page
+     * fetched by the crawl pipeline carries both.
+     *
+     * Idempotent and cheap on an annotated document (one CDP evaluation): the
+     * link is stored only when it is missing or describes another URL — a page
+     * the fetch/capture pipeline already annotated keeps its value, and a
+     * document whose URL changed since (a same-document navigation) is corrected
+     * instead of shipped with a stale link.  On a tab without the runtime, or on
+     * a document that cannot be annotated yet, it reports false instead of
+     * failing the caller.
+     *
+     * Note that computing the features is not read-only: the runtime stores its
+     * metadata elements in the document (`#PulsarMetaInformation`,
+     * `#PulsarScriptSection`) and settles the page (`window.stop()`), exactly as
+     * the fetch/capture pipeline already does for every page it captures.
+     *
+     * @param normalizedUri The page URL to record, already normalized by the
+     * session; when null the driver resolves it from the live document URL
+     * through [pageUrlNormalizer].
+     * @return true when `vi` data is available for the current document.
+     */
+    @Throws(WebDriverException::class)
+    suspend fun ensureViDataComputed(normalizedUri: String? = null): Boolean {
+        var probe = probeViData()
+        if (probe?.status == VI_DATA_UNAVAILABLE) {
+            // The runtime is registered into the tab's isolated world when the
+            // tab navigates.  A driver bound to an already-loaded tab (tab-new
+            // then select, or a driver swap) has no cached context for it, so
+            // neither the runtime nor its serializer exists until the world is
+            // re-registered.
+            ensurePulsarUtilsInjected()
+            probe = probeViData()
+        }
+
+        if (probe == null) {
+            logger.debug("The Browser4 runtime is unavailable on tab {}; its HTML carries no annotation", guid)
+            return false
+        }
+
+        storeCaptureMetaLink(probe, normalizedUri)
+
+        return when (probe.status) {
+            VI_DATA_COMPUTED -> true
+
+            VI_DATA_NOT_READY -> {
+                logger.debug("Tab {} has no document body yet; its HTML carries no vi data", guid)
+                false
+            }
+
+            VI_DATA_UNAVAILABLE -> {
+                logger.debug("The Browser4 runtime is unavailable on tab {}; its HTML carries no vi data", guid)
+                false
+            }
+
+            else -> {
+                // A document that cannot be annotated fails on every read; warn
+                // once per document so an unusable page does not turn every
+                // serialization into a warning.
+                if (shouldReportViFailure(viFailureReportedForUrl, probe.documentUrl)) {
+                    viFailureReportedForUrl = probe.documentUrl
+                    logger.warn(
+                        "The Browser4 runtime did not produce visual information (vi) on tab {} for '{}'; " +
+                            "the serialized HTML carries no bounding boxes",
+                        guid, probe.documentUrl
+                    )
+                }
+                false
+            }
+        }
+    }
+
+    /** Evaluate [viDataStatusJs]; an unreachable page reports no probe at all. */
+    private suspend fun probeViData(): ViDataProbe? =
+        runCatching { parseViDataProbe(evaluate(viDataStatusJs())) }.getOrNull()
+
+    /**
+     * Store the `normalizedURI` capture link for the document described by
+     * [probe], so the serializer writes `<link rel="normalizedURI">` into the
+     * serialized `<head>` next to the `vi` attributes.
+     *
+     * The caller's [explicitUri] wins; otherwise the live document URL is
+     * normalized through [pageUrlNormalizer].  The link is stored only when it is
+     * missing or describes a different URL, so the value the fetch/capture
+     * pipeline already stored for this document is never rewritten with an
+     * equivalent one — and a document whose URL changed since (a same-document
+     * navigation) is corrected instead of shipped with a stale link.
+     */
+    private suspend fun storeCaptureMetaLink(probe: ViDataProbe, explicitUri: String?) {
+        val uri = explicitUri?.takeIf { it.isNotBlank() }
+            ?: run {
+                val normalizer = pageUrlNormalizer ?: return
+                runCatching { normalizer(probe.documentUrl) }
+                    .onFailure { logger.debug("Failed to normalize '{}' on tab {}: {}", probe.documentUrl, guid, it.message) }
+                    .getOrNull()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: return
+            }
+
+        if (uri == probe.storedUri) {
+            return
+        }
+
+        runCatching { evaluate(storeCaptureMetaLinkJs(uri)) }
+            .onFailure { logger.debug("Failed to store the normalized URI on tab {}: {}", guid, it.message) }
+    }
+
+    /**
+     * Serialize the live document, ensuring its capture annotations (`vi`
+     * bounding boxes and the `normalizedURI` link) are available first.
+     *
+     * The upstream serializer emits them only after `__pulsar_utils__.compute()`
+     * has run and the capture meta links are stored, and falls back to plain
+     * `outerHTML` otherwise — so the documented guarantee of the WebDriver layer
+     * is enforced here instead of at every call site.  The guarantee is best
+     * effort: a document without the runtime, or without a body, still
+     * serializes — just without annotations.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun pageSource(): String? {
+        ensureViDataComputedQuietly()
+        return super.pageSource()
+    }
+
+    /**
+     * Serialize a subtree of the live document, ensuring its capture annotations
+     * are available first — the same guarantee as [pageSource].
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun outerHTML(selector: String): String? {
+        ensureViDataComputedQuietly()
+        return super.outerHTML(selector)
+    }
+
+    /**
+     * Best-effort [ensureViDataComputed] for the serialization paths: a page
+     * that cannot carry `vi` data must still serialize.
+     */
+    private suspend fun ensureViDataComputedQuietly() {
+        runCatching { ensureViDataComputed() }.onFailure {
+            logger.debug("vi data unavailable before serializing HTML on tab {}: {}", guid, it.message)
+        }
+    }
+
+    // ---------------------------------------------------------------------------
     // Viewport screenshot — capture a screenshot of the [n]-th viewport, scrolling
     // first so lazy-loaded content renders before capture.  Moved from
     // BrowserTabToolExecutor.screenshot(viewport=...) so the geometry logic is
@@ -1050,6 +2188,81 @@ open class Browser4WebDriver(
                 localStorageEntries = restoredLocalStorageEntries,
             )
         )
+    }
+
+    /**
+     * Saves the browser's cookies plus the active origin's localStorage as the
+     * storage-state JSON consumed by [loadStorageState].
+     *
+     * Overrides the upstream pulsar-browser implementation, which reads cookies
+     * through the typed CDP layer: it casts every element of the
+     * `Network.getAllCookies` result to
+     * `ai.platon.cdt.kt.protocol.types.network.Cookie`.  Over the extension
+     * relay that response arrives as generic JSON maps, so the cast throws
+     * `ClassCastException: LinkedHashMap cannot be cast to Cookie` and every
+     * cookie-reading tool (`state-save`, `cookie-list`, `cookie-get`) fails on
+     * `attach --extension` sessions — the documented "reuse your logged-in
+     * browser" path.  Reading the raw result and normalizing the fields here
+     * works over both transports.
+     *
+     * @return A JSON storage-state payload:
+     *   `{"cookies": [...], "origins": [{"origin": "...", "localStorage": [...]}]}`.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun saveStorageState(): String {
+        val payload = linkedMapOf<String, Any?>(
+            "cookies" to readAllCookiesViaCdp(),
+            "origins" to captureCurrentOriginLocalStorage(),
+        )
+        return storageStateMapper.writeValueAsString(payload)
+    }
+
+    /**
+     * Every cookie in the browser cookie jar, as `name -> value` maps.
+     *
+     * Uses the same raw-CDP read as [saveStorageState] — see there for why the
+     * typed upstream implementation cannot be used on extension-attached
+     * sessions.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun getCookies(): List<Map<String, String>> =
+        readAllCookiesViaCdp().map { cookie ->
+            cookie.entries.associate { (key, value) -> key to (value?.toString() ?: "") }
+        }
+
+    /**
+     * Read the whole cookie jar through `Network.getAllCookies` and normalize
+     * every entry into the canonical storage-state field set
+     * ([normalizeStorageStateCookie]).
+     */
+    private suspend fun readAllCookiesViaCdp(): List<Map<String, Any?>> {
+        val raw = executeCdpCommand("Network.getAllCookies", emptyMap())
+        return extractCookiesFromCdpResult(raw).map(::normalizeStorageStateCookie)
+    }
+
+    /**
+     * Capture the active origin and its localStorage entries as the `origins`
+     * section of the storage-state payload.
+     *
+     * Only the origin of the document that is currently open is captured:
+     * localStorage is origin-scoped and the browser exposes no API to enumerate
+     * every origin's store.  Returns an empty list when the active document has
+     * no standard origin (e.g. `about:blank`).
+     */
+    private suspend fun captureCurrentOriginLocalStorage(): List<Map<String, Any?>> {
+        val origin = runCatching { evaluateValue("location.origin")?.toString()?.trim() }.getOrNull()
+        if (origin.isNullOrEmpty() || !URLUtils.isStandard(origin)) {
+            return emptyList()
+        }
+
+        val json = runCatching { evaluateValue(captureLocalStorageScript())?.toString() }.getOrNull()
+        if (json.isNullOrBlank()) {
+            return emptyList()
+        }
+
+        val entries: Map<String, String> = storageStateMapper.readValue(json)
+        val localStorage = entries.map { (name, value) -> mapOf("name" to name, "value" to value) }
+        return listOf(mapOf("origin" to origin, "localStorage" to localStorage))
     }
 
     /**
@@ -1190,6 +2403,41 @@ open class Browser4WebDriver(
      */
     @Throws(WebDriverException::class)
     override suspend fun drag(sourceSelector: String, targetSelector: String): Unit {
+        dragAt(sourceSelector, targetSelector, DragDropPosition.CENTER.key)
+    }
+
+    /**
+     * Drag and drop [sourceSelector] onto [targetSelector] with an explicit
+     * drop [position] on the target, returning a short summary of where the
+     * source element ended up (used by the CLI `drag --at` flow).
+     *
+     * The interface-level [drag] (two-argument) stays a `Unit` override for
+     * upstream callers; tool callers that want the placement summary (and
+     * deterministic positioning) use this overload.
+     *
+     * @param position One of `"center"` (legacy: resolved center point with
+     *        ±2px jitter), `"top"` (drop at the target's top edge region —
+     *        insert *before* the target on child-index-based reorder lists),
+     *        or `"bottom"` (drop at the target's bottom edge region — insert
+     *        *after* the target).  Top/bottom points are read from the live
+     *        rect inside the page at dispatch time, so they cannot drift
+     *        outside the target and carry no jitter.
+     * @return A human-readable summary of the source's resulting DOM position,
+     *         e.g. `Dropped li#priorityHigh as child 4 of 4 in ul#priorityList`.
+     * @throws IllegalArgumentException if [position] is not a known value.
+     * @throws WebDriverException if the source or target cannot be located or the drag fails.
+     */
+    @Throws(WebDriverException::class)
+    suspend fun drag(sourceSelector: String, targetSelector: String, position: String): String {
+        val normalized = DragDropPosition.from(position).key
+        return dragAt(sourceSelector, targetSelector, normalized)
+    }
+
+    private suspend fun dragAt(
+        sourceSelector: String,
+        targetSelector: String,
+        position: String,
+    ): String {
         // Phase 1 — resolve (retryable pieces are covered by their own RPC
         // layers; deterministic failures like a missing element must surface
         // directly instead of being wrapped by the outer retry machinery).
@@ -1228,10 +2476,17 @@ open class Browser4WebDriver(
         // Humanize the sequence: jitter the press/release points (±2px) and
         // randomize inter-event delays (120-300ms, the same magnitude as the
         // type() bucket).  Constant centers and fixed delays are a fingerprint
-        // for synthetic drags.
+        // for synthetic drags.  Positioned drops (top/bottom) pin their own
+        // point from the live rect inside the page script, so no jitter is
+        // applied here — ±2px around a center line is exactly what makes
+        // insert-before/insert-after a coin flip on child-index-based reorder
+        // lists, and a jittered point could drift outside the edge region.
+        val positioned = position == DragDropPosition.TOP.key || position == DragDropPosition.BOTTOM.key
         val sourcePoint = Pair(source.x + randomOffset(2.0), source.y + randomOffset(2.0))
-        val targetPoint = Pair(target.x + randomOffset(2.0), target.y + randomOffset(2.0))
-        val delays = List(4) { randomDragDelayMillis() }
+        val targetPoint = if (positioned) Pair(target.x, target.y) else Pair(target.x + randomOffset(2.0), target.y + randomOffset(2.0))
+        // Positioned drops add two intermediate dragover sweep events, so they
+        // pace six inter-event delays instead of four.
+        val delays = List(if (positioned) 6 else 4) { randomDragDelayMillis() }
 
         val script = buildDragSequenceScript(
             targetCssPath = target.cssPath,
@@ -1240,6 +2495,7 @@ open class Browser4WebDriver(
             targetX = targetPoint.first,
             targetY = targetPoint.second,
             delays = delays,
+            dropPosition = position,
         )
 
         // Phase 2 — execute the sequence.  The source element is bound as
@@ -1250,6 +2506,15 @@ open class Browser4WebDriver(
         // transient CDP failures are retried, manually, inside this block.
         withNodeObjectId(browserProtocol, sourceNode) { sourceObjectId ->
             var lastCdpFailure: ChromeDriverException? = null
+            // DOM-position fingerprint of the source before any dispatch.
+            // An earlier attempt can dispatch the full lifecycle and then die
+            // with a *transient* CDP error; the retry's script pre-check then
+            // reports the target as occluded/moved only because the page
+            // already reordered.  When that happens, verify by measuring:
+            // if the source demonstrably moved, the drag took effect and the
+            // failure is a false negative — report success instead of throwing.
+            val positionBefore = sourcePositionFingerprint(sourceObjectId)
+            var dragSucceeded = false
             repeat(3) { attempt ->
                 try {
                     val result = browserProtocol.callFunctionOn(
@@ -1261,7 +2526,20 @@ open class Browser4WebDriver(
                     )
                     val scriptError = dragScriptErrorMessage(result?.result?.value)
                     if (scriptError == null) {
+                        dragSucceeded = true
                         return@repeat
+                    }
+                    if (attempt > 0 && positionBefore != null) {
+                        val positionAfter = sourcePositionFingerprint(sourceObjectId)
+                        if (positionAfter != null && positionAfter != positionBefore) {
+                            logger.warn(
+                                "Drag of '$sourceSelector' to '$targetSelector' failed its retry pre-check " +
+                                    "($scriptError) but the source element already moved in the DOM — an earlier " +
+                                    "attempt dispatched the drag lifecycle. Treating the drag as completed."
+                            )
+                            dragSucceeded = true
+                            return@repeat
+                        }
                     }
                     throw WebDriverException(
                         "Failed to drag '$sourceSelector' to '$targetSelector': $scriptError",
@@ -1276,10 +2554,49 @@ open class Browser4WebDriver(
                     }
                 }
             }
-            lastCdpFailure?.let { throw it }
+            if (!dragSucceeded) {
+                lastCdpFailure?.let { throw it }
+            }
         }
 
+        // Report where the source ended up so callers can verify the placement
+        // (deterministic intent) instead of trusting the drop silently.
+        val summary = elementPositionReport(sourceSelector)
         gap("drag")
+        return summary
+    }
+
+    /**
+     * Read the current DOM position of the drag source (by CDP object id) as a
+     * comparable fingerprint string: `{ok, parentKey, index, total}`.  Returns
+     * null when the read fails (transient CDP error) — callers treat null as
+     * "cannot verify" and keep the original error instead of guessing.
+     */
+    private suspend fun sourcePositionFingerprint(sourceObjectId: String): String? =
+        try {
+            val result = browserProtocol.callFunctionOn(
+                dragPositionFingerprintJs(),
+                objectId = sourceObjectId,
+                returnByValue = true,
+            )
+            result?.result?.value as? String
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.debug("Failed to read the drag source position fingerprint: ${e.message}")
+            null
+        }
+
+    /**
+     * Describe where the element matched by [selector] currently sits in the
+     * DOM (parent element and child index).  Used after a drag to report the
+     * resulting placement to the caller.  Falls back to a notice when the
+     * element can no longer be located (a drop target may have consumed it).
+     */
+    internal suspend fun elementPositionReport(selector: String): String {
+        val value = evaluateValue(selector, dragPositionReportJs())
+        return parseDragPositionReport(value)
+            ?: "The source element is no longer in the document after the drag; the drop target may have consumed it."
     }
 
     /**
@@ -1327,6 +2644,132 @@ open class Browser4WebDriver(
 
     /** Randomized inter-event delay for the drag sequence, 120-300 ms. */
     private fun randomDragDelayMillis(): Long = Random.nextLong(120L, 301L)
+
+    // ---------------------------------------------------------------------------
+    // upload fix — the upstream pulsar-browser upload
+    // (1) silently reports success when the selector matches no element
+    //     (RobustRPC.invokeOnElement skips the block for a null node),
+    // (2) fails with an opaque CDP -32000 error when the target is not a
+    //     file input or a path is not readable by the browser process, and
+    // (3) sets files through the session-scoped `nodeId`, which is unstable
+    //     across CDP sessions.
+    //
+    // This override keeps the whole chain — element resolution, DOM.describeNode
+    // and DOM.setFileInputFiles — inside ONE RobustRPC call (same CDP session),
+    // switches to the stable backendNodeId (agent-browser style), validates the
+    // target is really an `<input type="file">`, and turns every silent or
+    // opaque failure into an explicit, actionable error.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Upload [paths] to the file input identified by [selector], failing loudly
+     * (never silently) on every error path:
+     *
+     * - no element matches [selector] → `IllegalArgumentException` with a
+     *   stale-ref hint;
+     * - the target is not an `<input type="file">` → `IllegalArgumentException`;
+     * - `DOM.setFileInputFiles` is rejected by Chromium (unreadable/relative
+     *   path, wrong host topology) → `WebDriverException` wrapping the original
+     *   CDP error with deployment guidance.
+     *
+     * The file paths are read by the **browser process** — in local mode that is
+     * this machine (the CLI canonicalizes paths before dispatch); with a remote
+     * backend the paths must exist on the backend/browser host.
+     *
+     * @param selector A CSS selector, XPath, or "backend:nodeId" locator for the file input.
+     * @param paths Absolute paths of the files to upload (one or more).
+     * @throws IllegalArgumentException on empty paths, a missing target, or a non-file-input target.
+     * @throws WebDriverException when the CDP upload fails.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun upload(selector: String, paths: List<String>) {
+        if (paths.isEmpty() || paths.any { it.isBlank() }) {
+            throw IllegalArgumentException(
+                "upload requires at least one non-empty file path (got ${paths.size} path(s))"
+            )
+        }
+
+        // All CDP steps run inside one RobustRPC attempt so the resolved DOM
+        // node ids stay valid for the whole chain.
+        val uploaded = rpc.invokeOnElement(selector, "upload", focus = true) { nodeRef ->
+            if (!nodeRef.mayExist()) {
+                // WebDriverException (not IllegalStateException): exceptions
+                // thrown inside the RobustRPC block must be of a type RobustRPC
+                // rethrows verbatim (ChromeDriverException/WebDriverException),
+                // otherwise they are wrapped into a generic "Unexpected error in
+                // [upload]" that hides the real cause from the user.
+                throw WebDriverException(
+                    "upload: could not resolve element for selector [$selector]",
+                    driver = this
+                )
+            }
+
+            val node = browserProtocol.describeNode(
+                nodeId = nodeRef.nodeId.takeIf { it > 0 },
+                backendNodeId = nodeRef.backendNodeId.takeIf { it > 0 },
+                objectId = nodeRef.objectId,
+            )
+
+            // nodeName is uppercase for HTML elements ("INPUT"); missing
+            // attributes means an <input> without an explicit type — which is
+            // type=text, i.e. NOT a file input.
+            val nodeName = node.nodeName?.uppercase()
+            if (nodeName != "INPUT") {
+                throw WebDriverException(
+                    "upload: the target [$selector] is a <${nodeName ?: "unknown"}>, not a file input. " +
+                        "Upload targets must be <input type=\"file\"> elements.",
+                    driver = this
+                )
+            }
+            val attributes = node.attributes.orEmpty()
+            val isFileType = attributes
+                .chunked(2)
+                .any { (name, value) ->
+                    name.equals("type", ignoreCase = true) && value.equals("file", ignoreCase = true)
+                }
+            if (!isFileType) {
+                throw WebDriverException(
+                    "upload: the target [$selector] is an <input> without type=\"file\" — " +
+                        "only file inputs accept uploads.",
+                    driver = this
+                )
+            }
+            val backendNodeId = node.backendNodeId
+            if (backendNodeId == null || backendNodeId <= 0) {
+                throw WebDriverException(
+                    "upload: DOM.describeNode returned no backendNodeId for selector [$selector]",
+                    driver = this
+                )
+            }
+
+            // The typed BrowserProtocol.setFileInputFiles only accepts the
+            // session-scoped nodeId; the generic CDP channel accepts the
+            // stable backendNodeId (browser_protocol.json:8358-8363) and works
+            // over both the direct and the extension-relay transports.
+            try {
+                browserProtocol.executeCdpCommand(
+                    "DOM.setFileInputFiles",
+                    mapOf("files" to paths, "backendNodeId" to backendNodeId)
+                )
+            } catch (e: Exception) {
+                throw WebDriverException(
+                    "upload to [$selector] failed. DOM.setFileInputFiles requires absolute paths " +
+                        "that are readable by the browser process (the machine hosting the backend). " +
+                        "Original error: ${e.message}",
+                    e,
+                    driver = this
+                )
+            }
+            true
+        }
+
+        if (uploaded != true) {
+            throw IllegalArgumentException(
+                "upload: no element found for selector [$selector]. " +
+                    "The selector may be stale — re-run `snapshot` to refresh refs."
+            )
+        }
+    }
 
     // ---------------------------------------------------------------------------
     // selectOption fix — the upstream pulsar-browser selectOption reports

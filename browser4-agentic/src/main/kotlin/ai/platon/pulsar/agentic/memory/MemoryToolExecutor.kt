@@ -1,8 +1,10 @@
 package ai.platon.pulsar.agentic.memory
 
+import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationProvider
+import ai.platon.pulsar.agentic.tools.specs.ToolResultSchemas
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import kotlin.reflect.KClass
 
@@ -29,6 +31,9 @@ class MemoryToolExecutor(
     override val domain = "memory"
     override val receiverClass: KClass<*> = MemoryToolTarget::class
 
+    /** Falls back to [fallbackMemory] when no [MemoryToolTarget] receiver is bound. */
+    override val requiresReceiver: Boolean = false
+
     private val mapper = pulsarObjectMapper()
 
     /**
@@ -44,41 +49,59 @@ class MemoryToolExecutor(
         toolSpec["search"] = ToolSpec(
             domain = domain, method = "search",
             arguments = listOf(
-                ToolSpec.Arg("query", "String"),
-                ToolSpec.Arg("agent", "String", null),
-                ToolSpec.Arg("limit", "Int", "10"),
+                ToolSpec.Arg("query", "String", null, "Keywords to search past tasks and tool executions for."),
+                // Optional without a default: `"String?"` + `"null"` is the
+                // convention for that. A bare `null` default means *required*, and
+                // declaring `agent` that way made the validator reject a
+                // query-only search that the executor handles happily.
+                ToolSpec.Arg("agent", "String?", "null", "Restrict the search to one agent uuid."),
+                ToolSpec.Arg("limit", "Int", "10", "Maximum number of hits (1-50)."),
             ),
             returnType = "String",
+            outputSchema = ToolResultSchemas.MEMORY_SEARCH,
             description = "Search agent memory (past tasks and tool executions) " +
                 "by keywords. Returns hits with taskId, timestamp, tool and a " +
                 "snippet; use memory.read to fetch details. Optionally restrict " +
                 "to one agent uuid (agent).",
+            examples = listOf(
+                ToolExample(title = "Find past work on a topic", args = mapOf("query" to "amazon price")),
+            ),
         )
         toolSpec["read"] = ToolSpec(
             domain = domain, method = "read",
             arguments = listOf(
-                ToolSpec.Arg("taskId", "String"),
-                ToolSpec.Arg("seq", "Long", null),
-                ToolSpec.Arg("before", "Int", "0"),
-                ToolSpec.Arg("after", "Int", "0"),
+                ToolSpec.Arg("taskId", "String", null, "Task whose memory events to read."),
+                ToolSpec.Arg("seq", "Long?", "null", "Centre the window on this event seq."),
+                ToolSpec.Arg("before", "Int", "0", "Events to include before seq."),
+                ToolSpec.Arg("after", "Int", "0", "Events to include after seq."),
             ),
             returnType = "String",
+            outputSchema = ToolResultSchemas.MEMORY_READ,
             description = "Read a bounded window of memory events of one task " +
                 "around the event seq (defaults to the whole task, newest last). " +
                 "Bounded by the configured read window.",
+            examples = listOf(
+                ToolExample(title = "Read a task's events", args = mapOf("taskId" to "<task-id>")),
+            ),
         )
         toolSpec["note"] = ToolSpec(
             domain = domain, method = "note",
             arguments = listOf(
                 ToolSpec.Arg("key", "String"),
                 ToolSpec.Arg("value", "String"),
-                ToolSpec.Arg("taskId", "String", null),
+                ToolSpec.Arg("taskId", "String?", "null", "Task the note belongs to; defaults to the current task."),
             ),
             returnType = "String",
             description = "Write one working-memory note. Notes are re-injected " +
                 "into the conversation every round and survive context " +
                 "compression — use them for stable cross-step conclusions, " +
                 "confirmed assumptions, and pending todos.",
+            examples = listOf(
+                ToolExample(
+                    title = "Remember a conclusion",
+                    args = mapOf("key" to "price", "value" to "the product costs 19.99"),
+                ),
+            ),
         )
         toolSpec["forget"] = ToolSpec(
             domain = domain, method = "forget",
@@ -88,6 +111,9 @@ class MemoryToolExecutor(
             returnType = "String",
             description = "Explicitly forget one task from memory (privacy / " +
                 "correction). Removes its events from the log and the search index.",
+            examples = listOf(
+                ToolExample(title = "Forget a task", args = mapOf("taskId" to "<task-id>")),
+            ),
         )
     }
 

@@ -31,10 +31,13 @@ Comprehensive test runner for the current Maven reactors plus the Browser4 CLI p
 - `rest`: Run REST module tests
 - `skills`: Run skills module tests
 - `mcp`: Run MCP module tests
+- `mcp-contract`: Contract gate — tool matrix, docs, lint and validators (agentic + rest)
+- `ps`: Run all PowerShell `*.tests.ps1` files in the project
 - `main`: Run all Browser4 main tests (`fast`, `rest`, `it`, `e2e`)
 - `cli` / `browser4-cli`: Run Rust Browser4 CLI tests from `cli/browser4-cli`
 - `server`: Launch the standalone mock site server from `browser4-tests/browser4-rest-tests` via `spring-boot:run` (`mock-site` and `mocksiteboot` are accepted as legacy aliases)
 - `rws`: Run real-world-scenario unit tests (`common.tests.ps1`). With `--scenarios`, run all agent-scenario tasks via `run-tests.ps1`. With `--task <file>`, run a single task via `run-task.ps1`.
+- `session`: Inspect persisted test sessions (`list`, `view`, `prune`)
 - `resume`: Resume from the last failed module (`-rf`)
 
 **RWS flags** (accepted after `rws`):
@@ -178,7 +181,7 @@ Build scripts with extended functionality.
 
 CI/CD helper scripts for triggering and managing CI workflows.
 
-- **`trigger-ci.ps1`**: Create and push a CI pre-release tag (`vX.Y.Z-ci.N`) to trigger the CI workflow. Auto-increments the pre-release number. Branch-aware — creates tags from the current branch context.
+- **`trigger-ci.ps1`**: Create and push a CI pre-release tag (`vX.Y.Z-ci.N`) to trigger the CI workflow. Auto-increments the pre-release number. Branch-aware — creates tags from the current branch context, and hard-fails when the VERSION file's major.minor does not match the branch (the tag base version must always equal the VERSION file).
 - **`ci-tags-rm.ps1`**: Remove CI release tags.
 - **`monitor-ci.ps1`**: Monitor CI workflow runs with a 5-stage diagnostic pipeline. Tracks run status, extracts errors, and reports failures. On failure it prints error diagnostics; by default it does NOT call an AI agent — pass `-Agent auto` (or a backend name) to dispatch a coworker fix task.
 - **`tests/monitor-ci.tests.ps1`**: Unit tests for `monitor-ci.ps1`.
@@ -189,7 +192,7 @@ Shared PowerShell utility modules imported by other scripts.
 
 - **`Util.ps1`**: Common utilities including `Fix-Encoding-UTF8` — sets the console code page and output encoding to UTF-8 to prevent mojibake in Windows PowerShell.
 - **`agent-utils.psm1`**: AI agent utilities — resolve and invoke AI assistants (`claude`, `copilot`, etc.) on PATH. Provides `Get-AiAnalyzer`, `Test-AiAvailable`, and `Invoke-AiAnalysis` for AI-powered log analysis in test runners.
-- **`test-session.psm1`**: Cross-run persistable test-session state module. Maintains a single JSON session file (`target/test-session.json`) recording the last result, log paths, aggregate pass/fail counts, and rolling history for each test type. Imported by test runners; soft dependency — tests still run if the module is absent.
+- **`test-session.psm1`**: Cross-run persistable test-session state module. Every test run owns one subdirectory, `.test-sessions/<run-id>/`, holding `test-session.json` (last result, log paths, aggregate pass/fail counts, rolling history per test type) alongside that run's scratch files. `Publish-TestSessionRunDir` resolves the directory and exports `BROWSER4_TEST_SESSION_DIR` so spawned scenario runners, coworker workers and agents all write into the same per-run directory instead of the shared `.test-sessions/` root; `New-TestSessionRunDir` additionally creates it. Creation is lazy — a runner that only prints usage or lists directories leaves nothing behind, and the directory materialises on the first session write or the first child that needs it. Imported by test runners; soft dependency — tests still run if the module is absent.
 
 ### `git/`
 
@@ -345,7 +348,7 @@ Utility scripts for development and system maintenance.
   ```
 
 **Code Metrics:**
-- **`cloc.ps1`**: Count lines of code for a given git ref (defaults to HEAD).
+- **`cloc.ps1`**: Count Kotlin, Java, PowerShell, Bash, JavaScript (Node.js), and Rust lines of code for a given git ref (defaults to HEAD).
 
 **Maven Configuration:**
 - **`maven/cn/settings.xml`**: Pre-configured Maven settings with Huawei Cloud mirror for faster builds in China.

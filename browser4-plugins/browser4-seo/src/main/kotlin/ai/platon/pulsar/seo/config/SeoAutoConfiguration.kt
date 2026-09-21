@@ -35,7 +35,10 @@ import org.springframework.context.annotation.Lazy
  * automatically wires the SEO tools into the LLM agent tool registry.
  *
  * This is a minimal plugin — it only exposes tools, no browse event handlers.
- * Enabled by default. Disable with `seo.enabled=false`.
+ * Opt-in (default-disabled): the manifest declares `defaultEnabled: false`, so
+ * the plugin is NOT activated unless explicitly enabled
+ * (`browser4.plugins.enable=browser4-seo` or `browser4.plugins.enable-all=true`).
+ * Once activated, the tools can additionally be turned off with `seo.enabled=false`.
  */
 @AutoConfiguration
 @ConditionalOnProperty(name = ["seo.enabled"], havingValue = "true", matchIfMissing = true)

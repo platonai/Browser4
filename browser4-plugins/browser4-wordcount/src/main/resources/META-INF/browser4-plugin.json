@@ -1,1 +1,0 @@
-{"name":"browser4-wordcount","version":"1.0.0","sdkVersion": "${project.version}","description":"Counts words, characters, characters without spaces, and lines in a given text.","dependsOn":["browser4-skeleton","browser4-protocol","browser4-agentic"],"autoConfigurationClasses":["ai.platon.pulsar.my.config.WordcountAutoConfiguration"]}

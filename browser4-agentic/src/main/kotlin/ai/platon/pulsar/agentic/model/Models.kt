@@ -58,15 +58,92 @@ data class ToolSpec constructor(
     val returnType: String = "Unit",
     val description: String? = null,
     val help: String? = null,
+    /**
+     * Optional CLI command name in spaced form (e.g. `"profile import"`).
+     * When set, the CLI discovers this tool from `GET /mcp/tools/specs` and
+     * renders it as a first-class named command (`browser4-cli profile import
+     * --source chrome`) with argument parsing — no CLI code change needed.
+     * Null (default) keeps the tool CLI-invokable only through the generic
+     * `plugin <domain> <method>` path.
+     */
+    val cliName: String? = null,
+    /**
+     * Usage examples: the fastest way for a client to learn a tool without
+     * guessing argument semantics. Examples with [ToolExample.args] are
+     * executable and double as contract-test inputs; [ToolExample.code] carries
+     * documentation-only snippets harvested from the source KDoc.
+     */
+    val examples: List<ToolExample> = emptyList(),
+    /**
+     * JSON Schema (as JSON text) of a **successful** result.
+     *
+     * Kept as text on purpose: the spec travels through Jackson (`GET
+     * /mcp/tools/specs`) and through the spec snapshots, while the MCP layer
+     * parses it with kotlinx-serialization for `Tool.outputSchema` — text keeps
+     * both worlds happy without coupling this model to either JSON library.
+     *
+     * The supported subset is intentionally small (see `ToolResultValidator`):
+     * `type`, `required`, `properties`, `items`, `enum`.
+     */
+    val outputSchema: String? = null,
+    /**
+     * Task-lifecycle metadata for long-running tools.
+     *
+     * A tool that declares it returns the shared task envelope
+     * `{taskId, status, pollAfterMs, statusTool}` (also exposed as MCP
+     * `structuredContent`), so a client can poll a submit call generically
+     * instead of guessing the domain's status tool.
+     */
+    val task: TaskPolicy? = null,
+    /**
+     * Declared rate limit of this tool, when it differs from the policy derived
+     * from its domain/method (see
+     * [ai.platon.pulsar.agentic.tools.ToolRateLimitPolicy]).
+     *
+     * Left `null` on almost every tool on purpose: the derived policy is a few
+     * lines of code in one place, while a per-spec limit would have to be kept in
+     * sync across 137 generated specs.
+     */
+    val rateLimit: RateLimit? = null,
+    /**
+     * Whether a successful result may be reused, overriding
+     * [ai.platon.pulsar.agentic.tools.ToolCachePolicy]'s derived default.
+     *
+     * Tri-state on purpose: `null` (the default) lets the policy decide from the
+     * domain and method, `false` forbids caching outright, and `true` caches a tool
+     * the policy does not know about.
+     */
+    val cacheable: Boolean? = null,
+    /**
+     * How long a cached result stays valid, in milliseconds. `0` disables caching
+     * for this tool; `null` (the default) uses the policy's TTL.
+     */
+    val cacheTtlMs: Long? = null,
 ) {
     data class Arg(
         val name: String,
         val type: String,
         val defaultValue: String? = null,
+        /**
+         * Human-readable meaning of the argument, surfaced as the JSON Schema
+         * `description` of the property and in the generated tool docs.
+         *
+         * When absent, renderers fall back to [expression] (`url: String`,
+         * `depth: Int = 1`) — never to the bare argument name, which told a
+         * client nothing about the parameter.
+         */
+        val description: String? = null,
     ) {
         val expression: String
             get() {
-                return if (defaultValue != null) "$name: $type = $defaultValue" else "$name: $type"
+                // An intentional empty-string default must render as `""`; rendering
+                // it bare (`args: String = `) reads like a missing value.
+                val rendered = when {
+                    defaultValue == null -> null
+                    defaultValue.isEmpty() && type.trimEnd('?').equals("String", ignoreCase = true) -> "\"\""
+                    else -> defaultValue
+                }
+                return if (rendered == null) "$name: $type" else "$name: $type = $rendered"
             }
 
         val cliOptions: String
@@ -78,9 +155,17 @@ data class ToolSpec constructor(
             }
     }
 
+    /**
+     * The callable signature, e.g. `crawl.submit(url: String, depth: Int = 1)`.
+     *
+     * Rendered from each argument's [Arg.expression]: joining the `Arg` objects
+     * themselves produced the JVM data-class form
+     * `Arg(name=url, type=String, defaultValue=null)`, which leaked into `help`
+     * output and into the committed tool-call-specs JSON under `code-mirror`.
+     */
     val expression: String
         get() {
-            val args = arguments.joinToString(prefix = "(", postfix = ")")
+            val args = arguments.joinToString(prefix = "(", postfix = ")") { it.expression }
             return "$domain.$method$args"
         }
 
@@ -89,6 +174,75 @@ data class ToolSpec constructor(
             val args = arguments.joinToString(" ") { it.cliOptions }
             return "$ROOT_COMMAND $domain $method $args"
         }
+}
+
+/**
+ * Task-lifecycle contract of a long-running tool.
+ *
+ * @property statusTool MCP tool that reports progress (`crawl_status`)
+ * @property resultTool MCP tool that returns the payload (`crawl_result`)
+ * @property cancelTool MCP tool that cancels the task, when the domain has one
+ * @property pollAfterMs suggested delay before the first status poll
+ */
+data class TaskPolicy(
+    val statusTool: String,
+    val resultTool: String,
+    val cancelTool: String? = null,
+    val pollAfterMs: Long = 1_000,
+)
+
+/**
+ * One usage example for a [ToolSpec].
+ *
+ * @property title short label (`"navigate to a URL"`)
+ * @property args ready-to-send tool arguments, e.g. `mapOf("url" to "https://example.com")`.
+ *   Non-empty args make the example **executable**, so contract tests can drive
+ *   the tool with it and the documentation cannot drift from reality.
+ * @property code documentation-only snippet (typically harvested from KDoc)
+ * @property notes caveats worth knowing before running the call
+ * @property expectsError `true` for an example that demonstrates a failure mode
+ * @property runnable marks an example with **no arguments** as executable
+ *   (`title()`, `reload()`): an empty argument list is a valid call, but it is
+ *   indistinguishable from "no example args were written". `null` (the default)
+ *   falls back to [executable]'s arg-based rule, so no serialized example changes.
+ */
+data class ToolExample(
+    val title: String? = null,
+    val args: Map<String, String> = emptyMap(),
+    val code: String? = null,
+    val notes: String? = null,
+    val expectsError: Boolean = false,
+    val runnable: Boolean? = null,
+) {
+    /** Whether this example is a call a client (or a test) can actually make. */
+    val executable: Boolean get() = runnable ?: args.isNotEmpty()
+}
+
+/**
+ * How often a tool may be called, per session and per domain.
+ *
+ * A token bucket: [permitsPerSecond] tokens are added continuously, [burst] is the
+ * bucket size, so a caller may spend [burst] calls at once and then is held to the
+ * sustained rate. `null` on a [ToolSpec] means "no declared limit"; the default
+ * policy is derived from the tool's domain and method
+ * ([ai.platon.pulsar.agentic.tools.ToolRateLimitPolicy]).
+ *
+ * @property permitsPerSecond sustained rate; `0.0` disables limiting for this tool
+ * @property burst maximum tokens available at once (at least 1)
+ */
+data class RateLimit(
+    val permitsPerSecond: Double,
+    val burst: Int = 1,
+) {
+    init {
+        require(!permitsPerSecond.isNaN() && permitsPerSecond >= 0.0) {
+            "permitsPerSecond must be >= 0, was $permitsPerSecond"
+        }
+    }
+
+    val unlimited: Boolean get() = permitsPerSecond <= 0.0
+
+    override fun toString(): String = if (unlimited) "unlimited" else "$permitsPerSecond/s burst $burst"
 }
 
 /**

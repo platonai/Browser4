@@ -212,7 +212,7 @@ function Get-FunctionsFromScript {
 Write-Host "Source : $MonitorScriptPath" -ForegroundColor DarkGray
 
 $funcText = Get-FunctionsFromScript -ScriptPath $MonitorScriptPath `
-    -FunctionNames @('ConvertTo-LogLines', 'Parse-GitHubLogLine', 'Get-FailingTestNames', 'Extract-MinimalErrors', 'New-CoworkerFailureTask', 'Invoke-PostReleaseVersionBump')
+    -FunctionNames @('ConvertTo-LogLines', 'Parse-GitHubLogLine', 'Get-FailingTestNames', 'Extract-MinimalErrors', 'New-CoworkerFailureTask', 'Invoke-PostReleaseVersionBump', 'Select-TriggeredRun')
 
 Invoke-Expression $funcText
 
@@ -675,6 +675,122 @@ try {
 } finally {
     Remove-Item $bumpRepo4 -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+# ===================================================================
+# TESTS: Select-TriggeredRun (stale-run race regression)
+# ===================================================================
+Write-Host "━━━ Select-TriggeredRun: only the run this push triggered ━━━" -ForegroundColor Cyan
+
+# Regression: re-pushing a moved tag leaves the earlier, already-completed run
+# with the same headBranch, and `gh run list` returns it first.  Matching on
+# headBranch alone therefore returned the STALE run, so monitor-release reported
+# the old failure as the outcome of the new release and filed a duplicate
+# coworker task — exactly what happened with v4.13.17 on 2026-09-10 (stale run
+# 34439006612, freshly triggered run 34442693881).
+$pushTime = [datetime]::Parse('2026-09-10T05:50:00Z').ToUniversalTime()
+
+$staleRun = [pscustomobject]@{
+    databaseId = 34439006612
+    headBranch = 'v4.13.17'
+    status     = 'completed'
+    conclusion = 'failure'
+    createdAt  = '2026-09-10T04:54:46Z'
+    url        = 'https://example.invalid/old'
+}
+$newRun = [pscustomobject]@{
+    databaseId = 34442693881
+    headBranch = 'v4.13.17'
+    status     = 'in_progress'
+    conclusion = $null
+    createdAt  = '2026-09-10T05:50:31Z'
+    url        = 'https://example.invalid/new'
+}
+$baseline = @(34439006612)
+
+$picked = Select-TriggeredRun -Runs @($staleRun, $newRun) -Tag 'v4.13.17' `
+    -BaselineIds $baseline -TriggeredAfter $pushTime
+Assert-Returns -Label 'STR: picks the newly triggered run' -Actual $picked.databaseId -Expected 34442693881
+
+# The regression itself: while only the stale run is visible the selector must
+# return $null (keep waiting) — never the stale run.
+$waiting = Select-TriggeredRun -Runs @($staleRun) -Tag 'v4.13.17' `
+    -BaselineIds $baseline -TriggeredAfter $pushTime
+Assert-Returns -Label 'STR: stale run alone => $null (keep waiting)' -Actual ($null -eq $waiting) -Expected $true
+
+# Newest of several new runs wins.
+$newestRun = [pscustomobject]@{
+    databaseId = 34442693999
+    headBranch = 'v4.13.17'
+    status     = 'queued'
+    conclusion = $null
+    createdAt  = '2026-09-10T05:51:02Z'
+    url        = 'https://example.invalid/newest'
+}
+$pickedNewest = Select-TriggeredRun -Runs @($staleRun, $newestRun, $newRun) -Tag 'v4.13.17' `
+    -BaselineIds $baseline -TriggeredAfter $pushTime
+Assert-Returns -Label 'STR: newest new run wins' -Actual $pickedNewest.databaseId -Expected 34442693999
+
+# A run of a different tag is never matched.
+$otherTag = Select-TriggeredRun -Runs @($newRun) -Tag 'v4.13.18' `
+    -BaselineIds $baseline -TriggeredAfter $pushTime
+Assert-Returns -Label 'STR: different tag is ignored' -Actual ($null -eq $otherTag) -Expected $true
+
+# Baseline lookup failed (empty): the createdAt guard still keeps the stale run out.
+$noBaseline = Select-TriggeredRun -Runs @($staleRun, $newRun) -Tag 'v4.13.17' `
+    -BaselineIds @() -TriggeredAfter $pushTime
+Assert-Returns -Label 'STR: empty baseline + createdAt guard picks the new run' -Actual $noBaseline.databaseId -Expected 34442693881
+
+$noBaselineStaleOnly = Select-TriggeredRun -Runs @($staleRun) -Tag 'v4.13.17' `
+    -BaselineIds @() -TriggeredAfter $pushTime
+Assert-Returns -Label 'STR: empty baseline still rejects the pre-push run' -Actual ($null -eq $noBaselineStaleOnly) -Expected $true
+
+# Baseline ids may arrive as strings (gh JSON / explicit casts).
+$stringBaseline = Select-TriggeredRun -Runs @($staleRun, $newRun) -Tag 'v4.13.17' `
+    -BaselineIds @('34439006612') -TriggeredAfter $pushTime
+Assert-Returns -Label 'STR: string baseline ids still exclude the stale run' -Actual $stringBaseline.databaseId -Expected 34442693881
+
+# gh/ConvertFrom-Json hands createdAt over as a DateTime (not a string) — the
+# real shape must behave exactly like the string form.
+$dtStale = [pscustomobject]@{
+    databaseId = 34439006612
+    headBranch = 'v4.13.17'
+    status     = 'completed'
+    conclusion = 'failure'
+    createdAt  = [datetime]::Parse('2026-09-10T04:54:46Z')
+    url        = 'https://example.invalid/old'
+}
+$dtNew = [pscustomobject]@{
+    databaseId = 34442693881
+    headBranch = 'v4.13.17'
+    status     = 'in_progress'
+    conclusion = $null
+    createdAt  = [datetime]::Parse('2026-09-10T05:50:31Z')
+    url        = 'https://example.invalid/new'
+}
+$dtShaped = Select-TriggeredRun -Runs @($dtStale, $dtNew) -Tag 'v4.13.17' `
+    -BaselineIds @() -TriggeredAfter $pushTime
+Assert-Returns -Label 'STR: DateTime createdAt (gh shape) picks the new run' -Actual $dtShaped.databaseId -Expected 34442693881
+
+$dtStaleOnly = Select-TriggeredRun -Runs @($dtStale) -Tag 'v4.13.17' `
+    -BaselineIds @() -TriggeredAfter $pushTime
+Assert-Returns -Label 'STR: DateTime createdAt (gh shape) rejects the pre-push run' -Actual ($null -eq $dtStaleOnly) -Expected $true
+
+# Without a trigger timestamp the id baseline alone is authoritative.
+$idOnly = Select-TriggeredRun -Runs @($staleRun, $newRun) -Tag 'v4.13.17' -BaselineIds $baseline
+Assert-Returns -Label 'STR: id baseline alone is enough' -Actual $idOnly.databaseId -Expected 34442693881
+
+# First ever release of a tag: nothing stale, the run appears => picked.
+$firstRun = Select-TriggeredRun -Runs @($newRun) -Tag 'v4.13.17' `
+    -BaselineIds @() -TriggeredAfter $pushTime
+Assert-Returns -Label 'STR: first release of a tag is picked' -Actual $firstRun.databaseId -Expected 34442693881
+
+# Edge cases: no runs / no tag must not throw.
+$emptyRuns = Select-TriggeredRun -Runs @() -Tag 'v4.13.17'
+Assert-Returns -Label 'STR: empty run list => $null' -Actual ($null -eq $emptyRuns) -Expected $true
+$emptyTag = Select-TriggeredRun -Runs @($newRun) -Tag ''
+Assert-Returns -Label 'STR: empty tag => $null' -Actual ($null -eq $emptyTag) -Expected $true
+$noArgs = Select-TriggeredRun -Runs $null -Tag 'v4.13.17'
+Assert-Returns -Label 'STR: null run list => $null' -Actual ($null -eq $noArgs) -Expected $true
 
 # ===================================================================
 # Summary

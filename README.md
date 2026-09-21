@@ -61,10 +61,10 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 
 ## Quick Start
 
-Paste the following instruction to your favorite AI agent like claude, codex, workbuddy or openclaw and run it:
+Paste the following instruction to your favorite AI agent like dsh, claude, codex, workbuddy or openclaw and run it:
 
 ```
-Read https://browser4.io/SKILL.md and install browser4-cli (if not installed) for browser automation to perform the following task:
+Read https://browser4.io/SKILL.md, install or upgrade browser4-cli for browser automation, perform the following task:
 
 1. Open the browser in headed mode (`open --headed`) so the window is visible — this is a human-facing demo
 2. go to amazon.com
@@ -90,6 +90,8 @@ Choosing the right tool for your task:
 
 Use `snapshot -i --boxes` to see clickable/typeable elements with refs like `e15`, then `click <ref>`, `fill <ref> "<text>"`, `type`/`press`, `select`, `hover`/`drag`/`scroll`, and `wait` to drive the page. All interaction commands accept CSS selectors too. Chain multiple steps efficiently with `batch`.
 
+Content embedded in `<iframe>`s (payment forms, editors, widgets) is reached with the built-in frame switching: `frames` lists the frame tree, `frame "<iframe selector>"` scopes subsequent element commands into that frame (same-origin iframes fully supported), and `frame main` returns to the main document — no manual `contentDocument` eval needed.
+
 Typical interactive flow:
 
 ```bash
@@ -100,6 +102,10 @@ browser4-cli fill e3 "user@example.com"
 browser4-cli fill e4 "secret" --submit
 browser4-cli wait --load networkidle
 browser4-cli snapshot -i
+# iframe-heavy page:
+browser4-cli frame "#pay-frame"
+browser4-cli fill "#card-number" "4111 1111 1111 1111"
+browser4-cli frame main
 ```
 
 ### How to Extract Data
@@ -124,7 +130,7 @@ Need to process multiple pages?
 ├─ List of known URLs (in a file)? → crawl --seed-file urls.txt --depth 0 --sql @query.sql
 ├─ Crawl from a start URL (follow links)? → crawl <url> --out-link-selector "..." --depth N
 ├─ Need parallel execution (high throughput)? → swarm create → swarm query --seed-file ...
-├─ Repeated monitoring (check every hour)? → loop -- eval "..." -i 3600
+├─ Repeated monitoring (check every hour)? → loop -i 3600 -- eval "..."
 └─ Just a few URLs in a shell script?
    → browser4-cli open --headed "https://first-url"   # humans: open once, visibly
    → for url in ...; do browser4-cli goto "$url"; ... done
@@ -276,14 +282,14 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | Command | Description |
 |---|---|
 | `open [url]` | Open a browser session or reconnect to an existing one. **Headless by default.** Supports `--headed` (visible window), `--headless`, `--profile <path>`, `--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`, `--interact-level <FASTEST\|FAST\|DEFAULT>`. **Note:** `SYSTEM_DEFAULT` is deprecated and unsupported on Chrome ≥ 143 — use `attach` + `state-save`/`state-load` to reuse system browser state (see [browser-state-import.md](skills/browser4-cli/references/browser-state-import.md)). |
-| `attach` | Attach to an existing browser via CDP or the Browser4 extension. Supports `--cdp <url\|port\|channel>` and remote endpoint options. |
+| `attach` | Attach to an existing browser via CDP or the Browser4 extension. Supports `--cdp <url\|port\|channel>` and remote endpoint options. After a successful attach the CLI prints the browser that actually connected (`Connected browser: …` / `Attached to … at …`) and shows a ⚠ warning when it conflicts with the requested channel (e.g. requested msedge but Chrome connected) — verify it before driving the session. |
 | `close` | Close the active browser session. |
-| `list` | List browser sessions with their status and next-open behavior. Supports `--all`. |
+| `list` | List browser sessions with their status and next-open behavior. The Connection column prefers the backend-reported actual browser and annotates channel conflicts (e.g. `requested msedge · actual Google Chrome`). Supports `--all`. |
 | `session-default <name>` | Make a named session become the default unnamed session. |
 | `close-all` | Close all sessions without stopping the backend. |
 | `kill-all` | Force-stop the backend and Browser4-managed browser processes. |
 | `stop` | Gracefully stop the Browser4 server. |
-| `status` | Show server version, port, health, and the web status panel URL (`http://<server>:8182/status`). |
+| `status` | Show server version, port, health, and the web status panel URL (`http://<server>:8182/status`). When a session is active it also prints a current-session block: Name / Session ID / Status / Connection / Next open. |
 | `doctor` | Run diagnostics: build info, LLM status, stale daemon cleanup, optional repair. Supports `--verbose` and `--fix`. |
 | `doctor log [name]` | List, view, tail, or grep backend log files. Supports `--tail`, grep-style flags, and `doctor log <name> grep <pattern>`. |
 | `doctor metrics [filter]` | List, filter, or grep backend metrics. Supports `doctor metrics grep <pattern>`. |
@@ -343,13 +349,14 @@ All interaction commands accept a snapshot ref such as `e15` or a CSS selector u
 | `dblclick <ref> [button]` | Double-click an element. Supports `--modifiers`, `--follow`, `--auto-dismiss-dialogs`. |
 | `hover <ref>` | Hover over an element. |
 | `fill <ref> <text>` | Clear and fill text into an editable field. Supports `--submit`, `--verify`. |
-| `type <text> [ref]` | Type text into the focused element or a target element. Supports `--submit`, `--verify`, `--focus`, `--interactable-timeout`. |
+| `type <text> [ref]` | Type text into the focused element or a target element. Supports `--submit`, `--verify`, `--focus`, `--interactable-timeout`, and `--method auto\|chars\|exec` (requires a target ref; `auto` types short text per-character and bulk-inserts long/multi-line text on textarea/contenteditable via a single `execCommand('insertText')`, `chars` forces per-character typing, `exec` forces the bulk insert). |
 | `press <key> [ref]` | Press a key on the focused element or a target element. Supports `--verify`, `--follow`. |
 | `select <ref> <value>` | Select a dropdown value. Supports `--verify`. |
 | `check <ref>` | Check a checkbox or radio button. |
 | `uncheck <ref>` | Uncheck a checkbox or radio button. |
 | `drag <startRef> <endRef>` | Drag and drop from one element to another. |
 | `wait [target]` | Wait for a selector/ref, duration, text, URL pattern, page-load state, or JavaScript expression. Supports `--timeout`, `--text`, `--url`, `--load`, `--fn`. |
+| `upload <ref> <file> [file...]` | Upload one or more local files to a page file input. The target must be an `<input type="file">` (anything else errors); the paths must be readable by the browser process — local mode: the same machine, and empty/missing files are rejected with a hint; remote backend: paths resolve on the backend host. Supports `--no-snapshot`. |
 
 `wait --load` accepts `domcontentloaded`, `load`, and `networkidle`.
 
@@ -377,7 +384,7 @@ browser4-cli wait --load networkidle
 
 | Command | Description |
 |---|---|
-| `snapshot` | Capture an accessibility-tree snapshot. Supports `--boxes`, `-i/--interactive`, `-u/--urls`, `-c/--compact`, `--no-compact`, `-d/--depth`, `-l/--limit`, `-s/--selector`, `--raw`, `--stdout`, `-vp/--viewport`, `--filename`. |
+| `snapshot` | Capture an accessibility-tree snapshot. Supports `--boxes`/`--no-boxes`, `-i/--interactive`, `-u/--urls`, `-c/--compact`, `--no-compact`, `-d/--depth`, `-l/--limit`, `-s/--selector`, `--raw`, `--stdout`, `-vp/--viewport`, `--filename`. `--stdout`/`--raw` output is paginated at 2000 lines/page by default — when truncated, stdout (if piped) gets a `# … output truncated: showing N of M lines …` hint and the full footer goes to stderr; use `--all` or `--page-size 0` for the complete tree, and bound very large pages with `-v N`/`--depth`/`--selector`/`--no-boxes`. |
 | `snapshot grep <pattern>` | Search saved/current snapshot YAML with grep-style flags such as `-i`, `-v`, `-c`, `-l`, `-F`, `-w`, `-A`, `-B`, `-C`, `--selector`, `--page`, `--page-size`, `--all`. |
 | `snapshot list` | List saved snapshot files with timestamps and sizes. |
 | `snapshot clean` | Remove old snapshot files. Supports `--dry-run`. |
@@ -534,6 +541,30 @@ browser4-cli loop --shell "curl -s https://api.example.com/health" -i 60
 browser4-cli loop --list
 ```
 
+#### Network inspection, HAR recording & request routing
+
+Inspect what the page actually loaded (XHR/fetch calls, status codes, headers,
+response bodies), record a HAR 1.2 archive importable by Chrome DevTools, and
+route (mock/abort) matching requests. See
+[`skills/browser4-cli/references/network.md`](skills/browser4-cli/references/network.md)
+for the full guide.
+
+| Command | Description |
+|---|---|
+| `network requests` | List tracked requests. Supports `--filter`, `--type`, `--method`, `--status` (`200`, `2xx`, `400-499`), `--clear`. |
+| `network request <id>` | Full detail of one request: headers, timing, and the response body (fetched on demand). |
+| `network har start [--content <mode>]` | Start a HAR recording. Content mode: `none`, `text`, or `all` (binary base64). |
+| `network har stop [path]` | Stop recording and print the HAR JSON, or write it to a `.har` file when a path is given. |
+| `network route <pattern> --body <text>\|--abort` | Intercept matching requests (mock response or fail them) via CDP Fetch. Supports `--content-type`, `--resource-type`. |
+| `network unroute [pattern]` | Remove routes; without a pattern, disable interception entirely. |
+
+```bash
+browser4-cli network requests --filter api --status 2xx
+browser4-cli network har start --content text
+browser4-cli network har stop ./capture.har
+browser4-cli network route "**/api/users" --body '{"users":[]}' --content-type application/json
+```
+
 #### Swarm and crawl for scale
 
 The `co` prefix is accepted as an alias for `swarm`.
@@ -594,7 +625,7 @@ These commands operate on Browser4's learned experience store.
 
 | Command | Description |
 |---|---|
-| `experience save <url> <trace>` | Save a task execution trace. Supports `--outcome`, `--intent`, `--task-type`. |
+| `experience save <url> <trace>` | Save a task execution trace. Supports `--outcome`, `--intent`, `--task-type` (canonical types including `publish_post`), and `--facts <inline JSON \| @file.json>` — merges retrospective knowledge (`selectors` / `interaction_hints` / `known_blockers` / `anti_patterns`, camelCase or snake_case keys) into the (domain, intent) facts entry; the merge is refused when that entry is VERIFIED (immutable). |
 | `experience query <url>` | Query known selectors, blockers, and hints for a URL/domain. Supports `--intent`. |
 | `experience list` | List stored experience entries. Supports `--filter`, `--intent-filter`, `--page`, `--page-size`. |
 | `experience deep-learn <url> <intent>` | Run deeper analysis on stored traces. Supports `--force`. |
@@ -616,7 +647,6 @@ These commands exist in the CLI but are intentionally kept out of the default pu
 
 | Command | Description |
 |---|---|
-| `upload <ref> <file>` | Upload one or multiple files to a file input. |
 | `act <description>` | Experimental natural-language action translator that turns plain text into a browser command and runs it. |
 
 ### Timeout environment variables
@@ -754,7 +784,7 @@ The `coding` domain exposes **47 tools** in four groups:
 
 Browser4 includes a lightweight **MockSite** server that serves static HTML pages for testing and demos. Start it from the repository root:
 
-**Windows:** `./bin/test.ps1 mock-site -Dmock.site.port=18080`
+**Windows (pwsh — PowerShell 7+):** `./bin/test.ps1 mock-site -Dmock.site.port=18080`
 **Linux/macOS:** `./bin/test.sh mock-site -Dmock.site.port=18080`
 
 Key demo pages are served at `http://localhost:18080/generated/`. For the full page listing, environment variables, Python fallback, and Maven-based launch, see [MockSite](docs/mocksite.md). For the test taxonomy and tagging system, see [Test Taxonomy](docs/TESTING.md).

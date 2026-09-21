@@ -10,6 +10,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Registry of long-running CLI jobs (design §4.1.1). A foreground command that
@@ -88,7 +89,7 @@ class CliJobRegistry(
     }
 
     suspend fun await(id: String, timeoutMs: Long): CliResult? =
-        withTimeoutOrNull(timeoutMs) { jobs[id]?.await() }
+        withTimeoutOrNull(timeoutMs.milliseconds) { jobs[id]?.await() }
 
     /**
      * Kill all live jobs, await their teardown, and fail-loud when anything is
@@ -97,7 +98,7 @@ class CliJobRegistry(
     fun close() {
         meta.values.forEach { m -> if (m.cancelToken.isActive) m.cancelToken.cancel() }
         runBlocking {
-            withTimeoutOrNull(30_000) {
+            withTimeoutOrNull(30_000.milliseconds) {
                 jobs.values.forEach { runCatching { it.await() } }
             }
         }

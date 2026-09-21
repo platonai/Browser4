@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Inner Frame</title>
+</head>
+<body>
+  <h5 id="inner-heading">Inner frame</h5>
+  <button id="inner-button" type="button">Inner Button</button>
+  <div id="inner-state">inner-initial</div>
+  <script>
+    document.getElementById('inner-button').addEventListener('click', function () {
+      document.getElementById('inner-state').textContent = 'inner-clicked';
+    });
+  </script>
+</body>
+</html>

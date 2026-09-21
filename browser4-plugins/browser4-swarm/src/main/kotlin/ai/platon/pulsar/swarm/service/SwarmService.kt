@@ -124,13 +124,32 @@ open class SwarmService(
     var taskTtlMinutes: Int = 43200 // 30 days
 
     /**
-     * Maximum time (seconds) a swarm task may remain in CREATED state before
-     * being automatically transitioned to a TIMEOUT/failed state.  This catches
-     * tasks that are picked up by a worker but hang during fetch (e.g. due to
-     * "Protocol not found" for localhost URLs) and never update their status.
+     * Maximum time (seconds) a swarm task that a worker already picked up
+     * (`startedTime` set) may make no progress before being transitioned to a
+     * TIMEOUT/failed state.  This catches fetches that hang mid-flight.
+     *
+     * Only tasks that were actually started are subject to this timeout: a task
+     * that is still *queued* is waiting for a free tab, which says nothing
+     * about its own health.
      */
     @Volatile
     var staleTaskTimeoutSeconds: Long = 120
+
+    /**
+     * Maximum time (seconds) the swarm pipeline may make **no progress at all**
+     * before queued (never started) tasks are considered unconsumable and are
+     * failed.
+     *
+     * Bailing out on queued tasks by their own age is wrong whenever the pool
+     * is healthy but busy: a 100-URL batch drains at a few pages per minute, so
+     * the tail of the queue legitimately waits for many minutes while earlier
+     * tasks complete.  Keying the decision on the *pipeline* instead — the most
+     * recent status update across all live tasks — keeps a busy queue alive and
+     * still reaps tasks when the worker pool really is stalled (contexts that
+     * never came up, a hung fetch loop, a closed session).
+     */
+    @Volatile
+    var queueStallTimeoutSeconds: Long = 600
 
     init {
         // Periodically compact the JSONL file so stale entries don't accumulate forever.
@@ -214,53 +233,95 @@ open class SwarmService(
     }
 
     /**
-     * Transition swarm tasks that have been stuck in a non-terminal state
-     * (CREATED/queued or picked up but never finished) for longer than
-     * [staleTaskTimeoutSeconds] to a TIMEOUT/failed state.
+     * Transition swarm tasks that can no longer make progress to a TIMEOUT/failed
+     * state.
      *
-     * This catches tasks whose workers hung during fetch (e.g. "Protocol not found"
-     * for localhost URLs or other unreachable hosts) and never updated their status.
-     * Without this, these tasks appear as "queued" indefinitely with statusCode 201.
+     * Two distinct conditions are reaped, with different evidence:
+     *
+     * 1. **Started but hung** — a task a worker picked up (`startedTime` set) with
+     *    no status update for [staleTaskTimeoutSeconds]: the fetch itself is stuck
+     *    (unreachable host, protocol not found, hung renderer).
+     * 2. **Queued behind a stalled pipeline** — a never-started task older than
+     *    [queueStallTimeoutSeconds] in a swarm where no task at all has been
+     *    updated for that long: the pool cannot consume anything, so the task
+     *    would sit in the queue forever.
+     *
+     * Deliberately NOT reaped: a queued task whose siblings are still completing.
+     * A large batch legitimately waits minutes per page for a free tab, and
+     * failing those tasks by their own age used to wipe out most of a one-shot
+     * submission (98 of 100 jobs) while the fetch pipeline was busy working
+     * through the very same batch.
      */
     private fun transitionStaleTasks() {
         val now = Instant.now()
-        val staleCutoff = now.minusSeconds(staleTaskTimeoutSeconds)
+        val live = responseCache.asMap().entries.filter { !it.value.isDone }
+        if (live.isEmpty()) return
 
-        val stale = responseCache.asMap().entries.filter {
+        // Pipeline progress = the newest status update anywhere in the swarm.
+        // Terminal tasks count: a task that completed 10 seconds ago is the
+        // clearest evidence that the pool is draining its queue, even when
+        // every other task is still waiting for a tab.  Only when *nothing* has
+        // moved for the whole stall window can a queued task be declared
+        // unconsumable.
+        val lastProgressEpochSecond = responseCache.asMap().values
+            .mapNotNull { it.lastModifiedTime ?: it.createdTime }
+            .maxOrNull()
+            ?.epochSecond
+        val stalledForSeconds = lastProgressEpochSecond?.let { now.epochSecond - it } ?: Long.MAX_VALUE
+        val pipelineStalled = stalledForSeconds >= queueStallTimeoutSeconds
+
+        val taskCutoff = now.minusSeconds(staleTaskTimeoutSeconds)
+        val queueCutoff = now.minusSeconds(queueStallTimeoutSeconds)
+
+        var hungCount = 0
+        var queuedCount = 0
+
+        val stale = live.filter {
             val r = it.value
-            // Use lastModifiedTime when available: a task picked up by a worker
-            // has a startedTime, so checking createdTime alone would never catch
-            // tasks whose workers hung mid-fetch. Every status/event update
-            // refreshes lastModifiedTime, so tasks that are actively progressing
-            // (e.g. waiting between bounded retry attempts) are never affected.
             val lastTouched = r.lastModifiedTime ?: r.createdTime
-            !r.isDone
-                && lastTouched?.isBefore(staleCutoff) == true
+            if (r.startedTime != null) {
+                lastTouched?.isBefore(taskCutoff) == true
+            } else {
+                pipelineStalled && (r.createdTime?.isBefore(queueCutoff) != false)
+            }
         }
 
         for ((id, response) in stale) {
+            val hung = response.startedTime != null
             responseStatusIndex[response.statusCode]?.remove(id)
             response.statusCode = ResourceStatus.SC_REQUEST_TIMEOUT
             response.pageStatusCode = ProtocolStatusCodes.SC_REQUEST_TIMEOUT
             response.finishTime = now
             response.lastModifiedTime = now
             response.isDone = true
-            response.message = response.message
-                ?: "Task timed out: no progress for ${staleTaskTimeoutSeconds}s. " +
-                "The worker may have hung during fetch. Re-submit the task to retry."
+            response.message = response.message ?: if (hung) {
+                "Task timed out: no progress for ${staleTaskTimeoutSeconds}s after a worker picked it up. " +
+                    "The worker may have hung during fetch. Re-submit the task to retry."
+            } else {
+                "Task was never picked up: the swarm pipeline made no progress for " +
+                    "${stalledForSeconds.coerceAtLeast(queueStallTimeoutSeconds)}s, so it cannot be consumed. " +
+                    "Check the swarm session's browser contexts, or recreate the session and re-submit."
+            }
             responseStatusIndex[response.statusCode]?.add(id)
             persistence.append(response)
-            logger.warn(
-                "Swarm task {} auto-timed-out after no progress for {}s " +
-                "(staleTaskTimeoutSeconds={}). Likely cause: worker hung during fetch.",
-                id, staleTaskTimeoutSeconds, staleTaskTimeoutSeconds
-            )
+            if (hung) {
+                hungCount++
+            } else {
+                queuedCount++
+            }
         }
 
-        if (stale.isNotEmpty()) {
+        if (hungCount > 0) {
             logger.info(
-                "Transitioned {} stale swarm task(s) to TIMEOUT " +
-                "(threshold: {}s)", stale.size, staleTaskTimeoutSeconds
+                "Transitioned {} hung swarm task(s) to TIMEOUT (threshold: {}s)",
+                hungCount, staleTaskTimeoutSeconds
+            )
+        }
+        if (queuedCount > 0) {
+            logger.warn(
+                "Transitioned {} never-started swarm task(s) to TIMEOUT: the swarm pipeline made no " +
+                    "progress for {}s (queueStallTimeoutSeconds={})",
+                queuedCount, stalledForSeconds, queueStallTimeoutSeconds
             )
         }
     }
@@ -268,7 +329,15 @@ open class SwarmService(
     /**
      * Submit a scraping task
      * */
-    override fun submit(request: ScrapeRequest): String {
+    override fun submit(request: ScrapeRequest): String = submit(request, request.batchId)
+
+    /**
+     * Submit a scraping task as part of [batchId] (nullable).
+     *
+     * Every task of one batch submission carries the same batch id, so a batch
+     * can be tracked, filtered and summarised as a unit — see [batchStatus].
+     * */
+    override fun submit(request: ScrapeRequest, batchId: String?): String {
         // Resolve the session BEFORE the task is cached: the session getter
         // detects swarm session replacement and aborts pending tasks, and the
         // freshly submitted task must never be aborted by that check.
@@ -277,11 +346,12 @@ open class SwarmService(
             "Expected GenericAgenticSession but got ${s::class.simpleName} (uuid=${s.uuid})"
         }
         val hyperlink = createScrapeHyperlink(request, s)
+        hyperlink.response.batchId = batchId
         responseCache.put(hyperlink.uuid, hyperlink.response)
         hyperlink.response.id = hyperlink.uuid
         persistence.append(hyperlink.response)
         s.submit(hyperlink)
-        logger.debug("Swarm task submitted: {} sql={}", hyperlink.uuid, request.sql)
+        logger.debug("Swarm task submitted: {} batch={} sql={}", hyperlink.uuid, batchId, request.sql)
         return hyperlink.uuid
     }
 
@@ -289,7 +359,56 @@ open class SwarmService(
      * Submit a scraping task
      * */
     override fun submit(query: QueryRequest): String {
-        return submit(ScrapeRequest(query.toSQL()))
+        return submit(ScrapeRequest(query.toSQL()).also { it.batchId = query.batchId })
+    }
+
+    /**
+     * Aggregate status of every task submitted under [batchId].
+     *
+     * Returns the batch's task count, its lifecycle split, the wall-clock window
+     * (`startedAt` = earliest task start, `finishedAt` = latest finish, present
+     * only when the batch has fully settled) and per-task rows including each
+     * task's duration.  Tasks evicted from the response cache are not visible
+     * here — the cache is bounded (100k entries) and tasks expire on TTL.
+     * */
+    override fun batchStatus(batchId: String): Map<String, Any?> {
+        val tasks = responseCache.asMap().values.filter { it.batchId == batchId }
+
+        val completed = tasks.count { it.isDone && it.statusCode == ResourceStatus.SC_OK }
+        val failed = tasks.count { it.isDone && it.statusCode != ResourceStatus.SC_OK }
+        val pending = tasks.count { !it.isDone }
+
+        val startedAt = tasks.mapNotNull { it.startedTime ?: it.createdTime }.minOrNull()
+        val finishedAt = if (pending == 0) tasks.mapNotNull { it.finishTime }.maxOrNull() else null
+        val durationMillis = if (finishedAt != null && startedAt != null) {
+            java.time.Duration.between(startedAt, finishedAt).toMillis().coerceAtLeast(0)
+        } else null
+
+        val rows = tasks.map { r ->
+            mapOf(
+                "id" to r.id,
+                "isDone" to r.isDone,
+                "statusCode" to r.statusCode,
+                "status" to r.status,
+                "message" to r.message,
+                "createdTime" to r.createdTime?.toString(),
+                "startedTime" to r.startedTime?.toString(),
+                "finishTime" to r.finishTime?.toString(),
+                "durationMillis" to r.durationMillis,
+            )
+        }
+
+        return mapOf(
+            "batchId" to batchId,
+            "total" to tasks.size,
+            "completed" to completed,
+            "failed" to failed,
+            "pending" to pending,
+            "startedAt" to startedAt?.toString(),
+            "finishedAt" to finishedAt?.toString(),
+            "durationMillis" to durationMillis,
+            "tasks" to rows,
+        )
     }
 
     /**
@@ -332,7 +451,9 @@ open class SwarmService(
     override fun getStatus(request: ScrapeStatusRequest): ScrapeResponse {
         return responseCache.getIfPresent(request.id) ?: run {
             logger.warn("Swarm task not found: {}", request.id)
-            ScrapeResponse(request.id, ResourceStatus.SC_NOT_FOUND, ProtocolStatusCodes.SC_NOT_FOUND)
+            // notFound() clears createdTime: the placeholder describes a task
+            // that does not exist, so it must not look like a freshly created one.
+            ScrapeResponse.notFound(request.id).also { it.message = "Swarm task not found: ${request.id}" }
         }
     }
 

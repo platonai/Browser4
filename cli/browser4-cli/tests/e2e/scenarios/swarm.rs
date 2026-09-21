@@ -110,7 +110,21 @@ pub(super) fn test_swarm_concurrency_bounded_completion_live(ctx: &mut E2ECtx) {
         "No job should remain queued/processing after completion. swarm list:\n{list_output}"
     );
 
-    run_command(ctx, &["swarm", "close"]);
+    // Closing after all jobs completed must not report them as failed
+    // (regression: 'N locally tracked pending task(s) marked as failed
+    // (closed)' used to appear although every job had completed).
+    let close_result = run_command(ctx, &["swarm", "close"]);
+    let close_output = strip_snapshot_output(&close_result.stdout);
+    assert!(
+        !close_output.contains("marked as failed"),
+        "Completed jobs must never be reported as failed (closed) at close time. swarm close output:\n{}",
+        close_result.stdout
+    );
+    assert!(
+        close_output.contains("had already completed"),
+        "Expected the all-completed close summary, got:\n{}",
+        close_result.stdout
+    );
 }
 
 pub(super) fn test_swarm_submission_commands_live(ctx: &mut E2ECtx) {

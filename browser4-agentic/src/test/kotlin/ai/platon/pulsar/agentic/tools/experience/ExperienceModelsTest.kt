@@ -51,6 +51,33 @@ class ExperienceModelsTest {
             // "read" + "article" → READ intent
             assertEquals(Intent.READ, articleIntent)
         }
+
+        @Test
+        @DisplayName("classifies PUBLISH from English post/tweet intent")
+        fun testClassifyPublishEnglish() {
+            // Regression: "post" used to be a READ keyword — publishing text
+            // must classify as PUBLISH, not READ/OTHER.
+            assertEquals(Intent.PUBLISH, Intent.classify("post to x.com"))
+            assertEquals(Intent.PUBLISH, Intent.classify("publish a tweet with images"))
+            assertEquals(Intent.PUBLISH, Intent.classify("compose and post content"))
+            assertEquals(Intent.PUBLISH, Intent.classify("share this blog post to x"))
+        }
+
+        @Test
+        @DisplayName("classifies PUBLISH from Chinese posting intent")
+        fun testClassifyPublishChinese() {
+            // Chinese keywords must not fall through to OTHER (the classifier
+            // is keyword based and previously had no Chinese vocabulary).
+            assertEquals(Intent.PUBLISH, Intent.classify("发帖到X"))
+            assertEquals(Intent.PUBLISH, Intent.classify("发布微博带图"))
+        }
+
+        @Test
+        @DisplayName("reading an article still classifies READ (post removed only from posting context)")
+        fun testReadUnaffectedByPostRemoval() {
+            assertEquals(Intent.READ, Intent.classify("read this article"))
+            assertEquals(Intent.READ, Intent.classify("read the news"))
+        }
     }
 
     @Nested

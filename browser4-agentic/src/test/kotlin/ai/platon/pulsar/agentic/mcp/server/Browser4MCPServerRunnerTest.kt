@@ -76,4 +76,66 @@ class Browser4MCPServerRunnerTest {
     fun unknownOptionRequestsUsage() {
         assertNull(parseMcpServerOptions(arrayOf("--bogus")))
     }
+
+    // -------------------------------------------------------------------------
+    // `--app <name>` dispatch (P5)
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("--app mcp selects the MCP app and consumes the option")
+    fun appOptionSelectsMcpApp() {
+        val invocation = parseAppOption(arrayOf("--app", "mcp"))
+
+        assertNotNull(invocation)
+        assertEquals("mcp", invocation!!.app)
+        assertEquals(0, invocation.args.size)
+    }
+
+    @Test
+    @DisplayName("the app's own options are passed through untouched")
+    fun appOptionsArePassedThrough() {
+        val invocation = parseAppOption(arrayOf("--app", "mcp", "--transport", "http", "--port", "9090"))
+
+        assertNotNull(invocation)
+        assertEquals("mcp", invocation!!.app)
+        assertEquals(listOf("--transport", "http", "--port", "9090"), invocation.args.toList())
+
+        // The remaining options must be accepted by the MCP option parser as-is.
+        val options = parseMcpServerOptions(invocation.args)
+        assertNotNull(options)
+        assertEquals("http", options!!.transport)
+        assertEquals(9090, options.port)
+    }
+
+    @Test
+    @DisplayName("--app=<name> is accepted too, and the app name is case-insensitive")
+    fun inlineAppOptionIsAccepted() {
+        assertEquals("mcp", parseAppOption(arrayOf("--app=mcp"))!!.app)
+        assertEquals("mcp", parseAppOption(arrayOf("--app", "MCP"))!!.app)
+    }
+
+    @Test
+    @DisplayName("a command line without --app is left to the caller")
+    fun commandLineWithoutAppIsNotDispatched() {
+        assertNull(parseAppOption(arrayOf("--server.port=8182")))
+        assertNull(parseAppOption(emptyArray()))
+        // A dangling --app is malformed: the caller keeps its normal behaviour.
+        assertNull(parseAppOption(arrayOf("--app")))
+    }
+
+    @Test
+    @DisplayName("an unknown app does not start the MCP server")
+    fun unknownAppIsNotDispatched() {
+        assertFalse(runMcpAppIfRequested(arrayOf("--app", "web")))
+        assertFalse(runMcpAppIfRequested(arrayOf("--server.port=8182")))
+    }
+
+    @Test
+    @DisplayName("--app mcp reaches the MCP runner")
+    fun mcpAppIsDispatchedToTheRunner() {
+        // `--help` makes the runner print its usage and return before any session
+        // (and therefore any browser) is created, so this proves the launcher
+        // dispatch path end-to-end without starting Chrome.
+        assertTrue(runMcpAppIfRequested(arrayOf("--app", "mcp", "--help")))
+    }
 }

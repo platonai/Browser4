@@ -43,7 +43,7 @@ Cross-cutting persistence utilities shared by agent, crawl, and swarm components
 Shared scraping and crawling utilities:
 
 - **`AbstractScrapeHyperlink`** — Base class for AI-driven hyperlink scraping.
-- **`XSQLScrapeHyperlink`** / **`DegenerateXSQLScrapeHyperlink`** — XSQL-based hyperlink extraction.
+- **`XSQLHyperlink`** / **`DegenerateXSQLScrapeHyperlink`** — XSQL-based hyperlink extraction.
 - **`APISQLUtils`** / **`ScrapeAPIUtils`** — Utilities for REST API and SQL-backed scraping.
 - **`RestAPIPromptUtils`** / **`Prompts`** — Prompt construction helpers for REST API and LLM interactions.
 - **`DomUtils`** — DOM manipulation and traversal utilities.

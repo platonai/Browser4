@@ -367,7 +367,17 @@ class AgentToolManager constructor(
                     ?: throw UnsupportedOperationException(
                         "Command domain '${normalized.domain}' requires a registered CommandRunner target."
                     )
-                executor.callFunctionOn(normalized, commandTarget)
+                // The command executor lives in CustomToolRegistry (browser4-rest), not
+                // among the built-in executors, so it must be dispatched directly —
+                // routing the target through the composite executor only produced
+                // "Unsupported receiver class UserCommandExecutor". Same pattern as
+                // the captcha branch below.
+                val commandExecutor = CustomToolRegistry.instance.get(normalized.domain)
+                if (commandExecutor != null) {
+                    commandExecutor.callFunctionOn(normalized, commandTarget)
+                } else {
+                    executor.callFunctionOn(normalized, commandTarget)
+                }
             }
             "system" -> executor.callFunctionOn(normalized, system)
             "skill" -> executor.callFunctionOn(normalized, skillTarget)
@@ -387,11 +397,22 @@ class AgentToolManager constructor(
                     val target = when {
                         customExecutor.receiverClass == WebDriver::class -> driver
                         else -> _customTargets[normalized.domain]
-                            ?: throw UnsupportedOperationException(
-                                "Custom domain '${normalized.domain}' is registered but no target object is available."
-                            )
                     }
-                    customExecutor.callFunctionOn(normalized, target)
+                    when {
+                        target != null -> customExecutor.callFunctionOn(normalized, target)
+                        // Service-backed executors resolve their own collaborators, so
+                        // a missing target is not a failure for them.
+                        !customExecutor.requiresReceiver -> {
+                            logger.debug(
+                                "Custom domain '{}' has no registered target; {} does not consume a receiver",
+                                normalized.domain, customExecutor::class.simpleName
+                            )
+                            customExecutor.callFunctionOn(normalized, Any())
+                        }
+                        else -> throw UnsupportedOperationException(
+                            "Custom domain '${normalized.domain}' is registered but no target object is available."
+                        )
+                    }
                 } else {
                     throw UnsupportedOperationException("Unsupported domain: ${normalized.domain}")
                 }
@@ -500,13 +521,29 @@ class AgentToolManager constructor(
      * (same chromeTab, BrowserProtocol, and browser), so the swapped driver
      * replaces the existing bean and the session follows the switch.
      */
-    private fun bindSwappedDriver(driver: WebDriver) {
+    private suspend fun bindSwappedDriver(driver: WebDriver) {
         val bound = when {
             driver is Browser4WebDriver -> driver
             driver is PulsarWebDriver -> Browser4WebDriver.from(driver)
             else -> driver
         }
         session.bindDriver(bound)
+
+        // A swapped driver starts without an isolated-world context cache: it
+        // was created *after* the tab's document committed, so neither its own
+        // navigation nor the frame-navigated event registered the Browser4
+        // runtime (__pulsar_utils__) on this tab.  Evaluations would fall back
+        // to the main world, where the runtime never exists, and capture
+        // helpers would throw a ReferenceError until the next navigation.
+        // Initialize the runtime right away so the first capture on a
+        // tab-new target works; best-effort — the capture-side guard in
+        // InteractiveBrowserEmulator.ensurePulsarUtils retries lazily when
+        // this attempt races an in-flight navigation.
+        if (bound is Browser4WebDriver) {
+            runCatching { bound.ensurePulsarUtilsInjected() }.onFailure {
+                logger.debug("Failed to initialize the dual-world runtime after binding driver {}", it.message)
+            }
+        }
     }
 
     /**

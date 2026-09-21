@@ -68,10 +68,9 @@ browser4-cli webminer run-example
 
 WebMiner is a first-class Browser4 citizen: the `browser4-cli webminer`
 command installs, updates, and runs the tool natively (no PowerShell needed —
-the CLI locates a Java 17+ installation and launches `scent-miner.jar`
-directly). The JAR and its release metadata are installed to the same
-locations the launcher script uses (`~/.scent/webminer/`), so both entry
-points share one installation.
+the CLI locates a Java 17+ installation, preferring the JRE bundled with the
+Browser4 runtime, and launches `scent-miner.jar` directly). The JAR and its
+release metadata are installed to `~/.scent/webminer/`.
 
 ```bash
 browser4-cli webminer install            # Download and install the latest release
@@ -88,21 +87,26 @@ browser4-cli webminer views <result-dir> # Rebuild views from an existing run
 - Any other command is forwarded verbatim to `scent-miner.jar`, e.g.
   `browser4-cli webminer encode <dir>`.
 - Runs started through the CLI set `-Dapp.name=webminer`, so the views
-  task-output root is `%TEMP%\webminer-pereg\ml\tasks\...` (see [Output](#output)).
+  task-output root is `%TEMP%\webminer-<user>\ml\tasks\...` (`<user>` is the OS
+  user name; see [Output](#output)).
+- The bare `webminer` panel and `webminer version` keep the update check quiet:
+  the GitHub → OSS-mirror fallback notices (rate limit, HTTP status, unreachable)
+  are suppressed, and the `Published` line is omitted entirely when the release
+  carries no `published_at`.  `webminer install` / `update` still report the
+  fallback.
 
 ## Installing WebMiner
 
-The `webminer.ps1` launcher can self-install and self-update from GitHub Releases:
+`browser4-cli webminer install` downloads, verifies, and installs the latest
+release (GitHub Releases with an Aliyun OSS mirror fallback; works on
+Windows, Linux, and macOS — no PowerShell needed):
 
 ```bash
-.\webminer.ps1 install              # Download and install the latest release
-.\webminer.ps1 update               # Check for and install the latest release
-.\webminer.ps1 version              # Show installed and latest available versions
-.\webminer.ps1 uninstall            # Remove the installed release
+browser4-cli webminer install            # Download and install the latest release
+browser4-cli webminer update             # Check for and install the latest release
+browser4-cli webminer version            # Show installed and latest available versions
+browser4-cli webminer uninstall          # Remove the installed release
 ```
-
-`browser4-cli webminer install/update/version/uninstall` are the
-cross-platform equivalents (they do not require PowerShell).
 
 Releases are installed to `~/.scent/webminer/` and checked against
 `https://github.com/platonai/web-miner/releases`. SHA-256 checksums are
@@ -123,7 +127,7 @@ pages, extracts it, and runs the full pipeline — no manual setup required
 beyond Java 17 and 7-Zip:
 
 ```bash
-.\webminer.ps1 run-example
+browser4-cli webminer run-example
 ```
 
 The dataset is cached at `~/.scent/test-data/amazon.com/` so subsequent runs
@@ -133,7 +137,7 @@ skip the download.
 
 ```bash
 # Full pipeline (one-shot)
-.\webminer.ps1 all /path/to/html/files
+browser4-cli webminer all /path/to/html/files
 
 # Or with the JAR directly
 java -jar scent-miner.jar all /path/to/html/files
@@ -169,10 +173,12 @@ java -jar scent-miner.jar views <html-dir>-ml-output/kmeans-result/p<timestamp>
 2. **Views** (interactive HTML report + Excel + JSON) — the `views` stage of
    `all` writes them to the application's **temp task-output root**, NOT under
    `<html-dir>-ml-output`:
-   `%TEMP%\<app>-pereg\ml\tasks\unsupervised\result\p<timestamp>\predictionAndMinimalFeatures.views\`
-   on Windows (the `<app>` prefix follows `-Dapp.name`: `pulsar` for a direct
-   `java -jar` run, `webminer` when launched through `webminer.ps1`).  The end
-   of the run prints the resolved absolute views path.
+   `%TEMP%\<app>-<user>\ml\tasks\unsupervised\result\p<timestamp>\predictionAndMinimalFeatures.views\`
+   on Windows, and `<java.io.tmpdir>/<app>-<user>/ml/tasks/unsupervised/result/p<timestamp>/predictionAndMinimalFeatures.views/`
+   on Linux/macOS (`/tmp/...` on Linux, `$TMPDIR` on macOS) — the `<app>` prefix
+   follows `-Dapp.name` (`webminer` when launched through `browser4-cli webminer`,
+   `pulsar` for a direct `java -jar` run) and `<user>` is the OS user name.  The
+   end of the run prints the resolved absolute views path.
 
 So after `java -jar scent-miner.jar all ./html-pages/` the clustered results
 look like:
@@ -187,20 +193,28 @@ html-pages-ml-output/
           └── clusteringInfo.txt
 ```
 
-and the views (`index.html`, `*.xlsx`, `*.json`) live in the temp
+and the views (`<project>.html`, `*.xlsx`, `*.json`) live in the temp
 task-output directory printed by the run.
+
+> **The real report is `<project>.html` (e.g. `p<timestamp>.html`), not
+> `index.html`.**  The `index.html` inside the views directory is an
+> auto-generated directory listing ("Index of predictionAndMinimalFeatures.views")
+> — opening it shows a file list, not the interactive clustering report.
+> Open `<project>.html` instead.
 
 To place the views **beside the clustered results** (e.g. to archive them with
 the project), rebuild them from the result directory:
 
 ```bash
-java -jar scent-miner.jar views <html-dir>-ml-output/kmeans-result/p<timestamp>
+browser4-cli webminer views <html-dir>-ml-output/kmeans-result/p<timestamp>
+# (equivalent to: java -jar scent-miner.jar views <html-dir>-ml-output/kmeans-result/p<timestamp>)
 ```
 
 This writes `predictionAndMinimalFeatures.views/` inside the given result
-directory.  Open the generated `index.html` in a browser to explore the
-clustering results. The `.xlsx` files can be opened in Excel for sorting,
-filtering, or further analysis.
+directory — the recommended way to locate artifacts, since the output path is
+explicit instead of an opaque temp path.  Open the generated `<project>.html`
+in a browser to explore the clustering results. The `.xlsx` files can be
+opened in Excel for sorting, filtering, or further analysis.
 
 ## Tips
 

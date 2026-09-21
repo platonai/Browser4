@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Browser4 CLI Frame-Switch Fixture</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; padding: 16px; }
+    h2 { font-size: 18px; }
+    iframe { width: 420px; height: 160px; border: 1px solid #888; margin: 8px 0; display: block; }
+    .log { font-family: monospace; white-space: pre-wrap; background: #f4f4f4; padding: 8px; }
+  </style>
+</head>
+<body>
+  <h2 id="main-heading">Frame Switch Fixture (main document)</h2>
+  <input id="main-input" type="text" placeholder="main document input" />
+  <button id="main-button" type="button" onclick="document.getElementById('main-state').textContent = 'main-clicked'">Main Button</button>
+  <div class="log" id="main-state">main-initial</div>
+
+  <!-- Named payment iframe: the canonical frame-switch target -->
+  <iframe id="pay-frame" name="payframe" src="./frame-pay.html" title="payment frame"></iframe>
+
+  <!-- A second iframe for ambiguity / multiple-frame tests -->
+  <iframe id="other-frame" name="otherframe" src="./frame-other.html"></iframe>
+
+  <!-- Nested frames: switching twice (frame-switch -> nested -> inner) -->
+  <iframe id="nested-frame" name="nestedframe" src="./frame-nested.html"></iframe>
+
+  <script>
+    // Keep the main document's own state observable from e2e assertions.
+    window.__frameSwitchState = {
+      mainButtonClicks: 0
+    };
+    document.getElementById('main-button').addEventListener('click', function () {
+      window.__frameSwitchState.mainButtonClicks += 1;
+    });
+  </script>
+</body>
+</html>

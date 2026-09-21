@@ -77,11 +77,11 @@ class DevTaskPlannerTest {
     @Test
     @DisplayName("test class binds to its owning module via camelCase→kebab matching")
     fun testClassOwningModuleBinding() {
-        val plan = DevTaskPlanner.plan("补充 HeadingsConfigTest 用例")
-        assertTrue(plan.testClasses.contains("HeadingsConfigTest"), "testClasses: ${plan.testClasses}")
+        val plan = DevTaskPlanner.plan("补充 CaptchaConfigTest 用例")
+        assertTrue(plan.testClasses.contains("CaptchaConfigTest"), "testClasses: ${plan.testClasses}")
         val testStep = plan.steps.firstOrNull { it.tool == "coding.shell" && it.command.contains("-Dtest=") }
         assertNotNull(testStep, "test step expected: ${plan.steps}")
-        assertTrue(testStep!!.command.contains("-pl browser4-plugins/browser4-headings"),
+        assertTrue(testStep!!.command.contains("-pl browser4-plugins/browser4-captcha"),
             "test must run in the owning module, got: ${testStep.command}")
     }
 

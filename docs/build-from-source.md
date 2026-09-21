@@ -77,6 +77,27 @@ cargo run -- <command>
 
 The backend server starts automatically on first use (no manual `./mvnw` required).
 
+**Development mode and parallel checkouts.** When the CLI runs from inside a
+repository checkout it keeps its state per checkout
+(`~/.browser4/workspaces/<checkout>-<hash>/`) and allocates its backend port
+from **8282** upward, so `Browser4-4.13`, `Browser4-4.14` and git worktrees can
+each run and be tested at the same time — the second checkout automatically
+moves to 8283 when 8282 is taken. The backend also gets its own app data root
+(`-Dapp.data.dir=<workspace>/app-data`), so each workspace has its own Chrome
+profiles, H2/WebDB data and agent memory: two headed browsers no longer contend
+for one profile directory. Two things stay shared on purpose, linked into that
+root (Windows junction / POSIX symlink): the user's configuration
+(`~/.browser4/config/conf-enabled`, which holds the LLM API keys) and the
+browser prototype (`~/.browser4/browser/chrome/prototype`, the tree every
+`SEQUENTIAL`/`TEMPORARY` context is copied from) — so keys and seed state keep
+working without duplication. Where links are unavailable the config tree is
+copied and re-synced, and a workspace whose prototype cannot be linked simply
+keeps its own. Installed builds
+keep the production default (8182) and the flat `~/.browser4` state. Point a
+command at a specific backend with `--server <url>` /
+`browser4-cli config set server <url>`, or disable development mode with
+`BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1`.
+
 **Building the release binary:**
 
 ```bash

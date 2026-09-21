@@ -19,6 +19,24 @@ interface SwarmFacade {
     fun submit(request: ScrapeRequest): String
 
     /**
+     * Submit a URL or X-SQL scrape task as part of [batchId] (nullable) and
+     * return its task ID.
+     *
+     * Every task of one batch submission carries the same batch id, so a batch
+     * can be tracked, filtered and summarised as a unit — see [batchStatus].
+     */
+    fun submit(request: ScrapeRequest, batchId: String?): String
+
+    /**
+     * Aggregate status of every task submitted under [batchId]: task counts,
+     * the batch's wall-clock window and per-task rows (each with its duration).
+     *
+     * A batch id is assigned by the caller when submitting; this answers "is my
+     * batch done, and how long did it take?" in a single call.
+     */
+    fun batchStatus(batchId: String): Map<String, Any?>
+
+    /**
      * Submit a query-based scrape task and return its task ID.
      */
     fun submit(query: QueryRequest): String

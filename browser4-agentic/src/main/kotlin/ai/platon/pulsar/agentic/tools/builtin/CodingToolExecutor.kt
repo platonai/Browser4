@@ -603,7 +603,7 @@ class CodingToolExecutor : AbstractToolExecutor() {
             returnType = "String",
             description = "Generate a scaffold (see scaffold) AND write every generated file directly into the " +
                 "workspace under the given dir (relative to the workspace root, e.g. dir=\"browser4-plugins/" +
-                "browser4-wordcount\"). Multi-file types (plugin) are fully supported; for single-content types " +
+                "browser4-images\"). Multi-file types (plugin) are fully supported; for single-content types " +
                 "use scaffold. This is the reliable way for agents to materialize a new plugin without " +
                 "copy-pasting scaffold output."
         )

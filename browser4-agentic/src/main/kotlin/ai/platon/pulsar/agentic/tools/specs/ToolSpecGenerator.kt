@@ -4,6 +4,7 @@ import ai.platon.pulsar.api.WebDriver
 import ai.platon.pulsar.common.B4LLMUtils
 import ai.platon.pulsar.common.B4ProjectUtils
 import ai.platon.pulsar.common.B4ResourceLoader
+import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.common.ExperimentalApi
 import ai.platon.pulsar.common.Strings
@@ -17,6 +18,12 @@ object ToolSpecGenerator {
     private val logger = getLogger(this)
     private val isGenerated: AtomicBoolean = AtomicBoolean()
     private const val CODE_MIRROR_DIR = B4ProjectUtils.CODE_MIRROR_DIR
+
+    /** `@param name rest-of-line` inside a KDoc. */
+    private val PARAM_TAG = Regex("""@param\s+([A-Za-z_][A-Za-z0-9_]*)\s*(.*)""")
+
+    /** A fenced markdown code block, e.g. ```kotlin … ``` inside a KDoc. */
+    private val FENCED_BLOCK = Regex("```[A-Za-z]*\\s*\\n(.*?)```", RegexOption.DOT_MATCHES_ALL)
 
     val webDriverToolSpecs = mutableListOf<ToolSpec>()
     val agentToolSpecs = mutableListOf<ToolSpec>()
@@ -170,6 +177,7 @@ object ToolSpecGenerator {
                         "name" to arg.name,
                         "type" to arg.type,
                         "defaultValue" to arg.defaultValue,
+                        "description" to arg.description,
                         "expression" to arg.expression,
                         "cliOptions" to arg.cliOptions,
                     )
@@ -179,6 +187,17 @@ object ToolSpecGenerator {
                 "help" to spec.help,
                 "expression" to spec.expression,
                 "cli" to spec.cli,
+                // Documentation-only snippets are part of the spec snapshot so the
+                // offline fallback keeps the usage examples too.
+                "examples" to spec.examples.map { example ->
+                    linkedMapOf<String, Any?>(
+                        "title" to example.title,
+                        "args" to example.args,
+                        "code" to example.code,
+                        "notes" to example.notes,
+                        "expectsError" to example.expectsError,
+                    )
+                },
             )
         }
         return prettyPulsarObjectMapper().writeValueAsString(payload)
@@ -192,12 +211,17 @@ object ToolSpecGenerator {
         for (m in methods) {
             val arguments = mutableListOf<ToolSpec.Arg>()
             for (p in m.params) {
+                // An absent default must stay absent: rendering it as an empty
+                // string marked every generated argument as optional, so the
+                // JSON Schema advertised no `required` arguments at all (a client
+                // could call `tab.navigate` with no URL and only learn it was
+                // needed from the failure).
                 val defaultValue = when {
                     p.defaultValue != null && p.type.equals("String", ignoreCase = true) -> unquote(p.defaultValue)
                     p.defaultValue != null -> p.defaultValue
-                    else -> ""
+                    else -> null
                 }
-                val arg = ToolSpec.Arg(p.name, p.type, defaultValue)
+                val arg = ToolSpec.Arg(p.name, p.type, defaultValue?.takeIf { it.isNotBlank() }, m.paramDocs[p.name])
                 arguments.add(arg)
             }
 
@@ -206,8 +230,18 @@ object ToolSpecGenerator {
             val returnType = m.returnType.ifBlank { "Unit" }
             val description = m.kdoc ?: methodNameToDescription(method)
             val help = m.fullKDoc
+            // Keep only snippets that actually call this method.
+            val examples = m.examples.filter { it.code == null || it.code.contains("$method(") }
             // Keep argument order exactly as declared in source signatures.
-            toolSpec += ToolSpec(domain, method, arguments, returnType, description, help)
+            toolSpec += ToolSpec(
+                domain = domain,
+                method = method,
+                arguments = arguments,
+                returnType = returnType,
+                description = description,
+                help = help,
+                examples = examples,
+            )
         }
 
         // Keep method order exactly as declared in source interfaces.
@@ -221,7 +255,11 @@ object ToolSpecGenerator {
         val params: List<ParamSig>,
         val returnType: String,
         val kdoc: String?,
-        val fullKDoc: String? = null
+        val fullKDoc: String? = null,
+        /** Per-argument prose from the KDoc `@param name …` tags. */
+        val paramDocs: Map<String, String> = emptyMap(),
+        /** Ready-to-run call examples found in the KDoc code blocks. */
+        val examples: List<ToolExample> = emptyList(),
     )
 
     private fun extractInterfaceBody(src: String, interfaceName: String): String? {
@@ -252,6 +290,8 @@ object ToolSpecGenerator {
         val kdocBuf = StringBuilder()
         var pendingKDoc: String? = null
         var pendingFullKDoc: String? = null
+        var pendingParamDocs: Map<String, String> = emptyMap()
+        var pendingExamples: List<ToolExample> = emptyList()
         var pendingMcpAnnotation = false
 
         var collectingSig = false
@@ -275,10 +315,12 @@ object ToolSpecGenerator {
             val parsed = parseSignature(sig)
             if (parsed != null && pendingMcpAnnotation) {
                 val (name, params, returnType) = parsed
-                out += FuncSig(name, params, returnType, pendingKDoc, pendingFullKDoc)
+                out += FuncSig(name, params, returnType, pendingKDoc, pendingFullKDoc, pendingParamDocs, pendingExamples)
             }
             pendingKDoc = null
             pendingFullKDoc = null
+            pendingParamDocs = emptyMap()
+            pendingExamples = emptyList()
             pendingMcpAnnotation = false
             resetSig()
         }
@@ -296,9 +338,12 @@ object ToolSpecGenerator {
                 if (line.contains("*/")) {
                     inKDoc = false
                     // Clean up KDoc and extract relevant description
-                    val (short, full) = processKDoc(kdocBuf.toString())
+                    val raw = kdocBuf.toString()
+                    val (short, full) = processKDoc(raw)
                     pendingKDoc = short
                     pendingFullKDoc = full
+                    pendingParamDocs = parseKdocParams(raw)
+                    pendingExamples = parseKdocExamples(raw)
                 }
                 continue
             }
@@ -360,7 +405,7 @@ object ToolSpecGenerator {
             val parsed = parseSignature(sigBuf.toString())
             if (parsed != null && pendingMcpAnnotation) {
                 val (name, params, returnType) = parsed
-                out += FuncSig(name, params, returnType, pendingKDoc, pendingFullKDoc)
+                out += FuncSig(name, params, returnType, pendingKDoc, pendingFullKDoc, pendingParamDocs, pendingExamples)
             }
         }
         return out
@@ -660,6 +705,70 @@ object ToolSpecGenerator {
         }
         if (buf.isNotEmpty()) out += buf.toString()
         return out
+    }
+
+    /**
+     * Extract per-argument prose from the KDoc `@param name …` tags.
+     *
+     * The mirrored `WebDriver.kt` documents ~170 parameters this way; harvesting
+     * them turns `"description": "url: String"` into the real meaning of the
+     * argument, without hand-writing 161 descriptions.
+     *
+     * Continuation lines (a wrapped sentence) belong to the tag until the next
+     * tag or a blank line.
+     */
+    internal fun parseKdocParams(kdocRaw: String): Map<String, String> {
+        val inner = kdocRaw.replace("\r", "").substringAfter("/**").substringBeforeLast("*/")
+        val params = linkedMapOf<String, String>()
+        var current: String? = null
+        val text = StringBuilder()
+
+        fun flush() {
+            current?.let { name -> params[name] = text.toString().trim() }
+            current = null
+            text.setLength(0)
+        }
+
+        for (raw in inner.lines()) {
+            val line = raw.trim().removePrefix("*").trim()
+            val match = PARAM_TAG.find(line)
+            if (match != null) {
+                flush()
+                current = match.groupValues[1]
+                text.append(match.groupValues[2])
+                continue
+            }
+            if (line.startsWith("@")) {
+                flush()
+                continue
+            }
+            if (current == null) continue
+            if (line.isBlank()) {
+                flush()
+                continue
+            }
+            if (text.isNotEmpty()) text.append(' ')
+            text.append(line)
+        }
+        flush()
+
+        return params.filterValues { it.isNotBlank() }
+    }
+
+    /**
+     * Harvest the fenced code blocks of a KDoc as usage snippets.
+     *
+     * These are documentation-only ([ToolExample.code]): they are written in
+     * Kotlin against the driver interface, not as MCP arguments, so they are not
+     * offered as executable examples.
+     */
+    internal fun parseKdocExamples(kdocRaw: String): List<ToolExample> {
+        return FENCED_BLOCK.findAll(kdocRaw)
+            .map { it.groupValues[1].trim() }
+            .filter { it.isNotBlank() }
+            .take(2)
+            .map { ToolExample(title = "Example usage", code = it) }
+            .toList()
     }
 
     private fun processKDoc(kdocRaw: String): Pair<String, String> {

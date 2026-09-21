@@ -1,7 +1,10 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.pulsar.api.model.FrameInfo
 import ai.platon.pulsar.api.model.JsEvaluation
 import ai.platon.pulsar.agentic.model.ToolCall
+import ai.platon.pulsar.agentic.tools.ToolErrorCode
+import ai.platon.pulsar.agentic.tools.ToolErrorMapper
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.chrome.protocol.DialogEvent
@@ -9,8 +12,11 @@ import ai.platon.pulsar.chrome.protocol.DialogHandler
 import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito
 import org.mockito.Mockito.verify
@@ -243,6 +249,68 @@ class BrowserTabToolExecutorTest {
             @Suppress("UNCHECKED_CAST")
             val map = result.value as Map<String, Any?>
             assertEquals(false, map["pending"])
+        }
+    }
+
+    @Test
+    fun `eval is guarded when a native dialog is pending`() {
+        runBlocking {
+            val driver = Mockito.mock(PulsarWebDriver::class.java)
+            val handler = Mockito.mock(DialogHandler::class.java)
+            `when`(driver.dialogHandler).thenReturn(handler)
+            `when`(handler.hasPendingDialog()).thenReturn(true)
+            `when`(handler.peekPendingDialog()).thenReturn(DialogEvent(message = "Are you sure?", type = "confirm"))
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "eval", mutableMapOf<String, Any?>("expression" to "document.title")),
+                driver
+            )
+
+            // AbstractToolExecutor wraps thrown errors into TcEvaluate.
+            assertFalse(result.success)
+            assertTrue(result.exception?.message.orEmpty().contains("blocked by a native"))
+            // The page evaluation must never reach the driver while the dialog is open.
+            Mockito.verify(driver, Mockito.never()).evaluateValueDetail(Mockito.anyString())
+            Mockito.verify(driver, Mockito.never()).evaluate(Mockito.anyString())
+        }
+    }
+
+    @Test
+    fun `evaluateValue is guarded when a native dialog is pending`() {
+        runBlocking {
+            val driver = Mockito.mock(PulsarWebDriver::class.java)
+            val handler = Mockito.mock(DialogHandler::class.java)
+            `when`(driver.dialogHandler).thenReturn(handler)
+            `when`(handler.hasPendingDialog()).thenReturn(true)
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "evaluateValue", mutableMapOf<String, Any?>("expression" to "document.title")),
+                driver
+            )
+
+            assertFalse(result.success)
+            assertTrue(result.exception?.message.orEmpty().contains("blocked by a native"))
+            Mockito.verify(driver, Mockito.never()).evaluateValueDetail(Mockito.anyString())
+        }
+    }
+
+    @Test
+    fun `eval proceeds when no dialog is pending`() {
+        runBlocking {
+            val driver = Mockito.mock(PulsarWebDriver::class.java)
+            val handler = Mockito.mock(DialogHandler::class.java)
+            `when`(driver.dialogHandler).thenReturn(handler)
+            `when`(handler.hasPendingDialog()).thenReturn(false)
+            `when`(driver.evaluateValueDetail("document.title"))
+                .thenReturn(JsEvaluation(value = "Browser4 CLI Other Fixture"))
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "eval", mutableMapOf<String, Any?>("expression" to "document.title")),
+                driver
+            )
+
+            assertEquals("Browser4 CLI Other Fixture", result.value)
+            verify(driver).evaluateValueDetail("document.title")
         }
     }
 
@@ -677,5 +745,428 @@ class BrowserTabToolExecutorTest {
             Mockito.verify(driver, Mockito.never())
                 .waitForNavigation("http://example.com")
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Frame scope tools
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `frameSwitch delegates to the driver with the frame argument`() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        `when`(driver.frameSwitch("#pay-frame")).thenReturn(
+            FrameInfo(id = "f1", name = "payframe", url = "http://x/pay", parentId = "main", active = true)
+        )
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "frameSwitch", mutableMapOf("frame" to "#pay-frame")),
+            driver
+        )
+
+        assertTrue(result.success)
+        val value = result.value as Map<*, *>
+        assertEquals("f1", value["id"])
+        assertEquals("payframe", value["name"])
+        assertEquals(true, value["active"])
+        Mockito.verify(driver).frameSwitch("#pay-frame")
+        // `verify` returns the mock, so without this the method would have a return
+        // value and JUnit 5 would silently skip the test.
+        Unit
+    }
+
+    @Test
+    fun `frameMain delegates to the driver`() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "frameMain", mutableMapOf<String, Any?>()),
+            driver
+        )
+
+        assertTrue(result.success)
+        Mockito.verify(driver).frameMain()
+    }
+
+    @Test
+    fun `frameList delegates to the driver`() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        `when`(driver.frameList()).thenReturn(
+            listOf(
+                FrameInfo(id = "main", url = "http://x/", active = true),
+                FrameInfo(id = "f1", name = "payframe", url = "http://x/pay", parentId = "main"),
+            )
+        )
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "frameList", mutableMapOf<String, Any?>()),
+            driver
+        )
+
+        assertTrue(result.success)
+        val frames = result.value as List<*>
+        assertEquals(2, frames.size)
+        Mockito.verify(driver).frameList()
+        Unit
+    }
+
+    @Test
+    fun `frameSwitch requires the frame argument`() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "frameSwitch", mutableMapOf<String, Any?>()),
+            driver
+        )
+
+        assertTrue(!result.success)
+        val cause = result.exception?.cause
+        assertTrue(
+            cause?.message?.contains("frame") == true,
+            "the failure must name the missing argument, was: ${cause?.message}",
+        )
+        assertEquals(
+            ToolErrorCode.MISSING_REQUIRED_ARG,
+            ToolErrorMapper.classify(cause),
+            "a missing argument must carry the stable code, not INTERNAL",
+        )
+        Mockito.verify(driver, Mockito.never()).frameSwitch(Mockito.anyString())
+        // `verify` returns the mock: without this the method would have a return
+        // value and JUnit 5 would silently skip the test (which is how this
+        // assertion could sit stale for so long).
+        Unit
+    }
+
+    // ── eval element-scope resolution: unresolvable targets must fail loudly ──
+
+    @Test
+    fun `eval with a stale ref fails with an explicit element-not-found error`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            // Unstubbed evaluateValueDetail returns null — the driver reports
+            // "element not found" when a locator cannot be resolved.  A stale
+            // snapshot ref must never degrade into a successful JS null.
+            val result = executor.callFunctionOn(
+                ToolCall(
+                    "tab", "eval",
+                    mutableMapOf<String, Any?>(
+                        "selector" to "e9999",
+                        "functionDeclaration" to "element => element.tagName"
+                    )
+                ),
+                driver
+            )
+
+            assertTrue(result.exception != null, "stale ref must fail the tool call, got value=${result.value}")
+            val message = result.exception?.cause?.message ?: ""
+            assertTrue(message.contains("Element not found for ref e9999"), "unexpected message: $message")
+            // The expiry hint matches the CLI verbatim so it is not appended twice.
+            assertTrue(message.contains("Refs expire after page changes — re-run `snapshot` to get fresh refs."), message)
+        }
+    }
+
+    @Test
+    fun `eval on a selector that matches nothing fails loudly too`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+
+            val result = executor.callFunctionOn(
+                ToolCall(
+                    "tab", "eval",
+                    mutableMapOf<String, Any?>(
+                        "selector" to "#never-in-dom",
+                        "functionDeclaration" to "element => element.tagName"
+                    )
+                ),
+                driver
+            )
+
+            assertTrue(result.exception != null, "selector miss must fail an element-scoped eval, got value=${result.value}")
+            val message = result.exception?.cause?.message ?: ""
+            assertTrue(message.contains("No element matches selector \"#never-in-dom\""), message)
+        }
+    }
+
+    @Test
+    fun `eval on an existing element that returns JS null stays a successful null`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            // The element resolved and the expression legitimately returned null
+            // (e.g. an attribute that does not exist): the JsEvaluation is
+            // non-null with a null value — distinguishable from an unresolved
+            // locator (whole JsEvaluation == null), so it must NOT error.
+            `when`(driver.evaluateValueDetail("#name", "element => element.getAttribute('name')"))
+                .thenReturn(JsEvaluation(value = null, cdpType = "object", cdpSubtype = "null"))
+
+            val result = executor.callFunctionOn(
+                ToolCall(
+                    "tab", "eval",
+                    mutableMapOf<String, Any?>(
+                        "selector" to "#name",
+                        "expression" to "element => element.getAttribute('name')"
+                    )
+                ),
+                driver
+            )
+
+            assertTrue(result.success, "legitimate JS null must stay a success")
+            assertEquals(null, result.value)
+            assertEquals("null", result.className)
+        }
+    }
+
+    // ── get text/attr/property: uniform live-DOM resolution for every mode ──
+
+    @Test
+    fun `get text resolves through the shared element path and returns the text`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            Mockito.doAnswer { JsEvaluation(value = "4K OLED TV 55") }
+                .`when`(driver).evaluateValueDetail(Mockito.anyString(), Mockito.anyString())
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "selectFirstTextOrNull", mutableMapOf<String, Any?>("selector" to "#title")),
+                driver
+            )
+
+            assertEquals("4K OLED TV 55", result.value)
+            // text/attr/property reads share one driver path (evaluateValueDetail
+            // on the resolved element) — the old per-mode driver methods are bypassed.
+            Mockito.verify(driver, Mockito.never()).selectFirstTextOrNull(Mockito.anyString())
+        }
+    }
+
+    @Test
+    fun `get text normalizes whitespace by default and returns the raw text with raw=true`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            val readJs = java.util.concurrent.atomic.AtomicReference<String>()
+            Mockito.doAnswer { inv ->
+                readJs.set(inv.getArgument(1))
+                JsEvaluation(value = "ok")
+            }.`when`(driver).evaluateValueDetail(Mockito.anyString(), Mockito.anyString())
+
+            executor.callFunctionOn(
+                ToolCall("tab", "selectFirstTextOrNull", mutableMapOf<String, Any?>("selector" to "#title")),
+                driver
+            )
+            // Default: the read JS collapses whitespace runs and trims the ends,
+            // so layout whitespace (indentation/newlines) does not leak into the
+            // extracted text.
+            val normalizedJs = readJs.get()
+            assertTrue(normalizedJs.contains("text.replace(/\\s+/g, ' ').trim()"), "unexpected read JS: $normalizedJs")
+
+            executor.callFunctionOn(
+                ToolCall(
+                    "tab", "selectFirstTextOrNull",
+                    mutableMapOf<String, Any?>("selector" to "#title", "raw" to true)
+                ),
+                driver
+            )
+            // --raw: plain concatenation of the text nodes, no normalization.
+            val rawJs = readJs.get()
+            assertTrue(rawJs.contains("text += n.nodeValue;") && !rawJs.contains(".trim()"), "unexpected read JS: $rawJs")
+        }
+    }
+
+    @Test
+    fun `get text with a CSS selector that matches nothing returns null`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "selectFirstTextOrNull", mutableMapOf<String, Any?>("selector" to ".missing")),
+                driver
+            )
+
+            // A static CSS selector miss is a legitimate outcome (probing), not an error.
+            assertTrue(result.success)
+            assertEquals(null, result.value)
+        }
+    }
+
+    @Test
+    fun `get text with a stale ref fails with the expiry hint`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "selectFirstTextOrNull", mutableMapOf<String, Any?>("selector" to "e1265")),
+                driver
+            )
+
+            assertTrue(result.exception != null, "stale ref must fail the tool call, got value=${result.value}")
+            val message = result.exception?.cause?.message ?: ""
+            assertTrue(message.contains("Element not found for ref e1265"), message)
+            assertTrue(message.contains("Refs expire after page changes — re-run `snapshot` to get fresh refs."), message)
+        }
+    }
+
+    @Test
+    fun `get attr returns empty string when the element matched but the attribute is missing`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            // #email exists, but has no class attribute: JS getAttribute returns
+            // null while the locator resolved — must come back as "" (element
+            // matched, value empty/missing), NOT as "no element matched" (null).
+            val readJs = java.util.concurrent.atomic.AtomicReference<String>()
+            Mockito.doAnswer { inv ->
+                readJs.set(inv.getArgument(1))
+                JsEvaluation(value = null, cdpType = "object", cdpSubtype = "null")
+            }.`when`(driver).evaluateValueDetail(Mockito.anyString(), Mockito.anyString())
+
+            val result = executor.callFunctionOn(
+                ToolCall(
+                    "tab", "selectFirstAttributeOrNull",
+                    mutableMapOf<String, Any?>("selector" to "#email", "attrName" to "class")
+                ),
+                driver
+            )
+
+            assertTrue(result.success, "matched element with a null attribute must not fail")
+            assertEquals("", result.value)
+            // The read expression asks the matched element for the requested attribute.
+            assertTrue(readJs.get().contains("getAttribute('class')"), "unexpected read JS: ${readJs.get()}")
+        }
+    }
+
+    @Test
+    fun `get attr with a CSS selector that matches nothing returns null`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+
+            val result = executor.callFunctionOn(
+                ToolCall(
+                    "tab", "selectFirstAttributeOrNull",
+                    mutableMapOf<String, Any?>("selector" to "#result-data", "attrName" to "class")
+                ),
+                driver
+            )
+
+            assertTrue(result.success)
+            assertEquals(null, result.value)
+        }
+    }
+
+    @Test
+    fun `get attr with a stale ref raises an explicit element-not-found error`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+
+            val result = executor.callFunctionOn(
+                ToolCall(
+                    "tab", "selectFirstAttributeOrNull",
+                    mutableMapOf<String, Any?>("selector" to "e1265", "attrName" to "class")
+                ),
+                driver
+            )
+
+            assertTrue(result.exception != null, "stale ref must fail the tool call, got value=${result.value}")
+            val message = result.exception?.cause?.message ?: ""
+            assertTrue(message.contains("Element not found for ref e1265"), message)
+            assertTrue(message.contains("Refs expire after page changes"), message)
+        }
+    }
+
+    @Test
+    fun `get property resolves refs and CSS through the shared element path`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            // The property mode used to route through the page-side
+            // __pulsar_utils__ helper (document.querySelector of the raw
+            // selector), which cannot resolve `eN` backend-node-id refs and
+            // needs the injected runtime.  Now it resolves via the same CDP
+            // locator path as text/attr.
+            Mockito.doAnswer { JsEvaluation(value = "de") }
+                .`when`(driver).evaluateValueDetail(Mockito.anyString(), Mockito.anyString())
+
+            val result = executor.callFunctionOn(
+                ToolCall(
+                    "tab", "selectFirstPropertyValueOrNull",
+                    mutableMapOf<String, Any?>("selector" to "#country", "propName" to "value")
+                ),
+                driver
+            )
+
+            assertEquals("de", result.value)
+            Mockito.verify(driver, Mockito.never()).selectFirstPropertyValueOrNull(Mockito.anyString(), Mockito.anyString())
+        }
+    }
+
+    @Test
+    fun `get property with a matched element whose property is missing returns empty string`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            Mockito.doAnswer { JsEvaluation(value = null, cdpType = "undefined") }
+                .`when`(driver).evaluateValueDetail(Mockito.anyString(), Mockito.anyString())
+
+            val result = executor.callFunctionOn(
+                ToolCall(
+                    "tab", "selectFirstPropertyValueOrNull",
+                    mutableMapOf<String, Any?>("selector" to "#email", "propName" to "value")
+                ),
+                driver
+            )
+
+            assertTrue(result.success)
+            assertEquals("", result.value)
+        }
+    }
+
+    @Test
+    fun `get property with a stale ref raises an explicit element-not-found error`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+
+            val result = executor.callFunctionOn(
+                ToolCall(
+                    "tab", "selectFirstPropertyValueOrNull",
+                    mutableMapOf<String, Any?>("selector" to "e1265", "propName" to "value")
+                ),
+                driver
+            )
+
+            assertTrue(result.exception != null, "stale ref must fail the tool call, got value=${result.value}")
+            val message = result.exception?.cause?.message ?: ""
+            assertTrue(message.contains("Element not found for ref e1265"), message)
+        }
+    }
+
+    @Test
+    @DisplayName("every written tab example reaches the advertised spec")
+    fun everyWrittenTabExampleReachesTheSpec() {
+        val specs = executor.getToolSpecs()
+
+        val dead = TabToolExamples.EXECUTABLE.filterKeys { it !in specs }
+        assertTrue(
+            dead.isEmpty(),
+            "these examples were written for methods the executor does not advertise, " +
+                "so no client can ever see them: ${dead.keys}"
+        )
+
+        val dropped = TabToolExamples.EXECUTABLE.filter { (method, examples) ->
+            specs[method]?.examples != examples
+        }
+        assertTrue(
+            dropped.isEmpty(),
+            "these examples never reached their spec — most likely a spec declared after " +
+                "the `replaceExamples` call in the constructor overwrote it: ${dropped.keys}"
+        )
+    }
+
+    @Test
+    @DisplayName("the state readers the executor dispatches are advertised with their contract")
+    fun dispatchedStateReadersAreAdvertised() {
+        val specs = executor.getToolSpecs()
+        for (method in listOf("isEnabled", "dialogStatus")) {
+            assertNotNull(specs[method], "tab.$method is dispatched but not advertised")
+        }
+
+        assertTrue(specs["dialogStatus"]!!.arguments.isEmpty(), "dialogStatus takes no arguments")
+        val schema = specs["dialogStatus"]!!.outputSchema
+        assertNotNull(schema, "dialogStatus returns JSON, so it must declare its result schema")
+        assertTrue(
+            schema!!.contains("\"pending\"") && schema.contains("\"type\":\"object\""),
+            "the declared result schema must describe the {pending, type, message} map, was: $schema"
+        )
     }
 }

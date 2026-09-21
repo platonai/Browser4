@@ -136,8 +136,7 @@ AND NOT ManualOnly
 | E2E         | `browser4-tests/*-e2e-tests` |
 
 > **注：** 原 `pulsar-it-tests` / `pulsar-e2e-tests` 的集成与 E2E 套件已迁移至底层库
-> （browser4-core 各模块与 `pulsar-tests-common`）。两个模块作为占位保留，各自仅保留
-> 一个 smoke 测试，以保证既有构建接线与 CI 引用在迁移期间继续可用。
+> （browser4-core 各模块与 `pulsar-tests-common`），占位模块已从本仓库移除。
 
 ---
 
@@ -148,6 +147,52 @@ AND NOT ManualOnly
 * `ManualOnly` → 必须人工触发
 * `SkippableLowerLevel` → 可剪枝执行
 * `TestInfraCheck` → 失败立即中断
+
+---
+
+## 本地复现 CI 测试范围（一次跑全）
+
+不要靠 tag CI 逐轮试错（一轮约 26 分钟，而且 Maven 在第一个失败模块就停，所以一轮只暴露一个失败）。
+本地用与 `ci.yml` **相同**的开关跑一次，把失败全部列出来：
+
+```powershell
+# Windows
+./mvnw.cmd -o -B "-Pall-main-modules,all-test-modules" `
+  "-Dsurefire.excludes=**integration**" `
+  "-Dsurefire.excludedGroups=ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck" `
+  -DrunITs=true "-Dmaven.test.failure.ignore=true" test
+```
+
+```bash
+# Linux / macOS
+./mvnw -o -B -Pall-main-modules,all-test-modules \
+  -Dsurefire.excludes='**integration**' \
+  -Dsurefire.excludedGroups=ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck \
+  -DrunITs=true -Dmaven.test.failure.ignore=true test
+```
+
+* `-Dmaven.test.failure.ignore=true`：Maven 不在第一个失败模块停下，一轮即可看到**全部**失败模块（CI 没开这个开关，所以 CI 一次只暴露一个失败 —— 这正是"每轮修一个"的来源）。
+* PowerShell 中 `-P...` 必须整体加引号（`,` 会被解析成参数数组）。
+* 汇总方式：按 `[INFO] Building <模块>` 分组取 `Tests run:` 行；已知结果与处置见
+  [4.13.x CI 稳定化报告](../docs-dev/copilot/ci-stabilization-4.13.x.md)。
+* 复跑单个模块：模块必须先进入 reactor（只给 `-pl` 会报
+  "Could not find the selected project in the reactor"），例如
+  `-Pall-test-modules -pl browser4-tests/browser4-rest-tests test`。
+* **`-Dsurefire.excludedGroups=` 是"整体替换"而不是"追加"**：root `pom.xml` 的默认值
+  （`Slow,Heavy,RequiresServer,RequiresBrowser,RequiresAI,RequiresDocker,Integration,E2E,ManualOnly,TestInfraCheck,IntegrationTest,E2ETest,HeavyTest`
+  —— 即"排除所有非 Fast"）会被命令行**覆盖**；传了 `-Dsurefire.excludedGroups=` 就必须把想排除的
+  tag 全部再列一遍，否则像 `IntegrationTest` 这类测试会意外跑起来。
+* 想再窄到某个类：必须同时放开 group 过滤，否则选中的类被默认 `excludedGroups` 排除后
+  surefire 会给出 `Tests run: 0` **且退出码为 0**（静默通过，极易误判）：
+
+  ```powershell
+  ./mvnw.cmd -o -B -Pall-test-modules -pl browser4-tests/browser4-rest-tests `
+    -DrunITs=true `
+    "-Dsurefire.excludedGroups=ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck" `
+    "-Dtest=CrawlFixtureMetadataTest" test
+  ```
+
+  过滤后先看 `Running <类名>` 行确认真的跑起来了。
 
 ---
 
@@ -177,7 +222,7 @@ AND NOT ManualOnly
 **核心原因：**
 
 * JUnit 5 Tags 四维度分类 > Failsafe 单维度命名约定
-* 物理模块隔离（`pulsar-it-tests/` 等）已实现统计分离；其测试套件已迁移至底层库
+* 测试套件已迁移至底层库（原 `pulsar-it-tests` / `pulsar-e2e-tests` 模块已移除）
 * `@SpringBootTest` 已解决生命周期管理
 * GitHub Actions 已编排外部服务（MongoDB、Docker Compose）
 * Failsafe 的 `<groups>` 无法表达多维度组合（如 "Fast 且不需要 AI 的集成测试"）
@@ -186,8 +231,7 @@ AND NOT ManualOnly
 
 ```bash
 mvn test                              # 快速单测
-mvn test -DrunITs=true                # 集成测试（pulsar-it-tests 模块 smoke 测试）
-mvn test -pl browser4-tests/pulsar-it-tests  # 按模块执行（smoke 测试）
+mvn test -DrunITs=true                # 运行底层库中的集成测试（Tag 驱动）
 mvn test -Dgroups="Integration,Fast"  # 按 Tag 组合过滤
 ```
 

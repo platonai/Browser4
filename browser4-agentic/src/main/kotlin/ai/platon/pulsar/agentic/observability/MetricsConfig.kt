@@ -114,22 +114,32 @@ object MetricsConfig {
      * Get Prometheus scrape data in text format.
      * This is the data that Prometheus will scrape from /metrics endpoint.
      *
+     * Returns an empty string when the Prometheus registry is not on the
+     * classpath (it is an optional dependency) — the `is` check itself would
+     * otherwise throw `NoClassDefFoundError` and take the caller down with it.
+     *
      * @return Prometheus text format metrics data
      */
-    fun scrape(): String {
-        return if (registry is PrometheusMeterRegistry) {
-            (registry as PrometheusMeterRegistry).scrape()
-        } else {
-            ""
-        }
-    }
+    fun scrape(): String = scrapeOf(registry) ?: ""
+
+    /**
+     * Prometheus text exposition of [meterRegistry], or `null` when that
+     * registry cannot be scraped (wrong registry type, or the optional
+     * `micrometer-registry-prometheus` classes are absent from the bundle).
+     */
+    fun scrapeOf(meterRegistry: MeterRegistry): String? = runCatching {
+        (meterRegistry as? PrometheusMeterRegistry)?.scrape()
+    }.getOrNull()
+
+    /** Whether [meterRegistry] can be scraped by a Prometheus server. */
+    fun isPrometheus(meterRegistry: MeterRegistry): Boolean = runCatching {
+        meterRegistry is PrometheusMeterRegistry
+    }.getOrDefault(false)
 
     /**
      * Close the meter registry and cleanup resources.
      */
     fun close() {
-        if (registry is PrometheusMeterRegistry) {
-            (registry as PrometheusMeterRegistry).close()
-        }
+        runCatching { (registry as? PrometheusMeterRegistry)?.close() }
     }
 }

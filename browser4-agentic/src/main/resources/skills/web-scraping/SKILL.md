@@ -108,7 +108,7 @@ Validates skill configuration and environment. Always returns true for this skil
 
 ## Implementation Notes
 
-- **Headless mode is the default for AI agents:** Always open browsers in headless mode unless the user explicitly requests a visible browser window (e.g., "show me the browser", "open visibly", "headed"). Headless mode is faster, uses fewer resources, and avoids unnecessary GUI windows.
+- **Headless mode is the default for AI agents:** Always open browsers in headless mode unless the user explicitly requests a visible browser window (e.g., "show me the browser", "open visibly", "headed"). Headless mode is faster, uses fewer resources, and avoids unnecessary GUI windows. If user participation in the page interaction is required — e.g., logging in or entering a verification code (CAPTCHA) — open a **headed** browser so the user can see and act on the page.
 - Uses JavaScript execution via WebDriver.evaluate() to extract real webpage content
 - Extracts document title using `document.title`
 - Extracts page text using `document.body.textContent`

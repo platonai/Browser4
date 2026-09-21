@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.client.expectBody
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -222,6 +223,45 @@ private val createdSessions = mutableListOf<String>()
         )
     }
 
+    /**
+     * Select the tab whose URL contains [urlMarker], polling the tab list until
+     * the tab appears (a freshly created tab may lag the creation response).
+     */
+    private fun selectTabByUrl(sessionId: String, urlMarker: String, timeoutMs: Long = 15000) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val list = callTool("browser_tabs", mapOf("sessionId" to sessionId, "action" to "list"))
+            if (!list.isError) {
+                val tree = runCatching { objectMapper.readTree(textContent(list)) }.getOrNull()
+                val tabs = when {
+                    tree == null -> null
+                    tree.isArray -> tree
+                    tree.has("tabs") && tree["tabs"].isArray -> tree["tabs"]
+                    else -> null
+                }
+                if (tabs != null) {
+                    for (tab in tabs) {
+                        if (tab.path("url").asText("").contains(urlMarker)) {
+                            val index = tab.path("index").asInt(-1)
+                            if (index >= 0) {
+                                val select = callTool(
+                                    "browser_tabs",
+                                    mapOf("sessionId" to sessionId, "action" to "select", "index" to index)
+                                )
+                                if (!select.isError) return
+                            }
+                        }
+                    }
+                }
+            }
+            Thread.sleep(500)
+        }
+        val lastList = callTool("browser_tabs", mapOf("sessionId" to sessionId, "action" to "list"))
+        throw AssertionError(
+            "Timed out selecting tab with URL marker '$urlMarker'; last tab list: ${textContent(lastList)}"
+        )
+    }
+
     // =========================================================================
     // Scenario 1 — E-Commerce Product Monitoring
     // =========================================================================
@@ -283,6 +323,111 @@ private val createdSessions = mutableListOf<String>()
         val html = exportHtmlSnapshot(sessionId)
         assertTrue(html.contains("4K OLED TV"), "Exported HTML should contain product title")
         assertTrue(html.contains("product-price"), "Exported HTML should contain price element")
+    }
+
+    @Test
+    @DisplayName("1e — Capture survives tab-new and tab-select back (runtime self-heal)")
+    fun test1e_captureSurvivesTabNewAndTabSelectBack() {
+        val sessionId = openAndNavigate(TestUrls.MOCK_PRODUCT_DETAIL_URL)
+        awaitPageTitle(sessionId, "4K OLED TV")
+
+        // Baseline: capture on the originally navigated tab (the runtime was
+        // registered by the navigation hook on this driver).
+        assertNotError(callTool("html_snapshot_capture", mapOf("sessionId" to sessionId)))
+
+        // tab-new to a second fixture — the new tab's document commits before
+        // the dual-world runtime can be registered on it, and a driver bound
+        // afterwards never receives the frame-navigated re-injection.  This is
+        // the driver-swap scenario that used to break every later capture on
+        // the session with 'ReferenceError: __pulsar_utils__ is not defined'.
+        // (The MCP tool only CREATES the tab — the CLI wrapper then selects it,
+        // which is what binds the driver to the already-committed document.)
+        val newTab = callTool(
+            "browser_tabs",
+            mapOf("sessionId" to sessionId, "action" to "new", "url" to TestUrls.MOCK_NEWS_URL)
+        )
+        assertNotError(newTab)
+        // Locate the news tab by URL (creation may lag the tool response) and
+        // select it — the driver then binds to the already-committed document.
+        selectTabByUrl(sessionId, "/htmlsnapshot-test/news")
+        awaitPageTitle(sessionId, "Hacker News")
+
+        // Capture on the tab-new target must succeed and see the NEW tab.
+        val captureNewTab = callTool("html_snapshot_capture", mapOf("sessionId" to sessionId))
+        assertNotError(captureNewTab)
+        val newTabText = textContent(captureNewTab)
+        assertTrue(
+            newTabText.contains("Hacker News"),
+            "Capture after tab-new should target the new tab (news fixture): $newTabText"
+        )
+
+        // tab-select back to the original product tab and capture again: the
+        // driver re-binds to a document whose runtime was registered by an
+        // earlier binding.
+        selectTabByUrl(sessionId, "/ec/dp/B0E000001")
+        awaitPageTitle(sessionId, "4K OLED TV")
+
+        val captureBack = callTool("html_snapshot_capture", mapOf("sessionId" to sessionId))
+        assertNotError(captureBack)
+        val backText = textContent(captureBack)
+        assertTrue(
+            backText.contains("4K OLED TV"),
+            "Capture after tab-select back should target the original tab: $backText"
+        )
+        assertTrue(
+            !backText.contains("ReferenceError"),
+            "Capture after tab-select back must not surface a __pulsar_utils__ ReferenceError: $backText"
+        )
+
+        // The capture's best-effort runtime recovery must have re-established
+        // the isolated world on the re-selected tab: subsequent evaluations
+        // resolve through the isolated world where __pulsar_utils__ lives.
+        val runtimeProbe = callTool(
+            "browser_evaluate",
+            mapOf("sessionId" to sessionId, "expression" to "typeof window.__pulsar_utils__")
+        )
+        assertNotError(runtimeProbe)
+        assertEquals(
+            "function",
+            textContent(runtimeProbe).trim(),
+            "After capture on the re-selected tab the __pulsar_utils__ runtime must be available again"
+        )
+    }
+
+    @Test
+    @DisplayName("1d — Query with @url reflects live DOM mutations on the current page")
+    fun test1d_queryReflectsLiveDomMutations() {
+        val sessionId = openAndNavigate(TestUrls.MOCK_PRODUCT_DETAIL_URL)
+        awaitPageTitle(sessionId, "4K OLED TV")
+
+        // Mutate the LIVE DOM only — no navigation, no server-side change, so
+        // an independent re-fetch of the URL can never see this value.
+        val mutation = callTool(
+            "browser_evaluate",
+            mapOf(
+                "sessionId" to sessionId,
+                "expression" to "document.querySelector('#productTitle').textContent = 'LIVE-MUTATED-TITLE'"
+            )
+        )
+        assertNotError(mutation)
+
+        // Querying the current page (no url arg) must be seeded from the live
+        // tab and therefore observe the mutation.  Without live-page seeding
+        // the scrape engine re-fetches the fixture URL and returns the
+        // original server-side title.
+        val sql = """
+            SELECT dom_first_text(dom, '#productTitle') AS title
+            FROM load_and_select(@url, 'body')
+        """.trimIndent()
+        val result = queryHtmlSnapshot(sessionId, sql)
+        val resultSet = requireResultSet(result)
+        assertTrue(resultSet.size() == 1, "Expected 1 body row, got ${resultSet.size()}")
+
+        val row = resultSet[0]
+        assertTrue(
+            row["title"]?.asText()?.contains("LIVE-MUTATED-TITLE") == true,
+            "Query on the current page should reflect the live DOM mutation, got: ${row["title"]}"
+        )
     }
 
     // =========================================================================
@@ -645,6 +790,43 @@ private val createdSessions = mutableListOf<String>()
         assertTrue(
             html.contains("<") && html.contains(">"),
             "Export should contain HTML tags"
+        )
+    }
+
+    @Test
+    @DisplayName("9c — Capture and export carry vi bounding boxes and the normalized page URL")
+    fun test9c_captureAndExportCarryViBoundingBoxes() {
+        // A session that only navigated has no annotation yet, so the capture
+        // must produce it: without the vi data every interactive element loses
+        // its bounding box and the weighted list degrades to empty, and without
+        // the page link the exported HTML is not self-describing (issue #588).
+        val sessionId = openAndNavigate(TestUrls.MOCK_PRODUCT_DETAIL_URL)
+        awaitPageTitle(sessionId, "4K OLED TV")
+
+        val response = callTool("html_snapshot_capture", mapOf("sessionId" to sessionId))
+        assertNotError(response)
+        val captureResult = objectMapper.readTree(textContent(response))
+
+        val elements = captureResult["interactiveElements"]
+        assertNotNull(elements, "Capture should include interactiveElements")
+        assertTrue(elements.size() > 0, "Capture should list interactive elements, got: $captureResult")
+        assertTrue(
+            elements.any { it.has("box") && it["box"].asText().isNotBlank() },
+            "Interactive elements must carry a bounding box extracted from the vi data, got: $elements"
+        )
+
+        val html = exportHtmlSnapshot(sessionId)
+        assertTrue(
+            html.contains("vi=\""),
+            "Exported HTML must carry the vi attribute, got: ${html.take(400)}"
+        )
+
+        val normalizedUri = Regex("""<link rel="normalizedURI" href="([^"]*)"""")
+            .find(html)?.groupValues?.get(1).orEmpty()
+        assertEquals(
+            TestUrls.MOCK_PRODUCT_DETAIL_URL.trimEnd('/'),
+            normalizedUri.trimEnd('/'),
+            "Exported HTML must carry the normalized page URL, got: ${html.take(400)}"
         )
     }
 

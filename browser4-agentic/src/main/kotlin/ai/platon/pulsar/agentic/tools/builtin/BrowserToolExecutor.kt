@@ -1,10 +1,14 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.api.AbstractBrowser
 import ai.platon.pulsar.api.AbstractWebDriver
-import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.api.Browser
+import ai.platon.pulsar.chrome.PulsarWebDriver
+import ai.platon.pulsar.chrome.network.NetworkObserver
+import ai.platon.pulsar.chrome.network.RouteManager
+import ai.platon.pulsar.common.getLogger
 import kotlin.reflect.KClass
 
 class BrowserToolExecutor : AbstractToolExecutor() {
@@ -19,35 +23,45 @@ class BrowserToolExecutor : AbstractToolExecutor() {
             domain = domain,
             method = "switchTab",
             arguments = listOf(
-                ToolSpec.Arg("index", "Int", null),
-                ToolSpec.Arg("tabId", "String", null)
+                ToolSpec.Arg("index", "Int?", "null", "Zero-based tab index."),
+                ToolSpec.Arg("tabId", "String?", "null", "Tab GUID; give either this or index."),
             ),
             returnType = "WebDriver",
-            description = "Switch to a specific browser tab by its zero-based index or GUID"
+            description = "Switch to a specific browser tab by its zero-based index or GUID",
+            examples = listOf(
+                ToolExample(title = "Switch to the second tab", args = mapOf("index" to "1")),
+            ),
         )
         toolSpec["newTab"] = ToolSpec(
             domain = domain,
             method = "newTab",
             arguments = listOf(ToolSpec.Arg("url", "String", "about:blank")),
             returnType = "Map<String, String>",
-            description = "Create a new tab. Returns guid and url"
+            description = "Create a new tab. Returns guid and url",
+            examples = listOf(
+                ToolExample(title = "Open a new tab on a page", args = mapOf("url" to "https://example.com")),
+            ),
         )
         toolSpec["closeTab"] = ToolSpec(
             domain = domain,
             method = "closeTab",
             arguments = listOf(
-                ToolSpec.Arg("index", "Int", null),
-                ToolSpec.Arg("tabId", "String", null)
+                ToolSpec.Arg("index", "Int?", "null", "Zero-based tab index."),
+                ToolSpec.Arg("tabId", "String?", "null", "Tab GUID; give either this or index."),
             ),
             returnType = "Boolean",
-            description = "Close a tab by zero-based index or GUID, or the current tab when omitted"
+            description = "Close a tab by zero-based index or GUID, or the current tab when omitted",
+            examples = listOf(
+                ToolExample(title = "Close the second tab", args = mapOf("index" to "1")),
+            ),
         )
         toolSpec["listTabs"] = ToolSpec(
             domain = domain,
             method = "listTabs",
             arguments = emptyList(),
             returnType = "List<Map<String, String>>",
-            description = "List all tabs with index, guid, title, and url"
+            description = "List all tabs with index, guid, title, and url",
+            examples = listOf(ToolExample(title = "List every tab", runnable = true)),
         )
     }
 
@@ -97,6 +111,15 @@ class BrowserToolExecutor : AbstractToolExecutor() {
             "newTab" -> {
                 val url = paramString(args, "url", functionName) ?: "about:blank"
                 val driver = browser.newDriver()
+                // Claim the CDP event-listener slots for the new tab BEFORE
+                // the first navigation: the base library's NetworkManager
+                // registers its listeners on navigation and its event
+                // dispatcher keeps only ONE listener per event key, so a
+                // listener registered afterwards would silently never fire.
+                if (driver is PulsarWebDriver) {
+                    NetworkObserver.forProtocol(driver.browserProtocol).preRegister()
+                    RouteManager.forProtocol(driver.browserProtocol).preRegister()
+                }
                 // call navigate so JavaScript injection works
                 driver.navigate(url)
                 mapOf("guid" to driver.guid, "url" to driver.currentUrl())

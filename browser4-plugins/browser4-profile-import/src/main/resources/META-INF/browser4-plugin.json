@@ -1,0 +1,8 @@
+{
+  "name": "browser4-profile-import",
+  "version": "1.0.0",
+  "sdkVersion": "${project.version}",
+  "description": "Import browser personal data (bookmarks, history, passwords, cookies, extensions) from system Chrome / Edge / Safari into Browser4-managed profiles",
+  "dependsOn": ["browser4-skeleton", "browser4-agentic"],
+  "autoConfigurationClasses": ["ai.platon.pulsar.profileimport.config.ProfileImportAutoConfiguration"]
+}

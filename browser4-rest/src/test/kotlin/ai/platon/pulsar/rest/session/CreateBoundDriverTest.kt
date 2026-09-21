@@ -10,6 +10,7 @@ import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.common.config.VolatileConfig
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito
 
@@ -47,5 +48,38 @@ class CreateBoundDriverTest {
         // fell through to browserManager.launch, the unstubbed mocked context would
         // NPE loudly — and this verify would fail.
         Mockito.verify(boundBrowser).newDriver()
+    }
+
+    @Test
+    @DisplayName("createBoundDriver binds to the existing non-blank page tab")
+    fun createBoundDriverBindsToExistingNonBlankPageTab() {
+        // Mockito 5's inline mock maker can mock the final PulsarBrowser, so
+        // listTabs() and newDriverForTab() are stubbed to exercise the real
+        // tab-selection path: the non-about:blank page tab must be chosen,
+        // and no new tab may be created.
+        val context = Mockito.mock(GenericAgenticContext::class.java)
+        val session = GenericAgenticSession(context, VolatileConfig(false))
+
+        val boundBrowser = Mockito.mock(PulsarBrowser::class.java)
+        session.bindBrowser(boundBrowser)
+
+        val blankTab = BrowserTab().apply { id = "t-blank"; type = "page"; url = "about:blank" }
+        val realTab = BrowserTab().apply { id = "t-real"; type = "page"; url = "https://example.com/" }
+        Mockito.`when`(boundBrowser.listTabs()).thenReturn(arrayOf(blankTab, realTab))
+
+        val tabDriver = Mockito.mock(PulsarWebDriver::class.java)
+        Mockito.`when`(boundBrowser.newDriverForTab(realTab)).thenReturn(tabDriver)
+        Mockito.`when`(boundBrowser.settings).thenReturn(ai.platon.pulsar.api.model.BrowserSettings())
+        Mockito.`when`(tabDriver.guid).thenReturn("test-guid")
+        Mockito.`when`(tabDriver.chromeTab).thenReturn(realTab)
+        Mockito.`when`(tabDriver.browserProtocol).thenReturn(Mockito.mock(BrowserProtocol::class.java))
+        Mockito.`when`(tabDriver.browser).thenReturn(boundBrowser)
+
+        val driver = session.createBoundDriver()
+
+        assertTrue(driver is Browser4WebDriver, "bound driver should be swapped to Browser4WebDriver")
+        assertSame(driver, session.boundDriver, "session must be bound to the new driver")
+        Mockito.verify(boundBrowser).newDriverForTab(realTab)
+        Mockito.verify(boundBrowser, Mockito.never()).newDriver()
     }
 }

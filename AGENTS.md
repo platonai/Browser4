@@ -226,16 +226,13 @@ cargo test --test e2e -- --help           # All options
 | Scope | Path |
 |---|---|
 | Unit tests | `src/test/kotlin/...` |
-| Integration (migrated to base library; module now smoke-only) | `browser4-tests/pulsar-it-tests/` |
-| E2E (migrated to base library; module now smoke-only) | `browser4-tests/pulsar-e2e-tests/` |
 | REST integration/E2E | `browser4-tests/browser4-rest-tests/` |
 | Shared utilities | `browser4-tests/pulsar-tests-common/` |
 | Rust E2E | `cli/browser4-cli/tests/e2e/` |
 
 > **Note:** The former integration/E2E suites in `pulsar-it-tests` and `pulsar-e2e-tests`
 > have been migrated into the base library (browser4-core modules and
-> `pulsar-tests-common`). Both modules are retained as placeholders with a single
-> smoke test each to keep existing build wiring and CI references working.
+> `pulsar-tests-common`); the placeholder modules have been removed from this repo.
 
 ## Code Style
 
@@ -264,7 +261,15 @@ logger.info("Task {} finished in {} ms", taskId, cost)  // placeholders, never c
 
 **Coverage targets:** Global ≥70%, Core ≥80%, Utilities ≥90%, Controllers ≥85%
 
-**CI:** `.github/workflows/ci.yml` builds all-main-modules, starts Dockerized app on port 8182, runs `cargo test` in `cli/browser4-cli`, limits Maven tests to fast/unit tags by excluding `Slow`, `Heavy`, `Integration`, `E2E`, `SDK`, `Requires*`, `ManualOnly`.
+**CI has two gates with different Maven test scopes** — pick the tags for the gate you are writing tests for:
+
+| Gate | Workflow | Maven `excluded_groups` | Scope |
+|---|---|---|---|
+| PR Quality Gate | `.github/workflows/pr.yml` | `ManualOnly,RequiresAI,E2E,E2ETest,Slow,Heavy,HeavyTest,Integration,IntegrationTest,RequiresServer,RequiresBrowser,RequiresDocker,TestInfraCheck` | fast/unit only (`run_pulsar_tests: 'false'`) |
+| CI/CD Pipeline (main + release tags) | `.github/workflows/ci.yml` | `ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck` | adds integration/infra tests that need Chrome, Docker and the started app |
+
+Both gates pass `-Dsurefire.excludes=**integration**` (class-file pattern, not tags) and both derive success from the surefire XML totals — a test class is skipped by **tag**, never by name. `SDK` is excluded by neither gate (no test carries that tag today); `Heavy` is excluded only by the PR gate, `HeavyTest` by both. `.github/workflows/ci.yml` also builds all-main-modules, starts a Dockerized app on port 8182 and runs `cargo test` in `cli/browser4-cli`.
+See [CI stabilization notes](docs-dev/copilot/ci-stabilization-4.13.x.md) before changing either list.
 
 ## Configuration
 
@@ -275,6 +280,35 @@ logger.info("Task {} finished in {} ms", taskId, cost)  // placeholders, never c
 - LLM providers configured via env vars: `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, `VOLCENGINE_API_KEY`, `OPENAI_API_KEY`
 
 ## Development Patterns
+
+### CLI command naming: spaced form preferred
+
+New CLI commands must use the **spaced name** style (`verb noun`) — e.g.
+`swarm submit`, `htmlsnapshot get`, `profiles list`, `plugin <domain>` — to
+stay consistent with every other prefixed command. Internally the CLI is
+kebab-case (`swarm-submit`); users type the spaced form, which
+`rewrite_prefixed_command()` (main.rs) rewrites to the internal kebab name.
+
+When adding a prefixed command:
+
+1. `CommandDef.name` stays kebab-case (the internal dispatch name).
+2. Register the prefix in `rewrite_prefixed_command()` so `prefix sub` →
+   `prefix-sub`. If the prefix also works standalone (`crawl`, `webdb`,
+   `doctor`, `webminer`, …), gate it with a `known_subs` allowlist so bare
+   usage and positional args pass through untouched.
+3. Register the kebab form in `preferred_spaced_command_form()` (and the bare
+   prefix in `preferred_prefixed_group_form()` when the bare prefix is
+   invalid) so users get a "Use 'browser4-cli prefix sub' instead" hint.
+4. Single-word commands without subcommands (`goto`, `close`, `eval`, …) stay
+   bare kebab — no prefix, no spaced form.
+5. Plugin tool domains are already invoked spaced as `plugin <domain> <method>`
+   (dynamic discovery via `/mcp/tools`, no registration needed).
+6. Plugins can declare a **named CLI command** without any CLI change: set
+   `ToolSpec.cliName` (spaced form, e.g. `"profile import"`) on the tool spec.
+   The CLI discovers these from `GET /mcp/tools/specs` at startup and renders
+   them as first-class commands with argument parsing (`browser4-cli profile
+   import --source chrome`). No `CommandDef` needed — the spec's `arguments`
+   define the `--key value` options.
 
 ### Adding a `browser4-cli` command
 

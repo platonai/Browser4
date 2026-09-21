@@ -208,6 +208,13 @@ struct FixturePages {
     mouse_html: String,
     keyboard_html: String,
     drag_html: String,
+    network_html: String,
+    download_html: String,
+    frame_switch_html: String,
+    frame_pay_html: String,
+    frame_other_html: String,
+    frame_nested_html: String,
+    frame_inner_html: String,
 }
 
 impl FixtureServer {
@@ -230,6 +237,13 @@ impl FixtureServer {
             mouse_html: load_html_fixture(MOUSE_FIXTURE_FILE),
             keyboard_html: load_html_fixture(KEYBOARD_FIXTURE_FILE),
             drag_html: load_html_fixture(DRAG_FIXTURE_FILE),
+            network_html: load_html_fixture(NETWORK_FIXTURE_FILE),
+            download_html: load_html_fixture(DOWNLOAD_FIXTURE_FILE),
+            frame_switch_html: load_html_fixture(FRAME_FIXTURE_FILE),
+            frame_pay_html: load_html_fixture(FRAME_PAY_FIXTURE_FILE),
+            frame_other_html: load_html_fixture(FRAME_OTHER_FIXTURE_FILE),
+            frame_nested_html: load_html_fixture(FRAME_NESTED_FIXTURE_FILE),
+            frame_inner_html: load_html_fixture(FRAME_INNER_FIXTURE_FILE),
         });
 
         thread::spawn(move || {
@@ -338,6 +352,90 @@ fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePage
             "200 OK",
             "text/html; charset=utf-8",
             pages.drag_html.clone(),
+        )
+    } else if path == NETWORK_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.network_html.clone(),
+        )
+    } else if path == DOWNLOAD_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.download_html.clone(),
+        )
+    } else if path == FRAME_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.frame_switch_html.clone(),
+        )
+    } else if path == FRAME_PAY_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.frame_pay_html.clone(),
+        )
+    } else if path == FRAME_OTHER_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.frame_other_html.clone(),
+        )
+    } else if path == FRAME_NESTED_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.frame_nested_html.clone(),
+        )
+    } else if path == FRAME_INNER_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.frame_inner_html.clone(),
+        )
+    } else if path == FRAME_CROSS_PATH {
+        // Cross-origin frame fixture: the page is opened on 127.0.0.1 but its
+        // iframe points at 127.0.0.2 — a different origin (and a different
+        // renderer process), so the driver can list and select the frame but
+        // cannot operate inside it. The scenario starts a dedicated listener
+        // on 127.0.0.2:<this port> (see CrossOriginFixtureServer).
+        let port = stream.local_addr().map(|a| a.port()).unwrap_or(0);
+        let body = format!(
+            r#"<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Browser4 CLI Cross-Origin Frame Fixture</title></head>
+<body>
+  <h2>Cross-origin frame fixture (127.0.0.1 vs 127.0.0.2)</h2>
+  <button id="cross-main-button" type="button"
+    onclick="document.getElementById('cross-state').textContent = 'cross-main-clicked'">Main Button</button>
+  <div id="cross-state">cross-initial</div>
+  <iframe id="cross-frame" name="crossframe" src="http://127.0.0.2:{port}/frame-other.html"></iframe>
+</body>
+</html>"#
+        );
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            body,
+        )
+    } else if path == DOWNLOAD_FILE_PATH {
+        // Attachment download: Chrome saves this to the download directory
+        // configured via `download --dir` (Browser.setDownloadBehavior).
+        let body = DOWNLOAD_FILE_CONTENT.as_bytes();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: attachment; filename=\"download-me.txt\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.write_all(body);
+        return;
+    } else if path == NETWORK_OK_ENDPOINT {
+        (
+            "200 OK",
+            "application/json; charset=utf-8",
+            r#"{"status":"ok","source":"fixture"}"#.to_string(),
         )
     } else {
         (
@@ -493,6 +591,9 @@ struct FixtureDownloadServer {
     requests: Arc<Mutex<Vec<String>>>,
     /// Release tag served by this fixture (reported in /latest-release.json).
     tag: String,
+    /// Optional release-candidate tag reported in /latest-rc.json (simulating
+    /// a mirror that publishes RC metadata next to the stable metadata).
+    latest_rc: Option<String>,
     /// Artificial latency applied before serving each request (for speed-test
     /// scenarios that need one mirror to appear slower than another).
     latency: Duration,
@@ -503,7 +604,27 @@ impl FixtureDownloadServer {
         Self::start_with_latency(bundle_bytes, tag, Duration::ZERO)
     }
 
+    /// Like [`Self::start`], but also serves a `/latest-rc.json` metadata
+    /// endpoint reporting `rc_tag` (a newer release candidate).
+    fn start_with_rc(bundle_bytes: Vec<u8>, tag: &str, rc_tag: &str) -> Self {
+        Self::start_with_latency_and_rc(
+            bundle_bytes,
+            tag,
+            Duration::ZERO,
+            Some(rc_tag.to_string()),
+        )
+    }
+
     fn start_with_latency(bundle_bytes: Vec<u8>, tag: &str, latency: Duration) -> Self {
+        Self::start_with_latency_and_rc(bundle_bytes, tag, latency, None)
+    }
+
+    fn start_with_latency_and_rc(
+        bundle_bytes: Vec<u8>,
+        tag: &str,
+        latency: Duration,
+        latest_rc: Option<String>,
+    ) -> Self {
         let listener =
             TcpListener::bind("127.0.0.1:0").expect("fixture download server bind failed");
         let port = listener.local_addr().unwrap().port();
@@ -513,6 +634,7 @@ impl FixtureDownloadServer {
         let reqs = requests.clone();
         let bytes = Arc::new(bundle_bytes);
         let tag_owned = tag.to_string();
+        let rc_owned = latest_rc.clone();
 
         let tag_for_thread = tag_owned.clone();
         thread::spawn(move || {
@@ -528,7 +650,10 @@ impl FixtureDownloadServer {
                         let b = bytes.clone();
                         let r = reqs.clone();
                         let t = tag_for_thread.clone();
-                        thread::spawn(move || serve_download_request(stream, b, r, t, latency));
+                        let rc = rc_owned.clone();
+                        thread::spawn(move || {
+                            serve_download_request(stream, b, r, t, rc, latency)
+                        });
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
@@ -546,6 +671,7 @@ impl FixtureDownloadServer {
             shutdown,
             requests,
             tag: tag_owned,
+            latest_rc,
             latency,
         }
     }
@@ -573,6 +699,7 @@ fn serve_download_request(
     bundle_bytes: Arc<Vec<u8>>,
     requests: Arc<Mutex<Vec<String>>>,
     tag: String,
+    latest_rc: Option<String>,
     latency: Duration,
 ) {
     if !latency.is_zero() {
@@ -613,6 +740,26 @@ fn serve_download_request(
         return;
     }
 
+    // Serve /latest-rc.json metadata endpoint (simulating a mirror that
+    // publishes RC metadata; 404 when the fixture has no RC tag).
+    if path == "/releases/latest-rc.json" {
+        match latest_rc {
+            Some(rc_tag) => {
+                let body = format!(
+                    r#"{{"tag":"{}","version":"{}","published_at":"2026-01-01T00:00:00Z","release_url":"https://github.com/platonai/Browser4/releases/tag/{}","assets":[]}}"#,
+                    rc_tag,
+                    rc_tag.trim_start_matches('v'),
+                    rc_tag
+                );
+                write_http_response(&mut stream, "200 OK", "application/json", &body);
+            }
+            None => {
+                write_http_response(&mut stream, "404 Not Found", "text/plain", "not found")
+            }
+        }
+        return;
+    }
+
     // GitHub-style paths:
     //   /releases/latest/download/{asset}
     //   /releases/download/{tag}/{asset}
@@ -627,6 +774,69 @@ fn serve_download_request(
         let _ = stream.write_all(&bundle_bytes);
     } else {
         write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cross-origin fixture server: serves one page on 127.0.0.2:<port> — a
+// different origin from the main fixture (127.0.0.1), so an iframe pointing
+// at it renders as a cross-origin / out-of-process frame in Chrome.
+// ---------------------------------------------------------------------------
+
+struct CrossOriginFixtureServer {
+    port: u16,
+    shutdown: Arc<AtomicBool>,
+}
+
+impl CrossOriginFixtureServer {
+    /// Serves [html] for every request on `127.0.0.2:{port}` (the port of the
+    /// main fixture server, so the cross-origin iframe src needs no lookup).
+    fn start(port: u16, html: String) -> Self {
+        let listener = TcpListener::bind(format!("127.0.0.2:{port}"))
+            .expect("cross-origin fixture server bind on 127.0.0.2 failed");
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let flag = shutdown.clone();
+        thread::spawn(move || {
+            listener
+                .set_nonblocking(true)
+                .expect("cross-origin fixture server set_nonblocking failed");
+            loop {
+                if flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let body = html.clone();
+                        thread::spawn(move || {
+                            let response = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                body.len(),
+                                body
+                            );
+                            let _ = stream.write_all(response.as_bytes());
+                        });
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(e) => {
+                        eprintln!("[cross-origin fixture server] accept error (continuing): {e}");
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                }
+            }
+        });
+        Self { port, shutdown }
+    }
+
+    fn base_url(&self) -> String {
+        format!("http://127.0.0.2:{}", self.port)
+    }
+}
+
+impl Drop for CrossOriginFixtureServer {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
     }
 }
 
@@ -666,12 +876,28 @@ struct MockBrowser4State {
     /// Custom command_result responses keyed by task ID. When set, these override
     /// the default response for `command_result`.
     custom_command_results: HashMap<String, String>,
+    /// Custom GET /api/crawl/{id}/result bodies keyed by task ID. When set,
+    /// these override the canned OK response so tests can exercise listing /
+    /// diagnostic rendering paths (e.g. linksDiscovered=0 warnings).
+    custom_crawl_results: HashMap<String, String>,
     /// Custom browser_snapshot response. When set, overrides the default mock
     /// response for `browser_snapshot` tool calls (used by snapshot-grep, etc.).
     custom_browser_snapshot_response: Option<String>,
+    /// Custom html_snapshot_query response. When set, overrides the default OK
+    /// envelope so tests can exercise X-SQL error envelopes end-to-end
+    /// (e.g. statusCode 417 must produce a nonzero exit code).
+    custom_html_snapshot_query_response: Option<String>,
+    /// Custom agent_extract tool response. When set, overrides the default
+    /// clean JSON so tests can exercise the double-encoded ExtractResult
+    /// envelope unwrap path end-to-end.
+    custom_agent_extract_response: Option<String>,
     /// Track async chat submissions (prompt → task_id).
     chat_async_submissions: Vec<(String, String)>,
     next_chat_task_id: usize,
+    /// Recorded `POST /api/commands/{id}/cancel` calls (agent cancel).
+    agent_cancel_calls: Vec<String>,
+    /// Recorded `/api/config/{key}` REST calls as (method, key, value).
+    config_calls: Vec<(String, String, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -779,6 +1005,15 @@ impl MockBrowser4Server {
             .clone()
     }
 
+    /// Configure a custom response body for `GET /api/crawl/{task_id}/result`.
+    fn set_crawl_result(&self, task_id: &str, body: &str) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .custom_crawl_results
+            .insert(task_id.to_string(), body.to_string());
+    }
+
     fn set_listed_sessions(&self, listed_sessions: Vec<MockListedSession>) {
         self.state
             .lock()
@@ -869,6 +1104,28 @@ impl MockBrowser4Server {
             .custom_browser_snapshot_response = None;
     }
 
+    /// Set a custom response for the `html_snapshot_query` tool.  When set,
+    /// every `html_snapshot_query` call returns this text instead of the
+    /// default OK envelope, letting tests exercise X-SQL error envelopes
+    /// (e.g. statusCode 417) end-to-end.
+    fn set_html_snapshot_query_response(&self, response: &str) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .custom_html_snapshot_query_response = Some(response.to_string());
+    }
+
+    /// Set a custom response for the `agent_extract` tool.  When set, every
+    /// `agent_extract` call returns this text instead of the default clean
+    /// JSON, letting tests exercise the double-encoded ExtractResult
+    /// envelope unwrap path end-to-end.
+    fn set_agent_extract_response(&self, response: &str) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .custom_agent_extract_response = Some(response.to_string());
+    }
+
     /// Shut down the mock server's listener thread without dropping the recorded
     /// state. After calling this, further requests will fail with a connection
     /// error (simulating an unreachable backend).
@@ -918,7 +1175,13 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             &mut stream,
             "200 OK",
             "application/json",
-            r#"{"tools":["open_session","list_sessions","browser_navigate","agent_extract","agent_summarize","crawl_submit","markdown_read"]}"#,
+            r#"{"tools":["open_session","list_sessions","browser_navigate","agent_extract","agent_summarize","crawl_submit","markdown_read","profile_import_list_sources","profile_import_import"]}"#,
+        ),
+        ("GET", "/mcp/tools/specs") => write_http_response(
+            &mut stream,
+            "200 OK",
+            "application/json",
+            r#"{"tools":[{"cliName":"profile import","domain":"profile_import","method":"import","description":"Import browser data","arguments":[{"name":"source","type":"String","defaultValue":null},{"name":"data","type":"String","defaultValue":null}],"examples":[{"title":"Import Chrome bookmarks","args":{"source":"chrome"},"expectsError":false},{"title":"Import with a task id","args":{"source":"chrome","data":"bookmarks"},"notes":"Feed the returned import dir to open --profile","expectsError":false}]}]}"#,
         ),
         ("POST", "/mcp/call-tool") => {
             let payload: serde_json::Value =
@@ -1134,7 +1397,10 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 "close_session" => "Session closed.".to_string(),
                 "close_all_sessions" => "All sessions closed.".to_string(),
                 "agent_extract" => {
-                    r#"{"items":[{"title":"Mock Product","price":"$19.99"}]}"#.to_string()
+                    let guard = state.lock().expect("mock Browser4 state mutex poisoned");
+                    guard.custom_agent_extract_response.clone().unwrap_or_else(|| {
+                        r#"{"items":[{"title":"Mock Product","price":"$19.99"}]}"#.to_string()
+                    })
                 }
                 "agent_summarize" => "Mock summary for #page-marker".to_string(),
                 "crawl_submit" => {
@@ -1156,6 +1422,12 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 }
                 "markdown_read" => {
                     r##"{"markdown":"# Mock Read Article\n\nRead via the markdown plugin pipeline.","title":"Mock Read Article","byline":"","siteName":"","url":"https://mock.browser4.local","source":"extractor","charCount":64,"outline":[]}"##.to_string()
+                }
+                "html_snapshot_query" => {
+                    let guard = state.lock().expect("mock Browser4 state mutex poisoned");
+                    guard.custom_html_snapshot_query_response.clone().unwrap_or_else(|| {
+                        r#"{"statusCode":200,"status":"OK","resultSet":[{"url":"https://mock.browser4.local","title":"Mock Page"}]}"#.to_string()
+                    })
                 }
                 "execute_cdp_command" => {
                     let method = arguments
@@ -1425,23 +1697,32 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 .expect("mock Browser4 state mutex poisoned")
                 .result_queries
                 .push(task_id.clone());
-            let response = serde_json::json!({
-                "id": task_id,
-                "statusCode": 200,
-                "pageStatusCode": 200,
-                "isDone": true,
-                "status": "OK",
-                "pagesFound": 1,
-                "pages": [
-                    {
-                        "url": "https://mock.browser4.local/result/page",
-                        "title": "Mock Crawled Page",
-                        "depth": 0,
-                    }
-                ],
-                "error": null,
-            })
-            .to_string();
+            // A test-registered custom body wins when present; otherwise the
+            // canned OK response below applies.
+            let custom = {
+                let guard = state.lock().expect("mock Browser4 state mutex poisoned");
+                guard.custom_crawl_results.get(&task_id).cloned()
+            };
+            let response = match custom {
+                Some(custom) => custom,
+                None => serde_json::json!({
+                    "id": task_id,
+                    "statusCode": 200,
+                    "pageStatusCode": 200,
+                    "isDone": true,
+                    "status": "OK",
+                    "pagesFound": 1,
+                    "pages": [
+                        {
+                            "url": "https://mock.browser4.local/result/page",
+                            "title": "Mock Crawled Page",
+                            "depth": 0,
+                        }
+                    ],
+                    "error": null,
+                })
+                .to_string(),
+            };
             write_http_response(&mut stream, "200 OK", "application/json", &response);
         }
         // ---- chat REST endpoints ----
@@ -1495,6 +1776,69 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 &format!("Mock chat result for task {task_id}."),
             );
         }
+        // ---- agent cancel REST endpoint ----
+        _ if method == "POST" && route.starts_with("/api/commands/") && route.ends_with("/cancel") => {
+            let task_id = route
+                .strip_prefix("/api/commands/")
+                .and_then(|rest| rest.strip_suffix("/cancel"))
+                .unwrap_or_default()
+                .to_string();
+            state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .agent_cancel_calls
+                .push(task_id.clone());
+            let response = serde_json::json!({
+                "cancelled": true,
+                "message": format!("Task {task_id} cancelled."),
+            })
+            .to_string();
+            write_http_response(&mut stream, "200 OK", "application/json", &response);
+        }
+        // ---- unified /api/config/{key} REST interface (config get/set/delete) ----
+        _ if route.starts_with("/api/config/") => {
+            let key = route
+                .strip_prefix("/api/config/")
+                .unwrap_or_default()
+                .to_string();
+            let value = path
+                .split_once('?')
+                .and_then(|(_, query)| query.strip_prefix("value="))
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+            state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .config_calls
+                .push((method.to_string(), key.clone(), value.clone()));
+            let response = match method.as_str() {
+                "PUT" => serde_json::json!({
+                    "key": key,
+                    "configured": null,
+                    "default": "8192",
+                    "override": value,
+                    "effective": value,
+                    "unlimited": false,
+                }),
+                _ => serde_json::json!({
+                    "key": key,
+                    "configured": null,
+                    "default": "8192",
+                    "override": null,
+                    "effective": "8192",
+                    "unlimited": false,
+                }),
+            }
+            .to_string();
+            write_http_response(&mut stream, "200 OK", "application/json", &response);
+        }
+        // ---- aggregated system status panel (doctor status) ----
+        ("GET", "/api/system/status") => write_http_response(
+            &mut stream,
+            "200 OK",
+            "application/json",
+            r#"{"health":{"status":"UP"},"build":{"version":"4.14.0-mock","buildTime":"2026-08-01T00:00:00Z"},"runtime":{"uptimeSeconds":60,"pid":4242},"llm":{"configured":true},"sessions":{"active":1,"total":2},"browsers":{"running":1},"drivers":{"attached":1},"privacy":{"contexts":1},"plugins":[{"name":"mock-plugin"}],"skills":[{"id":"mock-skill"}],"metrics":{"requests":7},"logs":{"entries":3}}"#,
+        ),
         _ => write_http_response(
             &mut stream,
             "404 Not Found",
@@ -1533,6 +1877,8 @@ fn mock_browser_tool_text(
                 ("element => element.textContent", Some(target)) => {
                     format!("Mock element text for {target}")
                 }
+                // eval --json regression: a numeric JS result arrives as the text "6"
+                ("document.querySelectorAll('a').length", None) => "6".to_string(),
                 _ => "mock evaluation result".to_string(),
             }
         }
@@ -1558,6 +1904,14 @@ fn mock_browser_tool_text(
                 }
                 _ => "mock response for browser_tabs".to_string(),
             }
+        }
+        "profile_import_list_sources" => {
+            r#"{"chrome":[{"directory":"Default","name":"Person 1","userDataDir":"/mock/chrome","profileDir":"/mock/chrome/Default"}],"edge":[],"safari":{}}"#
+                .to_string()
+        }
+        "profile_import_import" => {
+            r#"{"importDir":"/mock/imports/chrome-Default-20260825","profileDir":"/mock/imports/chrome-Default-20260825/profile/Default","browser":"chrome","sourceProfile":"chrome:Default","filesCopied":42,"data":["bookmarks","cookies"],"warnings":["Passwords were not imported (disabled by default)."],"nextStep":"browser4-cli open --profile /mock/imports/chrome-Default-20260825/profile/Default"}"#
+                .to_string()
         }
         other => format!("mock response for {other}"),
     }
@@ -2028,6 +2382,12 @@ impl E2ECtx {
         self.extra_env.retain(|(k, _)| k != key);
         self.extra_env.push((key.to_string(), value.to_string()));
     }
+
+    /// Remove an environment variable override previously applied via
+    /// [set_env], restoring the inherited value for later scenarios.
+    fn unset_env(&mut self, key: &str) {
+        self.extra_env.retain(|(k, _)| k != key);
+    }
 }
 
 impl E2ECtx {
@@ -2053,6 +2413,22 @@ impl E2ECtx {
 
     fn drag_url(&self) -> String {
         format!("{}{}", self.fixture_base_url, DRAG_PATH)
+    }
+
+    fn network_url(&self) -> String {
+        format!("{}{}", self.fixture_base_url, NETWORK_PATH)
+    }
+
+    fn download_url(&self) -> String {
+        format!("{}{}", self.fixture_base_url, DOWNLOAD_PATH)
+    }
+
+    fn frame_switch_url(&self) -> String {
+        format!("{}{}", self.fixture_base_url, FRAME_PATH)
+    }
+
+    fn frame_cross_url(&self) -> String {
+        format!("{}{}", self.fixture_base_url, FRAME_CROSS_PATH)
     }
 
     /// A slow fixture URL (served after a fixed delay) used to hold browser
@@ -3637,9 +4013,41 @@ fn wait_for_eval_text(
 // Per-test isolation helper
 // ---------------------------------------------------------------------------
 
+/// Name of the backend app data root a development-mode CLI creates inside the
+/// state dir (`-Dapp.data.dir=<state_dir>/app-data`).
+const STATE_DIR_APP_DATA_ENTRY: &str = "app-data";
+
+/// Reset the CLI's own artifacts in [state_dir], keeping the backend app data
+/// root.
+///
+/// Development mode launches the backend with its app data root inside the CLI
+/// state dir, and a *running* backend keeps H2 databases, browser profiles,
+/// agent memory and logs open in there.  Deleting the directory out from under
+/// it corrupts every later scenario: sessions reappear as "already open" (the
+/// `open` assertions expect a fresh session), wiped H2 loses the task state the
+/// agent/swarm assertions rely on, and `kill-all` finds backends the harness
+/// believed were stopped.  Same reasoning as the runtime-dir guard below —
+/// never delete a live process's storage.
+fn reset_state_dir_keeping_app_data(state_dir: &Path) {
+    let Ok(entries) = fs::read_dir(state_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name() == STATE_DIR_APP_DATA_ENTRY {
+            continue;
+        }
+        let path = entry.path();
+        let removed = match entry.file_type() {
+            Ok(file_type) if file_type.is_dir() => fs::remove_dir_all(&path),
+            _ => fs::remove_file(&path),
+        };
+        let _ = removed;
+    }
+}
+
 fn reset_cli_artifacts(ctx: &mut E2ECtx) {
     let started_at = Instant::now();
-    let _ = fs::remove_dir_all(&ctx.state_dir);
+    reset_state_dir_keeping_app_data(&ctx.state_dir);
     fs::create_dir_all(&ctx.state_dir).ok();
     let _ = fs::remove_dir_all(ctx.workspace_dir.join(".browser4-cli"));
     // Clean the runtime dir too so that tests that set up an installed
@@ -4493,11 +4901,21 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "tab-new",
         "tab-select",
         "tab-close",
+        // test_e2e_frame_switch_commands
+        "frame",
+        "frames",
         "page-info",
         // eval is exercised directly by dedicated scenarios and shared helpers
         "eval",
         // test_cdp_command
         "cdp",
+        // test_network_requests_and_har
+        "network-requests",
+        "network-request",
+        "network-route",
+        "network-unroute",
+        "har-start",
+        "har-stop",
         // test_htmlsnapshot_*
         "htmlsnapshot",
         "htmlsnapshot-capture",
@@ -4521,6 +4939,8 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         // webdb commands
         "webdb-export",
         "webdb-normalize",
+        // test_e2e_mock_profile_import_command
+        "profile-import",
         // test_mock_agent_browser_command_gaps
         "dialog-status",
         "errors",
@@ -4535,6 +4955,52 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "highlight",
         "set",
         "window-new",
+        // test_mock_config_commands
+        "config",
+        "config-list",
+        "config-get",
+        "config-set",
+        "config-delete",
+        // test_mock_agent_cancel_command
+        "agent-cancel",
+        // test_mock_snapshot_diff_command
+        "diff-snapshot",
+        // test_mock_profiles_list_command
+        "profiles-list",
+        // test_mock_code_command_family
+        "code-read",
+        "code-write",
+        "code-append",
+        "code-replace",
+        "code-delete",
+        "code-copy",
+        "code-move",
+        "code-list",
+        "code-stat",
+        "code-glob",
+        "code-grep",
+        "code-mkdir",
+        "code-diff",
+        "code-changes",
+        "code-shell",
+        "code-scaffold",
+        "code-validate",
+        "code-mvn",
+        "code-run",
+        "code-devtask",
+        "code-impact",
+        "code-workspace",
+        "code-javap",
+        // test_mock_vitals_commands
+        "vitals",
+        "web-vitals",
+        // test_mock_doctor_status_command
+        "doctor-status",
+        // test_live_download_command (real browser + download fixture)
+        "download",
+        // test_live_profiler_commands (real browser CDP profiler)
+        "profiler-start",
+        "profiler-stop",
     ]
     .into();
 

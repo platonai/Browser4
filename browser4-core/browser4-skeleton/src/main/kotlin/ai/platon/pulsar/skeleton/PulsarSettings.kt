@@ -9,6 +9,8 @@ import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.InteractLevel
 import ai.platon.pulsar.common.config.CapabilityTypes.*
 import ai.platon.pulsar.common.config.MutableConfig
+import ai.platon.pulsar.common.B4Constants.BROWSER_CONTEXT_DIR
+import ai.platon.pulsar.common.B4Constants.BROWSER_PROFILE_PATH
 import ai.platon.pulsar.core.api.PulsarSettings
 
 /**
@@ -50,6 +52,8 @@ data class PulsarSettings(
     val maxOpenTabs: Int? = null,
     val interactSettings: InteractSettings? = null,
     val profileMode: BrowserProfileMode? = null,
+    val profilePath: String? = null,
+    val contextDir: String? = null,
     val label: String? = null,
 ) {
     fun overrideSystemProperties() {
@@ -62,6 +66,12 @@ data class PulsarSettings(
 
     private fun overrideConfigurationInternal(conf: MutableConfig? = null) {
         profileMode?.let { withBrowserContextMode(profileMode, conf) }
+        profilePath?.takeIf { it.isNotBlank() }?.let {
+            if (conf != null) conf.set(BROWSER_PROFILE_PATH, it) else System.setProperty(BROWSER_PROFILE_PATH, it)
+        }
+        contextDir?.takeIf { it.isNotBlank() }?.let {
+            conf?.set(BROWSER_CONTEXT_DIR, it) ?: System.setProperty(BROWSER_CONTEXT_DIR, it)
+        }
         when(displayMode) {
             DisplayMode.HEADLESS -> headless(conf)
             DisplayMode.GUI -> headed(conf)
@@ -84,6 +94,8 @@ data class PulsarSettings(
             val interactSettings: InteractSettings? = capabilities?.get("interactSettings")?.toString()?.let { InteractSettings.fromJsonOrNull(it) }
             val interactLevel = parseInteractLevel(capabilities)
             val profileMode = capabilities?.get("profileMode")?.toString()?.let { BrowserProfileMode.fromString(it) }
+            val profilePath = capabilities?.get("profilePath")?.toString()?.takeIf { it.isNotBlank() }
+            val contextDir = capabilities?.get("contextDir")?.toString()?.takeIf { it.isNotBlank() }
 
             return PulsarSettings(
                 spa = spa,
@@ -91,6 +103,8 @@ data class PulsarSettings(
                 maxBrowsers = maxBrowsers,
                 maxOpenTabs = maxOpenTabs,
                 profileMode = profileMode,
+                profilePath = profilePath,
+                contextDir = contextDir,
                 interactSettings = interactSettings ?: InteractSettings.create(interactLevel ?: InteractLevel.DEFAULT),
             )
         }
@@ -124,18 +138,15 @@ data class PulsarSettings(
         }
 
         private fun parseInteractLevel(capabilities: Map<String, Any?>?): InteractLevel? {
-            val rawInteractLevel = sequenceOf("interactLevel", "interact-level")
-                .mapNotNull { capabilities?.get(it)?.toString()?.trim()?.takeIf(String::isNotEmpty) }
-                .firstOrNull()
+            val rawInteractLevel = sequenceOf("interactLevel", "interact-level").firstNotNullOfOrNull {
+                capabilities?.get(it)?.toString()?.trim()?.takeIf(String::isNotEmpty)
+            }
                 ?: return null
 
             val normalizedInteractLevel = normalizeInteractLevelAlias(rawInteractLevel)
 
             return sequenceOf(normalizedInteractLevel, rawInteractLevel)
-                .filterNotNull()
-                .distinct()
-                .mapNotNull { value -> runCatching { InteractLevel.from(value) }.getOrNull() }
-                .firstOrNull()
+                .distinct().firstNotNullOfOrNull { value -> runCatching { InteractLevel.from(value) }.getOrNull() }
         }
 
         private fun normalizeInteractLevelAlias(value: String): String {

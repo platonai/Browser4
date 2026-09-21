@@ -1,5 +1,6 @@
 package ai.platon.pulsar.skeleton.session
 
+import ai.platon.pulsar.common.B4Constants.BROWSER_PROFILE_PATH
 import ai.platon.pulsar.common.Runtimes
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_DISPLAY_MODE
@@ -107,5 +108,83 @@ class AbstractPulsarSessionTest {
         val sessionConfig = VolatileConfig(false)
         PulsarSettings.parse(emptyMap()).overrideConfiguration(sessionConfig)
         assertNull(sessionConfig[BROWSER_DISPLAY_MODE])
+    }
+
+    // ------------------------------------------------------------------
+    // Capability chain: open --profile <path> -> sessionConfig
+    // browser.profile.path. createBoundDriver launches with a custom
+    // BrowserId when this value is set.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `profilePath capability sets browser profile path on the session config`() {
+        val sessionConfig = VolatileConfig(false)
+        PulsarSettings.parse(mapOf("profilePath" to "C:/tmp/browser-profile")).overrideConfiguration(sessionConfig)
+        assertEquals("C:/tmp/browser-profile", sessionConfig[BROWSER_PROFILE_PATH])
+    }
+
+    @Test
+    fun `blank profilePath capability is ignored`() {
+        val sessionConfig = VolatileConfig(false)
+        PulsarSettings.parse(mapOf("profilePath" to "   ")).overrideConfiguration(sessionConfig)
+        assertNull(sessionConfig[BROWSER_PROFILE_PATH])
+    }
+
+    @Test
+    fun `absent profilePath capability leaves the profile path unset`() {
+        val sessionConfig = VolatileConfig(false)
+        PulsarSettings.parse(emptyMap()).overrideConfiguration(sessionConfig)
+        assertNull(sessionConfig[BROWSER_PROFILE_PATH])
+    }
+
+    // ------------------------------------------------------------------
+    // Launch profile source: an explicit `open --profile <path>` must win
+    // over the session's computed context dir, otherwise the flag is
+    // silently ignored (named sessions always carry a context dir).
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `explicit profilePath wins over the session context dir`() {
+        assertEquals(
+            AbstractPulsarSession.LaunchProfileSource.PROFILE_PATH,
+            AbstractPulsarSession.resolveLaunchProfileSource(
+                contextDir = "D:/tmp/browser4/context/groups/named/PULSAR_CHROME/cx.1",
+                profilePath = "D:/profiles/chrome-system-copy",
+            )
+        )
+    }
+
+    @Test
+    fun `context dir is used when no profile path was requested`() {
+        assertEquals(
+            AbstractPulsarSession.LaunchProfileSource.CONTEXT_DIR,
+            AbstractPulsarSession.resolveLaunchProfileSource(
+                contextDir = "D:/tmp/browser4/context/groups/named/PULSAR_CHROME/cx.1",
+                profilePath = null,
+            )
+        )
+    }
+
+    @Test
+    fun `no launch profile source when neither value is set`() {
+        assertEquals(
+            AbstractPulsarSession.LaunchProfileSource.NONE,
+            AbstractPulsarSession.resolveLaunchProfileSource(contextDir = null, profilePath = null)
+        )
+    }
+
+    @Test
+    fun `blank launch profile values are treated as absent`() {
+        assertEquals(
+            AbstractPulsarSession.LaunchProfileSource.CONTEXT_DIR,
+            AbstractPulsarSession.resolveLaunchProfileSource(
+                contextDir = "D:/tmp/context",
+                profilePath = "   ",
+            )
+        )
+        assertEquals(
+            AbstractPulsarSession.LaunchProfileSource.NONE,
+            AbstractPulsarSession.resolveLaunchProfileSource(contextDir = "  ", profilePath = "")
+        )
     }
 }

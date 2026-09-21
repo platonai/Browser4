@@ -105,7 +105,9 @@ $Tests = @(
     [PSCustomObject]@{ Name = 'test-production-helpers';       Category = 'helpers';  Description = 'Unit tests for test-production.ps1 helper functions' },
     [PSCustomObject]@{ Name = 'test-utils-helpers';            Category = 'helpers';  Description = 'Unit tests for test-utils.psm1 helper functions' },
     [PSCustomObject]@{ Name = 'test.ps1.tests';               Category = 'helpers';  Description = 'Unit tests for bin/test.ps1 helper functions and dispatch logic' },
-    [PSCustomObject]@{ Name = 'coworker-scripts';              Category = 'coworker'; Description = 'Unit tests for coworker/scripts helper functions' }
+    [PSCustomObject]@{ Name = 'coworker-scripts';              Category = 'coworker'; Description = 'Unit tests for coworker/scripts helper functions' },
+    [PSCustomObject]@{ Name = 'verify-named-session-profile';   Category = 'verify';   Description = 'Measure: named-session profile binding across a backend restart' },
+    [PSCustomObject]@{ Name = 'verify-attach-close-tabs';       Category = 'verify';   Description = 'Measure: attach + close tab behaviour on a CDP-attached browser' }
 )
 
 # Map category name → list of test names
@@ -116,6 +118,7 @@ $Categories = @{
     stress   = @('stress-swarm-agents', 'stress-session', 'stress-install')
     helpers  = @('test-production-helpers', 'test-utils-helpers', 'test.ps1.tests')
     coworker = @('coworker-scripts')
+    verify   = @('verify-named-session-profile', 'verify-attach-close-tabs')
 }
 
 # -------------------------------------------------------------------

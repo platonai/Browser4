@@ -1,0 +1,194 @@
+{
+  "meta": {
+    "mode": "dev",
+    "source": "20260905-175604-form-filling.full.md",
+    "date": "20260905-175604",
+    "scenario": "form-filling"
+  },
+  "background": {
+    "executionContext": "**Commands used (in order):** `./b4w.ps1 help` → read `skills/browser4-cli/SKILL.md` + `references/snapshot.md` → `goto` → `snapshot -i` → `snapshot grep` → `help wait` / `help get` / `help select` / `help snapshot` / `help screenshot` → `fill` ×4 → `select` ×2 → `check` ×4 → `click` → `wait --load networkidle` → `get text \"#result-data\"` → `snapshot -v 0 --stdout` → `screenshot` → `snapshot -v 0` → `screenshot --full-page` → diagnostic probes (`eval` scrollY, `scrollTo` experiments) to confirm the viewport-scroll semantics reported in Issue 1.\n\n**Key decisions:** (1) Read the SKILL.md and targeted `--help` pages before acting, per the documented \"learn first\" convention; (2) chose the click-to-submit path over Enter (button is `type=button`, JS-wired — Enter would also work on this fixture); (3) skipped the phone-number/company fields because the snapshot showed them **without bounding boxes**, indicating they were display:none dynamic fields (only revealed by radio choice) — the fixture's submitted payload confirmed `phoneNumber: \"\"`; (4) used named artifacts in `.test-sessions/` for all outputs; (5) left the shared DEFAULT session open (it pre-existed from a concurrent evaluation) to avoid disrupting other runs.\n\n**Notable observations:** the daemon auto-started the backend on the first command with no setup; `snapshot -i` + `snapshot grep` made ref discovery trivial; the fixture shows the submission result in-page (no navigation), so \"result page\" documentation relied on the current viewport — which worked because the submit `click` auto-scrolled the page ~1057px (see Issue 1). Evidence-based probes: `window.scrollTo(0,700)` + `snapshot -v 0` → `hiddenTopHeight: 700px`, proving `-v 0` is scroll-relative.\n\nThe report file (JSON, machine-parseable) is also saved at `.test-sessions/form-filling-evaluation.json`.\n\n\n\n**Overall assessment summary:** Task completed 100% with zero blockers — a strong first-run experience (auto-started backend, clear tips, `snapshot -i` + `grep` made ref discovery easy, `select` accepted visible labels, every fill fired real DOM events). The 5 recorded issues are refinements rather than failures: the most valuable fixes are documenting that interaction commands scroll the page (so `-v 0` isn't the top afterward), adding the live `get` command to the SKILL.md command map/decision tree, and marking hidden/boxless controls in snapshot output. **Usability rating: 8/10.**",
+    "task": "**Task outcome: SUCCESSFUL (100%).** The full form-filling workflow completed end to end against `http://localhost:18080/generated/form-filling.html` (MockSite), using only the documented browser4-cli workflow:\n\n1. **Navigate** — `goto` loaded the form page (backend/daemon auto-started without issue; an existing DEFAULT session was reused).\n2. **Discover** — `snapshot -i` returned an interactive-oriented snapshot with refs; `snapshot grep` pulled the refs for every control (e1939 First Name, e1940 Last Name, e1941 Email, e1942 Country combobox, e1945 Experience level, e1946 Comments, checkboxes e1950–e1954, e2105 Submit).\n3. **Fill** — First Name \"Ada Lovelace\", Last Name \"Byron\", Email \"ada.byron@example.com\", Comments textarea — all registered real DOM `input` events (visible in the fixture's event log).\n4. **Select dropdowns** — Country → \"United Kingdom\" (`select` accepted the visible label, resolved to value `uk`); Experience level → \"Advanced\".\n5. **Check boxes** — 4 checkboxes checked (Testing, AI agents, newsletter opt-in, agree-to-terms) via `check`; fixture event log confirms `topic-toggle:…:on` and `terms-toggle:checked`.\n6. **Submit** — `click` on \"Submit form\" (e2105) succeeded.\n7. **Wait** — `wait --load networkidle` completed.\n8. **Verify** — `get text \"#result-data\"` returned the submission payload JSON containing every value: `firstName: \"Ada Lovelace\"`, `lastName: \"Byron\"`, `email: \"ada.byron@example.com\"`, `country: \"uk\"`, `topics: [\"automation\",\"testing\",\"ai\"]`, `newsletterOptIn: true`, `experienceLevel: \"advanced\"`, comments text. The snapshot also showed `submit-success:email` in the event log and \"All validation checks passed.\"\n9. **Document** — `snapshot -v 0` captured the result viewport (submitted JSON payload, checked states, success event) and artifacts were saved under `.test-sessions/` (`form-result-ax-snapshot.yml`, `form-result-screenshot.png`, `form-result-fullpage.png`, `form-result-viewport0.yml`).\n\nNo workarounds were needed; every command worked on the first attempt, including refs held across 13 interactions (this fixture never re-renders the DOM, so refs stayed stable — consistent with docs treating that as the non-guaranteed case)."
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "Interaction commands silently scroll the page, so a later `snapshot -v 0` is not the page top — no doc note explains this",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1) ./b4w.ps1 goto http://localhost:18080/generated/form-filling.html\n2) Fill the form fields, then ./b4w.ps1 click <submit-ref> where the button is below the fold (y~1573 on this fixture).\n3) ./b4w.ps1 snapshot -v 0 and inspect the output header."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The documentation and quick patterns should state that click/fill/select/check auto-scroll the element into view, so `-v 0` (scroll-relative 'current visible screen') after interactions starts mid-page — and an outcome-documentation capture should scroll to top first or use `-v all`."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "After the below-fold click, `snapshot -v 0` reported 'hiddenTopHeight: 1057px' and stderr noted 'Page is scrolled 1057px down - this snapshot starts below the page top'. A controlled test confirmed -v 0 tracks real scroll: window.scrollTo(0,700) made the next -v 0 file report 'hiddenTopHeight: 700px'. SKILL.md's core-loop/quick patterns ('click submit -> wait --load networkidle -> snapshot -v 0 --auto-diff') and task briefs ('full-viewport snapshot (-v 0)') present -v 0 as if it were a stable top-of-page capture; nowhere is the auto-scroll side effect of interaction commands documented."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Interaction commands scroll elements into view (observed final scroll offset ~1057px equals centering the y~1573 button in a 1080px viewport). Viewport indices are deliberately scroll-relative (documented in help), but the documentation set does not connect the two facts, so first-time users/briefs assume -v 0 always means 'top of the page'. The CLI does print a corrective notice, but it arrives at the very end of the tips block, after the preview output."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "skills/browser4-cli/SKILL.md (Core Loop + snapshot-mode table); cli/browser4-cli/src/main.rs (viewport-state notice emission)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a documentation note to SKILL.md/snapshot.md and to the snapshot help: click/fill/select/check may auto-scroll the page; after any interaction `-v 0` is the current screen, not the page top.\n- Update the 'Interactive Form Fill' and 'Verifying Results' quick patterns to include a scroll-to-top step (eval window.scrollTo(0,0)) or `snapshot -v all` before the final verification capture.\n- Move the 'Page is scrolled N px down' notice earlier in the output (it currently trails the snapshot preview and is easy to miss in agent traces)."
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "Standalone live-DOM `get` command (text/html/box/styles/property/attr) is missing from SKILL.md's command map and decision trees",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1) ./b4w.ps1 help (or read skills/browser4-cli/SKILL.md, section 3 Command Map and 4a decision tree).\n2) Search both for a `get` command row covering live-DOM extraction ('get text <sel>', 'get attr <sel> name')."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The command used to verify a page after an interaction ('Use get text or get attr to verify') should be discoverable from SKILL.md's command map / extraction decision tree, with its capture-free live-DOM semantics and its caveats documented."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "`get` appears only in the top-level help text under [Core] (un-starred) and in `get --help`. SKILL.md section 3 maps extraction exclusively to the htmlsnapshot family and eval; section 4a's tree routes one-field reads to 'htmlsnapshot get text' (which requires a prior `htmlsnapshot` capture). The only SKILL.md mention of live `get` is buried in a quick-pattern example after `generate-locator`. Its documented limitation ('attr/property reads are the least reliable' via CSS; missing attribute reads as null) is stated only in `get --help`, so an agent doing a step-8-style verification with `get attr` has no warning that a null result is ambiguous (missing vs. failed resolution)."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The SKILL.md command map groups commands by family (snapshot for interaction, htmlsnapshot for extraction) and the live-DOM `get` falls between the two, so it was never assigned a row or decision-tree leaf. Help-text completeness is fine; the skill documentation lags the command surface."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/commands.rs:1454 (get command definition); skills/browser4-cli/SKILL.md section 3 Command Map and section 4a"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a Command Map row for `get <mode> <selector> [name]`: 'live single-element read (text/html/attr/property) - capture-free, refs or CSS selectors; verification after interactions'.\n- Add a decision-tree leaf for single-field live reads / post-submit verification: `get text <sel>` before reaching for htmlsnapshot capture.\n- Surface the null-on-missing and attr/property CSS caveat from `get --help` in SKILL.md so AI agents do not misread null as a successful 'attribute absent' result."
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "Hidden (display:none) form controls appear as addressable textbox refs in snapshot output with no visibility marker",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1) ./b4w.ps1 goto http://localhost:18080/generated/form-filling.html (contact method defaults to Email).\n2) ./b4w.ps1 snapshot -i (or snapshot / snapshot -v 0) and inspect the dynamic-fields section."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Form controls that are not visible on the page (display:none) should either be excluded from the accessibility snapshot or explicitly marked hidden, so an agent cannot target a field no user can see. At minimum the interactive-oriented rendering (-i) should not present them as self-contained targets."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The phone-number and company textboxes (wrappers hidden via .hidden { display:none !important } while contact method = email) appear in the snapshot with full refs - e.g. 'textbox \"tel phone-number phoneNumber +1 555 123 4567\" [ref=e1943]' - in default, -i and -v 0 captures. They carry no coordinates ([box=] absent) and no [hidden]/[invisible] marker; nothing in the docs explains that boxless means not visible. A first-time agent could confidently `fill e1943` a field that is invisible to the user (the fixture only reveals it when the Phone radio is chosen)."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The snapshot builder emits addressable nodes for controls whose geometry is absent (display:none nodes reach the tree but have no bounding box). The -i interactive pass merges text into names but performs no visibility filtering, contradicting its 'each ref line reads as a self-contained target' description. Exact renderer location needs follow-up: the AX-tree-to-YAML generator is server-side and was not located in this pass (CLI-side viewport-state rendering lives in cli/browser4-cli/src/main.rs)."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "Server-side AX snapshot/YAML renderer (module not located; search for the emitter producing 'textbox ... [ref=e...]' YAML lines in browser4-core/browser4-browser), CLI viewport headers in cli/browser4-cli/src/main.rs"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Mark nodes with no bounding box as [hidden] (or omit them) in snapshot output, and filter them from the -i interactive-oriented rendering.\n- If kept, document the convention 'elements without [box=...] are not visible' in snapshot.md.\n- Add a regression test: hidden dynamic form fields (display:none toggled by JS) must not be emitted as fillable targets in -i mode."
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "Shared DEFAULT session is silently reused across concurrent invocations, letting one process clobber another's page",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1) With a backend running and a DEFAULT session active on another page, run ./b4w.ps1 goto http://localhost:18080/generated/form-filling.html from a second process."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Concurrent/automated invocations should either get isolated state or a clear warning that they are hijacking an in-use session, since navigation replaces the other process's page."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "goto printed 'Using existing session DEFAULT (current page: http://localhost:18080/ec/dp/B0E000002)' - a page left open by a different concurrent evaluation process - and navigated that shared session to the form page, invalidating the other process's page state. The reuse message is easy to miss mid-script, and nothing in the session documentation calls out this hazard for parallel agent usage."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The unnamed DEFAULT session is a singleton shared by every invocation that omits -s; goto auto-reconnects to it by design (persistence is desirable for interactive use). The design has no concurrency awareness - no lock, no warning that the session's current page belongs to another recent process."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs (session selection / reuse logic); skills/browser4-cli/SKILL.md section 2 Sessions"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a SKILL.md callout: parallel agent runs should always pass `-s <name>`; the DEFAULT session is shared and last-writer-wins.\n- Consider warning on goto when reusing a session whose current page differs from the requested URL and whose last activity is recent.\n- Optionally support an opt-in per-invocation anonymous session (e.g. config or env var) for scripted/parallel use."
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 5,
+      "title": "Every interaction triggers a full automatic snapshot: 10 form actions produced 10 extra round-trips, file writes, and repeated '### Page / ### Snapshot' output blocks",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1) ./b4w.ps1 goto <form page>, then run any sequence of fill/check/select/click commands (e.g. the 10 commands of this scenario) and observe output length, latency, and .browser4-cli/snapshot/ growth."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Default behavior favoring ref freshness is fine, but the output and cost overhead of the automatic snapshot should be lighter (single line when the page is unchanged), with cleanup guidance nearby."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Each of the ~10 interaction commands printed a repeated '### Page / URL / Title / ### Snapshot / [link] / size' block and wrote a new snapshot file (~13 files in a 2-minute session). Auto-snapshot and --no-snapshot are documented, and refs staying fresh is a real benefit, but for a first-time user the repetition reads as noise and the file accumulation (.browser4-cli/snapshot, plus the rarely-discoverable `snapshot clean`) is not mentioned anywhere near the interaction commands."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The auto-snapshot design trades efficiency for ref reliability and prints the full capture summary unconditionally after every interaction; the snapshot-directory growth has a cleanup command (`snapshot clean`) that is documented only in the help list, not in SKILL.md."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs (post-interaction auto-snapshot printing)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Print a one-line auto-snapshot summary (refs refresh + file link) instead of the repeated page header block when the page URL/title are unchanged.\n- Mention --no-snapshot and `snapshot clean` (or a retention policy) in the interaction command help / SKILL.md so users can opt out of both noise and file growth."
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}

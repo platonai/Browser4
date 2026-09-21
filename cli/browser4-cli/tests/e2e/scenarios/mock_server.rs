@@ -1,6 +1,167 @@
 use crate::*;
 
 // ---------------------------------------------------------------------------
+// profile-import (browser4-profile-import plugin tool surface)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_profile_import_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // --list-sources routes to profile_import_list_sources and prints raw JSON
+    let list = run_command(ctx, &["profile-import", "--list-sources"]);
+    assert_eq!(list.exit_code, 0, "expected list-sources to succeed");
+    assert!(
+        list.stdout.contains("Person 1") && list.stdout.contains("chrome"),
+        "Expected mock source listing in:\n{}",
+        list.stdout
+    );
+
+    // import routes to profile_import_import and pretty-prints key fields
+    let import = run_command(
+        ctx,
+        &["profile-import", "--source", "chrome", "--data", "bookmarks,cookies"],
+    );
+    assert_eq!(import.exit_code, 0, "expected import to succeed");
+    assert!(
+        import.stdout.contains("Import dir: /mock/imports/chrome-Default-20260825"),
+        "Expected import dir line in:\n{}",
+        import.stdout
+    );
+    assert!(
+        import.stdout.contains("Files copied: 42"),
+        "Expected files copied line in:\n{}",
+        import.stdout
+    );
+    assert!(
+        import.stdout.contains("Warning: Passwords were not imported"),
+        "Expected password warning in:\n{}",
+        import.stdout
+    );
+    assert!(
+        import.stdout.contains("Next step: browser4-cli open --profile"),
+        "Expected next-step hint in:\n{}",
+        import.stdout
+    );
+
+    // --json is a CLI-global flag (wraps output); the tool call itself must
+    // not carry it.
+    let raw = run_command(
+        ctx,
+        &["profile-import", "--source", "edge", "--json"],
+    );
+    assert_eq!(raw.exit_code, 0, "expected --json import to succeed");
+
+    // Dynamic plugin path: no CLI change needed — `plugin <domain>` (spaced,
+    // matching every other prefixed command style) rewrites to
+    // `plugin-<domain>`, discovers the tools from the server's /mcp/tools and
+    // calls them generically. The dynamic path routes through the
+    // session-aware tool executor, so an open session is needed first.
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+    let dynamic = run_command(
+        ctx,
+        &["plugin", "profile_import", "import", "--source", "chrome", "--data", "cookies"],
+    );
+    assert_eq!(dynamic.exit_code, 0, "expected dynamic plugin command to succeed:\n{}", dynamic.stdout);
+    assert!(
+        dynamic.stdout.contains("\"importDir\""),
+        "Expected raw JSON result from the dynamic plugin path in:\n{}",
+        dynamic.stdout
+    );
+
+    // Bare `plugin` is intentionally rejected with a subcommand hint (see
+    // preferred_prefixed_group_form); server-driven listing lives behind
+    // `plugin list` and `plugin-<domain>` invocations. The dynamic path above
+    // already proves server-side discovery works end to end.
+
+    // Plugin-declared CLI command: the plugin manifest (ToolSpec.cliName)
+    // declares `profile import`; the CLI discovers it from /mcp/tools/specs
+    // and renders it as a first-class named command — no CLI code change.
+    let declared = run_command(
+        ctx,
+        &["profile", "import", "--source", "chrome", "--data", "cookies"],
+    );
+    assert_eq!(declared.exit_code, 0, "expected declared command to succeed:\n{}", declared.stdout);
+    assert!(
+        declared.stdout.contains("\"importDir\""),
+        "Expected import result from the declared command in:\n{}",
+        declared.stdout
+    );
+
+    // `plugin commands` lists plugin-declared commands with their origin
+    // domain — the source-of-truth way to tell plugin commands apart from
+    // built-in ones.
+    let plugin_commands = run_command(ctx, &["plugin", "commands"]);
+    assert_eq!(plugin_commands.exit_code, 0, "expected plugin commands to succeed:\n{}", plugin_commands.stdout);
+    assert!(
+        plugin_commands.stdout.contains("profile import [--source --data]")
+            && plugin_commands.stdout.contains("profile_import.import"),
+        "Expected declared command listing in:\n{}",
+        plugin_commands.stdout
+    );
+
+    // `--help --examples` on a plugin-declared command renders the spec's
+    // examples instead of calling the tool (declared commands forward every
+    // option, so `--examples` must not reach the backend).
+    let declared_examples = run_command(ctx, &["profile", "import", "--help", "--examples"]);
+    assert_eq!(
+        declared_examples.exit_code, 0,
+        "expected declared --examples to succeed:\n{}",
+        declared_examples.stdout
+    );
+    assert!(
+        declared_examples
+            .stdout
+            .contains("Examples for profile_import.import (profile_import_import):")
+            && declared_examples
+                .stdout
+                .contains("- Import Chrome bookmarks: `{\"source\": \"chrome\"}`")
+            && declared_examples
+                .stdout
+                .contains("- Feed the returned import dir to open --profile"),
+        "Expected rendered examples in:\n{}",
+        declared_examples.stdout
+    );
+
+    // `help` badges plugin-declared commands with [plugin], so the origin of
+    // every command is visible at a glance.
+    let help_out = run_command(ctx, &["help"]);
+    assert_eq!(help_out.exit_code, 0, "expected help to succeed");
+    assert!(
+        help_out.stdout.contains("[plugin] profile import [--source --data]"),
+        "Expected [plugin] badge in help:\n{}",
+        help_out.stdout
+    );
+
+    // `help profile` shows both the built-in profile-import command and the
+    // plugin-declared `profile import` with its badge.
+    let help_profile = run_command(ctx, &["help", "profile"]);
+    assert_eq!(help_profile.exit_code, 0, "expected help profile to succeed");
+    assert!(
+        help_profile.stdout.contains("[plugin] profile import"),
+        "Expected [plugin] badge in help profile:\n{}",
+        help_profile.stdout
+    );
+
+    // Recorded tool calls carry the right names and camelCase params
+    let tool_calls = mock_server.snapshot().tool_calls;
+    assert!(
+        tool_calls.iter().any(|c| c.tool == "profile_import_list_sources"),
+        "expected list_sources call, got: {:?}",
+        tool_calls.iter().map(|c| c.tool.as_str()).collect::<Vec<_>>()
+    );
+    let import_call = tool_calls.iter().find(|c| c.tool == "profile_import_import").expect("import call");
+    assert_eq!(import_call.arguments.get("source").and_then(|v| v.as_str()), Some("chrome"));
+    assert_eq!(
+        import_call.arguments.get("data").and_then(|v| v.as_str()),
+        Some("bookmarks,cookies")
+    );
+    assert!(import_call.arguments.get("json").is_none(), "CLI-only flag must not be forwarded");
+}
+
+// ---------------------------------------------------------------------------
 // close
 // ---------------------------------------------------------------------------
 
@@ -907,10 +1068,15 @@ pub(super) fn test_stop_no_running_server(ctx: &mut E2ECtx) {
     // stop may report "No Browser4 server was running." when no server is
     // active, or it may report the actual server shutdown steps when a
     // real server (started by a previous live test) is still running.
+    // A CLI built inside a checkout runs in development mode, where `stop` is
+    // scoped to this workspace and says so.
     assert!(
         result.stdout.contains("No Browser4 server was running.")
+            || result
+                .stdout
+                .contains("No Browser4 server was running for this workspace.")
             || result.stdout.contains("Browser4 server stopped."),
-        "Expected either 'No Browser4 server was running.' or 'Browser4 server stopped.' in:\n{}",
+        "Expected 'No Browser4 server was running[ for this workspace].' or 'Browser4 server stopped.' in:\n{}",
         result.stdout
     );
 }
@@ -974,15 +1140,22 @@ pub(super) fn test_kill_all_no_running_processes(ctx: &mut E2ECtx) {
         "expected kill-all to succeed when no processes"
     );
 
-    // kill-all with no tracked processes should report that nothing was found
-    // and succeed without error.
+    // This scenario owns kill-all's "nothing left to kill" path: the call above
+    // may still report a backend this workspace legitimately had running —
+    // development-mode `stop` is workspace-scoped, so the `stop` scenarios just
+    // before this one leave the harness's own backend alive, where production
+    // `stop` used to sweep every backend and stop it for them.  After that call
+    // the machine is clean, so the second call must report exactly that.
+    let second = run_command(ctx, &["kill-all"]);
+    assert_eq!(
+        second.exit_code, 0,
+        "expected kill-all to succeed when no processes"
+    );
     assert!(
-        result
-            .stdout
-            .contains("No tracked Browser4 processes found")
-            || result.stdout.contains("Already stopped"),
+        second.stdout.contains("No tracked Browser4 processes found")
+            || second.stdout.contains("Already stopped"),
         "Expected kill-all to report no tracked processes in:\n{}",
-        result.stdout
+        second.stdout
     );
 }
 
@@ -1928,7 +2101,27 @@ pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
         "element => element.textContent"
     );
     assert_eq!(eval_calls[1].arguments["ref"], "backend:5");
+
+    // Regression (eval --json type preservation): the backend transports
+    // the evaluated value as text, so a numeric result arrives as "6" and
+    // must be emitted as the native JSON number 6, not the quoted string
+    // "6" (which would force consumers to coerce).
+    let json_eval = run_command(ctx, &["eval", "--json", "document.querySelectorAll('a').length"]);
+    let json_out: serde_json::Value = serde_json::from_str(&json_eval.stdout)
+        .unwrap_or_else(|e| panic!("eval --json output should be valid JSON: {e}
+{}", json_eval.stdout));
+    let num_result = json_out
+        .pointer("/output/result")
+        .unwrap_or_else(|| panic!("envelope should carry output.result:
+{}", json_eval.stdout));
+    assert!(
+        num_result.is_number() && num_result.as_i64() == Some(6),
+        "numeric eval result must stay a native JSON number, got: {num_result}
+{}",
+        json_eval.stdout
+    );
 }
+
 
 pub(super) fn test_cdp_command(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
@@ -2393,6 +2586,71 @@ pub(super) fn test_agent_browser_command_gaps(ctx: &mut E2ECtx) {
         window_new.stdout
     );
 
+    // ── 14-17. network requests / request detail / HAR start / stop ──────
+    let network_requests = run_command(
+        ctx,
+        &["network", "requests", "--filter", "api", "--status", "2xx"],
+    );
+    assert_eq!(
+        strip_snapshot_output(&network_requests.stdout),
+        "mock response for browser_network_requests",
+        "network requests should reach the backend tool"
+    );
+
+    let network_request = run_command(ctx, &["network", "request", "1234.5"]);
+    assert_eq!(
+        strip_snapshot_output(&network_request.stdout),
+        "mock response for browser_network_request"
+    );
+
+    // Numeric request ids (CDP ids can look like plain digits) must be
+    // forwarded as strings, not dropped by the arg parser.
+    let numeric_request = run_command(ctx, &["network", "request", "42238"]);
+    assert_eq!(
+        strip_snapshot_output(&numeric_request.stdout),
+        "mock response for browser_network_request"
+    );
+
+    let har_start = run_command(ctx, &["network", "har", "start", "--content", "all"]);
+    assert_eq!(
+        strip_snapshot_output(&har_start.stdout),
+        "mock response for browser_har_start"
+    );
+
+    let har_stop = run_command(ctx, &["network", "har", "stop"]);
+    assert_eq!(
+        strip_snapshot_output(&har_stop.stdout),
+        "mock response for browser_har_stop"
+    );
+
+    // `har stop [path]` accepts a positional path (agent-browser form).
+    let har_path = ctx.state_dir.join("mock-har-stop.har");
+    let har_stop_path = run_command(
+        ctx,
+        &["network", "har", "stop", har_path.to_str().expect("har path")],
+    );
+    assert!(
+        har_stop_path.stdout.contains("HAR saved"),
+        "har stop with a positional path should report the saved file, got:\n{}",
+        har_stop_path.stdout
+    );
+
+    // ── 18-19. network route / unroute ─────────────────────────────────
+    let route = run_command(
+        ctx,
+        &["network", "route", "**/api/users", "--body", "{\"users\":[]}", "--resource-type", "xhr"],
+    );
+    assert_eq!(
+        strip_snapshot_output(&route.stdout),
+        "mock response for browser_network_route"
+    );
+
+    let unroute = run_command(ctx, &["network", "unroute", "**/api/users"]);
+    assert_eq!(
+        strip_snapshot_output(&unroute.stdout),
+        "mock response for browser_network_unroute"
+    );
+
     // ── Verify recorded tool calls ────────────────────────────────────
     let tool_calls = mock_server.snapshot().tool_calls;
     let names: Vec<&str> = tool_calls.iter().map(|call| call.tool.as_str()).collect();
@@ -2408,12 +2666,70 @@ pub(super) fn test_agent_browser_command_gaps(ctx: &mut E2ECtx) {
         "browser_evaluate",
         "execute_cdp_command",
         "browser_tabs",
+        "browser_network_requests",
+        "browser_network_request",
+        "browser_network_route",
+        "browser_network_unroute",
+        "browser_har_start",
+        "browser_har_stop",
     ] {
         assert!(
             names.contains(&tool),
             "expected recorded tool call {tool}, got: {names:?}"
         );
     }
+
+    // Route args reach the backend.
+    let route_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_network_route")
+        .collect();
+    assert_eq!(route_calls.len(), 1, "expected one route call");
+    assert_eq!(route_calls[0].arguments["urlPattern"], "**/api/users");
+    assert_eq!(route_calls[0].arguments["body"], "{\"users\":[]}");
+    assert_eq!(route_calls[0].arguments["resourceType"], "xhr");
+    let unroute_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_network_unroute")
+        .collect();
+    assert_eq!(unroute_calls.len(), 1, "expected one unroute call");
+    assert_eq!(unroute_calls[0].arguments["urlPattern"], "**/api/users");
+
+    // Network filter args reach the backend.
+    let network_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_network_requests")
+        .collect();
+    assert_eq!(network_calls.len(), 1, "expected one network requests call");
+    assert_eq!(network_calls[0].arguments["filter"], "api");
+    assert_eq!(network_calls[0].arguments["status"], "2xx");
+    let har_start_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_har_start")
+        .collect();
+    assert_eq!(har_start_calls.len(), 1, "expected one har start call");
+    assert_eq!(har_start_calls[0].arguments["contentMode"], "all");
+    // Both request-detail ids arrive as strings (numeric ids included).
+    let detail_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_network_request")
+        .collect();
+    assert_eq!(detail_calls.len(), 2, "expected two network request calls");
+    assert_eq!(detail_calls[0].arguments["requestId"], "1234.5");
+    assert_eq!(detail_calls[1].arguments["requestId"], "42238");
+    // The positional har-stop path is consumed CLI-side (the backend returns
+    // the HAR document; the CLI writes the file), so the backend tool call
+    // carries no path argument.
+    let har_stop_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_har_stop")
+        .collect();
+    assert_eq!(har_stop_calls.len(), 2, "expected two har stop calls");
+    assert!(
+        har_stop_calls[1].arguments.get("path").is_none(),
+        "har-stop path should stay on the CLI side, got: {:?}",
+        har_stop_calls[1].arguments
+    );
 
     // press-key aliases (key + keyboard) each issue their own call.
     let press_calls = tool_calls
@@ -2514,6 +2830,100 @@ pub(super) fn test_swarm_session_and_agent_tools(ctx: &mut E2ECtx) {
         "summarize the page marker"
     );
     assert_eq!(summarize_call.arguments["selector"], "#page-marker");
+}
+
+/// Regression for the double-encoded extract envelope: the backend can wrap
+/// schema-constrained extraction in a serialization envelope whose
+/// `description` field holds the schema payload as an escaped JSON string.
+/// The CLI must surface the payload as clean top-level JSON — as the only
+/// stdout document under `--stdout`, and as a native value inside the
+/// `--json` envelope (a single JSON document, no stray raw line).
+pub(super) fn test_extract_schema_payload_clean_json(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_open_command(ctx);
+
+    mock_server.set_agent_extract_response(
+        r#"{"type":"ai.platon.pulsar.agentic.ExtractResult","description":"{\"title\":\"4K OLED TV 55\",\"price\":\"$899.99\",\"features\":[\"55 inch\",\"HDR10+\"]}"}"#,
+    );
+
+    // --stdout: the payload is the ONLY stdout document — clean schema-level
+    // JSON with no wrapper envelope, no task bookkeeping, no second line.
+    let stdout_result = run_command(
+        ctx,
+        &[
+            "extract",
+            "Extract the product title, price, and feature list",
+            "--schema={\"type\":\"object\"}",
+            "--stdout",
+        ],
+    );
+    assert_eq!(
+        stdout_result.exit_code, 0,
+        "extract --stdout should succeed:
+{}",
+        stdout_result.stderr
+    );
+    let payload: serde_json::Value = serde_json::from_str(
+        strip_snapshot_output(&stdout_result.stdout).trim(),
+    )
+    .unwrap_or_else(|e| {
+        panic!(
+            "extract --stdout output must parse as one clean JSON document: {e}
+{}",
+            stdout_result.stdout
+        )
+    });
+    assert_eq!(
+        payload,
+        serde_json::json!({
+            "title": "4K OLED TV 55",
+            "price": "$899.99",
+            "features": ["55 inch", "HDR10+"]
+        })
+    );
+    assert!(
+        !stdout_result.stdout.contains("ExtractResult"),
+        "the wrapper envelope must not leak into extract --stdout output:
+{}",
+        stdout_result.stdout
+    );
+
+    // --json --stdout: still exactly ONE stdout document (the JSON envelope),
+    // and the payload is embedded natively under output.extracted_content —
+    // not as an escaped string that needs a second JSON.parse.
+    let json_result = run_command(
+        ctx,
+        &[
+            "--json",
+            "extract",
+            "Extract the product title, price, and feature list",
+            "--schema={\"type\":\"object\"}",
+            "--stdout",
+        ],
+    );
+    let envelope: serde_json::Value = serde_json::from_str(&json_result.stdout)
+        .unwrap_or_else(|e| {
+            panic!(
+                "extract --json --stdout must emit a single JSON document: {e}
+{}",
+                json_result.stdout
+            )
+        });
+    assert_eq!(
+        envelope.pointer("/output/extracted_content"),
+        Some(&serde_json::json!({
+            "title": "4K OLED TV 55",
+            "price": "$899.99",
+            "features": ["55 inch", "HDR10+"]
+        })),
+        "the --json envelope must carry the schema payload natively, got:
+{}",
+        json_result.stdout
+    );
 }
 
 pub(super) fn test_agent_task_commands(ctx: &mut E2ECtx) {
@@ -3932,6 +4342,286 @@ pub(super) fn test_crawl_foreground(ctx: &mut E2ECtx) {
     );
 }
 
+pub(super) fn test_crawl_foreground_no_links_discovered(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = start_mock_crawl_session(ctx);
+
+    // A depth>=1 crawl whose backend response reports linksDiscovered=0:
+    // the seed page is recorded, but no out-links were found.  The CLI must
+    // surface the warning + backend diagnostic + the effective pattern
+    // instead of a hollow "Crawl completed. N pages found."  The diagnostic
+    // below is the pattern-filtered-all variant (the selector matched
+    // elements but the pattern filtered every one) — it must render by
+    // default, with no --verbose required.
+    let body = serde_json::json!({
+        "taskId": "crawl-job-42",
+        "statusCode": 200,
+        "isDone": true,
+        "status": "OK",
+        "pagesFound": 1,
+        "linksDiscovered": 0,
+        "diagnostic": "The page has 12 anchors and 4000B of HTML, and the selector 'a.product' matched 9 element(s), but the out-link pattern 'abc' filtered them all. Try a broader pattern (or drop -olp / --out-link-pattern).",
+        "pages": [
+            {
+                "url": "https://example.com/seed",
+                "title": "Seed Page",
+                "depth": 0,
+            }
+        ],
+        "error": null,
+    })
+    .to_string();
+    mock_server.set_crawl_result("crawl-job-42", &body);
+
+    let result = run_command(
+        ctx,
+        &[
+            "crawl",
+            "https://example.com/seed",
+            "--depth=2",
+            "--out-link-selector",
+            "a.product",
+            "--out-link-pattern",
+            "abc",
+        ],
+    );
+
+    let stdout = &result.stdout;
+    assert_eq!(result.exit_code, 0, "Expected exit 0, got:\n{}", result.stdout);
+    assert!(
+        stdout.contains("Crawl completed. 1 pages found."),
+        "Expected seed-only completion message in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("⚠ Link discovery found no out-links — only 1 page(s) recorded."),
+        "Expected no-out-links warning in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Diagnostic: The page has 12 anchors"),
+        "Expected backend diagnostic echo in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("matched 9 element(s), but the out-link pattern 'abc' filtered them all"),
+        "Expected the pattern-filtered-all diagnostic text without --verbose in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("The effective --out-link-pattern was: abc"),
+        "Expected effective-pattern echo in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("depth=0 | https://example.com/seed | Seed Page"),
+        "Expected seed page listing in:\n{}",
+        stdout
+    );
+}
+
+pub(super) fn test_crawl_foreground_reports_lost_pages(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = start_mock_crawl_session(ctx);
+
+    // A crawl that reported OK but lost pages (issue #592): the backend now
+    // guarantees pagesFound + failedPages.size == pagesExpected, and the CLI
+    // must say so instead of printing a smaller "Crawl completed. 8 pages
+    // found." as if nothing happened.
+    let body = serde_json::json!({
+        "taskId": "crawl-job-42",
+        "statusCode": 200,
+        "isDone": true,
+        "status": "OK",
+        "pagesFound": 8,
+        "pagesExpected": 10,
+        "linksDiscovered": 9,
+        "failedPages": [
+            {
+                "url": "https://example.com/product/2.html",
+                "depth": 1,
+                "protocolStatus": 1601,
+                "reason": "the page fetch failed and its retry budget was exhausted",
+            },
+            {
+                "url": "https://example.com/product/7.html",
+                "depth": 2,
+                "protocolStatus": 0,
+                "reason": "the crawl finished before this page produced a document",
+            }
+        ],
+        "pages": [
+            {
+                "url": "https://example.com/index.html",
+                "title": "Crawl Test Hub",
+                "depth": 0,
+            }
+        ],
+        "error": null,
+    })
+    .to_string();
+    mock_server.set_crawl_result("crawl-job-42", &body);
+
+    let result = run_command(
+        ctx,
+        &[
+            "crawl",
+            "https://example.com/index.html",
+            "--depth=2",
+            "--out-link-selector",
+            "a.product",
+        ],
+    );
+
+    let stdout = &result.stdout;
+    assert_eq!(result.exit_code, 0, "Expected exit 0, got:\n{}", result.stdout);
+    assert!(
+        stdout.contains("⚠ 2 of 10 submitted page(s) were never delivered"),
+        "Expected the lost-pages warning in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("this crawl is incomplete, not just small"),
+        "Expected the warning to say the crawl is incomplete in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("depth=1 | https://example.com/product/2.html | status=1601"),
+        "Expected the first lost URL with its depth and status in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("the page fetch failed and its retry budget was exhausted"),
+        "Expected the first lost page's reason in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("depth=2 | https://example.com/product/7.html | the crawl finished"),
+        "Expected a lost URL with no protocol status to omit the status part in:\n{}",
+        stdout
+    );
+}
+
+pub(super) fn test_crawl_foreground_with_discovered_links(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = start_mock_crawl_session(ctx);
+
+    // The same depth>=1 shape, but link discovery succeeded (linksDiscovered>0
+    // and multiple depth-labeled pages).  Must NOT show the no-out-links
+    // warning, and must render each page with its depth label.
+    let body = serde_json::json!({
+        "taskId": "crawl-job-42",
+        "statusCode": 200,
+        "isDone": true,
+        "status": "OK",
+        "pagesFound": 3,
+        "linksDiscovered": 2,
+        "pages": [
+            {
+                "url": "https://example.com/seed",
+                "title": "Seed Page",
+                "depth": 0,
+            },
+            {
+                "url": "https://example.com/cat/a",
+                "title": "Category A",
+                "depth": 1,
+            },
+            {
+                "url": "https://example.com/cat/b",
+                "title": "Category B",
+                "depth": 1,
+            }
+        ],
+        "error": null,
+    })
+    .to_string();
+    mock_server.set_crawl_result("crawl-job-42", &body);
+
+    let result = run_command(
+        ctx,
+        &[
+            "crawl",
+            "https://example.com/seed",
+            "--depth=2",
+            "--out-link-selector",
+            "a",
+        ],
+    );
+
+    let stdout = &result.stdout;
+    assert_eq!(result.exit_code, 0, "Expected exit 0, got:\n{}", result.stdout);
+    assert!(
+        stdout.contains("Crawl completed. 3 pages found."),
+        "Expected completion message in:\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("no out-links"),
+        "Discovery succeeded — must not warn about missing links:\n{}",
+        stdout
+    );
+    for expected in [
+        "  depth=0 | https://example.com/seed | Seed Page",
+        "  depth=1 | https://example.com/cat/a | Category A",
+        "  depth=1 | https://example.com/cat/b | Category B",
+    ] {
+        assert!(stdout.contains(expected), "Expected '{expected}' in:\n{stdout}");
+    }
+    // Depth-major, URL-ascending order as published by the backend.
+    let pos_seed = stdout.find("depth=0 |").expect("depth=0 line present");
+    let pos_a = stdout.find("depth=1 | https://example.com/cat/a").expect("cat/a line present");
+    let pos_b = stdout.find("depth=1 | https://example.com/cat/b").expect("cat/b line present");
+    assert!(
+        pos_seed < pos_a && pos_a < pos_b,
+        "Expected depth-major sorted listing in:\n{}",
+        stdout
+    );
+}
+
+pub(super) fn test_crawl_foreground_progress_suppresses_unchanged_counts(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = start_mock_crawl_session(ctx);
+
+    // A crawl that never makes progress: the mock returns a non-terminal
+    // "Processing" body with pagesFound stuck at 1.  The foreground poller
+    // reports at a 5s-then-10s cadence; lines whose counts did not change
+    // since the previous interval report must be suppressed (regression:
+    // crawls used to repeat identical same-count lines and interleave two
+    // progress formats, which read as stalling).  Bound the run with a short
+    // timeout so the scenario doesn't wait for the 10-minute default.
+    let body = serde_json::json!({
+        "taskId": "crawl-job-42",
+        "statusCode": 102,
+        "isDone": false,
+        "status": "Processing",
+        "pagesFound": 1,
+        "linksDiscovered": 0,
+        "pages": [],
+        "error": null,
+    })
+    .to_string();
+    mock_server.set_crawl_result("crawl-job-42", &body);
+    ctx.set_env("BROWSER4_CLI_CRAWL_TIMEOUT_SECS", "22");
+
+    let result = run_command_expecting_failure(
+        ctx,
+        &["crawl", "https://example.com/seed", "--depth=0"],
+        "Crawl timed out",
+    );
+
+    // In a ~22s run the interval printer would fire ~twice (5s then 10s
+    // cadence); the count never changed, so exactly one progress line may
+    // appear.  A reintroduced per-poll printer or a non-suppressing
+    // interval printer would emit it again.
+    let occurrences = result.stdout.matches("Crawling... 1 pages found").count();
+    assert_eq!(
+        occurrences, 1,
+        "Expected a single 'Crawling... 1 pages found' line for an unchanged count, got {}:\n{}",
+        occurrences, result.stdout
+    );
+}
+
 pub(super) fn test_crawl_foreground_with_sql(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     let _mock_server = start_mock_crawl_session(ctx);
@@ -3949,15 +4639,19 @@ pub(super) fn test_crawl_foreground_with_sql(ctx: &mut E2ECtx) {
     );
 
     let stdout = &result.stdout;
+    // With `--sql` and no `--output`, the extracted payload owns stdout and the
+    // progress lines are routed to stderr (see CRAWL_STRUCTURED_STDOUT), so the
+    // status assertions read both streams.  The payload assertion stays on stdout.
+    let combined = format!("{}\n{}", result.stdout, result.stderr);
     assert!(
-        stdout.contains("Crawl task submitted: crawl-job-42"),
+        combined.contains("Crawl task submitted: crawl-job-42"),
         "Expected submission in:\n{}",
-        stdout
+        combined
     );
     assert!(
-        stdout.contains("X-SQL extraction: enabled"),
+        combined.contains("X-SQL extraction: enabled"),
         "Expected X-SQL indicator in:\n{}",
-        stdout
+        combined
     );
     // The mock server result page doesn't have extracted data, so we should
     // see either "No extracted data" or a completion message
@@ -4378,6 +5072,76 @@ pub(super) fn test_upgrade_to_new_version(ctx: &mut E2ECtx) {
         result.stderr.contains("for AI agents"),
         "Expected AI-agent skills message in upgrade stderr:\n{}",
         result.stderr
+    );
+}
+
+pub(super) fn test_upgrade_shows_rc_hint(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    // Isolate so a pre-existing runtime from earlier scenarios does not
+    // short-circuit the install/upgrade flow.
+    isolate_runtime_dir(ctx, "upgrade-rc-hint");
+
+    // Never touch npm or download/execute the real install scripts.
+    ctx.set_env("BROWSER4_CLI_SKIP_SELF_UPGRADE", "1");
+
+    // ── Phase 1: a newer release candidate exists → the hint is shown ──
+    let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
+    let with_rc = FixtureDownloadServer::start_with_rc(bundle_bytes, "v4.10.0", "v4.11.0-rc.1");
+    ctx.set_env("BROWSER4_RELEASES_BASE_URL", &with_rc.base_url());
+
+    let result = run_command(ctx, &["upgrade"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "upgrade with RC metadata should succeed:\n{}",
+        result.stderr
+    );
+    // The stable release is still what gets installed.
+    assert!(
+        result.stdout.contains("upgraded successfully"),
+        "Expected 'upgraded successfully' in:\n{}",
+        result.stdout
+    );
+    // The RC hint names the candidate and the way to opt in.
+    assert!(
+        result.stderr.contains("release candidate"),
+        "Expected RC hint in stderr:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("v4.11.0-rc.1"),
+        "Expected RC tag in stderr:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("upgrade --tag v4.11.0-rc.1"),
+        "Expected actionable upgrade command in stderr:\n{}",
+        result.stderr
+    );
+    drop(with_rc);
+
+    // ── Phase 2: no RC published → no hint ──
+    let (bundle_bytes2, _dir_name2) = build_fake_runtime_bundle("v4.10.0");
+    let without_rc = FixtureDownloadServer::start(bundle_bytes2, "v4.10.0");
+    ctx.set_env("BROWSER4_RELEASES_BASE_URL", &without_rc.base_url());
+
+    let second = run_command(ctx, &["upgrade"]);
+    assert_eq!(second.exit_code, 0);
+    let combined = format!("{}\n{}", second.stdout, second.stderr);
+    assert!(
+        second.stdout.contains("already at the latest version"),
+        "Expected 'already at the latest version' in:\n{combined}"
+    );
+    assert!(
+        !second.stderr.contains("release candidate"),
+        "RC hint must not appear when no RC metadata is published:\n{}",
+        second.stderr
+    );
+    // The metadata endpoint must have been consulted (and found no RC).
+    let requests = without_rc.snapshot_requests();
+    assert!(
+        requests.iter().any(|p| p.contains("latest-rc.json")),
+        "Expected a latest-rc.json lookup, got: {:?}",
+        requests
     );
 }
 
@@ -4977,7 +5741,7 @@ pub(super) fn test_snapshot_viewport_range(ctx: &mut E2ECtx) {
 }
 
 // ---------------------------------------------------------------------------
-// snapshot-grep -- flag coverage (-i, -v, -F, -w)
+// snapshot-grep -- flag coverage (-i, -n, -v, -F, -w)
 // ---------------------------------------------------------------------------
 
 pub(super) fn test_snapshot_grep_flags(ctx: &mut E2ECtx) {
@@ -5065,6 +5829,20 @@ pub(super) fn test_snapshot_grep_flags(ctx: &mut E2ECtx) {
         "Expected -w moc NOT to match 'mock' (partial word):\n{}",
         result.stdout
     );
+
+    // --line-number (-n): GNU grep -n compatibility. Line numbers print by
+    // default, so -n is a no-op — but it must be ACCEPTED (previously it
+    // errored as "unexpected positional arguments (this command accepts 1)").
+    let result = run_command(ctx, &["snapshot", "grep", "-n", "mock"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep -n to succeed:\n{}", result.stderr);
+    assert!(result.stdout.contains("mock snapshot"),
+        "Expected -n mock to match:\n{}", result.stdout);
+    let numbered: Vec<&str> = result.stdout.lines()
+        .filter(|l| l.contains("mock snapshot"))
+        .collect();
+    assert!(numbered.iter().any(|l| l.starts_with(|c: char| c.is_ascii_digit())),
+        "Expected -n output lines to carry line-number prefixes:\n{}", result.stdout);
 
     // Combined flags: -i -v (invert case-insensitive match)
     let result = run_command(ctx, &["snapshot", "grep", "-i", "-v", "MOCK"]);
@@ -5508,6 +6286,154 @@ pub(super) fn test_htmlsnapshot_query(ctx: &mut E2ECtx) {
     );
 }
 
+/// `htmlsnapshot query --format table` renders rows from the response
+/// resultSet; the default (no --format) stays the raw JSON envelope.
+pub(super) fn test_htmlsnapshot_query_table_format(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    mock_server.set_html_snapshot_query_response(
+        r#"{"statusCode":200,"status":"OK","resultSet":[{"title":"Alpha","price":"$19.99"},{"title":"Beta","price":"$9.99"}]}"#,
+    );
+
+    let result = run_command(
+        ctx,
+        &["htmlsnapshot", "query", "--sql", "SELECT * FROM page", "--format", "table"],
+    );
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot query --format table to succeed:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stdout.contains("Alpha") && result.stdout.contains("Beta"),
+        "expected the table to list both result rows, got:\n{}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("2 rows returned."),
+        "expected row-count summary in table output, got:\n{}",
+        result.stdout
+    );
+
+    // Default output (no --format) remains the raw JSON envelope, exit 0.
+    let result = run_command(
+        ctx,
+        &["htmlsnapshot", "query", "--sql", "SELECT * FROM page"],
+    );
+    assert_eq!(
+        result.exit_code, 0,
+        "default-format query should succeed:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stdout.contains(r#""statusCode":200"#),
+        "expected the raw JSON envelope on stdout by default, got:\n{}",
+        result.stdout
+    );
+}
+
+/// A backend error envelope (417 Expectation Failed, or a 5xx with an empty
+/// resultSet) must produce a nonzero exit code in every output mode so scripts
+/// can detect failure; a 200 with an empty resultSet stays exit 0 ("no data"
+/// is not an error).
+pub(super) fn test_htmlsnapshot_query_error_envelope_exit_code(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    // 417 Expectation Failed — scrape session closed before the query ran.
+    mock_server.set_html_snapshot_query_response(
+        r#"{"statusCode":417,"status":"Expectation Failed","resultSet":null,"isDone":false}"#,
+    );
+
+    let result = run_command_expecting_failure(
+        ctx,
+        &["htmlsnapshot", "query", "--sql", "SELECT * FROM page"],
+        "X-SQL query failed (417 Expectation Failed)",
+    );
+    assert!(
+        result.stdout.contains(r#""statusCode":417"#),
+        "expected the raw JSON envelope to stay on stdout, got:\n{}",
+        result.stdout
+    );
+
+    // The --format table path prints actionable guidance AND exits nonzero.
+    let result = run_command_expecting_failure(
+        ctx,
+        &["htmlsnapshot", "query", "--sql", "SELECT * FROM page", "--format", "table"],
+        "### X-SQL Query Failed (417 Expectation Failed)",
+    );
+    assert!(
+        result.stdout.contains(r#""statusCode":417"#),
+        "expected the raw envelope to still be printed in table mode, got:\n{}",
+        result.stdout
+    );
+
+    // A 417 whose message carries a genuine H2 engine error (DOM_FIRST_FLOAT
+    // compared to a numeric literal in WHERE) surfaces the real cause + CAST
+    // fix instead of the canned session-race text.
+    mock_server.set_html_snapshot_query_response(
+        r#"{"statusCode":417,"status":"Expectation Failed","resultSet":null,"isDone":true,"message":"Hexadecimal string contains non-hex character: \"899.99\" (SQL 90004-197)\nSQL statement:\nSELECT DOM_FIRST_TEXT(DOM, '.product-title') FROM DOM_LOAD_AND_SELECT('http://mock/ec/b', '.product-card') WHERE DOM_FIRST_FLOAT(DOM, '.product-price') >= 25.0"}"#,
+    );
+    let result = run_command_expecting_failure(
+        ctx,
+        &["htmlsnapshot", "query", "--sql", "SELECT * FROM page"],
+        "Hexadecimal string contains non-hex character",
+    );
+    assert!(
+        !result.stderr.contains("scrape session closed"),
+        "a genuine H2 error must not be reported as a session race:\n{}",
+        result.stderr
+    );
+    let result = run_command_expecting_failure(
+        ctx,
+        &["htmlsnapshot", "query", "--sql", "SELECT * FROM page", "--format", "table"],
+        "CAST(DOM_FIRST_FLOAT(DOM, '.price', 0.0) AS DOUBLE) >= 25.0",
+    );
+    assert!(
+        !result.stdout.contains("scrape session closed"),
+        "a genuine H2 error must not be reported as a session race:\n{}",
+        result.stdout
+    );
+
+    // 5xx with an empty resultSet is a backend engine error → nonzero exit.
+    mock_server.set_html_snapshot_query_response(
+        r#"{"statusCode":500,"status":"Internal Server Error","resultSet":null,"isDone":true}"#,
+    );
+    let result = run_command_expecting_failure(
+        ctx,
+        &["htmlsnapshot", "query", "--sql", "SELECT * FROM page"],
+        "backend scrape engine",
+    );
+    assert!(
+        result.stdout.contains(r#""statusCode":500"#),
+        "expected the raw JSON envelope to stay on stdout, got:\n{}",
+        result.stdout
+    );
+
+    // A 200 envelope with an empty resultSet is "no data", not an error.
+    mock_server.set_html_snapshot_query_response(
+        r#"{"statusCode":200,"status":"OK","resultSet":[]}"#,
+    );
+    let result = run_command(
+        ctx,
+        &["htmlsnapshot", "query", "--sql", "SELECT * FROM page"],
+    );
+    assert_eq!(
+        result.exit_code, 0,
+        "expected empty 200 resultSet to stay exit 0:\n{}",
+        result.stderr
+    );
+}
+
 /// `htmlsnapshot export` sends `html_snapshot_export`.
 pub(super) fn test_htmlsnapshot_export(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
@@ -5797,7 +6723,7 @@ pub(super) fn test_upload_error_backend_failure(ctx: &mut E2ECtx) {
 
     let result = run_command_expecting_failure(
         ctx,
-        &["upload", &tmp_path.to_string_lossy(), "#file-input"],
+        &["upload", "#file-input", &tmp_path.to_string_lossy()],
         "simulated upload failure",
     );
     assert_ne!(
@@ -6084,3 +7010,550 @@ pub(super) fn test_e2e_wait_fn(ctx: &mut E2ECtx) {
 // tested via E2E because `--timeout` is always consumed as a global CLI flag
 // (see args.rs parse_global_flags). The unit tests in commands.rs cover the
 // custom-timeout logic via the tool_params_fn directly.
+
+// ---------------------------------------------------------------------------
+// agent-cancel (POST /api/commands/{id}/cancel)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_agent_cancel_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Submit an async agent task, then cancel it by id.
+    let submitted = run_command(ctx, &["agent", "run", "collect the latest updates"]);
+    let task_id = extract_submitted_task_id(&submitted.stdout);
+
+    let cancelled = run_command(ctx, &["agent", "cancel", &task_id]);
+    assert!(
+        cancelled.stdout.contains("cancelled"),
+        "Expected a cancellation confirmation in:\n{}",
+        cancelled.stdout
+    );
+
+    // The mock server must have received POST /api/commands/{id}/cancel.
+    let snapshot = mock_server.snapshot();
+    assert_eq!(
+        snapshot.agent_cancel_calls,
+        vec![task_id.clone()],
+        "Expected the cancel call to be recorded for {task_id}"
+    );
+
+    // Missing id is a hard CLI error before any HTTP request.
+    run_command_expecting_failure(ctx, &["agent", "cancel"], "Missing required argument");
+}
+
+// ---------------------------------------------------------------------------
+// config family (local config.json + server-side /api/config REST)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_config_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // ── Local keys: set → get → list → delete, all against the isolated
+    // state dir config.json (no server round trip). ──
+    let set = run_command(ctx, &["config", "set", "timeout", "42"]);
+    assert!(
+        set.stdout.contains("Set 'timeout' = '42'"),
+        "Expected config set confirmation in:\n{}",
+        set.stdout
+    );
+
+    let get = run_command(ctx, &["config", "get", "timeout"]);
+    assert!(
+        get.stdout.contains("42"),
+        "Expected config get to print the value in:\n{}",
+        get.stdout
+    );
+
+    let list = run_command(ctx, &["config", "list"]);
+    assert!(
+        list.stdout.contains("Config file:")
+            && list.stdout.contains("timeout") && list.stdout.contains("42"),
+        "Expected config list to show the key in:\n{}",
+        list.stdout
+    );
+
+    let del = run_command(ctx, &["config", "delete", "timeout"]);
+    assert!(
+        del.stdout.contains("Deleted 'timeout'"),
+        "Expected config delete confirmation in:\n{}",
+        del.stdout
+    );
+
+    // Unknown keys are rejected with the valid-keys hint.
+    run_command_expecting_failure(ctx, &["config", "set", "bogus-key", "1"], "Unknown config key");
+
+    // ── Server-side keys route to the unified /api/config/{key} REST API. ──
+    let server_get = run_command(ctx, &["config", "get", "agent.llm.maxRequestTokens"]);
+    assert!(
+        server_get
+            .stdout
+            .contains("Server config 'agent.llm.maxRequestTokens'"),
+        "Expected server config header in:\n{}",
+        server_get.stdout
+    );
+
+    let server_set = run_command(
+        ctx,
+        &["config", "set", "agent.llm.maxRequestTokens", "16000"],
+    );
+    assert!(
+        server_set.stdout.contains("16000"),
+        "Expected the runtime override in:\n{}",
+        server_set.stdout
+    );
+
+    let server_delete = run_command(ctx, &["config", "delete", "agent.llm.maxRequestTokens"]);
+    assert!(
+        server_delete
+            .stdout
+            .contains("Server config 'agent.llm.maxRequestTokens'"),
+        "Expected server config reset output in:\n{}",
+        server_delete.stdout
+    );
+
+    // Verify the REST traffic: GET, PUT (with ?value=), DELETE.
+    let calls = mock_server.snapshot().config_calls;
+    assert!(
+        calls.iter().any(|(method, key, _)| method == "GET" && key == "agent.llm.maxRequestTokens"),
+        "Expected a GET /api/config/agent.llm.maxRequestTokens call, got: {calls:?}"
+    );
+    assert!(
+        calls.iter().any(|(method, key, value)| method == "PUT"
+            && key == "agent.llm.maxRequestTokens"
+            && value == "16000"),
+        "Expected PUT /api/config/...?value=16000 call, got: {calls:?}"
+    );
+    assert!(
+        calls.iter().any(|(method, key, _)| method == "DELETE" && key == "agent.llm.maxRequestTokens"),
+        "Expected a DELETE /api/config/agent.llm.maxRequestTokens call, got: {calls:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// diff-snapshot (filesystem-only)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_snapshot_diff_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // diff-snapshot is a pure local-file command; craft two accessibility
+    // tree snapshots in the CLI's snapshot directory (the CLI runs with
+    // workspace_dir as its working directory).
+    let snap_dir = ctx.workspace_dir.join(".browser4-cli").join("snapshot");
+    std::fs::create_dir_all(&snap_dir).expect("create snapshot dir");
+    let before = snap_dir.join("before.yml");
+    let after = snap_dir.join("after.yml");
+    std::fs::write(
+        &before,
+        "- button \"Search\" [box=10,20,100,30] [ref=e1]:\n\
+         - textbox \"Query\" [box=10,60,100,30] [ref=e2]:\n\
+         \x20\x20- /value: \"hello\"\n\
+         - link \"Old\" [box=10,100,100,30] [ref=e4]:\n",
+    )
+    .expect("write before snapshot");
+    std::fs::write(
+        &after,
+        "- button \"Search\" [box=10,20,100,30] [ref=e1]:\n\
+         - textbox \"Query\" [box=10,60,100,30] [ref=e2]:\n\
+         \x20\x20- /value: \"hello2\"\n\
+         - link \"New\" [box=10,140,100,30] [ref=e3]:\n",
+    )
+    .expect("write after snapshot");
+
+    let diff = run_command(
+        ctx,
+        &[
+            "diff",
+            "snapshot",
+            before.to_str().expect("before path"),
+            after.to_str().expect("after path"),
+        ],
+    );
+    assert!(
+        diff.stdout.contains("Snapshot Diff"),
+        "Expected a diff header in:\n{}",
+        diff.stdout
+    );
+    assert!(
+        diff.stdout.contains("1 added, 1 removed, 1 modified"),
+        "Expected the change summary in:\n{}",
+        diff.stdout
+    );
+    assert!(
+        diff.stdout.contains("/value: \"hello\" → \"hello2\""),
+        "Expected the value change in:\n{}",
+        diff.stdout
+    );
+    assert!(
+        diff.stdout.contains("- link e4 \"Old\"") && diff.stdout.contains("+ link e3 \"New\""),
+        "Expected removed/added link entries in:\n{}",
+        diff.stdout
+    );
+
+    // Missing files produce a readable error instead of a panic.
+    let missing = snap_dir.join("missing.yml");
+    let bad = run_command_allowing_failure(
+        ctx,
+        &["diff", "snapshot", missing.to_str().expect("missing path"), "nope.yml"],
+    );
+    assert!(
+        bad.stdout.contains("Cannot read") || bad.exit_code != 0,
+        "Expected a readable error for missing files, got:\n{}",
+        bad.stdout
+    );
+}
+
+// ---------------------------------------------------------------------------
+// profiles-list (filesystem-only, honours HOME/USERPROFILE)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_profiles_list_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Redirect HOME/USERPROFILE so the CLI scans an isolated fake home, then
+    // restore the original values so later scenarios are unaffected.
+    let fake_home = ctx.workspace_dir.join("fake-home");
+    let chrome_base = fake_home.join(".browser4").join("browser").join("chrome");
+    std::fs::create_dir_all(chrome_base.join("prototype").join("google-chrome"))
+        .expect("create prototype profile");
+    std::fs::create_dir_all(chrome_base.join("default")).expect("create default profile");
+    let orig_home = std::env::var("HOME").ok();
+    let orig_userprofile = std::env::var("USERPROFILE").ok();
+    let fake_home_str = fake_home.to_string_lossy().into_owned();
+    ctx.set_env("HOME", &fake_home_str);
+    ctx.set_env("USERPROFILE", &fake_home_str);
+
+    let list = run_command(ctx, &["profiles", "list"]);
+    assert!(
+        list.stdout.contains("prototype"),
+        "Expected the prototype profile in:\n{}",
+        list.stdout
+    );
+    assert!(
+        list.stdout.contains("default"),
+        "Expected the default profile in:\n{}",
+        list.stdout
+    );
+
+    // Restore the inherited environment for later scenarios.
+    match orig_home {
+        Some(home) => ctx.set_env("HOME", &home),
+        None => ctx.unset_env("HOME"),
+    }
+    match orig_userprofile {
+        Some(up) => ctx.set_env("USERPROFILE", &up),
+        None => ctx.unset_env("USERPROFILE"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// code-* family (session-independent coding tools → coding_* MCP tools)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_code_command_family(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // No session is opened: code commands are session-independent and go
+    // straight to the backend's coding tools.
+    let file = "sample.txt";
+    let other = "other.txt";
+
+    // Content-bearing commands: positional content, plus the --stdin path.
+    run_command(ctx, &["code", "write", file, "hello world"]);
+    let write_stdin = run_command_with_stdin(
+        ctx,
+        &["code", "write", file, "--stdin"],
+        "content from stdin",
+    );
+    assert_eq!(write_stdin.exit_code, 0, "code write --stdin should succeed");
+
+    run_command(ctx, &["code", "append", file, "more"]);
+    run_command(ctx, &["code", "replace", file, "hello", "bye"]);
+    run_command(ctx, &["code", "read", file]);
+    run_command(ctx, &["code", "delete", other]);
+    run_command(ctx, &["code", "copy", file, other]);
+    run_command(ctx, &["code", "move", other, "moved.txt"]);
+    run_command(ctx, &["code", "list", "."]);
+    run_command(ctx, &["code", "stat", file]);
+    run_command(ctx, &["code", "glob", "**/*.kt"]);
+    run_command(ctx, &["code", "grep", "TODO", "."]);
+    run_command(ctx, &["code", "mkdir", "new-dir"]);
+    run_command(ctx, &["code", "diff", file]);
+    run_command(ctx, &["code", "changes"]);
+    run_command(ctx, &["code", "shell", "echo hi"]);
+    run_command(ctx, &["code", "scaffold", "js"]);
+    run_command(ctx, &["code", "validate", "js"]);
+    run_command(ctx, &["code", "mvn", "browser4-rest"]);
+    run_command(ctx, &["code", "run", "bash", "echo hi"]);
+    run_command(ctx, &["code", "devtask", "test dev task"]);
+    run_command(ctx, &["code", "impact", file]);
+    run_command(ctx, &["code", "workspace"]);
+    run_command(ctx, &["code", "javap", "java.lang.String"]);
+
+    // Every expected coding_* tool must have been called exactly once (the
+    // two code-write invocations count separately).
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let mut names: Vec<&str> = tool_calls.iter().map(|call| call.tool.as_str()).collect();
+    names.sort_unstable();
+    for tool in [
+        "coding_write",
+        "coding_append",
+        "coding_replace",
+        "coding_read",
+        "coding_delete",
+        "coding_copy",
+        "coding_move",
+        "coding_listDir",
+        "coding_stat",
+        "coding_glob",
+        "coding_grep",
+        "coding_mkdir",
+        "coding_diff",
+        "coding_changeSummary",
+        "coding_shell",
+        "coding_scaffold",
+        "coding_validate",
+        "coding_mvnBuild",
+        "coding_runCode",
+        "coding_devTask",
+        "coding_impact",
+        "coding_workspaceRoot",
+        "coding_classInfo",
+    ] {
+        let count = names.iter().filter(|n| **n == tool).count();
+        assert!(
+            count >= 1,
+            "expected at least one {tool} call, got: {names:?}"
+        );
+    }
+
+    // --stdin content must reach the backend as the `content` argument, and
+    // the CLI-only flag must not leak into the tool call.
+    let write_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "coding_write")
+        .collect();
+    assert_eq!(write_calls.len(), 2, "expected two coding_write calls");
+    let stdin_call = write_calls
+        .iter()
+        .find(|call| call.arguments.get("content").and_then(|v| v.as_str()) == Some("content from stdin"))
+        .unwrap_or_else(|| panic!("expected stdin content in coding_write args: {:?}", write_calls));
+    assert!(
+        stdin_call.arguments.get("stdin").is_none(),
+        "CLI-only --stdin flag must not be forwarded, got: {:?}",
+        stdin_call.arguments
+    );
+
+    // camelCase mapping: code-diff sends the path as `path`.
+    let diff_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "coding_diff")
+        .collect();
+    assert_eq!(diff_calls.len(), 1, "expected one coding_diff call");
+    assert_eq!(diff_calls[0].arguments["path"], "sample.txt");
+}
+
+// ---------------------------------------------------------------------------
+// vitals / web-vitals (dispatch + shared VITALS_JS evaluation)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_vitals_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result
+            .stdout
+            .contains("Session opened: swarm-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    let vitals = run_command(ctx, &["vitals"]);
+    assert_eq!(
+        strip_snapshot_output(&vitals.stdout),
+        "mock evaluation result",
+        "vitals should evaluate VITALS_JS through browser_evaluate"
+    );
+
+    let web_vitals = run_command(ctx, &["web-vitals"]);
+    assert_eq!(
+        strip_snapshot_output(&web_vitals.stdout),
+        "mock evaluation result",
+        "web-vitals (alias) should behave like vitals"
+    );
+
+    // Both commands must issue the same browser_evaluate call: the VITALS
+    // injection script with awaitPromise enabled.
+    let snapshot = mock_server.snapshot();
+    let evaluate_calls: Vec<_> = snapshot
+        .tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_evaluate")
+        .collect();
+    assert_eq!(
+        evaluate_calls.len(),
+        2,
+        "expected two browser_evaluate calls (vitals + web-vitals), got {evaluate_calls:?}"
+    );
+    for call in &evaluate_calls {
+        assert_eq!(
+            call.arguments.get("awaitPromise").and_then(|v| v.as_bool()),
+            Some(true),
+            "expected awaitPromise=true, got: {:?}",
+            call.arguments
+        );
+        let expression = call
+            .arguments
+            .get("expression")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        assert!(
+            expression.contains("web-vitals"),
+            "expected the web-vitals injection script, got a {} char expression",
+            expression.len()
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// doctor-status (aggregated /api/system/status panel)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_doctor_status_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Default view renders the summary layers of the canned report.
+    let status = run_command(ctx, &["doctor", "status"]);
+    assert!(
+        status.stdout.contains("Status Panel Report"),
+        "Expected the status panel header in:\n{}",
+        status.stdout
+    );
+    assert!(
+        status.stdout.contains("UP"),
+        "Expected the health layer in:\n{}",
+        status.stdout
+    );
+
+    // --section drills into one report layer.
+    let section = run_command(ctx, &["doctor", "status", "--section", "build"]);
+    assert!(
+        section.stdout.contains("4.14.0-mock"),
+        "Expected the build section content in:\n{}",
+        section.stdout
+    );
+
+    // Unknown sections are reported with the available list (the command
+    // itself still exits 0 — it degrades gracefully).
+    let unknown = run_command(ctx, &["doctor", "status", "--section", "bogus"]);
+    assert!(
+        unknown.stdout.contains("Unknown section"),
+        "Expected the unknown-section hint in:\n{}",
+        unknown.stdout
+    );
+
+    // --json embeds the raw report document.
+    let json_out = run_command(ctx, &["doctor", "status", "--json"]);
+    assert!(
+        json_out.stdout.contains("status_report")
+            && json_out.stdout.contains("mock-plugin"),
+        "Expected the raw report under status_report in:\n{}",
+        json_out.stdout
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Frame commands (frames / frame) — CLI↔backend contract
+// ---------------------------------------------------------------------------
+
+/// `frames` / `frame` / `frame main` must map to the frame_list /
+/// frame_switch / frame_main backend tools with the right arguments, render
+/// the backend response, and surface backend "Frame not found" errors.
+pub(super) fn test_e2e_frame_commands_contract(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result
+            .stdout
+            .contains("Session opened: swarm-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    // ── frames → frame_list (no extra arguments) and prints the response ──
+    let frames_result = run_command(ctx, &["frames"]);
+    assert_eq!(frames_result.exit_code, 0, "expected frames to succeed");
+    assert!(
+        frames_result
+            .stdout
+            .contains("mock response for frame_list"),
+        "Expected the frame_list mock response in:\n{}",
+        frames_result.stdout
+    );
+
+    // ── frame <selector> → frame_switch with the frame argument ──
+    let switch_result = run_command(ctx, &["frame", "#pay-frame"]);
+    assert_eq!(switch_result.exit_code, 0, "expected frame switch to succeed");
+
+    // ── frame main → frame_main (no extra arguments) ──
+    let main_result = run_command(ctx, &["frame", "main"]);
+    assert_eq!(main_result.exit_code, 0, "expected frame main to succeed");
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let list_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "frame_list")
+        .collect();
+    assert_eq!(list_calls.len(), 1, "expected one frame_list call");
+    assert_eq!(list_calls[0].arguments["sessionId"], "swarm-session-1");
+
+    let switch_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "frame_switch")
+        .collect();
+    assert_eq!(switch_calls.len(), 1, "expected one frame_switch call");
+    assert_eq!(switch_calls[0].arguments["sessionId"], "swarm-session-1");
+    assert_eq!(switch_calls[0].arguments["frame"], "#pay-frame");
+
+    let main_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "frame_main")
+        .collect();
+    assert_eq!(main_calls.len(), 1, "expected one frame_main call");
+    assert_eq!(main_calls[0].arguments["sessionId"], "swarm-session-1");
+
+    // ── backend error surfaces to the CLI with a non-zero exit ──
+    mock_server.queue_tool_failure(
+        "frame_switch",
+        Some("swarm-session-1"),
+        None,
+        "Frame not found: #no-such-frame",
+    );
+    run_command_expecting_failure(ctx, &["frame", "#no-such-frame"], "Frame not found");
+}

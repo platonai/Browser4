@@ -78,12 +78,14 @@ Runs a full CLI smoke test suitable for CI and local development:
 ./smoke-test-runtime-bundle.sh <cli-binary> <bundle-archive> [test-port] [timeout-secs]
 ```
 
-### Install script tests
+### Script tests
 
 | File | Purpose |
 |------|---------|
 | `tests/install-browser4-cli.tests.sh` | Unit tests for the Unix install script |
 | `tests/install-browser4-cli.tests.ps1` | Unit tests for the Windows install script (Pester) |
+| `tests/wait-for-npm-version.tests.sh` | Unit tests for `wait-for-npm-version.sh` (stubbed `npm`, no network) |
+| `tests/reconcile-release-assets.tests.sh` | Unit tests for `reconcile-release-assets.sh` (stubbed `gh`, no network) |
 
 ## Publish (npm)
 
@@ -94,6 +96,7 @@ Runs a full CLI smoke test suitable for CI and local development:
 | `publish-if-needed.js` | Publishes to npm only when the local version differs from the registry. Uses `--tag next` for prerelease versions (containing `-`). |
 | `sync-readme.mjs` | Temporarily copies the repository root `README.md` to `cli/README.md` for npm pack/publish, then restores the original CLI README in `postpack`. |
 | `postinstall.js` | npm `postinstall` hook: downloads the platform native binary after `npm install` |
+| `wait-for-npm-version.sh` | Waits until a published version is actually visible on npm; called by the release workflows after `npm publish` |
 
 ### Version check
 
@@ -112,6 +115,23 @@ node scripts/publish-if-needed.js --dry-run   # print what would happen
 ```
 
 Optional env: `BROWSER4_CLI_NPM_REMOTE_VERSION` to override the remote version for testing.
+
+### Verifying a publish landed
+
+`npm publish` exiting 0 only means the registry accepted the upload — npm processes
+publishes asynchronously and answers with *"Your package is being processed and may take a
+few minutes to become available"*, after which the version can stay invisible to
+`npm view` for a while. `wait-for-npm-version.sh` polls until the exact version is
+visible (10 minutes by default) and only then lets the release proceed:
+
+```shell
+bash scripts/wait-for-npm-version.sh browser4-cli 4.13.18            # 10 min budget, 15 s interval
+bash scripts/wait-for-npm-version.sh browser4-cli 4.13.18 120 5      # 2 min budget, 5 s interval
+```
+
+Exit code 0 = version visible; 1 = still not visible when the budget expired (the message
+includes the last registry answer and manual re-check commands). Both `release.yml` and
+`release-cli.yml` call it in their `Verify npm package was published` step.
 
 ### README sync for npm package
 
@@ -133,6 +153,37 @@ This makes the npm package README match the repository root README without leavi
 ### Postinstall
 
 `postinstall.js` runs automatically after `npm install browser4-cli`. It detects the platform and downloads the matching native binary to `bin/`. On global installs, it also patches npm's bin shims to invoke the native binary directly.
+
+## Release
+
+| Script | Purpose |
+|--------|---------|
+| `reconcile-release-assets.sh` | Makes a GitHub release carry exactly the assets a job produced, re-uploading what is missing or truncated; called by `release.yml` after the publishing action |
+
+### Recovering from a failed release upload
+
+GitHub's release upload endpoint answers with a transient 5xx a few times a month
+(*"Error creating asset temp dir"*, *"Error saving asset"*, *"Unicorn!"*). v4.14.0-rc.6
+(`release.yml` run 35265014949) lost its whole release pipeline that way: the publishing
+action uploaded 6 of 11 assets and then failed, which skipped the artifact attestation, the
+release verification and the OSS sync.
+
+`reconcile-release-assets.sh` treats the release as the source of truth: it lists the assets
+the release carries, uploads only the files that are missing or whose size differs
+(`gh release upload --clobber`), and re-checks until the release matches or the budget
+expires. An already complete release costs one API call and no upload.
+
+```shell
+bash scripts/reconcile-release-assets.sh --tag v4.14.0 --repo platonai/Browser4 \
+  release-assets/Browser4.jar release-assets/browser4-cli-linux-x64
+bash scripts/reconcile-release-assets.sh --tag v4.14.0 --files-from release-assets.txt
+```
+
+Exit code 0 = the release carries every given file at the local size; 1 = still missing or
+mismatched when the budget (600 s by default) expired, the release does not exist, or bad
+usage. `release.yml` runs it in its own `Reconcile release assets` step, which decides
+whether that job passed — the publishing action runs with `continue-on-error: true` for
+exactly that reason.
 
 ## Documentation
 

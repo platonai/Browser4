@@ -163,6 +163,14 @@ To make a full copy of your system profile:
 - **Not an official one-command feature yet:** unlike section 1, there is no
   `profile-import` command — this is a manual procedure.
 
+> **Automated alternative (4.14+):** the `browser4-profile-import` plugin
+> exposes `profile_import.list_sources` and `profile_import.import` tools that
+> discover Chrome/Edge/Safari profiles, copy the whole profile (excluding
+> caches and lock files) into `~/.browser4/imports/<snapshot>/`, and convert
+> Safari bookmarks/cookies into Browser4 formats. The copied profile mounts
+> with `open --profile <dir>` (the `profilePath` capability now reaches the
+> browser launch). Passwords are excluded by default for security.
+
 ## Comparison
 
 | Path | State covered | Copied into managed browser | Status |

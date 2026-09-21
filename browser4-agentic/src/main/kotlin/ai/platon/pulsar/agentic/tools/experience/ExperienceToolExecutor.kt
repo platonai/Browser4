@@ -1,7 +1,9 @@
 package ai.platon.pulsar.agentic.tools.experience
 
+import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
+import ai.platon.pulsar.agentic.tools.specs.ToolResultSchemas
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import kotlin.reflect.KClass
 import java.time.Instant
@@ -41,6 +43,9 @@ class ExperienceToolExecutor(
     override val domain = "experience"
     override val receiverClass: KClass<*> = KnowledgeStore::class
 
+    /** The knowledge store is injected; the receiver is not consumed. */
+    override val requiresReceiver: Boolean = false
+
     private val mapper = pulsarObjectMapper()
 
     init {
@@ -50,39 +55,85 @@ class ExperienceToolExecutor(
                 ToolSpec.Arg("url", "String"),
                 ToolSpec.Arg("trace", "String"),
                 ToolSpec.Arg("outcome", "String", "success"),
-                ToolSpec.Arg("intent", "String", null),
-                ToolSpec.Arg("task_type", "String", null),
+                // Optional in the implementation (`required = false`, and `facts` is
+                // read straight off the map) — declaring them required made the
+                // validator reject every documented call, which is how the example
+                // written for this tool caught the mismatch.
+                ToolSpec.Arg("intent", "String?", "null", "Free-text intent of the task."),
+                ToolSpec.Arg("task_type", "String?", "null", "Task classification, when the caller knows it."),
+                ToolSpec.Arg("facts", "String?", "null", "Retrospective knowledge (JSON string or object)."),
             ),
             returnType = "String",
+            outputSchema = ToolResultSchemas.EXPERIENCE_SAVE,
             description = "Fast Learning: save task trace and update experience stats. " +
                 "Runs in ~tens of ms. No analysis tools executed. " +
-                "Use experience_deep_learn for analysis and knowledge promotion.",
+                "Use experience_deep_learn for analysis and knowledge promotion. " +
+                "Optional `facts` (JSON string or object) merges retrospective knowledge " +
+                "(selectors/interaction_hints/known_blockers/anti_patterns) into the " +
+                "(domain, intent) facts entry — the writer path for lessons learned on a task. " +
+                "Refused when the entry is VERIFIED (immutable).",
+            examples = listOf(
+                ToolExample(
+                    title = "Record what a finished task learned",
+                    args = mapOf(
+                        "url" to "https://example.com/product/1",
+                        "trace" to "{\"steps\":[{\"tool\":\"click\",\"selector\":\"#buy\"}],\"outcome\":\"success\"}",
+                        "intent" to "buy the product",
+                    ),
+                    notes = "`facts` is optional; pass it to merge selectors, blockers or anti-patterns.",
+                ),
+            ),
         )
 
         toolSpec["query"] = ToolSpec(
             domain = domain, method = "query",
             arguments = listOf(
                 ToolSpec.Arg("url", "String"),
-                ToolSpec.Arg("intent", "String", null),
+                // Optional: read with `required = false`, and the (domain, url) facts
+                // answer when the caller has no intent to state.
+                ToolSpec.Arg("intent", "String?", "null", "Free-text intent; omit to match on the URL alone."),
             ),
             returnType = "String",
+            outputSchema = ToolResultSchemas.EXPERIENCE_QUERY,
             description = "Query stored knowledge with intent-based resolution. " +
                 "Classifies intent, then resolves: (domain,intent) → (domain,url) → " +
                 "(family,intent) → (category,intent) → (universal,intent) → cold start. " +
                 "Returns tier, confidence, selectors, blockers, warnings, and status.",
+            examples = listOf(
+                ToolExample(
+                    title = "Ask what is already known about a page",
+                    args = mapOf(
+                        "url" to "https://example.com/product/1",
+                        "intent" to "buy the product",
+                    ),
+                    notes = "Omit `intent` to let the stored (domain, url) facts answer.",
+                ),
+            ),
         )
 
         toolSpec["list"] = ToolSpec(
             domain = domain, method = "list",
             arguments = listOf(
-                ToolSpec.Arg("filter", "String", null),
-                ToolSpec.Arg("intent_filter", "String", null),
-                ToolSpec.Arg("page", "Int", "1"),
-                ToolSpec.Arg("page_size", "Int", "20"),
+                // Optional without a default — see ToolSpec.Arg: `"String?"` + `"null"`.
+                // A bare `null` default declares the argument *required*, which made
+                // the validator reject the plain `experience_list` call the executor
+                // handles with no filter at all.
+                ToolSpec.Arg("filter", "String?", "null", "Only entries whose domain matches this value."),
+                ToolSpec.Arg("intent_filter", "String?", "null", "Only entries whose intent matches this value."),
+                ToolSpec.Arg("page", "Int", "1", "Page number, starting at 1."),
+                ToolSpec.Arg("page_size", "Int", "20", "Entries per page."),
             ),
             returnType = "String",
+            outputSchema = ToolResultSchemas.EXPERIENCE_LIST,
             description = "List stored knowledge entries organized by domain + intent. " +
                 "Filter by domain (filter) or intent (intent_filter). Paginated.",
+            examples = listOf(
+                ToolExample(
+                    title = "List what is known about one domain",
+                    args = mapOf("filter" to "example.com", "page_size" to "50"),
+                    notes = "Every argument is optional — `experience_list` with no arguments lists everything.",
+                ),
+            ),
         )
 
         toolSpec["deep_learn"] = ToolSpec(
@@ -93,10 +144,21 @@ class ExperienceToolExecutor(
                 ToolSpec.Arg("force", "Boolean", "false"),
             ),
             returnType = "String",
+            outputSchema = ToolResultSchemas.EXPERIENCE_DEEP_LEARN,
             description = "Deep Learning: run analysis tools (htmlsnapshot summary, inspect) " +
                 "to build or update KnowledgeFacts. Creates hypothesis on first run, " +
                 "promotes to verified when confidence threshold met. " +
                 "Use force=true to bypass sampling checks.",
+            examples = listOf(
+                ToolExample(
+                    title = "Analyse a page and promote what it teaches",
+                    args = mapOf(
+                        "url" to "https://example.com/product/1",
+                        "intent" to "buy the product",
+                    ),
+                    notes = "Runs analysis tools against the current page and takes seconds, not milliseconds.",
+                ),
+            ),
         )
     }
 
@@ -190,13 +252,34 @@ class ExperienceToolExecutor(
         val tracePath = knowledgeStore.saveTrace(trace)
         knowledgeStore.updateStats(trace)
 
-        // Also create/save KnowledgeFacts so list() and query() find this entry
-        // without requiring an explicit deep_learn call.
         val intentKey = classifiedIntent.name.lowercase()
-        val existingFacts = knowledgeStore.loadFacts(domainName, intentKey)
-        if (existingFacts == null) {
-            val facts = KnowledgeFacts.createHypothesis(intentKey, domainName, urlPattern)
-            knowledgeStore.saveFacts(facts)
+
+        // Optional retrospective knowledge: `facts` seeds/merges the
+        // otherwise writer-less selectors/hints/blockers/anti-patterns of the
+        // (domain, intent) facts entry (see KnowledgeFacts).  Accepts a JSON
+        // string OR a structured object (MCP may deliver either); nested keys
+        // tolerate camelCase and snake_case spellings.
+        val factsValue = args["facts"]
+        var factsMerged: Boolean? = null
+        var factsStatus: String? = null
+        var factsRejected: Boolean? = null
+        var factsMessage: String? = null
+        val patch = parseFactsPatch(factsValue)
+        if (!patch.isEmpty) {
+            val mergeResult = knowledgeStore.mergeFacts(domainName, intentKey, urlPattern, patch)
+            factsMerged = !mergeResult.rejected
+            factsRejected = mergeResult.rejected
+            factsStatus = mergeResult.facts.status.name.lowercase()
+            factsMessage = mergeResult.message
+        } else {
+            // No knowledge patch: still create empty HYPOTHESIS facts so
+            // list() and query() find this (domain, intent) entry without an
+            // explicit deep_learn call.
+            val existingFacts = knowledgeStore.loadFacts(domainName, intentKey)
+            if (existingFacts == null) {
+                val facts = KnowledgeFacts.createHypothesis(intentKey, domainName, urlPattern)
+                knowledgeStore.saveFacts(facts)
+            }
         }
 
         // Load stats for response
@@ -212,12 +295,104 @@ class ExperienceToolExecutor(
             confidence = stats.confidence,
             retrievalTier = stats.retrievalTier,
             failureCategory = failureCategory,
+            factsMerged = factsMerged,
+            factsStatus = factsStatus,
+            factsRejected = factsRejected,
+            factsMessage = factsMessage,
             message = buildString {
                 append("Fast Learning complete for $domainName")
                 if (failureCategory != null) append(" — failure: $failureCategory")
+                if (factsMessage != null) append(". $factsMessage")
             },
         )
         return mapper.writeValueAsString(result)
+    }
+
+    /**
+     * Parse the optional `facts` argument of experience_save into a
+     * [FactsPatch].  Accepts:
+     * - `null`/missing → empty patch;
+     * - a JSON string (CLI `--facts @file` / inline JSON);
+     * - a structured Map (LLM tool calls deliver objects natively).
+     *
+     * Nested keys tolerate both snake_case and camelCase spellings
+     * (`interaction_hints` / `interactionHints`, …); selector values accept
+     * `{primary, fallbacks?, note?}` (and `source` is ignored/kept as-is).
+     */
+    private fun parseFactsPatch(value: Any?): FactsPatch {
+        if (value == null) return FactsPatch()
+        val map: Map<*, *> = when (value) {
+            is String -> {
+                val trimmed = value.trim()
+                if (trimmed.isEmpty() || trimmed == "{}" || trimmed == "null") return FactsPatch()
+                try {
+                    mapper.readValue(trimmed, Map::class.java)
+                } catch (e: Exception) {
+                    throw IllegalArgumentException(
+                        "Failed to parse facts JSON: ${e.message}. " +
+                            "Expected: {\"selectors\":{...},\"interaction_hints\":[...],\"known_blockers\":[...],\"anti_patterns\":[...]}"
+                    )
+                }
+            }
+            is Map<*, *> -> value
+            else -> throw IllegalArgumentException(
+                "facts must be a JSON string or object (got ${value::class.simpleName})"
+            )
+        }
+
+        fun pick(vararg keys: String): Any? {
+            for ((k, v) in map) {
+                val key = k?.toString() ?: continue
+                if (keys.any { it.equals(key, ignoreCase = true) }) return v
+            }
+            return null
+        }
+        fun strList(v: Any?): List<String> = when (v) {
+            null -> emptyList()
+            is List<*> -> v.mapNotNull { it?.toString() }
+            is String -> v.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }
+            else -> emptyList()
+        }
+
+        val selectors = mutableMapOf<String, VerifiedSelector>()
+        (pick("selectors") as? Map<*, *>)?.forEach { (key, raw) ->
+            val selMap = raw as? Map<*, *> ?: return@forEach
+            val primary = selMap.entries.firstOrNull { (k, _) ->
+                k?.toString()?.equals("primary", true) == true
+            }?.value?.toString() ?: return@forEach
+            val fallbacks = strList(selMap.entries.firstOrNull { (k, _) ->
+                k?.toString()?.equals("fallbacks", true) == true
+            }?.value)
+            val note = selMap.entries.firstOrNull { (k, _) ->
+                k?.toString()?.equals("note", true) == true
+            }?.value?.toString()
+            selectors[key?.toString() ?: primary] = VerifiedSelector(
+                primary = primary,
+                fallbacks = fallbacks,
+                note = note,
+            )
+        }
+
+        val blockers = (pick("known_blockers", "blockers") as? List<*>).orEmpty().mapNotNull { raw ->
+            val b = raw as? Map<*, *> ?: return@mapNotNull null
+            fun field(vararg keys: String): String? =
+                b.entries.firstOrNull { (k, _) -> keys.any { it.equals(k?.toString(), true) } }?.value?.toString()
+            val type = field("type") ?: return@mapNotNull null
+            BlockerInfo(
+                type = type,
+                selector = field("selector"),
+                action = field("action") ?: "click",
+                frequency = field("frequency"),
+                note = field("note"),
+            )
+        }
+
+        return FactsPatch(
+            selectors = selectors,
+            interactionHints = strList(pick("interaction_hints", "interactionHints", "hints")),
+            knownBlockers = blockers,
+            antiPatterns = strList(pick("anti_patterns", "antiPatterns")),
+        )
     }
 
     // =========================================================================
@@ -349,6 +524,8 @@ class ExperienceToolExecutor(
             lower.contains("download") || lower.contains("save_file") -> "download"
             lower.contains("monitor") || lower.contains("watch") || lower.contains("track") -> "monitor"
             lower.contains("compare") || lower.contains("diff") -> "compare"
+            lower.contains("publish") || lower.contains("post") || lower.contains("x_post")
+                || lower.contains("cross") || lower.contains("发帖") || lower.contains("发布") -> "publish"
             else -> null
         }
     }

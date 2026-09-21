@@ -24,6 +24,18 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         private const val READ_ACTIONS_WHITELIST_PROPERTY = "browser4.tab.read.actions.whitelist"
         private const val READ_ACTIONS_WHITELIST_ENV = "BROWSER4_TAB_READ_ACTIONS_WHITELIST"
         private val logger: Logger = Logger.getLogger(BrowserTabToolExecutor::class.java.name)
+
+        /**
+         * Result contract of `tab.dialogStatus`.
+         *
+         * `type`/`message` are optional on purpose: the driver-less fallback answers
+         * `{pending: false}` and nothing else, and a schema that demanded all three
+         * fields would reject that legitimate result.
+         */
+        private const val DIALOG_STATUS_SCHEMA =
+            """{"type":"object","required":["pending"],"properties":""" +
+                """{"pending":{"type":"boolean"},"type":{"type":"string"},"message":{"type":"string"}}}"""
+
         // Actions that read page state and can become flaky if executed too soon after mutations/navigation.
         private val DEFAULT_READ_PAGE_STATE_ACTIONS = setOf(
             "waitForSelector", "waitForNavigation", "waitForPage",
@@ -56,9 +68,76 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "loadStorageState"
         )
 
+        // JS-execution actions that must NOT run while a native JS dialog
+        // (alert/confirm/prompt) is open.  Chrome queues CDP Runtime.evaluate
+        // (and similar) commands behind the dialog and they never complete,
+        // so these hang until the caller gives up.  Keep them separate from
+        // READ_PAGE_STATE_ACTIONS: eval-family actions may mutate the DOM, so
+        // they intentionally do not participate in the read-timing whitelist,
+        // but they still need the dialog guard.
+        private val EVAL_EXECUTION_ACTIONS = setOf(
+            "evaluate", "evaluateDetail", "eval", "evaluateValue", "evaluateValueDetail"
+        )
+
+        /** Actions guarded against an open native JS dialog. */
+        private val DIALOG_GUARDED_ACTIONS: Set<String> =
+            READ_PAGE_STATE_ACTIONS + EVAL_EXECUTION_ACTIONS
+
         private const val NAVIGATION_POLL_TIMEOUT_MS = 30_000L
         private const val NAVIGATION_DOM_READY_TIMEOUT_MS = 10_000L
         private const val NAVIGATION_DOM_SETTLE_DELAY_MS = 1_000L
+
+        /**
+         * Read the concatenated descendant text of an element, skipping
+         * SCRIPT/STYLE/NOSCRIPT/TEMPLATE subtrees, then normalize runs of
+         * whitespace (including newlines) to single spaces and trim the ends.
+         * This is the default for `get text`: `textContent`-style reads
+         * otherwise surface the page's layout whitespace (indentation,
+         * line breaks) that the rendered text does not show.
+         *
+         * Both variants run through the same CDP `callFunctionOn` locator path
+         * used by the attribute/property reads, so every `get` mode resolves
+         * refs (`eN` backend node ids) and CSS selectors identically against
+         * the live DOM.
+         */
+        private val SELECT_FIRST_TEXT_NORMALIZED_JS: String =
+            """
+            function(element) {
+                try {
+                    var excluded = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
+                    var text = '';
+                    var walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, { acceptNode: function(node) {
+                        var p = node.parentNode;
+                        return p && !excluded.has(p.nodeName) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+                    }});
+                    var n;
+                    while ((n = walker.nextNode())) { text += n.nodeValue; }
+                    return text.replace(/\s+/g, ' ').trim();
+                } catch (e) { return null; }
+            }
+            """.trimIndent()
+
+        /**
+         * Raw variant of [SELECT_FIRST_TEXT_NORMALIZED_JS]: the concatenated
+         * descendant text exactly as stored in the DOM, no whitespace
+         * normalization.  Selected with `get text --raw`.
+         */
+        private val SELECT_FIRST_TEXT_READ_JS: String =
+            """
+            function(element) {
+                try {
+                    var excluded = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
+                    var text = '';
+                    var walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, { acceptNode: function(node) {
+                        var p = node.parentNode;
+                        return p && !excluded.has(p.nodeName) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+                    }});
+                    var n;
+                    while ((n = walker.nextNode())) { text += n.nodeValue; }
+                    return text;
+                } catch (e) { return null; }
+            }
+            """.trimIndent()
 
         private fun resolveReadPageStateActions(): Set<String> {
             val configuredValue = System.getProperty(READ_ACTIONS_WHITELIST_PROPERTY)?.trim()
@@ -132,16 +211,24 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             method = "type",
             arguments = listOf(
                 ToolSpec.Arg("text", "String"),
-                ToolSpec.Arg("selector", "String?", "null")
+                ToolSpec.Arg("selector", "String?", "null"),
+                ToolSpec.Arg("method", "String?", "auto"),
+                ToolSpec.Arg("verify", "Boolean", "false")
             ),
             returnType = "Unit",
-            description = "Insert text into the currently focused element or the element matched by selector.",
+            description = "Insert text into the currently focused element or the element matched by selector. " +
+                "method=auto|chars|exec: auto (default) uses per-character typing for short text and one " +
+                "execCommand('insertText') bulk insert for long (>150 chars) or multi-line text; chars forces " +
+                "per-character typing; exec forces the bulk insert (selector required). verify=true reads the " +
+                "element back after typing and fails when the content does not match (never silently lose text).",
             help = """
                 tab.type(text: String)
                 tab.type(text: String, selector: String?)
+                tab.type(text: String, selector: String, method: String?, verify: Boolean?)
 
                 Types text into the currently focused element when selector is omitted.
                 When selector is provided, the executor focuses the matched element first and then types text.
+                method: auto|chars|exec — see the tool description. method/verify require a selector.
             """.trimIndent()
         )
         toolSpec["press"] = ToolSpec(
@@ -159,6 +246,221 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
                 Presses the key on the currently focused element when selector is omitted.
                 When selector is provided, the executor focuses the matched element first and then presses the key.
+            """.trimIndent()
+        )
+        // ------------------------------------------------------------------
+        // Explicit contracts for methods whose upstream WebDriver signature is
+        // not expressible over JSON.
+        //
+        // `ToolSpecGenerator` mirrors the base library's `WebDriver.kt`, and for
+        // an overloaded method it keeps the *last* overload. For the methods
+        // below that last overload takes a domain object (`NavigateEntry`,
+        // `RectD`, `AriaSnapshotOptions`, `Duration`, a `suspend () -> …`
+        // action) that an MCP client cannot send — and the required-argument
+        // check then rejected calls that the executor actually handles. Each
+        // spec here states what `callFunctionOn` really reads; keep them in
+        // sync with the `when (functionName)` branches below.
+        // ------------------------------------------------------------------
+        toolSpec["click"] = ToolSpec(
+            domain = domain,
+            method = "click",
+            arguments = listOf(
+                ToolSpec.Arg("selector", "String", null, "CSS or :expr(...) selector of the element to click."),
+                ToolSpec.Arg("count", "Int?", "null", "Click this many times (2 = double click)."),
+                ToolSpec.Arg("modifier", "String?", "null", "Modifier key held during the click (e.g. Control, Shift)."),
+                ToolSpec.Arg("button", "String?", "null", "Mouse button: left | right | middle."),
+                ToolSpec.Arg("autoDismissDialogs", "Boolean?", "false", "Accept any native dialog raised by the click."),
+            ),
+            returnType = "Unit",
+            description = "Click the element matched by selector, optionally with a repeat count, modifier or mouse button.",
+            help = """
+                tab.click(selector: String)
+                tab.click(selector: String, count: Int)
+                tab.click(selector: String, modifier: String)
+
+                count and modifier are mutually exclusive. The upstream WebDriver
+                overloads declare modifier as required; the executor does not, so the
+                advertised contract keeps it optional (a client that only has a
+                selector must not be rejected).
+            """.trimIndent()
+        )
+        toolSpec["dblclick"] = ToolSpec(
+            domain = domain,
+            method = "dblclick",
+            arguments = listOf(
+                ToolSpec.Arg("selector", "String", null, "CSS or :expr(...) selector of the element to double click."),
+                ToolSpec.Arg("modifier", "String?", "null", "Modifier key held during the double click."),
+                ToolSpec.Arg("autoDismissDialogs", "Boolean?", "false", "Accept any native dialog raised by the click."),
+            ),
+            returnType = "Unit",
+            description = "Double click the element matched by selector.",
+            help = """
+                tab.dblclick(selector: String)
+                tab.dblclick(selector: String, modifier: String)
+
+                The upstream overload declares modifier as required; the executor does
+                not, so a selector-only call is valid here.
+            """.trimIndent()
+        )
+        toolSpec["evaluateValue"] = ToolSpec(
+            domain = domain,
+            method = "evaluateValue",
+            arguments = listOf(
+                ToolSpec.Arg("expression", "String?", "null", "JavaScript expression, evaluated in the page."),
+                ToolSpec.Arg("selector", "String?", "null", "Scope the evaluation to this element."),
+                ToolSpec.Arg("functionDeclaration", "String?", "null", "Function body used with 'selector'."),
+                ToolSpec.Arg("awaitPromise", "Boolean?", "false", "Await a promise returned by the expression."),
+                ToolSpec.Arg("waitSelector", "String?", "null", "Wait for this selector before evaluating."),
+                ToolSpec.Arg("waitTimeout", "Long?", "null", "How long to wait for 'waitSelector' (default 30000)."),
+            ),
+            returnType = "Any?",
+            description = "Evaluate JavaScript in the page, or against the element matched by selector.",
+            help = """
+                tab.evaluateValue(expression: String)
+                tab.evaluateValue(selector: String, functionDeclaration: String)
+
+                `expression` is the page-scoped form the CLI and MCP clients use;
+                `selector` + `functionDeclaration` is the element-scoped overload the
+                executor resolves through the driver. The upstream declaration lists
+                the second overload last and without defaults, which would make both
+                of its arguments mandatory for every caller.
+            """.trimIndent()
+        )
+        toolSpec["navigate"] = ToolSpec(
+            domain = domain,
+            method = "navigate",
+            arguments = listOf(
+                ToolSpec.Arg("url", "String", null, "URL to navigate to; the executor waits for the page to load."),
+                ToolSpec.Arg("rawUrl", "String?", "null", "Low-level alternative to 'url' — must be paired with 'pageUrl'."),
+                ToolSpec.Arg("pageUrl", "String?", "null", "Page URL paired with 'rawUrl'."),
+            ),
+            returnType = "Unit",
+            description = "Navigate the current page to a URL and wait for the page to load.",
+            help = """
+                tab.navigate(url: String)
+
+                Navigates the current page to `url` and then polls document.readyState
+                until the page has loaded (covers SPA routes and same-URL navigations,
+                which waitForNavigation() cannot observe).
+                rawUrl/pageUrl are the low-level pair used by internal drivers; MCP
+                clients should pass `url`.
+            """.trimIndent()
+        )
+        toolSpec["waitForSelector"] = ToolSpec(
+            domain = domain,
+            method = "waitForSelector",
+            arguments = listOf(
+                ToolSpec.Arg("selector", "String", null, "CSS selector or :expr(...) selector to wait for."),
+                ToolSpec.Arg("timeoutMillis", "Long?", "null", "How long to wait before failing; driver default when omitted."),
+            ),
+            returnType = "Unit",
+            description = "Wait until an element matching the selector exists in the DOM.",
+            help = """
+                tab.waitForSelector(selector: String)
+                tab.waitForSelector(selector: String, timeoutMillis: Long)
+
+                Fails (TIMEOUT) instead of returning silently when the selector never appears.
+            """.trimIndent()
+        )
+        toolSpec["waitForNavigation"] = ToolSpec(
+            domain = domain,
+            method = "waitForNavigation",
+            arguments = listOf(
+                ToolSpec.Arg("oldUrl", "String?", "null", "URL to navigate away from; omit to just wait for the page to settle."),
+                ToolSpec.Arg("timeoutMillis", "Long?", "null", "How long to wait before failing."),
+            ),
+            returnType = "Unit",
+            description = "Wait for an in-flight navigation to finish.",
+            help = """
+                tab.waitForNavigation()
+                tab.waitForNavigation(oldUrl: String, timeoutMillis: Long?)
+
+                Polls document.readyState instead of the upstream `oldUrl != currentUrl()`
+                predicate, so same-URL navigations (SPA routes, fragment jumps) also
+                complete instead of timing out.
+            """.trimIndent()
+        )
+        toolSpec["waitForPage"] = ToolSpec(
+            domain = domain,
+            method = "waitForPage",
+            arguments = listOf(
+                ToolSpec.Arg("url", "String", null, "URL to wait for."),
+                ToolSpec.Arg("timeoutMillis", "Long?", "null", "How long to wait before failing; 30000 when omitted."),
+            ),
+            returnType = "Unit",
+            description = "Wait until the browser has a page at the given URL.",
+            help = """
+                tab.waitForPage(url: String)
+                tab.waitForPage(url: String, timeoutMillis: Long)
+            """.trimIndent()
+        )
+        toolSpec["waitForFunction"] = ToolSpec(
+            domain = domain,
+            method = "waitForFunction",
+            arguments = listOf(
+                ToolSpec.Arg("pageFunction", "String", null, "JavaScript expression returning a truthy value when done."),
+                ToolSpec.Arg("timeoutMillis", "Long?", "null", "How long to wait before failing; 30000 when omitted."),
+            ),
+            returnType = "Unit",
+            description = "Wait until a JavaScript expression evaluates to a truthy value.",
+            help = """
+                tab.waitForFunction(pageFunction: String)
+                tab.waitForFunction(pageFunction: String, timeoutMillis: Long)
+            """.trimIndent()
+        )
+        toolSpec["delay"] = ToolSpec(
+            domain = domain,
+            method = "delay",
+            arguments = listOf(
+                ToolSpec.Arg("millis", "Long", "1000", "How long to wait, in milliseconds."),
+            ),
+            returnType = "Unit",
+            description = "Wait unconditionally for the given number of milliseconds.",
+            help = """
+                tab.delay(millis: Long = 1000)
+            """.trimIndent()
+        )
+        toolSpec["screenshot"] = ToolSpec(
+            domain = domain,
+            method = "screenshot",
+            arguments = listOf(
+                ToolSpec.Arg("selector", "String?", "null", "Capture only the element matching this selector."),
+                ToolSpec.Arg("fullPage", "Boolean?", "null", "Capture the full scrollable page."),
+                ToolSpec.Arg("viewport", "Int?", "null", "Capture the Nth viewport (scroll-relative)."),
+            ),
+            returnType = "String",
+            description = "Capture a screenshot; pass no argument for the visible viewport, or exactly one of selector/fullPage/viewport.",
+            help = """
+                tab.screenshot()
+                tab.screenshot(selector: String)
+                tab.screenshot(fullPage: Boolean)
+                tab.screenshot(viewport: Int)
+
+                Exactly one of selector/fullPage/viewport may be given; anything else is
+                rejected rather than silently capturing the wrong region.
+            """.trimIndent()
+        )
+        toolSpec["ariaSnapshot"] = ToolSpec(
+            domain = domain,
+            method = "ariaSnapshot",
+            arguments = listOf(
+                ToolSpec.Arg("viewports", "String?", "null", "Viewport spec (e.g. \"0,1\") to capture."),
+                ToolSpec.Arg("interactive", "Boolean?", "false", "Keep only interactive nodes."),
+                ToolSpec.Arg("urls", "Boolean?", "false", "Include link URLs."),
+                ToolSpec.Arg("compact", "Boolean?", "true", "Drop empty structural nodes."),
+                ToolSpec.Arg("depth", "Int?", "-1", "Maximum tree depth; -1 for unlimited."),
+                ToolSpec.Arg("selector", "String?", "null", "Root the snapshot at this selector."),
+                ToolSpec.Arg("boxes", "Boolean?", "true", "Include element bounding boxes."),
+                ToolSpec.Arg("limit", "Int?", "-1", "Maximum number of nodes; -1 for unlimited."),
+            ),
+            returnType = "String",
+            description = "Build an ARIA accessibility snapshot of the current page.",
+            help = """
+                tab.ariaSnapshot()
+                tab.ariaSnapshot(selector: String, compact: Boolean, boxes: Boolean, …)
+
+                The upstream WebDriver method takes an AriaSnapshotOptions object; the
+                executor flattens it into these options, which is what MCP clients send.
             """.trimIndent()
         )
         toolSpec["saveStorageState"] = ToolSpec(
@@ -211,15 +513,186 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 Empties the in-browser console message buffer.
             """.trimIndent()
         )
+        toolSpec["networkRequests"] = ToolSpec(
+            domain = domain,
+            method = "networkRequests",
+            arguments = listOf(
+                ToolSpec.Arg("filter", "String?", "null"),
+                ToolSpec.Arg("type", "String?", "null"),
+                ToolSpec.Arg("method", "String?", "null"),
+                ToolSpec.Arg("status", "String?", "null"),
+                ToolSpec.Arg("clear", "Boolean", "false"),
+            ),
+            returnType = "List<TrackedNetworkRequest>",
+            description = "List network requests tracked for the current tab, optionally filtered.",
+            help = """
+                tab.networkRequests()
+                tab.networkRequests(filter: String? = null, type: String? = null, method: String? = null, status: String? = null, clear: Boolean = false)
+
+                Enables Network tracking on first use, then returns the requests observed so far.
+                filter — only requests whose URL contains this text (case-insensitive).
+                type — comma-separated CDP resource types, e.g. "xhr,fetch".
+                method — HTTP method, e.g. "POST".
+                status — "200", "2xx", or a range like "400-499".
+                clear — drop all tracked requests first.
+            """.trimIndent()
+        )
+        toolSpec["networkRequestDetail"] = ToolSpec(
+            domain = domain,
+            method = "networkRequestDetail",
+            arguments = listOf(ToolSpec.Arg("requestId", "String")),
+            returnType = "Map<String, Any?>",
+            description = "Fetch the full detail of one tracked network request, including headers, timing, and response body.",
+            help = """
+                tab.networkRequestDetail(requestId: String)
+
+                Returns request/response metadata plus the response body (fetched on demand) for the
+                request id shown by tab.networkRequests().
+            """.trimIndent()
+        )
+        toolSpec["harStart"] = ToolSpec(
+            domain = domain,
+            method = "harStart",
+            arguments = listOf(ToolSpec.Arg("contentMode", "String?", "none")),
+            returnType = "Map<String, Any?>",
+            description = "Start a HAR recording session on the current tab (bodies captured per content mode: none, text, or all).",
+            help = """
+                tab.harStart(contentMode: String = "none")
+
+                Starts recording network traffic into a HAR 1.2 document.
+                contentMode — which response bodies to embed: "none" (default), "text" (text-like MIME types), or "all" (binary base64).
+                Stop with tab.harStop() and write the returned "har" document to a .har file.
+            """.trimIndent()
+        )
+        toolSpec["harStop"] = ToolSpec(
+            domain = domain,
+            method = "harStop",
+            arguments = emptyList(),
+            returnType = "Map<String, Any?>",
+            description = "Stop the active HAR recording and return the complete HAR 1.2 document.",
+            help = """
+                tab.harStop()
+
+                Stops recording and returns { recording, contentMode, entries, har } where har is the
+                HAR 1.2 document. Serialize it to JSON to get a .har file.
+            """.trimIndent()
+        )
+        toolSpec["networkRoute"] = ToolSpec(
+            domain = domain,
+            method = "networkRoute",
+            arguments = listOf(
+                ToolSpec.Arg("urlPattern", "String"),
+                ToolSpec.Arg("abort", "Boolean", "false"),
+                ToolSpec.Arg("body", "String?", "null"),
+                ToolSpec.Arg("contentType", "String?", "null"),
+                ToolSpec.Arg("resourceType", "String?", "null"),
+            ),
+            returnType = "Map<String, Any?>",
+            description = "Route matching requests to a mock response or abort them (CDP Fetch interception).",
+            help = """
+                tab.networkRoute(urlPattern: String, abort: Boolean = false, body: String? = null, contentType: String? = null, resourceType: String? = null)
+
+                Intercepts requests whose URL matches urlPattern ("*" matches all; plain text matches
+                URLs containing it; "*" globs like "**/api/users" are supported).
+                abort — fail matching requests instead of sending them.
+                body/contentType — answer matching requests with this mock response.
+                resourceType — only intercept these CDP resource types (comma-separated, e.g. "xhr,fetch").
+                Remove routes with tab.networkUnroute().
+            """.trimIndent()
+        )
+        toolSpec["networkUnroute"] = ToolSpec(
+            domain = domain,
+            method = "networkUnroute",
+            arguments = listOf(ToolSpec.Arg("urlPattern", "String?", "null")),
+            returnType = "Map<String, Any?>",
+            description = "Remove request routes; without a pattern every route is removed and Fetch interception is disabled.",
+            help = """
+                tab.networkUnroute(urlPattern: String? = null)
+
+                Removes the route registered with the exact urlPattern, or all routes (and disables
+                Fetch interception) when no pattern is given.
+            """.trimIndent()
+        )
+        // Frame-scope specs are normally generated from the WebDriver interface
+        // source; the explicit entries keep them resolvable when the generator
+        // falls back to the bundled JSON (e.g. running from a JAR).
+        toolSpec["frameList"] = ToolSpec(
+            domain = domain,
+            method = "frameList",
+            arguments = emptyList(),
+            returnType = "List<FrameInfo>",
+            description = "List the frames of the current page (frame tree, depth-first, main frame first).",
+            help = """
+                tab.frameList()
+
+                Returns the page's frames with their id, name, url, parent frame id, and depth.
+                The frame that element operations are currently scoped to is marked active.
+            """.trimIndent()
+        )
+        toolSpec["frameSwitch"] = ToolSpec(
+            domain = domain,
+            method = "frameSwitch",
+            arguments = listOf(ToolSpec.Arg("frame", "String")),
+            returnType = "Map<String, Any?>",
+            description = "Switch the frame that subsequent CSS-selector element operations resolve against.",
+            help = """
+                tab.frameSwitch(frame: String)
+
+                Resolves the target in this order: a CSS selector matching an <iframe> in the
+                currently scoped document (nested switching works), an exact frame id as printed
+                by tab.frameList(), an exact frame name, or a case-insensitive url substring.
+                After switching, click/fill/type/hover/focus/waitForSelector/isVisible and the
+                element-scoped reads resolve their CSS selectors inside the selected frame.
+                Return to the main frame with tab.frameMain(); the scope also resets on navigation.
+            """.trimIndent()
+        )
+        toolSpec["frameMain"] = ToolSpec(
+            domain = domain,
+            method = "frameMain",
+            arguments = emptyList(),
+            returnType = "Unit",
+            description = "Switch back to the main frame, undoing the scope set by frameSwitch.",
+            help = """
+                tab.frameMain()
+
+                All subsequent element operations resolve against the main document again.
+            """.trimIndent()
+        )
+
+        // Two methods the executor dispatches and the API advertises aliases for
+        // (`browser_is_enabled`, `browser_dialog_status`), but which the mirrored
+        // `WebDriver` interface does not declare — so no generated spec existed and
+        // the aliases resolved to nothing. Declared here, they become reachable.
+        toolSpec["isEnabled"] = ToolSpec(
+            domain = domain,
+            method = "isEnabled",
+            arguments = listOf(ToolSpec.Arg("selector", "String", null, "Element to inspect.")),
+            returnType = "Boolean",
+            description = "Whether the element matched by `selector` is enabled — " +
+                "not disabled and not read-only."
+        )
+        toolSpec["dialogStatus"] = ToolSpec(
+            domain = domain,
+            method = "dialogStatus",
+            arguments = emptyList(),
+            returnType = "Map",
+            description = "Report the pending JavaScript dialog, if any: " +
+                "`{pending, type, message}`. Read-only — it never dismisses the dialog.",
+            outputSchema = DIALOG_STATUS_SCHEMA
+        )
+
+        // Must stay last: the generated examples are KDoc snippets and the explicit
+        // specs above replace whole entries, so applying the callable examples
+        // (see TabToolExamples) earlier silently loses them for every method
+        // declared after this point. `TabToolExamplesTest` pins that.
+        toolSpec.replaceExamples(TabToolExamples.EXECUTABLE)
     }
 
     override fun help(method: String): String {
         val spec = toolSpec[method] ?: return "No help available for unknown method: $method"
-
-        return spec.help ?: """
-            ${spec.expression}
-            ${spec.description}
-        """.trimIndent()
+        // Keep the authored KDoc prose, but render signature/arguments/examples the
+        // same way every other executor does.
+        return renderHelp(spec)
     }
 
     private fun normalizeEvaluateValueArgs(args: Map<String, Any?>): Map<String, Any?> {
@@ -240,6 +713,96 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "eval" -> "eval requires 'expression' or ('expression','selector')"
             else -> "evaluateValue requires 'expression' or ('selector','functionDeclaration')"
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Element-scoped reads — uniform locator resolution for `get` modes
+    // ---------------------------------------------------------------------------
+    //
+    // text / attr / property reads are dispatched to the driver methods
+    // selectFirstTextOrNull / selectFirstAttributeOrNull /
+    // selectFirstPropertyValueOrNull, whose resolution paths historically
+    // diverged (CDP DOM resolution for text/attr vs a page-JS
+    // __pulsar_utils__ helper for property that needs an injected runtime and
+    // degrades `eN` refs).  Instead, all three modes resolve through the
+    // driver's element-scoped evaluateValueDetail (CDP DOM.querySelector for
+    // CSS selectors and DOM.resolveNode for `eN` backend-node-id refs) and
+    // differ only in the value expression — one live-DOM path with identical
+    // semantics for every locator format and every mode.
+    //
+    // Result contract (backward compatible with the CLI):
+    // - element matched  -> the value, or `""` when the element matched but the
+    //   requested attribute/property is null/absent (never conflated with a miss)
+    // - CSS/XPath selector matched nothing -> null (a miss is a legitimate,
+    //   non-fatal outcome when probing static selectors)
+    // - an `eN`/`backend:` snapshot ref cannot be resolved -> an explicit
+    //   "Element not found for ref ..." error (refs expire after page changes
+    //   and must not degrade silently to a bare null)
+
+    /**
+     * True when [selector] is a snapshot element-ref (`e1265`, `backend:15`)
+     * rather than a CSS/XPath selector.  Refs are ephemeral backend node ids:
+     * they expire whenever the page's DOM changes, so a failed lookup most
+     * likely means the ref is stale.  Mirrors the CLI's `looks_like_element_ref`.
+     */
+    private fun isElementRef(selector: String): Boolean {
+        val s = selector.trim()
+        val rest = when {
+            s.startsWith("e") -> s.drop(1)
+            s.startsWith("backend:") -> s.removePrefix("backend:")
+            else -> return false
+        }
+        return rest.isNotEmpty() && rest.all { it.isDigit() }
+    }
+
+    /**
+     * The error message used when [selector] cannot be resolved to a live DOM
+     * element.  Ref-shaped targets get the staleness guidance (the hint phrase
+     * matches the CLI verbatim so it is not appended twice); CSS/XPath
+     * selectors get a plain no-match message.
+     */
+    private fun elementNotFoundMessage(selector: String): String {
+        val target = selector.trim()
+        return if (isElementRef(target)) {
+            "Element not found for ref $target. Refs expire after page changes — re-run `snapshot` to get fresh refs."
+        } else {
+            "No element matches selector \"$target\"."
+        }
+    }
+
+    /**
+     * Resolve [selector] to the first matching live-DOM element and read its
+     * text/attribute/property via [functionDeclaration].  See the contract in
+     * the section comment above.
+     */
+    private suspend fun selectFirstValue(
+        driver: WebDriver,
+        selector: String,
+        functionDeclaration: String,
+        valueLabel: String
+    ): String? {
+        val evaluation = driver.evaluateValueDetail(selector, functionDeclaration)
+        if (evaluation == null) {
+            // The locator could not be resolved.  Refs are ephemeral backend
+            // node ids — expire them loudly instead of returning a bare null.
+            if (isElementRef(selector)) {
+                throw IllegalArgumentException(elementNotFoundMessage(selector))
+            }
+            return null
+        }
+
+        // The element exists.  A null/undefined value or a page-side read
+        // exception (e.g. attribute access on a non-element node) both mean
+        // "matched, but the value is empty or missing" — encoded as "" so the
+        // caller can tell it apart from "no element matched" (null).
+        val exception = evaluation.exception
+        if (exception != null) {
+            logger.fine(
+                "Reading $valueLabel from $selector raised a page-side exception: ${exception.text}"
+            )
+            return ""
+        }
+        return evaluation.value?.toString() ?: ""
     }
 
     /**
@@ -421,14 +984,21 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         waitBeforeReadIfNeeded(functionName)
 
         // Detect if a native JavaScript dialog (alert/confirm/prompt) is
-        // blocking the page.  Read-state actions like ariaSnapshot, evaluate,
-        // and select* require JS execution via CDP; when a dialog is open,
-        // Chrome queues CDP commands behind the dialog and they never complete.
-        // Instead of hanging, surface a clear error so the user knows to accept
-        // or dismiss the dialog first.  The guard itself lives in
-        // Browser4WebDriver.requireNoPendingDialog; non-Browser4WebDriver
+        // blocking the page.  Read-state actions (ariaSnapshot, select*, …)
+        // AND the eval family (eval/evaluate/evaluateValue/…) require JS/CDP
+        // execution; when a dialog is open, Chrome queues those CDP commands
+        // behind the dialog and they never complete.  Instead of hanging,
+        // surface a clear error so the user knows to accept or dismiss the
+        // dialog first (dialogStatus shows the pending dialog;
+        // dialog-accept/dialog-dismiss resolve it).  The guard itself lives
+        // in Browser4WebDriver.requireNoPendingDialog; non-Browser4WebDriver
         // drivers keep the legacy inline check.
-        if (functionName in READ_PAGE_STATE_ACTIONS && driver is PulsarWebDriver) {
+        //
+        // Interactive actions (click/fill/type/press/…) are intentionally NOT
+        // guarded here: whether their Input.* CDP path also queues behind a
+        // dialog is not established, and some of them run with the
+        // autoDismissDialogs option which resolves dialogs first.
+        if (functionName in DIALOG_GUARDED_ACTIONS && driver is PulsarWebDriver) {
             val b4Driver = driver as? Browser4WebDriver
             if (b4Driver != null) {
                 b4Driver.requireNoPendingDialog()
@@ -748,18 +1318,37 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "type" -> {
                 when {
                     args.containsKey("selector") && args.containsKey("text") -> {
-                        validateArgs(args, allowed("selector", "text", "submit", "timeoutMillis"), setOf("selector", "text"), functionName)
+                        validateArgs(
+                            args,
+                            allowed("selector", "text", "submit", "timeoutMillis", "method", "verify"),
+                            setOf("selector", "text"),
+                            functionName
+                        )
                         val selector = paramString(args, "selector", functionName)!!
                         val timeoutMillis = paramLong(args, "timeoutMillis", functionName, required = false)
+                        val method = paramString(args, "method", functionName, required = false)
+                        val verify = paramBool(args, "verify", functionName, required = false) ?: false
                         val typeBlock: suspend () -> Unit = {
                             val text = paramString(args, "text", functionName)!!
                             val b4Driver = driver as? Browser4WebDriver
                             if (b4Driver != null) {
-                                // Use Browser4WebDriver.typeSafe — code-point-aware
-                                // typing that avoids the charAt() surrogate-splitting
-                                // bug in Keyboard.type() (pulsar-browser:4.11.2)
-                                b4Driver.typeSafe(text, selector)
+                                // Browser4WebDriver.typeAuto — pluggable insertion
+                                // strategy (auto|chars|exec) with optional read-back
+                                // verification.  Long/multi-line text goes through one
+                                // execCommand('insertText') bulk insert; short text
+                                // keeps the per-code-point chars path.
+                                b4Driver.typeAuto(selector, text, method ?: "auto", verify)
                             } else {
+                                if (method == "exec") {
+                                    throw IllegalArgumentException(
+                                        "type method=exec requires the Browser4 driver (unavailable on ${driver::class.simpleName})"
+                                    )
+                                }
+                                if (verify) {
+                                    logger.warning(
+                                        "type verify requested on a non-Browser4WebDriver driver — verification is only supported on the Browser4 driver; skipping"
+                                    )
+                                }
                                 // Fallback: inline the same fix via PulsarWebDriver API
                                 val pulsarDriver = driver as? PulsarWebDriver
                                 if (pulsarDriver != null) {
@@ -1104,14 +1693,26 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "drag" -> {
                 validateArgs(
                     args,
-                    allowed("sourceSelector", "targetSelector"),
+                    allowed("sourceSelector", "targetSelector", "at"),
                     setOf("sourceSelector", "targetSelector"),
                     functionName
                 )
-                driver.drag(
-                    sourceSelector = paramString(args, "sourceSelector", functionName)!!,
-                    targetSelector = paramString(args, "targetSelector", functionName)!!
-                )
+                val sourceSelector = paramString(args, "sourceSelector", functionName)!!
+                val targetSelector = paramString(args, "targetSelector", functionName)!!
+                val b4Driver = driver as? Browser4WebDriver
+                if (b4Driver == null) {
+                    driver.drag(sourceSelector = sourceSelector, targetSelector = targetSelector)
+                    null
+                } else {
+                    // `at` pins the drop point to the target's center (default)
+                    // or its top/bottom edge region, so reorder-list
+                    // insert-before/insert-after is deterministic instead of a
+                    // ±2px jitter coin flip.  Browser4WebDriver.drag reports
+                    // the resulting DOM placement; illegal positions throw
+                    // IllegalArgumentException there.
+                    val at = paramString(args, "at", functionName, required = false, default = "center")!!
+                    b4Driver.drag(sourceSelector, targetSelector, at)
+                }
             }
 
             "clickTextMatches" -> {
@@ -1383,9 +1984,11 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             }
 
             "selectFirstTextOrNull" -> {
-                validateArgs(args, allowed("selector"), setOf("selector"), functionName); driver.selectFirstTextOrNull(
-                    paramString(args, "selector", functionName)!!
-                )
+                validateArgs(args, allowed("selector", "raw"), setOf("selector"), functionName)
+                val selector = paramString(args, "selector", functionName)!!
+                val raw = paramBool(args, "raw", functionName, required = false) ?: false
+                val readJs = if (raw) SELECT_FIRST_TEXT_READ_JS else SELECT_FIRST_TEXT_NORMALIZED_JS
+                selectFirstValue(driver, selector, readJs, "text")
             }
 
             "selectTextAll" -> {
@@ -1400,10 +2003,11 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     allowed("selector", "attrName"),
                     setOf("selector", "attrName"),
                     functionName
-                ); driver.selectFirstAttributeOrNull(
-                    paramString(args, "selector", functionName)!!,
-                    paramString(args, "attrName", functionName)!!
                 )
+                val selector = paramString(args, "selector", functionName)!!
+                val attrName = paramString(args, "attrName", functionName)!!
+                val readJs = "function(element) { return element.getAttribute('${Browser4WebDriver.escapeJsString(attrName)}'); }"
+                selectFirstValue(driver, selector, readJs, "attribute '$attrName'")
             }
 
             "selectAttributes" -> {
@@ -1480,10 +2084,11 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     allowed("selector", "propName"),
                     setOf("selector", "propName"),
                     functionName
-                ); driver.selectFirstPropertyValueOrNull(
-                    paramString(args, "selector", functionName)!!,
-                    paramString(args, "propName", functionName)!!
                 )
+                val selector = paramString(args, "selector", functionName)!!
+                val propName = paramString(args, "propName", functionName)!!
+                val readJs = "function(element) { return element['${Browser4WebDriver.escapeJsString(propName)}']; }"
+                selectFirstValue(driver, selector, readJs, "property '$propName'")
             }
 
             "selectPropertyValueAll" -> {
@@ -1583,10 +2188,16 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                             setOf("selector", "functionDeclaration"),
                             functionName
                         )
+                        val selector = paramString(normalizedArgs, "selector", functionName)!!
+                        // An element-scoped evaluation needs a real element: when the
+                        // locator cannot be resolved (stale `eN` snapshot ref, selector
+                        // miss, removed element) the driver returns a null JsEvaluation
+                        // that is indistinguishable from a legitimate JS null.  Fail
+                        // loudly instead so the caller sees an explicit not-found error.
                         driver.evaluateValueDetail(
-                            paramString(normalizedArgs, "selector", functionName)!!,
+                            selector,
                             paramString(normalizedArgs, "functionDeclaration", functionName)!!
-                        )
+                        ) ?: throw IllegalArgumentException(elementNotFoundMessage(selector))
                     }
 
                     normalizedArgs.containsKey("expression") -> {
@@ -1611,10 +2222,14 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                             setOf("selector", "functionDeclaration"),
                             functionName
                         )
+                        val selector = paramString(args, "selector", functionName)!!
+                        // See the "eval"/"evaluateValue" branch above — an element
+                        // scoped evaluation whose locator resolves to nothing must
+                        // surface as an explicit not-found error, never a null result.
                         driver.evaluateValueDetail(
-                            paramString(args, "selector", functionName)!!,
+                            selector,
                             paramString(args, "functionDeclaration", functionName)!!
-                        )
+                        ) ?: throw IllegalArgumentException(elementNotFoundMessage(selector))
                     }
 
                     args.containsKey("expression") -> {
@@ -1782,6 +2397,89 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 @Suppress("UNCHECKED_CAST")
                 val params = args["params"] as? Map<String, Any?>
                 driver.executeCdpCommand(method, params)
+            }
+
+            // ---- Frame scope (iframe switching) ----
+            "frameList" -> {
+                validateArgs(args, emptySet(), emptySet(), functionName)
+                driver.frameList()
+            }
+
+            "frameSwitch" -> {
+                validateArgs(args, allowed("frame"), setOf("frame"), functionName)
+                val info = driver.frameSwitch(paramString(args, "frame", functionName)!!)
+                // Serialize explicitly: FrameInfo is a data class, and the generic
+                // response serializer only JSON-encodes maps/lists/collections.
+                linkedMapOf(
+                    "id" to info.id,
+                    "name" to info.name,
+                    "url" to info.url,
+                    "parentId" to info.parentId,
+                    "depth" to info.depth,
+                    "active" to info.active,
+                    "label" to info.label,
+                )
+            }
+
+            "frameMain" -> {
+                validateArgs(args, emptySet(), emptySet(), functionName)
+                driver.frameMain()
+            }
+
+            // Network tracking & HAR recording (Browser4-specific; requires a
+            // Browser4WebDriver session — all production sessions are).
+            "networkRequests" -> {
+                validateArgs(args, allowed("filter", "type", "method", "status", "clear"), emptySet(), functionName)
+                val b4Driver = driver as? Browser4WebDriver
+                    ?: throw IllegalArgumentException("networkRequests requires a Browser4WebDriver session")
+                b4Driver.networkRequests(
+                    filter = paramString(args, "filter", functionName, required = false),
+                    type = paramString(args, "type", functionName, required = false),
+                    method = paramString(args, "method", functionName, required = false),
+                    status = paramString(args, "status", functionName, required = false),
+                    clear = paramBool(args, "clear", functionName, required = false, default = false) ?: false,
+                )
+            }
+
+            "networkRequestDetail" -> {
+                validateArgs(args, allowed("requestId"), setOf("requestId"), functionName)
+                val b4Driver = driver as? Browser4WebDriver
+                    ?: throw IllegalArgumentException("networkRequestDetail requires a Browser4WebDriver session")
+                b4Driver.networkRequestDetail(paramString(args, "requestId", functionName)!!)
+            }
+
+            "harStart" -> {
+                validateArgs(args, allowed("contentMode"), emptySet(), functionName)
+                val b4Driver = driver as? Browser4WebDriver
+                    ?: throw IllegalArgumentException("harStart requires a Browser4WebDriver session")
+                b4Driver.harStart(paramString(args, "contentMode", functionName, required = false) ?: "none")
+            }
+
+            "harStop" -> {
+                validateArgs(args, emptySet(), emptySet(), functionName)
+                val b4Driver = driver as? Browser4WebDriver
+                    ?: throw IllegalArgumentException("harStop requires a Browser4WebDriver session")
+                b4Driver.harStop()
+            }
+
+            "networkRoute" -> {
+                validateArgs(args, allowed("urlPattern", "abort", "body", "contentType", "resourceType"), setOf("urlPattern"), functionName)
+                val b4Driver = driver as? Browser4WebDriver
+                    ?: throw IllegalArgumentException("networkRoute requires a Browser4WebDriver session")
+                b4Driver.networkRoute(
+                    urlPattern = paramString(args, "urlPattern", functionName)!!,
+                    abort = paramBool(args, "abort", functionName, required = false, default = false) ?: false,
+                    body = paramString(args, "body", functionName, required = false),
+                    contentType = paramString(args, "contentType", functionName, required = false),
+                    resourceType = paramString(args, "resourceType", functionName, required = false),
+                )
+            }
+
+            "networkUnroute" -> {
+                validateArgs(args, allowed("urlPattern"), emptySet(), functionName)
+                val b4Driver = driver as? Browser4WebDriver
+                    ?: throw IllegalArgumentException("networkUnroute requires a Browser4WebDriver session")
+                b4Driver.networkUnroute(paramString(args, "urlPattern", functionName, required = false))
             }
 
             "help" -> help()

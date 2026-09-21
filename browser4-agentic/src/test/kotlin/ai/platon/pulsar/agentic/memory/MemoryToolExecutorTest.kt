@@ -1,5 +1,7 @@
 package ai.platon.pulsar.agentic.memory
 
+import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
+import ai.platon.pulsar.agentic.tools.specs.ToolSpecValidator
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -8,6 +10,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 @DisplayName("MemoryToolExecutor")
@@ -48,6 +51,52 @@ class MemoryToolExecutorTest {
         ) as String
         assertTrue(result.contains("t1"))
         assertTrue(result.contains("L0"))
+    }
+
+    @Test
+    @DisplayName("the declared outputSchema accepts what search and read produce")
+    fun outputSchemaAcceptsProduction() = runBlocking {
+        seed()
+        val calls = listOf<Pair<String, Map<String, Any?>>>(
+            "search" to mapOf("query" to "amazon"),
+            "read" to mapOf("taskId" to "t1"),
+        )
+
+        for ((method, args) in calls) {
+            val spec = executor.getToolSpecs().getValue(method)
+            assertNotNull(spec.outputSchema, "memory.$method must declare its result contract")
+
+            val text = executor.callFunctionOn("memory", method, args, Any()) as String
+            val issues = ToolResultValidator.validate(spec, ToolResultValidator.parse(text))
+
+            assertEquals(
+                emptyList<String>(), issues.map { "${it.path} ${it.message}" },
+                "memory.$method answered with a payload that violates its own schema: $text",
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("optional arguments are advertised as optional, not required")
+    fun optionalArgumentsAreNotRequired() {
+        // `agent`/`seq` are read with `required = false`. Declaring them as bare
+        // `null` defaults (the convention for *required*) made the validator reject
+        // the query-only search and the whole-task read that the executor handles.
+        val validator = ToolSpecValidator()
+
+        val search = executor.getToolSpecs().getValue("search")
+        assertEquals(
+            emptyList<ToolSpecValidator.Violation>(),
+            validator.validate(search, mapOf("query" to "amazon")),
+            "a query-only search is a valid call",
+        )
+
+        val read = executor.getToolSpecs().getValue("read")
+        assertEquals(
+            emptyList<ToolSpecValidator.Violation>(),
+            validator.validate(read, mapOf("taskId" to "t1")),
+            "reading a whole task without coarse coordinates is a valid call",
+        )
     }
 
     @Test

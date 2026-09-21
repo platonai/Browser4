@@ -40,6 +40,7 @@ When you pass a channel name (`attach --cdp chrome`), the CLI finds the browser 
 1. **Process scan** — enumerates running processes whose command line contains `--remote-debugging-port=N`:
    - `N != 0` (e.g. `chrome --remote-debugging-port=9222`): use that port directly.
    - `N == 0` (Browser4-launched browsers use this — Chrome picks a free port at random): the requested value is not a usable endpoint, so the CLI resolves the real port by asking the process which ports it is actually listening on (Windows: `Get-NetTCPConnection` keyed to the process id), then probing each listener with a CDP health check (`GET /json/version`) and returning the first that answers. This is what makes Browser4-managed browsers (random debug port) discoverable via `attach --cdp chrome`.
+     > **⚠ Windows-only tier:** the listening-port resolution runs only on Windows. On Linux/macOS a browser started with `--remote-debugging-port=0` cannot be resolved from a channel name — resolution falls through to the default port and the 9222–9333 scan, and attach usually fails. There, pass an explicit endpoint (`--cdp http://localhost:9222`, `--cdp host:port`, `--cdp 9222`) or start the target browser with a fixed `--remote-debugging-port`.
 2. **Channel default port** — probes the channel's conventional port (9222 for Chrome), for browsers started manually with the documented flag.
 3. **Port-range scan** — concurrently probes a range of ports for any CDP responder, as a last resort.
 
@@ -51,6 +52,37 @@ Before the session is bound, the backend probes the resolved endpoint:
 - `GET /json` must list at least one `page` target — attaching to a browser with nothing to navigate is refused.
 
 Both failures produce a loud error (naming the endpoint and how to fix it) instead of a silent success. After a successful attach, the CLI prints the target browser's real current page URL so you can confirm it is driving the browser you intended.
+
+### Verify the Actual Browser After Attach
+
+`attach` reports **which browser actually connected**, not just the channel you requested:
+
+- **Extension attach (`--extension`)** prints `Extension connected and healthy!` followed by `Connected browser: Google Chrome 138`. Identity comes from the extension WebSocket handshake User-Agent — Chrome and Edge run the same extension id, and Edge advertises an `Edg/` UA token, so the User-Agent is the only reliable signal.
+- **CDP attach (`--cdp`)** prints `Attached to Google Chrome 138 at http://localhost:9222`. Identity comes from the browser's `GET /json/version` response.
+
+**Channel-mismatch warning:** when the actual browser family conflicts with the requested channel (e.g. `attach --extension msedge` landing on Chrome), the CLI warns immediately with ⚠:
+
+```text
+⚠  Requested channel was 'msedge', but the browser that actually connected is Google Chrome 138 — you may have attached to the WRONG browser, and login state on this browser likely differs.
+   Run `close`, then re-run `browser4-cli attach --extension msedge` and approve the connection in the correct browser.
+```
+
+Always **check the printed browser** right after attaching — the silent failure mode is driving the wrong profile and later reporting "lost login state".
+
+**Session listings also show the real browser:**
+
+- `list` — the Connection column prefers the backend-reported actual browser over the locally requested channel and annotates conflicts, e.g. `Extension (requested msedge · actual Google Chrome 138.0.0.0)` or `CDP (requested msedge · actual Google Chrome 138)`; without a conflict it reads `Extension (Google Chrome 138)` / `CDP: http://localhost:9222 (Google Chrome 138)`.
+- `status` — when a session is active it prints a current-session block: Name / Session ID / Status / Connection / Next open.
+
+**Disconnected attached sessions are never silently replaced.** If an attached session goes stale (extension relay dropped, browser closed), subsequent commands fail with an explicit error instead of quietly launching a fresh Browser4 browser (which would have no profile or login state):
+
+```text
+The attached browser session <session-id> is no longer reachable (it was NOT replaced with a new browser, so no login state was lost — the old browser may still be running).
+Re-attach to the same browser explicitly: `browser4-cli attach --extension msedge`
+Then verify the connection shows the browser you expect (use `browser4-cli list`).
+```
+
+Re-run the suggested attach command, then confirm with `list` that the connection shows the browser you expect.
 
 ## Patterns
 
@@ -166,6 +198,8 @@ browser4-cli screenshot --filename remote-state.png
 | `CDP endpoint ... is not reachable` | Start the target browser with `--remote-debugging-port` and retry; the endpoint named in the error is not answering |
 | `... reachable but has no page targets` | Open a tab in the target browser, then retry attach — the browser has nothing to navigate yet |
 | Attached, but the reported page looks wrong | The CLI prints the real current page URL after attach; if it does not match the window you expect, the endpoint pointed at a different browser — target the correct port |
+| Attached to the wrong browser (requested msedge, Chrome connected) | The CLI prints `Connected browser:` / `Attached to …` plus a ⚠ warning when the actual family conflicts with the requested channel — run `close`, then re-run attach with the correct channel and approve it in the correct browser |
+| Attached session went stale after a disconnect | The error states the session was NOT replaced with a new browser — re-run `attach --extension …` / `attach --cdp …` explicitly, then verify with `list` |
 | Extension session goes stale | Run `close` first, then re-attach with `attach --extension`; avoid navigating to chrome:// internal pages |
 | Extension not found / not installed | Install the Browser4 Chrome Extension in the target browser first |
 
@@ -182,7 +216,11 @@ browser4-cli close       # or: browser4-cli disconnect
 | Session Type | Behavior |
 |-------------|----------|
 | Browser4-launched (via `open`) | `close` terminates the browser process |
-| Extension-attached (via `attach --extension`) | `close` disconnects from the extension relay — your Chrome browser and its tabs remain untouched |
-| CDP-attached (via `attach --cdp`) | `close` disconnects from the remote debugging port — the browser continues running |
+| Extension-attached (via `attach --extension`) | `close` disconnects from the extension relay — Chrome keeps running. **The tab(s) Browser4 drove are removed** (`chrome.tabs.remove`); tabs you opened yourself and never touched through the session stay open |
+| CDP-attached (via `attach --cdp`) | `close` disconnects from the remote debugging port — the browser process continues running. **The tab Browser4 was bound to is closed** with the session |
+
+> **Keep the page you were working on:** `close` on an attached session closes the
+> tab the session was driving (the browser process itself survives). Save the URL
+> first (`page-url`) if you need to reopen it after re-attaching.
 
 The `disconnect` alias is available as a more accurate command name for attached sessions, but it's identical to `close` in behavior.

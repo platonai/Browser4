@@ -35,6 +35,15 @@ data class ObserveParams(
 /**
  * Data class to encapsulate the results of an extraction inference operation.
  * Used internally for event handling to avoid passing too many parameters.
+ *
+ * @property result The CLEAN schema payload (extraction fields only; task
+ * bookkeeping such as token counts / progress is never merged into it).
+ * @property extractedNode The raw object node returned by the extraction call.
+ * @property metaNode The raw evaluation-metadata object returned by the
+ * evaluation call (progress/completed from the advisory evaluator model).
+ * @property completed Whether the extraction task is complete — `true` whenever
+ * usable content is present in [result], otherwise the evaluator's judgment.
+ * @property progress Free-text progress description from the evaluator.
  */
 data class ExtractInferenceResult(
     val result: ObjectNode,

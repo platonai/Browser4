@@ -157,6 +157,9 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
 /// The boolean set is used by `parse_raw_args` to avoid consuming the next
 /// argument as a value for boolean flags (e.g. `-i` should not consume
 /// `"search"` in `snapshot grep -i "search"`).
+/// Both collections hold machine keys: [`OptionDef::key`] strips an
+/// embedded help placeholder (`"max-files <n>"` → `"max-files"`) so the
+/// parsed argument map always uses the bare flag name.
 pub fn build_short_option_map(
     options: &[crate::commands::OptionDef],
 ) -> (HashMap<String, String>, HashSet<String>) {
@@ -164,10 +167,10 @@ pub fn build_short_option_map(
     let mut bool_opts = HashSet::new();
     for opt in options {
         if opt.is_bool {
-            bool_opts.insert(opt.name.to_string());
+            bool_opts.insert(opt.key().to_string());
         }
         if let Some(short) = opt.short {
-            map.insert(short.to_string(), opt.name.to_string());
+            map.insert(short.to_string(), opt.key().to_string());
         }
     }
     (map, bool_opts)
@@ -339,6 +342,75 @@ fn looks_like_negative_value(token: &str) -> bool {
             .all(|c| c.is_ascii_digit() || c == '-' || c == '.' || c == ',')
 }
 
+/// A token that is a known global flag mistakenly placed after the command
+/// name (e.g. `htmlsnapshot -q`).  Used to produce a targeted error hint
+/// instead of a bare "unexpected positional arguments" rejection.
+fn is_global_flag_token(token: &str) -> bool {
+    matches!(
+        token,
+        "-q" | "--quiet"
+            | "--json"
+            | "--pretty"
+            | "--show-tip"
+            | "-tip"
+            | "--help-json"
+            | "--timeout"
+    ) || token.starts_with("--timeout=")
+}
+
+/// Build the hint appended to "unexpected positional arguments" errors when
+/// any offending token is a global flag.
+fn global_flag_hint(tokens: &[&String]) -> String {
+    if tokens.iter().any(|t| is_global_flag_token(t)) {
+        " (global flags must appear before the command, e.g. 'browser4-cli -q htmlsnapshot')"
+            .to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// Build the argument map for the `upload` command.
+///
+/// Upload accepts a target ref followed by ONE OR MORE file paths
+/// (`upload <ref> <file> [file...]`).  The generic [build_command_args]
+/// would join surplus positionals into the last slot with spaces
+/// (`upload e5 a.txt b.txt` → `paths: ["a.txt b.txt"]`), silently creating
+/// one non-existent path.  This builder keeps every trailing positional as
+/// its own file path instead:
+/// - `ref`   = first positional,
+/// - `file`  = first file (kept so generic required-arg validation passes),
+/// - `paths` = JSON array of ALL file paths (used by `upload`'s
+///   tool_params_fn),
+/// - named options (e.g. `--no-snapshot`) are preserved untouched.
+pub fn build_upload_args(raw: &HashMap<String, Value>) -> Result<HashMap<String, Value>, String> {
+    let mut result = raw.clone();
+
+    let positional: Vec<String> = match raw.get("_") {
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .skip(1) // skip command name
+            .map(|v| v.as_str().unwrap_or("").to_string())
+            .collect(),
+        _ => vec![],
+    };
+
+    if positional.is_empty() {
+        return Err("error: upload requires a target ref and at least one file path (usage: upload <ref> <file> [file...])".to_string());
+    }
+    if positional.len() < 2 {
+        return Err("error: upload requires a file path after the target ref (usage: upload <ref> <file> [file...])".to_string());
+    }
+
+    result.insert("ref".to_string(), json!(positional[0]));
+    result.insert("file".to_string(), json!(positional[1]));
+    result.insert(
+        "paths".to_string(),
+        Value::Array(positional[1..].iter().map(|p| json!(p)).collect()),
+    );
+
+    Ok(result)
+}
+
 /// Build a flat argument map from parsed raw args for use in command dispatch.
 ///
 /// Positional arguments are mapped to their named positions as defined in
@@ -373,9 +445,10 @@ pub fn build_command_args(
     };
 
     if positional.len() > arg_names.len() && arg_names.is_empty() {
+        let hint = global_flag_hint(&positional.iter().collect::<Vec<_>>());
         return Err(format!(
-            "error: unexpected positional arguments (this command accepts none): {:?}",
-            &positional
+            "error: unexpected positional arguments (this command accepts none): {:?}{}",
+            &positional, hint
         ));
     }
 
@@ -416,10 +489,12 @@ pub fn build_command_args(
                     .map(|(_, t)| t)
                     .collect();
                 if !offending.is_empty() {
+                    let hint = global_flag_hint(&offending);
                     return Err(format!(
-                        "error: unexpected positional arguments (this command accepts {}): {:?}",
+                        "error: unexpected positional arguments (this command accepts {}): {:?}{}",
                         arg_names.len(),
-                        &offending
+                        &offending,
+                        hint
                     ));
                 }
                 result.insert(name.to_string(), json!(positional[i..].join(" ")));
@@ -958,6 +1033,39 @@ mod tests {
     }
 
     #[test]
+    fn test_global_flag_rejection_carries_position_hint() {
+        // When the stray token is a known global flag, the error must point at
+        // the placement rule instead of leaving the user with a bare
+        // "unexpected positional arguments" rejection.
+        let mut raw = HashMap::new();
+        raw.insert("_".to_string(), json!(["htmlsnapshot", "-q"]));
+        let result = build_command_args(&raw, &[], &[]);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("global flags must appear before the command"),
+            "error should hint at the placement rule: {err}"
+        );
+
+        // The hint also rides on the flag-aware "accepts N" path.
+        let mut raw_flag = HashMap::new();
+        raw_flag.insert("_".to_string(), json!(["goto", "http://example.com/page", "--quiet"]));
+        let err_flag = build_command_args(&raw_flag, &["url"], &[]).unwrap_err();
+        assert!(
+            err_flag.contains("global flags must appear before the command"),
+            "error should hint at the placement rule: {err_flag}"
+        );
+
+        // Non-flag-like stray positionals don't get the hint.
+        let mut raw2 = HashMap::new();
+        raw2.insert("_".to_string(), json!(["htmlsnapshot", "extra"]));
+        let result2 = build_command_args(&raw2, &[], &[]);
+        assert!(!result2
+            .unwrap_err()
+            .contains("global flags must appear before the command"));
+    }
+
+    #[test]
     fn test_goto_rejects_trailing_flag_into_url() {
         // `goto <url> -q` must not silently navigate to "<url> -q" — the stray
         // flag is rejected instead (regression: extra positionals were joined
@@ -1442,5 +1550,68 @@ mod tests {
         ];
         let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
         assert_eq!(map.get("regexp"), Some(&json!("price")));
+    }
+
+    #[test]
+    fn test_build_upload_args_single_file() {
+        let raw = parse_raw_args(
+            &["upload".to_string(), "#file-input".to_string(), "C:\\a.txt".to_string()],
+            None,
+            None,
+        );
+        let map = build_upload_args(&raw).unwrap();
+        assert_eq!(map.get("ref"), Some(&json!("#file-input")));
+        assert_eq!(map.get("file"), Some(&json!("C:\\a.txt")));
+        assert_eq!(map.get("paths"), Some(&json!(["C:\\a.txt"])));
+    }
+
+    #[test]
+    fn test_build_upload_args_multiple_files_kept_separate() {
+        // Regression: the generic builder joins surplus positionals with
+        // spaces ("upload e5 a.txt b.txt" → paths:["a.txt b.txt"]).
+        let raw = parse_raw_args(
+            &[
+                "upload".to_string(),
+                "e5".to_string(),
+                "a.txt".to_string(),
+                "b.txt".to_string(),
+                "dir with space\\c.txt".to_string(),
+            ],
+            None,
+            None,
+        );
+        let map = build_upload_args(&raw).unwrap();
+        assert_eq!(map.get("ref"), Some(&json!("e5")));
+        assert_eq!(map.get("file"), Some(&json!("a.txt")));
+        assert_eq!(
+            map.get("paths"),
+            Some(&json!(["a.txt", "b.txt", "dir with space\\c.txt"]))
+        );
+    }
+
+    #[test]
+    fn test_build_upload_args_preserves_flags() {
+        let raw = parse_raw_args(
+            &[
+                "upload".to_string(),
+                "e5".to_string(),
+                "a.txt".to_string(),
+                "--no-snapshot".to_string(),
+            ],
+            None,
+            None,
+        );
+        let map = build_upload_args(&raw).unwrap();
+        assert_eq!(map.get("no-snapshot"), Some(&json!(true)));
+        assert_eq!(map.get("paths"), Some(&json!(["a.txt"])));
+    }
+
+    #[test]
+    fn test_build_upload_args_requires_ref_and_file() {
+        let raw = parse_raw_args(&["upload".to_string()], None, None);
+        assert!(build_upload_args(&raw).is_err());
+
+        let raw = parse_raw_args(&["upload".to_string(), "e5".to_string()], None, None);
+        assert!(build_upload_args(&raw).is_err());
     }
 }

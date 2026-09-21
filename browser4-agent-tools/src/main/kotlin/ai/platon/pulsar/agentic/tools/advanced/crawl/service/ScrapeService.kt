@@ -8,7 +8,7 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.DegenerateXSQLScrapeHyperlink
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeHyperlink
-import ai.platon.pulsar.agentic.tools.advanced.crawl.common.XSQLScrapeHyperlink
+import ai.platon.pulsar.agentic.tools.advanced.crawl.common.XSQLHyperlink
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
@@ -84,7 +84,7 @@ class ScrapeService(
         val sql = request.sql
         val link = if (ScrapeAPIUtils.isScrapeUDF(sql)) {
             val xSQL = ScrapeAPIUtils.normalize(sql)
-            XSQLScrapeHyperlink(request, xSQL, session)
+            XSQLHyperlink(request, xSQL, session)
         } else {
             DegenerateXSQLScrapeHyperlink(request, session)
         }

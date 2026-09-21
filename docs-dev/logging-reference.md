@@ -27,8 +27,6 @@ management tooling, debugging, or configuring observability.
 | `browser4-agentic/src/test/resources/logback-test.xml` | Agentic tests — console only, log.level overridable |
 | `browser4-tests/browser4-rest-tests/src/test/resources/logback-test.xml` | REST integration tests |
 | `browser4-tests/browser4-e2e-tests/src/test/resources/logback-test.xml` | E2E tests — DEBUG on `skeleton.ai.agent` |
-| `browser4-tests/pulsar-e2e-tests/src/test/resources/logback-test.xml` | Pulsar E2E — same structure |
-| `browser4-tests/pulsar-it-tests/src/test/resources/logback-test.xml` | Pulsar IT — `skeleton.ai.agent` DEBUG |
 | `browser4-tests/pulsar-tests-common/src/test/resources/logback-test.xml` | Test common — minimal console |
 | `examples/browser4-examples/src/main/resources/logback.xml` | Examples — writes to `logs/pulsar.exam.log` |
 
@@ -206,7 +204,7 @@ a helper that merges both streams through `cmd.exe` redirect.
 | Location | Script | Content |
 |---|---|---|
 | `browser4-tests/tests-production/logs/<name>_<ts>/cmd_XXXX_<name>.log` | `test-utils.psm1` | Full stdout/stderr per CLI command invocation |
-| `.test-sessions/<session-id>/test-session.json` | `test-session.psm1` | Cross-run test results, log paths, pass/fail counts |
+| `.test-sessions/<run-id>/test-session.json` | `test-session.psm1` | Cross-run test results, log paths, pass/fail counts (+ that run's scratch files) |
 
 **`test-utils.psm1` key exports:**
 - `Initialize-TestLogging -Name <name>` — creates per-script log directory
@@ -214,8 +212,16 @@ a helper that merges both streams through `cmd.exe` redirect.
 - `Register-CliResult` — records exit code, elapsed time, log paths
 
 **`test-session.psm1`** — maintains one JSON file per test invocation under
-`.test-sessions/<timestamp>/test-session.json` with rolling history (max 5
-entries per test type).
+`.test-sessions/<run-id>/test-session.json` with rolling history (max 5
+entries per test type). That same `<run-id>/` directory is the run's scratch
+area: `bin/test.ps1` resolves it and exports `BROWSER4_TEST_SESSION_DIR`, so
+scenario runners, coworker workers and agents spawned by the run drop their
+temporary files next to `test-session.json` instead of into the shared
+`.test-sessions/` root. Creation is lazy — the directory materialises on the
+first session write or the first child that needs it, so invocations that never
+execute a test (usage errors, display-only `rws dir` listings, `-Show`) leave
+nothing behind. Prune old runs with `test.ps1 session prune --keep N` (never
+touches the `_legacy/` archive).
 
 ### 3.4 Maintenance System
 
@@ -249,7 +255,7 @@ entries per test type).
 | Workflow | Artifact Name | Content |
 |---|---|---|
 | `.github/workflows/release.yml` | `smoke-test-logs-${{ matrix.artifact_name }}` | `${{ runner.temp }}/browser4-server-logs/` |
-| `.github/workflows/cross-platform-smoke.yml` | `smoke-test-logs-*` | Same pattern |
+| ~~`.github/workflows/cross-platform-smoke.yml`~~ | ~~`smoke-test-logs-*`~~ | ~~Same pattern~~ *(workflow removed — release.yml is the single smoke owner)* |
 | `.github/workflows/weekly-production-test.yml` | `production-test-logs-${{ matrix.name }}` | `.browser4-acceptance/` + `b4cli-*.txt` |
 | `.github/actions/run-tests/action.yml` | test reports | Maven Surefire XML reports |
 
@@ -281,7 +287,8 @@ and renders results as a GitHub Step Summary.
 {repo}/.build/spring-boot.log                    ← Build: Spring Boot output
 {repo}/bin/maintenance/logs/                     ← Maintenance check JSON
 {repo}/browser4-tests/tests-production/logs/     ← Test: per-CLI transcripts
-{repo}/.test-sessions/                           ← Test: cross-run session state
+{repo}/.test-sessions/<run-id>/                  ← Test: per-run session state + scratch files
+{repo}/.test-sessions/_legacy/                   ← Test: archived pre-restructure runs (never pruned)
 {repo}/cron.log                                  ← Cron job output (gitignored)
 
 ~/.browser4-coworker/tasks/300logs/              ← Coworker scheduler + task runner

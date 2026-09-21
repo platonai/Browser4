@@ -122,6 +122,12 @@ open class PrivacyManagedBrowserFetcher constructor(
     override val isActive get() = !illegalState.get() && !closed.get() && AppContext.isActive
 
     /**
+     * One lease per web driver, keyed by the driver identity: a tab a session is
+     * bound to is driven by one fetch at a time, see [fetchDeferred].
+     */
+    private val driverLeases = DriverLeaseRegistry()
+
+    /**
      * Fetch page content
      * */
     @Throws(Exception::class)
@@ -155,8 +161,31 @@ open class PrivacyManagedBrowserFetcher constructor(
         // Attempt to get a specified web driver for the page
         val driver = getWebDriver(task.page)
         if (driver != null) {
-            // Use the specified driver to fetch the page content
-            return webdriverFetcher.fetchDeferred(task, driver).response
+            // A driver that did not come from the pool is used by whoever asks
+            // for it, so two concurrent fetches can end up driving the same tab:
+            // the second navigation advances the tab while the first is still
+            // capturing, and the capture then reads a document another fetch
+            // produced (the snapshot-origin guard refuses it, and before the
+            // guard existed the page was recorded under the wrong URL).
+            // Drive it under a per-driver lease so a tab only ever has one
+            // fetch's navigation in flight.
+            if (driverLeases.tryAcquire(driver.id, DRIVER_LEASE_TIMEOUT_MILLIS)) {
+                try {
+                    return webdriverFetcher.fetchDeferred(task, driver).response
+                } finally {
+                    driverLeases.release(driver.id)
+                }
+            }
+
+            // The driver stayed busy for longer than a whole fetch should take.
+            // Waiting any longer would stall the caller, and driving the tab
+            // concurrently is what corrupts the capture, so lease an independent
+            // tab from the pool instead.
+            logger.warn(
+                "{}. The specified web driver #{} is busy with another fetch for more than {}ms, " +
+                        "leasing an independent driver instead of sharing the tab | {}",
+                task.page.id, driver.id, DRIVER_LEASE_TIMEOUT_MILLIS, task.url
+            )
         }
 
         // If no driver is specified, execute the task within a privacy context
@@ -244,5 +273,19 @@ open class PrivacyManagedBrowserFetcher constructor(
         }
 
         return drivers.shuffled().firstOrNull() ?: browser.newDriver()
+    }
+
+    companion object {
+        /**
+         * How long a fetch waits for the specified driver's lease before falling
+         * back to an independent driver from the pool.
+         *
+         * The lease is meant to be held for the duration of one fetch (seconds on
+         * a healthy page), so this only fires when a tab is genuinely stuck.  It
+         * is deliberately much longer than a page load: falling back too eagerly
+         * would move pages off the session's tab (losing its cookies and login
+         * state) for a queue that is merely a few fetches deep.
+         */
+        const val DRIVER_LEASE_TIMEOUT_MILLIS = 60_000L
     }
 }
