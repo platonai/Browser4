@@ -853,7 +853,7 @@ crawl 想并行需要**不绑定会话驱动**、改为按 tab 从驱动池租�
 4. 多轮并发发布对同一条记录是 read-modify-write，没有 `recordSeedProgress` 那样的 per-task 锁
    （`CrawlTaskContext.publishLock` 只在种子收尾时用）。危害是瞬时视图可能少一轮的字段，
    下一次发布/种子收尾就会修正；要根治需让 sink 拿到 task context 的锁。
-5. 发现链接未去重，且不套用 `--ignore-url-query` / `--no-norm`（depth 1 与引擎路径都套用）；
+5. **（§21 已修）发现链接未去重**，且不套用 `--ignore-url-query` / `--no-norm`（depth 1 与引擎路径都套用）；
    `topLinks` 预算可能被重复链接吃光（重复抓取已在第一轮 #4 的闸门下消失，预算问题仍在）。
 
 ## 17. 轮次预算与"没跑起来/没结算"的报账（4.13.x，§16.4 的第 1、2 条）
@@ -1332,6 +1332,66 @@ worker 写的 `"PROCESSING"`）与 `ResourceStatus` 可读文本（`"OK"`、`"Re
 
 **仍未做**：`IsolatedWorldManager` 的注入为何每次加载都要重来（依赖内实现，需要上游看）；
 驱动池分配日志（19.5 第三条）。
+
+
+
+## 21. 发现链接的去重与 URL 整形：重复 href 吃掉 `--top-links` 预算、`--ignore-url-query` 不生效（4.13.x，§16.4 第 5 条）
+
+§16.4 第 5 条把两件事写在一起：**发现链接未去重**，以及**不套用 `--ignore-url-query` / `--no-norm`**。
+本轮按"先量、再改"的顺序做。
+
+### 21.1 探针：一个"重复链接"的 fixture，把三件事一次量出来
+
+新增 fixture `pulsar-tests-common/.../static/generated/crawl/dup/hub.html`
+（5 个目标、8 个锚点：图片与标题指向同一个详情页、grid/list 两个 query 拼写指向同一页、
+最后一个带 `#specs`），配 `CrawlLinkDiscoveryTest`（`IntegrationTest`，真实浏览器 + REST API）。
+**改动前**实测（本机，`--depth 2 -ol "a.pick"`）：
+
+| 场景 | 改前实测 | 应有 |
+|---|---|---|
+| `-topLinks 3` | **3 行**：hub + `product/1.html` + `product/2.html` —— 8 个锚点里 `[1,1,2]` 先占满 3 个预算槽，实际只排队了 2 个不同页面 | 4 行：hub + product/1,2,3 |
+| `-topLinks 20 -ignoreUrlQuery` | 行 URL 仍是 `…/product/4.html?src=grid` —— 标志对发现链接无效 | 行 URL 无 query |
+| `-topLinks 20`（两种拼写） | 6 行，`?src=grid`（首个拼写）胜出、`#specs` 已被剥掉 | **同**（这一条改前就是对的） |
+
+第三条是重要的对照组：它说明**身份去重与 fragment 剥离早就是对的**，坏掉的只是"预算前的去重"和
+"`--ignore-url-query` 在哪一层生效"。第二条还不是"少抓页"而是**报错的口径**：`normalizeForVisit`
+早已把 query 折进同一个身份，排队的 URL 却保留 query，于是行里报的 URL 不是真正抓的那个。
+
+### 21.2 修法：一个共用的选择器，两条发现路径不能再分叉
+
+* `CrawlSupport.selectDiscoveredLinks(hrefs, visited, outLinkPattern, topLinks, ignoreUrlQuery)`
+  —— 顺序是**整形 → 模式过滤 → 身份去重 → 已访问过滤 → 预算**，返回 `DiscoverySelection`
+  （`links` + `filtered` / `repeated` / `alreadyVisited` / `overBudget` 四个桶）。四个桶是有意的：
+  日志的 "N of M anchor(s) … were not queued" 必须能把 M - links 拆开说清，否则"预算被重复链接吃掉"
+  看起来和一次正常运行没有区别；`links.size + skipped == M` 也由单测钉住。
+* `crawlDepthN`（depth ≥ 2）与 `extractOutLinks`（depth 1）**都**改用它。这正是 §16.4 #5 的另一半：
+  两条路径此前各写一份——depth 1 做了 `.distinct()`（按拼写）+ query 剥离，depth-N 什么都没做，
+  于是同一页面在不同 depth 下的行为不一致。
+* fragment 在整形阶段**无条件**剥掉（与引擎 `parseNormalizedLink` 一致：无论 `--no-norm`，
+  fragment 都不参与身份），`#specs` 这类拼写不再进入模式/去重/预算的判断。
+* `buildLinkArgs(options, expandable)` 从 `CrawlRoundRunner` 的私有方法移到 `CrawlSupport`，
+  并补上 `-ignoreUrlQuery` / `-noNorm` 的转发：**发现页由 session 加载，没进 args 的选项就等于不存在**
+  （`-readonly` 当初正是因为同样的原因漏在 depth ≥ 2 之外）。depth-1 的链接参数也改用同一函数
+  （`expandable = false`：depth-1 不展开子页，不需要 out-link 选择器）。
+
+### 21.3 验证
+
+| 层 | 证据 | 结果 |
+|---|---|---|
+| 本地 · 单测 | `browser4-rest` 8 个 crawl 单测类 | **113 / 0 / 0**（`CrawlSupportTest` 29 → 41，新增 11 个选择器 + 3 个参数转发用例） |
+| 本地 · 集成 | `CrawlLinkDiscoveryTest`（真实浏览器，3 条 crawl：预算 / 两种拼写 / `-ignoreUrlQuery`） | **4 / 0 / 0，130.6 s**（含继承的 hello 用例）。改前同一份测试 2 红（`-topLinks 3` 得 3 行、`-ignoreUrlQuery` 行里带 query） |
+| 本地 · 集成 | `CrawlFixtureMetadataTest`（既有 10 页 depth-2 fixture） | **5 / 0 / 0，667.4 s**（CI 基线 714.6 s，本地同量级） |
+| 本地 · 集成 | `SwarmCrawlFixtureTest` | **3 / 0 / 0，4.2 s** |
+| 文档 | `skills/browser4-cli/references/crawl.md` | `--top-links` 一行改为"**distinct** pages one page may contribute"；"URL deduplication" 段补上四条可观察契约（预算先去重、fragment 不进 URL、首个拼写胜出、`--ignore-url-query` 作用于排队前的 href） |
+
+**仍未做（记录边界）**：
+
+* `--no-norm` 只有**代码层**证据：它的转发路径有单测钉住参数字符串（`buildLinkArgs`），
+  但 MockSite 上找不到一个"归一化会改变、改后仍能抓通"的 URL（大小写路径在 Linux 会 404，
+  默认端口/大写主机名在 fixture 里不存在），因此没有浏览器层断言。
+* `--ignore-url-query` 对**种子 URL** 的影响（`CombinedUrlNormalizer` 在加载种子时也会剥 query）
+  不在本轮范围：那是引擎侧行为，且与 coworker 报告里的另一条 issue 重合，需要单独判断
+  "种子是否应当原样抓取"。
 
 
 

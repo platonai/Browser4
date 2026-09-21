@@ -271,11 +271,12 @@ internal class CrawlRoundRunner(
 
             // Submit each out-link as a ParsableHyperlink so we can collect results.
             // Include -refresh so each out-link is fetched fresh — without it, internal
-            // HTTP caches or stale protocol state can cause 0-byte responses.
+            // HTTP caches or stale protocol state can cause 0-byte responses.  The
+            // other fetch-shaping options (-readonly, -ignoreUrlQuery, -noNorm) are
+            // forwarded by buildLinkArgs for the same reason: a discovered page is
+            // loaded by the session, which only knows what these args tell it.
+            val linkArgs = buildLinkArgs(options, expandable = false)
             outLinks.forEach { linkUrl ->
-                // -readonly is forwarded so depth-1 page loads honor it too (no
-                // store writes) instead of silently ignoring the flag.
-                val readonlySuffix = if (options.readonly) " -readonly" else ""
                 val onParse = parse@{ _page: WebPage, _document: FeaturedDocument ->
                     if (!ledger.enter()) {
                         logger.debug(
@@ -344,7 +345,7 @@ internal class CrawlRoundRunner(
                     }
                     null
                 }
-                val hyperlink = ParsableHyperlink("$linkUrl -parse -refresh$readonlySuffix", onParse)
+                val hyperlink = ParsableHyperlink("$linkUrl $linkArgs", onParse)
                 // A fetch that never fires a parse event (retry budget exhausted,
                 // dropped task, terminal 4xx/5xx) is settled here instead of
                 // vanishing from the result.
@@ -571,32 +572,41 @@ internal class CrawlRoundRunner(
                 if (currentDepth != null && currentDepth < maxDepth) {
                     val selector = options.outLinkSelector
                     if (selector.isNotBlank()) {
-                        val allLinks = document.selectHyperlinks(selector)
-                            .map { it.url }
-                            .toList()
+                        val hrefs = document.selectHyperlinks(selector).map { it.url }.toList()
                         // Check-and-mark must be atomic with submission, so two
                         // pages discovering the same link cannot both submit it.
-                        val (newLinks, dupes) = synchronized(discoveryLock) {
-                            val fresh = allLinks.filter { link ->
-                                normalizeForVisit(link) !in visited
+                        // The selection is shared with crawlDepth1 (see
+                        // selectDiscoveredLinks): repeats on one page must not
+                        // spend the -top-links budget, and a discovered href is
+                        // shaped here — not by the load path, which never sees
+                        // -ignoreUrlQuery for these links.
+                        val selection = synchronized(discoveryLock) {
+                            selectDiscoveredLinks(
+                                hrefs = hrefs,
+                                visited = visited,
+                                outLinkPattern = options.outLinkPattern,
+                                topLinks = options.topLinks,
+                                ignoreUrlQuery = options.ignoreUrlQuery
+                            ).also { chosen ->
+                                chosen.links.forEach { link -> visited.add(normalizeForVisit(link)) }
                             }
-                            val chosen = fresh
-                                .filter { link -> matchesPattern(link, options.outLinkPattern) }
-                                .take(options.topLinks)
-                            chosen.forEach { link -> visited.add(normalizeForVisit(link)) }
-                            chosen to (allLinks.size - fresh.size)
                         }
-                        if (dupes > 0) {
+                        val newLinks = selection.links
+                        if (selection.skipped > 0) {
                             logger.debug(
-                                "Crawl {}: {} link(s) skipped — already visited (depth={})",
-                                taskId, dupes, currentDepth
+                                "Crawl {}: {} of {} anchor(s) on this page were not queued at depth {} " +
+                                    "({} did not match -outLinkPattern, {} repeated on the page, " +
+                                    "{} already visited, {} beyond -top-links {})",
+                                taskId, selection.skipped, hrefs.size, currentDepth,
+                                selection.filtered, selection.repeated, selection.alreadyVisited,
+                                selection.overBudget, options.topLinks
                             )
                         }
 
                         if (newLinks.isNotEmpty()) {
                             linksDiscovered.addAndGet(newLinks.size)
                             val childDepth = currentDepth + 1
-                            val args = buildLinkArgs(options)
+                            val args = buildLinkArgs(options, expandable = true)
                             newLinks.forEach { link ->
                                 depths[normalizeForVisit(link)] = childDepth
                                 val hyperlink = ParsableHyperlink("$link $args", parseHandler)
@@ -678,7 +688,7 @@ internal class CrawlRoundRunner(
             val seedKey = normalizeForVisit(request.url)
             visited.add(seedKey)
             depths[seedKey] = 0
-            val seedArgs = buildLinkArgs(options)
+            val seedArgs = buildLinkArgs(options, expandable = true)
             val seedHyperlink = ParsableHyperlink("${request.url} $seedArgs", parseHandler)
             seedHyperlink.eventHandlers.crawlEventHandlers.onLoaded.addLast { _, loaded ->
                 settleFromLoaded(ledger, request.url, 0, loaded)
@@ -810,7 +820,7 @@ internal class CrawlRoundRunner(
             selector, matchedElements.size
         )
 
-        return matchedElements.mapNotNull { element ->
+        val hrefs = matchedElements.mapNotNull { element ->
             val href = element.attr("href").takeIf { it.isNotBlank() }
                 ?: element.attr("src").takeIf { it.isNotBlank() }
                 ?: return@mapNotNull null
@@ -822,21 +832,23 @@ internal class CrawlRoundRunner(
             if (href.trimStart().startsWith("#")) {
                 return@mapNotNull null
             }
-            // Normalize: resolve relative URLs, optional query stripping
-            val resolved = runCatching {
+            // Resolve relative URLs against the portal; the query is stripped
+            // later, by the selection, where -ignoreUrlQuery is applied.
+            runCatching {
                 java.net.URI(portalUrl).resolve(href).toString()
             }.getOrElse { href }
-
-            if (normOptions.ignoreUrlQuery) {
-                resolved.substringBefore('?')
-            } else {
-                resolved
-            }
         }
-            .filter { link -> matchesPattern(link, normOptions.outLinkPattern) }
-            .distinct()
-            .take(normOptions.topLinks)
-            .toList()
+
+        // The same selection as a depth>=2 round's discovery: dedupe before the
+        // budget, shape the spelling once.  A single-level round has no
+        // cross-page memory to hand it, which is why `visited` is empty.
+        return selectDiscoveredLinks(
+            hrefs = hrefs,
+            visited = emptySet(),
+            outLinkPattern = normOptions.outLinkPattern,
+            topLinks = normOptions.topLinks,
+            ignoreUrlQuery = normOptions.ignoreUrlQuery
+        ).links
     }
 
     private fun parseOptions(session: PulsarSession, args: String): LoadOptions {
@@ -909,33 +921,6 @@ internal class CrawlRoundRunner(
 
             else -> Unit
         }
-    }
-
-    /**
-     * The load args of a submitted hyperlink.
-     *
-     * A child's discovery depth is deliberately NOT embedded here.  It used to
-     * be (`-depth N`) so that it could be re-read out of `page.configuredUrl`,
-     * but [LoadOptions] has no such option: `LoadOptions.toString()` — which is
-     * what builds `configuredUrl` — only serializes options it knows, so the
-     * marker was dropped on submission and every read of it failed.  Depth is
-     * queue-time bookkeeping owned by `crawlDepthN`'s `depths` map and is never
-     * re-derived from a URL.
-     */
-    private fun buildLinkArgs(options: LoadOptions): String {
-        val parts = mutableListOf("-parse")
-        if (options.outLinkSelector.isNotBlank()) {
-            parts.add("-outLink \"${options.outLinkSelector}\"")
-        }
-        if (options.outLinkPattern.isNotBlank() && options.outLinkPattern != ".+") {
-            parts.add("-outLinkPattern \"${options.outLinkPattern}\"")
-        }
-        // -readonly must reach every page load, not just the seed: without this
-        // the flag silently stops applying at depth>=2 and the crawl writes
-        // pages to the store while claiming nothing was written.
-        if (options.refresh) parts.add("-refresh")
-        if (options.readonly) parts.add("-readonly")
-        return parts.joinToString(" ")
     }
 
     private companion object {

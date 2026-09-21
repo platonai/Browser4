@@ -2,6 +2,7 @@ package ai.platon.pulsar.rest.api.service.crawl
 
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.context.PulsarContext
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import kotlinx.coroutines.async
@@ -317,6 +318,135 @@ internal fun matchesPattern(url: String, pattern: String?): Boolean {
     return runCatching {
         Regex(pattern).containsMatchIn(url)
     }.getOrDefault(true)
+}
+
+/**
+ * The out-links one discovery pass may queue, and the anchors it refused.
+ *
+ * A storefront routinely offers one destination through several anchors — the
+ * product image and the product title are two `href`s to the same page, and a
+ * grid/list toggle spells another page twice with different query strings.  The
+ * budget (`-top-links`) is a budget for *pages*, so it can only be spent after
+ * the repeats are gone: feeding the anchors straight into `take(n)` lets two
+ * copies of one link take two slots, and the crawl then queues fewer distinct
+ * pages than it was asked for.  (The ledger refuses the second submission of one
+ * identity, so nothing is fetched twice — the promise is lost silently instead.)
+ *
+ * Identity is [normalizeForVisit], the crawl's one dedup key, and the spelling
+ * that survives is the first one seen.  The fragment is always dropped: a jump
+ * target inside a document never identifies a page, so it must not reach the
+ * URL a row reports.  The query is dropped when [ignoreUrlQuery] is set — the
+ * flag is documented as stripping the query from a *discovered* href, so it has
+ * to be applied where discovered hrefs become queued URLs; the load path never
+ * sees it for these links.
+ *
+ * [visited] is the crawl's cross-page memory (identities this crawl already
+ * queued).  A single-level crawl passes an empty set: it has no memory to keep,
+ * and the ledger refuses a second submission of one identity anyway.
+ *
+ * @param hrefs the anchors one page offers, in document order, already absolute.
+ * @param visited identities this crawl has already queued.
+ * @param outLinkPattern `-out-link-pattern`, matched against the prepared spelling.
+ * @param topLinks `-top-links`, the number of *distinct* links one page may add.
+ * @param ignoreUrlQuery `-ignoreUrlQuery`: drop the query from each candidate.
+ * @return the links to queue and the count of anchors each rule refused; see
+ *   [DiscoverySelection] for why the counters are part of the result.
+ */
+internal fun selectDiscoveredLinks(
+    hrefs: List<String>,
+    visited: Set<String>,
+    outLinkPattern: String?,
+    topLinks: Int,
+    ignoreUrlQuery: Boolean,
+): DiscoverySelection {
+    // Blank hrefs are not candidates at all, so they are not counted as skipped:
+    // an anchor with nothing to resolve was never a link.
+    val prepared = hrefs.asSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .map { href -> href.substringBefore('#').let { if (ignoreUrlQuery) it.substringBefore('?') else it } }
+        .toList()
+
+    val matched = prepared.filter { matchesPattern(it, outLinkPattern) }
+
+    // First spelling of each identity wins, in document order.
+    val distinct = LinkedHashMap<String, String>(matched.size)
+    matched.forEach { distinct.putIfAbsent(normalizeForVisit(it), it) }
+
+    val fresh = distinct.filterKeys { it !in visited }.values.toList()
+    val chosen = fresh.take(topLinks.coerceAtLeast(0))
+
+    return DiscoverySelection(
+        links = chosen,
+        filtered = prepared.size - matched.size,
+        alreadyVisited = distinct.size - fresh.size,
+        repeated = matched.size - distinct.size,
+        overBudget = fresh.size - chosen.size,
+    )
+}
+
+/**
+ * The outcome of [selectDiscoveredLinks]: the links to queue, and why the rest
+ * of the page's anchors were not queued.
+ *
+ * The counters exist so the crawl's log can name the reason ("3 repeated on the
+ * page, 2 already visited, 5 beyond -top-links 3") instead of one opaque
+ * "skipped" number that hides a budget mistake behind a normal-looking run.
+ * They add up: `links.size + skipped` is the number of non-blank anchors the
+ * page offered, so a crawl that queued nothing always says which rule did it.
+ */
+internal data class DiscoverySelection(
+    val links: List<String>,
+    /** Anchors the out-link pattern rejected. */
+    val filtered: Int,
+    /** Anchors whose page another anchor on the same page already offered. */
+    val repeated: Int,
+    /** Anchors whose page this crawl has already queued. */
+    val alreadyVisited: Int,
+    /** Distinct, unvisited links that did not fit in `-top-links`. */
+    val overBudget: Int,
+) {
+    val skipped: Int get() = filtered + repeated + alreadyVisited + overBudget
+}
+
+/**
+ * The args a crawl puts on each URL it discovered.
+ *
+ * Discovered pages are loaded through the session, so an option that is not in
+ * these args simply does not apply to them: `-readonly` used to stop applying at
+ * depth >= 2 (the crawl wrote pages to the store while claiming it did not), and
+ * `-ignoreUrlQuery` / `-noNorm` are documented as options for *discovered*
+ * out-link hrefs — the very links this string carries.  They are forwarded here
+ * for the same reason `-refresh` is: the load, not the crawl, is what normalizes
+ * a URL, and the load only knows what these args tell it.
+ *
+ * A child's discovery depth is deliberately NOT embedded here.  It used to be
+ * (`-depth N`) so that it could be re-read out of `page.configuredUrl`, but
+ * [LoadOptions] has no such option: `LoadOptions.toString()` — which is what
+ * builds `configuredUrl` — only serializes options it knows, so the marker was
+ * dropped on submission and every read of it failed.  Depth is queue-time
+ * bookkeeping owned by `CrawlRoundRunner`'s `depths` map and is never re-derived
+ * from a URL.
+ *
+ * @param expandable whether the loaded page may discover further links
+ *   (depth >= 2 rounds submit children; a depth-1 round does not, so it does not
+ *   carry an out-link selector that nothing would read).
+ */
+internal fun buildLinkArgs(options: LoadOptions, expandable: Boolean): String {
+    val parts = mutableListOf("-parse")
+    if (expandable) {
+        if (options.outLinkSelector.isNotBlank()) {
+            parts.add("-outLink \"${options.outLinkSelector}\"")
+        }
+        if (options.outLinkPattern.isNotBlank() && options.outLinkPattern != ".+") {
+            parts.add("-outLinkPattern \"${options.outLinkPattern}\"")
+        }
+    }
+    if (options.refresh) parts.add("-refresh")
+    if (options.readonly) parts.add("-readonly")
+    if (options.ignoreUrlQuery) parts.add("-ignoreUrlQuery")
+    if (options.noNorm) parts.add("-noNorm")
+    return parts.joinToString(" ")
 }
 
 /**

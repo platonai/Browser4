@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.api.service.crawl
 
 import ai.platon.pulsar.common.ResourceStatus
+import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.context.PulsarContext
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -59,6 +60,248 @@ class CrawlSupportTest {
             normalizeForVisit("https://example.com/hub.html"),
             normalizeForVisit("https://example.com/hub.html#")
         )
+    }
+
+    // ------------------------------------------------------------------
+    // selectDiscoveredLinks
+    // ------------------------------------------------------------------
+
+    /** The duplicate hub fixture: five destinations offered through eight anchors. */
+    private fun duplicateHubHrefs(): List<String> = listOf(
+        "http://h/generated/crawl/product/1.html",
+        "http://h/generated/crawl/product/1.html",
+        "http://h/generated/crawl/product/2.html",
+        "http://h/generated/crawl/product/2.html",
+        "http://h/generated/crawl/product/3.html",
+        "http://h/generated/crawl/product/4.html?src=grid",
+        "http://h/generated/crawl/product/4.html?src=list",
+        "http://h/generated/crawl/product/5.html#specs"
+    )
+
+    @Test
+    @DisplayName("repeats on one page do not spend the -top-links budget")
+    fun testRepeatsDoNotSpendTheBudget() {
+        // The image and the title of a product are two anchors with one href, and
+        // a grid/list toggle spells one page twice.  Taking the budget before the
+        // repeats are gone spends three slots on two pages.
+        val selection = selectDiscoveredLinks(
+            hrefs = duplicateHubHrefs(),
+            visited = emptySet(),
+            outLinkPattern = null,
+            topLinks = 3,
+            ignoreUrlQuery = false
+        )
+
+        assertEquals(
+            listOf(
+                "http://h/generated/crawl/product/1.html",
+                "http://h/generated/crawl/product/2.html",
+                "http://h/generated/crawl/product/3.html"
+            ),
+            selection.links
+        )
+        assertEquals(3, selection.repeated, "two repeats of product/1 and one of product/4")
+        assertEquals(0, selection.alreadyVisited)
+        assertEquals(2, selection.overBudget, "product/4 and product/5 did not fit")
+        assertEquals(5, selection.skipped)
+    }
+
+    @Test
+    @DisplayName("the budget is spent on distinct pages the crawl has not seen yet")
+    fun testBudgetSkipsVisitedIdentities() {
+        // A visited candidate costs nothing — it must not consume a slot the next
+        // fresh link needs, or a crawl shrinks as the round progresses.
+        val selection = selectDiscoveredLinks(
+            hrefs = duplicateHubHrefs(),
+            visited = setOf(
+                normalizeForVisit("http://h/generated/crawl/product/1.html"),
+                normalizeForVisit("http://h/generated/crawl/product/2.html")
+            ),
+            outLinkPattern = null,
+            topLinks = 3,
+            ignoreUrlQuery = false
+        )
+
+        assertEquals(
+            listOf(
+                "http://h/generated/crawl/product/3.html",
+                "http://h/generated/crawl/product/4.html?src=grid",
+                "http://h/generated/crawl/product/5.html"
+            ),
+            selection.links
+        )
+        assertEquals(3, selection.repeated)
+        assertEquals(2, selection.alreadyVisited)
+        assertEquals(0, selection.overBudget)
+    }
+
+    @Test
+    @DisplayName("one page offered twice is queued once, under the first spelling seen")
+    fun testOnePageIsQueuedUnderItsFirstSpelling() {
+        val selection = selectDiscoveredLinks(
+            hrefs = listOf(
+                "http://h/p/4.html?src=grid",
+                "http://h/p/4.html?src=list",
+                "http://h/p/5.html#specs"
+            ),
+            visited = emptySet(),
+            outLinkPattern = null,
+            topLinks = 20,
+            ignoreUrlQuery = false
+        )
+
+        // The identity ignores the query (that is the documented dedup rule), so
+        // the first spelling is the one the row will report.
+        assertEquals(listOf("http://h/p/4.html?src=grid", "http://h/p/5.html"), selection.links)
+        assertEquals(1, selection.repeated)
+    }
+
+    @Test
+    @DisplayName("-ignoreUrlQuery strips the query from the href the crawl queues")
+    fun testIgnoreUrlQueryStripsTheQueuedSpelling() {
+        val selection = selectDiscoveredLinks(
+            hrefs = listOf(
+                "http://h/p/4.html?src=grid",
+                "http://h/p/4.html?src=list",
+                "http://h/p/5.html#specs"
+            ),
+            visited = emptySet(),
+            outLinkPattern = null,
+            topLinks = 20,
+            ignoreUrlQuery = true
+        )
+
+        assertEquals(listOf("http://h/p/4.html", "http://h/p/5.html"), selection.links)
+        assertEquals(1, selection.repeated)
+    }
+
+    @Test
+    @DisplayName("a fragment never survives into the queued URL")
+    fun testFragmentIsNeverQueued() {
+        // A jump target inside a document is not a page.  The load path used to be
+        // the only thing stripping it, which made a fragment-carrying url visible
+        // to every earlier decision (dedup, pattern, budget) under a spelling the
+        // crawl would never fetch.
+        val selection = selectDiscoveredLinks(
+            hrefs = listOf("http://h/p/1.html#reviews", "http://h/p/1.html"),
+            visited = emptySet(),
+            outLinkPattern = null,
+            topLinks = 20,
+            ignoreUrlQuery = false
+        )
+
+        assertEquals(listOf("http://h/p/1.html"), selection.links)
+        assertEquals(1, selection.repeated, "the plain spelling is the same page")
+    }
+
+    @Test
+    @DisplayName("the out-link pattern is matched against the spelling the crawl queues")
+    fun testPatternSeesTheQueuedSpelling() {
+        // -ignoreUrlQuery is applied before the pattern is matched, which is what
+        // a pattern written against the stripped URL expects.  Matching the raw
+        // href instead would let a query string decide whether a link is followed.
+        val selection = selectDiscoveredLinks(
+            hrefs = listOf("http://h/p/1.html?src=grid", "http://h/p/2.html"),
+            visited = emptySet(),
+            outLinkPattern = "src=grid",
+            topLinks = 20,
+            ignoreUrlQuery = true
+        )
+
+        assertTrue(selection.links.isEmpty(), "the stripped href must not match: ${selection.links}")
+        // Rejected anchors are their own bucket: they are not repeats, and they
+        // must not be reported as something the budget refused.
+        assertEquals(2, selection.filtered)
+        assertEquals(0, selection.repeated)
+        assertEquals(0, selection.overBudget)
+    }
+
+    @Test
+    @DisplayName("every anchor a page offered is either queued or accounted for")
+    fun testCountersAccountForEveryAnchor() {
+        // The log line reads "N of M anchors were not queued (…)", so the buckets
+        // have to add up to M - links.size.  Without the filtered bucket a page
+        // whose links were all rejected by the pattern reported "0 skipped".
+        val hrefs = duplicateHubHrefs()
+        val selection = selectDiscoveredLinks(
+            hrefs = hrefs,
+            visited = setOf(normalizeForVisit("http://h/generated/crawl/product/1.html")),
+            outLinkPattern = "product/",
+            topLinks = 2,
+            ignoreUrlQuery = false
+        )
+
+        assertEquals(hrefs.size, selection.links.size + selection.skipped)
+    }
+
+    @Test
+    @DisplayName("a blank or non-matching anchor list queues nothing and is not miscounted")
+    fun testEmptyInputs() {
+        val selection = selectDiscoveredLinks(
+            hrefs = listOf("   ", ""),
+            visited = emptySet(),
+            outLinkPattern = null,
+            topLinks = 20,
+            ignoreUrlQuery = false
+        )
+
+        assertTrue(selection.links.isEmpty())
+        assertEquals(0, selection.skipped)
+    }
+
+    @Test
+    @DisplayName("-top-links 0 queues nothing but still reports what it refused")
+    fun testZeroBudget() {
+        val selection = selectDiscoveredLinks(
+            hrefs = duplicateHubHrefs(),
+            visited = emptySet(),
+            outLinkPattern = null,
+            topLinks = 0,
+            ignoreUrlQuery = false
+        )
+
+        assertTrue(selection.links.isEmpty())
+        assertEquals(0, selection.filtered)
+        assertEquals(3, selection.repeated)
+        assertEquals(5, selection.overBudget)
+    }
+
+    // ------------------------------------------------------------------
+    // buildLinkArgs
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a depth>=2 link load carries the flags that shape a discovered fetch")
+    fun testLinkArgsForExpandedPages() {
+        val options = LoadOptions.parse(
+            "-outLink \"a.pick\" -outLinkPattern \"product/\" -refresh -readonly -ignoreUrlQuery -noNorm"
+        )
+
+        assertEquals(
+            "-parse -outLink \"a.pick\" -outLinkPattern \"product/\" -refresh -readonly -ignoreUrlQuery -noNorm",
+            buildLinkArgs(options, expandable = true)
+        )
+    }
+
+    @Test
+    @DisplayName("a depth-1 link load carries no out-link selector, but keeps the fetch flags")
+    fun testLinkArgsForLeafPages() {
+        // Nothing reads an out-link selector on a page whose children are not
+        // followed, but -readonly / -ignoreUrlQuery / -noNorm have to reach the
+        // load or the flag silently applies to the seed only.
+        val options = LoadOptions.parse(
+            "-outLink \"a.pick\" -outLinkPattern \"product/\" -refresh -readonly -ignoreUrlQuery -noNorm"
+        )
+
+        assertEquals("-parse -refresh -readonly -ignoreUrlQuery -noNorm", buildLinkArgs(options, expandable = false))
+    }
+
+    @Test
+    @DisplayName("the catch-all out-link pattern is not forwarded")
+    fun testCatchAllPatternIsNotForwarded() {
+        val options = LoadOptions.parse("-outLink \"a\" -outLinkPattern \".+\" -refresh")
+
+        assertEquals("-parse -outLink \"a\" -refresh", buildLinkArgs(options, expandable = true))
     }
 
     // ------------------------------------------------------------------

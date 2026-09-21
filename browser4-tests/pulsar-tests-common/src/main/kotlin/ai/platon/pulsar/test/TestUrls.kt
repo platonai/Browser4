@@ -38,6 +38,17 @@ object TestUrls {
     val MOCK_CRAWL_HUB_URL get() = "$MOCK_CRAWL_BASE/index.html"
     val MOCK_CRAWL_PRODUCT_DETAIL_URL get() = "$MOCK_CRAWL_BASE/product/1.html"
 
+    /**
+     * Hub whose five products are offered through eight anchors: the image and the
+     * title link the same page, a grid/list toggle spells another one twice with
+     * different query strings, and the last one carries a fragment.
+     *
+     * Fixture for the link-discovery contracts: repeats must not spend the
+     * `--top-links` budget, and `--ignore-url-query` must strip the query from a
+     * discovered href (see `CrawlLinkDiscoveryTest`).
+     */
+    val MOCK_CRAWL_DUP_HUB_URL get() = "$MOCK_CRAWL_BASE/dup/hub.html"
+
     var urlGroups = mutableMapOf<String, Array<String>>()
 
     init {

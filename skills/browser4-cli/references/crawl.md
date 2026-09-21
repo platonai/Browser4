@@ -214,7 +214,7 @@ Notes:
 |---|---|---|---|---|
 | `--out-link-selector` | `-ol` | string | — | CSS selector to extract links from each page |
 | `--out-link-pattern` | `-olp` | regex | `.+` | Regex to filter extracted links |
-| `--top-links` | `-tl` | int | `20` | Max links extracted per page |
+| `--top-links` | `-tl` | int | `20` | Max **distinct** pages one page may contribute (repeats are removed first) |
 
 > **Git Bash / MSYS2 caveat — leading-`/` pattern values:** when you run the CLI
 > from Git Bash, argument values that start with `/` (e.g.
@@ -385,11 +385,19 @@ browser4-cli crawl "https://example.com" -ol "a[href]" -a "-nMaxRetry 5 -lazyFlu
 - Visited URLs are normalized: lowercase, trailing slash removed, query string
   and URL fragment always stripped for dedup purposes.
 - The same URL is never visited twice within a crawl session.
+- `--top-links` is a budget for **pages**, not anchors: the links a page offers
+  are deduplicated *before* the budget is applied, so a product linked twice
+  (image and title) or a page offered under two query strings costs one slot.
+- A fragment is never part of a queued or reported URL:
+  `product/1.html#specs` is queued — and reported — as `product/1.html`.
+- When one page is offered under several spellings, the crawl queues the first
+  one it saw (document order) and reports that spelling.
 - Fragment-only anchors (`href="#"`, `href="#section"`) can never navigate to
   a new document and are skipped during link extraction — they are not counted
   as discovered out-links.
-- Use `--ignore-url-query` to additionally strip query parameters from extracted
-  link hrefs before resolution.
+- Use `--ignore-url-query` to strip query parameters from discovered link hrefs
+  before they are queued, so the URL a result row reports is the URL that was
+  fetched.
 - Use `--no-norm` to disable LoadOptions-level normalization (does not affect
   internal dedup normalization).
 
