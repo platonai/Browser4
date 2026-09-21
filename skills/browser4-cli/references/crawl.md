@@ -470,18 +470,24 @@ Check the current status of a crawl task.
 browser4-cli crawl status <task-id>
 ```
 
-Shows whether the task is CREATED, PROCESSING, or completed (OK), along with
+Shows whether the task is `Created`, `Processing`, or completed (`OK`), along with
 pages found so far and any error information.  Prints a compact one-line
 summary in front of the raw task record.
 
+The wire values are `ResourceStatus` display text — `Created`, `Processing`, `OK`,
+`Request Timeout`, `Internal Server Error`, `Not Found` (one vocabulary, defined
+by `CrawlStatus` on the backend).  The CLI maps them to lifecycle labels:
+`queued`, `processing`, `completed`, `failed (timeout)`, `failed (error)`,
+`failed (not found)`.
+
 ### crawl result
 
-Retrieve the current record of a crawl task.  A terminal task (OK, TIMEOUT,
-ERROR) returns the full result: page listing (without `--sql`) or extracted
-data (with `--sql`).  The record also carries the live status field, so
-polling a task that is still PROCESSING returns the record with
-`status: PROCESSING` and whatever partial progress exists — the CLI prints a
-hint when the task is not yet terminal.
+Retrieve the current record of a crawl task.  A terminal task (`OK`,
+`Request Timeout`, `Internal Server Error`, `Not Found`) returns the full result:
+page listing (without `--sql`) or extracted data (with `--sql`).  The record also
+carries the live status field, so polling a task that is still `Processing`
+returns the record with `status: Processing` and whatever partial progress exists
+— the CLI prints a hint when the task is not yet terminal.
 
 ```bash
 browser4-cli crawl result <task-id>
@@ -489,7 +495,7 @@ browser4-cli crawl result <task-id>
 
 > **Note:** `crawl result` returns the task's current record including its
 > `status` field — it does not refuse non-terminal tasks.  While a task is
-> PROCESSING, `crawl result` and `crawl status` show equivalent partial
+> `Processing`, `crawl result` and `crawl status` show equivalent partial
 > records; use either to poll.
 
 ### crawl cancel

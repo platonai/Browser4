@@ -11757,13 +11757,24 @@ fn friendly_agent_status(process_state: &str, is_done: bool, status_code: &str) 
 }
 
 /// Map crawl status strings to the same lifecycle labels.
+///
+/// The backend emits `ResourceStatus` display text ("Created", "Processing",
+/// "Request Timeout", "Internal Server Error", "Not Found"); token spellings from
+/// older payloads are still accepted so a mixed-version pair keeps labelling
+/// correctly.  Matching only the tokens — the previous behaviour — mislabelled
+/// everything except `"OK"`: `"Request Timeout"` fell through to
+/// `"request timeout"` instead of `"failed (timeout)"`, and `"Not Found"` never
+/// matched `contains("NOT_FOUND")` at all.
 fn friendly_crawl_status(status: &str) -> String {
     match status {
-        "CREATED" => "queued".to_string(),
-        "OK" => "completed".to_string(),
-        "REQUEST_TIMEOUT" => "failed (timeout)".to_string(),
-        "INTERNAL_SERVER_ERROR" => "failed (error)".to_string(),
-        s if s.contains("NOT_FOUND") => "failed (not found)".to_string(),
+        "Created" | "CREATED" => "queued".to_string(),
+        "Processing" | "PROCESSING" | "Accepted" | "SC_ACCEPTED" => "processing".to_string(),
+        "OK" | "SC_OK" => "completed".to_string(),
+        "Request Timeout" | "REQUEST_TIMEOUT" | "SC_REQUEST_TIMEOUT" => "failed (timeout)".to_string(),
+        "Internal Server Error" | "INTERNAL_SERVER_ERROR" | "SC_INTERNAL_SERVER_ERROR" => {
+            "failed (error)".to_string()
+        }
+        s if s.contains("Not Found") || s.contains("NOT_FOUND") => "failed (not found)".to_string(),
         other => other.to_lowercase(),
     }
 }
@@ -27531,6 +27542,21 @@ mod tests {
     #[test]
     fn friendly_crawl_status_unknown_is_lowered() {
         assert_eq!(friendly_crawl_status("PROCESSING"), "processing");
+    }
+
+    /// The backend sends ResourceStatus display text, so the labels must not
+    /// depend on the token spellings (they used to: only "OK" agreed).
+    #[test]
+    fn friendly_crawl_status_accepts_display_text() {
+        assert_eq!(friendly_crawl_status("Created"), "queued");
+        assert_eq!(friendly_crawl_status("Processing"), "processing");
+        assert_eq!(friendly_crawl_status("Accepted"), "processing");
+        assert_eq!(friendly_crawl_status("Request Timeout"), "failed (timeout)");
+        assert_eq!(
+            friendly_crawl_status("Internal Server Error"),
+            "failed (error)"
+        );
+        assert_eq!(friendly_crawl_status("Not Found"), "failed (not found)");
     }
 
     #[test]

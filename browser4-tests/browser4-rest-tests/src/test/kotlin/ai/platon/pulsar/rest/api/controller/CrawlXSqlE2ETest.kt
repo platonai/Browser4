@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
+import ai.platon.pulsar.rest.api.service.crawl.CrawlStatus
 import ai.platon.pulsar.test.TestUrls
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
@@ -141,7 +142,8 @@ class CrawlXSqlE2ETest : RestAPITestBase() {
             val result = requireNotNull(raw) { "empty crawl result for $taskId" }
                 .let { jacksonObjectMapper().registerModule(JavaTimeModule()).readValue(it, CrawlResponse::class.java) }
             last = result
-            if (result.status in setOf("OK", "SC_OK", "SC_REQUEST_TIMEOUT", "SC_INTERNAL_SERVER_ERROR")) {
+            // Terminal detection defers to CrawlStatus — the one vocabulary definition.
+            if (CrawlStatus.isTerminal(result.status)) {
                 return result
             }
         }

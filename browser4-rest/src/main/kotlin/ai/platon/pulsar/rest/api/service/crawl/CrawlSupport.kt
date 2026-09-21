@@ -428,7 +428,7 @@ internal fun mergeIncrementalProgress(
     if (previous != null && previous.status in terminalStatuses) return null
     return CrawlResponse(
         taskId = taskId,
-        status = "PROCESSING",
+        status = CrawlStatus.PROCESSING,
         pagesFound = pages.size,
         linksDiscovered = linksDiscovered,
         pages = pages,

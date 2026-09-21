@@ -3,6 +3,7 @@ package ai.platon.pulsar.rest.api.controller
 import ai.platon.pulsar.rest.api.service.crawl.CrawlRequest
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
 import ai.platon.pulsar.rest.api.service.crawl.CrawlService
+import ai.platon.pulsar.rest.api.service.crawl.CrawlStatus
 import ai.platon.pulsar.test.TestUrls
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
@@ -307,21 +308,15 @@ class CrawlParallelTabsTest : RestAPITestBase() {
     }
 
     /**
-     * Terminal detection has to accept every spelling used on this line: the
-     * response defaults to the `"CREATED"` token, [CrawlService] settles with
-     * `ResourceStatus` display text (`"OK"`, `"Request Timeout"`,
-     * `"Internal Server Error"`, `"Not Found"`), and [CrawlResponse.finishTime] is
-     * the model's own terminal marker.  The previous check compared against
-     * `"SC_REQUEST_TIMEOUT"` / `"SC_INTERNAL_SERVER_ERROR"` spellings that the
-     * service never emits, so a crawl that had already timed out could never be
-     * recognised and the wait ran out its whole cap before blaming a stall.
+     * Terminal detection defers to [CrawlStatus] — the one vocabulary definition —
+     * so this test cannot drift from the service again.  The previous check
+     * compared against `"SC_REQUEST_TIMEOUT"` / `"SC_INTERNAL_SERVER_ERROR"`
+     * spellings the service never emitted, so a crawl that had already timed out
+     * could never be recognised and the wait ran out its whole cap before blaming a
+     * stall.  [CrawlResponse.finishTime] is the model's own terminal marker.
      */
     private fun CrawlResponse.isTerminal(): Boolean =
-        finishTime != null ||
-            status.equals("OK", true) ||
-            status.equals("Request Timeout", true) ||
-            status.equals("Internal Server Error", true) ||
-            status.equals("Not Found", true)
+        finishTime != null || CrawlStatus.isTerminal(status)
 
     /** One line of the task's own accounting, for a timeout that has to be actionable. */
     private fun CrawlResponse.describe(): String = buildString {

@@ -329,15 +329,15 @@ class CrawlServiceTest {
     }
 
     /**
-     * The `status` field mixes vocabularies on this line: [CrawlResponse] defaults
-     * to the `"CREATED"` token, the service writes both raw tokens (`"PROCESSING"`)
-     * and `ResourceStatus` display text (`"Created"`, `"Request Timeout"`), and
-     * [CrawlResponse.finishTime] is the model's own "reached a terminal state"
-     * marker.  Comparing against the upper-case tokens alone therefore matched only
-     * the default and exited on the *first* poll, so the caller asserted on
-     * `"Created"` and failed within milliseconds instead of waiting for the terminal
-     * record.  Match case-insensitively and treat a recorded finish time as final.
+     * Wait while the task is unfinished *and* still reports a running state.
+     *
+     * [CrawlStatus] is the single source of truth for the vocabulary, so this no
+     * longer has to guess spellings: the old comparison against the upper-case
+     * tokens alone matched only the `"CREATED"` default and exited on the *first*
+     * poll, which made the caller assert on `"Created"` within milliseconds
+     * instead of waiting for the terminal record.  [CrawlResponse.finishTime] is
+     * the model's own "reached a terminal state" marker, so it is checked too.
      */
     private fun CrawlResponse.isStillRunning(): Boolean =
-        finishTime == null && (status.equals("CREATED", true) || status.equals("PROCESSING", true))
+        finishTime == null && CrawlStatus.isRunning(status)
 }

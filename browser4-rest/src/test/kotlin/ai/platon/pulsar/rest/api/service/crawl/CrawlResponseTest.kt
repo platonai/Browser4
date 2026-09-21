@@ -79,7 +79,7 @@ class CrawlResponseTest {
     @Test
     fun `default status is CREATED`() {
         val response = CrawlResponse()
-        assertEquals("CREATED", response.status)
+        assertEquals(CrawlStatus.CREATED, response.status)
     }
 
     // -----------------------------------------------------------------

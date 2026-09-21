@@ -380,7 +380,7 @@ class CrawlSupportTest {
     fun testIncrementalPublishKeepsLossCounters() {
         val previous = CrawlResponse(
             taskId = "t-merge",
-            status = "PROCESSING",
+            status = CrawlStatus.PROCESSING,
             pagesFound = 1,
             pagesExpected = 3,
             failedPages = listOf(CrawlFailedPage("https://example.com/lost", 1, 408, "timeout")),
@@ -403,7 +403,7 @@ class CrawlSupportTest {
 
         assertEquals(2, merged.pagesFound)
         assertEquals(5, merged.linksDiscovered)
-        assertEquals("PROCESSING", merged.status)
+        assertEquals(CrawlStatus.PROCESSING, merged.status)
         // The point of the merge: a page publish must not erase what the settled
         // seeds already reported, or the in-flight view under-reports loss.
         assertEquals(previous.failedPages, merged.failedPages)
@@ -415,7 +415,7 @@ class CrawlSupportTest {
         // Age drives the TTL purge: publishing progress must not make a task young again.
         assertEquals(previous.createdAt, merged.createdAt)
         // A diagnostic that is not supplied now is preserved, never erased.
-        val withDiagnostic = CrawlResponse(taskId = "t-merge", status = "PROCESSING", diagnostic = "no out-links")
+        val withDiagnostic = CrawlResponse(taskId = "t-merge", status = CrawlStatus.PROCESSING, diagnostic = "no out-links")
         assertEquals(
             "no out-links",
             mergeIncrementalProgress("t-merge", withDiagnostic, emptyList(), 0, null, TERMINAL)?.diagnostic

@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.rest.api.service.crawl.CrawlResponse
+import ai.platon.pulsar.rest.api.service.crawl.CrawlStatus
 import ai.platon.pulsar.test.TestUrls
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
@@ -71,7 +72,7 @@ class CrawlFixtureMetadataTest : RestAPITestBase() {
     fun testDepth2CrawlRecordsTitlesPerUrl() {
         val response = runCrawl(depth = 2, args = "-refresh")
 
-        assertTrue(response.status == "OK" || response.status == "SC_OK",
+        assertTrue(response.status == CrawlStatus.OK,
             "crawl should complete OK, got: ${response.status} error=${response.error}")
         assertNoLostPages(response)
         val pages = requireNotNull(response.pages)
@@ -104,7 +105,7 @@ class CrawlFixtureMetadataTest : RestAPITestBase() {
     fun testReadonlyRefreshCrawlVerifiesFreshness() {
         val response = runCrawl(depth = 2, args = "-readonly -refresh")
 
-        assertTrue(response.status == "OK" || response.status == "SC_OK",
+        assertTrue(response.status == CrawlStatus.OK,
             "crawl should complete OK, got: ${response.status} error=${response.error}")
         assertNoLostPages(response)
         val pages = requireNotNull(response.pages)
@@ -141,7 +142,7 @@ class CrawlFixtureMetadataTest : RestAPITestBase() {
         // forcing is revisited (docs-dev/copilot/ci-stabilization-4.13.x.md §18).
         val response = runCrawl(depth = 2, args = "-readonly")
 
-        assertTrue(response.status == "OK" || response.status == "SC_OK",
+        assertTrue(response.status == CrawlStatus.OK,
             "crawl should complete OK, got: ${response.status} error=${response.error}")
         assertNoLostPages(response)
         val pages = requireNotNull(response.pages)
@@ -187,7 +188,7 @@ class CrawlFixtureMetadataTest : RestAPITestBase() {
 
         for ((label, taskId) in listOf("first" to firstTask, "second" to secondTask)) {
             val response = waitForTerminal(taskId)
-            assertTrue(response.status == "OK" || response.status == "SC_OK",
+            assertTrue(response.status == CrawlStatus.OK,
                 "$label crawl should complete OK, got: ${response.status} error=${response.error}")
             assertNoLostPages(response)
             val pages = requireNotNull(response.pages) { "$label crawl returned no pages" }
@@ -271,9 +272,9 @@ class CrawlFixtureMetadataTest : RestAPITestBase() {
                         .readValue(it, CrawlResponse::class.java)
                 }
             last = result
-            if (result.status == "OK" || result.status == "SC_OK" ||
-                result.status == "SC_REQUEST_TIMEOUT" || result.status == "SC_INTERNAL_SERVER_ERROR"
-            ) {
+            // Terminal detection defers to CrawlStatus — the one vocabulary
+            // definition — so this test cannot drift from the service.
+            if (CrawlStatus.isTerminal(result.status)) {
                 return result
             }
         }

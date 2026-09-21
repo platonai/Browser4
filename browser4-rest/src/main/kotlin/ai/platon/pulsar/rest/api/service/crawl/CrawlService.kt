@@ -1,7 +1,6 @@
 package ai.platon.pulsar.rest.api.service.crawl
 
 import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
-import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.skeleton.PulsarSettings
@@ -54,11 +53,7 @@ class CrawlService(
 
     /** Terminal task states: OK, TIMEOUT, ERROR.  Tasks in these states are
      *  purgeable, clearable, and never re-finalized by a late cancellation. */
-    private val terminalStatuses = setOf(
-        ResourceStatus.getStatusText(ResourceStatus.SC_OK),
-        ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
-        ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
-    )
+    private val terminalStatuses = CrawlStatus.TERMINAL
 
     internal val persistence = JsonlPersistence(
         file = crawlPersistencePath(),
@@ -85,7 +80,7 @@ class CrawlService(
             // yet, and the terminal write of the crawl replaces this record.
             taskStore.put(taskId, CrawlResponse(
                 taskId = taskId,
-                status = ResourceStatus.getStatusText(ResourceStatus.SC_OK),
+                status = CrawlStatus.OK,
                 pagesFound = 0,
                 diagnostic = diagnostic
             ))
@@ -198,7 +193,7 @@ class CrawlService(
         val taskId = UUID.randomUUID().toString()
         val response = CrawlResponse(
             taskId = taskId,
-            status = ResourceStatus.getStatusText(ResourceStatus.SC_CREATED)
+            status = CrawlStatus.CREATED
         )
         taskStore.put(taskId, response)
         onStatusChanged(response)
@@ -251,7 +246,7 @@ class CrawlService(
         val now = Instant.now()
         val errorResponse = CrawlResponse(
             taskId = taskId,
-            status = ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
+            status = CrawlStatus.INTERNAL_SERVER_ERROR,
             error = "No URLs provided",
             startedTime = now,
             finishTime = now
@@ -289,15 +284,15 @@ class CrawlService(
     }
 
     /**
-     * Mark the task as "PROCESSING" as soon as the worker picks it up.
-     * Without this, the CLI sees "CREATED" for the entire duration of the crawl
-     * (which can be 80-100s for many URLs), making it appear as if nothing is
-     * happening.
+     * Mark the task as [CrawlStatus.PROCESSING] as soon as the worker picks it up.
+     * Without this, the CLI sees [CrawlStatus.CREATED] for the entire duration of
+     * the crawl (which can be 80-100s for many URLs), making it appear as if
+     * nothing is happening.
      */
     private fun markProcessing(task: CrawlTaskContext) {
         val processing = CrawlResponse(
             taskId = task.taskId,
-            status = "PROCESSING",
+            status = CrawlStatus.PROCESSING,
             pagesFound = 0,
             startedTime = Instant.now()
         )
@@ -515,7 +510,7 @@ class CrawlService(
             val currentResult = taskStore.getIfPresent(task.taskId)
             val incrementalResponse = CrawlResponse(
                 taskId = task.taskId,
-                status = "PROCESSING",
+                status = CrawlStatus.PROCESSING,
                 pagesFound = pages.size,
                 linksDiscovered = task.linksDiscovered.get(),
                 pages = pages,
@@ -563,9 +558,9 @@ class CrawlService(
         val completed = CrawlResponse(
             taskId = task.taskId,
             status = if (timedOut != null) {
-                ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT)
+                CrawlStatus.REQUEST_TIMEOUT
             } else {
-                ResourceStatus.getStatusText(ResourceStatus.SC_OK)
+                CrawlStatus.OK
             },
             pagesFound = allPages.size,
             linksDiscovered = task.linksDiscovered.get(),
@@ -651,7 +646,7 @@ class CrawlService(
             val lossNote = buildLossNote(snapshot.pages.size, snapshot.pagesExpected, failedPages)
             val timedOut = CrawlResponse(
                 taskId = task.taskId,
-                status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
+                status = CrawlStatus.REQUEST_TIMEOUT,
                 error = if (timedOutByTaskLimit) {
                     "Crawl timed out while processing seeds (server-side limit of " +
                         "${taskTimeoutMillis / 1000}s exceeded). Partial results below."
@@ -694,7 +689,7 @@ class CrawlService(
         val now = Instant.now()
         val failed = CrawlResponse(
             taskId = task.taskId,
-            status = ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
+            status = CrawlStatus.INTERNAL_SERVER_ERROR,
             error = e.message ?: "Unknown error",
             parallelTabs = task.parallelTabs,
             maxConcurrentFetches = task.peakInFlight.get(),
@@ -751,7 +746,7 @@ class CrawlService(
         val previous = taskStore.getIfPresent(taskId)
         val cancelled = CrawlResponse(
             taskId = taskId,
-            status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
+            status = CrawlStatus.REQUEST_TIMEOUT,
             error = "Cancelled by user",
             parallelTabs = previous?.parallelTabs ?: 0,
             maxConcurrentFetches = previous?.maxConcurrentFetches ?: 0,
@@ -839,7 +834,7 @@ class CrawlService(
     fun getResult(taskId: String): CrawlResponse {
         return taskStore.getIfPresent(taskId) ?: CrawlResponse(
             taskId = taskId,
-            status = ResourceStatus.getStatusText(ResourceStatus.SC_NOT_FOUND),
+            status = CrawlStatus.NOT_FOUND,
             error = "Task not found: $taskId"
         )
     }

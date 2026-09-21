@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.service.crawl
 
+import ai.platon.pulsar.common.ResourceStatus
 import com.fasterxml.jackson.annotation.JsonCreator
 import com.fasterxml.jackson.annotation.JsonProperty
 import java.time.Instant
@@ -36,6 +37,40 @@ data class CrawlRequest @JsonCreator constructor(
     @param:JsonProperty("parallelTabs") val parallelTabs: Int? = null
 )
 
+/**
+ * The one spelling per crawl task state, defined once.
+ *
+ * The service used to mix two vocabularies: bare tokens ([CrawlResponse.status]
+ * defaulted to `"CREATED"`, and the worker wrote `"PROCESSING"`) next to
+ * [ResourceStatus] display text (`"OK"`, `"Request Timeout"`).  Every consumer
+ * had to guess which one it would see, and the CLI guessed wrong: it matched the
+ * token spellings, so `"Created"` came out as `"created"`, `"Request Timeout"` as
+ * `"request timeout"` and `"Not Found"` fell through entirely -- only `"OK"`
+ * happened to agree between the two vocabularies.
+ *
+ * Display text is canonical here because that is what the REST payload has always
+ * carried for settled tasks; test-side waits that need to survive either spelling
+ * should compare through [isTerminal] / [isRunning] instead of literals.
+ */
+object CrawlStatus {
+    val CREATED: String = ResourceStatus.getStatusText(ResourceStatus.SC_CREATED)
+    val PROCESSING: String = ResourceStatus.getStatusText(ResourceStatus.SC_PROCESSING)
+    val OK: String = ResourceStatus.getStatusText(ResourceStatus.SC_OK)
+    val REQUEST_TIMEOUT: String = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT)
+    val INTERNAL_SERVER_ERROR: String = ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR)
+    val NOT_FOUND: String = ResourceStatus.getStatusText(ResourceStatus.SC_NOT_FOUND)
+
+    /** States a task never leaves. */
+    val TERMINAL: Set<String> = setOf(OK, REQUEST_TIMEOUT, INTERNAL_SERVER_ERROR, NOT_FOUND)
+
+    /** States a task is still making progress in. */
+    val RUNNING: Set<String> = setOf(CREATED, PROCESSING)
+
+    fun isTerminal(status: String): Boolean = status in TERMINAL
+
+    fun isRunning(status: String): Boolean = status in RUNNING
+}
+
 data class CrawlSeedStatus(
     val url: String,
     val status: String,  // "fetched", "skipped", "error"
@@ -45,7 +80,7 @@ data class CrawlSeedStatus(
 
 data class CrawlResponse(
     val taskId: String = "",
-    val status: String = "CREATED",
+    val status: String = CrawlStatus.CREATED,
     val pagesFound: Int = 0,
     /**
      * Number of out-links discovered and submitted beyond the seed URLs

@@ -1162,4 +1162,116 @@ Maven；`exit 124` 被映射成 `status=timeout`，于是 `Check Test Status` �
 **仍未做**：`ScrapeServiceTests` 在 CI 上长时间无输出的原因（本轮没有它的失败日志可看，
 因为它从未跑完）；以及 19.5 第三条的驱动池分配日志。
 
+## 20. `ScrapeServiceTests` 慢 13 分钟 + crawl 状态词表混用（v4.13.20 后修）
+
+两项都来自 §19 的收尾清单，一起修。
+
+### 20.1 `ScrapeServiceTests`：13.2 分钟不是"卡住"，是**每次加载都重新注入运行时**
+
+绿的那次门禁（run 35514175379）里，该类是整套最慢：`Tests run: 4 ... Time elapsed: 794.7 s`
+（13.2 分钟，1 个用例因无 LLM key 跳过）。本地同 commit 也慢：**168.0 s**，而两个 scrape
+各自只用了 **1.69 s / 1.60 s**。时间线（本地日志，按时间戳做间隔分析）：
+
+| 现象 | 数据 |
+|---|---|
+| Spring 上下文启动 | 11.968 s（`Started ScrapeServiceTests in 11.968 seconds`） |
+| 页面加载耗时 | **列表页 `/ec/b?node=...`（101 个商品）每次 ~32 s**（32.07 / 31.80 / 33.36），详情页 `/ec/dp/...` 每次 ~3 s（2.71 / 3.16 / 3.57） |
+| 间隔成因 | 每轮之间固定 13–33 s 的停顿，对应 `IsolatedWorldManager - Injecting Browser4 runtime (v1.0.0) into isolated world`（本地全程 **32 次**），`CoreMetrics` 同期为 `Fetched 2 pages in 1m (0.03 pages/s)` |
+
+列表页每次重新抓取（日志里 `last fetched 35s ago, fc:2` / `fc:3`，缓存没帮上忙），所以
+三个用例各自付一次 ~32 s。`IsolatedWorldManager` 不在本仓库（在 `pulsar-browser` 依赖里），
+**注入本身我们改不了**，能改的只有"少加载"。
+
+顺带发现一个**死钩子**：
+
+```kotlin
+@BeforeEach
+@DisplayName("Ensure resources are prepared")
+suspend fun ensureResourcesArePrepared() { ... }   // 编译后签名为 (Continuation) -> JUnit 无法调用
+```
+
+`javap` 证实编译结果是 `ensureResourcesArePrepared(kotlin.coroutines.Continuation)`，且没有无参重载
+——JUnit 永远不会执行它。也就是说它声明的"每个用例前准备好页面"从未发生（真发生了反而会
+每个用例多付两次 ~32 s）。
+
+**修法**（`browser4-tests/browser4-rest-tests/.../ScrapeServiceTests.kt`）：
+
+* 删掉死钩子，并在类 KDoc 写清"为什么这里故意没有 `@BeforeEach`"，防止有人再加挂起钩子；
+  `MockEcServerTestBase.setup()` 仍会在每个用例前校验 mock server。
+* 两个只断言 `dom_base_uri(dom)` 的用例改抓**详情页**（~3 s）而不是 101 商品的列表页（~32 s）
+  —— 断言的契约是"同步/异步抓取返回正确 base URI"，与页面身份无关；列表页的抓取由
+  `CrawlFixtureMetadataTest` / `CrawlParallelTabsTest` 覆盖。
+* 异步用例的轮询由"1 秒 × 最多 120 次（417 时再来一轮最多 120 次）"改为**deadline 驱动 + 250 ms 间隔**
+  （`awaitScrapeJob`），最坏上限仍是 2 分钟，但常见路径不再白等整秒。
+
+本地实测（同一台机器、同一 commit 家族）：
+
+| 运行方式 | 之前 | 之后 |
+|---|---|---|
+| 单独跑 `-Dtest=ScrapeServiceTests` | **168.0 s**（4/4） | **65.65 s**（4/4）——**2.6× 提速** |
+| 与 `CrawlParallelTabsTest` + `CrawlFixtureMetadataTest` 同 JVM 连跑 | — | 247.7 s（三个类同 JVM，前两类各 ~11 分钟） |
+
+### 20.1.1 仍未解决的部分：负载下"抓取本身就慢"
+
+单独跑只有 65.65 s，但**同 JVM 跑完两个重类之后**，同样的详情页抓取要 **90–113 s**
+（`Task 164 ... got 200 14.93 KiB in 1m52.74s`，一次 scrape `used PT3M48.5850761S`）。
+慢 fetch 邻域日志显示原因不是等待，而是**中途整套新建浏览器/隐私上下文**：
+
+```
+BrowserFileSystem - User data dir does not exist, copy from prototype | ...\browser4-pereg\context\tmp\groups
+ChromeLauncher   - DevTools listening on ws://127.0.0.1:20455/devtools/browser/...
+DualWorldScriptLoader - Generated js: ... page-world.gen.js / isolated-world.gen.js
+IsolatedWorldManager  - Injecting Browser4 runtime (v1.0.0) into isolated world context 2 / context 4
+MultiPrivacyContextManager / WebDriverPoolManager - Maintaining service is started  (再一次)
+ScrapeService - X-SQL: pre-load of '.../ec/dp/B0E000001' before first attempt failed: null
+```
+
+即 `browser.context.number=2` 的两个上下文被前序重类占满后，后续 fetch 会**新建上下文乃至新建
+Chrome**（拷贝 prototype profile → 启动 → 重新生成并注入双世界 JS），单次数十秒。这一点
+`CoreMetrics` 也印证：`Fetched 67 pages in 23m (0.05 pages/s)`。
+
+**已排除的假设**：60 秒驱动租约等待。`PrivacyManagedBrowserFetcher.DRIVER_LEASE_TIMEOUT_MILLIS = 60_000`
+确实与 §19.4 的"4 × 60 s"算术吻合，但本地两轮日志里该告警**出现 0 次**
+（`is busy with another fetch for more than ...`），租约的 acquire/release 也是成对的
+（`tryAcquire` + `finally { release }`），因此不是它。
+
+**仍未做**：多隐私上下文/驱动池在重类之后为何要重建（`MultiPrivacyContextManager`、
+`WebDriverPoolManager` 的生命周期与 `@DirtiesContext(BEFORE_CLASS)`、
+`browser.context.number` 的交互）；以及 19.5 第三条的驱动池分配日志。
+
+
+### 20.2 crawl 状态词表：一个状态一个拼写
+
+服务端 `CrawlResponse.status` 同时存在两套词表：裸 token（默认值 `"CREATED"`、
+worker 写的 `"PROCESSING"`）与 `ResourceStatus` 可读文本（`"OK"`、`"Request Timeout"`）。
+代价在 CLI 上最明显 —— `friendly_crawl_status` 只匹配 token：
+
+| 服务端实际发出 | 旧 CLI 映射结果 | 应为 |
+|---|---|---|
+| `Created` | `created` | `queued` |
+| `Request Timeout` | `request timeout` | `failed (timeout)` |
+| `Internal Server Error` | `internal server error` | `failed (error)` |
+| `Not Found` | `not found`（`contains("NOT_FOUND")` 不匹配） | `failed (not found)` |
+| `OK` | `completed` ✅ | `completed` |
+
+**修法**：
+
+* `browser4-rest/.../crawl/CrawlModels.kt` 新增 `object CrawlStatus`——`CREATED` / `PROCESSING` /
+  `OK` / `REQUEST_TIMEOUT` / `INTERNAL_SERVER_ERROR` / `NOT_FOUND`（全部由
+  `ResourceStatus.getStatusText(...)` 生成）、`TERMINAL` / `RUNNING` 集合与 `isTerminal` / `isRunning`。
+  可读文本是权威形式，因为 REST 载荷对已结算任务一直用它。
+* `CrawlResponse.status` 默认值改用 `CrawlStatus.CREATED`；`CrawlService` 的 12 处写点与
+  `terminalStatuses`、`CrawlSupport` 的 1 处写点全部改用常量（`ResourceStatus` 导入随之删除）。
+* 测试改从常量/谓词断言，不再写死拼写：`CrawlResponseTest`、`CrawlServicePersistenceTest`、
+  `CrawlParallelBudgetTest`、`CrawlSupportTest`、`CrawlServiceTest`（`isStillRunning`）、
+  `CrawlParallelTabsTest`（`isTerminal`）、`CrawlFixtureMetadataTest`、`CrawlXSqlE2ETest`。
+* CLI `friendly_crawl_status` 改为接受**两套拼写**（可读文本优先、token 兼容旧载荷），
+  并新增 `friendly_crawl_status_accepts_display_text` 覆盖上述四种曾被误标的状态。
+* 文档：`skills/browser4-cli/references/crawl.md` 的 `crawl status` / `crawl result` 段改为列出
+  真实线上值与该映射。
+
+**仍未做**：`IsolatedWorldManager` 的注入为何每次加载都要重来（依赖内实现，需要上游看）；
+驱动池分配日志（19.5 第三条）。
+
+
 
