@@ -423,6 +423,63 @@ class Browser4WebDriverTest {
         assertTrue(js.contains("cssPath: path.join(' > ')"), "expected css path output: $js")
         assertTrue(js.contains("vw: window.innerWidth"), "expected viewport width output: $js")
         assertTrue(js.contains("vh: window.innerHeight"), "expected viewport height output: $js")
+        assertTrue(js.contains("document.elementFromPoint"), "expected the hit test: $js")
+    }
+
+    // -------------------------------------------------------------------------
+    // Trusted clicks (CDP input instead of synthetic DOM events)
+    // -------------------------------------------------------------------------
+
+    private fun center(x: Double, y: Double, inFrame: Boolean = false, hit: Boolean = true) =
+        Browser4WebDriver.DragCenter(x, y, "button#go", inFrame, 1280, 900, hit)
+
+    @Test
+    @DisplayName("canClickWithTrustedInput accepts an unobstructed main-frame element")
+    fun canClickWithTrustedInputAcceptsUnobstructedElement() {
+        assertTrue(Browser4WebDriver.canClickWithTrustedInput(center(10.0, 20.0)))
+    }
+
+    @Test
+    @DisplayName("canClickWithTrustedInput rejects unresolvable, frame-resident and occluded targets")
+    fun canClickWithTrustedInputRejectsUnusableTargets() {
+        assertFalse(Browser4WebDriver.canClickWithTrustedInput(null), "an unresolved element cannot be clicked")
+        assertFalse(
+            Browser4WebDriver.canClickWithTrustedInput(center(10.0, 20.0, inFrame = true)),
+            "frame coordinates are not main-frame viewport coordinates",
+        )
+        assertFalse(
+            Browser4WebDriver.canClickWithTrustedInput(center(10.0, 20.0, hit = false)),
+            "a trusted click on an occluded point would hit whatever is on top",
+        )
+    }
+
+    @Test
+    @DisplayName("parseDragCenter reports whether the element is hit at its center")
+    fun parseDragCenterReadsHitTest() {
+        val hit = Browser4WebDriver.parseDragCenter("""{"x":1,"y":2,"cssPath":"button#go","hit":true}""")
+        assertTrue(hit?.hit == true, "expected hit=true, got $hit")
+
+        val missed = Browser4WebDriver.parseDragCenter("""{"x":1,"y":2,"cssPath":"button#go","hit":false}""")
+        assertTrue(missed?.hit == false, "expected hit=false, got $missed")
+
+        val unreported = Browser4WebDriver.parseDragCenter("""{"x":1,"y":2,"cssPath":"button#go"}""")
+        assertTrue(unreported?.hit == false, "an old payload without a hit test must not be clickable: $unreported")
+    }
+
+    @Test
+    @DisplayName("the trusted-click probe is installed hidden and removed again")
+    fun trustedClickProbeIsHiddenAndRemoved() {
+        val install = Browser4WebDriver.trustedClickProbeInstallJs()
+        assertTrue(install.contains("Object.defineProperty"), "expected defineProperty: $install")
+        assertTrue(install.contains("enumerable: false"), "the probe must be hidden from window enumeration: $install")
+        assertTrue(install.contains("addEventListener"), "expected capture-phase listeners: $install")
+        assertTrue(install.contains("event.isTrusted"), "expected the trust flag: $install")
+
+        val read = Browser4WebDriver.trustedClickProbeReadJs()
+        assertTrue(read.contains("removeEventListener"), "the probe must remove its listeners: $read")
+        assertTrue(read.contains("'trusted'"), "expected the trusted outcome: $read")
+        assertTrue(read.contains("'none'"), "expected the not-delivered outcome: $read")
+        assertTrue(read.contains("'missing'"), "expected the tampered outcome: $read")
     }
 
     @Test

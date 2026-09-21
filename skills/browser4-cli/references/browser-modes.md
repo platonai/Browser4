@@ -175,6 +175,12 @@ instead of Chrome directly. Therefore:
   cannot be told apart from a page that logs nothing: `console` then prints an empty list with no
   error, so treat an unexpectedly empty console on a relayed session as "capture unavailable",
   not as "the page is quiet".
+- Clicks are dispatched as **trusted** input (`Input.dispatchMouseEvent`, i.e. `event.isTrusted` is
+  true and the events carry their real coordinates) instead of synthetic DOM events. The driver
+  first verifies with a one-shot check that trusted input actually reaches the page on this
+  platform/session, and falls back to DOM dispatch when the element cannot be clicked at its own
+  coordinates (occluded by an overlay, `pointer-events: none`, inside a frame) — so the click always
+  lands on the requested element, never on whatever happens to be on top.
 - Sites with strong bot protection may still block automated sessions. When the
   goal is "act as the logged-in user", prefer the attach paths (axis 3) over
   launching another browser, and consider raising `--interact-level` (§4).

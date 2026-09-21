@@ -635,6 +635,16 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         group: Some("mouse"),
         level: ScenarioLevel::Extended,
     },
+    ScenarioDef {
+        name: "test_e2e_mouse_trusted_click",
+        short_name: "test_mouse_trusted_click",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: browser::test_e2e_mouse_trusted_click,
+        group: Some("mouse"),
+        level: ScenarioLevel::Basic,
+    },
     // ── Drag hardening scenarios (dedicated drag fixture) ────────
     ScenarioDef {
         name: "test_e2e_drag_hardening",

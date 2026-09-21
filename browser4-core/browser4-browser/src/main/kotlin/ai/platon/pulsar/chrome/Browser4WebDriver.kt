@@ -76,9 +76,11 @@ open class Browser4WebDriver(
     /**
      * Viewport center of a drag element, plus the stable CSS path used to
      * re-locate it inside the drag script (where CDP node object ids are
-     * not available for the target), a frame-residency flag, and the viewport
+     * not available for the target), a frame-residency flag, the viewport
      * size at resolution time (used to confirm the target is actually
-     * visible after an asynchronous scroll commit).
+     * visible after an asynchronous scroll commit), and whether the element
+     * itself is hit at that point (used to decide whether a trusted click can
+     * be dispatched there without clicking an overlay).
      */
     internal data class DragCenter(
         val x: Double,
@@ -87,6 +89,7 @@ open class Browser4WebDriver(
         val inFrame: Boolean,
         val viewportWidth: Int = 0,
         val viewportHeight: Int = 0,
+        val hit: Boolean = false,
     )
 
     companion object {
@@ -501,8 +504,70 @@ open class Browser4WebDriver(
                 inFrame = node.get("inFrame")?.asBoolean() ?: false,
                 viewportWidth = node.get("vw")?.takeIf { it.isNumber }?.asInt() ?: 0,
                 viewportHeight = node.get("vh")?.takeIf { it.isNumber }?.asInt() ?: 0,
+                hit = node.get("hit")?.asBoolean() ?: false,
             )
         }
+
+        /**
+         * The page global installed for the duration of one trusted click, see
+         * [trustedClickProbeInstallJs].
+         */
+        internal const val TRUSTED_CLICK_PROBE = "__b4_trusted_click_probe__"
+
+        /**
+         * Whether a click at [point] may be dispatched as trusted CDP input.
+         *
+         * Two conditions rule it out, both because the coordinates would then be wrong:
+         *
+         * - frame-resident elements: `getBoundingClientRect` is frame-relative while
+         *   `Input.dispatchMouseEvent` takes main-frame viewport coordinates;
+         * - an element that is not hit at that point (occluded by an overlay, `pointer-events:
+         *   none`, moved by an async layout shift): the trusted click would land on whatever is on
+         *   top and silently click an unrelated element. The DOM fallback dispatches on the element
+         *   itself and has no such failure mode.
+         */
+        internal fun canClickWithTrustedInput(point: DragCenter?): Boolean =
+            point != null && !point.inFrame && point.hit
+
+        /**
+         * Install a one-shot page probe that counts **trusted** mouse events.
+         *
+         * A CDP press/release pair either reaches the page — then the document observes trusted
+         * `mousedown`/`mouseup`/`click` events — or it does not, and the driver must not report
+         * success for a click that never happened. The probe is the authority for that decision. It
+         * is installed as a non-enumerable global so a page enumerating `window` cannot see it, and
+         * removed again by [trustedClickProbeReadJs].
+         */
+        internal fun trustedClickProbeInstallJs(): String = """
+            (function() {
+                var state = { trusted: 0, listeners: [] };
+                Object.defineProperty(window, '$TRUSTED_CLICK_PROBE', {
+                    value: state, writable: true, configurable: true, enumerable: false
+                });
+                ['mousedown', 'mouseup', 'click'].forEach(function(name) {
+                    var listener = function(event) { if (event.isTrusted) { state.trusted += 1; } };
+                    document.addEventListener(name, listener, true);
+                    state.listeners.push([name, listener]);
+                });
+                return 'installed';
+            })()
+        """.trimIndent()
+
+        /**
+         * Remove the probe installed by [trustedClickProbeInstallJs] and report what it saw:
+         * `"trusted"`, `"none"`, or `"missing"` when the global was gone (a page replaced it).
+         */
+        internal fun trustedClickProbeReadJs(): String = """
+            (function() {
+                var state = window['$TRUSTED_CLICK_PROBE'];
+                if (!state) { return 'missing'; }
+                (state.listeners || []).forEach(function(entry) {
+                    document.removeEventListener(entry[0], entry[1], true);
+                });
+                try { delete window['$TRUSTED_CLICK_PROBE']; } catch (e) { }
+                return state.trusted > 0 ? 'trusted' : 'none';
+            })()
+        """.trimIndent()
 
         /**
          * The `function()` body evaluated with `this` bound to a drag element.
@@ -546,7 +611,11 @@ open class Browser4WebDriver(
                     cssPath: path.join(' > '),
                     inFrame: this.ownerDocument !== document,
                     vw: window.innerWidth,
-                    vh: window.innerHeight
+                    vh: window.innerHeight,
+                    hit: (function() {
+                        var at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+                        return !!(at && (at === this || this.contains(at)));
+                    }).call(this)
                 });
             }
             """.trimIndent()
@@ -1163,16 +1232,25 @@ internal enum class DragDropPosition(val key: String) {
      * Left-click [count] times on [selector], with the pointer moved onto the
      * element first and native dialogs reported as they open (see
      * [movePointerToClickTarget] and [withDialogWatch]).
+     *
+     * The click itself is dispatched as trusted CDP input when the element can be clicked at its
+     * own coordinates, and falls back to the upstream DOM path otherwise (see [clickTrusted]).
      */
     @Throws(WebDriverException::class)
     override suspend fun click(selector: String, count: Int) {
         movePointerToClickTarget(selector)
-        withDialogWatch("click") { super.click(selector, count) }
+        withDialogWatch("click") {
+            if (!clickTrusted(selector, count, resolveClickPoint(selector))) {
+                super.click(selector, count)
+            }
+        }
     }
 
     /**
-     * Click [selector] with a [modifier] key held; see [click] for the
-     * pointer-move and dialog-watch behaviour.
+     * Left-click [count] times on [selector] with a modifier key held.
+     *
+     * Modifier clicks stay on the upstream path: the CDP modifier bitmask has no DOM equivalent, so
+     * upstream already dispatches those through CDP for every platform.
      */
     @Throws(WebDriverException::class)
     override suspend fun click(selector: String, modifier: String) {
@@ -1180,14 +1258,144 @@ internal enum class DragDropPosition(val key: String) {
         withDialogWatch("click") { super.click(selector, modifier) }
     }
 
+    /** The cached trusted-click capability of this driver; null until an attempt was verified. */
+    @Volatile
+    private var trustedClickSupported: Boolean? = null
+
     /**
-     * Double-click [selector] (with an optional [modifier]); see [click] for
-     * the pointer-move and dialog-watch behaviour.
+     * Resolve the point a trusted click would target, or null when the trusted path must not be
+     * used for this element (capability already refuted, element unresolvable, frame-resident or
+     * not hit at that point — see [canClickWithTrustedInput]).
+     */
+    private suspend fun resolveClickPoint(selector: String): DragCenter? {
+        if (trustedClickSupported == false) {
+            return null
+        }
+
+        return resolveDragCenter(selector)?.takeIf { canClickWithTrustedInput(it) }
+    }
+
+    /**
+     * Dispatch [count] clicks (a double-click for `count == 2`) on [selector] as trusted CDP input
+     * and report whether the page received them.
+     *
+     * ## Why
+     *
+     * Upstream clicks through synthetic DOM events on Windows
+     * (`emulator.click(..., dispatchCdpMouseEvents = false)` + `dispatchDomClick`) because CDP
+     * press/release were believed not to trigger DOM clicks in headless Chrome there. Measured on
+     * Chrome 153 / Windows headless, `Input.dispatchMouseEvent` `mousePressed` + `mouseReleased`
+     * produces `mousedown`, `mouseup` **and** `click` with `isTrusted: true`, so the workaround is
+     * obsolete: a page that records `event.isTrusted` (a honeypot button, a bot-detection beacon)
+     * sees synthetic events immediately. The same applies to `dblclick`.
+     *
+     * ## Verification and fallback
+     *
+     * `Input.dispatchMouseEvent` says nothing about delivery, so the first dispatch on a driver is
+     * verified with a one-shot page probe ([trustedClickProbeInstallJs]): when no trusted mouse
+     * event reached the page, the capability is cached as unsupported and the caller falls back to
+     * the DOM path — a click that never happened cannot double-fire. A dispatch that cannot be
+     * verified at all (a page that removed the probe) is reported as delivered and re-probed next
+     * time, because dispatching a second click is the worse failure mode.
+     *
+     * @return true when the click was dispatched and received (or sent but not verifiable)
+     */
+    private suspend fun clickTrusted(selector: String, count: Int, point: DragCenter?): Boolean {
+        if (trustedClickSupported == false || point == null) {
+            return false
+        }
+
+        val verify = trustedClickSupported == null
+        if (verify && runCatching { evaluate(trustedClickProbeInstallJs()) }.isFailure) {
+            logger.debug("Cannot install the trusted-click probe on [{}], using the DOM click path", selector)
+            return false
+        }
+
+        var sent = 0
+        try {
+            repeat(count) { index ->
+                val clickCount = index + 1
+                browserProtocol.executeCdpCommand(
+                    "Input.dispatchMouseEvent", mouseEvent("mousePressed", point, clickCount, buttons = 1)
+                )
+                sent += 1
+                browserProtocol.executeCdpCommand(
+                    "Input.dispatchMouseEvent", mouseEvent("mouseReleased", point, clickCount, buttons = 0)
+                )
+                sent += 1
+            }
+        } catch (e: Exception) {
+            if (sent == 0) {
+                logger.warn(
+                    "Trusted click on [{}] could not be dispatched ({}), using the DOM click path",
+                    selector, e.message
+                )
+                return false
+            }
+
+            throw WebDriverException(
+                "Trusted click on [$selector] failed after $sent input event(s): the page may be in a " +
+                    "partially pressed state. Original error: ${e.message}",
+                e, driver = this,
+            )
+        }
+
+        if (!verify) {
+            return true
+        }
+
+        return when (runCatching { evaluate(trustedClickProbeReadJs())?.toString() }.getOrNull()) {
+            "trusted" -> {
+                trustedClickSupported = true
+                true
+            }
+
+            "none" -> {
+                trustedClickSupported = false
+                logger.info(
+                    "Trusted CDP clicks are not delivered to this page's browser; [{}] uses the DOM " +
+                        "click path for the rest of the session", selector
+                )
+                false
+            }
+
+            else -> {
+                logger.warn(
+                    "Trusted click on [{}] could not be verified (the page removed the probe); assuming " +
+                        "it was delivered to avoid a second click", selector
+                )
+                true
+            }
+        }
+    }
+
+    /** One `Input.dispatchMouseEvent` parameter map for a left-button event at [point]. */
+    private fun mouseEvent(type: String, point: DragCenter, clickCount: Int, buttons: Int): Map<String, Any?> =
+        mapOf(
+            "type" to type,
+            "x" to point.x,
+            "y" to point.y,
+            "button" to "left",
+            "buttons" to buttons,
+            "clickCount" to clickCount,
+        )
+
+    /**
+     * Double-click [selector] (with an optional [modifier]); see [click] for the pointer-move and
+     * dialog-watch behaviour.
+     *
+     * The double-click is dispatched as trusted CDP input when the element can be clicked at its
+     * own coordinates (see [clickTrusted]); a modifier click keeps the upstream path, which already
+     * uses CDP on every platform because the modifier bitmask has no DOM equivalent.
      */
     @Throws(WebDriverException::class)
     override suspend fun dblclick(selector: String, modifier: String) {
         movePointerToClickTarget(selector)
-        withDialogWatch("dblclick") { super.dblclick(selector, modifier) }
+        withDialogWatch("dblclick") {
+            if (modifier.isNotBlank() || !clickTrusted(selector, 2, resolveClickPoint(selector))) {
+                super.dblclick(selector, modifier)
+            }
+        }
     }
 
     // ---------------------------------------------------------------------------
