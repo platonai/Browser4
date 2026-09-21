@@ -62,7 +62,7 @@ class CrawlServicePersistenceTest {
         service.restoreFromDisk()
 
         assertEquals("good", service.getResult("good").taskId)
-        assertEquals("OK", service.getResult("good").status)
+        assertEquals(CrawlStatus.OK, service.getResult("good").status)
     }
 
     @Test
@@ -80,8 +80,8 @@ class CrawlServicePersistenceTest {
     @Test
     fun `restoreFromDisk ignores blank taskId`(@TempDir tempDir: Path) {
         val jsonlPath = tempDir.resolve("crawl-tasks.jsonl")
-        val blank = CrawlResponse(taskId = "", status = "CREATED")
-        val valid = CrawlResponse(taskId = "valid", status = "OK")
+        val blank = CrawlResponse(taskId = "", status = CrawlStatus.CREATED)
+        val valid = CrawlResponse(taskId = "valid", status = CrawlStatus.OK)
         Files.createDirectories(tempDir)
         Files.writeString(
             jsonlPath,

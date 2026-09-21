@@ -1235,9 +1235,44 @@ Chrome**（拷贝 prototype profile → 启动 → 重新生成并注入双世�
 （`is busy with another fetch for more than ...`），租约的 acquire/release 也是成对的
 （`tryAcquire` + `finally { release }`），因此不是它。
 
-**仍未做**：多隐私上下文/驱动池在重类之后为何要重建（`MultiPrivacyContextManager`、
-`WebDriverPoolManager` 的生命周期与 `@DirtiesContext(BEFORE_CLASS)`、
-`browser.context.number` 的交互）；以及 19.5 第三条的驱动池分配日志。
+**已查明（2026-09-21 补充）——剩下的成本不在本仓库，且隔离是有意为之**：
+
+* **注入类在外部依赖里**：`IsolatedWorldManager` 与 `DualWorldScriptLoader` 在本仓库中**不存在**
+  （`IsolatedWorldManager.kt` / `DualWorldScriptLoader.kt` 全仓无匹配），所以"每次导航重新注入"的
+  单次成本在这里改不了。
+* **本仓库这一侧的路径已经做了缓存**：`Browser4WebDriver.ensurePulsarUtilsInjected`
+  （`browser4-core/browser4-browser/.../Browser4WebDriver.kt:1634-1685`）会先探测 `__pulsar_utils__`，
+  命中就复用已缓存的 isolated-world context id（源码注释：*"id is returned and reused, and the
+  runtime is injected only when the …"*）。即重复注入是**导航丢弃执行上下文后的必要动作**，不是缺陷。
+* **浏览器启动次数已归因**：3 类那次本地运行共 4 次 `DevTools listening`（12:16:12、12:16:47、
+  12:38:40、12:39:01），后两次落在 `ScrapeServiceTests` 窗口内——即该类因
+  `@DirtiesContext(BEFORE_CLASS)` 每次都要重建上下文与浏览器，约 **40–60 s**。这与"单独跑 65.65 s"
+  互相印证：去掉隔离确实能再省一块，但该注解是为了防前序用例 `kill_all_sessions` 关掉浏览器而存在的
+  （见该类内注释），**不应为提速牺牲**。
+* **已否证**：60 秒驱动租约等待（本地两轮日志 0 次告警）；服务端残留 token 消费者（全仓扫描仅命中
+  整数状态码与其它子系统）。
+
+### 20.3 验证状态（截至 2026-09-21，`v4.13.21-ci.1` 门禁进行中）
+
+| 层 | 证据 | 结果 |
+|---|---|---|
+| 本地 · 第 2 项 | `browser4-rest` crawl 单测 6 个类 | **88 / 0 / 0** |
+| 本地 · 第 2 项 | `cargo test --bin browser4-cli`（含新增 display-text 用例） | **1209 / 0** |
+| 本地 · 第 2 项 | 真实持久化 JSONL（29 条记录） | **单一句表、零 token**：Created 10 · Processing 9 · OK 8 · Internal Server Error 1 · Request Timeout 1 |
+| 本地 · 第 2 项 | 全仓消费者扫描（.kt/.rs/.ps1/.js/.ts/.json/.md） | 无遗漏（命中项均为整数状态码或其它子系统） |
+| 本地 · 第 1 项 | `ScrapeServiceTests` 单独跑 | **168.0 s → 65.65 s**（4/4 通过） |
+| CI · 第 2 项 | browser4-rest 模块（run 35568764699） | **404 / 0 / 0**，含改动的 5 个单测类 |
+| CI · 第 2 项 | `CrawlXSqlE2ETest` | **2 / 0 / 0**（7.23 s） |
+| CI · 第 2 项 | Cross-Platform Smoke Test（标签 + 分支各一次，同 SHA） | **success / success** |
+| CI · 待取 | `CrawlFixtureMetadataTest` / `CrawlParallelTabsTest` / `ScrapeServiceTests` 耗时；`Check Test Status`；Rust + CLI E2E | 门禁运行中 |
+
+门禁通过后应把上表最后一行的三个耗时与 §19.7 的基线对比（`ScrapeServiceTests` **794.7 s**、
+另两类 668.8 / 671.7 s、测试阶段共 **43 分钟**），并据此判断第 1 项的收益是否在 CI 上兑现。
+
+
+**因此本仓库内可安全优化的部分已经做完**：死钩子、列表页→详情页、轮询方式，实测 168.0 s → 65.65 s。
+再往下需要动上游注入实现，或重新评估测试隔离策略——两者都超出本次范围。
+
 
 
 ### 20.2 crawl 状态词表：一个状态一个拼写

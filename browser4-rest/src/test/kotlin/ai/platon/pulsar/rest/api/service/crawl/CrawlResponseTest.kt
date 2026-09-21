@@ -44,7 +44,7 @@ class CrawlResponseTest {
         )
         assertEquals(now, response.startedTime)
         assertEquals(now.plusSeconds(30), response.finishTime)
-        assertEquals("OK", response.status)
+        assertEquals(CrawlStatus.OK, response.status)
         assertEquals(0, response.pagesFound)
     }
 
