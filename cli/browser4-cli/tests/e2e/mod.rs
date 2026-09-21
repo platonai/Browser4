@@ -206,6 +206,8 @@ struct FixturePages {
     mouse_html: String,
     keyboard_html: String,
     drag_html: String,
+    stealth_html: String,
+    stealth_sw_js: String,
 }
 
 impl FixtureServer {
@@ -228,6 +230,8 @@ impl FixtureServer {
             mouse_html: load_html_fixture(MOUSE_FIXTURE_FILE),
             keyboard_html: load_html_fixture(KEYBOARD_FIXTURE_FILE),
             drag_html: load_html_fixture(DRAG_FIXTURE_FILE),
+            stealth_html: load_html_fixture(STEALTH_FIXTURE_FILE),
+            stealth_sw_js: load_html_fixture(STEALTH_SW_FIXTURE_FILE),
         });
 
         thread::spawn(move || {
@@ -336,6 +340,20 @@ fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePage
             "200 OK",
             "text/html; charset=utf-8",
             pages.drag_html.clone(),
+        )
+    } else if path == STEALTH_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.stealth_html.clone(),
+        )
+    } else if path == STEALTH_SW_PATH {
+        // The service worker only registers when its script is served with a
+        // JavaScript content type.
+        (
+            "200 OK",
+            "application/javascript; charset=utf-8",
+            pages.stealth_sw_js.clone(),
         )
     } else {
         (
@@ -2047,6 +2065,14 @@ impl E2ECtx {
 
     fn drag_url(&self) -> String {
         format!("{}{}", self.fixture_base_url, DRAG_PATH)
+    }
+
+    fn stealth_url(&self) -> String {
+        format!("{}{}", self.fixture_base_url, STEALTH_PATH)
+    }
+
+    fn stealth_sw_url(&self) -> String {
+        format!("{}{}", self.fixture_base_url, STEALTH_SW_PATH)
     }
 
     /// A slow fixture URL (served after a fixed delay) used to hold browser

@@ -155,9 +155,26 @@ instead of Chrome directly. Therefore:
   and warns when the session was launched headless anyway, or when the process is
   headed but no window is detected. If you see that warning, `close` and retry
   `open --headed` once.
-- Browser4 passes plain `--headless` (never `--headless=new`), forces
-  `--disable-blink-features=AutomationControlled`, and leaves user-agent rotation
-  off by default because rotation itself is detectable.
+- Browser4 passes plain `--headless` (never `--headless=new`) and forces
+  `--disable-blink-features=AutomationControlled`.
+- Headless launches do **not** advertise the `HeadlessChrome` token: the User-Agent is derived from
+  the installed Chrome version and passed as `--user-agent` at launch, so the main frame, iframes,
+  dedicated/shared workers and service workers all report the same string (a CDP
+  `Emulation.setUserAgentOverride` cannot reach the worker scopes — they live in their own renderer
+  processes). Set `browser.launch.headless.user.agent.fix=false` to disable it, or supply your own
+  `--user-agent` through `browser.launch.chrome.args`, which always wins.
+- The User-Agent is still never **rotated**: rotation itself is detectable, so the value is fixed
+  per installed Chrome version rather than randomised.
+- The injected page-world stealth payload deliberately does **not** fabricate
+  `navigator.hardwareConcurrency`, `navigator.languages` or the WebGL vendor/renderer: a
+  main-world patch cannot reach worker scopes, so a fabricated value would be contradicted by the
+  same session's workers — the exact inconsistency bot-detection services cross-check. Host values
+  are reported consistently instead.
+- Headless sessions report a screen that can hold the pinned viewport (`screen.width/height` are
+  realigned after each navigation, since Chrome's headless default screen is a virtual 800×600
+  while the viewport is 1920×1080 by default). `--hide-scrollbars` still makes
+  `innerWidth - clientWidth` zero, and the pinned viewport can still be larger than the *real*
+  monitor on small displays — both are library-level limitations, not CLI behaviour.
 - Sites with strong bot protection may still block automated sessions. When the
   goal is "act as the logged-in user", prefer the attach paths (axis 3) over
   launching another browser, and consider raising `--interact-level` (§4).

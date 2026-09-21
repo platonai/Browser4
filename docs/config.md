@@ -195,6 +195,41 @@ docker run -d -p 8182:8182 `
   Enables the built-in `browser4-browser` runtime plugin wiring.
   Set `browser.enabled=false` to disable browser runtime beans.
 
+### 🕵️ Headless anti-detection
+
+* **`browser.launch.headless.user.agent.fix`** *(default: `true`)*
+  Chrome advertises `HeadlessChrome/<version>` in the User-Agent of every headless launch while
+  `navigator.userAgentData.brands` still reports `Google Chrome` — a directly detectable
+  contradiction. With this enabled, a headless session launches with
+  `--user-agent=<reduced UA derived from the installed Chrome version>`, which is the only
+  mechanism that reaches **every** JavaScript scope of the session (main frame, iframes,
+  dedicated/shared workers and service workers) and keeps the `Sec-CH-UA*` request headers intact.
+
+  - Set to `false` to let Chrome report its native User-Agent.
+  - Providing your own `--user-agent` through `browser.launch.chrome.args` always wins, and so does
+    an explicit `--user-agent` passed on the command line.
+  - The value is not randomised; rotating the User-Agent is itself detectable.
+
+* **`browser.launch.chrome.args`**
+  Extra Chrome command-line arguments, appended verbatim (whitespace-separated, double quotes group
+  an argument). Arguments for keys the program sets itself — `--headless`, `--disable-gpu`,
+  `--window-size`, … — are ignored by design (see `ChromeOptions.toList` priorities), so this is the
+  place for *additional* switches, not for overriding session-forced ones.
+
+> Headless sessions also report a screen that can hold the pinned viewport. Headless Chrome's
+> default screen is a virtual 800×600, while the viewport and `--window-size` default to
+> `BrowserSettings.VIEWPORT` (1920×1080); without realignment the page reported
+> `innerWidth (1920) > screen.width (800)` — a window larger than its own screen. The driver
+> re-applies `Emulation.setDeviceMetricsOverride` with `screenWidth`/`screenHeight` after each
+> navigation, with the viewport geometry unchanged.
+
+> The page-world stealth payload (`js/stealth.js`) intentionally does not fabricate
+> `navigator.hardwareConcurrency`, `navigator.languages` or the WebGL vendor/renderer. Main-world
+> patches cannot reach worker scopes (`Page.addScriptToEvaluateOnNewDocument` applies to frames
+> only), so a fabricated value is contradicted by the same session's own workers — the exact
+> cross-context inconsistency bot-detection services look for. Host values are reported
+> consistently instead.
+
 ### 📦 `browser.profile.mode` Comparison Table
 
 | Mode           | Description                                                                 | User Data Directory Behavior                             | Use Case            |

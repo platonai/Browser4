@@ -6,7 +6,9 @@ import ai.platon.pulsar.api.BrowserId
 import ai.platon.pulsar.api.BrowserProfile
 import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.api.model.BrowserTab
+import ai.platon.pulsar.api.model.DisplayMode
 import ai.platon.pulsar.chrome.Browser4WebDriver
+import ai.platon.pulsar.chrome.HeadlessUserAgent
 import ai.platon.pulsar.chrome.PulsarBrowser
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.common.*
@@ -279,6 +281,15 @@ abstract class AbstractPulsarSession(
                 bindDriver(b4Driver)
                 (existingBrowser as? AbstractBrowser)?.frontDriver = b4Driver
                 return b4Driver
+            }
+
+            // Chrome advertises "HeadlessChrome/<version>" in the User-Agent of every headless
+            // launch while userAgentData.brands still says "Google Chrome" — a deterministic bot
+            // signal. The flag has to be decided before Chrome starts, so the reduced
+            // User-Agent is derived from the installed Chrome version here. GUI sessions are
+            // skipped: their User-Agent carries no headless token to remove.
+            if (sessionConfig[BROWSER_DISPLAY_MODE] != DisplayMode.GUI.name) {
+                HeadlessUserAgent.fixUserAgent(sessionConfig)
             }
 
             val contextDir = sessionConfig[BROWSER_CONTEXT_DIR]?.toString()?.takeIf { it.isNotBlank() }

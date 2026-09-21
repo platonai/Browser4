@@ -20,6 +20,10 @@ pub const KEYBOARD_PATH: &str = "/keyboard";
 
 pub const DRAG_PATH: &str = "/drag-test";
 
+pub const STEALTH_PATH: &str = "/stealth";
+
+pub const STEALTH_SW_PATH: &str = "/browser4-stealth-sw.js";
+
 pub const INTERACTIVE_TITLE: &str = "Browser4 CLI Interactive Fixture";
 
 pub const OTHER_TITLE: &str = "Browser4 CLI Other Fixture";
@@ -29,6 +33,8 @@ pub const FORM_TITLE: &str = "Browser4 CLI Form Fixture";
 pub const MOUSE_TITLE: &str = "Browser4 CLI Mouse Fixture";
 
 pub const KEYBOARD_TITLE: &str = "Browser4 CLI Keyboard Fixture";
+
+pub const STEALTH_TITLE: &str = "Browser4 CLI Stealth Probe Fixture";
 
 pub const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
 
@@ -51,6 +57,10 @@ pub const MOUSE_FIXTURE_FILE: &str = "mcp-tool-controller-mouse-fixture.html";
 pub const KEYBOARD_FIXTURE_FILE: &str = "mcp-tool-controller-keyboard-fixture.html";
 
 pub const DRAG_FIXTURE_FILE: &str = "drag-test.html";
+
+pub const STEALTH_FIXTURE_FILE: &str = "stealth-probe-fixture.html";
+
+pub const STEALTH_SW_FIXTURE_FILE: &str = "browser4-stealth-sw.js";
 
 pub const MAX_EMPTY_READ_ATTEMPTS: u32 = 200; // 2 s with 10 ms sleep per attempt
 

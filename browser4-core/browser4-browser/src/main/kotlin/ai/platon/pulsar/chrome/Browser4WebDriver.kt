@@ -3,6 +3,7 @@ package ai.platon.pulsar.chrome
 import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.api.model.BrowserTab
 import ai.platon.pulsar.api.model.JsEvaluation
+import ai.platon.pulsar.api.model.NavigateEntry
 import ai.platon.pulsar.api.model.WebDriverException
 import ai.platon.pulsar.chrome.network.RobustRPC
 import ai.platon.pulsar.chrome.protocol.Keyboard
@@ -106,6 +107,17 @@ open class Browser4WebDriver(
 
         /** The dual-world runtime global probed by [ensurePulsarUtilsInjected]. */
         private const val PULSAR_UTILS_FUNCTION = "__pulsar_utils__"
+
+        /** Matches the Chrome version token of a User-Agent, e.g. `Chrome/153.0.0.0`. */
+        private val CHROME_VERSION_IN_UA = Regex("""Chrome/(\d+(?:\.\d+)*)""")
+
+        /**
+         * Screen height margin (CSS pixels) reported above the pinned viewport, see
+         * [applyHeadlessScreenMetrics]. Chrome's own window chrome is ~85 px and the reduced
+         * `window.outerdimensions` patch adds exactly that, so 120 keeps the whole chain
+         * `innerHeight < outerHeight < screen.height` plausible.
+         */
+        private const val HEADLESS_SCREEN_HEIGHT_MARGIN = 120
 
         private val storageStateMapper: ObjectMapper = jacksonObjectMapper()
             .setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
@@ -1149,6 +1161,137 @@ internal enum class DragDropPosition(val key: String) {
         return outcome.await().getOrThrow()
     }
 
+    /** Guards [ensureNonHeadlessUserAgent] so the check runs at most once per driver. */
+    @Volatile
+    private var headlessUserAgentChecked = false
+
+    /**
+     * Navigate after making the session consistent with what the page can observe.
+     *
+     * Before the navigation: [ensureNonHeadlessUserAgent] removes the `HeadlessChrome` token from
+     * browsers that were launched without the launch argument. After it:
+     * [applyHeadlessScreenMetrics] aligns `screen.*` with the pinned viewport. This method is the
+     * funnel every other navigation entry point (`navigate(url)`, `open`, `goto`) goes through, so
+     * both run before the first document is loaded / right after it commits.
+     */
+    override suspend fun navigate(entry: NavigateEntry) {
+        ensureNonHeadlessUserAgent()
+        super.navigate(entry)
+        applyHeadlessScreenMetrics()
+    }
+
+    /**
+     * Report a screen that can actually hold the pinned viewport.
+     *
+     * Headless Chrome's default screen is a virtual 800×600, while the driver pins the viewport to
+     * `BrowserSettings.VIEWPORT` (1920×1080 by default) and forces `--window-size` to the same
+     * size. Every headless session therefore reported `innerWidth (1920) > screen.width (800)` — a
+     * window wider and taller than its own screen, which no real browser can produce, and a
+     * favourite consistency check of fingerprinting scripts.
+     *
+     * The upstream override (`PulsarWebDriver.navigateInvaded` → `setDeviceMetricsOverride`) calls
+     * the same CDP method without `screenWidth`/`screenHeight`, so the screen falls back to the
+     * virtual default. Re-applying it here with identical viewport geometry (same width, height and
+     * `deviceScaleFactor`) changes only `screen.*`/`avail*`, not the layout, and keeps the whole
+     * chain plausible: `innerHeight < outerHeight < screen.height`.
+     *
+     * GUI sessions are left untouched — they already report the real screen — and so are external
+     * (attached) browsers, whose window and screen belong to the user's real desktop.
+     */
+    private suspend fun applyHeadlessScreenMetrics() {
+        if (!settings.isHeadless || browser.id.isExternal) {
+            return
+        }
+
+        val viewport = settings.viewportSize
+        runCatching {
+            browserProtocol.setDeviceMetricsOverride(
+                mobile = false,
+                width = viewport.width,
+                height = viewport.height,
+                // 0.0 keeps the host device pixel ratio, exactly like the upstream call.
+                deviceScaleFactor = 0.0,
+                screenWidth = viewport.width,
+                screenHeight = viewport.height + HEADLESS_SCREEN_HEIGHT_MARGIN,
+            )
+        }.onFailure {
+            logger.debug("Failed to align the headless screen metrics with the viewport", it)
+        }
+    }
+
+    /**
+     * Remove the `HeadlessChrome` token from the User-Agent of a browser that was launched without
+     * the launch argument configured by [HeadlessUserAgent].
+     *
+     * The launch argument is the primary fix because it reaches every JavaScript scope (main frame,
+     * iframes, dedicated/shared/service workers) and the HTTP headers. It cannot cover a browser
+     * that was already running when the fix was configured — a pooled/reused browser or one bound
+     * through `attach --cdp` — so those are corrected here, at the target level.
+     *
+     * Scope of the CDP fallback (measured on Chrome 153): `Emulation.setUserAgentOverride` reaches
+     * the main frame, its iframes and dedicated workers, but **not** `SharedWorker` and
+     * `ServiceWorker` globals, which live in their own renderer processes and keep the native
+     * value. `userAgentMetadata` must be supplied as well: overriding the User-Agent without it
+     * makes Chrome drop the `Sec-CH-UA` / `Sec-CH-UA-Platform` request headers entirely, which is
+     * a louder signal than the one being fixed.
+     */
+    private suspend fun ensureNonHeadlessUserAgent() {
+        if (headlessUserAgentChecked) {
+            return
+        }
+        headlessUserAgentChecked = true
+
+        val nativeUserAgent = runCatching { browser.userAgent }.getOrNull()
+        val fixedUserAgent = HeadlessUserAgent.toNonHeadlessUserAgent(nativeUserAgent) ?: return
+
+        logger.warn(
+            "The browser still reports the '{}' User-Agent token ({}). Applying a target-level " +
+                "override; SharedWorker/ServiceWorker scopes can only be fixed by the launch " +
+                "argument ({}.fixUserAgent).",
+            HeadlessUserAgent.HEADLESS_TOKEN,
+            nativeUserAgent,
+            HeadlessUserAgent::class.simpleName
+        )
+
+        val params = mutableMapOf<String, Any?>("userAgent" to fixedUserAgent)
+        userAgentMetadata(fixedUserAgent)?.let { params["userAgentMetadata"] = it }
+
+        runCatching { browserProtocol.executeCdpCommand("Emulation.setUserAgentOverride", params) }
+            .onFailure { logger.warn("Failed to override the headless User-Agent", it) }
+    }
+
+    /**
+     * Build the `userAgentMetadata` that keeps Client Hints consistent with [userAgent].
+     *
+     * Every value is derived from the User-Agent string itself, so no additional state or platform
+     * probing is required. High-entropy fields that the reduced User-Agent does not carry
+     * (`platformVersion`, `model`) are sent empty — Chrome only reveals them to origins that opted
+     * in through `Accept-CH`, exactly like a browser that never learned them.
+     */
+    private fun userAgentMetadata(userAgent: String): Map<String, Any?>? {
+        val fullVersion = CHROME_VERSION_IN_UA.find(userAgent)?.groupValues?.get(1) ?: return null
+        val majorVersion = fullVersion.substringBefore('.')
+        val brands = listOf("Chromium", "Google Chrome", "Not_A Brand")
+        val versionOf = { brand: String -> if (brand == "Not_A Brand") "8" else majorVersion }
+        val fullVersionOf = { brand: String -> if (brand == "Not_A Brand") "8.0.0.0" else fullVersion }
+
+        return mapOf(
+            "brands" to brands.map { mapOf("brand" to it, "version" to versionOf(it)) },
+            "fullVersionList" to brands.map { mapOf("brand" to it, "version" to fullVersionOf(it)) },
+            "fullVersion" to fullVersion,
+            "platform" to when {
+                userAgent.contains("Windows") -> "Windows"
+                userAgent.contains("Macintosh") -> "macOS"
+                else -> "Linux"
+            },
+            "platformVersion" to "",
+            "architecture" to if (userAgent.contains("aarch64") || userAgent.contains("arm64")) "arm" else "x86",
+            "model" to "",
+            "mobile" to false,
+            "bitness" to if (userAgent.contains("WOW64")) "32" else "64",
+        )
+    }
+
     /**
      * Left-click [count] times on [selector], with the pointer moved onto the
      * element first and native dialogs reported as they open (see
@@ -1159,7 +1302,6 @@ internal enum class DragDropPosition(val key: String) {
         movePointerToClickTarget(selector)
         withDialogWatch("click") { super.click(selector, count) }
     }
-
     /**
      * Click [selector] with a [modifier] key held; see [click] for the
      * pointer-move and dialog-watch behaviour.

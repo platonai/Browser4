@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Browser4 CLI Stealth Probe Fixture</title>
+  <style>
+    body { margin: 0; padding: 16px; font-family: monospace; }
+    #state-log { white-space: pre-wrap; }
+    .pass { color: #070; }
+    .fail { color: #b00; font-weight: bold; }
+  </style>
+</head>
+<body>
+<!--
+  Stealth probe fixture.
+
+  Samples the automation-relevant surface from EVERY JavaScript scope of one browser:
+  main frame, same-origin iframe, dedicated worker, shared worker and service worker.
+  Detectors such as deviceandbrowserinfo / bot.incolumitas flag a session when these scopes
+  disagree with each other (e.g. navigator.hardwareConcurrency 4 in the page vs 20 in a worker),
+  which is exactly what a main-world-only patch produces.
+
+  Exposes the result twice:
+   - window.__stealthProbe — the full object (for `eval --await window.__stealthProbe`)
+   - #state-log            — JSON, last line of the element (for state-log style readers)
+-->
+<main>
+  <h1>Stealth probe</h1>
+  <pre id="state-log">pending</pre>
+</main>
+<script>
+(function () {
+  const SAMPLER = `
+    self.__probeSample = () => ({
+      ua: navigator.userAgent,
+      brands: navigator.userAgentData ? navigator.userAgentData.brands : null,
+      platform: navigator.platform,
+      language: navigator.language,
+      languages: Array.from(navigator.languages || []),
+      cores: navigator.hardwareConcurrency,
+      webdriver: navigator.webdriver,
+      tz: Intl.DateTimeFormat().resolvedOptions().timeZone
+    })
+  `;
+
+  function blobUrl(code) {
+    return URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
+  }
+
+  function samplePage() {
+    const descriptor = Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace');
+    return {
+      ua: navigator.userAgent,
+      brands: navigator.userAgentData ? navigator.userAgentData.brands : null,
+      platform: navigator.platform,
+      language: navigator.language,
+      languages: Array.from(navigator.languages || []),
+      cores: navigator.hardwareConcurrency,
+      webdriver: navigator.webdriver,
+      tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      top: window.top === window,
+      // Service-worker registration requires a secure context (https or a trustworthy
+      // origin such as 127.0.0.1); callers assert the worker scopes accordingly.
+      secureContext: window.isSecureContext,
+      serviceWorkerAvailable: 'serviceWorker' in navigator,
+      prepareStackTrace: descriptor ? Object.keys(descriptor).sort() : null,
+      geometry: {
+        inner: [window.innerWidth, window.innerHeight],
+        outer: [window.outerWidth, window.outerHeight],
+        screen: [screen.width, screen.height],
+        avail: [screen.availWidth, screen.availHeight],
+        dpr: window.devicePixelRatio,
+        scrollbar: window.innerWidth - document.documentElement.clientWidth
+      }
+    };
+  }
+
+  function sampleIframe() {
+    return new Promise((resolve) => {
+      const frame = document.createElement('iframe');
+      frame.style.cssText = 'width:200px;height:80px;border:0';
+      frame.onload = () => {
+        try {
+          const w = frame.contentWindow;
+          resolve({
+            ua: w.navigator.userAgent,
+            cores: w.navigator.hardwareConcurrency,
+            language: w.navigator.language,
+            languages: Array.from(w.navigator.languages || []),
+            webdriver: w.navigator.webdriver
+          });
+        } catch (e) {
+          resolve({ error: String(e) });
+        }
+      };
+      document.body.appendChild(frame);
+      setTimeout(() => resolve({ error: 'timeout' }), 4000);
+    });
+  }
+
+  function sampleDedicatedWorker() {
+    return new Promise((resolve) => {
+      try {
+        const worker = new Worker(blobUrl(SAMPLER + '\nself.onmessage = () => postMessage(self.__probeSample())'));
+        worker.onmessage = (e) => resolve(e.data);
+        worker.postMessage('go');
+      } catch (e) {
+        resolve({ error: String(e) });
+      }
+      setTimeout(() => resolve({ error: 'timeout' }), 4000);
+    });
+  }
+
+  function sampleSharedWorker() {
+    return new Promise((resolve) => {
+      try {
+        const code = SAMPLER + `
+          self.onconnect = (e) => {
+            const port = e.ports[0]
+            port.onmessage = () => port.postMessage(self.__probeSample())
+            port.start()
+          }`;
+        const worker = new SharedWorker(blobUrl(code));
+        worker.port.onmessage = (e) => resolve(e.data);
+        worker.port.postMessage('go');
+      } catch (e) {
+        resolve({ error: String(e) });
+      }
+      setTimeout(() => resolve({ error: 'timeout' }), 4000);
+    });
+  }
+
+  function sampleServiceWorker() {
+    return new Promise((resolve) => {
+      if (!navigator.serviceWorker) {
+        resolve({ error: 'unsupported' });
+        return;
+      }
+      const script = new URL('browser4-stealth-sw.js', location.href).href;
+      navigator.serviceWorker.register(script)
+        .then((registration) => navigator.serviceWorker.ready.then(() => registration.active))
+        .then((active) => {
+          if (!active) {
+            resolve({ error: 'not-active' });
+            return;
+          }
+          const channel = new MessageChannel();
+          channel.port1.onmessage = (e) => resolve(e.data);
+          active.postMessage('go', [channel.port2]);
+        })
+        .catch((e) => resolve({ error: String(e) }));
+      setTimeout(() => resolve({ error: 'timeout' }), 6000);
+    });
+  }
+
+  function buildChecks(probe) {
+    const scopes = { iframe: probe.iframe, worker: probe.worker, shared: probe.shared, sw: probe.sw };
+    const reachable = Object.entries(scopes).filter(([, s]) => s && !s.error);
+    const same = (pick) => reachable.every(([, s]) => pick(s) === pick(probe.main));
+
+    const uaBrandVersion = (() => {
+      const match = /Chrome\/(\d+)/.exec(probe.main.ua);
+      const chromeBrand = (probe.main.brands || []).find((b) => b.brand === 'Google Chrome');
+      if (!match || !chromeBrand) return 'unavailable';
+      return match[1] === chromeBrand.version ? 'pass' : `ua=${match[1]} brand=${chromeBrand.version}`;
+    })();
+
+    return {
+      reachableScopes: reachable.map(([name]) => name),
+      'user-agent-has-no-headless-token': !/HeadlessChrome/.test(probe.main.ua),
+      'user-agent-consistent-across-scopes': same((s) => s.ua),
+      'cores-consistent-across-scopes': same((s) => s.cores),
+      'languages-consistent-across-scopes': same((s) => JSON.stringify(s.languages)),
+      'language-consistent-across-scopes': same((s) => s.language),
+      'language-in-languages': probe.main.languages.includes(probe.main.language),
+      'user-agent-brand-version-consistent': uaBrandVersion,
+      'webdriver-false': probe.main.webdriver === false,
+      'prepare-stack-trace-not-defined': probe.main.prepareStackTrace === null,
+      'screen-not-smaller-than-window': probe.main.geometry.screen[0] >= probe.main.geometry.inner[0]
+        && probe.main.geometry.screen[1] >= probe.main.geometry.inner[1],
+      'outer-not-smaller-than-inner': probe.main.geometry.outer[0] >= probe.main.geometry.inner[0]
+        && probe.main.geometry.outer[1] >= probe.main.geometry.inner[1],
+      // Reported only: headless Chrome reports outer === inner, i.e. a browser window with no
+      // window chrome at all. Restoring the delta needs the upstream `--window-size` handling
+      // (platonai/Browser4base#11 §7), not another page-world patch.
+      'window-chrome-present': probe.main.geometry.outer[1] - probe.main.geometry.inner[1] >= 60,
+      'scrollbar-has-width': probe.main.geometry.scrollbar > 0
+    };
+  }
+
+  function render(probe) {
+    const checks = probe.checks;
+    const lines = Object.entries(checks).map(([name, value]) => {
+      const ok = value === true || value === 'pass' || Array.isArray(value);
+      return (ok ? 'ok   ' : 'FAIL ') + name + ' = ' + JSON.stringify(value);
+    });
+    document.getElementById('state-log').textContent = lines.join('\n') + '\n' + JSON.stringify(probe);
+  }
+
+  function run() {
+    Promise.all([
+      samplePage(),
+      sampleIframe(),
+      sampleDedicatedWorker(),
+      sampleSharedWorker(),
+      sampleServiceWorker()
+    ]).then(([main, iframe, worker, shared, sw]) => {
+      const probe = { main, iframe, worker, shared, sw };
+      probe.checks = buildChecks(probe);
+      window.__stealthProbe = probe;
+      render(probe);
+    });
+  }
+
+  if (document.readyState === 'complete') {
+    run();
+  } else {
+    window.addEventListener('load', run);
+  }
+})();
+</script>
+</body>
+</html>

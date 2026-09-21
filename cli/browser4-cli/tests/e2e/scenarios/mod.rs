@@ -134,6 +134,17 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         group: Some("navigation"),
         level: ScenarioLevel::Basic,
     },
+    // ── Stealth fixture scenario ─────────────────────────────────
+    ScenarioDef {
+        name: "test_e2e_stealth_consistency",
+        short_name: "test_stealth_consistency",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: browser::test_e2e_stealth_consistency,
+        group: Some("stealth"),
+        level: ScenarioLevel::Basic,
+    },
     ScenarioDef {
         name: "test_e2e_storage_state_commands",
         short_name: "test_storage_state_commands",

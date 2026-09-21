@@ -2551,3 +2551,154 @@ pub(super) fn test_htmlsnapshot_capture_after_tab_new(ctx: &mut E2ECtx) {
 
     run_command(ctx, &["close"]);
 }
+
+/// Stealth regression scenario: a headless session must look identical in every
+/// JavaScript scope instead of revealing Chrome's `HeadlessChrome` token.
+///
+/// The fixture samples the automation-relevant `navigator` surface in the main
+/// frame, a same-origin iframe, a dedicated worker, a shared worker and a
+/// service worker.  A main-world-only patch (or a UA override that does not
+/// reach worker globals) leaves those scopes disagreeing with each other — the
+/// signature a real detector keys on.
+pub(super) fn test_e2e_stealth_consistency(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let stealth_url = ctx.stealth_url();
+    let open_result = run_command(
+        ctx,
+        &["open", "--headless", &stealth_url, OPEN_PROFILE_MODE_ARG],
+    );
+    assert!(
+        open_result.stdout.contains("Session opened:"),
+        "Expected session to open headless. Output:\n{}",
+        open_result.stdout
+    );
+
+    // Sampling five scopes and registering a service worker takes a few seconds,
+    // so poll #state-log instead of assuming a single read is current.
+    let (raw, probe) = wait_for_stealth_probe(ctx, 45_000);
+
+    // The probe is only rendered after the fixture has run: confirm we are on it.
+    let title = eval_text(ctx, "document.title");
+    assert_eq!(
+        title.trim(),
+        STEALTH_TITLE,
+        "Expected the stealth probe fixture to be loaded.\nRaw #state-log:\n{raw}"
+    );
+
+    for name in [
+        "user-agent-has-no-headless-token",
+        "user-agent-consistent-across-scopes",
+        "cores-consistent-across-scopes",
+        "languages-consistent-across-scopes",
+        "language-in-languages",
+        "webdriver-false",
+        "prepare-stack-trace-not-defined",
+    ] {
+        assert_eq!(
+            probe["checks"][name].as_bool(),
+            Some(true),
+            "Stealth check '{name}' must be true.\nRaw probe JSON:\n{raw}"
+        );
+    }
+
+    assert_eq!(
+        probe["checks"]["user-agent-brand-version-consistent"].as_str(),
+        Some("pass"),
+        "The Chrome version in navigator.userAgent must match the Google Chrome \
+         User-Agent Client Hint brand version.\nRaw probe JSON:\n{raw}"
+    );
+
+    // The worker scopes are the point of this scenario: an evasion installed in
+    // the main world only leaves them reporting the unpatched navigator.
+    let reachable_scopes: Vec<&str> = probe["checks"]["reachableScopes"]
+        .as_array()
+        .map(|scopes| scopes.iter().filter_map(|scope| scope.as_str()).collect())
+        .unwrap_or_default();
+
+    // Shared workers need no secure context, so this scope is always asserted.
+    assert!(
+        reachable_scopes.contains(&"shared"),
+        "The stealth probe must reach the 'shared' JavaScript scope; \
+         reachableScopes={reachable_scopes:?}.\nRaw probe JSON:\n{raw}"
+    );
+
+    // Service workers can only be registered from a secure context. CI runs the
+    // browser against `host.docker.internal` (BROWSER4_E2E_FIXTURE_HOST), which is
+    // not a trustworthy origin, so the scope is asserted wherever the probe could
+    // actually reach it and reported otherwise.
+    let secure_context = probe["main"]["secureContext"].as_bool().unwrap_or(false);
+    if secure_context {
+        assert!(
+            reachable_scopes.contains(&"sw"),
+            "The stealth probe must reach the 'sw' JavaScript scope in a secure context; \
+             reachableScopes={reachable_scopes:?}.\nRaw probe JSON:\n{raw}"
+        );
+    } else {
+        println!(
+            "[stealth] note: skipping the service-worker scope assertion — the fixture was \
+             served from a non-secure origin (secureContext=false), where service workers \
+             cannot be registered."
+        );
+    }
+
+    let main_ua = probe["main"]["ua"].as_str().unwrap_or_default();
+    assert!(
+        !main_ua.contains("HeadlessChrome"),
+        "The main-frame User-Agent must not carry the HeadlessChrome token, got: {main_ua}\n\
+         Raw probe JSON:\n{raw}"
+    );
+
+    // Geometry checks that still depend on library-level gaps (platonai/Browser4base#11
+    // §6/§7) are reported, never asserted.
+    println!(
+        "[stealth] note: window-chrome-present={} scrollbar-has-width={} are library-level gaps \
+         tracked in platonai/Browser4base#11 and are not asserted.",
+        probe["checks"]["window-chrome-present"],
+        probe["checks"]["scrollbar-has-width"],
+    );
+    println!("[stealth] reachableScopes={reachable_scopes:?} main UA={main_ua}");
+
+    run_command(ctx, &["close"]);
+}
+
+/// Poll `#state-log` until its last line parses as the stealth probe JSON.
+///
+/// Returns the raw element text together with the parsed probe so a failure can
+/// print exactly what the page reported.
+fn wait_for_stealth_probe(ctx: &mut E2ECtx, timeout_ms: u64) -> (String, serde_json::Value) {
+    let started_at = Instant::now();
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let mut raw = String::new();
+
+    while Instant::now() < deadline {
+        raw = strip_snapshot_output(
+            &run_checked_cli_process(
+                ctx,
+                &["eval", "document.getElementById('state-log').textContent"],
+            )
+            .stdout,
+        );
+        if let Some(probe) = parse_stealth_probe(&raw) {
+            ctx.record_step("wait for stealth probe JSON", started_at.elapsed());
+            return (raw, probe);
+        }
+        sleep(Duration::from_millis(500));
+    }
+
+    panic!(
+        "Timed out after {timeout_ms}ms waiting for the stealth probe JSON in #state-log.\n\
+         Last #state-log text:\n{raw}"
+    );
+}
+
+/// Parse the probe JSON from the last non-empty line of the `#state-log` text.
+fn parse_stealth_probe(state_log_text: &str) -> Option<serde_json::Value> {
+    let last_line = state_log_text
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())?;
+    let probe: serde_json::Value = serde_json::from_str(last_line.trim()).ok()?;
+    probe.get("checks")?;
+    Some(probe)
+}
