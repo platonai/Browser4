@@ -1252,7 +1252,7 @@ Chrome**（拷贝 prototype profile → 启动 → 重新生成并注入双世�
 * **已否证**：60 秒驱动租约等待（本地两轮日志 0 次告警）；服务端残留 token 消费者（全仓扫描仅命中
   整数状态码与其它子系统）。
 
-### 20.3 验证状态（截至 2026-09-21，`v4.13.21-ci.1` 门禁进行中）
+### 20.3 验证状态（截至 2026-09-21，`v4.13.21-ci.1` 门禁 **success**）
 
 | 层 | 证据 | 结果 |
 |---|---|---|
@@ -1264,10 +1264,35 @@ Chrome**（拷贝 prototype profile → 启动 → 重新生成并注入双世�
 | CI · 第 2 项 | browser4-rest 模块（run 35568764699） | **404 / 0 / 0**，含改动的 5 个单测类 |
 | CI · 第 2 项 | `CrawlXSqlE2ETest` | **2 / 0 / 0**（7.23 s） |
 | CI · 第 2 项 | Cross-Platform Smoke Test（标签 + 分支各一次，同 SHA） | **success / success** |
-| CI · 待取 | `CrawlFixtureMetadataTest` / `CrawlParallelTabsTest` / `ScrapeServiceTests` 耗时；`Check Test Status`；Rust + CLI E2E | 门禁运行中 |
+| CI · 第 1 项 | `ScrapeServiceTests`（run 35568764699） | **8.55 s**（4 个用例，1 个因无 LLM key 跳过） |
+| CI · 全部 | 门禁 `CI/CD Pipeline`（tag `v4.13.21-ci.1` = `8ac4d359d`，run [35568764699](https://github.com/platonai/Browser4/actions/runs/35568764699)） | **success**：`Total 2164 / Passed 2108 / Skipped 56 / Failed 0`；`Check Test Status` 通过；CLI E2E 通过 |
 
-门禁通过后应把上表最后一行的三个耗时与 §19.7 的基线对比（`ScrapeServiceTests` **794.7 s**、
-另两类 668.8 / 671.7 s、测试阶段共 **43 分钟**），并据此判断第 1 项的收益是否在 CI 上兑现。
+#### 20.3.1 第 1 项的收益在 CI 上兑现（−786 s 全落在目标类上）
+
+基线取**上一次绿门禁** `v4.13.20-ci.3`（run [35514175379](https://github.com/platonai/Browser4/actions/runs/35514175379)），
+同一个 `ci-build` job、同一个 `Run Tests` 步骤、同一份排除清单，逐项同口径对比：
+
+| 项 | v4.13.20-ci.3 | v4.13.21-ci.1 | Δ |
+|---|---|---|---|
+| `ScrapeServiceTests` | **794.7 s** | **8.55 s** | **−786.2 s（−98.9%）** |
+| `CrawlFixtureMetadataTest` | 656.8 s | 714.6 s | +57.8 s（+8.8%） |
+| `CrawlParallelTabsTest` | 638.7 s | 672.1 s | +33.4 s（+5.2%） |
+| `Run Tests` 步骤 | **2 585 s（43 分 05 秒）** | **1 807 s（30 分 07 秒）** | **−778 s（−13 分）** |
+| `ci-build` job 全程（含 Docker 构建 + CLI E2E） | 3 595 s（59 分 55 秒） | 3 234 s（53 分 54 秒） | −361 s（−6 分） |
+| 用例账目（Total / Passed / Skipped / Failed） | 2164 / 2108 / 56 / 0 | 2164 / 2108 / 56 / 0 | 完全相同 |
+
+三点结论：
+
+* **收益只在目标类上，且几乎不多不少**：单类省 786.2 s、测试步骤省 778 s，差 8 s 落在步骤内噪声里；
+  两个 crawl 类合计 +91 s 是它们自身的负载波动（最近三次门禁里分别在 656.8–714.6 s 与
+  638.7–672.1 s 之间），本次改动没有碰它们的代码路径，两类本轮也都绿。
+* **§19.7 的 50 分钟预算现在有明显余量**：`Run Tests` 只用 30 分 07 秒，**35 分钟的旧预算也已够用**
+  （`ci.2` 那次正是被 2100 s 杀掉的）。即便如此仍建议保留 50 分钟：两个 crawl 类仍占 23 / 30 分钟，
+  单类波动 ±10%，留 20 分钟余量比贴着上限再赌一次便宜。
+* **门禁覆盖到 `8ac4d359d`**：其后的 `9126e70c0c`（`CrawlResponseTest` / `CrawlServicePersistenceTest`
+  改用 `CrawlStatus` 常量，外加本文档）没有门禁记录——这是机制而非遗漏：`ci.yml` 只在
+  `v*.*.*-ci.N` / `v*.*.*-rc.N-ci.N` 标签上触发，分支推送只跑 Cross-Platform Smoke Test。
+  该提交涉及的两个类本地 **17 / 0 / 0** 与 **5 / 0 / 0**，会随下一个 `-ci.N` 标签（或发布流水线）一并覆盖。
 
 
 **因此本仓库内可安全优化的部分已经做完**：死钩子、列表页→详情页、轮询方式，实测 168.0 s → 65.65 s。
