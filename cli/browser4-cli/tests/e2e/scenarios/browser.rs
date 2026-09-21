@@ -2736,3 +2736,56 @@ pub(super) fn test_e2e_console_capture_after_tab_new(ctx: &mut E2ECtx) {
 
     run_command(ctx, &["close"]);
 }
+
+/// Test that the pointer move before a click is jittered inside the element.
+///
+/// Landing on the element's exact center on every request is itself a fingerprint —
+/// real users never hit the same pixel twice.  The driver nudges the point by at most
+/// ±2 px (clamped to the element box), so this scenario clicks the same element
+/// repeatedly and asserts both properties from the fixture's own mousemove log.
+pub(super) fn test_mouse_pointer_jitter(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.mouse_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["resize", "1280", "900"]);
+    sleep(Duration::from_secs(1));
+
+    let clicks = 6_u64;
+    let mut positions: Vec<(i64, i64)> = Vec::new();
+
+    for index in 0..clicks {
+        run_command(ctx, &["click", "#mouse-track-area"]);
+
+        // The pointer move is dispatched just before the click, so wait until the
+        // fixture recorded this click *and* a pointer position.
+        let state = wait_for_state_or_abort(
+            ctx,
+            |s| {
+                s["mouseDownCount"].as_u64().unwrap_or(0) > index
+                    && s["lastMouse"].as_array().map_or(false, |a| a.len() == 2)
+            },
+            2_000,
+            "Expected the fixture to record the click and the preceding pointer move",
+        );
+
+        positions.push((
+            state["lastMouse"][0].as_i64().unwrap_or_default(),
+            state["lastMouse"][1].as_i64().unwrap_or_default(),
+        ));
+    }
+
+    assert!(
+        positions.iter().any(|p| *p != positions[0]),
+        "Expected the pre-click pointer position to vary between clicks, got {positions:?}"
+    );
+
+    let min_x = positions.iter().map(|p| p.0).min().unwrap_or_default();
+    let max_x = positions.iter().map(|p| p.0).max().unwrap_or_default();
+    let min_y = positions.iter().map(|p| p.1).min().unwrap_or_default();
+    let max_y = positions.iter().map(|p| p.1).max().unwrap_or_default();
+    assert!(
+        max_x - min_x <= 5 && max_y - min_y <= 5,
+        "Pointer jitter must stay inside the element (<= ±2 px plus rounding), got {positions:?}"
+    );
+
+    run_command(ctx, &["close"]);
+}
