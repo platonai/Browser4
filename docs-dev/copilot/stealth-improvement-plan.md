@@ -13,7 +13,7 @@
 | R2 主世界 vs Worker 矛盾 | ✅ 已修 | 新 `js/stealth.js`（extract-stealth-evasions + 2.11.2，剔除 `hardwareConcurrency`/`languages`/`webgl.vendor`）；实测各 scope 均报主机真值 20/zh-CN |
 | R3 `language ∉ languages` | ✅ 已修 | 同上（不再伪造 languages）；实测 `zh-CN ∈ [zh-CN, zh]` |
 | R4 `Error.prepareStackTrace` 自曝 | ✅ 已修 | 重生成后该块消失；实测自有属性不存在 |
-| R7/R8 屏幕 vs 视口 | ✅ 已修 | `Browser4WebDriver.applyHeadlessScreenMetrics`：导航后用 `screenWidth/screenHeight` 重下 metrics（视口几何不变）；GUI/attach 会话跳过 |
+| R7/R8 屏幕 vs 视口 | ✅ 已修 | `Browser4WebDriver.applyHeadlessScreenMetrics`：导航后用 `screenWidth/screenHeight` 重下 metrics（视口几何不变），并由 `Page.frameNavigated` 监听器在 **commit 时**再对齐一次；GUI/attach 会话跳过 |
 | R7 `--hide-scrollbars`、窗口 chrome 缺失 | ⏳ 上游 | `innerWidth - clientWidth == 0` 仍是可测信号；需放开 flag，见 issue #11 §6 |
 | R9 `Runtime.enable`、R10 死缝、注入重复注册 | ⏳ 上游 | issue #11 §4/§5/§8 |
 | R11 文档 | ✅ 已更新 | `skills/browser4-cli/references/browser-modes.md`、`docs/config.md` |
@@ -37,7 +37,7 @@ ok   window-chrome-present = true                    # outer 1165 > inner 1080
 FAIL scrollbar-has-width = false                     # --hide-scrollbars → issue #11 §6（唯一残留）
 ```
 
-已知时序细节：会话**首次**导航时，`applyHeadlessScreenMetrics` 可能晚于该页的 load 事件（`open` 路径比 `goto` 多一层等待），第二次导航起稳定生效；这与既有报告里"首次加载补丁未生效"是同一类注入时序问题（issue #11 §4）。
+已知时序细节：仅"页面 `load` 之前"的对齐被修复（`Page.frameNavigated` 于 commit 时触发）。若检测脚本在 `<head>` 内联脚本里、即 document_start 阶段就读 `screen.*`，仍可能读到 headless 默认的虚拟屏幕——因为上游的视口覆盖就发生在导航提交之前、且不带 `screen*` 参数，仓库内没有可插入的时机（issue #11 §7 建议上游把 `screenWidth/Height` 与视口一起下发）。修复前后各开全新会话复测：修复前 3 个会话中 1 个失败，修复后 5/5 通过。
 
 
 **机制实验结论**（决定了实现方式，`Emulation` 域在 Chrome 153 上的传播范围）

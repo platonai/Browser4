@@ -1,5 +1,6 @@
 package ai.platon.pulsar.chrome
 
+import ai.platon.cdt.kt.protocol.support.types.EventListener
 import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.api.model.BrowserTab
 import ai.platon.pulsar.api.model.JsEvaluation
@@ -1165,19 +1166,53 @@ internal enum class DragDropPosition(val key: String) {
     @Volatile
     private var headlessUserAgentChecked = false
 
+    /** The main-frame navigation listener registered by [ensureScreenMetricsOnMainFrameNavigation]. */
+    @Volatile
+    private var screenMetricsListener: EventListener? = null
+
     /**
      * Navigate after making the session consistent with what the page can observe.
      *
      * Before the navigation: [ensureNonHeadlessUserAgent] removes the `HeadlessChrome` token from
-     * browsers that were launched without the launch argument. After it:
-     * [applyHeadlessScreenMetrics] aligns `screen.*` with the pinned viewport. This method is the
-     * funnel every other navigation entry point (`navigate(url)`, `open`, `goto`) goes through, so
-     * both run before the first document is loaded / right after it commits.
+     * browsers that were launched without the launch argument, and
+     * [ensureScreenMetricsOnMainFrameNavigation] makes sure the screen alignment also happens at
+     * commit time. After it: [applyHeadlessScreenMetrics] re-applies it as a safety net. This
+     * method is the funnel every other navigation entry point (`navigate(url)`, `open`, `goto`)
+     * goes through.
      */
     override suspend fun navigate(entry: NavigateEntry) {
         ensureNonHeadlessUserAgent()
+        ensureScreenMetricsOnMainFrameNavigation()
         super.navigate(entry)
         applyHeadlessScreenMetrics()
+    }
+
+    /**
+     * Align the screen metrics as soon as a main-frame navigation commits.
+     *
+     * The call in [navigate] runs after `super.navigate(...)` returns, which races with the page:
+     * for a cached or local page the document's `load` event can fire before the driver's next CDP
+     * round trip, and a detector sampling `screen.*` while the page loads then sees the headless
+     * default (a virtual 800×600) — measured on one fresh session out of three before this hook
+     * existed. `Page.frameNavigated` is emitted at commit, i.e. after the upstream viewport
+     * override that resets `screen.*` and before the document's own scripts run, so aligning the
+     * screen there is deterministic instead of a race. Sub-frames inherit the target-level override
+     * and navigate frequently, so only main-frame commits are handled.
+     */
+    private fun ensureScreenMetricsOnMainFrameNavigation() {
+        if (screenMetricsListener != null) {
+            return
+        }
+
+        synchronized(this) {
+            if (screenMetricsListener == null) {
+                screenMetricsListener = browserProtocol.onFrameNavigated { event ->
+                    if (event.frame.parentId == null) {
+                        applyHeadlessScreenMetrics()
+                    }
+                }
+            }
+        }
     }
 
     /**
