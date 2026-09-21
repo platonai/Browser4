@@ -1093,7 +1093,7 @@ java.lang.IllegalStateException: Crawl eb660148-… did not reach a terminal sta
   最近的 WARN/ERROR 摘要一起抛出来。
 * **上限的合理性**：4 分钟是这条用例写死的；本地 63.9 s、ci.4 整类 72.7 s，健康区间离上限有 3× 余量，
   但 CI 负载下的停顿会把它吃掉。要么按类内累计耗时调大，要么让该类拥有独立上下文/独立超时策略。
-* **驱动池在该类里的分配日志**（谁占着 driver、谁在等、等了多久）没有拉出来对照，这是把"环境停顿"
+* **（§23 已做）驱动池在该类里的分配日志**（谁占着 driver、谁在等、等了多久）没有拉出来对照，这是把"环境停顿"
   坐实成"驱动池饥饿"的最后一步。
 
 ### 19.6 修复（v4.13.20，2026-09-20）
@@ -1468,6 +1468,74 @@ pages=0/0 → 1/0 → 2/0 → 3/3 → 4/3 → 5/3 → 6/6 → 7/6 → 8/6 → 9/
   （测试只对正常完成的 crawl 断言该性质）。
 * 第 4 条的竞态没有**直接**复现用例（见 22.1）：它由"两条发布路径共用同一把锁与同一个写入函数"
   在结构上消除，并由上述不变量覆盖。
+
+
+
+## 23. 驱动池的分配日志：谁在等、等了多久、谁占着（4.13.x，§19.5 第 3 条）
+
+§19.5 第 3 条是"把'环境停顿'坐实成'驱动池饥饿'的最后一步"。此前判断"不是驱动池饥饿"只能靠
+**告警缺席**（60 s 租约告警 0 次），而池子自己什么都不说：一个卡在 `poll()` 里的任务，从上面看
+和"页面慢"完全一样。
+
+### 23.1 加了什么
+
+都在 `LoadingWebDriverPool`（所有取 driver 的路径都经过它）：
+
+* **计量**：`pollWebDriver` 记录进入/离开时间，等待时长随结果一起上报（在 `finally` 里，成功与
+  失败都报）。
+* **谁在等**：`poll(priority, conf, event, page)` 把 `page.url` 一路带到上报里——这是爬取路径唯一
+  知道"这是哪个任务"的地方；不经过该路径的调用记为 `unknown`。
+* **谁占着**：上报当下把 `workingDrivers` 的前 3 个连同它们的当前页面列出来（`#id state url`），
+  其余按数量省略（`(+N more)`）——一行日志必须还是一行。
+* **为什么**：`driverWaitReason(...)` 把原因分类。`every driver slot is taken`（该加容量）与
+  `driver creation is refused: ...`（该等负载回落）是两种不同的处置，混淆就会把真正的饱和读成
+  一次瞬时抖动；这个函数与 `shouldCreateWebDriver` 的判定顺序一致。
+* **两级，两种用途**：
+  * `WAIT_DEBUG_THRESHOLD`（默认 1 s）以上的等待，DEBUG 一行给出精确数字（等待时长 / 拿到的
+    driver / 池快照 / 原因 / 等待者 / 占用者）——排查时看的就是这一行；
+  * `WAIT_WARN_THRESHOLD`（默认 10 s）以上的等待，额外一条 WARN，**消息只由小集合的值构成**
+    （池号、等待倍数桶 `1x/3x/10x/30x`、原因、browserId）。原因是 `ThrottlingLogger` 按
+    **渲染后的消息**去重：消息里带 URL 或毫秒数，就等于每次都是新消息，等于没有节流。
+* 池耗尽时的异常消息与 INFO 也带上原因与占用者——调用方此前只能看到一句 "exhausted"，无法区分
+  "池被占满"和"浏览器根本没起来"。
+
+### 23.2 顺带修掉一个真 bug：亚秒超时被静默吞掉
+
+`poll(priority, conf, timeout: Duration)` 原先用 `timeout.seconds` 转秒，而
+`Duration.ofMillis(700).seconds == 0` ⇒ "等 700 ms"变成"不等待、立刻报池耗尽"。爬取路径
+（`settings.pollingDriverTimeout`）现在按毫秒传递。这是写诊断测试时被测试逼出来的：探针把超时设成
+700 ms，实际只等了 0.15 s。
+
+### 23.3 验证
+
+| 层 | 证据 | 结果 |
+|---|---|---|
+| 本地 · 单测 | `LoadingWebDriverPoolTest`（新增 4 条：端到端诊断 1 条 + 纯函数 3 条） | **6 / 0 / 0**（原 2 条） |
+| 本地 · 单测 | 同包 `ConcurrentStatefulDriverPoolPoolTest` + `ExceptionsTest` | **20 / 0 / 0**、**13 / 0 / 0** |
+| 本地 · 集成 | `CrawlParallelTabsTest`（4 种子并行 + depth-1 双轮，真实浏览器） | **5 / 0 / 0，135.1 s** |
+
+端到端那条用例断言的是**可读性本身**（不是"有没有日志"）：强制让资源守卫拒绝创建（与负载尖峰同一
+路径），一个等待的调用必须（a）异常消息里带原因与占用者，（b）DEBUG 行里点名等待的页面，
+（c）WARN 行里点名池与原因、但**不含**等待者 URL（否则节流失效）。
+
+### 23.4 真实 crawl 的观察：**没有**池饥饿（否证，不是坐实）
+
+同一台机器上跑 `CrawlParallelTabsTest`（4 种子并行、`parallelTabs=4`，另有 depth-1 双轮用例），
+按新诊断在应用日志里检索：
+
+| 检索项 | 命中 |
+|---|---|
+| `A task waited more than …`（≥10 s 等待的 WARN） | **0** |
+| `Driver pool is exhausted, rethrow …`（池耗尽） | **0** |
+| `Maintaining service is started/closed`（池管理器） | 各 8 次（正常启停） |
+
+即：这些场景里池**从未**让任务等待到 10 s，也从未耗尽——"CI 上 crawl 停顿"在这类负载下**不是**
+驱动池饥饿。这与 §20 的结论互相印证：成本在"新建浏览器/隐私上下文 + 重新注入双世界 JS"一侧。
+
+**边界**：1–10 s 之间的等待只在 DEBUG 级别可见，而测试配置里
+`ai.platon.pulsar.protocol.browser.driver` 固定为 INFO，所以本轮**只否证了 ≥10 s 的池等待**。
+要拿到更细的分布，把该 logger 调到 DEBUG，或临时下调 `WAIT_DEBUG_THRESHOLD`
+（两者都是 `var`，不需要改代码）。
 
 
 
