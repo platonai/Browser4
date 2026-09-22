@@ -20,6 +20,12 @@ pub const KEYBOARD_PATH: &str = "/keyboard";
 
 pub const DRAG_PATH: &str = "/drag-test";
 
+/// The console serialization probe page: it logs objects carrying getters and a Proxy prototype, so
+/// a remote client that serializes console arguments becomes observable to the page.
+pub const CONSOLE_PROBE_PATH: &str = "/console-probe";
+
+pub const CONSOLE_PROBE_TITLE: &str = "Browser4 CLI Console Probe Fixture";
+
 pub const INTERACTIVE_TITLE: &str = "Browser4 CLI Interactive Fixture";
 
 pub const OTHER_TITLE: &str = "Browser4 CLI Other Fixture";
@@ -51,6 +57,8 @@ pub const MOUSE_FIXTURE_FILE: &str = "mcp-tool-controller-mouse-fixture.html";
 pub const KEYBOARD_FIXTURE_FILE: &str = "mcp-tool-controller-keyboard-fixture.html";
 
 pub const DRAG_FIXTURE_FILE: &str = "drag-test.html";
+
+pub const CONSOLE_PROBE_FIXTURE_FILE: &str = "console-probe-fixture.html";
 
 pub const MAX_EMPTY_READ_ATTEMPTS: u32 = 200; // 2 s with 10 ms sleep per attempt
 

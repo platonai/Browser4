@@ -10,6 +10,7 @@ import ai.platon.pulsar.chrome.network.RobustRPC
 import ai.platon.pulsar.chrome.protocol.Keyboard
 import ai.platon.pulsar.chrome.protocol.util.withNodeObjectId
 import ai.platon.pulsar.chrome.util.ChromeDriverException
+import ai.platon.pulsar.common.B4Constants
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -1620,18 +1621,32 @@ internal enum class DragDropPosition(val key: String) {
     @Volatile
     private var consoleCaptureUnavailable = false
 
+    /** Set once the first `Console.messageAdded` arrives, so a live capture shows up in the log. */
+    @Volatile
+    private var consoleCaptureConfirmed = false
+
+    /**
+     * Whether the CDP capture is enabled by configuration; see [B4Constants.CONSOLE_CAPTURE_CDP].
+     *
+     * Read per call: the settings of a browser are immutable, and a `false` value must not enable
+     * anything at all — no domain, no listener, no latch.
+     */
+    private val consoleCaptureOverCdp: Boolean
+        get() = settings.config.getBoolean(B4Constants.CONSOLE_CAPTURE_CDP, B4Constants.CONSOLE_CAPTURE_CDP_DEFAULT)
+
     /**
      * Read the buffered browser console messages filtered to [level] and above
      * (error=0, warn=1, info=2, log=2, debug=3).
      *
      * Messages are collected from CDP `Console.messageAdded` events, so reading the console never
      * modifies the page (see [ConsoleMessageBuffer] for why that matters). Capture starts with the
-     * first call — like the page-side buffer it replaces — and falls back to
-     * [consoleMessagesJs] when the transport cannot enable the Console domain.
+     * first call — like the page-side buffer it replaces — and falls back to [consoleMessagesJs] when
+     * the transport cannot enable the Console domain; `browser.console.capture=false` skips CDP
+     * entirely, see [B4Constants.CONSOLE_CAPTURE_CDP].
      */
     @Throws(WebDriverException::class)
     suspend fun consoleMessages(level: String = "info"): JsEvaluation? {
-        if (!ensureConsoleCapture()) {
+        if (!consoleCaptureOverCdp || !ensureConsoleCapture()) {
             return evaluateValueDetail(consoleMessagesJs(level))
         }
 
@@ -1645,7 +1660,7 @@ internal enum class DragDropPosition(val key: String) {
      */
     @Throws(WebDriverException::class)
     suspend fun consoleClear(): JsEvaluation? {
-        if (!ensureConsoleCapture()) {
+        if (!consoleCaptureOverCdp || !ensureConsoleCapture()) {
             return evaluateValueDetail(consoleClearJs())
         }
 
@@ -1658,11 +1673,25 @@ internal enum class DragDropPosition(val key: String) {
      *
      * `Console.messageAdded` is the only console event the protocol layer exposes
      * ([BrowserProtocol.onConsoleMessageAdded]); it is deprecated in the CDP definition in favour of
-     * `Runtime.consoleAPICalled`, which would need an upstream addition — measured on Chrome 153 it
-     * still delivers every page `console.*` call, and the driver favours it over patching the page.
+     * `Runtime.consoleAPICalled`, which would need both an upstream addition to the protocol layer
+     * and `browser.launch.runtime.enable=true` — the domain the base library now keeps off by default
+     * because of the console-argument serialization it carries. Measured on Chrome 153,
+     * `Console.messageAdded` still delivers every page `console.*` call, so the deprecated event is
+     * the cheaper of the two, and the driver favours it over patching the page.
      *
      * @return false when the Console domain could not be enabled, i.e. the caller must fall back to
      * the page-side buffer (an extension/relay transport that does not implement the command)
+     *
+     * The decision is taken once per driver: a transport that rejects the command is remembered, so
+     * the page-side fallback is neither retried on every read nor warned about twice. Note the
+     * converse case, which no code can detect: a transport that accepts `Console.enable` but never
+     * delivers `Console.messageAdded` leaves the console legitimately empty — indistinguishable from
+     * a page that logs nothing, hence the one-shot debug line on the first captured message.
+     *
+     * Enabling the domain was measured against the signal that made the base library default
+     * `Runtime.enable` to off: on Chrome 153.0.8010.52 the getter, inherited-getter and
+     * prototype-Proxy probes of `console-probe-fixture.html` report false with the capture off and
+     * on (`test_e2e_console_serialization_probe`), so this domain does not reproduce that signal.
      */
     private suspend fun ensureConsoleCapture(): Boolean {
         if (consoleListener != null) {
@@ -1683,24 +1712,30 @@ internal enum class DragDropPosition(val key: String) {
             return consoleListener != null
         }
 
-        val enabled = runCatching { browserProtocol.executeCdpCommand("Console.enable") }.isSuccess
-        if (!enabled) {
+        val enabled = runCatching { browserProtocol.executeCdpCommand("Console.enable") }
+        if (enabled.isFailure) {
             consoleCaptureUnavailable = true
             logger.warn(
-                "Console.enable is not available on this transport; console messages keep using the " +
-                    "page-side buffer (which patches console.* and is visible to the page)"
+                "Console.enable is not available on this transport ({}); console messages keep using " +
+                    "the page-side buffer (which patches console.* and is visible to the page)",
+                enabled.exceptionOrNull()?.message
             )
             return false
         }
 
         consoleListener = browserProtocol.onConsoleMessageAdded { event ->
-            val message = event.message ?: return@onConsoleMessageAdded
+            val message = event.message
             if (message.source != ConsoleMessageSource.CONSOLE_API) {
                 // Only page `console.*` calls, matching the buffer this replaces (network/security
                 // entries would otherwise show up as console messages).
                 return@onConsoleMessageAdded
             }
-            consoleBuffer.add(message.level?.name, message.text)
+            if (consoleBuffer.add(message.level.name, message.text) && !consoleCaptureConfirmed) {
+                consoleCaptureConfirmed = true
+                // A relay can accept Console.enable and never deliver events; this line is the only
+                // evidence in the log that the capture is actually working on this transport.
+                logger.debug("Console message capture is live on this driver")
+            }
         }
 
         return true

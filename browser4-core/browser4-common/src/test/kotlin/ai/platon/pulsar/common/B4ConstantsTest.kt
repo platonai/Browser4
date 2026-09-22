@@ -34,4 +34,13 @@ class B4ConstantsTest {
     fun contextConfigLocationIsExpected() {
         assertEquals("classpath:browser4-beans/app-context.xml", B4Constants.BROWSER4_CONTEXT_CONFIG_LOCATION)
     }
+
+    @Test
+    @DisplayName("the console capture key and its default are pinned")
+    fun consoleCaptureKeyAndDefaultArePinned() {
+        assertEquals("browser.console.capture", B4Constants.CONSOLE_CAPTURE_CDP)
+        // The CDP capture stays the default: flipping it silently would change whether the
+        // `console` command touches the page world, which is what the key exists to decide.
+        assertEquals(true, B4Constants.CONSOLE_CAPTURE_CDP_DEFAULT)
+    }
 }
