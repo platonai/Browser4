@@ -824,6 +824,193 @@ class CrawlSupportTest {
     }
 
     // ------------------------------------------------------------------
+    // delivery attempts: resolveDeliveryAttempt / lossReasonForLoaded
+    // ------------------------------------------------------------------
+
+    /** The facts of a load that went well and delivered content, unless changed. */
+    private fun facts(
+        url: String = "https://example.com/page.html",
+        fetched: Boolean = true,
+        canceled: Boolean = false,
+        nil: Boolean = false,
+        retry: Boolean = false,
+        failed: Boolean = false,
+        success: Boolean = true,
+        statusCode: Int = 200,
+        statusReason: String? = null,
+        contentLength: Long = 1024,
+    ) = LoadedPageFacts(
+        url, fetched, canceled, nil, retry, failed, success, statusCode, statusReason, contentLength
+    )
+
+    @Test
+    @DisplayName("a load that delivered no document is retried once, and its loss is not settled yet")
+    fun testDeliveryFailureIsRetriedOnce() {
+        val ledger = CrawlLedger("t-retry")
+        val url = "https://example.com/flaky.html"
+        ledger.submit(url, 1)
+        val attempt = ledger.beginAttempt(url)
+        // The parse event saw the load and carried an empty document.  That is what this call
+        // is handed; it is also what tells it "a parse event fired and delivered nothing".
+        val emptyDeliveries = mutableSetOf(normalizeForVisit(url))
+
+        val next = resolveDeliveryAttempt(
+            ledger, url, 1, attempt, facts(url = url, contentLength = 0), emptyDeliveries
+        )
+
+        assertEquals(2L, next, "the first delivery failure is worth one more load")
+        assertEquals(0, ledger.settled, "nothing is settled while the retry is on its way")
+        assertEquals(1, ledger.pagesExpected, "a retry is not another page")
+        assertTrue(ledger.failedPages().isEmpty(), "the withdrawn loss is not reported")
+        assertFalse(ledger.isComplete)
+        assertTrue(ledger.isCurrentAttempt(url, requireNotNull(next)))
+    }
+
+    @Test
+    @DisplayName("a retry that also delivered nothing is reported as lost")
+    fun testSecondFailureIsReportedAsLost() {
+        val ledger = CrawlLedger("t-retry-lost")
+        val url = "https://example.com/flaky.html"
+        ledger.submit(url, 1)
+        ledger.beginAttempt(url)
+        val retry = requireNotNull(ledger.startRetry(url))
+
+        val next = resolveDeliveryAttempt(
+            ledger, url, 1, retry, facts(url = url, contentLength = 0), mutableSetOf(normalizeForVisit(url))
+        )
+
+        assertNull(next, "the URL has no attempt left")
+        assertEquals(1, ledger.settled)
+        val lost = ledger.failedPages().single()
+        assertEquals(CrawlLedger.REASON_NOT_DELIVERED, lost.reason)
+        assertEquals(url, lost.url)
+        assertEquals(1, lost.depth)
+    }
+
+    @Test
+    @DisplayName("a load the engine is still retrying is waited for, never retried by the crawl")
+    fun testEngineScheduledRetryIsWaitedFor() {
+        val ledger = CrawlLedger("t-engine-retry")
+        val url = "https://example.com/flaky.html"
+        ledger.submit(url, 1)
+        val attempt = ledger.beginAttempt(url)
+
+        // A failed fetch the engine classifies as retryable comes back with a retry status, and
+        // the engine schedules the next load itself (37-45s later, as the probe runs show).  The
+        // crawl must neither settle the URL nor spend an attempt of its own on it.
+        val next = resolveDeliveryAttempt(
+            ledger, url, 1, attempt,
+            facts(url = url, fetched = false, success = false, retry = true, statusCode = 1601),
+            mutableSetOf()
+        )
+
+        assertNull(next)
+        assertEquals(0, ledger.settled)
+        assertEquals(1, ledger.attemptCount(url), "the second load is the engine's, not the crawl's")
+        assertTrue(ledger.failedPages().isEmpty())
+        assertFalse(ledger.isComplete, "the round keeps waiting for the load the engine scheduled")
+    }
+
+    @Test
+    @DisplayName("an attempt a retry has superseded settles nothing")
+    fun testSupersededAttemptSettlesNothing() {
+        val ledger = CrawlLedger("t-stale-attempt")
+        val url = "https://example.com/flaky.html"
+        ledger.submit(url, 1)
+        val first = ledger.beginAttempt(url)
+        val retry = requireNotNull(ledger.startRetry(url))
+
+        // The failed attempt's load event arrives after the retry was submitted.
+        val next = resolveDeliveryAttempt(
+            ledger, url, 1, first, facts(url = url, contentLength = 0), mutableSetOf(normalizeForVisit(url))
+        )
+
+        assertNull(next)
+        assertEquals(0, ledger.settled, "the retry's URL is still outstanding")
+        assertTrue(ledger.failedPages().isEmpty())
+        assertTrue(ledger.isCurrentAttempt(url, retry))
+    }
+
+    @Test
+    @DisplayName("a terminal fetch failure is retried once, and the retry's own reason is reported")
+    fun testTerminalFetchFailureIsRetriedOnce() {
+        val ledger = CrawlLedger("t-fetch-failed")
+        val url = "https://example.com/dead.html"
+        ledger.submit(url, 1)
+        val attempt = ledger.beginAttempt(url)
+        // The engine classified this one as failed, so no retry of its own is coming and no
+        // parse event ever fired.
+        val page = facts(
+            url = url, fetched = false, success = false, failed = true,
+            statusCode = 1604, statusReason = "not found", contentLength = 0
+        )
+
+        val retry = resolveDeliveryAttempt(ledger, url, 1, attempt, page, mutableSetOf())
+
+        assertEquals(2L, retry, "a finished failure is still worth one more load")
+        assertEquals(0, ledger.settled, "the loss is withdrawn while the retry runs")
+        assertTrue(ledger.failedPages().isEmpty())
+
+        // The retry fails the same way: now it is reported, with the reason of the attempt that
+        // actually settled the URL.
+        val next = resolveDeliveryAttempt(ledger, url, 1, requireNotNull(retry), page, mutableSetOf())
+
+        assertNull(next)
+        val lost = ledger.failedPages().single()
+        assertEquals("not found", lost.reason)
+        assertEquals(1604, lost.protocolStatus)
+    }
+
+    @Test
+    @DisplayName("a page that arrived but never reached the parser is reported, not re-fetched")
+    fun testPageWithoutParseEventIsNotRefetched() {
+        val ledger = CrawlLedger("t-not-parsed")
+        val url = "https://example.com/no-parse.html"
+        ledger.submit(url, 1)
+        val attempt = ledger.beginAttempt(url)
+
+        val next = resolveDeliveryAttempt(ledger, url, 1, attempt, facts(url = url), mutableSetOf())
+
+        assertNull(next, "the content is already here: loading it again buys nothing")
+        assertEquals(1, ledger.attemptCount(url))
+        assertEquals(CrawlLedger.REASON_NOT_PARSED, ledger.failedPages().single().reason)
+    }
+
+    @Test
+    @DisplayName("a zero-byte page that never reached the parser is a delivery failure, so it is retried")
+    fun testZeroBytePageWithoutParseEventIsRetried() {
+        val ledger = CrawlLedger("t-zero-byte")
+        val url = "https://example.com/zero.html"
+        ledger.submit(url, 1)
+        val attempt = ledger.beginAttempt(url)
+
+        val next = resolveDeliveryAttempt(
+            ledger, url, 1, attempt, facts(url = url, contentLength = 0), mutableSetOf()
+        )
+
+        assertEquals(2L, next, "nothing arrived, whatever the status said")
+        assertEquals(0, ledger.settled)
+        assertTrue(ledger.failedPages().isEmpty())
+    }
+
+    @Test
+    @DisplayName("a page whose row was recorded settles nothing, however late its load event is")
+    fun testDeliveredPageSettlesNothing() {
+        val ledger = CrawlLedger("t-delivered")
+        val url = "https://example.com/ok.html"
+        ledger.submit(url, 1)
+        val attempt = ledger.beginAttempt(url)
+        ledger.recordSuccess(url)
+
+        val next = resolveDeliveryAttempt(ledger, url, 1, attempt, facts(url = url), mutableSetOf())
+
+        assertNull(next)
+        assertEquals(1, ledger.settled)
+        assertTrue(ledger.failedPages().isEmpty())
+        assertTrue(ledger.isComplete)
+    }
+
+    // ------------------------------------------------------------------
     // buildLossNote
     // ------------------------------------------------------------------
 

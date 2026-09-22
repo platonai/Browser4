@@ -10,6 +10,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import org.slf4j.LoggerFactory
 import java.time.Duration
 import java.time.Instant
 
@@ -308,6 +309,179 @@ internal fun isDocumentDelivered(fetched: Boolean, html: String?, storeServed: B
  * only one allowed to treat that as a delivered page (see [isDocumentDelivered]).
  */
 internal fun isReadOnlyStoreServe(page: WebPage, readonly: Boolean): Boolean = readonly && page.isCached
+
+/**
+ * The facts about a finished load that decide what the crawl does with the page it asked
+ * for, and eventually lose it.
+ *
+ * Captured into a value on purpose: the delivery rules below are then plain functions of a
+ * ledger and these fields, which is what makes them testable without a browser, a session or
+ * a mocked engine type.  The engine's own status vocabulary is read exactly once, in
+ * [loadedPageFacts].
+ */
+internal data class LoadedPageFacts(
+    val url: String,
+    val isFetched: Boolean,
+    val isCanceled: Boolean,
+    val isNil: Boolean,
+    val isRetry: Boolean,
+    val isFailed: Boolean,
+    val isSuccess: Boolean,
+    val statusCode: Int,
+    val statusReason: String?,
+    val contentLength: Long,
+)
+
+/** Read the delivery-relevant facts of a load; null when the load produced no page at all. */
+internal fun loadedPageFacts(page: WebPage?): LoadedPageFacts? {
+    if (page == null) return null
+    val status = page.protocolStatus
+    return LoadedPageFacts(
+        url = page.url,
+        isFetched = page.isFetched,
+        isCanceled = page.isCanceled,
+        isNil = page.isNil,
+        isRetry = status.isRetry,
+        isFailed = status.isFailed,
+        isSuccess = status.isSuccess,
+        statusCode = status.minorCode,
+        statusReason = status.reason?.toString(),
+        contentLength = page.contentLength
+    )
+}
+
+/**
+ * Why a completed load left the crawl without a row for [submittedUrl].
+ *
+ * Without this, a fetch that fails is invisible to the crawl: the parse event never fires, so
+ * the completion wait can never learn that the page is not coming, and the URL simply
+ * disappears from the result (issue #592).  The classification mirrors
+ * `XSQLHyperlink.CrawlEventHandlers`, the established reading of these states here:
+ *
+ *  * a retry/canceled status means the page is still in flight — report nothing, so the
+ *    round keeps waiting for the attempt that finally lands;
+ *  * `!isFetched` alone is NOT a failure: a page served from the page store (`-readonly`
+ *    without `-refresh`) legitimately completes with content while `isFetched` stays false;
+ *  * a successful load is settled by the parse event that records its row, and the load event
+ *    fires *after* it — so a success no row was recorded for will never produce one and is
+ *    reported here instead of letting the round wait out its whole timeout.
+ *
+ * @return the reason to report, or null when there is nothing to report.
+ */
+internal fun lossReasonForLoaded(ledger: CrawlLedger, submittedUrl: String, page: LoadedPageFacts?): String? {
+    if (page == null) return CrawlLedger.REASON_NEVER_FETCHED
+    return when {
+        page.isCanceled || page.isRetry -> null
+
+        page.isNil -> CrawlLedger.REASON_NEVER_FETCHED
+
+        page.isFailed -> page.statusReason ?: CrawlLedger.REASON_FETCH_FAILED
+
+        !page.isFetched && !page.isSuccess -> CrawlLedger.REASON_NEVER_FETCHED
+
+        !ledger.isRecordedSuccess(submittedUrl) && !ledger.isRecordedSuccess(page.url) ->
+            CrawlLedger.REASON_NOT_PARSED
+
+        else -> null
+    }
+}
+
+/**
+ * Decide what happens to the delivery attempt [token] of [url] once its load is over: settle
+ * the URL, or claim one more load of it.
+ *
+ * The loss of a page is decided here and not in the parse event, because this is the only
+ * place that knows *which* attempt it is looking at — the token — and that a load which
+ * delivered no document (the parse event fired, the document was empty: a zero-byte response,
+ * or a stored copy substituted for a failed fetch) may still be worth one more load.
+ * Everything a superseded attempt reports is ignored: its URL is already being loaded again,
+ * and settling it here would report the loss that retry is about to disprove.
+ *
+ * The order matters: the retry is claimed *before* the failure is recorded, because a
+ * recorded loss can complete the round (when this was its last outstanding URL, which is the
+ * single-page case), and a completed round refuses the retry this very call was about to
+ * submit.
+ *
+ * @param emptyDeliveries URLs whose parse event carried no document; this attempt's entry is
+ *   consumed here.
+ * @return the attempt token to load [url] again under, or null when this attempt is settled
+ *   (or still in flight and about to decide for itself).
+ */
+internal fun resolveDeliveryAttempt(
+    ledger: CrawlLedger,
+    url: String,
+    depth: Int,
+    token: Long,
+    page: LoadedPageFacts?,
+    emptyDeliveries: MutableSet<String>
+): Long? {
+    if (ledger.isTerminal || !ledger.isCurrentAttempt(url, token)) return null
+    // The row this URL was waiting for exists: a duplicate event of an earlier attempt must
+    // not settle it a second time.
+    if (ledger.isRecordedSuccess(url)) return null
+
+    // The engine is still working on this URL (a retry/canceled status): settle nothing.  Its
+    // own scheduled retry is the second load, and the round waits for it.
+    if (page != null && (page.isCanceled || page.isRetry)) return null
+
+    val empty = emptyDeliveries.remove(normalizeForVisit(url))
+    // A load that produced a parse event carries the loss the parse event saw; one that
+    // produced none is classified from its own status.
+    val reason = if (empty) CrawlLedger.REASON_NOT_DELIVERED else lossReasonForLoaded(ledger, url, page)
+    // A page that arrived but never reached the parser is not a *delivery* failure: the content
+    // is there, and loading it again would fetch the same bytes twice.  A page with no content
+    // at all is the exception — a zero-byte response that no parse event followed either, which
+    // is a delivery failure the retry can clear.
+    if (reason == CrawlLedger.REASON_NOT_PARSED && (page?.contentLength ?: 0) > 0) {
+        ledger.recordFailure(url, depth, page?.statusCode ?: 0, reason)
+        return null
+    }
+    if (reason == null) return null
+
+    claimDeliveryRetry(ledger, url, token, page)?.let { return it }
+
+    if (empty) {
+        logger.warn(
+            "Crawl {}: the load of '{}' returned no document (fetched={}, status={}, contentLength={}) " +
+                "on attempt {}; reporting it as lost",
+            ledger.taskId, url, page?.isFetched, page?.statusCode, page?.contentLength, token
+        )
+    }
+    ledger.recordFailure(url, depth, page?.statusCode ?: 0, reason)
+    return null
+}
+
+/**
+ * Claim one more load of [url], when a second load can still change the outcome and the URL
+ * has an attempt to spend ([CrawlLedger.startRetry]).
+ *
+ * Every failure that reaches this point is retried once, whatever its protocol status, because
+ * the engine's *own* retry has already been accounted for: a status the engine considers
+ * retryable (`isRetry`) never gets here — it keeps the URL in flight and the round waits for
+ * the attempt the engine scheduled.  What is left is a load the engine considers finished and
+ * the crawl did not receive: a dropped task, a fetch that failed for good, or a stored copy
+ * substituted for a failed fetch.  One more load of a page the caller asked for is cheap next
+ * to reporting it lost, and if it fails too, its status is what the loss report carries.
+ *
+ * @return the token of the new attempt, or null when the URL is out of attempts.
+ */
+internal fun claimDeliveryRetry(
+    ledger: CrawlLedger,
+    url: String,
+    token: Long,
+    page: LoadedPageFacts?
+): Long? {
+    val next = ledger.startRetry(url) ?: return null
+    logger.warn(
+        "Crawl {}: '{}' delivered nothing on attempt {} (fetched={}, status={}, contentLength={}); " +
+            "loading it once more (attempt {})",
+        ledger.taskId, url, token, page?.isFetched, page?.statusCode ?: 0, page?.contentLength, next
+    )
+    return next
+}
+
+/** Logger for the delivery rules above; they run outside the round runner. */
+private val logger = LoggerFactory.getLogger("ai.platon.pulsar.rest.api.service.crawl.CrawlDelivery")
 
 /**
  * Extract the <title> text from raw HTML when [FeaturedDocument.title]

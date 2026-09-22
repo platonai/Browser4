@@ -278,6 +278,13 @@ internal class CrawlRoundRunner(
             // can appear twice in the listing and the crawl can complete
             // before every page has been collected.
             val recorded = ConcurrentHashMap.newKeySet<String>()
+            // Submitted URLs whose parse event carried no document.  The parse event
+            // is where a delivery failure becomes visible, but not where the loss is
+            // decided: the attempt may be worth one more load, and the load event of
+            // *that* attempt carries the attempt token and the protocol status the
+            // decision needs.  Nothing is settled here — the marker only tells the
+            // load event that a parse event fired and delivered nothing.
+            val emptyDeliveries = ConcurrentHashMap.newKeySet<String>()
 
             // Submit each out-link as a ParsableHyperlink so we can collect results.
             // Include -refresh so each out-link is fetched fresh — without it, internal
@@ -286,7 +293,13 @@ internal class CrawlRoundRunner(
             // forwarded by buildLinkArgs for the same reason: a discovered page is
             // loaded by the session, which only knows what these args tell it.
             val linkArgs = buildLinkArgs(options, expandable = false)
-            outLinks.forEach { linkUrl ->
+
+            /**
+             * Load [linkUrl] once, under [token] — the first attempt, or the retry a
+             * failed attempt was granted.  Local so the load event can submit the same
+             * URL again under the token that retry claimed ([resolveDeliveryAttempt]).
+             */
+            fun submitAttempt(linkUrl: String, token: Long) {
                 val onParse = parse@{ _page: WebPage, _document: FeaturedDocument ->
                     if (!ledger.enter()) {
                         logger.debug(
@@ -306,18 +319,17 @@ internal class CrawlRoundRunner(
                                 _page.isFetched, _document.html, isReadOnlyStoreServe(_page, options.readonly)
                             )
                         ) {
-                            logger.warn(
+                            logger.debug(
                                 "Crawl {}: the load of '{}' returned no document (fetched={}, status={}, " +
-                                "contentLength={}); reporting it as lost",
+                                    "contentLength={}); leaving this attempt to its load event",
                                 taskId, linkUrl, _page.isFetched, _page.protocolStatus.minorCode, _page.contentLength
                             )
-                            ledger.recordFailure(
-                                linkUrl, 1, _page.protocolStatus.minorCode, CrawlLedger.REASON_NOT_DELIVERED
-                            )
+                            emptyDeliveries.add(normalizeForVisit(linkUrl))
                             return@parse null
                         }
                         // Only the first parse event for a URL records the result
                         // and settles the URL; duplicates are dropped.
+                        emptyDeliveries.remove(normalizeForVisit(linkUrl))
                         if (recorded.add(normalizeForVisit(linkUrl))) {
                             val extractionResult = if (request.sql != null) {
                                 executeCrawlSqlQuery(session, linkUrl, request.sql, _page, _document)
@@ -363,13 +375,34 @@ internal class CrawlRoundRunner(
                 val hyperlink = ParsableHyperlink("$linkUrl $linkArgs", onParse)
                 // A fetch that never fires a parse event (retry budget exhausted,
                 // dropped task, terminal 4xx/5xx) is settled here instead of
-                // vanishing from the result.
+                // vanishing from the result — and a load that delivered nothing gets
+                // its one retry here, while the URL is still outstanding.
                 hyperlink.eventHandlers.crawlEventHandlers.onLoaded.addLast { _, loaded ->
-                    settleFromLoaded(ledger, linkUrl, 1, loaded)
+                    // This event can submit the retry, so it holds the round open exactly
+                    // like a parse handler does: a round that completed here would report
+                    // the loss and then refuse the retry it had just decided on.
+                    if (ledger.enter()) {
+                        try {
+                            resolveDeliveryAttempt(ledger, linkUrl, 1, token, loadedPageFacts(loaded), emptyDeliveries)?.let { next ->
+                                submitAttempt(linkUrl, next)
+                            }
+                        } finally {
+                            ledger.leave()
+                        }
+                    }
                     null
                 }
-                ledger.submit(linkUrl, 1)
                 session.submit(hyperlink)
+            }
+
+            outLinks.forEach { linkUrl ->
+                // Register before submitting: a page that settles faster than it is
+                // counted would end the round.
+                if (ledger.submit(linkUrl, 1)) {
+                    submitAttempt(linkUrl, ledger.beginAttempt(linkUrl))
+                } else {
+                    logger.debug("Crawl {}: not submitting '{}' — the URL is already queued", taskId, linkUrl)
+                }
             }
 
             // Wait until every submitted out-page settled (per-crawl, not global).
@@ -473,9 +506,20 @@ internal class CrawlRoundRunner(
             // pages that discover the same child cannot both pass the check and
             // submit it twice.
             val discoveryLock = Any()
+            // Submitted URLs whose parse event carried no document.  The parse event is
+            // where a delivery failure becomes visible, but not where the loss is
+            // decided: the attempt may be worth one more load, and the load event of
+            // *that* attempt carries the attempt token and the protocol status the
+            // decision needs.  Nothing is settled here — the marker only tells the load
+            // event that a parse event fired and delivered nothing.
+            val emptyDeliveries = ConcurrentHashMap.newKeySet<String>()
 
             // Use lateinit to allow recursive reference within the parse handler
             lateinit var parseHandler: (WebPage, FeaturedDocument) -> Any?
+            // (url, depth, attempt token) -> one load of that URL.  Both the parse
+            // handler (children) and the seed submit through it, and so does the load
+            // event that re-submits a page whose attempt delivered nothing.
+            lateinit var submitAttempt: (String, Int, Long) -> Unit
 
             parseHandler = crawlParse@{ page: WebPage, document: FeaturedDocument ->
                 // The submission is the identity this crawl owns: `page.url` is the
@@ -527,18 +571,16 @@ internal class CrawlRoundRunner(
                 // resolveRoundArgs), so a page the store answered counts as delivered
                 // and is recorded with its age (see storeServeMarkers).
                 if (!isDocumentDelivered(page.isFetched, document.html, isReadOnlyStoreServe(page, options.readonly))) {
-                    logger.warn(
+                    logger.debug(
                         "Crawl {}: the load of '{}' (submitted as '{}') returned no document " +
-                        "(fetched={}, status={}, contentLength={}); reporting it as lost",
+                        "(fetched={}, status={}, contentLength={}); leaving this attempt to its load event",
                         taskId, servedUrl, page.url, page.isFetched,
                         page.protocolStatus.minorCode, page.contentLength
                     )
-                    ledger.recordFailure(
-                        page.url, currentDepth ?: UNKNOWN_DEPTH, page.protocolStatus.minorCode,
-                        CrawlLedger.REASON_NOT_DELIVERED
-                    )
+                    emptyDeliveries.add(key)
                     return@crawlParse null
                 }
+                emptyDeliveries.remove(key)
 
                 // First parse event for this URL owns the result entry and the
                 // completion tick.  Later events (re-parses of the same page) only
@@ -628,17 +670,8 @@ internal class CrawlRoundRunner(
                         if (newLinks.isNotEmpty()) {
                             linksDiscovered.addAndGet(newLinks.size)
                             val childDepth = currentDepth + 1
-                            val args = buildLinkArgs(options, expandable = true)
                             newLinks.forEach { link ->
                                 depths[normalizeForVisit(link)] = childDepth
-                                val hyperlink = ParsableHyperlink("$link $args", parseHandler)
-                                // A fetch that never fires a parse event (retry
-                                // budget exhausted, dropped task, terminal
-                                // 4xx/5xx) is settled here instead of vanishing.
-                                hyperlink.eventHandlers.crawlEventHandlers.onLoaded.addLast { _, loaded ->
-                                    settleFromLoaded(ledger, link, childDepth, loaded)
-                                    null
-                                }
                                 // Register before submitting: a page that settles
                                 // faster than it is counted would end the round.
                                 // `submit` refuses once the round is terminal and
@@ -646,7 +679,7 @@ internal class CrawlRoundRunner(
                                 // handed to the session for a task the caller has
                                 // already been told is finished (issue #592).
                                 if (ledger.submit(link, childDepth)) {
-                                    session.submit(hyperlink)
+                                    submitAttempt(link, childDepth, ledger.beginAttempt(link))
                                 } else {
                                     logger.debug(
                                         "Crawl {}: not submitting '{}' — the round is complete or the URL is already queued",
@@ -705,16 +738,34 @@ internal class CrawlRoundRunner(
                 }
             } // parseHandler defined
 
+            submitAttempt = { url, depth, token ->
+                val hyperlink = ParsableHyperlink("$url ${buildLinkArgs(options, expandable = true)}", parseHandler)
+                // A fetch that never fires a parse event (retry budget exhausted,
+                // dropped task, terminal 4xx/5xx) is settled here instead of vanishing
+                // from the result — and a load that delivered nothing is retried here
+                // once, while its URL is still outstanding.
+                hyperlink.eventHandlers.crawlEventHandlers.onLoaded.addLast { _, loaded ->
+                    // This event can submit the retry, so it holds the round open exactly
+                    // like a parse handler does: a round that completed here would report
+                    // the loss and then refuse the retry it had just decided on.
+                    if (ledger.enter()) {
+                        try {
+                            resolveDeliveryAttempt(ledger, url, depth, token, loadedPageFacts(loaded), emptyDeliveries)?.let { next ->
+                                submitAttempt(url, depth, next)
+                            }
+                        } finally {
+                            ledger.leave()
+                        }
+                    }
+                    null
+                }
+                session.submit(hyperlink)
+            }
+
             // Submit the seed URL (depth 0 — it is the starting page).
             val seedKey = normalizeForVisit(request.url)
             visited.add(seedKey)
             depths[seedKey] = 0
-            val seedArgs = buildLinkArgs(options, expandable = true)
-            val seedHyperlink = ParsableHyperlink("${request.url} $seedArgs", parseHandler)
-            seedHyperlink.eventHandlers.crawlEventHandlers.onLoaded.addLast { _, loaded ->
-                settleFromLoaded(ledger, request.url, 0, loaded)
-                null
-            }
             // A refused seed submission must not be followed by a wait for a page
             // that was never queued.  (Nothing can make the ledger terminal this
             // early, so this is a guard, not a path.)
@@ -722,7 +773,7 @@ internal class CrawlRoundRunner(
                 logger.warn("Crawl {}: the seed URL '{}' was not queued; ending the round", taskId, request.url)
                 return CrawlRound(pages = emptyList(), pagesExpected = 0)
             }
-            session.submit(seedHyperlink)
+            submitAttempt(request.url, 0, ledger.beginAttempt(request.url))
 
             // Wait until every submitted URL settled (per-crawl completion, not
             // global).  The budget is the task's remaining budget, never
@@ -877,56 +928,6 @@ internal class CrawlRoundRunner(
             session.options()
         } else {
             session.options(args)
-        }
-    }
-
-    /**
-     * Settle a submitted URL from the crawl `onLoaded` event, which fires for
-     * every load attempt — including the ones that no parse event ever follows.
-     *
-     * Without this, a fetch that fails is invisible to the crawl: the parse
-     * event never fires, so the completion wait can never learn that the page
-     * is not coming, and the URL simply disappears from the result (issue
-     * #592).  Classification mirrors `XSQLHyperlink.CrawlEventHandlers`, which
-     * is the established reading of these states in this codebase:
-     *
-     *  * a retry/canceled status means the page is still in flight — settle
-     *    nothing, so the round keeps waiting for the attempt that finally lands;
-     *  * `!isFetched` alone is NOT a failure: a page served from the page store
-     *    (`-readonly` without `-refresh`) legitimately completes with content
-     *    while `isFetched` stays false.
-     */
-    private fun settleFromLoaded(ledger: CrawlLedger, submittedUrl: String, depth: Int, page: WebPage?) {
-        if (ledger.isTerminal) return
-        if (page == null) {
-            ledger.recordFailure(submittedUrl, depth, 0, CrawlLedger.REASON_NEVER_FETCHED)
-            return
-        }
-        val status = page.protocolStatus
-        when {
-            page.isCanceled || status.isRetry -> Unit
-
-            page.isNil -> ledger.recordFailure(
-                submittedUrl, depth, status.minorCode, CrawlLedger.REASON_NEVER_FETCHED
-            )
-
-            status.isFailed -> ledger.recordFailure(
-                submittedUrl, depth, status.minorCode,
-                status.reason?.toString() ?: CrawlLedger.REASON_FETCH_FAILED
-            )
-
-            !page.isFetched && !status.isSuccess -> ledger.recordFailure(
-                submittedUrl, depth, status.minorCode, CrawlLedger.REASON_NEVER_FETCHED
-            )
-
-            // A successful load is settled by the parse event that records its
-            // row, and `onLoaded` fires *after* that event.  A success no row was
-            // recorded for will never produce one, so report it instead of
-            // letting the round wait out its whole timeout.
-            !ledger.isRecordedSuccess(submittedUrl) && !ledger.isRecordedSuccess(page.url) ->
-                ledger.recordFailure(submittedUrl, depth, status.minorCode, CrawlLedger.REASON_NOT_PARSED)
-
-            else -> Unit
         }
     }
 

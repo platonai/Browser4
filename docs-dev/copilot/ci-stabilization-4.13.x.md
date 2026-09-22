@@ -1020,9 +1020,11 @@ crawl 强制 `-refresh`，所以这条用例今天只会走 "verified fresh" 分
   与 `CrawlFixtureMetadataTest` 的 store-serve 分支都是死代码。**决策（用户，§25）：`--readonly` 优先于
   `--refresh`** —— 不是"没要 refresh 才不补"，而是"要了 readonly 就把 refresh 擦掉"，因为 readonly 只服务于
   X-SQL 引擎的第二次读，那一次读的语义就是"读本地缓存"。实现见 §25.2，日志证据见 §25.5。
-* **失败抓取的重试**：本轮只把"没抓到"如实报成丢失，没有加重试。`crawlDepth0` 有 `MAX_FETCH_RETRIES`，
+* **（§26 已做）失败抓取的重试**：本轮只把"没抓到"如实报成丢失，没有加重试。`crawlDepth0` 有 `MAX_FETCH_RETRIES`，
   两个链接发现路径没有。"交付失败即重投一次"需要在 ledger 上开一个"尝试中、仍未结算"的口子
   （现有的 `enter/leave` + `settle()` 恰好一次语义会被重复结算破坏），属于独立一轮。
+  §26 就是这么做的：attempt token + `startRetry` 撤单式重投，唯一的重投机会只花在**引擎判为终局、
+  而 crawl 没拿到**的失败上（引擎自己的重投由 `isRetry` 让路，见 §26.4）。
 * 触发这次退化的**根因**（浏览器在持续 crawl 负载下变得不可用：`BrowserUnavailableException`、
   `Timeout to wait for document ready`）在引擎/驱动池一侧，本轮没有动 —— 本轮只是让它不再伪装成一行。
 
@@ -1692,6 +1694,102 @@ INFO LoadComponent.Task - 134. 💯 ⚡ U for N got 200 2.1953125 KiB [💿2.195
   情形——按语义那是允许的（readonly 只承诺"可以读本地"，不承诺"必须新鲜"），但如果将来要保证
   X-SQL 的第一次读一定新鲜，得由 crawl 侧（而非引擎侧）显式要求，这里留个明确边界。
 * §18.5 第 2 条（送达失败后重试）仍未做：需要 ledger 暴露"在途尝试"这一层，属于独立改动。
+
+
+## 26. 送达失败即重投一次：给 ledger 开一个"在途尝试"的口子（4.13.x，§18.5 第 2 条）
+
+§18.5 第 2 条记的是"本轮只把'没抓到'如实报成丢失，没有加重试"。这一轮补上：一次投递失败之后**再加载
+一次同一个 URL**，而且这一轮的 row 由重投那一次产生。
+
+### 26.1 为什么不能简单"再 submit 一遍"
+
+原来丢页是在 **parse 事件**里结算的（`recordFailure(... REASON_NOT_DELIVERED)`），而重投必须发生在
+**load 事件**里：只有那里同时握着这次尝试的 token 与协议状态。三层原因，每一层单独都会让"朴素重投"出错：
+
+* `onLoaded` 在 parse **之后**触发（代码里写明的顺序）。parse 已经把 URL 结算成失败，轮次就可能在
+  load 事件跑到之前 `complete()`；一旦 terminal，重投只能被拒 —— 结果是"刚决定要重投、又立刻报告丢失"。
+  单页 crawl 必然踩中这一条，所以现在的顺序是**先认领重投、再记录失败**，并且 load 事件用
+  `enter()/leave()` 持有轮次（它可能提交重投，和 parse 处理器一样必须让轮次保持未完成）。
+* ledger 的结算语义是"每个提交 URL 恰好一次"，`recordFailure` 靠 `failedKeys` 幂等。重投意味着同一个
+  URL 要有第二次结算机会，于是需要显式**撤单**：撤回失败记录、把结算数还回去。
+* 旧尝试的事件在重投期间还会继续到达（重复的 parse 事件、跟在 parse 后面的 load 事件）。它们必须
+  **什么都结算不了**，否则重投的 row 会变成第二次结算，撞上 ledger 的 over-count 守卫（"响亮地"提前
+  结束轮次）。
+
+### 26.2 ledger：attempt token + 撤单式重投
+
+`CrawlLedger(taskId, maxDeliveryAttempts = 2)`（首次 + 一次重投）新增三个方法：
+
+| 方法 | 作用 |
+|---|---|
+| `beginAttempt(url): Long` | 每次**提交**（首次或重投）开一个尝试，返回 token |
+| `isCurrentAttempt(url, token)` | token 是否仍是该 URL 最新的尝试——被取代的尝试据此自我否决 |
+| `startRetry(url): Long?` | 原子地花掉一次重投预算；**并把已结算的失败撤单**（撤回记录 + 归还 settled 计数），返回新 token；预算用完或轮次已终止则返回 null |
+
+`pagesExpected` 不变：一个 URL 提交过一次，就仍然只值一页。
+
+### 26.3 回合内：parse 只负责"看见"，load 负责"决定"
+
+两条丢页路径（`crawlDepth1` 的外链、`crawlDepthN` 的发现子页）现在共用同一套流程：
+
+1. 提交时 `ledger.beginAttempt(url)` 取 token，该次提交的 parse / load 事件都闭包持有它；
+2. parse 事件发现"这次没有拿到文档"时**只打标记**（`emptyDeliveries`），不做任何结算；
+3. 该次尝试的 load 事件（`resolveDeliveryAttempt`，与 `lossReasonForLoaded` / `claimDeliveryRetry`
+   一起放在 `CrawlSupport`，输入是从 `WebPage` 抽出来的 `LoadedPageFacts`，所以可以脱离浏览器单测）
+   在做任何结算**之前**先决定要不要重投：
+   * **引擎自己还在重试的**（`isRetry` / canceled 状态）什么都不做：第二次加载是引擎排的，轮次只要等它；
+   * 其余的失败一律重投一次（预算在 ledger 里），不按协议状态挑 —— 见 §26.4 的探针证据；
+   * "内容到了但 parse 没触发"（`REASON_NOT_PARSED` 且 `contentLength > 0`）不算投递失败，不重投；
+     而 `contentLength == 0` 的那种（0 字节响应、连 parse 都没跟上）仍然算 —— 重投正是冲它去的；
+4. 重投也失败时照旧报丢失，措辞保持原样：`... reporting it as lost`（多带上 `on attempt N`）。
+
+### 26.4 探针：失败答案该长什么样（两次否证）
+
+`ConcurrencyProbeController` 新增两个端点 + 一处计数：
+
+* `GET /__probe/flaky/{id}?failures=N&status=500`：前 N 次用 `status` 应答，之后回真页面；每个 id 的命中
+  次数进 `/stats` 的 `flakyHits`（`/reset` 一并清零）。
+* `GET /__probe/flaky-hub/{id}?links=N&failures=N`：门户本身永远有内容，只有它链出去的子页会失败
+  （门户失败会走"0 外链诊断"那条路，测不到投递）。`failures` 只作用于子页——第一版把它同时用在自己身上，
+  深度-2 用例传 `failures=0` 时子页也就从不失败了。
+
+站点侧计数是这里唯一的见证人：对 crawl 而言两次加载是同一个 URL，只有服务器能区分"加载了两次、
+第二次成功"与"只加载了一次"。但**失败答案本身**试了两版才站住：
+
+1. **`200` + 空 body 不行**（第一版：两条用例都红，`expected: <2> but was: <1>`）。浏览器导航到一个空响应
+   会合成为 `<html><head></head><body></body></html>` —— 日志里量到的那个 **39 B** —— `isDocumentDelivered`
+   看到 html 非空，于是"没抓到"变成了"抓到一个空壳页"（row 有了、标题为空），重投压根不存在。
+2. **`500` 和 `404` 也不行**：浏览器驱动的加载失败会落在浏览器错误页上，引擎据此判为**可重试**
+   （`1601 Retry(1601) rs: BrowserErrorPageException`），并自己排下一次加载：
+   `StreamingTaskRunner.Task - 4. 🤺 Trying 1th 37s later | ... fc:1/1 Retry(1601)`，约 37~55 s 后那次
+   `💯 🖴 ... last fetched 45s ago, fc:2` 就是它。也就是说：**这类失败根本轮不到 crawl 的重投**，
+   用它们做的用例会"不劳而获"地通过。
+
+**结论（决定实现与测试怎么分工）**：引擎自带重投，覆盖"引擎认为可重试"的失败；crawl 的重投只覆盖
+**引擎认为已经结束、而 crawl 没拿到**的失败 —— §18 记录的"存储副本顶替了一次失败的抓取"
+（`fetched=false, status=200, contentLength=7706`）正是这一类，也是 §18.5 第 2 条真正要修的那一种。
+所以：这条规则用 `CrawlSupportTest` 的确定性单测钉住（含"引擎在重试时什么都不做"这一条），端到端那条
+用例改为钉**契约**——"第一次加载失败的页面最终仍被交付、且绝不报成丢失"，无论第二次加载是引擎排的还是
+crawl 排的。
+
+### 26.5 验证
+
+| 层 | 证据 | 结果 |
+|---|---|---|
+| 单测 · ledger | `CrawlLedgerTest` 14 → **18**：重投预算、撤单（失败撤回 + settled 归还）、被取代的尝试、轮次已终止时拒绝重投 | **18 / 0 / 0** |
+| 单测 · 规则 | `CrawlSupportTest` 49 → **57**：空交付重投、二次失败报丢失、**引擎在重试时什么都不做**、被取代的尝试不结算、终局失败重投并把原因报回来、`NOT_PARSED`（有内容）不重投、0 字节要重投、已记录成功的页面不结算 | **57 / 0 / 0** |
+| 集成 · 端到端 | `CrawlDeliveryRetryTest`（新增 2 条：depth-1 外链 / depth-2 发现子页），断言站点侧"每个子页被问了两次"、row 带上交付页的标题、`0 lost` | **3 / 0 / 0，189.4 s** |
+| 日志 | `1601 Retry(1601) rs: BrowserErrorPageException` → `Trying 1th 37s later` → 45 s 后 `fc:2` 拿到 200 | 见 §26.4 |
+
+### 26.6 仍未做（本条边界）
+
+* **引擎的重投延迟是轮次预算的隐性开销**：一次失败的加载要先等 37~55 s 才等到引擎排的下一次，而这段时间
+  轮次一直在等（`isRetry` 不结算）。页数多的时候这会显著吃掉任务预算，本轮没有动 —— 那是引擎侧的调度，
+  不是 crawl 能决定的。
+* **crawl 的重投只有一次，且只覆盖引擎判为终局的失败**。要让它也接管"引擎还在重投"的情形，得先决定谁的
+  判断更可信（引擎的重试间隔可调吗？值得等吗？），属于独立一轮的决策。
+* **端到端用例钉的是契约而不是机制**：它无法区分"第二次加载是谁排的"。要区分就需要一个能产生**终局**投递
+  失败的 fixture；本轮试了 `200` 空 body、`500`、`404` 三种，前两种直接不成立、第三种被引擎接管（§26.4）。
 
 
 

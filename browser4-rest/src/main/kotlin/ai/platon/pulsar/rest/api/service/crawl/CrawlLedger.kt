@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Per-round settle bookkeeping for a link-discovery crawl.
@@ -38,12 +39,25 @@ import java.util.concurrent.atomic.AtomicInteger
  * `document.baseURI`), so settled pages are counted, never matched.  URLs are
  * tracked for *reporting* only: which submitted URLs never settled, and why.
  *
+ * A URL is not necessarily settled by its *first* load: a load that delivered no
+ * document may be retried once (see [startRetry]), which makes the failed
+ * attempt's late events stale.  Every attempt therefore carries a token
+ * ([beginAttempt]), and a settle that arrives under an older token is ignored —
+ * otherwise a duplicate event of the failed attempt would settle the URL while
+ * the retry is still in flight, and the retry's own row would then be counted a
+ * second time.
+ *
  * Threading: the ledger is safe to use from concurrent parse handlers and crawl
  * event handlers.  All completion decisions are made on atomics.
  *
  * @param taskId the crawl task id, used for logging only.
+ * @param maxDeliveryAttempts how many loads one URL may get (the first plus its
+ *   retries); the crawl passes its own budget, tests use smaller ones.
  */
-class CrawlLedger(val taskId: String = "") {
+class CrawlLedger(
+    val taskId: String = "",
+    val maxDeliveryAttempts: Int = DEFAULT_MAX_DELIVERY_ATTEMPTS
+) {
 
     companion object {
         private val logger = LoggerFactory.getLogger(CrawlLedger::class.java)
@@ -70,6 +84,18 @@ class CrawlLedger(val taskId: String = "") {
 
         /** The round ended (timeout/abort) before this page produced a document. */
         const val REASON_ROUND_ENDED = "the crawl finished before this page produced a document"
+
+        /**
+         * How many loads a URL gets by default: the first attempt plus one retry.
+         *
+         * One retry is what a *delivery* failure is worth: the second load is a
+         * fresh fetch of the same URL, which is what fixes the transient causes
+         * (a zero-byte response, a dropped task, a stored copy substituted for a
+         * failed fetch).  A third load of a URL that failed twice buys nothing but
+         * time — the round still has other pages to collect, and the loss is
+         * reportable either way.
+         */
+        const val DEFAULT_MAX_DELIVERY_ATTEMPTS = 2
     }
 
     private val submittedCount = AtomicInteger(0)
@@ -96,6 +122,9 @@ class CrawlLedger(val taskId: String = "") {
     private val succeededKeys = ConcurrentHashMap.newKeySet<String>()
 
     private val failures = ConcurrentHashMap<String, CrawlFailedPage>()
+
+    /** Submitted URL key -> the newest delivery attempt token handed out for it. */
+    private val attemptTokens = ConcurrentHashMap<String, AtomicLong>()
 
     /** How many URLs this round handed to the session (seeds included). */
     val pagesExpected: Int get() = submittedCount.get()
@@ -129,6 +158,70 @@ class CrawlLedger(val taskId: String = "") {
 
     /** Register several URLs discovered at the same depth. */
     fun submit(urls: Iterable<String>, depth: Int) = urls.forEach { submit(it, depth) }
+
+    /**
+     * Open a delivery attempt for [url] — one load of it, the first or a retry —
+     * and return its token.
+     *
+     * The token is what keeps a *stale* attempt from settling the URL: every
+     * event of an attempt (its parse event, its load event) is handled under the
+     * token it was submitted with, and [isCurrentAttempt] tells the handler
+     * whether that attempt is still the one the round is waiting for.
+     *
+     * Called once per submission, next to [submit]; a re-submission of an
+     * already-registered URL goes through [startRetry] instead.
+     */
+    fun beginAttempt(url: String): Long =
+        attemptTokens.computeIfAbsent(normalizeForVisit(url)) { AtomicLong() }.incrementAndGet()
+
+    /**
+     * True when [token] is the newest delivery attempt for [url].
+     *
+     * A URL whose first load delivered nothing gets one more attempt, and the
+     * failed attempt's events keep arriving afterwards (a duplicate parse event,
+     * the load event that fires after the parse event).  Those must settle
+     * nothing: the round is waiting for the *retry*, and settling the URL here
+     * would complete the round with a loss while its page is on its way.
+     */
+    fun isCurrentAttempt(url: String, token: Long): Boolean =
+        (attemptTokens[normalizeForVisit(url)]?.get() ?: 0L) == token
+
+    /** How many delivery attempts [url] has been given (0 when it was never loaded). */
+    fun attemptCount(url: String): Int = (attemptTokens[normalizeForVisit(url)]?.get() ?: 0L).toInt()
+
+    /**
+     * Claim one more delivery attempt for [url], after an attempt delivered
+     * nothing, and return the token of that new attempt.
+     *
+     * Two things happen here, and both are needed for the retry to be honest:
+     *
+     *  * the budget is spent **atomically**, so two duplicate events of the same
+     *    failed attempt cannot each start a retry of their own;
+     *  * a URL the failed attempt already settled as a failure is re-opened —
+     *    the failure record is withdrawn and the settlement is given back — so
+     *    the round waits for the retry's outcome instead of reporting the loss
+     *    the retry is about to disprove.  [pagesExpected] does not change: the
+     *    URL was submitted once and is still worth exactly one page.
+     *
+     * @return the new attempt's token, or null when the URL has no attempt left
+     *   (or the round is already terminal, in which case nothing is re-opened).
+     */
+    fun startRetry(url: String): Long? {
+        if (terminal.get()) return null
+        val key = normalizeForVisit(url)
+        val tokens = attemptTokens.computeIfAbsent(key) { AtomicLong() }
+        while (true) {
+            val current = tokens.get()
+            if (current >= maxDeliveryAttempts) return null
+            if (tokens.compareAndSet(current, current + 1)) {
+                if (failedKeys.remove(key)) {
+                    failures.remove(key)
+                    settledCount.decrementAndGet()
+                }
+                return current + 1
+            }
+        }
+    }
 
     /**
      * Mark that a parse handler is about to run for a page of this round.
