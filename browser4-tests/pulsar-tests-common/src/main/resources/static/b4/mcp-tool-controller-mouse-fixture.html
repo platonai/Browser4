@@ -186,7 +186,9 @@
       clickCount: 0,
       clickButton: '',
       clickPosition: null,
+      clickTrusted: null,
       doubleClickCount: 0,
+      dblclickTrusted: null,
       rightClickCount: 0,
       middleClickCount: 0,
       clickCountClicks: 0,
@@ -254,11 +256,14 @@
       S.clickCount += 1;
       S.clickButton = 'left';
       S.clickPosition = [Math.round(e.clientX), Math.round(e.clientY)];
+      // Whether the click came from real input (CDP) or a synthetic DOM dispatch.
+      S.clickTrusted = e.isTrusted;
       syncState();
     });
 
-    document.getElementById('dblclick-target').addEventListener('dblclick', function() {
+    document.getElementById('dblclick-target').addEventListener('dblclick', function(e) {
       S.doubleClickCount += 1;
+      S.dblclickTrusted = e.isTrusted;
       syncState();
     });
 

@@ -2789,3 +2789,61 @@ pub(super) fn test_mouse_pointer_jitter(ctx: &mut E2ECtx) {
 
     run_command(ctx, &["close"]);
 }
+
+/// Test that a click reaches the page as trusted input instead of a synthetic DOM event.
+///
+/// The mouse fixture records `event.isTrusted` in its click and dblclick handlers.  Upstream
+/// dispatches clicks through synthetic DOM events on Windows, which a page detects with a single
+/// `event.isTrusted` check (honeypot buttons, bot-detection beacons); the driver now prefers trusted
+/// CDP input and only falls back to the DOM path when the element cannot be clicked at its own
+/// coordinates.
+pub(super) fn test_e2e_mouse_trusted_click(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.mouse_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["resize", "1280", "900"]);
+    sleep(Duration::from_secs(1));
+
+    // ── Single click ────────────────────────────────────────────────
+    run_command(ctx, &["click", "#click-target"]);
+    wait_for_state_or_abort(
+        ctx,
+        |s| s["clickCount"].as_u64().unwrap_or(0) >= 1,
+        2_000,
+        "Expected the click to reach #click-target",
+    );
+    let state = read_interactive_state(ctx);
+    assert_eq!(
+        state["clickButton"].as_str(),
+        Some("left"),
+        "Expected a left click on #click-target, got {state}"
+    );
+    assert_eq!(
+        state["clickTrusted"].as_bool(),
+        Some(true),
+        "#click-target must receive a trusted click (isTrusted=true), got {state}"
+    );
+    // The synthetic path dispatches the event with clientX/clientY = 0; real input carries the
+    // coordinates it was dispatched at, so this is a second, independent detector-visible signal.
+    let position = state["clickPosition"].as_array().cloned().unwrap_or_default();
+    assert!(
+        position.iter().any(|v| v.as_i64().unwrap_or(0) > 0),
+        "A trusted click must carry its real coordinates, got {state}"
+    );
+
+    // ── Double click ────────────────────────────────────────────────
+    run_command(ctx, &["dblclick", "#dblclick-target"]);
+    wait_for_state_or_abort(
+        ctx,
+        |s| s["doubleClickCount"].as_u64().unwrap_or(0) >= 1,
+        2_000,
+        "Expected the double click to reach #dblclick-target",
+    );
+    let state = read_interactive_state(ctx);
+    assert_eq!(
+        state["dblclickTrusted"].as_bool(),
+        Some(true),
+        "#dblclick-target must receive a trusted double click (isTrusted=true), got {state}"
+    );
+
+    run_command(ctx, &["close"]);
+}

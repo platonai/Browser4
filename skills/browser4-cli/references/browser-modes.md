@@ -179,6 +179,12 @@ instead of Chrome directly. Therefore:
   that precedes a click lands within ±2 px of the element's center (clamped to the element box),
   so repeated clicks on the same element do not hit the identical pixel. Explicit coordinates
   passed to `mousemove` are **not** jittered — that command means "put the pointer exactly here".
+- Clicks are dispatched as **trusted** input (`Input.dispatchMouseEvent`, i.e. `event.isTrusted` is
+  true and the events carry their real coordinates) instead of synthetic DOM events. The driver
+  first verifies with a one-shot check that trusted input actually reaches the page on this
+  platform/session, and falls back to DOM dispatch when the element cannot be clicked at its own
+  coordinates (occluded by an overlay, `pointer-events: none`, inside a frame) — so the click always
+  lands on the requested element, never on whatever happens to be on top.
 - Sites with strong bot protection may still block automated sessions. When the
   goal is "act as the logged-in user", prefer the attach paths (axis 3) over
   launching another browser, and consider raising `--interact-level` (§4).
