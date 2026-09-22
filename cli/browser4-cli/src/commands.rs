@@ -3034,7 +3034,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page-load-timeout <dur>", description: "Maximum time to wait per page load: seconds number or duration such as 30s, 1m", is_bool: false, short: None },
                 OptionDef { name: "ignore-url-query", description: "Remove query parameters from discovered out-link hrefs before loading (no effect on seed URLs in depth-0 bulk fetch)", is_bool: true, short: None },
                 OptionDef { name: "no-norm", description: "Disable URL normalization of discovered out-link hrefs (no effect on seed URLs in depth-0 bulk fetch)", is_bool: true, short: None },
-                OptionDef { name: "readonly", description: "Non-destructive mode (no page modifications)", is_bool: true, short: None },
+                OptionDef { name: "readonly", description: "Non-destructive mode: loads may be served from the page store and are never written back; wins over --refresh", is_bool: true, short: None },
                 OptionDef { name: "parallel <n>", description: "Collect up to <n> pages/tabs at the same time (default: 4, 1 = sequential). Each parallel unit needs its own browser tab", is_bool: false, short: None },
                 OptionDef { name: "background", description: "Submit crawl and return immediately; use 'crawl list' to track progress", is_bool: true, short: Some("bg") },
                 OptionDef { name: "verbose", description: "Show per-URL processing status in crawl results", is_bool: true, short: None },

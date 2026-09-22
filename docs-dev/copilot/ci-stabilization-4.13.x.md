@@ -1015,11 +1015,11 @@ crawl 强制 `-refresh`，所以这条用例今天只会走 "verified fresh" 分
 
 ### 18.5 仍未做
 
-* **强制 `-refresh` 与"readonly 可从存储读"的契约冲突**（§18.1）：`crawl --readonly` 永远会重新抓取，
+* **（§25 已做）强制 `-refresh` 与"readonly 可从存储读"的契约冲突**（§18.1）：`crawl --readonly` 永远会重新抓取，
   `buildReadonlyNote` 里 "served from the page store (age X)" 的措辞、`CrawlResponse.servedFromStore`
-  与 `CrawlFixtureMetadataTest` 的 store-serve 分支都是死代码。要让契约成立，得让
-  `buildEffectiveArgs`（以及 `crawlDepth0` 里同样的拼接）在用户明确要 `-readonly` 且没要 `-refresh` 时
-  不再补 `-refresh`。这会改变用户可见行为（readonly 会开始吐旧内容），需要单独决策 + e2e。
+  与 `CrawlFixtureMetadataTest` 的 store-serve 分支都是死代码。**决策（用户，§25）：`--readonly` 优先于
+  `--refresh`** —— 不是"没要 refresh 才不补"，而是"要了 readonly 就把 refresh 擦掉"，因为 readonly 只服务于
+  X-SQL 引擎的第二次读，那一次读的语义就是"读本地缓存"。实现见 §25.2，日志证据见 §25.5。
 * **失败抓取的重试**：本轮只把"没抓到"如实报成丢失，没有加重试。`crawlDepth0` 有 `MAX_FETCH_RETRIES`，
   两个链接发现路径没有。"交付失败即重投一次"需要在 ledger 上开一个"尝试中、仍未结算"的口子
   （现有的 `enter/leave` + `settle()` 恰好一次语义会被重复结算破坏），属于独立一轮。
@@ -1536,6 +1536,162 @@ pages=0/0 → 1/0 → 2/0 → 3/3 → 4/3 → 5/3 → 6/6 → 7/6 → 8/6 → 9/
 `ai.platon.pulsar.protocol.browser.driver` 固定为 INFO，所以本轮**只否证了 ≥10 s 的池等待**。
 要拿到更细的分布，把该 logger 调到 DEBUG，或临时下调 `WAIT_DEBUG_THRESHOLD`
 （两者都是 `var`，不需要改代码）。
+
+
+
+## 24. 门禁 `v4.13.21-ci.2`：三笔产品改动转绿，但测试预算只剩 74 秒（4.13.x，2026-09-22）
+
+`v4.13.21-ci.1` 之后有三笔**产品**改动（§21 链接发现、§22 在途视图、§23 驱动池诊断）此前没有被任何
+tag 门禁跑过，本轮补跑：
+
+| 项 | 值 |
+|---|---|
+| tag / SHA | `v4.13.21-ci.2` = `5fce62557f` |
+| run | [35646179429](https://github.com/platonai/Browser4/actions/runs/35646179429) |
+| 结果 | **success**（19:39:23 → 20:43:21 UTC，63 分 58 秒） |
+| 用例账目 | **Total 2190 / Passed 2134 / Skipped 56 / Failed 0**（ci.1：2164 / 2108 / 56 / 0，+26 条） |
+| Cross-Platform Smoke Test | success（同 SHA） |
+
+### 24.1 三个慢类的耗时对比（同一 job、同一 `Run Tests` 步骤）
+
+| 类 | ci.1 | ci.2 | Δ |
+|---|---|---|---|
+| `CrawlLinkDiscoveryTest`（§21 新增） | — | **685.3 s** | +685.3 |
+| `CrawlInFlightProgressTest`（§22 新增） | — | **123.3 s** | +123.3 |
+| `CrawlFixtureMetadataTest`（**未改动**） | 714.6 s | **956.1 s** | +241.5 |
+| `CrawlParallelTabsTest`（**未改动**） | 672.1 s | **708.8 s** | +36.7 |
+| `ScrapeServiceTests` | 8.55 s | 8.27 s | −0.3 |
+| `CrawlXSqlE2ETest` | 7.23 s | 6.07 s | −1.2 |
+| `SwarmCrawlFixtureTest` | 3.12 s | 2.08 s | −1.0 |
+
+### 24.2 预算：`Run Tests` 2926 s（48 分 46 秒），上限 3000 s
+
+| 步骤 | ci.1 | ci.2 |
+|---|---|---|
+| Maven Build | 163 s | 163 s |
+| **Run Tests** | **1807 s（30 分 07 秒）** | **2926 s（48 分 46 秒）** |
+| Build Docker Image | 227 s | 239 s |
+| Run browser4-cli E2E | 322 s | 323 s |
+| `ci-build` job 全程 | 3234 s（53 分 54 秒） | 3834 s（63 分 54 秒） |
+
++1119 s 里，~809 s 是**新增两个集成测试类**的成本，~278 s 是**未被改动**的两个重类的波动。
+余量只剩 **74 秒**——下一次同量级波动就会把门禁打成 `timeout`（正是 §19.7 的失败模式）。
+
+处置：
+
+* **本轮已做（缩小成本）**：`CrawlLinkDiscoveryTest` 由 3 条 crawl 减到 2 条。被删的那条
+  （"两种拼写只抓一次"）的契约在单元接缝上已钉住
+  （`CrawlSupportTest.testOnePageIsQueuedUnderItsFirstSpelling`），而它的两条断言里
+  "fragment 不进 URL"仍由保留的 `-ignoreUrlQuery` 用例逐行断言精确 URL 覆盖。
+  该用例在 CI 上约 228 s，预计把门禁压回 ~45 分钟。
+* **需要决策**：把 tag 门禁的 `timeout_minutes` 由 50 提到 60（`.github/workflows/ci.yml`）。
+  这与 §19.7"不要盲目加预算"不冲突：那次是"没跑起来/卡住"（该先查为什么），这次是**可归因的测试成本**
+  加上**可观测的波动**（同一份代码 ±4 分钟）。50 分钟是 v4.13.20 时为 ~30 分钟的负载定的，
+  现在这个负载已经涨到 ~45–49 分钟；只有同时收成本 + 留余量，门禁才重新"可预期地全绿"。
+
+
+
+## 25. `--readonly` 与 X-SQL 的第二次读：readonly 优先于 refresh（4.13.x，§18.5 第 1 条）
+
+§18.5 第 1 条记的是"强制 `-refresh` 让 `readonlyNote` 的存取分支变成死代码"。本轮的结论是：
+`--readonly` **只服务于 X-SQL 执行引擎的第二次读**，所以那些"死代码"不是该删掉的冗余，而是**没接通的接口**。
+
+### 25.1 从日志学到的用法：X-SQL 会读同一页两次
+
+`CrawlXSqlE2ETest` 的真实日志（本轮）：
+
+```
+DEBUG CrawlXSql - Crawl X-SQL: froze the round's page for 'http://.../__probe/slow/crawl-sql-seed-<run>'
+                 (2248 bytes, document=true)
+INFO  CrawlXSql - Crawl X-SQL: executing query on 'http://.../crawl-sql-seed-<run>':
+                 select dom_first_text(dom, '#probe-id') as id
+                 from load_and_select('http://.../crawl-sql-seed-<run> -readonly', ':root')
+INFO  CrawlXSql - Crawl X-SQL: extracted 1 row(s)
+```
+
+**第一次读**是 crawl 自己加载页面（随后 freeze 进本地缓存）；**第二次读**是语句里的
+`load_and_select()` UDF —— 它只带 `-readonly`，因为封印
+（`ScrapeAPIUtils.normalizeForReadOnlyQuery`）把 `refresh/expires/expireAt/itemExpires/itemExpireAt`
+按名字擦掉并校验（`checkReadOnlyQuery`）。§20 之前的日志里也见过它的另一半：
+`X-SQL: pre-load of '...' before first attempt failed`（`ScrapeService` 的预加载）。
+
+### 25.2 规则：readonly 优先于 refresh（改在哪、为什么）
+
+`-refresh` 不是一个普通选项，它是 `-ignoreFailure -i 0s` 的简写：**任何**本地副本都会被判定为过期，
+于是 `AbstractPulsarSession.createPageWithCachedCoreOrNull`（要求 readonly 且未过期）这条捷径被绕过，
+UDF 在查询执行期间回到网络并回写存储。两个选项因此不能并存：
+
+* **本轮改动**：新增 `CrawlSupport.resolveRoundArgs`——args 里含 `-readonly` 时**擦掉 `-refresh` 且不再补**；
+  `crawlDepth0` 与 depth-1/depth-N 三处统一走它，旧的私有 `buildEffectiveArgs` 删除。
+  不带 `--readonly` 时行为不变（仍强制 `-refresh`，因为陈旧/半写的存储副本正是"门户页 0 个外链"
+  的成因）。
+* 语句内部的封印不变（既有实现 + 既有断言）。
+
+### 25.3 接通接口：readonly 命中存储不再被当成"丢页"
+
+改完规则后 `CrawlFixtureMetadataTest` 的两条 readonly 用例立刻红了，失败信息本身给出了原因：
+
+```
+WARN CrawlRoundRunner - the load of '.../index.html' returned no document
+     (fetched=false, status=200, contentLength=7706); reporting it as lost
+```
+
+内容在（7706 字节，就是存储里那份），只是"这一轮没抓"，而 §18 引入的
+`isDocumentDelivered(fetched, html)` 把"没抓"等同于"没收到"。修法是把 readonly 这一种情况显式接上：
+
+* `isDocumentDelivered(fetched, html, storeServed)`：`storeServed` 时文档非空即算送达；
+* `isReadOnlyStoreServe(page, readonly) = readonly && page.isCached`：只有 **readonly 轮次**能把存储
+  命中当作送达——`-ignoreFailure` 下"抓取失败被存储副本顶替"的老问题（§18）依旧报丢失，
+  因为那种轮次必然带 `-refresh`（因而非 readonly）。
+
+于是 §18 留下的两半（`servedFromStore` 标记、`buildReadonlyNote` 的存取分支与 age 文案）第一次真正被走到，
+测试也从"两个分支随便哪个"收紧为"必须走存取分支"。
+
+### 25.4 验证
+
+| 层 | 证据 | 结果 |
+|---|---|---|
+| 本地 · 单测 | `CrawlSupportTest`（新增 3 条 `resolveRoundArgs` + 2 条送达判定） | **49 / 0 / 0** |
+| 本地 · 集成 | `CrawlFixtureMetadataTest`（两条 readonly 用例改为断言存取分支） | **5 / 0 / 0，179.4 s** |
+| 本地 · 集成 | `CrawlLinkDiscoveryTest`（同一 JVM 连跑，确认 link 参数改动未回归） | **3 / 0 / 0，181.0 s** |
+| 本地 · 集成 | `CrawlXSqlE2ETest`（服务器侧计数断言"查询不额外抓一次"） | **2 / 0 / 0，150.4 s**（单独跑 24.4 s） |
+| 汇总 | 三类同批 `-Dtest=CrawlFixtureMetadataTest,CrawlLinkDiscoveryTest,CrawlXSqlE2ETest` | **BUILD SUCCESS，10 / 0 / 0** |
+| 文档 | `skills/browser4-cli/references/crawl.md` 新增"`--readonly` and the X-SQL second read"；CLI `--readonly` 描述同步 | — |
+
+### 25.5 日志证据（`browser4-tests/browser4-rest-tests/logs/pulsar.log`，末次运行段）
+
+请求侧与生效侧的 args 成对出现，正好把"擦除"钉住（`CrawlController` 打请求原样 args，
+`LoadComponent.Task` 打真正下发的 args）：
+
+```
+INFO CrawlController - Crawl request: url='.../__probe/slow/crawl-sql-seed-muc40dkb' ... args='-refresh -readonly' sql=true
+INFO LoadComponent.Task - 134. 💯 ⚡ U for N got 200 2.1953125 KiB [💿2.1953125 KiB] in 1m22.097s, fc:1 | ... |
+                         http://localhost:13196/__probe/slow/crawl-sql-seed-muc40dkb -readonly
+```
+
+即 `-refresh -readonly` → `-readonly`：`-refresh` 被擦掉，**页面仍然照抓**（`⚡`、`fc:1`、耗时 1m22s 是
+探针的 `delayMs`）。这正是"readonly 不是禁止联网，而是允许命中本地副本"的语义。
+
+其余三条观察：
+
+* **不带 readonly 的轮次照旧带 `-refresh`**：同段内 `/generated/crawl/` 的加载行全部形如
+  `... -outLinkPattern product/ -outLinkSelector a.product -parse -refresh`（`dup/hub.html` 的
+  `-outLinkSelector a.pick` 同名），默认行为没被改动。
+* **readonly 轮次不再产生加载任务行**：该运行段内带 `-readonly` 的 `LoadComponent` 行只有上面这两条
+  X-SQL 探针页；两个 readonly fixture crawl 的请求（`11:20:21` 的 `-readonly`、`11:20:25` 的
+  `-readonly -refresh`）各自对应 `Crawl task ... completed: 10 pages, 0 lost, status OK`，中间没有
+  任何 `-readonly` 加载任务 —— 也就是说两次读里的第二次读直接命中了本地页存储。
+  修复前的运行段恰是反例：同一批 URL 每页都留下 `-readonly … -refresh` 的加载任务行
+  （本文件 line 2678 / 2680、3245 / 3259 属旧段，可作对照）。
+* **"存储命中=送达"真的被走到**：readonly 轮的终态是 `0 lost`，而修复前这里是
+  `returned no document (fetched=false, …); reporting it as lost`。
+
+### 25.6 仍未做（本条边界）
+
+* 上面那两条 X-SQL 探针页是 `fc:1`（**第一次读就联网**），所以日志没有覆盖"第一次读也命中旧副本"的
+  情形——按语义那是允许的（readonly 只承诺"可以读本地"，不承诺"必须新鲜"），但如果将来要保证
+  X-SQL 的第一次读一定新鲜，得由 crawl 侧（而非引擎侧）显式要求，这里留个明确边界。
+* §18.5 第 2 条（送达失败后重试）仍未做：需要 ledger 暴露"在途尝试"这一层，属于独立改动。
 
 
 

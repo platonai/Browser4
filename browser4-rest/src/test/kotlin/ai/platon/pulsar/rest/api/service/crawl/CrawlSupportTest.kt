@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.api.service.crawl
 
 import ai.platon.pulsar.common.ResourceStatus
+import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.context.PulsarContext
 import ai.platon.pulsar.skeleton.session.PulsarSession
@@ -15,6 +16,7 @@ import org.mockito.Mockito.doThrow
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
+import org.mockito.kotlin.whenever
 import java.time.Instant
 
 /**
@@ -529,6 +531,39 @@ class CrawlSupportTest {
         assertFalse(isDocumentDelivered(fetched = false, html = null))
     }
 
+    @Test
+    @DisplayName("a read-only load answered from the page store delivered the page it was asked for")
+    fun testReadOnlyStoreServeIsDelivered() {
+        // `--readonly` asks for the stored copy — that is what makes the X-SQL engine's second read
+        // a cache hit — so "not fetched this round" is not "not received".  The page carries the
+        // store's content length and its age is reported per row.
+        assertTrue(
+            isDocumentDelivered(
+                fetched = false, html = "<html><head><title>stored</title></head></html>", storeServed = true
+            ),
+            "a read-only round that the store answered has the page it asked for"
+        )
+        // Content is still the test: a stored copy with no body is not a page.
+        assertFalse(isDocumentDelivered(fetched = false, html = "", storeServed = true))
+        assertFalse(isDocumentDelivered(fetched = false, html = null, storeServed = true))
+    }
+
+    @Test
+    @DisplayName("only a read-only round may treat a store hit as delivered")
+    fun testStoreServeNeedsReadOnly() {
+        val page = mock<WebPage>()
+        whenever(page.isCached).thenReturn(true)
+
+        assertTrue(isReadOnlyStoreServe(page, readonly = true))
+        // A refreshed round substitutes the store copy for a *failed* fetch; recording that would
+        // put a hollow row in the listing under a URL the crawl never received (§18).
+        assertFalse(isReadOnlyStoreServe(page, readonly = false))
+
+        val fetched = mock<WebPage>()
+        whenever(fetched.isCached).thenReturn(false)
+        assertFalse(isReadOnlyStoreServe(fetched, readonly = true))
+    }
+
     // ------------------------------------------------------------------
     // extractTitleFromHtml
     // ------------------------------------------------------------------
@@ -732,6 +767,59 @@ class CrawlSupportTest {
         assertEquals(
             listOf("https://example.com/a", "https://example.com/b", "https://example.com/c"),
             aggregateInFlightPages(published).map { it.url }
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // resolveRoundArgs
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a crawl still refreshes by default, so a stale stored page cannot empty the crawl")
+    fun testRoundArgsRefreshByDefault() {
+        assertEquals("-refresh", resolveRoundArgs(""))
+        assertEquals("-refresh", resolveRoundArgs("   "))
+        assertEquals("-outLink \"a.pick\" -refresh", resolveRoundArgs("-outLink \"a.pick\" -refresh"))
+        assertEquals("-outLink \"a.pick\" -refresh", resolveRoundArgs("-outLink \"a.pick\""))
+        // Any spelling counts, or the crawl would add a second, redundant refresh.
+        assertEquals("--refresh -topLinks 3", resolveRoundArgs("--refresh -topLinks 3"))
+    }
+
+    @Test
+    @DisplayName("-readonly wins over -refresh, in either order and under any spelling")
+    fun testReadOnlyWinsOverRefresh() {
+        // The X-SQL second read is a guaranteed cache hit only while the page is local, and
+        // `-refresh` (= -ignoreFailure -i 0s) makes every local copy look expired. The two options
+        // mean opposite things, so the read-only one decides.
+        assertEquals("-readonly", resolveRoundArgs("-readonly -refresh"))
+        assertEquals("-readonly", resolveRoundArgs("-refresh -readonly"))
+        assertEquals("-readonly", resolveRoundArgs("-readonly -refresh=true"))
+        // A read-only crawl must not gain a refresh it did not ask for.
+        assertEquals("-readonly", resolveRoundArgs("-readonly"))
+        assertEquals(
+            "-outLink \"a.pick\" -topLinks 3 -readonly",
+            resolveRoundArgs("-outLink \"a.pick\" -topLinks 3 -readonly -refresh")
+        )
+        // Whatever the caller asked for besides refresh is left exactly as it was.
+        assertEquals(
+            "-expires 1d -readonly -parse",
+            resolveRoundArgs("-expires 1d -readonly -parse -refresh")
+        )
+    }
+
+    @Test
+    @DisplayName("an option value is not an option: a selector survives a strip")
+    fun testOptionValuesSurviveTheStrip() {
+        // The tokens are split on whitespace, so a quoted selector is its own token; a strip that
+        // matched substrings would corrupt it.
+        assertEquals(
+            "-outLink \"a.refresh.js\" -readonly",
+            resolveRoundArgs("-outLink \"a.refresh.js\" -readonly -refresh")
+        )
+        // `-refresh` inside a pattern value is not the option either.
+        assertEquals(
+            "-outLinkPattern refresh -readonly",
+            resolveRoundArgs("-outLinkPattern refresh -readonly -refresh")
         )
     }
 

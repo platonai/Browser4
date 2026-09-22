@@ -237,7 +237,7 @@ Notes:
 | `--page-load-timeout` | | string | Max wait per page load: seconds number (`30`) or duration (`30s`, `1m`) |
 | `--ignore-url-query` | | bool | Strip query params from **discovered out-link** hrefs (no effect on seed URLs in depth-0 bulk fetch) |
 | `--no-norm` | | bool | Disable URL normalization of **discovered out-link** hrefs (no effect on seed URLs in depth-0 bulk fetch) |
-| `--readonly` | | bool | Non-destructive mode |
+| `--readonly` | | bool | Non-destructive mode: loads may be served from the page store and are never written back. Wins over `--refresh` (see below) |
 
 ### Async flag
 
@@ -405,6 +405,47 @@ browser4-cli crawl "https://example.com" -ol "a[href]" -a "-nMaxRetry 5 -lazyFlu
 > *discovered* during depth ≥ 1 link discovery.  Seed URLs in a depth-0 bulk
 > fetch are always fetched and reported verbatim, so these flags produce no
 > observable change there.
+
+## `--readonly` and the X-SQL second read
+
+A crawl normally forces a fresh fetch (`-refresh`) on every page it loads.  With
+`--readonly` it does not: **`--readonly` wins over `--refresh`**, and the refresh
+is dropped rather than added.
+
+The reason is the X-SQL execution engine, which reads a page **twice**:
+
+1. **before the query** — the crawl's own load of the page.  That page is frozen
+   into the local page cache under the URL the statement will resolve;
+2. **during the query** — the `load_and_select()` / `load()` UDF inside X-SQL
+   resolves the URL in the statement's FROM clause.  The statement is *sealed*
+   with `-readonly` and with every fetch-forcing option erased, so this read
+   serves the frozen copy: no network round trip, no page-store write, no cache
+   write while the query runs.
+
+The two flags cannot be combined, because `-refresh` expands to
+`-ignoreFailure -i 0s`: it makes *every* local copy look expired, so the
+read-only shortcut is missed and the UDF re-fetches the page while the query is
+still executing.  Hence the precedence: a read-only crawl loads `-readonly` and
+nothing that forces a fetch.
+
+```bash
+# Read the pages the store already holds; never write them back.
+browser4-cli crawl --seed-file urls.txt --depth 0 --readonly
+```
+
+What to expect:
+
+- A page that is **in the page store** is served from there.  The result rows
+  carry the store markers and the completion note reports how old the served
+  content is (`readonly: N/M page(s) served from the page store (stored content
+  up to … old)`).
+- A page that is **not** local is fetched (read-only is a cache-hit *preference*,
+  not a fetch prohibition) — the crawl simply does not write it back, and the
+  note says `readonly: verified fresh — all N page(s) fetched from the live
+  site`.
+- Link discovery over a stale stored page can legitimately find no out-links;
+  the empty-out-links diagnostic then explains it.  Add `--refresh` **instead
+  of** `--readonly` for a crawl that must see the live site.
 
 ## Seed files
 

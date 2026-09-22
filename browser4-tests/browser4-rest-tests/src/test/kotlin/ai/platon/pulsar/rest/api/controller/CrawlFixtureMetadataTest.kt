@@ -101,8 +101,14 @@ class CrawlFixtureMetadataTest : RestAPITestBase() {
     }
 
     @Test
-    @DisplayName("readonly + refresh crawl verifies freshness and never serves stored content")
-    fun testReadonlyRefreshCrawlVerifiesFreshness() {
+    @DisplayName("-readonly wins over -refresh: asking for both still serves the stored copy")
+    fun testReadOnlyRefreshCrawlVerifiesFreshness() {
+        // The two flags cannot be combined, and this is what that means end to end: `-refresh`
+        // expands to `-ignoreFailure -i 0s`, which makes every local copy look expired and so stops
+        // a read-only load from being the cache hit `--readonly` promises — the read-only one
+        // decides (CrawlSupport.resolveRoundArgs).  Requesting both therefore behaves like
+        // requesting `--readonly`, *not* like requesting a fresh fetch: the discriminating
+        // assertion is that the note does not claim freshness.
         val response = runCrawl(depth = 2, args = "-readonly -refresh")
 
         assertTrue(response.status == CrawlStatus.OK,
@@ -111,16 +117,17 @@ class CrawlFixtureMetadataTest : RestAPITestBase() {
         val pages = requireNotNull(response.pages)
         assertEquals(10, pages.size, "expected 10 pages, got ${pages.size}")
 
-        // With -refresh nothing may be served from the store; every page was
-        // fetched from the live site and the note says so (Issue 2: readonly
-        // surfaces what it did — served with age, or verified fresh).
-        assertTrue(pages.none { it.servedFromStore },
-            "readonly -refresh crawl must not serve stored content, but ${pages.count { it.servedFromStore }} page(s) did")
+        val served = pages.count { it.servedFromStore }
         val note = requireNotNull(response.readonlyNote) { "readonly crawl must produce a readonlyNote" }
-        assertTrue(note.contains("verified fresh"), "readonly note should verify freshness, got: $note")
-        assertTrue(note.contains("nothing was written to the page store"), "readonly note should state nothing was written, got: $note")
+        assertTrue(served > 0,
+            "readonly wins over refresh, so the stored fixture should have been served, but the " +
+                "note says: $note")
+        assertTrue(note.contains("served from the page store"),
+            "readonly note should report store serves, got: $note")
+        assertTrue(!note.contains("verified fresh"),
+            "a read-only round that served the store must not claim freshness, got: $note")
 
-        // Metadata integrity holds on the fresh fetch too.
+        // Metadata integrity holds on the served copy too.
         val expectedTitles = fixtureTitles()
         for (page in pages) {
             assertEquals(expectedTitles[page.url], page.title,
@@ -131,15 +138,12 @@ class CrawlFixtureMetadataTest : RestAPITestBase() {
     @Test
     @DisplayName("readonly crawl without refresh surfaces store serves with age, or verifies freshness")
     fun testReadonlyCrawlSurfacesServedOrFresh() {
-        // No -refresh: when the page store holds the fixture pages (from
-        // earlier crawls), the load may serve stored content — readonly mode
-        // must say so with the age of the content; otherwise it must verify
-        // freshness.  Either way metadata integrity holds per row.
-        //
-        // Note: a crawl forces `-refresh` onto every load it issues (see
-        // `CrawlRoundRunner.buildEffectiveArgs`), so today this always takes the
-        // freshness branch; the stored-content branch has no coverage until that
-        // forcing is revisited (docs-dev/copilot/ci-stabilization-4.13.x.md §18).
+        // No -refresh: the page store holds the fixture pages (the tests above fetched them), and
+        // `-readonly` now wins over the refresh a crawl would otherwise add (resolveRoundArgs), so
+        // the loads are free to serve that stored content — readonly mode must say so with the age
+        // of the content.  The freshness branch remains for a store that does not hold the page
+        // (a cache miss is fetched, just not written back).  Either way metadata integrity holds
+        // per row.
         val response = runCrawl(depth = 2, args = "-readonly")
 
         assertTrue(response.status == CrawlStatus.OK,
@@ -152,18 +156,22 @@ class CrawlFixtureMetadataTest : RestAPITestBase() {
         val note = requireNotNull(response.readonlyNote) { "readonly crawl must produce a readonlyNote" }
 
         val served = pages.filter { it.servedFromStore }
-        if (served.isEmpty()) {
-            assertTrue(note.contains("verified fresh"),
-                "readonly note should verify freshness when nothing was served, got: $note")
-        } else {
-            assertTrue(note.contains("served from the page store"),
-                "readonly note should report store serves, got: $note")
-            assertTrue(note.contains("old"), "readonly note should carry the age of stored content, got: $note")
-            // Served rows carry the stored-content age; the original fetch time
-            // of stored content is preserved, so the age is always computable.
-            assertTrue(served.all { it.storeAgeSeconds != null },
-                "served-from-store rows must carry storeAgeSeconds")
-        }
+        // The tests above fetched the fixture into the page store, and a read-only crawl is what
+        // may answer from it (CrawlSupport.isReadOnlyStoreServe) — so the store branch is the one
+        // this run takes.  If the store ever stops holding the fixture, this assertion is where
+        // that shows up, instead of the run silently verifying freshness.
+        assertTrue(
+            served.isNotEmpty(),
+            "a read-only crawl should serve the stored fixture the earlier tests fetched, " +
+                "note: ${response.readonlyNote}"
+        )
+        assertTrue(note.contains("served from the page store"),
+            "readonly note should report store serves, got: $note")
+        assertTrue(note.contains("old"), "readonly note should carry the age of stored content, got: $note")
+        // Served rows carry the stored-content age; the original fetch time
+        // of stored content is preserved, so the age is always computable.
+        assertTrue(served.all { it.storeAgeSeconds != null },
+            "served-from-store rows must carry storeAgeSeconds")
 
         // Every row — stored or fresh — still shows the title of the page at
         // that URL.  Stored content is served under the URL it was stored for.

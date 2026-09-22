@@ -290,9 +290,24 @@ internal suspend fun <T> mapCrawlSeedsConcurrently(
  * per-URL metadata guarantee exists to prevent.  The document is what the caller
  * asked for, so its presence answers the question; the protocol status does not,
  * because it stays 200 in both cases.
+ *
+ * A read-only load is the one case where "not fetched" does not mean "not received": the caller
+ * asked for the stored copy — that is what `--readonly` means, and what makes the X-SQL engine's
+ * second read of a page a cache hit ([resolveRoundArgs]) — so a page that came back from the store
+ * with content counts as delivered when the round was read-only.  The substitution case above is
+ * not that: it happens under `-ignoreFailure`, which `-refresh` implies and which a read-only round
+ * never carries, so a failed fetch still comes back as a loss.
  */
-internal fun isDocumentDelivered(fetched: Boolean, html: String?): Boolean =
-    fetched && !html.isNullOrBlank()
+internal fun isDocumentDelivered(fetched: Boolean, html: String?, storeServed: Boolean = false): Boolean =
+    !html.isNullOrBlank() && (fetched || storeServed)
+
+/**
+ * Whether a load answered from the page store because the round is read-only.
+ *
+ * [WebPage.isCached] is set when the load served the stored page core, and a read-only round is the
+ * only one allowed to treat that as a delivered page (see [isDocumentDelivered]).
+ */
+internal fun isReadOnlyStoreServe(page: WebPage, readonly: Boolean): Boolean = readonly && page.isCached
 
 /**
  * Extract the <title> text from raw HTML when [FeaturedDocument.title]
@@ -410,6 +425,68 @@ internal data class DiscoverySelection(
 }
 
 /**
+ * The option tokens of an args string: the whitespace-separated words that start with `-`, with any
+ * `=value` suffix removed so `-refresh=true` and `-refresh` are the same option.
+ *
+ * Option *values* are left alone: a quoted CSS selector arrives as its own token and is not an
+ * option, so it survives a strip untouched.
+ */
+private fun optionTokensIn(args: String): Set<String> =
+    args.split(Regex("\\s+"))
+        .filter { it.startsWith("-") }
+        .map { it.substringBefore('=') }
+        .toSet()
+
+/** True when [args] requests the option named [fieldName], under any of its spellings. */
+internal fun hasOption(args: String, fieldName: String): Boolean {
+    val tokens = optionTokensIn(args)
+    return LoadOptions.getOptionNames(fieldName).any { it in tokens }
+}
+
+/** [args] without the option named [fieldName] (all spellings), blanks collapsed. */
+internal fun stripOption(args: String, fieldName: String): String {
+    val names = LoadOptions.getOptionNames(fieldName)
+    return args.split(Regex("\\s+"))
+        .filterNot { token -> names.any { name -> token == name || token.startsWith("$name=") } }
+        .joinToString(" ")
+        .trim()
+}
+
+/**
+ * The args a crawl round loads its pages with.
+ *
+ * A crawl forces `-refresh` by default, because a stale or half-written stored copy is what makes a
+ * portal page return 0 out-links — `buildEffectiveArgs` existed for that (see
+ * `docs-dev/copilot/ci-stabilization-4.13.x.md` §18), and this keeps it.
+ *
+ * **`-readonly` wins over `-refresh`** when the request asks for both, which is the one thing that
+ * changed. The two options mean opposite things, and the engine has no notion of precedence between
+ * them: `-refresh` expands to `-ignoreFailure -i 0s` and resets the fetch retry counters, so
+ * `LoadOptions.isExpired()` answers true for *every* local copy. `PulsarSession.load()` then misses
+ * its read-only shortcut (`AbstractPulsarSession.createPageWithCachedCoreOrNull`, which needs both
+ * `readonly` and a page that has not expired) and goes to the web — taking the store writes with it.
+ * So "read-only" can only mean anything if the refresh is *gone*, not merely present alongside it:
+ * the round erases `-refresh` and adds none.
+ *
+ * That is also what makes the X-SQL execution engine's *second* read of a page a guaranteed cache
+ * hit (`CrawlXSql`/`ScrapeAPIUtils.normalizeForReadOnlyQuery` seal the statement's own url the same
+ * way, for the same reason). A call that also passes `-expires 0s` explicitly still fetches: this
+ * stops the crawl from *adding* a fetch, it does not overrule a caller who asks for one in so many
+ * words.
+ */
+internal fun resolveRoundArgs(rawArgs: String): String {
+    val args = rawArgs.trim()
+    if (hasOption(args, "readonly")) {
+        return stripOption(args, "refresh")
+    }
+    return when {
+        args.isBlank() -> "-refresh"
+        hasOption(args, "refresh") -> args
+        else -> "$args -refresh"
+    }
+}
+
+/**
  * The args a crawl puts on each URL it discovered.
  *
  * Discovered pages are loaded through the session, so an option that is not in
@@ -452,10 +529,13 @@ internal fun buildLinkArgs(options: LoadOptions, expandable: Boolean): String {
 /**
  * Compute the readonly store-serving markers for a recorded page.
  *
- * When a load serves the stored page core (options.readonly without a
- * forced -refresh), [WebPage.isCached] is true and [WebPage.fetchTime]
- * preserves the time the content was originally fetched, so the age of the
- * served content is computable.  Fresh fetches keep served=false.
+ * When a load serves the stored page core, [WebPage.isCached] is true and [WebPage.fetchTime]
+ * preserves the time the content was originally fetched, so the age of the served content is
+ * computable.  Fresh fetches keep served=false.
+ *
+ * A read-only crawl is the case this reports on: it loads without `-refresh`
+ * ([resolveRoundArgs]), which is what lets the engine answer from local storage — and that copy can
+ * be older than the crawl, so the age has to reach the caller.
  */
 internal fun storeServeMarkers(page: WebPage): Pair<Boolean, Long?> {
     if (!page.isCached) return false to null

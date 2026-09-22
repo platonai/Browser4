@@ -38,7 +38,10 @@ private val PAGE_DOWNLOAD_TIMEOUT = 30_000L.milliseconds
  *     so that nothing can evict it in between;
  *  2. **during** — the url inside the SQL carries `-readonly` and no option that forces a fetch,
  *     so the UDF load serves that local copy read-only: no network round trip, no store write, no
- *     cache write while the query executes.
+ *     cache write while the query executes.  `-refresh` is the option that would break this (it
+ *     makes every local copy look expired), which is why the seal *erases* it instead of relying on
+ *     any precedence between the two flags — and why the crawl's own loads follow the same rule
+ *     ([resolveRoundArgs]: `-readonly` wins over `-refresh` in the round's args too).
  *
  * When (1) cannot be satisfied the query is refused instead of run: `-readonly` is a cache-hit
  * guarantee, not a fetch prohibition, and an unguarded run would silently re-fetch and rewrite the

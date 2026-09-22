@@ -86,10 +86,10 @@ internal class CrawlRoundRunner(
         request: CrawlRequest,
         sharedSession: PulsarSession? = null
     ): List<CrawlPageResult> {
-        // Depth=0 bulk-fetch: always use -refresh so that internal HTTP
-        // caches and protocol-level state from prior sessions don't cause
-        // 0-byte responses for URLs after the first.
-        val effectiveArgs = if (request.args.isBlank()) "-refresh" else "${request.args} -refresh"
+        // Depth=0 bulk-fetch: the round's own args, refreshed by default so that internal HTTP
+        // caches and protocol-level state from prior sessions don't cause 0-byte responses for URLs
+        // after the first — unless the caller asked for a read-only crawl, see resolveRoundArgs.
+        val effectiveArgs = resolveRoundArgs(request.args)
 
         var lastError: Exception? = null
         repeat(MAX_FETCH_RETRIES) { attempt ->
@@ -222,10 +222,10 @@ internal class CrawlRoundRunner(
         // that is still discovering links be overtaken by the others.
         val ledger = CrawlLedger(taskId)
         try {
-            // Always add -refresh so the portal page is loaded with fresh content.
-            // Without this, cached empty/malformed pages cause link discovery to
-            // return 0 elements even when the page has many anchors in the live DOM.
-            val effectiveArgs = buildEffectiveArgs(request.args)
+            // The round's args, refreshed unless the caller asked for a read-only crawl: without a
+            // refresh, cached empty/malformed pages make link discovery return 0 elements even when
+            // the page has many anchors in the live DOM (see resolveRoundArgs for the trade-off).
+            val effectiveArgs = resolveRoundArgs(request.args)
             val options = parseOptions(session, effectiveArgs)
             if (options.outLinkSelector.isNullOrBlank()) {
                 // If X-SQL extraction was requested but no out-link selector is configured,
@@ -298,9 +298,14 @@ internal class CrawlRoundRunner(
                     try {
                         // A load that returned no document of its own is a lost
                         // page, not a row — the depth>1 handler documents why (a
-                        // failed fetch is papered over by `-ignoreFailure`, which
-                        // the forced `-refresh` implies).
-                        if (!isDocumentDelivered(_page.isFetched, _document.html)) {
+                        // failed fetch is papered over by `-ignoreFailure`, which a
+                        // refreshed round implies) — unless this is a read-only
+                        // round answering from the page store, which is what
+                        // `--readonly` asked for.
+                        if (!isDocumentDelivered(
+                                _page.isFetched, _document.html, isReadOnlyStoreServe(_page, options.readonly)
+                            )
+                        ) {
                             logger.warn(
                                 "Crawl {}: the load of '{}' returned no document (fetched={}, status={}, " +
                                 "contentLength={}); reporting it as lost",
@@ -442,7 +447,7 @@ internal class CrawlRoundRunner(
         // at all (issue #592: "expected 10 pages, got 8", status=OK).
         val ledger = CrawlLedger(taskId)
         try {
-            val effectiveArgs = buildEffectiveArgs(request.args)
+            val effectiveArgs = resolveRoundArgs(request.args)
             val options = parseOptions(session, effectiveArgs)
             val maxDepth = request.depth
             val visited = ConcurrentHashMap.newKeySet<String>()
@@ -510,14 +515,18 @@ internal class CrawlRoundRunner(
 
                 // Only a load that delivered a document of its own may become a
                 // row.  A fetch that failed here is not an error the caller sees:
-                // the crawl forces `-refresh`, `-refresh` implies `-ignoreFailure`,
-                // and the engine then hands back whatever the page store holds —
-                // a page object with a content length, an empty document and no
-                // title.  Recording that produced a listing row for a page the
-                // crawl never received, under the URL it was supposed to have.
-                // It is settled as a loss instead, so the crawl says "not
-                // delivered" rather than showing a hollow row.
-                if (!isDocumentDelivered(page.isFetched, document.html)) {
+                // a refreshed round implies `-ignoreFailure`, and the engine then
+                // hands back whatever the page store holds — a page object with a
+                // content length, an empty document and no title.  Recording that
+                // produced a listing row for a page the crawl never received, under
+                // the URL it was supposed to have.  It is settled as a loss instead,
+                // so the crawl says "not delivered" rather than showing a hollow row.
+                //
+                // A read-only round is the exception, and the only one: it asked for
+                // the stored copy (`-readonly` wins over `-refresh`, see
+                // resolveRoundArgs), so a page the store answered counts as delivered
+                // and is recorded with its age (see storeServeMarkers).
+                if (!isDocumentDelivered(page.isFetched, document.html, isReadOnlyStoreServe(page, options.readonly))) {
                     logger.warn(
                         "Crawl {}: the load of '{}' (submitted as '{}') returned no document " +
                         "(fetched={}, status={}, contentLength={}); reporting it as lost",
@@ -868,20 +877,6 @@ internal class CrawlRoundRunner(
             session.options()
         } else {
             session.options(args)
-        }
-    }
-
-    /**
-     * Ensure -refresh is present in the args string so portal/link pages are
-     * always loaded with fresh content.  Stale internal HTTP caches are the
-     * root cause of both "0 elements for any CSS selector" (Issue 1) and
-     * "0 byte fetch" (Issue 2).
-     */
-    private fun buildEffectiveArgs(rawArgs: String): String {
-        return when {
-            rawArgs.isBlank() -> "-refresh"
-            rawArgs.contains("-refresh") -> rawArgs
-            else -> "$rawArgs -refresh"
         }
     }
 
