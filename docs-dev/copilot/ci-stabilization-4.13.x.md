@@ -1843,6 +1843,9 @@ crawl 排的。
   时刻，排队不算——这条语义没变，文档里也写了。
 * **没有任何配置项把默认值调大**：运维侧仍然只能改 `CrawlService.taskTimeoutMillis`（或按请求传）。若将来要
   做成 `application.properties` 配置项，那是配置层的独立改动（本轮只动 REST/DTO 契约，符合 §17.5 的原话）。
+* **CLI 端到端（真后端）没有单独跑 `--timeout`**：本地校验与参数翻译有 Rust 单测，服务端契约有 Kotlin 单测，
+  而请求字段的绑定形状与 `parallelTabs` 完全相同（后者在 CLI e2e 里已经跑通）。要把它变成"真浏览器 +
+  真后端"的证据，得往 `crawl` 的 e2e 场景里加一条，留给下一次 CLI e2e 批次。
 
 
 
