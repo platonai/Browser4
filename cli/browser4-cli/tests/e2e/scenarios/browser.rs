@@ -2551,3 +2551,188 @@ pub(super) fn test_htmlsnapshot_capture_after_tab_new(ctx: &mut E2ECtx) {
 
     run_command(ctx, &["close"]);
 }
+
+/// Test that reading console messages leaves the page untouched.
+///
+/// The historical implementation replaced `console.log`/`warn`/… with driver-owned wrappers that
+/// buffered on `window.__b4_console`, which a page detects easily: the wrapper's source through
+/// `console.log.toString()` (or `Function.prototype.toString.call(console.log)`, which bypasses an
+/// own `toString`), its function `name`, and the `prototype` property a native console method does
+/// not have.  Messages are now captured from CDP, so after reading the console the page must look
+/// exactly as it did before.
+pub(super) fn test_e2e_console_capture_is_page_silent(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    goto_interactive_page(ctx);
+
+    // The first read starts the capture (same "from now on" semantics as the page-side buffer it
+    // replaces, just without touching the page).
+    run_command(ctx, &["console"]);
+
+    // A page-side console call that CDP has to report to the driver.
+    eval_text(ctx, "console.log('b4-console-probe-1')");
+    let listed = run_command(ctx, &["console"]).stdout;
+    assert!(
+        listed.contains("b4-console-probe-1"),
+        "console must list the page's log message, got:\n{listed}"
+    );
+
+    // Reading the console must not have patched the page.
+    let native_output = eval_text(ctx, "String(console.log)");
+    let native = last_non_empty_line(&native_output);
+    assert_eq!(
+        native, "function log() { [native code] }",
+        "console.log must stay the native function after reading the console, got: {native}"
+    );
+
+    let globals_output = eval_text(
+        ctx,
+        "Object.getOwnPropertyNames(window).filter(function(n){ return n.indexOf('__b4') === 0 }).length",
+    );
+    let globals = last_non_empty_line(&globals_output);
+    assert_eq!(
+        globals, "0",
+        "no driver-owned global may be left on the page, got: {globals}"
+    );
+
+    // Clearing drops the buffered messages, and capture continues afterwards.
+    run_command(ctx, &["console", "--clear"]);
+    eval_text(ctx, "console.log('b4-console-probe-2')");
+    let after_clear = run_command(ctx, &["console"]).stdout;
+    assert!(
+        after_clear.contains("b4-console-probe-2"),
+        "console must keep capturing after a clear, got:\n{after_clear}"
+    );
+    assert!(
+        !after_clear.contains("b4-console-probe-1"),
+        "clearing must drop the messages buffered so far, got:\n{after_clear}"
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+/// The last non-empty line of a command's stdout (command output may be followed by hint lines).
+fn last_non_empty_line(text: &str) -> &str {
+    text.lines().map(str::trim).filter(|line| !line.is_empty()).last().unwrap_or_default()
+}
+
+/// Measure whether enabling the CDP Console domain alone makes the page's console arguments
+/// observable.
+///
+/// The fixture logs objects that carry getters and a Proxy prototype (see
+/// `console-probe-fixture.html`), so any `true` in the reading means something serialized the
+/// arguments for a remote client. The base library stopped sending `Runtime.enable` by default
+/// (browser4-base v4.11.18) precisely because of that signal, which leaves the Console domain the
+/// `console` command enables as the only candidate: the probes are read once before the first
+/// `console` call (capture off) and once after (capture on).
+///
+/// A `before` reading that is not all-false means something else serializes console arguments, and
+/// an `after` reading that differs from it means `Console.enable` carries the same signal — both are
+/// findings to record in `Browser4WebDriver.ensureConsoleCapture` and in
+/// `skills/browser4-cli/references/browser-modes.md`, not a reason to hide the reading.
+pub(super) fn test_e2e_console_serialization_probe(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.console_probe_url(), OPEN_PROFILE_MODE_ARG]);
+    sleep(Duration::from_secs(2));
+
+    let title = last_non_empty_line(&eval_text(ctx, "document.title")).to_string();
+    assert_eq!(
+        title, CONSOLE_PROBE_TITLE,
+        "the console probe fixture must be the open document"
+    );
+
+    // ── 1. Capture off: no `console` call has been made yet ─────────────────
+    let before = last_non_empty_line(&eval_text(ctx, "b4Probe.run()")).to_string();
+    assert!(
+        before.contains("ownGetter") && before.contains("prototypeProxy"),
+        "the probe page must report the three readings, got: {before}"
+    );
+    println!("console serialization probe, capture off:  {before}");
+    assert_eq!(
+        before,
+        r#"{"ownGetter":false,"inheritedGetter":false,"prototypeProxy":false}"#,
+        "with Runtime.enable off by default nothing may serialize console arguments before the \
+         console command runs; got: {before}"
+    );
+
+    // ── 2. The first `console` call enables the Console domain ──────────────
+    run_command(ctx, &["console"]);
+
+    // ── 3. Capture on: does anything serialize the arguments now? ───────────
+    let after = last_non_empty_line(&eval_text(ctx, "b4Probe.run()")).to_string();
+    println!("console serialization probe, capture on:   {after}");
+
+    assert_eq!(
+        before, after,
+        "enabling the Console domain changed the page's serialization reading; record it: \
+         before={before} after={after}"
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+/// Test that `console` keeps capturing after the session moves to a tab it did not create.
+///
+/// Capture is enabled lazily on the first `console` call and the listener is registered on that
+/// driver, so a tab created with `tab-new` is the interesting case: its document committed before a
+/// driver was bound to it (the late-binding path `test_htmlsnapshot_capture_after_tab_new` covers on
+/// the runtime side), and the second driver must enable the Console domain on its own. A silently
+/// empty console here is the failure mode this scenario pins.
+pub(super) fn test_e2e_console_capture_after_tab_new(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    // ── 1. Capture on the original tab ─────────────────────────────────────
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    goto_interactive_page(ctx);
+    run_command(ctx, &["console"]); // the first read starts the capture on this driver
+    eval_text(ctx, "console.log('b4-console-origin-1')");
+    let origin = run_command(ctx, &["console"]).stdout;
+    assert!(
+        origin.contains("b4-console-origin-1"),
+        "console must capture on the original tab, got:\n{origin}"
+    );
+
+    // ── 2. tab-new to the form fixture (the CLI switches to it) ────────────
+    let form_url = ctx.form_url();
+    let new_tab = run_command(ctx, &["tab-new", &form_url]);
+    assert_eq!(
+        new_tab.exit_code, 0,
+        "tab-new failed:\nstdout: {}\nstderr: {}",
+        new_tab.stdout, new_tab.stderr
+    );
+    let tab_list = strip_snapshot_output(&run_command(ctx, &["tab-list", "--json"]).stdout);
+    assert!(
+        tab_list.contains(&form_url),
+        "Expected the form fixture tab after tab-new:\n{tab_list}"
+    );
+
+    // ── 3. Capture keeps working on the tab-new target ─────────────────────
+    // The first read on the new tab is what enables the capture there (the same "from now on"
+    // boundary as anywhere else), so it has to come before the message this step asserts on.
+    run_command(ctx, &["console"]);
+    eval_text(ctx, "console.log('b4-console-newtab-1')");
+    let after = run_command(ctx, &["console"]).stdout;
+    assert!(
+        after.contains("b4-console-newtab-1"),
+        "console must capture on the tab-new target, got:\n{after}"
+    );
+    assert!(
+        !after.contains("b4-console-origin-1"),
+        "the new tab's console must not replay the previous tab's messages, got:\n{after}"
+    );
+
+    // ── 4. Clearing on the new tab does not break the capture ──────────────
+    run_command(ctx, &["console", "--clear"]);
+    eval_text(ctx, "console.log('b4-console-newtab-2')");
+    let cleared = run_command(ctx, &["console"]).stdout;
+    assert!(
+        cleared.contains("b4-console-newtab-2"),
+        "capture must continue after a clear on the new tab, got:\n{cleared}"
+    );
+    assert!(
+        !cleared.contains("b4-console-newtab-1"),
+        "clearing must drop the messages buffered before it, got:\n{cleared}"
+    );
+
+    run_command(ctx, &["close"]);
+}

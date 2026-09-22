@@ -158,6 +158,23 @@ instead of Chrome directly. Therefore:
 - Browser4 passes plain `--headless` (never `--headless=new`), forces
   `--disable-blink-features=AutomationControlled`, and leaves user-agent rotation
   off by default because rotation itself is detectable.
+- `console` (list console messages) reads them from the DevTools protocol, so it does **not**
+  patch the page: `console.log` stays the native function and no driver-owned global appears on
+  `window`. Capture starts with the first `console` call of a session, so messages logged before it
+  are not listed — the same boundary the page-side buffer had. Enabling the CDP console domain is
+  the same family of side effect that made the base library stop sending `Runtime.enable` by
+  default, so it was measured rather than assumed: on Chrome 153.0.8010.52 the getter,
+  inherited-getter and prototype-Proxy probes on a logged object stay silent with the domain off
+  and on, while the page-side patch fails the same page's `String(console.log)` check.
+  `browser.console.capture=false` still opts out of the protocol entirely and takes that
+  page-visible patch instead.
+- Where the transport cannot enable the CDP console domain (an extension relay), the driver falls
+  back to the historical page-side buffer, which does replace `console.*` while it is active. The
+  fallback is decided once per driver and the warning names the underlying error, so it is neither
+  retried nor reported twice. A relay that accepts the command but never delivers console events
+  cannot be told apart from a page that logs nothing: `console` then prints an empty list with no
+  error, so treat an unexpectedly empty console on a relayed session as "capture unavailable",
+  not as "the page is quiet".
 - Sites with strong bot protection may still block automated sessions. When the
   goal is "act as the logged-in user", prefer the attach paths (axis 3) over
   launching another browser, and consider raising `--interact-level` (§4).

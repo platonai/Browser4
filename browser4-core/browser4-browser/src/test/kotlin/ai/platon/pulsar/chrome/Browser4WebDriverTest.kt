@@ -201,11 +201,14 @@ class Browser4WebDriverTest {
     }
 
     // -------------------------------------------------------------------------
-    // consoleMessagesJs / consoleClearJs
+    // The page-side console builders — FALLBACK ONLY.
+    // The console path is the CDP capture (Browser4WebDriverConsoleCaptureTest and the
+    // test_e2e_console_capture_* scenarios); these builders are evaluated only when the transport
+    // cannot enable the Console domain, or when browser.console.capture=false.
     // -------------------------------------------------------------------------
 
     @Test
-    @DisplayName("consoleMessagesJs embeds the level filter and the buffer")
+    @DisplayName("the page-side fallback embeds the level filter and its own buffer")
     fun consoleMessagesJsEmbedsLevelAndBuffer() {
         val js = Browser4WebDriver.consoleMessagesJs("error")
         assertTrue(js.contains("minPriority['error']"), "expected level embedding: $js")
@@ -213,7 +216,7 @@ class Browser4WebDriverTest {
     }
 
     @Test
-    @DisplayName("consoleClearJs clears the buffer")
+    @DisplayName("the page-side fallback clears its own buffer")
     fun consoleClearJsClearsBuffer() {
         assertTrue(Browser4WebDriver.consoleClearJs().contains("window.__b4_console = []"))
     }

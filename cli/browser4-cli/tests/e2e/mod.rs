@@ -206,6 +206,7 @@ struct FixturePages {
     mouse_html: String,
     keyboard_html: String,
     drag_html: String,
+    console_probe_html: String,
 }
 
 impl FixtureServer {
@@ -228,6 +229,7 @@ impl FixtureServer {
             mouse_html: load_html_fixture(MOUSE_FIXTURE_FILE),
             keyboard_html: load_html_fixture(KEYBOARD_FIXTURE_FILE),
             drag_html: load_html_fixture(DRAG_FIXTURE_FILE),
+            console_probe_html: load_html_fixture(CONSOLE_PROBE_FIXTURE_FILE),
         });
 
         thread::spawn(move || {
@@ -336,6 +338,12 @@ fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePage
             "200 OK",
             "text/html; charset=utf-8",
             pages.drag_html.clone(),
+        )
+    } else if path == CONSOLE_PROBE_PATH {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.console_probe_html.clone(),
         )
     } else {
         (
@@ -2047,6 +2055,11 @@ impl E2ECtx {
 
     fn drag_url(&self) -> String {
         format!("{}{}", self.fixture_base_url, DRAG_PATH)
+    }
+
+    /// The console serialization probe page (see `console-probe-fixture.html`).
+    fn console_probe_url(&self) -> String {
+        format!("{}{}", self.fixture_base_url, CONSOLE_PROBE_PATH)
     }
 
     /// A slow fixture URL (served after a fixed delay) used to hold browser

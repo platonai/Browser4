@@ -1,5 +1,7 @@
 package ai.platon.pulsar.chrome
 
+import ai.platon.cdt.kt.protocol.support.types.EventListener
+import ai.platon.cdt.kt.protocol.types.console.ConsoleMessageSource
 import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.api.model.BrowserTab
 import ai.platon.pulsar.api.model.JsEvaluation
@@ -8,6 +10,7 @@ import ai.platon.pulsar.chrome.network.RobustRPC
 import ai.platon.pulsar.chrome.protocol.Keyboard
 import ai.platon.pulsar.chrome.protocol.util.withNodeObjectId
 import ai.platon.pulsar.chrome.util.ChromeDriverException
+import ai.platon.pulsar.common.B4Constants
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -23,6 +26,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.random.Random
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Browser4-specific extension of [PulsarWebDriver].
@@ -106,6 +110,9 @@ open class Browser4WebDriver(
 
         /** The dual-world runtime global probed by [ensurePulsarUtilsInjected]. */
         private const val PULSAR_UTILS_FUNCTION = "__pulsar_utils__"
+
+        /** Confirmation text of [consoleClear]; unchanged from the page-side implementation. */
+        internal const val CONSOLE_CLEARED_MESSAGE = "Console cleared"
 
         private val storageStateMapper: ObjectMapper = jacksonObjectMapper()
             .setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
@@ -350,11 +357,14 @@ open class Browser4WebDriver(
             """.trimIndent()
 
         /**
-         * The IIFE used by [consoleMessages] (and the executor's fallback) to read
-         * the buffered console messages, filtering to [level] and above
-         * (error=0, warn=1, info=2, log=2, debug=3).  Intercepts
-         * console.log/warn/error/info/debug on first call and buffers subsequent
-         * messages on `window.__b4_console`.
+         * The IIFE the executor uses for drivers that are not a [Browser4WebDriver], and the
+         * fallback when the Console domain cannot be enabled ([consoleMessages]).
+         *
+         * It patches the page's `console.*` and buffers on `window.__b4_console`, which a page can
+         * detect (the wrapper's source via `console.log.toString()` /
+         * `Function.prototype.toString.call`, its `name`, and the `prototype` property a native
+         * console method does not have) — [Browser4WebDriver.consoleMessages] therefore prefers CDP
+         * capture and leaves this builder for the cases where CDP is unavailable.
          */
         fun consoleMessagesJs(level: String): String =
             """
@@ -1594,27 +1604,142 @@ internal enum class DragDropPosition(val key: String) {
     }
 
     // ---------------------------------------------------------------------------
-    // Console message buffer — intercepts console.log/warn/error/info/debug on
-    // first call and buffers subsequent messages on window.__b4_console.
-    // Moved from BrowserTabToolExecutor so the buffer behavior is driver-owned
-    // and reusable outside the tool layer.
+    // Console message buffer — captured over CDP, the page is left untouched.
     // ---------------------------------------------------------------------------
+
+    /** Buffered console messages, fed by the `Console.messageAdded` listener below. */
+    private val consoleBuffer = ConsoleMessageBuffer()
+
+    /** The `Console.messageAdded` listener, registered at most once per driver. */
+    @Volatile
+    private var consoleListener: EventListener? = null
+
+    /** Guards the one-time capture setup; see [ensureConsoleCapture]. */
+    private val consoleCaptureStarted = AtomicBoolean(false)
+
+    /** Set when the transport cannot enable the Console domain, so the fallback is not retried. */
+    @Volatile
+    private var consoleCaptureUnavailable = false
+
+    /** Set once the first `Console.messageAdded` arrives, so a live capture shows up in the log. */
+    @Volatile
+    private var consoleCaptureConfirmed = false
+
+    /**
+     * Whether the CDP capture is enabled by configuration; see [B4Constants.CONSOLE_CAPTURE_CDP].
+     *
+     * Read per call: the settings of a browser are immutable, and a `false` value must not enable
+     * anything at all — no domain, no listener, no latch.
+     */
+    private val consoleCaptureOverCdp: Boolean
+        get() = settings.config.getBoolean(B4Constants.CONSOLE_CAPTURE_CDP, B4Constants.CONSOLE_CAPTURE_CDP_DEFAULT)
 
     /**
      * Read the buffered browser console messages filtered to [level] and above
-     * (error=0, warn=1, info=2, log=2, debug=3).  Intercepts the console on
-     * first call and buffers subsequent messages.
+     * (error=0, warn=1, info=2, log=2, debug=3).
+     *
+     * Messages are collected from CDP `Console.messageAdded` events, so reading the console never
+     * modifies the page (see [ConsoleMessageBuffer] for why that matters). Capture starts with the
+     * first call — like the page-side buffer it replaces — and falls back to [consoleMessagesJs] when
+     * the transport cannot enable the Console domain; `browser.console.capture=false` skips CDP
+     * entirely, see [B4Constants.CONSOLE_CAPTURE_CDP].
      */
     @Throws(WebDriverException::class)
-    suspend fun consoleMessages(level: String = "info"): JsEvaluation? =
-        evaluateValueDetail(consoleMessagesJs(level))
+    suspend fun consoleMessages(level: String = "info"): JsEvaluation? {
+        if (!consoleCaptureOverCdp || !ensureConsoleCapture()) {
+            return evaluateValueDetail(consoleMessagesJs(level))
+        }
+
+        return JsEvaluation(value = consoleBuffer.toJson(level), cdpType = "string")
+    }
 
     /**
      * Clear the buffered browser console messages.
+     *
+     * @see consoleMessages
      */
     @Throws(WebDriverException::class)
-    suspend fun consoleClear(): JsEvaluation? =
-        evaluateValueDetail(consoleClearJs())
+    suspend fun consoleClear(): JsEvaluation? {
+        if (!consoleCaptureOverCdp || !ensureConsoleCapture()) {
+            return evaluateValueDetail(consoleClearJs())
+        }
+
+        consoleBuffer.clear()
+        return JsEvaluation(value = CONSOLE_CLEARED_MESSAGE, cdpType = "string")
+    }
+
+    /**
+     * Start capturing console messages for this driver, once.
+     *
+     * `Console.messageAdded` is the only console event the protocol layer exposes
+     * ([BrowserProtocol.onConsoleMessageAdded]); it is deprecated in the CDP definition in favour of
+     * `Runtime.consoleAPICalled`, which would need both an upstream addition to the protocol layer
+     * and `browser.launch.runtime.enable=true` — the domain the base library now keeps off by default
+     * because of the console-argument serialization it carries. Measured on Chrome 153,
+     * `Console.messageAdded` still delivers every page `console.*` call, so the deprecated event is
+     * the cheaper of the two, and the driver favours it over patching the page.
+     *
+     * @return false when the Console domain could not be enabled, i.e. the caller must fall back to
+     * the page-side buffer (an extension/relay transport that does not implement the command)
+     *
+     * The decision is taken once per driver: a transport that rejects the command is remembered, so
+     * the page-side fallback is neither retried on every read nor warned about twice. Note the
+     * converse case, which no code can detect: a transport that accepts `Console.enable` but never
+     * delivers `Console.messageAdded` leaves the console legitimately empty — indistinguishable from
+     * a page that logs nothing, hence the one-shot debug line on the first captured message.
+     *
+     * Enabling the domain was measured against the signal that made the base library default
+     * `Runtime.enable` to off: on Chrome 153.0.8010.52 the getter, inherited-getter and
+     * prototype-Proxy probes of `console-probe-fixture.html` report false with the capture off and
+     * on (`test_e2e_console_serialization_probe`), so this domain does not reproduce that signal.
+     */
+    private suspend fun ensureConsoleCapture(): Boolean {
+        if (consoleListener != null) {
+            return true
+        }
+        if (consoleCaptureUnavailable) {
+            return false
+        }
+
+        if (!consoleCaptureStarted.compareAndSet(false, true)) {
+            // Another call is enabling the capture; give it a moment instead of enabling twice.
+            repeat(50) {
+                if (consoleListener != null) {
+                    return true
+                }
+                delay(10)
+            }
+            return consoleListener != null
+        }
+
+        val enabled = runCatching { browserProtocol.executeCdpCommand("Console.enable") }
+        if (enabled.isFailure) {
+            consoleCaptureUnavailable = true
+            logger.warn(
+                "Console.enable is not available on this transport ({}); console messages keep using " +
+                    "the page-side buffer (which patches console.* and is visible to the page)",
+                enabled.exceptionOrNull()?.message
+            )
+            return false
+        }
+
+        consoleListener = browserProtocol.onConsoleMessageAdded { event ->
+            val message = event.message
+            if (message.source != ConsoleMessageSource.CONSOLE_API) {
+                // Only page `console.*` calls, matching the buffer this replaces (network/security
+                // entries would otherwise show up as console messages).
+                return@onConsoleMessageAdded
+            }
+            if (consoleBuffer.add(message.level.name, message.text) && !consoleCaptureConfirmed) {
+                consoleCaptureConfirmed = true
+                // A relay can accept Console.enable and never deliver events; this line is the only
+                // evidence in the log that the capture is actually working on this transport.
+                logger.debug("Console message capture is live on this driver")
+            }
+        }
+
+        return true
+    }
 
     // ---------------------------------------------------------------------------
     // Dual-world runtime recovery — PulsarWebDriver registers the Browser4
