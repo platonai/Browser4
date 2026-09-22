@@ -164,6 +164,19 @@ class CrawlService(
         return budget.coerceIn(1, MAX_PARALLEL_TABS)
     }
 
+    /**
+     * Resolve the task budget for one crawl from its request.
+     *
+     * [taskTimeoutMillis] is the server's default — what a request that asks for nothing runs
+     * under.  A request may ask for its own, clamped to the per-request range
+     * ([resolveRequestTaskTimeout]); the effective value is what the task arms its clock with,
+     * what every round derives its own timeout from, and what
+     * [CrawlResponse.taskTimeoutMillis] reports, so a clamp is visible to the caller instead of
+     * being a silent difference between what it asked for and what it got.
+     */
+    fun resolveTaskTimeoutMillis(request: CrawlRequest): Long =
+        resolveRequestTaskTimeout(request.taskTimeoutMillis, taskTimeoutMillis)
+
     init {
         // Periodically purge expired tasks so stale entries don't accumulate
         crawlScope.launch {
@@ -198,14 +211,15 @@ class CrawlService(
             return taskId
         }
 
-        // The parallelism budget is resolved once, before the worker starts, so
-        // every branch of the worker — including its terminal timeout/error
-        // records — reports the same budget the crawl actually ran under.
+        // The parallelism budget and the task budget are resolved once, before the worker
+        // starts, so every branch of the worker — including its terminal timeout/error
+        // records — reports the same values the crawl actually ran under.
         val task = CrawlTaskContext(
             taskId = taskId,
             request = request,
             seedUrls = seedUrls,
-            parallelTabs = resolveParallelTabs(request)
+            parallelTabs = resolveParallelTabs(request),
+            taskTimeoutMillis = resolveTaskTimeoutMillis(request)
         )
 
         val job = crawlScope.launch { runCrawlTask(task) }
@@ -213,8 +227,8 @@ class CrawlService(
         jobStore[taskId] = job
 
         logger.info(
-            "Crawl task submitted: {} seeds={} depth={} parallelTabs={}",
-            taskId, seedUrls.size, request.depth, task.parallelTabs
+            "Crawl task submitted: {} seeds={} depth={} parallelTabs={} budget={}ms",
+            taskId, seedUrls.size, request.depth, task.parallelTabs, task.taskTimeoutMillis
         )
         return taskId
     }
@@ -264,7 +278,7 @@ class CrawlService(
             markProcessing(task)
             // Arm the task clock together with the task-level limit, so a round's
             // derived budget and the limit itself measure exactly the same span.
-            val taskLimitMs = taskTimeoutMillis
+            val taskLimitMs = task.taskTimeoutMillis
             task.armBudget(taskLimitMs)
             val collected = withTimeout(taskLimitMs.milliseconds) { collectSeeds(task) }
             writeCompleted(task, collected)
@@ -407,7 +421,7 @@ class CrawlService(
             val remainingBudgetMs = task.remainingBudgetMs()
             if (!hasBudgetForRound(remainingBudgetMs)) {
                 val reason = "$REASON_BUDGET_EXHAUSTED " +
-                    "(${remainingBudgetMs}ms of the ${taskTimeoutMillis}ms task budget left)"
+                    "(${remainingBudgetMs}ms of the ${task.taskTimeoutMillis}ms task budget left)"
                 logger.warn(
                     "Crawl {}: seed URL {}/{} '{}' was not started — {}",
                     task.taskId, index + 1, task.seedUrls.size, seedUrl, reason
@@ -531,6 +545,7 @@ class CrawlService(
                 // so a poller can tell a slow serial crawl from a
                 // fast parallel one.
                 parallelTabs = task.parallelTabs,
+                taskTimeoutMillis = task.taskTimeoutMillis,
                 maxConcurrentFetches = task.peakInFlight.get()
             )
             taskStore.put(task.taskId, incrementalResponse)
@@ -583,6 +598,7 @@ class CrawlService(
             failedPages = failedPages.takeIf { it.isNotEmpty() },
             pagesExpected = pagesExpected,
             parallelTabs = task.parallelTabs,
+            taskTimeoutMillis = task.taskTimeoutMillis,
             maxConcurrentFetches = task.peakInFlight.get()
         )
         taskStore.put(task.taskId, completed)
@@ -655,7 +671,7 @@ class CrawlService(
                 status = CrawlStatus.REQUEST_TIMEOUT,
                 error = if (timedOutByTaskLimit) {
                     "Crawl timed out while processing seeds (server-side limit of " +
-                        "${taskTimeoutMillis / 1000}s exceeded). Partial results below."
+                        "${task.taskTimeoutMillis / 1000}s exceeded). Partial results below."
                 } else {
                     "Crawl cancelled or timed out"
                 },
@@ -674,6 +690,7 @@ class CrawlService(
                 // running under and the overlap it achieved, so the
                 // partial result says "how" as well as "how much".
                 parallelTabs = existing?.parallelTabs ?: task.parallelTabs,
+                taskTimeoutMillis = existing?.taskTimeoutMillis ?: task.taskTimeoutMillis,
                 maxConcurrentFetches = maxOf(existing?.maxConcurrentFetches ?: 0, task.peakInFlight.get()),
                 startedTime = existing?.startedTime ?: now,
                 finishTime = now
@@ -698,6 +715,7 @@ class CrawlService(
             status = CrawlStatus.INTERNAL_SERVER_ERROR,
             error = e.message ?: "Unknown error",
             parallelTabs = task.parallelTabs,
+            taskTimeoutMillis = task.taskTimeoutMillis,
             maxConcurrentFetches = task.peakInFlight.get(),
             startedTime = existing?.startedTime ?: now,
             finishTime = now
@@ -763,6 +781,7 @@ class CrawlService(
             status = CrawlStatus.REQUEST_TIMEOUT,
             error = "Cancelled by user",
             parallelTabs = previous?.parallelTabs ?: 0,
+            taskTimeoutMillis = previous?.taskTimeoutMillis ?: 0,
             maxConcurrentFetches = previous?.maxConcurrentFetches ?: 0,
             startedTime = previous?.startedTime ?: now,
             finishTime = now
@@ -864,6 +883,12 @@ class CrawlService(
         val request: CrawlRequest,
         val seedUrls: List<String>,
         val parallelTabs: Int,
+        /**
+         * The task budget this crawl runs under (ms), resolved from its request once — the
+         * clock it arms, the limit every round derives its own timeout from, and the value
+         * the terminal record reports (see [resolveTaskTimeoutMillis]).
+         */
+        val taskTimeoutMillis: Long,
     ) {
         // Out-links discovered beyond the seed URLs (depth>=1 crawls),
         // aggregated across seeds.  Kept separate from the result size so a

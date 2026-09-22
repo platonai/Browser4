@@ -13314,6 +13314,13 @@ fn build_crawl_server_params(
                 m.insert("parallelTabs".to_string(), json!(n));
             }
         }
+        // --timeout is a CLI spelling too: the backend field is `taskTimeoutMillis`, and the
+        // value is a user-facing duration there (`10m`), so it is converted here.
+        if let Some(value) = m.remove("timeout") {
+            if let Some(millis) = value.as_str().and_then(crawl_timeout_to_millis) {
+                m.insert("taskTimeoutMillis".to_string(), json!(millis));
+            }
+        }
         // Insert resolved urls array
         let url_array: Vec<Value> = urls.iter().map(|u| json!(u)).collect();
         m.insert("urls".to_string(), json!(url_array));
@@ -13383,6 +13390,74 @@ fn validate_crawl_parallel(value: &str) -> Result<(), String> {
             value
         )),
     }
+}
+
+/// Task-budget range the server accepts for one crawl, in milliseconds.
+///
+/// Must match `CrawlSupport.MIN_REQUEST_TASK_TIMEOUT_MS` / `MAX_REQUEST_TASK_TIMEOUT_MS`:
+/// the server clamps into this range, and clamping silently is exactly what a caller cannot
+/// see — so the CLI refuses the value up front, while the response still reports the budget
+/// that was used (mirroring `--parallel`).
+const CRAWL_MIN_TASK_TIMEOUT_MS: i64 = 1_000;
+const CRAWL_MAX_TASK_TIMEOUT_MS: i64 = 3_600_000;
+
+/// A task budget in milliseconds: a plain integer means seconds (the same reading the load
+/// options use), and `ms`/`s`/`m`/`h`/`d` suffixes are honoured. `None` when the value is not
+/// a duration at all.
+fn crawl_timeout_to_millis(value: &str) -> Option<i64> {
+    let value = value.trim();
+    if !is_duration_value(value) {
+        return None;
+    }
+    let (number, factor) = if let Some(number) = value.strip_suffix("ms") {
+        (number, 1_i64)
+    } else if let Some(number) = value.strip_suffix('s') {
+        (number, 1_000)
+    } else if let Some(number) = value.strip_suffix('m') {
+        (number, 60_000)
+    } else if let Some(number) = value.strip_suffix('h') {
+        (number, 3_600_000)
+    } else if let Some(number) = value.strip_suffix('d') {
+        (number, 86_400_000)
+    } else {
+        (value, 1_000)
+    };
+    number.parse::<i64>().ok().map(|n| n * factor)
+}
+
+/// Validate the --timeout value: a duration inside the range one request may ask for.
+///
+/// An absent/empty value is fine (the server's 10-minute default applies). The budget is
+/// what makes a large crawl end with an accounted-for TIMEOUT instead of being killed
+/// mid-flight, so a value the user cannot have meant must fail here rather than quietly
+/// become the default.
+fn validate_crawl_timeout(value: &str) -> Result<(), String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(());
+    }
+    let millis = crawl_timeout_to_millis(value).ok_or_else(|| {
+        format!(
+            "Invalid --timeout value '{}'. Expected seconds (900) or a duration such as 30s, \
+             10m, 1h",
+            value
+        )
+    })?;
+    if millis < CRAWL_MIN_TASK_TIMEOUT_MS {
+        return Err(format!(
+            "Invalid --timeout value '{}'. The minimum is 1s: a crawl with no time at all \
+             cannot start a single round",
+            value
+        ));
+    }
+    if millis > CRAWL_MAX_TASK_TIMEOUT_MS {
+        return Err(format!(
+            "Invalid --timeout value '{}'. The maximum is 1h, because the budget buys browser \
+             time; split the work across several crawls",
+            value
+        ));
+    }
+    Ok(())
 }
 
 /// The parallelism report for a finished crawl: the budget it ran under and the
@@ -13692,6 +13767,17 @@ async fn handle_crawl(
     validate_crawl_parallel(
         tool_params
             .get("parallel")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+    )?;
+
+    // ---- Validate the task budget ----
+    // The budget is the crawl's own clock: a round derives its timeout from what is left of
+    // it, and a seed that cannot fit is reported as an unstarted loss.  A value outside the
+    // server's per-request range is refused here rather than clamped silently.
+    validate_crawl_timeout(
+        tool_params
+            .get("timeout")
             .and_then(|v| v.as_str())
             .unwrap_or(""),
     )?;
@@ -26869,6 +26955,61 @@ mod tests {
     // -------------------------------------------------------------------
     // build_crawl_server_params tests
     // -------------------------------------------------------------------
+
+    #[test]
+    fn crawl_timeout_parses_seconds_and_durations_to_millis() {
+        // A plain integer is seconds, the same reading the load options use.
+        assert_eq!(crawl_timeout_to_millis("900"), Some(900_000));
+        assert_eq!(crawl_timeout_to_millis("30s"), Some(30_000));
+        assert_eq!(crawl_timeout_to_millis("1500ms"), Some(1_500));
+        assert_eq!(crawl_timeout_to_millis("10m"), Some(600_000));
+        assert_eq!(crawl_timeout_to_millis("1h"), Some(3_600_000));
+        assert_eq!(crawl_timeout_to_millis("2d"), Some(172_800_000));
+        assert_eq!(crawl_timeout_to_millis("soon"), None);
+        assert_eq!(crawl_timeout_to_millis(""), None);
+    }
+
+    #[test]
+    fn validate_crawl_timeout_accepts_an_absent_or_in_range_budget() {
+        assert!(validate_crawl_timeout("").is_ok(), "absent means the server default");
+        assert!(validate_crawl_timeout("1s").is_ok());
+        assert!(validate_crawl_timeout("30m").is_ok());
+        assert!(validate_crawl_timeout("1h").is_ok());
+    }
+
+    #[test]
+    fn validate_crawl_timeout_rejects_a_budget_no_crawl_can_use() {
+        let err = validate_crawl_timeout("500ms").unwrap_err();
+        assert!(err.contains("minimum is 1s"), "got: {err}");
+        let err = validate_crawl_timeout("2h").unwrap_err();
+        assert!(err.contains("maximum is 1h"), "got: {err}");
+        let err = validate_crawl_timeout("ten minutes").unwrap_err();
+        assert!(err.contains("10m"), "the error must show a usable spelling, got: {err}");
+    }
+
+    #[test]
+    fn build_crawl_server_params_translates_timeout_to_task_timeout_millis() {
+        let tool_params = json!({"url": "https://example.com", "timeout": "45s"});
+        let urls = vec!["https://example.com".to_string()];
+        let result = build_crawl_server_params(&tool_params, &urls, None, None);
+        assert_eq!(result["taskTimeoutMillis"], json!(45_000));
+        // The CLI spelling must not leak: the server reads `taskTimeoutMillis` only.
+        assert!(
+            result.get("timeout").is_none(),
+            "the CLI duration spelling must not be sent as-is: {result}"
+        );
+    }
+
+    #[test]
+    fn build_crawl_server_params_omits_the_task_budget_when_not_requested() {
+        let tool_params = json!({"url": "https://example.com"});
+        let urls = vec!["https://example.com".to_string()];
+        let result = build_crawl_server_params(&tool_params, &urls, None, None);
+        assert!(
+            result.get("taskTimeoutMillis").is_none(),
+            "an absent budget must let the server's default apply: {result}"
+        );
+    }
 
     #[test]
     fn build_crawl_server_params_strips_cli_only_keys() {

@@ -3036,6 +3036,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "no-norm", description: "Disable URL normalization of discovered out-link hrefs (no effect on seed URLs in depth-0 bulk fetch)", is_bool: true, short: None },
                 OptionDef { name: "readonly", description: "Non-destructive mode: loads may be served from the page store and are never written back; wins over --refresh", is_bool: true, short: None },
                 OptionDef { name: "parallel <n>", description: "Collect up to <n> pages/tabs at the same time (default: 4, 1 = sequential). Each parallel unit needs its own browser tab", is_bool: false, short: None },
+                OptionDef { name: "timeout <dur>", description: "Maximum time the crawl may run before the server cancels it: seconds, or a duration such as 30s, 10m, 1h (default: 10m; max 1h). A crawl that runs out of budget reports the pages it never started instead of being cut off silently", is_bool: false, short: None },
                 OptionDef { name: "background", description: "Submit crawl and return immediately; use 'crawl list' to track progress", is_bool: true, short: Some("bg") },
                 OptionDef { name: "verbose", description: "Show per-URL processing status in crawl results", is_bool: true, short: None },
             ],

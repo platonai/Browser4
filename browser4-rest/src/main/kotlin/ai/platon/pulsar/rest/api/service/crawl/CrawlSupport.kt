@@ -28,6 +28,37 @@ import java.time.Instant
 private val MIN_FETCH_TIME: Instant = Instant.parse("2000-01-01T00:00:00Z")
 
 /**
+ * Floor for a task budget a request may ask for (ms).
+ *
+ * It only has to be positive: a budget below the round floor (report margin + minimum round
+ * budget) cannot start a single round, and that is a *reported* outcome — every seed is
+ * refused by name with its reason — not a silent one.  Unit tests drive that path with 10s.
+ */
+internal const val MIN_REQUEST_TASK_TIMEOUT_MS = 1_000L
+
+/**
+ * Ceiling for a task budget a request may ask for (ms): one hour.
+ *
+ * A caller may raise its own budget above the server default (the default is a policy, not a
+ * grant), but not without bound: one crawl holding browser tabs for a day is the failure this
+ * ceiling prevents.  An operator who needs longer raises `CrawlService.taskTimeoutMillis`.
+ */
+internal const val MAX_REQUEST_TASK_TIMEOUT_MS = 3_600_000L
+
+/**
+ * The task budget a request runs under, from what it asked for and what the server defaults to.
+ *
+ * `null` and non-positive values mean "no preference" (a budget is a limit, not a switch, so
+ * `0` must not mean "cancel now"), and anything positive is clamped into the per-request range.
+ * The caller sees the result in `CrawlResponse.taskTimeoutMillis`, so a clamp is visible rather
+ * than silently different — the same contract `resolveParallelTabs` has for tabs.
+ */
+internal fun resolveRequestTaskTimeout(requested: Long?, serverDefault: Long): Long {
+    if (requested == null || requested <= 0L) return serverDefault
+    return requested.coerceIn(MIN_REQUEST_TASK_TIMEOUT_MS, MAX_REQUEST_TASK_TIMEOUT_MS)
+}
+
+/**
  * How many lost URLs the diagnostic spells out.  The full list is in
  * [CrawlResponse.failedPages]; the note only has to prove the loss is real and
  * name the first few.

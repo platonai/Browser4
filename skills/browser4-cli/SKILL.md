@@ -273,7 +273,7 @@ Copy-paste template and expanded trees: [decision-trees.md](references/decision-
 ### 4d. Bulk & Scale
 
 - Single list page → `htmlsnapshot query` with `DOM_LOAD_AND_SELECT`.
-- Known URL list → `crawl --seed-file urls.txt --depth 0 --sql @query.sql` (add `--parallel 8`; each unit gets its own tab).
+- Known URL list → `crawl --seed-file urls.txt --depth 0 --sql @query.sql` (add `--parallel 8`; each unit gets its own tab, and `--timeout 30m` when the 10-minute task budget is too short).
 - Crawl from a start URL → `crawl <url> --out-link-selector "…" --depth N`.
 - High throughput → `swarm create` → `swarm query --seed-file …`; `swarm query` returns rows, so stage the fetched corpus with `webdb export "url1,url2" <dir>` (URLs **comma-separated**).
 - Repeated monitoring → `loop -i 3600 -- eval "…"`.

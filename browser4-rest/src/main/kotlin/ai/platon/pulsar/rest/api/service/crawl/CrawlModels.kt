@@ -34,7 +34,25 @@ data class CrawlRequest @JsonCreator constructor(
      * `null` (the default) uses [CrawlService.DEFAULT_PARALLEL_TABS], and `1`
      * means the historical strictly sequential crawl.
      */
-    @param:JsonProperty("parallelTabs") val parallelTabs: Int? = null
+    @param:JsonProperty("parallelTabs") val parallelTabs: Int? = null,
+    /**
+     * How long this crawl may run before the server cancels it (ms).
+     *
+     * The budget is the crawl's own clock, not a per-request timeout: a round derives its
+     * timeout from what is left of it (see `CrawlService.resolveRoundTimeoutMs`), and a seed
+     * that cannot fit is reported as an unstarted loss instead of being dropped.  It is
+     * therefore also what a caller tunes to make a big crawl finish *and report* rather than
+     * be killed mid-flight.
+     *
+     * `null` (the default) uses the server's `CrawlService.taskTimeoutMillis` (10 minutes).
+     * A value above zero is clamped to the per-request range
+     * (`MIN_REQUEST_TASK_TIMEOUT_MS`..`MAX_REQUEST_TASK_TIMEOUT_MS`), which
+     * `CrawlResponse.taskTimeoutMillis` always reports — so a clamped request is visible
+     * rather than silently different.  A non-positive value means "no preference" and falls
+     * back to the server default: the budget is a limit, not a switch, and `0` must not mean
+     * "cancel immediately".
+     */
+    @param:JsonProperty("taskTimeoutMillis") val taskTimeoutMillis: Long? = null
 )
 
 /**
@@ -133,6 +151,16 @@ data class CrawlResponse(
      * never the raw request.
      */
     val parallelTabs: Int = 0,
+    /**
+     * The task budget this crawl ran under (ms): how long it was allowed to run before the
+     * server's task limit cancels it.
+     *
+     * Reported for the same reason [parallelTabs] is: the value is always the *effective*
+     * one — the request's own budget after clamping, or the server default when the request
+     * asked for none (see `CrawlService.resolveTaskTimeoutMillis`) — never the raw request.
+     * It is `0` for a task that never started.
+     */
+    val taskTimeoutMillis: Long = 0,
     /**
      * The peak number of fetch units this crawl actually had in flight at the
      * same time — the observed counterpart of [parallelTabs].

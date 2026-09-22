@@ -314,6 +314,63 @@ class CrawlServiceTest {
         verifyNoInteractions(sessionManager)
     }
 
+    /**
+     * A request may carry its own task budget, and the record it leaves behind reports the
+     * budget it actually ran under — the same contract `parallelTabs` has, so a clamped
+     * request is visible to the caller instead of silently different.
+     */
+    @Test
+    fun `a request's own task budget drives the crawl and is reported back`() = runBlocking {
+        // Below the round floor (report margin + minimum round budget = 45s), so no seed can
+        // be started — and the crawl says so by name rather than looking merely small.
+        val seeds = listOf("https://example.com/a", "https://example.com/b")
+
+        val taskId = crawlService.submit(
+            CrawlRequest(urls = seeds, depth = 1, taskTimeoutMillis = 10_000)
+        )
+        val result = awaitTerminal(taskId)
+
+        assertEquals(
+            ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
+            result.status,
+            "a crawl that could not fetch its seeds is a timeout, never OK"
+        )
+        assertEquals(
+            10_000L, result.taskTimeoutMillis,
+            "the record must report the budget the task ran under, not the server default"
+        )
+        assertEquals(seeds.size, result.pagesExpected)
+        assertEquals(seeds, result.failedPages?.map { it.url }, "every refused seed is named")
+        assertEquals(
+            result.pagesExpected, result.pagesFound + (result.failedPages?.size ?: 0),
+            "the accounting law still holds for a request-scoped budget"
+        )
+        verifyNoInteractions(sessionManager)
+    }
+
+    @Test
+    fun `a request's task budget is clamped, and an absent one uses the server default`() {
+        val serverDefault = crawlService.taskTimeoutMillis
+        assertEquals(
+            serverDefault, crawlService.resolveTaskTimeoutMillis(CrawlRequest()),
+            "no preference runs under the server's default"
+        )
+        assertEquals(
+            serverDefault, crawlService.resolveTaskTimeoutMillis(CrawlRequest(taskTimeoutMillis = 0)),
+            "0 is not a switch: a budget of nothing is not a crawl"
+        )
+        assertEquals(
+            MAX_REQUEST_TASK_TIMEOUT_MS,
+            crawlService.resolveTaskTimeoutMillis(CrawlRequest(taskTimeoutMillis = 24 * 3_600_000L)),
+            "a caller may exceed the server default, but not without bound"
+        )
+        assertEquals(
+            MIN_REQUEST_TASK_TIMEOUT_MS,
+            crawlService.resolveTaskTimeoutMillis(CrawlRequest(taskTimeoutMillis = 1)),
+            "a sub-second budget is raised to the floor rather than armed as a zero-length clock"
+        )
+    }
+
     /** Poll a task until it reaches a terminal state, or fail with what it was doing. */
     private suspend fun awaitTerminal(taskId: String, timeoutMs: Long = 30_000): CrawlResponse {
         val deadline = System.currentTimeMillis() + timeoutMs

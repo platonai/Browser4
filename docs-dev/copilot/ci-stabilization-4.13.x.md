@@ -947,8 +947,8 @@ round = clamp( min(depth × 5min, 30min),  剩余任务预算 − 30s 报告余�
 
 §16.4 的第 3、4、5 条不变（在途视图非聚合、发布缺 per-task 锁、发现链接未去重）。本轮新增两条：
 
-* `taskTimeoutMillis` 只有一个默认值 10 min（单测直接改这个 `@Volatile var`）。若要按请求或配置调，
-  需要在 REST/DTO 层定契约（`CrawlRequest` 加字段 + 校验 + 文档），本轮没有做。
+* **（§27 已做）`taskTimeoutMillis` 的按请求契约**：原来只有一个默认值 10 min（单测直接改这个
+  `@Volatile var`），现在 `CrawlRequest` 带字段 + 校验 + 文档。见 §27。
 * **store-serve 行的 `title` 为 null**（真浏览器 `testReadonlyCrawlSurfacesServedOrFresh`，改动前后都红）：
   §17.5 当时把它归到"`-readonly` 不带 `-refresh` 的 store-serve 路径"——**这个判断是错的**，
   下一轮（§18）用探针推翻并修掉了：真正发生的是"一次失败的抓取被 `-ignoreFailure` 兜住，
@@ -1790,6 +1790,59 @@ crawl 排的。
   判断更可信（引擎的重试间隔可调吗？值得等吗？），属于独立一轮的决策。
 * **端到端用例钉的是契约而不是机制**：它无法区分"第二次加载是谁排的"。要区分就需要一个能产生**终局**投递
   失败的 fixture；本轮试了 `200` 空 body、`500`、`404` 三种，前两种直接不成立、第三种被引擎接管（§26.4）。
+
+
+## 27. 任务预算的按请求契约：`--timeout`（4.13.x，§17.5 第 1 条）
+
+§17.5 记的是"`taskTimeoutMillis` 只有一个默认值 10 min；要按请求调，需要在 REST/DTO 层定契约"。这一轮补上，
+并且顺着 §17.2/§17.3 已有的那条线走：**任务预算是一个时钟**，轮次预算从它派生、种子闸门按它算，所以"按请求
+调预算"改的是整个任务的时间面，不是另加一个定时器。
+
+### 27.1 契约
+
+| 层 | 形状 |
+|---|---|
+| 请求 | `CrawlRequest.taskTimeoutMillis: Long? = null`（JSON 同名）。`null` / `≤ 0` = "没有偏好"，用服务端默认值；`> 0` 被夹到 `[1s, 1h]` |
+| 纯规则 | `CrawlSupport.resolveRequestTaskTimeout(requested, serverDefault)`；常量 `MIN_REQUEST_TASK_TIMEOUT_MS = 1_000` / `MAX_REQUEST_TASK_TIMEOUT_MS = 3_600_000` |
+| 服务 | `CrawlService.resolveTaskTimeoutMillis(request)`：与 `resolveParallelTabs` 同一形状、同一约定 |
+| 任务 | `CrawlTaskContext.taskTimeoutMillis` 在提交时解析一次；worker 用它 arm 时钟、用它做 `withTimeout`、用它写"预算用尽"和"任务上限"文案 |
+| 记录 | `CrawlResponse.taskTimeoutMillis` 报**实际生效**的值（含服务端夹取），不是原始请求 |
+| CLI | `crawl --timeout <dur>`（`900`/`30s`/`10m`/`1h`），在本地校验后翻译成 `taskTimeoutMillis` |
+
+三条设计取舍，都是照已有的约定抄的：
+
+* **夹取而不是拒绝**（服务端）：与 `--parallel` 一样，"问了超过服务端愿意给的"仍然得到一次能跑的 crawl，
+  而记录里报的是实际值，调用方看得见差别。`0` 和负数当"没有偏好"：预算是上限，不是开关，`0` 不能解释成
+  "立刻取消"。
+* **CLI 提前拒绝**：`--parallel` 的先例是"把一次往返变成一条立刻的消息"。所以 `--timeout 500ms` / `2h` /
+  `ten minutes` 在本地就以非零退出，错误信息里给出可用的写法（`10m`）。
+* **默认值不动**：`CrawlService.taskTimeoutMillis`（10 min）仍是"没要求就用它"，运维侧的唯一旋钮也还在那里；
+  按请求调只是让一次 crawl 能自己说"我需要 30 分钟"。
+
+### 27.2 验证
+
+| 层 | 证据 | 结果 |
+|---|---|---|
+| 单测 · 纯规则 | `CrawlSupportTest` 57 → **59**：缺省/非正数回落默认、请求值被夹到 `[1s, 1h]` | **59 / 0 / 0** |
+| 单测 · 服务 | `CrawlServiceTest` 11 → **13**：请求自带 `taskTimeoutMillis = 10_000` 时闸门在碰浏览器前短路、终态 TIMEOUT、每个种子按名报丢失、记录里报的就是 10_000（不是服务端默认）；夹取与缺省回落 | **13 / 0 / 0** |
+| 单测 · 序列化 | `CrawlResponseTest` 17 → **18**：`taskTimeoutMillis` 持久化往返；没有该字段的历史 JSONL 行仍能还原（任务文件是跨版本追加的） | **18 / 0 / 0** |
+| 单测 · CLI | `cargo test --bin browser4-cli`：时长解析（`900`→900000、`1500ms`、`10m`、`1h`、`2d`、垃圾值→None）、上下界校验、`--timeout 45s` → `taskTimeoutMillis: 45000` 且 CLI 拼写不外泄、未指定时不发这个字段 | **1214 passed / 0 failed** |
+| 汇总（同批） | `CrawlLedgerTest` + `CrawlResponseTest` + `CrawlServiceTest` + `CrawlSupportTest` | **108 / 0 / 0，BUILD SUCCESS** |
+
+文档：`skills/browser4-cli/references/crawl.md` 新增 `--timeout` 选项行 + "Task budget (`--timeout`)" 小节，
+把"后端任务上限 10 分钟"改成"默认 10 分钟，可按 crawl 用 `--timeout` 提到最多 1h"，排障表新增
+`Invalid --timeout` 行；`skills/browser4-cli/SKILL.md` 的 crawl 指南补一句；CLI 帮助文本由
+`commands.rs` 的 `OptionDef` 生成，所以 `--timeout` 的说明只写在一处。
+
+### 27.3 仍未做（本条边界）
+
+* **请求侧预算不做"下限保护"**：允许 `--timeout 1s`（服务端下限）意味着这次 crawl 的每个种子都会在
+  闸门处被拒。这是**如实报账**的行为（每个种子一行丢失 + `skipped` 状态），不是静默失败，所以没有再加
+  "至少 45s"的限制——那会让"我就是想测一下预算闸门"变成做不到。CLI 只挡 `1s` 以下。
+* **`--timeout` 不覆盖排队时间**：预算从 worker 真正开工时 arm（`armBudget`），与 `withTimeout` 同一个
+  时刻，排队不算——这条语义没变，文档里也写了。
+* **没有任何配置项把默认值调大**：运维侧仍然只能改 `CrawlService.taskTimeoutMillis`（或按请求传）。若将来要
+  做成 `application.properties` 配置项，那是配置层的独立改动（本轮只动 REST/DTO 契约，符合 §17.5 的原话）。
 
 
 

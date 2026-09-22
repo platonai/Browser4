@@ -1011,6 +1011,34 @@ class CrawlSupportTest {
     }
 
     // ------------------------------------------------------------------
+    // resolveRequestTaskTimeout
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a request with no budget of its own runs under the server's default")
+    fun testAbsentTaskBudgetUsesTheServerDefault() {
+        assertEquals(600_000L, resolveRequestTaskTimeout(null, 600_000L))
+        // A budget is a limit, not a switch: a non-positive value means "no preference".
+        assertEquals(600_000L, resolveRequestTaskTimeout(0L, 600_000L))
+        assertEquals(600_000L, resolveRequestTaskTimeout(-5L, 600_000L))
+    }
+
+    @Test
+    @DisplayName("a requested budget is honoured, and clamped to the per-request range")
+    fun testRequestedTaskBudgetIsClamped() {
+        assertEquals(120_000L, resolveRequestTaskTimeout(120_000L, 600_000L))
+        // Above the server default is allowed — the default is a policy, not a grant ...
+        assertEquals(1_800_000L, resolveRequestTaskTimeout(1_800_000L, 600_000L))
+        // ... but not without bound: one crawl may not hold browsers for a day.
+        assertEquals(
+            MAX_REQUEST_TASK_TIMEOUT_MS,
+            resolveRequestTaskTimeout(24 * 3_600_000L, 600_000L)
+        )
+        // Below the floor is raised to it, so the clock a task arms is never zero-length.
+        assertEquals(MIN_REQUEST_TASK_TIMEOUT_MS, resolveRequestTaskTimeout(1L, 600_000L))
+    }
+
+    // ------------------------------------------------------------------
     // buildLossNote
     // ------------------------------------------------------------------
 
