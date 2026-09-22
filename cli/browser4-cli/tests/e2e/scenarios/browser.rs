@@ -2551,3 +2551,67 @@ pub(super) fn test_htmlsnapshot_capture_after_tab_new(ctx: &mut E2ECtx) {
 
     run_command(ctx, &["close"]);
 }
+
+/// Test that reading console messages leaves the page untouched.
+///
+/// The historical implementation replaced `console.log`/`warn`/… with driver-owned wrappers that
+/// buffered on `window.__b4_console`, which a page detects easily: the wrapper's source through
+/// `console.log.toString()` (or `Function.prototype.toString.call(console.log)`, which bypasses an
+/// own `toString`), its function `name`, and the `prototype` property a native console method does
+/// not have.  Messages are now captured from CDP, so after reading the console the page must look
+/// exactly as it did before.
+pub(super) fn test_e2e_console_capture_is_page_silent(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    goto_interactive_page(ctx);
+
+    // The first read starts the capture (same "from now on" semantics as the page-side buffer it
+    // replaces, just without touching the page).
+    run_command(ctx, &["console"]);
+
+    // A page-side console call that CDP has to report to the driver.
+    eval_text(ctx, "console.log('b4-console-probe-1')");
+    let listed = run_command(ctx, &["console"]).stdout;
+    assert!(
+        listed.contains("b4-console-probe-1"),
+        "console must list the page's log message, got:\n{listed}"
+    );
+
+    // Reading the console must not have patched the page.
+    let native_output = eval_text(ctx, "String(console.log)");
+    let native = last_non_empty_line(&native_output);
+    assert_eq!(
+        native, "function log() { [native code] }",
+        "console.log must stay the native function after reading the console, got: {native}"
+    );
+
+    let globals_output = eval_text(
+        ctx,
+        "Object.getOwnPropertyNames(window).filter(function(n){ return n.indexOf('__b4') === 0 }).length",
+    );
+    let globals = last_non_empty_line(&globals_output);
+    assert_eq!(
+        globals, "0",
+        "no driver-owned global may be left on the page, got: {globals}"
+    );
+
+    // Clearing drops the buffered messages, and capture continues afterwards.
+    run_command(ctx, &["console", "--clear"]);
+    eval_text(ctx, "console.log('b4-console-probe-2')");
+    let after_clear = run_command(ctx, &["console"]).stdout;
+    assert!(
+        after_clear.contains("b4-console-probe-2"),
+        "console must keep capturing after a clear, got:\n{after_clear}"
+    );
+    assert!(
+        !after_clear.contains("b4-console-probe-1"),
+        "clearing must drop the messages buffered so far, got:\n{after_clear}"
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+/// The last non-empty line of a command's stdout (command output may be followed by hint lines).
+fn last_non_empty_line(text: &str) -> &str {
+    text.lines().map(str::trim).filter(|line| !line.is_empty()).last().unwrap_or_default()
+}

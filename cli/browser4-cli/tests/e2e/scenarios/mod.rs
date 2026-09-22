@@ -544,6 +544,16 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         group: Some("devtools"),
         level: ScenarioLevel::Basic,
     },
+    ScenarioDef {
+        name: "test_e2e_console_capture_is_page_silent",
+        short_name: "test_console_capture_is_page_silent",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: browser::test_e2e_console_capture_is_page_silent,
+        group: Some("devtools"),
+        level: ScenarioLevel::Basic,
+    },
     // ── Mouse fixture scenarios ──────────────────────────────────
     ScenarioDef {
         name: "test_e2e_mouse_click_variants",

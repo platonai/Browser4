@@ -158,6 +158,11 @@ instead of Chrome directly. Therefore:
 - Browser4 passes plain `--headless` (never `--headless=new`), forces
   `--disable-blink-features=AutomationControlled`, and leaves user-agent rotation
   off by default because rotation itself is detectable.
+- `console` (list console messages) reads them from the DevTools protocol, so it does **not**
+  patch the page: `console.log` stays the native function and no driver-owned global appears on
+  `window`. Capture starts with the first `console` call of a session; where the transport cannot
+  enable the CDP console domain (an extension relay), the driver falls back to the historical
+  page-side buffer, which does replace `console.*` while it is active.
 - Sites with strong bot protection may still block automated sessions. When the
   goal is "act as the logged-in user", prefer the attach paths (axis 3) over
   launching another browser, and consider raising `--interact-level` (§4).
