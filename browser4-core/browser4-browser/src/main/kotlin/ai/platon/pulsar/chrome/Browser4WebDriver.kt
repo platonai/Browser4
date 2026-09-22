@@ -76,9 +76,11 @@ open class Browser4WebDriver(
     /**
      * Viewport center of a drag element, plus the stable CSS path used to
      * re-locate it inside the drag script (where CDP node object ids are
-     * not available for the target), a frame-residency flag, and the viewport
+     * not available for the target), a frame-residency flag, the viewport
      * size at resolution time (used to confirm the target is actually
-     * visible after an asynchronous scroll commit).
+     * visible after an asynchronous scroll commit), and the element's box
+     * size (used to clamp pointer jitter so a jittered point stays inside
+     * the element).
      */
     internal data class DragCenter(
         val x: Double,
@@ -87,6 +89,8 @@ open class Browser4WebDriver(
         val inFrame: Boolean,
         val viewportWidth: Int = 0,
         val viewportHeight: Int = 0,
+        val width: Double = 0.0,
+        val height: Double = 0.0,
     )
 
     companion object {
@@ -501,7 +505,55 @@ open class Browser4WebDriver(
                 inFrame = node.get("inFrame")?.asBoolean() ?: false,
                 viewportWidth = node.get("vw")?.takeIf { it.isNumber }?.asInt() ?: 0,
                 viewportHeight = node.get("vh")?.takeIf { it.isNumber }?.asInt() ?: 0,
+                width = node.get("w")?.takeIf { it.isNumber }?.asDouble() ?: 0.0,
+                height = node.get("h")?.takeIf { it.isNumber }?.asDouble() ?: 0.0,
             )
+        }
+
+        /**
+         * Maximum pointer jitter (CSS pixels) applied before a click-family pointer move.
+         *
+         * Landing on the element's exact center every single time is itself a fingerprint, so the
+         * pointer is nudged the same way the drag sequence already nudges its press/release points
+         * (±2 px). Explicit coordinates from `mouse-move` are never jittered — the caller asked for
+         * a specific point.
+         */
+        internal const val POINTER_JITTER_PX = 2.0
+
+        /** Keep a jittered pointer this far inside the element box. */
+        internal const val POINTER_JITTER_EDGE_INSET_PX = 1.0
+
+        /**
+         * Nudge the element center ([x], [y]) by a random offset of at most
+         * `min(jitter, box/2 - inset)` per axis, so the result stays inside the element of the given
+         * [width]/[height] box.
+         *
+         * An element whose box is unknown (0) or too small to hold any offset keeps the exact
+         * center: moving the pointer outside the element would break the CSS `:hover` state this
+         * move exists to establish (see `movePointerToClickTarget`), which is worse than a
+         * repeatable coordinate.
+         *
+         * @param nextOffset produces a uniform offset in `[-range, range]`; injected in tests
+         */
+        internal fun jitteredPointerPosition(
+            x: Double,
+            y: Double,
+            width: Double,
+            height: Double,
+            jitter: Double = POINTER_JITTER_PX,
+            nextOffset: (Double) -> Double = { range -> Random.nextDouble(-range, range) },
+        ): Pair<Double, Double> {
+            val maxOffset = if (width > 0.0 && height > 0.0) {
+                minOf(jitter, minOf(width, height) / 2.0 - POINTER_JITTER_EDGE_INSET_PX).coerceAtLeast(0.0)
+            } else {
+                0.0
+            }
+
+            if (maxOffset <= 0.0) {
+                return x to y
+            }
+
+            return (x + nextOffset(maxOffset)) to (y + nextOffset(maxOffset))
         }
 
         /**
@@ -546,7 +598,9 @@ open class Browser4WebDriver(
                     cssPath: path.join(' > '),
                     inFrame: this.ownerDocument !== document,
                     vw: window.innerWidth,
-                    vh: window.innerHeight
+                    vh: window.innerHeight,
+                    w: r.width,
+                    h: r.height
                 });
             }
             """.trimIndent()
@@ -1044,13 +1098,16 @@ internal enum class DragDropPosition(val key: String) {
     }
 
     /**
-     * Move the pointer to the click target's center before dispatching the
+     * Move the pointer onto the click target before dispatching the
      * click, so the pointer physically rests on the element when its click
      * events fire.  The upstream Windows click path never moves the mouse
      * (pure DOM JS), so without this step CSS `:hover` keeps reflecting the
      * previous operation's element — stale highlights and hover tooltips
      * persist across clicks and snapshots taken right after a click miss the
      * tooltip that a real user would see.
+     *
+     * The point is jittered inside the element (see [jitteredPointerPosition]) rather than always
+     * being the exact center, which would repeat the same pixel on every request.
      *
      * Uses the drag-style instant scroll + visibility poll, so the resolved
      * center is stable before the pointer moves.  Best-effort: when the
@@ -1087,7 +1144,12 @@ internal enum class DragDropPosition(val key: String) {
             point.x >= 0 && point.y >= 0 && point.x <= point.viewportWidth && point.y <= point.viewportHeight
             )
         if (visible) {
-            mouseMove(point.x, point.y)
+            // Nudge the pointer inside the element instead of always hitting its exact center:
+            // identical coordinates on every request for the same element are a fingerprint. The
+            // offset is clamped to the element box so `:hover` still applies (see
+            // [jitteredPointerPosition]).
+            val (pointerX, pointerY) = jitteredPointerPosition(point.x, point.y, point.width, point.height)
+            mouseMove(pointerX, pointerY)
         }
     }
 

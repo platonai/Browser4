@@ -175,6 +175,10 @@ instead of Chrome directly. Therefore:
   cannot be told apart from a page that logs nothing: `console` then prints an empty list with no
   error, so treat an unexpectedly empty console on a relayed session as "capture unavailable",
   not as "the page is quiet".
+- Pointer coordinates are humanised the same way the interaction delays are: the pointer move
+  that precedes a click lands within ±2 px of the element's center (clamped to the element box),
+  so repeated clicks on the same element do not hit the identical pixel. Explicit coordinates
+  passed to `mousemove` are **not** jittered — that command means "put the pointer exactly here".
 - Sites with strong bot protection may still block automated sessions. When the
   goal is "act as the logged-in user", prefer the attach paths (axis 3) over
   launching another browser, and consider raising `--interact-level` (§4).
