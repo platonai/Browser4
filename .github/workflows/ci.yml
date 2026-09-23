@@ -152,6 +152,14 @@ jobs:
             echo "  - Failed Tests: ${{ steps.run-tests.outputs.failed_count }}"
             echo "  - Passed Tests: ${{ steps.run-tests.outputs.passed_count }}"
             echo "  - Skipped Tests: ${{ steps.run-tests.outputs.skipped_count }}"
+            echo "  - Maven exit code: ${{ steps.run-tests.outputs.run_exit_code }}"
+            echo "  - Surefire reports produced: ${{ steps.run-tests.outputs.reports_found }}"
+            if [ "${{ steps.run-tests.outputs.failed_count }}" = "0" ]; then
+              echo ""
+              echo "ℹ️  No surefire test failure was parsed, so the reactor failed outside the tests:"
+              echo "    a module compile/dependency error, or a test JVM that died before writing"
+              echo "    its report. Inspect the 'Run Tests' step above for the Maven error."
+            fi
             FAILED_LIST="${{ steps.run-tests.outputs.failed_test_list }}"
             if [ -n "$FAILED_LIST" ]; then
               echo ""
@@ -160,10 +168,16 @@ jobs:
                 echo "  - $test"
               done
             fi
-            exit 1
+            # Do NOT fail the job here: the Docker build, app startup and the CLI
+            # e2e stage are independent of the JVM suite.  Failing here would skip
+            # all of them, so one broken JVM test would hide everything the release
+            # gate exists to check.  Record the state; 'Enforce CI Gate' decides.
+            echo "MAVEN_TESTS_FAILED=1" >> "$GITHUB_ENV"
+            echo "⚠️  JVM test stage failed — continuing so the CLI e2e stage can run."
           else
             echo "✅ All tests passed successfully"
             echo "📊 Test Results: ${{ steps.run-tests.outputs.passed_count }} tests passed"
+            echo "MAVEN_TESTS_FAILED=0" >> "$GITHUB_ENV"
           fi
 
       - name: Setup Rust Toolchain
@@ -212,7 +226,11 @@ jobs:
 
       - name: Run browser4-cli E2E Tests
         id: e2e-cli
-        timeout-minutes: 15
+        # 25 minutes for the BASIC subset (148 scenarios).  The stricter
+        # --max-failures=0 below turns a truncated suite into a red gate, so the
+        # budget has to be honest: nightly gives 30 minutes to the full 204-scenario
+        # EXTENDED run of the same harness.
+        timeout-minutes: 25
         shell: bash
         env:
           BROWSER4_E2E_SERVICE_URL: http://localhost:8182
@@ -220,11 +238,13 @@ jobs:
         run: |
           echo "::group::🧪 browser4-cli E2E Tests"
 
-          # Run the CLI tests against the already-running Docker container
+          # Run the CLI tests against the already-running Docker container.
+          # --max-failures=0: this is a gate, not a report — a tolerated failure
+          # hides damage for a whole release cycle.
           echo "Running browser4-cli E2E tests..."
           echo "Working directory: $(pwd)"
           cd cli/browser4-cli
-          cargo test --test e2e -- --nocapture
+          cargo test --test e2e -- --nocapture --max-failures=0
           # cargo test
           cd "$(git rev-parse --show-toplevel)"
 
@@ -254,6 +274,9 @@ jobs:
           echo "  - Health Check: ${{ steps.health.outcome }}"
           echo "  - CLI E2E Tests: ${{ steps.e2e-cli.outcome }}"
           echo "  - Unit Tests: ${{ steps.run-tests.outcome || 'skipped' }}"
+          # Set by 'Check Test Status': 0 = passed, 1 = failed, unset = skipped
+          # (inputs.skip_tests) or never reached.  'Enforce CI Gate' decides.
+          echo "  - JVM test stage flag: ${MAVEN_TESTS_FAILED:-unset}"
 
           echo ""
           echo "🌐 Infrastructure:"
@@ -269,6 +292,46 @@ jobs:
           echo "🌟 Commit: ${{ github.sha }}"
 
           echo "::endgroup::"
+
+      - name: Enforce CI Gate
+        # Runs after every stage so one round reports the whole picture: the JVM
+        # suite AND the CLI e2e suite both execute even when the JVM stage failed.
+        # This step alone decides the job outcome (mirrors nightly.yml).
+        if: always()
+        shell: bash
+        run: |
+          echo "::group::🚦 CI Gate"
+
+          failed=0
+
+          # skip_tests only silences the JVM stage; the Docker build, the app and
+          # the CLI e2e stage still run, so the gate must still check them.
+          if [ "${{ inputs.skip_tests }}" = "true" ]; then
+            echo "  - JVM tests       : intentionally skipped (skip_tests input)"
+          else
+            maven_status="${MAVEN_TESTS_FAILED:-unset}"
+            echo "  - JVM tests       : ${maven_status}"
+            case "$maven_status" in
+              0) echo "      ✅ JVM tests passed" ;;
+              1) echo "      ❌ JVM tests failed (see 'Check Test Status' above)"; failed=1 ;;
+              *) echo "      ❌ JVM tests never reported a status (setup/build/dependencies failed first)"; failed=1 ;;
+            esac
+          fi
+
+          e2e_outcome="${{ steps.e2e-cli.outcome }}"
+          echo "  - CLI e2e tests   : ${e2e_outcome:-<not run>}"
+          if [ "${e2e_outcome:-skipped}" != "success" ]; then
+            echo "      ❌ browser4-cli e2e did not pass (tolerance is 0 in this gate)"
+            failed=1
+          fi
+
+          echo "::endgroup::"
+
+          if [ "$failed" -ne 0 ]; then
+            echo "❌ CI gate failed — see the per-stage summaries above."
+            exit 1
+          fi
+          echo "✅ CI gate passed"
 
       - name: Cleanup Resources
         if: always()
